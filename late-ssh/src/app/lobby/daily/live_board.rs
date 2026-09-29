@@ -28,7 +28,7 @@ use super::{
 
 /// Tall enough for a chess or checkers board at one row per rank; every
 /// other game centres in it.
-pub(crate) const BOARD_ROWS: u16 = 8;
+pub(crate) const BOARD_ROWS: u16 = crate::app::live::ui::PICTURE_ROWS;
 
 /// `8ball eggy v weslin`, the player on the move in amber; `eggy is aiming`
 /// while they line up.

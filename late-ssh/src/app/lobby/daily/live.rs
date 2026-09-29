@@ -2,20 +2,16 @@
 //!
 //! A compact, per-game snapshot of a match's position, built once per
 //! snapshot publish from the same state JSON the service already parses for
-//! move counts, and carried on every `DailyMatchItem`. The #lounge strip
-//! (`live_strip.rs`) paints one active match at the top of the Home chat,
-//! the viewer's own included: the one somebody is lining up a shot on, else
-//! the one that moved last (`pick_featured`), but only while something just
-//! happened to it (`strip_is_fresh`), and a match that just ended for a
-//! minute after (`finish_headline`). It holds positions only, never a hidden
+//! move counts, and carried on every `DailyMatchItem`. The live strip
+//! (`app/live/`) paints one at the top of the Home chat, the viewer's own
+//! included, while something just happened to it, and a match that just
+//! ended for a minute after (`finish_headline`); `live_strip.rs` is what a
+//! match looks like there. It holds positions only, never a hidden
 //! hand or a fleet: a live board is a spectator's view even for the players,
 //! so it keeps exactly the secrets the spectate board keeps (`battleship_ui`
 //! shows public shots only, `briscola_ui` shows backs).
 
-use std::time::{Duration, Instant};
-
 use anyhow::{Result, bail};
-use chrono::{DateTime, Utc};
 use cozy_chess::Board;
 use late_core::models::daily_match::DailyResult;
 use serde_json::Value;
@@ -38,21 +34,6 @@ use super::{
     svc::{DailyChessState, DailyFinishedItem, DailyMatchItem, DailyWinPayout},
 };
 
-/// An aim older than this is a player who stopped, not one lining up.
-pub const LIVE_AIM_WINDOW: Duration = Duration::from_secs(8);
-/// A featured match stays up at least this long once it goes up, unless
-/// somebody starts aiming elsewhere: a newer move waits its turn, so a busy
-/// lobby does not flip the board before anyone has looked at it.
-pub const LIVE_HOLD: Duration = Duration::from_secs(60);
-/// The #lounge strip stays up this long after the featured match's last
-/// write: long enough for a regular glancing back to catch it, short enough
-/// that it leaves and can come back. A correspondence match sits active for
-/// days between moves, so "active" alone would keep the strip up for good.
-pub const LIVE_STRIP_LINGER: Duration = Duration::from_secs(5 * 60);
-/// A match that just ended holds the strip this long with its final board
-/// and the result, the best advert the lobby has.
-pub const LIVE_FINISH_LINGER: Duration = Duration::from_secs(60);
-
 /// The featured match as the strip paints it: its board, and the
 /// shooter's aim while one is fresh.
 pub struct LiveView<'a> {
@@ -61,30 +42,16 @@ pub struct LiveView<'a> {
     pub aim: Option<&'a PoolAimShare>,
 }
 
-/// What the #lounge strip paints: a match in play, or the final board of one
-/// that just ended with the result as the strip announces it.
-pub struct LiveStripView<'a> {
+/// A match as the live strip paints it: one in play, or the final board of
+/// one that just ended with the result as the strip announces it.
+pub struct MatchStripView<'a> {
     pub view: LiveView<'a>,
     /// `Some` for a finished match (`finish_headline`); the strip then opens
     /// nothing on click, since the board is gone from the lobby.
     pub finish: Option<&'a str>,
 }
 
-/// Whether the #lounge strip is up for the featured match: its row was
-/// written inside `LIVE_STRIP_LINGER`, or its shooter is lining up a shot.
-/// `now_utc` is the clock the row's `updated` was stamped with.
-pub fn strip_is_fresh(
-    updated: DateTime<Utc>,
-    aimed_at: Option<Instant>,
-    now_utc: DateTime<Utc>,
-    now: Instant,
-) -> bool {
-    let aiming = aimed_at.is_some_and(|at| now.saturating_duration_since(at) < LIVE_AIM_WINDOW);
-    let linger = chrono::Duration::from_std(LIVE_STRIP_LINGER).expect("linger fits chrono");
-    aiming || now_utc.signed_duration_since(updated) < linger
-}
-
-/// The result line the #lounge strip shows under a finished match's last
+/// The result line the live strip shows under a finished match's last
 /// board, read off the finished row as the snapshot carries it, so it is
 /// the same on every replica. Chips are named only once the payout, a
 /// second write behind the finish, is on the row and says `paid`.
@@ -129,112 +96,6 @@ pub fn finish_headline(item: &DailyFinishedItem) -> String {
             | DailyResult::FrameWon => format!("a draw · {phrase}"),
         },
     }
-}
-
-/// One match the strip could feature.
-#[derive(Clone, Copy, Debug)]
-pub struct LiveCandidate {
-    pub id: Uuid,
-    /// The row's last write: newest is the match that just moved.
-    pub updated: DateTime<Utc>,
-    /// When the shooter last moved their cue, if they have.
-    pub aimed_at: Option<Instant>,
-}
-
-/// The match the strip features, and when it took the strip.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Featured {
-    pub id: Uuid,
-    pub since: DateTime<Utc>,
-}
-
-/// Pick the match the #lounge strip features, from the rows' `updated`
-/// stamps, the wall clock, and the match this session is showing.
-///
-/// A fresh aim wins outright, the freshest if several. Otherwise the match
-/// on the strip keeps it for `LIVE_HOLD` from the moment it took it, as long
-/// as it is still in the lobby and its last write is inside
-/// `LIVE_STRIP_LINGER`. Past that the writes are replayed in order
-/// (`replay`), which is also where a session with nothing up starts, so one
-/// that connects mid-hold sees what the room sees.
-///
-/// The replay reads only each row's latest stamp, so a match that moves
-/// again loses its old place in it. The hold is what keeps that from
-/// flipping the board early: a session follows the replay one match behind
-/// rather than cut a minute short.
-pub fn pick_featured(
-    current: Option<Featured>,
-    candidates: &[LiveCandidate],
-    now_utc: DateTime<Utc>,
-    now: Instant,
-) -> Option<Featured> {
-    let since_for = |id: Uuid, fresh_start: DateTime<Utc>| match current {
-        Some(current) if current.id == id => current.since,
-        Some(_) => now_utc,
-        None => fresh_start,
-    };
-    let aiming = |candidate: &&LiveCandidate| {
-        candidate
-            .aimed_at
-            .is_some_and(|at| now.saturating_duration_since(at) < LIVE_AIM_WINDOW)
-    };
-    if let Some(candidate) = candidates
-        .iter()
-        .filter(aiming)
-        .max_by_key(|candidate| candidate.aimed_at)
-    {
-        return Some(Featured {
-            id: candidate.id,
-            since: since_for(candidate.id, now_utc),
-        });
-    }
-    let hold = chrono::Duration::from_std(LIVE_HOLD).expect("hold fits chrono");
-    let linger = chrono::Duration::from_std(LIVE_STRIP_LINGER).expect("linger fits chrono");
-    if let Some(current) = current
-        && now_utc < current.since + hold
-        && candidates.iter().any(|candidate| {
-            candidate.id == current.id && now_utc.signed_duration_since(candidate.updated) < linger
-        })
-    {
-        return Some(current);
-    }
-    let (id, shown_at) = replay(candidates, now_utc)?;
-    Some(Featured {
-        id,
-        since: since_for(id, shown_at),
-    })
-}
-
-/// Replay the writes in order, from data every session and every replica
-/// shares: a match that takes the strip keeps it for `LIVE_HOLD`, and the
-/// next write in line takes over at its own stamp or the end of that hold,
-/// whichever is later. So two moves a minute apart each get their minute, in
-/// order. A match whose turn would come after its own `LIVE_STRIP_LINGER`
-/// ran out is skipped: the strip could not show it, and its minute would
-/// keep a move that just landed waiting behind nothing. Returns the match
-/// and when it took the strip.
-fn replay(candidates: &[LiveCandidate], now_utc: DateTime<Utc>) -> Option<(Uuid, DateTime<Utc>)> {
-    let hold = chrono::Duration::from_std(LIVE_HOLD).expect("hold fits chrono");
-    let linger = chrono::Duration::from_std(LIVE_STRIP_LINGER).expect("linger fits chrono");
-    let mut ordered: Vec<&LiveCandidate> = candidates.iter().collect();
-    // The id breaks a tie between two rows stamped the same instant, so
-    // the order is the same on every session.
-    ordered.sort_by_key(|candidate| (candidate.updated, candidate.id));
-    let mut ordered = ordered.into_iter();
-    let first = ordered.next()?;
-    let (mut shown, mut shown_at) = (first.id, first.updated);
-    for next in ordered {
-        let takeover = next.updated.max(shown_at + hold);
-        if takeover > now_utc {
-            break;
-        }
-        if takeover.signed_duration_since(next.updated) >= linger {
-            continue;
-        }
-        shown = next.id;
-        shown_at = takeover;
-    }
-    Some((shown, shown_at))
 }
 
 /// What the snapshot reads off one active match's state JSON: the summary

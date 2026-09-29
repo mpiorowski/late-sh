@@ -25,6 +25,7 @@ pub mod input;
 mod input_flow_test;
 pub mod jobs;
 pub(crate) mod leaderboard;
+pub mod live;
 pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;

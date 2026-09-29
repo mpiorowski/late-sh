@@ -131,3 +131,8 @@ down:
 stop:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml stop
 remove: down
+
+# Stops every running container on this machine, not just this project's.
+.PHONY: stop-all
+stop-all:
+	docker ps -q | xargs -r docker stop

@@ -2721,7 +2721,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if handle_pet_click(app, x, y) {
         return true;
     }
-    if handle_live_strip_click(app, x, y) {
+    if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
         return true;
     }
     // A click on a Zen tile focuses it, then falls through so the composer
@@ -2820,49 +2820,6 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
             app.chat.composer_click_to_cursor(rect, x, y);
         }
     }
-    true
-}
-
-/// A left-click on the #lounge live strip opens the match it shows: the
-/// same board the Lobby modal opens, read-only unless the viewer plays in
-/// it. A rect is only recorded on frames where the strip drew a match still
-/// in the lobby.
-fn handle_live_strip_click(app: &mut App, x: u16, y: u16) -> bool {
-    if chat_scroll_clicks_blocked(app) {
-        return false;
-    }
-    let Some((rect, match_id)) = app.daily.live_strip_hit.get() else {
-        return false;
-    };
-    if !rect_contains(rect, x, y) {
-        return false;
-    }
-    // Gone between the frame and the click (it finished): nothing to open.
-    let Some(item) = app.daily.live_item(match_id) else {
-        return false;
-    };
-    app.daily.open_board(
-        &item,
-        app.screen,
-        crate::app::lobby::daily::state::BoardEntry::LoungeStrip,
-    );
-    app.set_screen(Screen::DailyMatch);
-    true
-}
-
-/// `o` on the #lounge card opens the match the live strip is showing, the
-/// keyboard twin of the click on it. With nothing to open (no strip up, or
-/// a result holding it) the key falls through untouched.
-fn open_live_strip_match(app: &mut App) -> bool {
-    let Some(item) = app.daily.live_strip_match() else {
-        return false;
-    };
-    app.daily.open_board(
-        &item,
-        app.screen,
-        crate::app::lobby::daily::state::BoardEntry::LoungeStrip,
-    );
-    app.set_screen(Screen::DailyMatch);
     true
 }
 
@@ -3944,7 +3901,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.news_composing
                 && app.lounge_card_shown() =>
         {
-            open_live_strip_match(app)
+            crate::app::live::input::open_from_key(app)
         }
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);

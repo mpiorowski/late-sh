@@ -257,3 +257,52 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
     assert!(!app.show_lobby_modal, "the modal was never open");
     assert!(app.lobby.glow(), "nothing looked at the lobby");
 }
+
+/// A track somebody queued in the booth goes up on the live strip, and `o`
+/// tunes a viewer on another source in to YouTube; once there, `o` opens
+/// the booth.
+#[tokio::test]
+async fn o_on_a_booth_track_tunes_in_then_opens_the_booth() {
+    use crate::app::audio::youtube::YoutubeVideo;
+    use late_core::models::user::AudioSource;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-booth-me").await;
+    let them = create_test_user(&test_db.db, "strip-booth-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-booth-flow-it");
+    app.resize(160, 40).expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.set_paired_playback_source(AudioSource::Icecast);
+
+    app.audio
+        .service()
+        .submit_validated_video(
+            them.id,
+            YoutubeVideo {
+                video_id: "ggggggggggg".to_string(),
+                title: Some("Blue in Green".to_string()),
+                channel: Some("Late Night Tapes".to_string()),
+                duration_ms: Some(225_000),
+                is_stream: false,
+            },
+        )
+        .await
+        .expect("queue a track");
+    wait_for_render_contains(&mut app, "Late Night Tapes \u{b7} 3:45").await;
+    wait_for_render_contains(&mut app, "o or click to tune in").await;
+
+    app.handle_input(b"o");
+    assert_eq!(app.paired_source, AudioSource::Youtube, "o tunes in");
+    assert!(!app.booth_modal_state.is_open());
+    wait_for_render_contains(&mut app, "o or click for the booth").await;
+
+    app.handle_input(b"o");
+    assert!(app.booth_modal_state.is_open(), "then o opens the booth");
+}

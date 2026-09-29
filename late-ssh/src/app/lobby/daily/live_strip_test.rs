@@ -1,8 +1,14 @@
 use chrono::Utc;
 use uuid::Uuid;
 
+use ratatui::text::Line;
+
 use super::*;
-use crate::app::games::pool_core::{cue::ShotMode, rules::PoolRules};
+use crate::app::games::pool_core::cue::ShotMode;
+use crate::app::live::{
+    state::LiveStripView,
+    ui::{LIVE_STRIP_HEIGHT, live_strip_compact_line, live_strip_lines},
+};
 use crate::app::lobby::daily::{
     games::DailyGame,
     live::MatchSummary,
@@ -58,14 +64,14 @@ fn strip<'a>(
     aim: Option<&'a PoolAimShare>,
     finish: Option<&'a str>,
 ) -> LiveStripView<'a> {
-    LiveStripView {
+    LiveStripView::Match(MatchStripView {
         view: LiveView {
             item,
             board: &item.board,
             aim,
         },
         finish,
-    }
+    })
 }
 
 #[test]
@@ -115,33 +121,6 @@ fn the_words_sit_beside_the_board() {
     );
     assert!(line_text(&done[3]).ends_with("weslin won · eight ball · +400 chips"));
     assert!(line_text(&done[6]).ends_with("ctrl+g to play"));
-}
-
-#[test]
-fn the_card_picks_the_form_and_keeps_rows_for_the_messages() {
-    let card = |width, height| Rect {
-        x: 0,
-        y: 0,
-        width,
-        height,
-    };
-    let (size, strip, rest) = fit_live_strip(card(80, 30)).unwrap();
-    assert_eq!(size, StripSize::Full);
-    assert_eq!(strip.height, LIVE_STRIP_HEIGHT);
-    assert_eq!(rest.height, 30 - LIVE_STRIP_HEIGHT);
-
-    let (size, strip, _) = fit_live_strip(card(80, 14)).unwrap();
-    assert_eq!(
-        size,
-        StripSize::Compact,
-        "a short card gets the one-row form"
-    );
-    assert_eq!(strip.height, LIVE_STRIP_COMPACT_HEIGHT);
-
-    let (size, _, _) = fit_live_strip(card(40, 30)).unwrap();
-    assert_eq!(size, StripSize::Compact, "a narrow card too");
-
-    assert!(fit_live_strip(card(80, 4)).is_none(), "no room at all");
 }
 
 #[test]

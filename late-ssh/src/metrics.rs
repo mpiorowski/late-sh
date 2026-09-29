@@ -6,6 +6,7 @@ use late_core::models::media_queue_item::SongQueueReward;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
+use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
@@ -393,7 +394,7 @@ mod inner {
         PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
         RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
         SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        TranslationResult, VizWireBands,
+        ThumbnailFetch, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -986,6 +987,18 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_news_share_chips_paid_total")
                 .with_description("Chips minted as News share rewards")
+                .build()
+        })
+    }
+
+    fn booth_thumbnails_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_booth_thumbnails_total")
+                .with_description(
+                    "YouTube thumbnail fetches for the live strip, once per track per replica",
+                )
                 .build()
         })
     }
@@ -1771,6 +1784,20 @@ mod inner {
         }
     }
 
+    fn thumbnail_fetch_label(outcome: ThumbnailFetch) -> &'static str {
+        match outcome {
+            ThumbnailFetch::Fetched => "fetched",
+            ThumbnailFetch::Failed => "failed",
+        }
+    }
+
+    pub fn record_booth_thumbnail(outcome: ThumbnailFetch) {
+        booth_thumbnails_total().add(
+            1,
+            &[KeyValue::new("outcome", thumbnail_fetch_label(outcome))],
+        );
+    }
+
     pub fn record_song_queued(reward: SongQueueReward) {
         songs_queued_total().add(
             1,
@@ -2296,7 +2323,7 @@ mod inner {
         PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
         RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
         SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        TranslationResult, VizWireBands,
+        ThumbnailFetch, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2354,6 +2381,7 @@ mod inner {
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
+    pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}

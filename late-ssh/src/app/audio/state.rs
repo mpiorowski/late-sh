@@ -10,7 +10,7 @@ use super::{
     svc::{AudioEvent, AudioService, QueueSnapshot},
     viz::{LiveBands, Spectrum},
 };
-use crate::app::common::primitives::Banner;
+use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
 
 pub struct AudioTick {
     pub banner: Option<Banner>,
@@ -60,6 +60,11 @@ impl AudioState {
 
     pub(crate) fn live_bands(&self) -> Option<LiveBands> {
         self.spectrum.as_ref().map(Spectrum::bands)
+    }
+
+    /// The booth's tracks as the live strip weighs them.
+    pub fn live_candidates(&self) -> Vec<LiveCandidate> {
+        super::booth::live::candidates(&self.snapshot_rx.borrow())
     }
 
     pub fn queue_snapshot(&self) -> QueueSnapshot {

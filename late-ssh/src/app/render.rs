@@ -420,7 +420,7 @@ impl App {
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
         self.last_pet_frame.set(None);
-        self.daily.live_strip_hit.set(None);
+        self.live.hit.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -618,7 +618,8 @@ impl App {
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
         let dashboard_live_strip = if home_selected {
-            self.daily.live_strip_view()
+            self.live
+                .view(&self.daily, &self.audio, self.paired_source)
         } else {
             None
         };
@@ -704,7 +705,7 @@ impl App {
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
-            live_strip_hit: &self.daily.live_strip_hit,
+            live_strip_hit: &self.live.hit,
             inline_images: &self.chat.inline_image_cache,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),

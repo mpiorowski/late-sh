@@ -873,6 +873,8 @@ pub struct App {
     pub(crate) lobby: crate::app::lobby::state::LobbyState,
     /// Daily correspondence games: sidebar panel and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
+    /// The live strip at the top of the #lounge card.
+    pub(crate) live: crate::app::live::state::LiveState,
     /// House tables: the fixed multiplayer tables behind the Lobby modal.
     pub(crate) house: crate::app::lobby::house::state::HouseState,
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
@@ -1741,6 +1743,7 @@ impl App {
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
+            live: crate::app::live::state::LiveState::new(),
             house: crate::app::lobby::house::state::HouseState::new(
                 config.user_id,
                 config.house_registry,
@@ -3101,14 +3104,20 @@ impl App {
             AudioSource::Youtube => AudioSource::Icecast,
             AudioSource::Icecast => AudioSource::Radio,
         };
-        self.paired_source = next;
+        self.set_paired_playback_source(next);
+        next
+    }
+
+    /// Switch the per-user audio source preference to `source`, persisted
+    /// and pushed to paired clients the same way the toggle is.
+    pub fn set_paired_playback_source(&mut self, source: late_core::models::user::AudioSource) {
+        self.paired_source = source;
         if let Some(active_users) = &self.active_users
             && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
         {
-            active.audio_source = next;
+            active.audio_source = source;
         }
-        self.audio.persist_audio_source(next);
-        next
+        self.audio.persist_audio_source(source);
     }
 
     pub fn select_icecast_stream(&mut self, stream: late_core::models::user::IcecastStream) {

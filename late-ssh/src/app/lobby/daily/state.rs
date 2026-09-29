@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use tokio::sync::{broadcast, oneshot, watch};
 use uuid::Uuid;
 
+use crate::app::live::pick::{LIVE_AIM_WINDOW, LiveCandidate, LiveSource};
 use crate::app::{
     common::primitives::{Banner, Screen},
     games::{
@@ -32,10 +33,7 @@ use super::{
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
     games::DailyGame,
-    live::{
-        Featured, LIVE_AIM_WINDOW, LIVE_FINISH_LINGER, LiveCandidate, LiveStripView, LiveView,
-        finish_headline, pick_featured, strip_is_fresh,
-    },
+    live::{LiveView, MatchStripView, finish_headline},
     pool::{DailyPoolState, PoolAimShare},
     pool_draft::{PoolCueHit, PoolDetail, PoolDraft, PoolPlayback, should_share_aim},
     reversi::DailyReversiState,
@@ -123,18 +121,9 @@ pub struct DailyState {
     /// arrived. Presentation only, like the aim itself: pruned past
     /// `LIVE_AIM_WINDOW` on every tick, so it holds tables in play right now.
     live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
-    /// The match the #lounge strip features and when it took the strip
-    /// (`live::pick_featured`).
-    live_featured: Option<Featured>,
-    /// A match that just ended, held for the #lounge strip (`note_finished`).
+    /// The last match that ended, kept for the live strip (`note_finished`).
+    /// The strip decides how long it is news (`app/live/state.rs`).
     live_finish: Option<LiveFinish>,
-    /// What the #lounge strip shows, decided on the tick
-    /// (`refresh_live_strip`) so a change of height is a change of frame.
-    live_strip: Option<StripPick>,
-    /// Where the #lounge strip drew this frame and which match it showed,
-    /// for the click that opens it. Render-recorded, cleared before every
-    /// draw; a finished match records nothing, there is no board to open.
-    pub live_strip_hit: Cell<Option<(Rect, Uuid)>>,
 }
 
 /// A match that just ended, as the #lounge strip shows it: the position it
@@ -143,15 +132,6 @@ struct LiveFinish {
     item: DailyMatchItem,
     headline: String,
     at: Instant,
-}
-
-/// What the #lounge strip is showing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StripPick {
-    /// The featured match (`live_view`).
-    Live,
-    /// The match that just ended (`live_finish`).
-    Finish,
 }
 
 /// Full-screen correspondence board (`Screen::DailyMatch`).
@@ -718,10 +698,7 @@ impl DailyState {
             own_loss: false,
             board: None,
             live_aims: HashMap::new(),
-            live_featured: None,
             live_finish: None,
-            live_strip: None,
-            live_strip_hit: Cell::new(None),
         }
     }
 
@@ -733,9 +710,7 @@ impl DailyState {
     /// flight. Returns a banner for events targeted at this user plus
     /// whether anything drained may have changed render-visible state
     /// (board, lobby glow, turn markers).
-    /// `reading` is whether the viewer has a message selected in the
-    /// #lounge card: the strip then holds its height (`refresh_live_strip`).
-    pub fn tick(&mut self, reading: bool) -> DailyTick {
+    pub fn tick(&mut self) -> DailyTick {
         let mut banner = None;
         let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
@@ -778,13 +753,8 @@ impl DailyState {
             changed = true;
         }
         let now = Instant::now();
-        let now_utc = Utc::now();
-        let featured_changed = self.refresh_live_featured(now, now_utc);
-        let strip_changed = self.refresh_live_strip(now, now_utc, reading);
-        // A new featured match is only news while the strip is showing it.
-        if strip_changed || (featured_changed && self.live_strip == Some(StripPick::Live)) {
-            changed = true;
-        }
+        self.live_aims
+            .retain(|_, (_, at)| now.saturating_duration_since(*at) < LIVE_AIM_WINDOW);
         DailyTick {
             banner,
             changed,
@@ -890,9 +860,9 @@ impl DailyState {
                 by_user_id,
                 aim,
             } => {
-                // Every other player's aim is also news for the #lounge strip.
+                // Every other player's aim is also news for the live strip.
                 // It is stored, not repainted: the strip repaints on the
-                // half-tick edge while it draws a cue (`live_strip_aiming`),
+                // half-tick edge while it draws a cue (`LiveState::aiming`),
                 // so a shooter sweeping the cue costs no frames beyond that.
                 if by_user_id != self.user_id {
                     self.live_aims.insert(match_id, (aim, Instant::now()));
@@ -1026,50 +996,46 @@ impl DailyState {
         matches
     }
 
-    /// Re-pick the featured match: drop stale aims, then run
-    /// `pick_featured` over every active match, the viewer's own
-    /// included. True when the featured match changed.
-    fn refresh_live_featured(&mut self, now: Instant, now_utc: DateTime<Utc>) -> bool {
-        self.live_aims
-            .retain(|_, (_, at)| now.saturating_duration_since(*at) < LIVE_AIM_WINDOW);
-        let candidates: Vec<LiveCandidate> = self
-            .snapshot
+    /// Every active match, the viewer's own included, as the live strip
+    /// weighs it: its last write, and its shooter's aim if one is fresh.
+    pub fn live_candidates(&self) -> Vec<LiveCandidate> {
+        self.snapshot
             .active_matches
             .iter()
             .map(|item| LiveCandidate {
-                id: item.id,
+                source: LiveSource::DailyMatch(item.id),
                 updated: item.updated,
                 aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
             })
-            .collect();
-        let next = pick_featured(self.live_featured, &candidates, now_utc, now);
-        let changed =
-            next.map(|featured| featured.id) != self.live_featured.map(|featured| featured.id);
-        self.live_featured = next;
-        changed
+            .collect()
     }
 
-    /// The featured match, its board, and a fresh aim if its shooter is
-    /// lining up. `None` when no match is on.
-    fn live_view(&self) -> Option<LiveView<'_>> {
-        let featured = self.live_featured?;
+    /// One active match as the live strip paints it: its board, and a fresh
+    /// aim if its shooter is lining up. `None` once it left the lobby.
+    pub fn live_match_view(&self, match_id: Uuid) -> Option<MatchStripView<'_>> {
         let item = self
             .snapshot
             .active_matches
             .iter()
-            .find(|item| item.id == featured.id)?;
-        let board = &item.board;
+            .find(|item| item.id == match_id)?;
         let aim = self
             .live_aims
             .get(&item.id)
             .filter(|(_, at)| at.elapsed() < LIVE_AIM_WINDOW)
             .map(|(aim, _)| aim);
-        Some(LiveView { item, board, aim })
+        Some(MatchStripView {
+            view: LiveView {
+                item,
+                board: &item.board,
+                aim,
+            },
+            finish: None,
+        })
     }
 
     /// A match that left the active list and landed among the finished
     /// ones just ended: hold the position it ended on, off the finished
-    /// row, with the result for the #lounge strip. Read off the snapshot rather than the event feed,
+    /// row, with the result for the live strip. Read off the snapshot rather than the event feed,
     /// so it fires on every replica and not only where the finish was
     /// written. A held result whose row is still listed re-reads its
     /// headline, since the payout is a second write behind the finish.
@@ -1105,94 +1071,29 @@ impl DailyState {
         }
     }
 
-    /// Decide what the #lounge strip shows: a fresh aim beats everything, a
-    /// match that ended inside `LIVE_FINISH_LINGER` beats a move, a move
-    /// inside `LIVE_STRIP_LINGER` beats nothing. Going up or coming down
-    /// waits while the viewer is reading, so the messages never shift under
-    /// a selection. True when the strip's contents changed.
-    fn refresh_live_strip(&mut self, now: Instant, now_utc: DateTime<Utc>, reading: bool) -> bool {
-        let live = self.live_view();
-        let aiming = live.as_ref().is_some_and(|view| view.aim.is_some());
-        let live_fresh = live.as_ref().is_some_and(|view| {
-            strip_is_fresh(
-                view.item.updated,
-                self.live_aims.get(&view.item.id).map(|(_, at)| *at),
-                now_utc,
-                now,
-            )
-        });
-        let finish_fresh = self
-            .live_finish
-            .as_ref()
-            .is_some_and(|finish| now.saturating_duration_since(finish.at) < LIVE_FINISH_LINGER);
-        let want = if aiming {
-            Some(StripPick::Live)
-        } else if finish_fresh {
-            Some(StripPick::Finish)
-        } else if live_fresh {
-            Some(StripPick::Live)
-        } else {
-            None
-        };
-        if want == self.live_strip {
-            return false;
-        }
-        let height_changes = want.is_none() || self.live_strip.is_none();
-        let still_showable = match self.live_strip {
-            Some(StripPick::Live) => live.is_some(),
-            Some(StripPick::Finish) => self.live_finish.is_some(),
-            None => true,
-        };
-        if reading && height_changes && still_showable {
-            return false;
-        }
-        self.live_strip = want;
-        if want != Some(StripPick::Finish) && !finish_fresh {
-            self.live_finish = None;
-        }
-        true
+    /// When the last match ended, for the live strip to weigh against
+    /// its linger.
+    pub fn live_finish_at(&self) -> Option<Instant> {
+        self.live_finish.as_ref().map(|finish| finish.at)
     }
 
-    /// What the #lounge strip paints, if it is up.
-    pub fn live_strip_view(&self) -> Option<LiveStripView<'_>> {
-        match self.live_strip? {
-            StripPick::Live => Some(LiveStripView {
-                view: self.live_view()?,
-                finish: None,
-            }),
-            StripPick::Finish => {
-                let finish = self.live_finish.as_ref()?;
-                Some(LiveStripView {
-                    view: LiveView {
-                        item: &finish.item,
-                        board: &finish.item.board,
-                        aim: None,
-                    },
-                    finish: Some(finish.headline.as_str()),
-                })
-            }
-        }
+    /// The last match that ended, as the live strip paints it: the final
+    /// board with the result.
+    pub fn live_finish_view(&self) -> Option<MatchStripView<'_>> {
+        let finish = self.live_finish.as_ref()?;
+        Some(MatchStripView {
+            view: LiveView {
+                item: &finish.item,
+                board: &finish.item.board,
+                aim: None,
+            },
+            finish: Some(finish.headline.as_str()),
+        })
     }
 
-    /// Whether the #lounge strip is drawing a cue right now, so the frame
-    /// that shows it rides the half-tick.
-    pub fn live_strip_aiming(&self) -> bool {
-        self.live_strip == Some(StripPick::Live)
-            && self.live_view().is_some_and(|view| view.aim.is_some())
-    }
-
-    /// The match the #lounge strip is showing live, for the `o` key that
-    /// opens it. `None` while it holds a result: that board is gone from
-    /// the lobby, and the hint says so.
-    pub fn live_strip_match(&self) -> Option<DailyMatchItem> {
-        match self.live_strip? {
-            StripPick::Live => self.live_item(self.live_featured?.id),
-            StripPick::Finish => None,
-        }
-    }
-
-    /// The featured match, for the click that opens it: read-only for a
-    /// spectator, playable for one of its players (`open_board` decides).
+    /// A match on the live strip, for the key or click that opens it:
+    /// read-only for a spectator, playable for one of its players
+    /// (`open_board` decides).
     pub fn live_item(&self, match_id: Uuid) -> Option<DailyMatchItem> {
         self.snapshot
             .active_matches
