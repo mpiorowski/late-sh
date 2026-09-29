@@ -143,6 +143,7 @@ pub(crate) fn draw(
     };
     board.board_geometry.set(None);
     board.target_geometry.set(None);
+    board.card_slots.set(None);
 
     if let Some(error) = &board.load_error {
         draw_center_message(frame, area, &format!("Failed to load match: {error}"));
@@ -254,6 +255,14 @@ fn draw_match(
         }
         DailyGameDetail::Briscola(briscola) => {
             super::briscola_ui::draw(frame, area, daily, board, detail, briscola);
+            return;
+        }
+        DailyGameDetail::Cribbage(cribbage) => {
+            super::cribbage_ui::draw(frame, area, daily, board, detail, cribbage);
+            return;
+        }
+        DailyGameDetail::GinRummy(gin) => {
+            super::gin_ui::draw(frame, area, daily, board, detail, gin);
             return;
         }
         DailyGameDetail::EightBall(pool)
@@ -519,6 +528,12 @@ pub(super) fn result_banner(
         // A frame is won on points, so it names no ball: the last black is
         // just the last ball.
         DailyResult::FrameWon => ("Frame won", winner_text(detail.row.winner_user_id), color),
+        DailyResult::PeggedOut => ("Pegged out", winner_text(detail.row.winner_user_id), color),
+        DailyResult::ReachedHundred => (
+            "First to 100",
+            winner_text(detail.row.winner_user_id),
+            color,
+        ),
         DailyResult::Timeout => (
             "Timeout",
             format!(

@@ -22,7 +22,7 @@
 //! A player who cannot play says go automatically; the last card before the
 //! count resets pegs one (unless it made thirty-one). Then the show, in
 //! order: pone's hand, the dealer's hand, the crib, each with the starter.
-//! First to 121 wins on the spot, mid-pegging or mid-show, so the count
+//! First to 61 wins on the spot, mid-pegging or mid-show, so the count
 //! stops the moment somebody pegs out. There is no draw.
 
 use anyhow::{Context, Result, bail, ensure};
@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 use super::std_deck::{self, Card, Rank};
 
-pub const WINNING_SCORE: u32 = 121;
+/// The short game: once around the board. The full game's 121 runs to
+/// months at a move a day.
+pub const WINNING_SCORE: u32 = 61;
 /// Cards dealt to each player.
 pub const DEALT: usize = 6;
 /// Cards each player keeps after the discard.
@@ -79,7 +81,7 @@ pub enum Phase {
     /// Only a state between the service's apply and its `deal_next` (or a
     /// client's optimistic copy) sits here.
     AwaitingDeal,
-    /// This seat reached 121.
+    /// This seat reached `WINNING_SCORE`.
     Won(usize),
 }
 
@@ -432,6 +434,14 @@ impl Table {
         other(self.dealer)
     }
 
+    /// `seat`'s cards low to high: the order the board draws a hand in and
+    /// the cursor walks, so the two always agree. Only ever the viewer's.
+    pub fn held(&self, seat: usize) -> Vec<Card> {
+        let mut cards = self.hands[seat].clone();
+        std_deck::sort_by_rank(&mut cards);
+        cards
+    }
+
     /// Whether `seat` holds a card that fits under thirty-one.
     pub fn can_play(&self, seat: usize) -> bool {
         self.hands[seat]
@@ -531,7 +541,11 @@ impl Table {
     fn show(&mut self) {
         let starter = self.starter.expect("the starter is cut before pegging");
         let parts = [
-            (ShowPart::PoneHand, self.pone(), self.kept[self.pone()].clone()),
+            (
+                ShowPart::PoneHand,
+                self.pone(),
+                self.kept[self.pone()].clone(),
+            ),
             (
                 ShowPart::DealerHand,
                 self.dealer,

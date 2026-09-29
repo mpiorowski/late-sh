@@ -28,7 +28,9 @@ use super::{
     briscola::DailyBriscolaState,
     checkers::{self, DailyCheckersState},
     connect4::{self, DailyConnect4State},
+    cribbage::{self, DailyCribbageState},
     games::DailyGame,
+    gin::{self, DailyGinState},
     pool::{DailyPoolState, PoolAimShare},
     reversi::{self, DailyReversiState},
     svc::{DailyChessState, DailyFinishedItem, DailyMatchItem, DailyWinPayout},
@@ -93,7 +95,9 @@ pub fn finish_headline(item: &DailyFinishedItem) -> String {
             | DailyResult::EightPotted
             | DailyResult::EarlyEight
             | DailyResult::NinePotted
-            | DailyResult::FrameWon => format!("a draw · {phrase}"),
+            | DailyResult::FrameWon
+            | DailyResult::PeggedOut
+            | DailyResult::ReachedHundred => format!("a draw · {phrase}"),
         },
     }
 }
@@ -158,6 +162,16 @@ pub enum LiveBoard {
         /// Points captured per seat.
         points: [u32; 2],
         stock_remaining: usize,
+    },
+    /// A race to a target score over many hands: cribbage and gin rummy.
+    /// Scores only; the hands stay hidden.
+    ScoreRace {
+        /// Seat 0's user id; the seats are the claim-time coin flip.
+        seat0_id: Uuid,
+        scores: [u32; 2],
+        target: u32,
+        /// The hand in play, from one.
+        hand: usize,
     },
     Pool {
         rules: PoolRules,
@@ -293,6 +307,36 @@ impl MatchSummary {
                         seat0_id: state.seats[0],
                         points: table.points,
                         stock_remaining: state.stock_remaining(),
+                    },
+                })
+            }
+            DailyGame::Cribbage => {
+                let state = DailyCribbageState::parse(state)?;
+                let table = state.table();
+                Ok(Self {
+                    white_id: None,
+                    black_id: None,
+                    move_count: state.move_count(),
+                    board: LiveBoard::ScoreRace {
+                        seat0_id: state.seats[0],
+                        scores: table.scores,
+                        target: cribbage::WINNING_SCORE,
+                        hand: table.hand + 1,
+                    },
+                })
+            }
+            DailyGame::GinRummy => {
+                let state = DailyGinState::parse(state)?;
+                let table = state.table();
+                Ok(Self {
+                    white_id: None,
+                    black_id: None,
+                    move_count: state.move_count(),
+                    board: LiveBoard::ScoreRace {
+                        seat0_id: state.seats[0],
+                        scores: table.scores,
+                        target: gin::TARGET_SCORE,
+                        hand: table.hand + 1,
                     },
                 })
             }

@@ -283,7 +283,9 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
         DailyGame::ConnectFour => format!("{} drops", item.move_count),
         DailyGame::Reversi | DailyGame::Checkers => format!("{} moves", item.move_count),
         DailyGame::Backgammon => format!("{} rolls", item.move_count),
-        DailyGame::Briscola => format!("{} cards", item.move_count),
+        DailyGame::Briscola | DailyGame::Cribbage | DailyGame::GinRummy => {
+            format!("{} cards", item.move_count)
+        }
         DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
             format!("{} shots", item.move_count)
         }
@@ -467,7 +469,9 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
         DailyGame::ConnectFour => format!("{} drops", item.move_count),
         DailyGame::Reversi | DailyGame::Checkers => format!("{} moves", item.move_count),
         DailyGame::Backgammon => format!("{} rolls", item.move_count),
-        DailyGame::Briscola => format!("{} cards", item.move_count),
+        DailyGame::Briscola | DailyGame::Cribbage | DailyGame::GinRummy => {
+            format!("{} cards", item.move_count)
+        }
         DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
             format!("{} shots", item.move_count)
         }

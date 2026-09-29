@@ -37,11 +37,15 @@ pub enum DailyResult {
     /// the pool results, it names no ball: a frame is won on points, and the
     /// last black is just the last ball.
     FrameWon,
+    /// Cribbage: this player reached 121, mid-pegging or mid-show.
+    PeggedOut,
+    /// Gin rummy: this player reached 100 across the hands.
+    ReachedHundred,
 }
 
 impl DailyResult {
     /// Every result, for `parse`. A new variant goes here and in `as_str`.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Checkmate,
         Self::Draw,
         Self::Resign,
@@ -56,6 +60,8 @@ impl DailyResult {
         Self::EarlyEight,
         Self::NinePotted,
         Self::FrameWon,
+        Self::PeggedOut,
+        Self::ReachedHundred,
     ];
 
     /// The persisted `daily_matches.result` value.
@@ -75,6 +81,8 @@ impl DailyResult {
             Self::EarlyEight => "early_eight",
             Self::NinePotted => "nine_potted",
             Self::FrameWon => "frame_won",
+            Self::PeggedOut => "pegged_out",
+            Self::ReachedHundred => "reached_hundred",
         }
     }
 
@@ -127,6 +135,8 @@ impl DailyMatch {
     pub const GAME_KIND_CHECKERS: &'static str = "checkers";
     pub const GAME_KIND_BACKGAMMON: &'static str = "backgammon";
     pub const GAME_KIND_BRISCOLA: &'static str = "briscola";
+    pub const GAME_KIND_CRIBBAGE: &'static str = "cribbage";
+    pub const GAME_KIND_GIN: &'static str = "gin";
     pub const GAME_KIND_EIGHTBALL: &'static str = "eightball";
     pub const GAME_KIND_NINEBALL: &'static str = "nineball";
     pub const GAME_KIND_SNOOKER: &'static str = "snooker";

@@ -32,11 +32,15 @@ use super::{
     briscola::DailyBriscolaState,
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
+    cribbage::{self, CribbageMove, DailyCribbageState},
     games::DailyGame,
+    gin::{self, DailyGinState, GinMove, Pile},
+    hand_ui::CardSlots,
     live::{LiveView, MatchStripView, finish_headline},
     pool::{DailyPoolState, PoolAimShare},
     pool_draft::{PoolCueHit, PoolDetail, PoolDraft, PoolPlayback, should_share_aim},
     reversi::DailyReversiState,
+    std_deck::Card,
     svc::{
         DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyChessState,
         DailyEvent, DailyFinishOutcome, DailyFinishedItem, DailyMatchItem, DailyService,
@@ -250,6 +254,10 @@ pub struct DailyBoardState {
     /// into a spot on the cloth. Same render-recorded contract as
     /// `target_geometry`; `None` whenever the overview is the one on screen.
     pub pool_eye_geometry: Cell<Option<Eye>>,
+    /// The card row a click can pick from in the cribbage and gin boards (a
+    /// hand, or gin's two piles), as last drawn. Same render-recorded
+    /// contract as `target_geometry`.
+    pub card_slots: Cell<Option<CardSlots>>,
 }
 
 impl DailyBoardState {
@@ -308,6 +316,8 @@ pub enum DailyGameDetail {
     Checkers(CheckersDetail),
     Backgammon(BackgammonDetail),
     Briscola(BriscolaDetail),
+    Cribbage(CribbageDetail),
+    GinRummy(GinDetail),
     /// Both pool games share one detail, one state type and one renderer; only
     /// the ruleset differs, and that rides inside `DailyPoolState`. Two
     /// variants rather than one so `kind()` can still answer honestly — the
@@ -329,6 +339,8 @@ impl DailyGameDetail {
             Self::Checkers(_) => DailyGame::Checkers,
             Self::Backgammon(_) => DailyGame::Backgammon,
             Self::Briscola(_) => DailyGame::Briscola,
+            Self::Cribbage(_) => DailyGame::Cribbage,
+            Self::GinRummy(_) => DailyGame::GinRummy,
             Self::EightBall(_) => DailyGame::EightBall,
             Self::NineBall(_) => DailyGame::NineBall,
             Self::Snooker(_) => DailyGame::Snooker,
@@ -394,6 +406,27 @@ pub struct BriscolaDetail {
     /// A card left this session and hasn't come back via reload yet; blocks
     /// playing again until the canonical row lands.
     pub play_in_flight: bool,
+}
+
+pub struct CribbageDetail {
+    pub state: DailyCribbageState,
+    /// Cards picked for the crib while the discard is composed, at most two.
+    /// A third pick replaces the older; picking a marked card again once two
+    /// are marked sends them.
+    pub marked: Vec<Card>,
+    /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
+}
+
+pub struct GinDetail {
+    pub state: DailyGinState,
+    /// The card picked to throw. Picking it again throws it; `g` throws it
+    /// and knocks.
+    pub marked: Option<Card>,
+    /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
 }
 
 impl ChessDetail {
@@ -481,6 +514,16 @@ impl DailyMatchDetail {
                 state: DailyBriscolaState::parse(&row.state).map_err(|e| e.to_string())?,
                 play_in_flight: false,
             }),
+            Some(DailyGame::Cribbage) => DailyGameDetail::Cribbage(CribbageDetail {
+                state: DailyCribbageState::parse(&row.state).map_err(|e| e.to_string())?,
+                marked: Vec::new(),
+                move_in_flight: false,
+            }),
+            Some(DailyGame::GinRummy) => DailyGameDetail::GinRummy(GinDetail {
+                state: DailyGinState::parse(&row.state).map_err(|e| e.to_string())?,
+                marked: None,
+                move_in_flight: false,
+            }),
             Some(DailyGame::EightBall) => DailyGameDetail::EightBall(pool_detail(&row)?),
             Some(DailyGame::NineBall) => DailyGameDetail::NineBall(pool_detail(&row)?),
             Some(DailyGame::Snooker) => DailyGameDetail::Snooker(pool_detail(&row)?),
@@ -502,6 +545,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -517,6 +562,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -533,6 +580,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -549,6 +598,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -565,6 +616,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -581,6 +634,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Reversi(_)
             | DailyGameDetail::Backgammon(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -597,6 +652,8 @@ impl DailyMatchDetail {
             | DailyGameDetail::Reversi(_)
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
             | DailyGameDetail::EightBall(_)
             | DailyGameDetail::NineBall(_)
             | DailyGameDetail::Snooker(_) => None,
@@ -606,7 +663,9 @@ impl DailyMatchDetail {
     pub fn briscola(&self) -> Option<&BriscolaDetail> {
         match &self.game {
             DailyGameDetail::Briscola(briscola) => Some(briscola),
-            DailyGameDetail::Chess(_)
+            DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::Chess(_)
             | DailyGameDetail::Chess960(_)
             | DailyGameDetail::Battleship(_)
             | DailyGameDetail::Connect4(_)
@@ -634,7 +693,9 @@ impl DailyMatchDetail {
             | DailyGameDetail::Reversi(_)
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
-            | DailyGameDetail::Briscola(_) => None,
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_) => None,
         }
     }
 
@@ -650,7 +711,9 @@ impl DailyMatchDetail {
             | DailyGameDetail::Reversi(_)
             | DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
-            | DailyGameDetail::Briscola(_) => None,
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_) => None,
         }
     }
 
@@ -1281,8 +1344,9 @@ impl DailyState {
                 // A visual slot on the 2x14 board grid: bottom row, in the
                 // player's own home quadrant.
                 DailyGame::Backgammon => backgammon::SLOT_COLS + 9,
-                // The briscola cursor is a slot in your own hand.
-                DailyGame::Briscola => 0,
+                // The card games' cursor is a slot in your own hand (or, for
+                // gin's draw, one of the two piles: the stock first).
+                DailyGame::Briscola | DailyGame::Cribbage | DailyGame::GinRummy => 0,
                 // Pool aims in table coordinates, not cells; the cursor is
                 // unused and the draft carries the aim.
                 DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => 0,
@@ -1306,6 +1370,7 @@ impl DailyState {
             pool_shared_at: None,
             pool_eye: false,
             pool_eye_geometry: Cell::new(None),
+            card_slots: Cell::new(None),
         });
         self.request_board_reload();
     }
@@ -1494,6 +1559,28 @@ impl DailyState {
                 let max = briscola.state.hand_of(user_id).len().saturating_sub(1) as isize;
                 board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
             }
+            Some(DailyGameDetail::Cribbage(cribbage)) => {
+                // One-dimensional over your own hand, which shrinks as the
+                // discard and the pegging take cards out of it.
+                let held = cribbage
+                    .state
+                    .seat_of(user_id)
+                    .map_or(0, |seat| cribbage.state.table().hands[seat].len());
+                let max = held.saturating_sub(1) as isize;
+                board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
+            }
+            Some(DailyGameDetail::GinRummy(gin)) => {
+                // Over the two piles while you owe a draw, over your hand
+                // once you owe a discard.
+                let table = gin.state.table();
+                let slots = match (table.phase, gin.state.seat_of(user_id)) {
+                    (gin::Phase::Draw(_), Some(_)) => 2,
+                    (_, Some(seat)) => table.hands[seat].len(),
+                    (_, None) => 0,
+                };
+                let max = slots.saturating_sub(1) as isize;
+                board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
+            }
             Some(DailyGameDetail::Backgammon(_)) => {
                 // The 2x14 visual slot grid (points, bar, off tray); "up"
                 // (dy=1) moves to the top row.
@@ -1574,6 +1661,8 @@ impl DailyState {
             DailyGame::Checkers => Self::checkers_select(board, user_id, &svc),
             DailyGame::Backgammon => Self::backgammon_select(board, user_id, &svc),
             DailyGame::Briscola => Self::briscola_play(board, user_id, &svc),
+            DailyGame::Cribbage => Self::cribbage_select(board, user_id, &svc),
+            DailyGame::GinRummy => Self::gin_select(board, user_id, &svc),
             // Routed above: firing needs `self`, not just the board.
             DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {}
         }
@@ -1922,6 +2011,194 @@ impl DailyState {
         svc.play_move_task(user_id, board.match_id, card_id, card_id);
     }
 
+    /// Space/Enter on the cribbage board. Discarding: pick two cards, then
+    /// pick either of them again to send both (a third pick swaps out the
+    /// older). Pegging: play the card under the cursor. Applies
+    /// optimistically; the one thing a client cannot do is deal, so the
+    /// last card of a hand leaves the board waiting on the reload.
+    fn cribbage_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let DailyGameDetail::Cribbage(cribbage) = &mut detail.game else {
+            return;
+        };
+        if cribbage.move_in_flight {
+            return;
+        }
+        let Some(seat) = cribbage.state.seat_of(user_id) else {
+            return;
+        };
+        let table = cribbage.state.table();
+        let held = table.held(seat);
+        let Some(&card) = held.get(board.cursor) else {
+            board.cursor = held.len().saturating_sub(1);
+            return;
+        };
+        let played = match table.phase {
+            cribbage::Phase::Discard(on) if on == seat => {
+                if !cribbage.marked.contains(&card) {
+                    if cribbage.marked.len() == 2 {
+                        cribbage.marked.remove(0);
+                    }
+                    cribbage.marked.push(card);
+                    return;
+                }
+                if cribbage.marked.len() < 2 {
+                    cribbage.marked.retain(|marked| *marked != card);
+                    return;
+                }
+                CribbageMove::Discard([cribbage.marked[0], cribbage.marked[1]])
+            }
+            cribbage::Phase::Peg(on) if on == seat => CribbageMove::Play(card),
+            cribbage::Phase::Discard(_)
+            | cribbage::Phase::Peg(_)
+            | cribbage::Phase::AwaitingDeal
+            | cribbage::Phase::Won(_) => return,
+        };
+        // A card that would pass 31 is refused here as it would be by the
+        // server; the board dims those cards, so nothing is sent.
+        if cribbage.state.apply_move(played).is_err() {
+            return;
+        }
+        cribbage.move_in_flight = true;
+        cribbage.marked.clear();
+        detail.row.turn_user_id = cribbage.state.turn_user();
+        let remaining = cribbage.state.table().hands[seat].len();
+        board.cursor = board.cursor.min(remaining.saturating_sub(1));
+        svc.play_cribbage_move_task(user_id, board.match_id, played);
+    }
+
+    /// Space/Enter on the gin board. Owing a draw: take from the pile under
+    /// the cursor (the stock, or the discard). Owing a discard: pick a card,
+    /// then pick it again to throw it.
+    fn gin_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
+            return;
+        };
+        if gin.move_in_flight {
+            return;
+        }
+        let Some(seat) = gin.state.seat_of(user_id) else {
+            return;
+        };
+        let table = gin.state.table();
+        match table.phase {
+            gin::Phase::Draw(on) if on == seat => {
+                let pile = match board.cursor {
+                    0 => Pile::Stock,
+                    _ => Pile::Discard,
+                };
+                let played = GinMove::Draw(pile);
+                let Ok(outcome) = gin.state.apply_move(played) else {
+                    return;
+                };
+                // Land the cursor on the card just drawn, wherever the
+                // melds put it.
+                let after = gin.state.table();
+                let drawn = match outcome.taken {
+                    Some(card) => Some(card),
+                    None => after.hands[seat].last().copied(),
+                };
+                board.cursor = after
+                    .held(seat)
+                    .iter()
+                    .position(|card| Some(*card) == drawn)
+                    .unwrap_or(0);
+                gin.move_in_flight = true;
+                svc.play_gin_move_task(user_id, board.match_id, played);
+            }
+            gin::Phase::Discard(on) if on == seat => {
+                let held = table.held(seat);
+                let Some(&card) = held.get(board.cursor) else {
+                    board.cursor = held.len().saturating_sub(1);
+                    return;
+                };
+                if gin.marked != Some(card) {
+                    gin.marked = Some(card);
+                    return;
+                }
+                Self::gin_throw(board, user_id, svc, card, false);
+            }
+            gin::Phase::Draw(_)
+            | gin::Phase::Discard(_)
+            | gin::Phase::AwaitingDeal
+            | gin::Phase::Won(_) => {}
+        }
+    }
+
+    /// `g` on the gin board: knock with the picked card. With nothing picked
+    /// it picks the card under the cursor first, so a knock is always two
+    /// deliberate presses, like every other throw. Returns whether the open
+    /// board is a gin board at all: `g` means nothing anywhere else.
+    pub fn board_knock(&mut self) -> bool {
+        let user_id = self.user_id;
+        let svc = self.svc.clone();
+        let Some(board) = &mut self.board else {
+            return false;
+        };
+        let Some(detail) = &mut board.detail else {
+            return false;
+        };
+        let active = detail.is_active();
+        let row_turn = detail.row.turn_user_id;
+        let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
+            return false;
+        };
+        board.resign_confirm = false;
+        let Some(seat) = gin.state.seat_of(user_id) else {
+            return true;
+        };
+        let table = gin.state.table();
+        if !active
+            || row_turn != Some(user_id)
+            || gin.move_in_flight
+            || table.phase != gin::Phase::Discard(seat)
+        {
+            return true;
+        }
+        let held = table.held(seat);
+        match gin.marked {
+            Some(card) => {
+                if gin::deadwood_after_discard(&held, card) <= gin::MAX_KNOCK {
+                    Self::gin_throw(board, user_id, &svc, card, true);
+                }
+            }
+            None => gin.marked = held.get(board.cursor).copied(),
+        }
+        true
+    }
+
+    fn gin_throw(
+        board: &mut DailyBoardState,
+        user_id: Uuid,
+        svc: &DailyService,
+        card: Card,
+        knock: bool,
+    ) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
+            return;
+        };
+        let played = GinMove::Discard { card, knock };
+        if gin.state.apply_move(played).is_err() {
+            return;
+        }
+        gin.move_in_flight = true;
+        gin.marked = None;
+        detail.row.turn_user_id = gin.state.turn_user();
+        board.cursor = 0;
+        svc.play_gin_move_task(user_id, board.match_id, played);
+    }
+
+    /// A click on a card the cribbage or gin board drew: put the cursor
+    /// there and act as Space would.
+    pub fn board_click_card(&mut self, index: usize) {
+        if let Some(board) = &mut self.board {
+            board.cursor = index;
+        }
+        self.board_select_or_move();
+    }
+
     fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {
         let Some(chess) = detail.chess_mut() else {
             return;
@@ -1983,6 +2260,15 @@ impl DailyState {
             DailyGameDetail::EightBall(pool)
             | DailyGameDetail::NineBall(pool)
             | DailyGameDetail::Snooker(pool) => pool.draft.cancel(),
+            // A half-picked discard is put back before Esc leaves.
+            DailyGameDetail::Cribbage(cribbage) if !cribbage.marked.is_empty() => {
+                cribbage.marked.clear();
+                true
+            }
+            DailyGameDetail::GinRummy(gin) if gin.marked.is_some() => {
+                gin.marked = None;
+                true
+            }
             // Nothing pending: Esc leaves.
             DailyGameDetail::Checkers(_)
             | DailyGameDetail::Backgammon(_)
@@ -1991,7 +2277,9 @@ impl DailyState {
             | DailyGameDetail::Battleship(_)
             | DailyGameDetail::Connect4(_)
             | DailyGameDetail::Reversi(_)
-            | DailyGameDetail::Briscola(_) => false,
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_) => false,
         }
     }
 
@@ -2319,6 +2607,8 @@ pub fn result_phrase(result: DailyResult) -> &'static str {
         DailyResult::EarlyEight => "early eight",
         DailyResult::NinePotted => "nine ball",
         DailyResult::FrameWon => "frame won",
+        DailyResult::PeggedOut => "pegged out",
+        DailyResult::ReachedHundred => "first to 100",
     }
 }
 

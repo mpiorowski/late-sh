@@ -138,6 +138,27 @@ pub(crate) fn board_lines(width: u16, view: &LiveView<'_>, background: Rgb) -> V
                 stat_line(format!("{stock_remaining} in the stock")),
             ]
         }
+        LiveBoard::ScoreRace {
+            seat0_id,
+            scores,
+            target,
+            hand,
+        } => {
+            let (seat0, seat1) = if *seat0_id == item.challenger_id {
+                (&item.challenger_username, &item.opponent_username)
+            } else {
+                (&item.opponent_username, &item.challenger_username)
+            };
+            vec![
+                name_line(seat0),
+                stat_line(format!("{} of {target}", scores[0])),
+                Line::from(""),
+                name_line(seat1),
+                stat_line(format!("{} of {target}", scores[1])),
+                Line::from(""),
+                stat_line(format!("hand {hand}")),
+            ]
+        }
     }
 }
 

@@ -124,6 +124,7 @@ fn standing_text(view: &LiveView<'_>) -> String {
             ..
         } => format!("{game} · {}-{}", scores[0], scores[1]),
         LiveBoard::Pool { .. } => format!("{game} · shot {}", view.item.move_count),
+        LiveBoard::ScoreRace { scores, .. } => format!("{game} · {}-{}", scores[0], scores[1]),
         LiveBoard::Chess { .. }
         | LiveBoard::Battleship { .. }
         | LiveBoard::ConnectFour { .. }
@@ -231,7 +232,8 @@ fn last_event_text(view: &LiveView<'_>) -> String {
         | LiveBoard::Reversi { last: None, .. } => FIRST_MOVE.to_string(),
         LiveBoard::Battleship { .. }
         | LiveBoard::Backgammon { .. }
-        | LiveBoard::Briscola { .. } => {
+        | LiveBoard::Briscola { .. }
+        | LiveBoard::ScoreRace { .. } => {
             if view.item.move_count == 0 {
                 FIRST_MOVE.to_string()
             } else {
