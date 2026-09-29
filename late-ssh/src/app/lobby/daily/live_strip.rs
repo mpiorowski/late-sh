@@ -62,18 +62,31 @@ fn word_rows(budget: usize, strip: &MatchStripView<'_>) -> Vec<Vec<Span<'static>
         Style::default().fg(theme::TEXT_DIM()),
     )];
     rows[3] = vec![event_span(budget, strip)];
-    rows[6] = vec![Span::styled(
-        truncate_chars(
-            if strip.finish.is_some() {
-                "ctrl+g to play"
-            } else {
-                "o or click to watch"
-            },
-            budget,
-        ),
-        Style::default().fg(theme::TEXT_FAINT()),
-    )];
+    rows[6] = match strip.finish {
+        Some(_) => key_hint_spans(budget, "ctrl+g", " to play"),
+        None => key_hint_spans(budget, "o", " or click to watch"),
+    };
     rows
+}
+
+/// `press o or click to watch`, the key in amber like the hint bars. Too
+/// narrow for the whole hint, it falls back to one faint truncated run.
+fn key_hint_spans(budget: usize, key: &str, rest: &str) -> Vec<Span<'static>> {
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let full = format!("press {key}{rest}");
+    if full.chars().count() > budget {
+        return vec![Span::styled(truncate_chars(&full, budget), faint)];
+    }
+    vec![
+        Span::styled("press ", faint),
+        Span::styled(
+            key.to_string(),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(rest.to_string(), faint),
+    ]
 }
 
 fn name(username: &Option<String>) -> String {

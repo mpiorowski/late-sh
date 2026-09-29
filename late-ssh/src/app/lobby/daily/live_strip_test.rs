@@ -99,7 +99,13 @@ fn the_words_sit_beside_the_board() {
     assert!(text[1].ends_with("eggy · weslin"), "{}", text[1]);
     assert!(text[2].ends_with("Eight-Ball · shot 0"), "{}", text[2]);
     assert!(text[3].ends_with("waiting for the break"), "{}", text[3]);
-    assert!(text[6].ends_with("o or click to watch"), "{}", text[6]);
+    assert!(text[6].ends_with("press o or click to watch"), "{}", text[6]);
+    let key = lines[6]
+        .spans
+        .iter()
+        .find(|span| span.content == "o")
+        .expect("the key is its own span");
+    assert_eq!(key.style.fg, Some(theme::AMBER_DIM()), "the key stands out");
     assert!(
         text[8].starts_with("── live ─"),
         "the rule parts the strip from the chat: {}",
@@ -120,7 +126,7 @@ fn the_words_sit_beside_the_board() {
         BACKGROUND,
     );
     assert!(line_text(&done[3]).ends_with("weslin won · eight ball · +400 chips"));
-    assert!(line_text(&done[6]).ends_with("ctrl+g to play"));
+    assert!(line_text(&done[6]).ends_with("press ctrl+g to play"));
 }
 
 #[test]
