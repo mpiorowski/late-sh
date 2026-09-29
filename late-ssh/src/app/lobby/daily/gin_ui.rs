@@ -263,21 +263,26 @@ pub(crate) fn table_lines(
     });
     lines.push(Line::raw(""));
 
-    // Your hand, face up and melds first, unless you are only watching.
+    // Your hand, face up and melds first, unless you are only watching. The
+    // card just taken from the pile is dimmed: it cannot be thrown.
     let held = table.held(my_seat);
     let mine: Vec<(Face, Style)> = held
         .iter()
         .enumerate()
         .map(|(index, &card)| match spectating {
             true => (Face::Back, hand_ui::back_style()),
-            false => (
-                Face::Up(card),
-                hand_ui::face_style(
+            false => {
+                let mut style = hand_ui::face_style(
                     card,
                     cursor == Some(index) && !drawing,
                     marked == Some(card),
-                ),
-            ),
+                );
+                // The card just taken from the pile cannot go straight back.
+                if table.taken == Some(card) {
+                    style = style.add_modifier(Modifier::DIM);
+                }
+                (Face::Up(card), style)
+            }
         })
         .collect();
     lines.extend(row(&mine, tier, width));
@@ -402,6 +407,7 @@ fn status_line(
     let my_turn = detail.row.turn_user_id == Some(daily.user_id()) && !board.spectating;
     match (gin.move_in_flight, my_turn, table.phase) {
         (true, _, Phase::AwaitingDeal) => spans.push(Span::styled("Dealing the next hand…", amber)),
+        (true, _, Phase::Draw(_)) => spans.push(Span::styled("Drawing…", amber)),
         (true, _, _) => spans.push(Span::styled("Card away…", amber)),
         (false, true, Phase::Draw(_)) => {
             spans.push(Span::styled("Your draw · the stock or the discard", amber))
@@ -409,6 +415,10 @@ fn status_line(
         (false, true, _) => {
             let held = table.held(my_seat);
             match gin.marked.or_else(|| held.get(board.cursor).copied()) {
+                Some(card) if table.taken == Some(card) => spans.push(Span::styled(
+                    format!("You just took {} · it cannot go straight back", card.label()),
+                    amber,
+                )),
                 Some(card) => {
                     let left = gin::deadwood_after_discard(&held, card);
                     let verb = match gin.marked == Some(card) {

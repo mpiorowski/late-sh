@@ -37,7 +37,8 @@ pub enum DailyResult {
     /// the pool results, it names no ball: a frame is won on points, and the
     /// last black is just the last ball.
     FrameWon,
-    /// Cribbage: this player reached 121, mid-pegging or mid-show.
+    /// Cribbage: this player reached `cribbage::WINNING_SCORE` (61),
+    /// mid-pegging or mid-show.
     PeggedOut,
     /// Gin rummy: this player reached 100 across the hands.
     ReachedHundred,
