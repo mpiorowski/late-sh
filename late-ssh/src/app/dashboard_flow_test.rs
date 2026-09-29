@@ -277,7 +277,8 @@ async fn o_on_a_booth_track_tunes_in_then_opens_the_booth() {
         .await
         .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), me.id, "strip-booth-flow-it");
-    app.resize(160, 40).expect("resize to a card the full strip fits");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
     wait_for_render_contains(&mut app, "lounge").await;
     app.set_paired_playback_source(AudioSource::Icecast);
 
@@ -305,4 +306,64 @@ async fn o_on_a_booth_track_tunes_in_then_opens_the_booth() {
 
     app.handle_input(b"o");
     assert!(app.booth_modal_state.is_open(), "then o opens the booth");
+}
+
+/// A track that left the booth between the strip's last tick and the key
+/// has nothing to tune in to: `o` leaves the viewer's audio source alone.
+#[tokio::test]
+async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
+    use crate::app::audio::youtube::YoutubeVideo;
+    use late_core::models::user::AudioSource;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-gone-me").await;
+    let them = create_test_user(&test_db.db, "strip-gone-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-gone-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.set_paired_playback_source(AudioSource::Icecast);
+
+    app.audio
+        .service()
+        .submit_validated_video(
+            them.id,
+            YoutubeVideo {
+                video_id: "hhhhhhhhhhh".to_string(),
+                title: Some("Naima".to_string()),
+                channel: Some("Late Night Tapes".to_string()),
+                duration_ms: Some(225_000),
+                is_stream: false,
+            },
+        )
+        .await
+        .expect("queue a track");
+    wait_for_render_contains(&mut app, "o or click to tune in").await;
+
+    // The track is skipped, and the key lands before the next tick.
+    app.audio
+        .service()
+        .force_skip()
+        .await
+        .expect("skip the track");
+    let snapshot = app.audio.queue_snapshot();
+    assert!(
+        snapshot.current.is_none() && snapshot.queue.is_empty(),
+        "the track left the booth"
+    );
+
+    app.handle_input(b"o");
+    assert_eq!(
+        app.paired_source,
+        AudioSource::Icecast,
+        "nothing to tune in to"
+    );
+    assert!(!app.booth_modal_state.is_open());
 }

@@ -6,8 +6,8 @@ pub mod radio_meta;
 pub mod state;
 pub mod stations;
 pub mod svc;
-pub mod thumbnail;
 #[cfg(test)]
 mod svc_test;
+pub mod thumbnail;
 pub mod viz;
 pub mod youtube;

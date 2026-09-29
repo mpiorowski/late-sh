@@ -31,9 +31,10 @@ pub const LIVE_HOLD: Duration = Duration::from_secs(60);
 /// between moves, so "active" alone would keep the strip up for good.
 pub const LIVE_STRIP_LINGER: Duration = Duration::from_secs(5 * 60);
 
-/// Whether the strip is up for the featured match: its row was
-/// written inside `LIVE_STRIP_LINGER`, or its shooter is lining up a shot.
-/// `now_utc` is the clock the row's `updated` was stamped with.
+/// Whether the strip is up for the featured source: its last write is
+/// inside `LIVE_STRIP_LINGER`, or somebody is acting on it right now (a
+/// pool shooter lining up a shot). `now_utc` is the clock `updated` was
+/// stamped with.
 pub fn strip_is_fresh(
     updated: DateTime<Utc>,
     aimed_at: Option<Instant>,
@@ -45,12 +46,12 @@ pub fn strip_is_fresh(
     aiming || now_utc.signed_duration_since(updated) < linger
 }
 
-
 /// One thing the strip could feature.
 #[derive(Clone, Copy, Debug)]
 pub struct LiveCandidate {
     pub source: LiveSource,
-    /// The row's last write: newest is what just happened.
+    /// The source's last write (a match row's `updated`, when a track was
+    /// queued): newest is what just happened.
     pub updated: DateTime<Utc>,
     /// When somebody last acted on it right now, if they have: a pool
     /// shooter moving their cue, the one source of it today.
@@ -64,19 +65,19 @@ pub struct Featured {
     pub since: DateTime<Utc>,
 }
 
-/// Pick what the strip features, from the rows' `updated`
-/// stamps, the wall clock, and the match this session is showing.
+/// Pick what the strip features, from the candidates' `updated` stamps,
+/// the wall clock, and the source this session is showing.
 ///
-/// A fresh aim wins outright, the freshest if several. Otherwise the match
+/// A fresh aim wins outright, the freshest if several. Otherwise the source
 /// on the strip keeps it for `LIVE_HOLD` from the moment it took it, as long
-/// as it is still in the lobby and its last write is inside
+/// as it is still a candidate and its last write is inside
 /// `LIVE_STRIP_LINGER`. Past that the writes are replayed in order
 /// (`replay`), which is also where a session with nothing up starts, so one
 /// that connects mid-hold sees what the room sees.
 ///
-/// The replay reads only each row's latest stamp, so a match that moves
-/// again loses its old place in it. The hold is what keeps that from
-/// flipping the board early: a session follows the replay one match behind
+/// The replay reads only each candidate's latest stamp, so a match that
+/// moves again loses its old place in it. The hold is what keeps that from
+/// flipping the strip early: a session follows the replay one step behind
 /// rather than cut a minute short.
 pub fn pick_featured(
     current: Option<Featured>,
@@ -123,13 +124,13 @@ pub fn pick_featured(
 }
 
 /// Replay the writes in order, from data every session and every replica
-/// shares: a match that takes the strip keeps it for `LIVE_HOLD`, and the
+/// shares: a source that takes the strip keeps it for `LIVE_HOLD`, and the
 /// next write in line takes over at its own stamp or the end of that hold,
-/// whichever is later. So two moves a minute apart each get their minute, in
-/// order. A match whose turn would come after its own `LIVE_STRIP_LINGER`
-/// ran out is skipped: the strip could not show it, and its minute would
-/// keep a move that just landed waiting behind nothing. Returns the match
-/// and when it took the strip.
+/// whichever is later. So a move and a queued track a minute apart each get
+/// their minute, in order. A source whose turn would come after its own
+/// `LIVE_STRIP_LINGER` ran out is skipped: the strip could not show it, and
+/// its minute would keep news that just landed waiting behind nothing.
+/// Returns the source and when it took the strip.
 fn replay(
     candidates: &[LiveCandidate],
     now_utc: DateTime<Utc>,
@@ -137,7 +138,7 @@ fn replay(
     let hold = chrono::Duration::from_std(LIVE_HOLD).expect("hold fits chrono");
     let linger = chrono::Duration::from_std(LIVE_STRIP_LINGER).expect("linger fits chrono");
     let mut ordered: Vec<&LiveCandidate> = candidates.iter().collect();
-    // The source breaks a tie between two rows stamped the same instant, so
+    // The source breaks a tie between two stamps of the same instant, so
     // the order is the same on every session.
     ordered.sort_by_key(|candidate| (candidate.updated, candidate.source));
     let mut ordered = ordered.into_iter();
@@ -156,7 +157,6 @@ fn replay(
     }
     Some((shown, shown_at))
 }
-
 
 #[cfg(test)]
 #[path = "pick_test.rs"]

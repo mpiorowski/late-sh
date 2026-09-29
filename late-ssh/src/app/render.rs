@@ -618,8 +618,7 @@ impl App {
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
         let dashboard_live_strip = if home_selected {
-            self.live
-                .view(&self.daily, &self.audio, self.paired_source)
+            self.live.view(&self.daily, &self.audio, self.paired_source)
         } else {
             None
         };

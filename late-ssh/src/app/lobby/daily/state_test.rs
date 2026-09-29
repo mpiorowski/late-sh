@@ -83,10 +83,7 @@ async fn only_events_this_session_can_see_cost_a_repaint() {
     // Nor does this session's own aim echoing back: the draft it is being
     // given right now is already on the board.
     svc.publish_aim(elsewhere, me.id, aim);
-    assert!(
-        !state.tick().changed,
-        "my own aim comes back to me unread"
-    );
+    assert!(!state.tick().changed, "my own aim comes back to me unread");
 
     // A move in a match this session is not watching is the lobby snapshot's
     // news, and the snapshot raises its own flag.

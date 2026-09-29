@@ -68,6 +68,16 @@ impl AudioState {
         super::booth::live::candidates(&self.snapshot_rx.borrow())
     }
 
+    /// Whether a track is still in the booth, playing or queued.
+    pub fn in_booth(&self, item_id: Uuid) -> bool {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .any(|item| item.id == item_id)
+    }
+
     /// The thumbnail of one track in the booth, once it has been fetched.
     pub fn queue_thumbnail(&self, item_id: Uuid) -> Option<Thumbnail> {
         let snapshot = self.snapshot_rx.borrow();

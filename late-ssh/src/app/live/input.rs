@@ -45,19 +45,23 @@ fn open(app: &mut App, source: LiveSource) -> bool {
             None => false,
         },
         // Tune in; somebody already on YouTube gets the booth, where the
-        // queue can be voted on and added to.
-        LiveSource::BoothTrack(_) => {
-            match app.paired_source {
-                AudioSource::Youtube => {
-                    let submit_enabled = app.audio.booth_submit_enabled();
-                    app.booth_modal_state.open(submit_enabled);
+        // queue can be voted on and added to. Gone between the frame and
+        // the key (it was skipped or deleted): nothing to tune in to.
+        LiveSource::BoothTrack(item_id) => match app.audio.in_booth(item_id) {
+            true => {
+                match app.paired_source {
+                    AudioSource::Youtube => {
+                        let submit_enabled = app.audio.booth_submit_enabled();
+                        app.booth_modal_state.open(submit_enabled);
+                    }
+                    AudioSource::Radio | AudioSource::Icecast => {
+                        app.set_paired_playback_source(AudioSource::Youtube);
+                        app.banner = Some(Banner::success("Audio source: YouTube"));
+                    }
                 }
-                AudioSource::Radio | AudioSource::Icecast => {
-                    app.set_paired_playback_source(AudioSource::Youtube);
-                    app.banner = Some(Banner::success("Audio source: YouTube"));
-                }
+                true
             }
-            true
-        }
+            false => false,
+        },
     }
 }

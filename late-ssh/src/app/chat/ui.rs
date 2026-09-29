@@ -1207,16 +1207,9 @@ pub fn draw_dashboard_chat_card(
     // The live strip takes its rows off the top, so the newest messages,
     // anchored at the bottom, stay where they are when it comes and goes.
     if let Some(strip) = &view.live_strip
-        && let Some((size, strip_area, rest)) =
-            crate::app::live::ui::fit_live_strip(messages_area)
+        && let Some((size, strip_area, rest)) = crate::app::live::ui::fit_live_strip(messages_area)
     {
-        crate::app::live::ui::draw_live_strip(
-            frame,
-            strip_area,
-            size,
-            strip,
-            view.live_strip_hit,
-        );
+        crate::app::live::ui::draw_live_strip(frame, strip_area, size, strip, view.live_strip_hit);
         messages_area = rest;
     }
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);

@@ -29,7 +29,7 @@ One slot. Sources offer candidates, the slot features one at a time, and `o` or 
 | `LiveSource` | Candidates | Body | Opening it |
 |---|---|---|---|
 | `DailyMatch(match id)` | `DailyState::live_candidates`: every active match, the viewer's own included, stamped with the row's `updated`, plus the shooter's aim while fresh | `lobby/daily/live_strip.rs` over `live_board.rs`: the board, the players, where the match stands, what just happened | `open_board` with `BoardEntry::LoungeStrip`, then `Screen::DailyMatch` |
-| `BoothTrack(queue item id)` | `AudioState::live_candidates`: every track playing or queued in the YouTube booth, stamped with when it was queued | `audio/booth/live.rs`: the thumbnail, the title, channel and length, who queued it and where it stands | On another source: switch to YouTube (`App::set_paired_playback_source`). Already on YouTube: open the booth modal |
+| `BoothTrack(queue item id)` | `AudioState::live_candidates`: every track playing or queued in the YouTube booth, stamped with when it was queued | `audio/booth/live.rs`: the thumbnail, the title, channel and length, who queued it and where it stands | On another source: switch to YouTube (`App::set_paired_playback_source`). Already on YouTube: open the booth modal. Nothing if the track left the booth since the last tick (`AudioState::in_booth`) |
 
 A daily match that just ended is not a candidate. `DailyState` holds its final board and result (`live_finish_view`, `live_finish_at`) and the slot gives it `LIVE_FINISH_LINGER`; it opens nothing, since its board has left the lobby.
 
@@ -81,4 +81,4 @@ The pick reads only stamps that live in the database, so it is as shared as the 
 - `state_test.rs`: a booth track and a daily move taking turns with a result cutting in and the strip coming down, asserted as the whole of what the strip shows and opens at each step; the height held under a selection.
 - `ui_test.rs`: the form picked by the card's size.
 - Bodies are tested with their source: `../lobby/daily/live_strip_test.rs`, `../audio/booth/live_test.rs`.
-- End to end in `../dashboard_flow_test.rs`: `o` opening a match, closing back to the card, and `o` on a booth track tuning in then opening the booth.
+- End to end in `../dashboard_flow_test.rs`: `o` opening a match, closing back to the card, `o` on a booth track tuning in then opening the booth, and `o` on a track that left the booth changing nothing.

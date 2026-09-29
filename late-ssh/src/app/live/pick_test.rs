@@ -75,7 +75,11 @@ fn a_match_on_the_strip_keeps_its_minute_when_another_moves_again() {
     let start = Instant::now();
     let t0 = Utc.with_ymd_and_hms(2026, 9, 28, 14, 0, 0).unwrap();
     let at = |secs: i64| t0 + chrono::Duration::seconds(secs);
-    let (a, b, c) = (LiveSource::DailyMatch(Uuid::from_u128(1)), LiveSource::DailyMatch(Uuid::from_u128(2)), LiveSource::DailyMatch(Uuid::from_u128(3)));
+    let (a, b, c) = (
+        LiveSource::DailyMatch(Uuid::from_u128(1)),
+        LiveSource::DailyMatch(Uuid::from_u128(2)),
+        LiveSource::DailyMatch(Uuid::from_u128(3)),
+    );
     let candidate = |source, secs| LiveCandidate {
         source,
         updated: at(secs),
@@ -191,4 +195,3 @@ fn the_strip_is_fresh_after_a_write_or_under_an_aim() {
         "an aim past its window is a player who stopped"
     );
 }
-
