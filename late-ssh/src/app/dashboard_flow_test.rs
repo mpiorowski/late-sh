@@ -160,3 +160,48 @@ async fn c_on_dashboard_copies_selected_message() {
     app.handle_input(b"c");
     wait_for_render_contains(&mut app, "Message copied to clipboard!").await;
 }
+
+/// `o` on the #lounge card opens the match the live strip is showing, and
+/// does nothing while no strip is up.
+#[tokio::test]
+async fn o_opens_the_live_strip_match_from_the_lounge_card() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-key-me").await;
+    let them = create_test_user(&test_db.db, "strip-key-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-key-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::Dashboard, "no strip, nothing to open");
+
+    // The challenge is posted by another service over the same database;
+    // claiming it through the app's own puts it in the app's snapshot.
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel::<ActivityEvent>(8);
+    let poster = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = poster
+        .post_challenge(them.id, DailyGame::Chess, None)
+        .await
+        .expect("post");
+    app.daily.claim_challenge(posted.id);
+    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
+    wait_for_render_contains(&mut app, "Daily Match").await;
+}

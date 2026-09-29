@@ -33,7 +33,7 @@ use super::{
     games::DailyGame,
     pool::{DailyPoolState, PoolAimShare},
     reversi::{self, DailyReversiState},
-    svc::{DailyChessState, DailyFinishOutcome, DailyMatchItem, DailyWinPayout},
+    svc::{DailyChessState, DailyFinishedItem, DailyMatchItem, DailyWinPayout},
 };
 
 /// An aim older than this is a player who stopped, not one lining up.
@@ -82,39 +82,37 @@ pub fn strip_is_fresh(
     aiming || now_utc.signed_duration_since(updated) < linger
 }
 
-/// The strip's line for a match that just ended: `eggy won · eight ball ·
-/// +300 chips`, `a draw · no moves left`. The chips are named only when they
-/// were paid; the other payout arms are the winner's news, not the room's.
-pub fn finish_headline(item: &DailyMatchItem, outcome: DailyFinishOutcome, result: &str) -> String {
-    let phrase = super::state::result_phrase(result);
-    match outcome {
-        DailyFinishOutcome::Won { user_id, payout } => {
-            let winner = if user_id == item.challenger_id {
+/// The result line the #lounge strip shows under a finished match's last
+/// board, read off the finished row as the snapshot carries it, so it is
+/// the same on every replica. Chips are named only once the payout, a
+/// second write behind the finish, is on the row and says `paid`.
+pub fn finish_headline(item: &DailyFinishedItem) -> String {
+    let phrase = super::state::result_phrase(&item.result);
+    match item.winner_user_id {
+        Some(winner_id) => {
+            let winner = if winner_id == item.challenger_id {
                 &item.challenger_username
             } else {
                 &item.opponent_username
             };
             let winner = winner.as_deref().unwrap_or("player");
-            match payout {
-                DailyWinPayout::Paid => {
+            match item.win_payout {
+                Some(DailyWinPayout::Paid) => {
                     format!(
                         "{winner} won · {phrase} · +{} chips",
                         item.game.win_payout()
                     )
                 }
-                DailyWinPayout::Unplayed
-                | DailyWinPayout::PairDayCapped
-                | DailyWinPayout::Failed => {
-                    format!("{winner} won · {phrase}")
-                }
+                Some(DailyWinPayout::Unplayed)
+                | Some(DailyWinPayout::PairDayCapped)
+                | Some(DailyWinPayout::Failed)
+                | None => format!("{winner} won · {phrase}"),
             }
         }
-        DailyFinishOutcome::Draw
-            if result == late_core::models::daily_match::DailyMatch::RESULT_DRAW =>
-        {
+        None if item.result == late_core::models::daily_match::DailyMatch::RESULT_DRAW => {
             "a draw".to_string()
         }
-        DailyFinishOutcome::Draw => format!("a draw · {phrase}"),
+        None => format!("a draw · {phrase}"),
     }
 }
 

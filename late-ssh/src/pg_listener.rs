@@ -26,6 +26,7 @@ use late_core::models::{
     chat_message_gild::CHAT_MESSAGE_GILDED_CHANNEL,
     chips::CHIP_USER_CHANGED_CHANNEL,
     crown::CROWN_CHANGED_CHANNEL,
+    daily_match::DAILY_MATCH_CHANGED_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
@@ -50,6 +51,7 @@ pub enum Refresh {
     AppFlags,
     RunnerLooks,
     CrownHolder,
+    DailyMatches,
     Pot,
     Articles,
     ActiveQuestBoards,
@@ -63,6 +65,7 @@ impl Refresh {
             Refresh::AppFlags => "app flags",
             Refresh::RunnerLooks => "runner looks",
             Refresh::CrownHolder => "crown holder",
+            Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active quest boards",
@@ -112,6 +115,7 @@ pub enum Channel {
     ChatMessageGilded,
     ChipUserChanged,
     CrownChanged,
+    DailyMatchChanged,
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
     PotChanged,
@@ -123,13 +127,14 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 14] = [
+    pub const ALL: [Channel; 15] = [
         Channel::AppFlagChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
         Channel::ChatMessageGilded,
         Channel::ChipUserChanged,
         Channel::CrownChanged,
+        Channel::DailyMatchChanged,
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
         Channel::PotChanged,
@@ -149,6 +154,7 @@ impl Channel {
             Channel::ChatMessageGilded => CHAT_MESSAGE_GILDED_CHANNEL,
             Channel::ChipUserChanged => CHIP_USER_CHANGED_CHANNEL,
             Channel::CrownChanged => CROWN_CHANGED_CHANNEL,
+            Channel::DailyMatchChanged => DAILY_MATCH_CHANGED_CHANNEL,
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,

@@ -125,12 +125,7 @@ pub struct DailyState {
     live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
     /// The match the #lounge strip features (`live::pick_featured`).
     live_featured: Option<Uuid>,
-    /// Active matches that left the snapshot with a board, oldest first,
-    /// capped at `LIVE_VANISHED_CAP`. A finish event can land after the
-    /// snapshot already dropped its match, and the strip wants that match's
-    /// final position (`hold_finish`).
-    live_vanished: Vec<DailyMatchItem>,
-    /// A match that just ended, held for the #lounge strip.
+    /// A match that just ended, held for the #lounge strip (`note_finished`).
     live_finish: Option<LiveFinish>,
     /// What the #lounge strip shows, decided on the tick
     /// (`refresh_live_strip`) so a change of height is a change of frame.
@@ -140,10 +135,6 @@ pub struct DailyState {
     /// draw; a finished match records nothing, there is no board to open.
     pub live_strip_hit: Cell<Option<(Rect, Uuid)>>,
 }
-
-/// How many vanished matches `DailyState::live_vanished` keeps: a finish
-/// lands within a tick or two of its snapshot, so a handful covers a burst.
-const LIVE_VANISHED_CAP: usize = 4;
 
 /// A match that just ended, as the #lounge strip shows it: its last known
 /// position and the result line.
@@ -594,7 +585,6 @@ impl DailyState {
             board: None,
             live_aims: HashMap::new(),
             live_featured: None,
-            live_vanished: Vec::new(),
             live_finish: None,
             live_strip: None,
             live_strip_hit: Cell::new(None),
@@ -616,7 +606,7 @@ impl DailyState {
         let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             let next = self.snapshot_rx.borrow_and_update().clone();
-            self.note_vanished(&next);
+            self.note_finished(&next);
             self.snapshot = next;
             self.notify_turn_edges();
             changed = true;
@@ -708,7 +698,6 @@ impl DailyState {
                     self.request_board_reload();
                     reloaded = true;
                 }
-                let held = self.hold_finish(match_id, outcome, &result);
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
                 let banner = match outcome {
                     DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
@@ -753,9 +742,9 @@ impl DailyState {
                     DailyFinishOutcome::Won { .. } | DailyFinishOutcome::Draw => None,
                 };
                 // A match you are not in, finishing while you are not watching
-                // it, is news for the lobby snapshot and not for this frame,
-                // unless the #lounge strip took its final board.
-                let changed = reloaded || banner.is_some() || held;
+                // it, is news for the lobby snapshot and not for this frame:
+                // the #lounge strip takes its final board off the snapshot.
+                let changed = reloaded || banner.is_some();
                 EventEffect { banner, changed }
             }
             // Somebody is lining up a shot on a table this session has open.
@@ -944,50 +933,34 @@ impl DailyState {
         Some(LiveView { item, board, aim })
     }
 
-    /// Remember active matches the incoming snapshot no longer lists, so a
-    /// finish event arriving after it can still show their final board.
-    fn note_vanished(&mut self, next: &DailySnapshot) {
+    /// A match that left the active list and landed among the finished
+    /// ones just ended: hold its last known position with the result for
+    /// the #lounge strip. Read off the snapshot rather than the event feed,
+    /// so it fires on every replica and not only where the finish was
+    /// written. A held result whose row is still listed re-reads its
+    /// headline, since the payout is a second write behind the finish.
+    fn note_finished(&mut self, next: &DailySnapshot) {
         for item in &self.snapshot.active_matches {
-            if item.board.is_some() && !next.active_matches.iter().any(|n| n.id == item.id) {
-                self.live_vanished.push(item.clone());
+            if item.board.is_none() || next.active_matches.iter().any(|n| n.id == item.id) {
+                continue;
             }
+            let Some(finished) = next.finished_matches.iter().find(|f| f.id == item.id) else {
+                continue;
+            };
+            self.live_finish = Some(LiveFinish {
+                item: item.clone(),
+                headline: finish_headline(finished),
+                at: Instant::now(),
+            });
         }
-        let extra = self.live_vanished.len().saturating_sub(LIVE_VANISHED_CAP);
-        self.live_vanished.drain(..extra);
-    }
-
-    /// Take a finished match's last known position for the #lounge strip.
-    /// True when there was one to take; a match whose state never read (no
-    /// board) has nothing to show.
-    fn hold_finish(&mut self, match_id: Uuid, outcome: DailyFinishOutcome, result: &str) -> bool {
-        let item = match self
-            .snapshot
-            .active_matches
-            .iter()
-            .find(|item| item.id == match_id)
+        if let Some(finish) = self.live_finish.as_mut()
+            && let Some(finished) = next
+                .finished_matches
+                .iter()
+                .find(|f| f.id == finish.item.id)
         {
-            Some(item) => Some(item.clone()),
-            None => {
-                let at = self
-                    .live_vanished
-                    .iter()
-                    .rposition(|item| item.id == match_id);
-                at.map(|at| self.live_vanished.remove(at))
-            }
-        };
-        let Some(item) = item else {
-            return false;
-        };
-        if item.board.is_none() {
-            return false;
+            finish.headline = finish_headline(finished);
         }
-        let headline = finish_headline(&item, outcome, result);
-        self.live_finish = Some(LiveFinish {
-            item,
-            headline,
-            at: Instant::now(),
-        });
-        true
     }
 
     /// Decide what the #lounge strip shows: a fresh aim beats everything, a
@@ -1065,6 +1038,16 @@ impl DailyState {
     pub fn live_strip_aiming(&self) -> bool {
         self.live_strip == Some(StripPick::Live)
             && self.live_view().is_some_and(|view| view.aim.is_some())
+    }
+
+    /// The match the #lounge strip is showing live, for the `o` key that
+    /// opens it. `None` while it holds a result: that board is gone from
+    /// the lobby, and the hint says so.
+    pub fn live_strip_match(&self) -> Option<DailyMatchItem> {
+        match self.live_strip? {
+            StripPick::Live => self.live_item(self.live_featured?),
+            StripPick::Finish => None,
+        }
     }
 
     /// The featured match, for the click that opens it: read-only for a

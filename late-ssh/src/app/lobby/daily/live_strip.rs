@@ -188,7 +188,7 @@ fn word_rows(budget: usize, strip: &LiveStripView<'_>) -> Vec<Vec<Span<'static>>
             if strip.finish.is_some() {
                 "ctrl+g to play"
             } else {
-                "click to watch"
+                "o or click to watch"
             },
             budget,
         ),

@@ -2846,6 +2846,18 @@ fn handle_live_strip_click(app: &mut App, x: u16, y: u16) -> bool {
     true
 }
 
+/// `o` on the #lounge card opens the match the live strip is showing, the
+/// keyboard twin of the click on it. With nothing to open (no strip up, or
+/// a result holding it) the key falls through untouched.
+fn open_live_strip_match(app: &mut App) -> bool {
+    let Some(item) = app.daily.live_strip_match() else {
+        return false;
+    };
+    app.daily.open_board(&item, app.screen);
+    app.set_screen(Screen::DailyMatch);
+    true
+}
+
 fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
     x >= rect.x
         && x < rect.x.saturating_add(rect.width)
@@ -3916,6 +3928,15 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         {
             open_bonsai_modal_globally(app);
             true
+        }
+        b'o' | b'O'
+            if global_letter_keys
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && app.lounge_card_shown() =>
+        {
+            open_live_strip_match(app)
         }
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);

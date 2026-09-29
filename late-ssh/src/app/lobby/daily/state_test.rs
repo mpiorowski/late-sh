@@ -181,32 +181,65 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
 }
 
 /// The #lounge strip goes up when a match is claimed, waits to appear while
-/// the viewer is reading, and holds the result once the match ends.
+/// the viewer is reading, and holds the result once the match ends. The
+/// viewer sits on a replica that never wrote any of it: the claim and the
+/// resign land on another service over the same database, and reach this
+/// one through the `daily_match_changed` notify.
 #[tokio::test]
-async fn the_lounge_strip_goes_up_on_a_claim_and_holds_the_result() {
+async fn the_lounge_strip_goes_up_on_a_claim_and_holds_the_result_on_every_replica() {
     use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
     use crate::app::games::chips::svc::ChipService;
     use late_core::test_utils::create_test_user;
+    use std::time::Duration;
 
     let test_db = crate::test_helpers::new_test_db().await;
     let me = create_test_user(&test_db.db, "daily-strip-me").await;
     let them = create_test_user(&test_db.db, "daily-strip-them").await;
     let (activity_tx, _activity_rx) = broadcast::channel::<ActivityEvent>(8);
-    let svc = DailyService::new(
-        test_db.db.clone(),
-        ChipService::new(test_db.db.clone()),
-        ActivityPublisher::new(test_db.db.clone(), activity_tx),
-    );
+    let daily_service = || {
+        DailyService::new(
+            test_db.db.clone(),
+            ChipService::new(test_db.db.clone()),
+            ActivityPublisher::new(test_db.db.clone(), activity_tx.clone()),
+        )
+    };
+    let writer = daily_service();
+    let other_replica = daily_service();
+    let mut pg_listener = crate::pg_listener::PgListener::new();
+    let _worker = other_replica.start_notify_worker(pg_listener.subscribe(DailyService::CHANNELS));
+    let _listener = pg_listener.start(test_db.db.config().clone());
+    let mut snapshot_rx = other_replica.subscribe_snapshot();
     let (notifier, _outbox) = crate::app::notify::channel();
-    let mut state = DailyState::new(svc.clone(), me.id, notifier);
+    let mut state = DailyState::new(other_replica.clone(), me.id, notifier);
     let _ = state.tick(false);
     assert!(state.live_strip_view().is_none(), "nothing live, no strip");
 
-    let posted = svc
+    let posted = writer
         .post_challenge(them.id, DailyGame::Chess, None)
         .await
         .expect("post");
-    svc.claim_challenge(me.id, posted.id).await.expect("claim");
+    writer
+        .claim_challenge(me.id, posted.id)
+        .await
+        .expect("claim");
+
+    // Whether the LISTEN is live before or after the claim, the listening
+    // replica's seed read or the notify lands the match in its snapshot.
+    let arrived = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let listed = snapshot_rx
+                .borrow_and_update()
+                .active_matches
+                .iter()
+                .any(|item| item.id == posted.id);
+            if listed {
+                return;
+            }
+            snapshot_rx.changed().await.expect("snapshot watch open");
+        }
+    })
+    .await;
+    arrived.expect("the listening replica learns the claim");
 
     // Appearing would shift the messages under a selection: it waits.
     let _ = state.tick(true);
@@ -218,8 +251,24 @@ async fn the_lounge_strip_goes_up_on_a_claim_and_holds_the_result() {
     assert_eq!(strip.view.item.id, posted.id);
     assert!(strip.finish.is_none());
 
-    // The match ends: the strip keeps its final board with the result.
-    svc.resign(me.id, posted.id).await.expect("resign");
+    // The match ends on the other replica: this one's strip keeps the final
+    // board with the result, read off the finished row in its snapshot.
+    writer.resign(me.id, posted.id).await.expect("resign");
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let listed = snapshot_rx
+                .borrow_and_update()
+                .finished_matches
+                .iter()
+                .any(|item| item.id == posted.id);
+            if listed {
+                return;
+            }
+            snapshot_rx.changed().await.expect("snapshot watch open");
+        }
+    })
+    .await;
+    finished.expect("the listening replica learns the finish");
     let _ = state.tick(false);
     let strip = state.live_strip_view().expect("the result holds the strip");
     assert_eq!(strip.view.item.id, posted.id);

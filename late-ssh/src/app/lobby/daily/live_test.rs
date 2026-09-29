@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 
@@ -166,45 +166,49 @@ fn the_strip_is_fresh_after_a_write_or_under_an_aim() {
 #[test]
 fn the_finish_headline_names_the_winner_and_only_paid_chips() {
     let (eggy, weslin) = (Uuid::from_u128(1), Uuid::from_u128(2));
-    let item = DailyMatchItem {
-        id: Uuid::from_u128(9),
-        game: DailyGame::EightBall,
-        challenger_id: eggy,
-        challenger_username: Some("eggy".to_string()),
-        opponent_id: weslin,
-        opponent_username: Some("weslin".to_string()),
-        white_id: None,
-        black_id: None,
-        turn_user_id: Some(eggy),
-        turn_deadline_at: None,
-        move_count: 12,
-        updated: Utc::now(),
-        board: None,
-    };
-    let won = |user_id, payout| DailyFinishOutcome::Won { user_id, payout };
+    let finished =
+        |winner: Option<Uuid>, result: &str, payout: Option<DailyWinPayout>| DailyFinishedItem {
+            id: Uuid::from_u128(9),
+            game: DailyGame::EightBall,
+            challenger_id: eggy,
+            challenger_username: Some("eggy".to_string()),
+            opponent_id: weslin,
+            opponent_username: Some("weslin".to_string()),
+            winner_user_id: winner,
+            result: result.to_string(),
+            win_payout: payout,
+            finished_at: Utc::now(),
+            challenger_seen: false,
+            opponent_seen: false,
+        };
 
     assert_eq!(
-        finish_headline(
-            &item,
-            won(weslin, DailyWinPayout::Paid),
-            DailyMatch::RESULT_EIGHT_POTTED
-        ),
+        finish_headline(&finished(
+            Some(weslin),
+            DailyMatch::RESULT_EIGHT_POTTED,
+            Some(DailyWinPayout::Paid)
+        )),
         "weslin won · eight ball · +400 chips"
     );
     assert_eq!(
-        finish_headline(
-            &item,
-            won(eggy, DailyWinPayout::Unplayed),
-            DailyMatch::RESULT_RESIGN
-        ),
+        finish_headline(&finished(
+            Some(eggy),
+            DailyMatch::RESULT_RESIGN,
+            Some(DailyWinPayout::Unplayed)
+        )),
         "eggy won · resignation"
     );
     assert_eq!(
-        finish_headline(&item, DailyFinishOutcome::Draw, DailyMatch::RESULT_DRAW),
+        finish_headline(&finished(Some(eggy), DailyMatch::RESULT_RESIGN, None)),
+        "eggy won · resignation",
+        "the payout is a second write behind the finish; until it lands no chips are named"
+    );
+    assert_eq!(
+        finish_headline(&finished(None, DailyMatch::RESULT_DRAW, None)),
         "a draw"
     );
     assert_eq!(
-        finish_headline(&item, DailyFinishOutcome::Draw, DailyMatch::RESULT_NO_MOVES),
+        finish_headline(&finished(None, DailyMatch::RESULT_NO_MOVES, None)),
         "a draw · no moves left"
     );
 }

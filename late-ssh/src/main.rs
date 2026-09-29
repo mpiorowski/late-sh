@@ -241,7 +241,9 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         activity_publisher.clone(),
     );
-    daily_service.refresh_task();
+    let _daily_notify_task = daily_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::lobby::daily::svc::DailyService::CHANNELS),
+    );
     daily_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),

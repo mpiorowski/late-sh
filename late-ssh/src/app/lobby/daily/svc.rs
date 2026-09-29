@@ -14,7 +14,7 @@ use late_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::activity::publisher::ActivityPublisher;
@@ -26,6 +26,7 @@ use crate::app::games::{
     chips::svc::ChipService,
     pool_core::{rules::PoolRules, shot::Shot},
 };
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 use super::{
     backgammon::DailyBackgammonState,
@@ -488,13 +489,36 @@ impl DailyService {
         });
     }
 
-    pub fn refresh_task(&self) {
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::DailyMatchChanged];
+
+    /// Keep every replica's lobby snapshot in step with `daily_match_changed`,
+    /// which a trigger fires on every write to `daily_matches` (a claim, a
+    /// move, a finish, its payout, a result ack, a sweeper forfeit) on
+    /// whichever replica made it. The resync is the seed and the reconnect
+    /// catch-up, retried until it lands; a notify is one re-read, and a
+    /// burst that queued while one ran collapses into the next. A failed
+    /// re-read after a notify leaves this replica on its last snapshot until
+    /// the next notify or the sweeper's minute, so it is logged and the
+    /// worker keeps going.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.refresh().await {
-                tracing::error!(error = ?e, "failed to refresh daily matches");
+            while let Some(signal) = signals.recv().await {
+                let mut resync = signal == Signal::Resync;
+                while let Ok(queued) = signals.try_recv() {
+                    resync |= queued == Signal::Resync;
+                }
+                if resync {
+                    read_until_ok(Refresh::DailyMatches, || svc.refresh()).await;
+                } else if let Err(error) = svc.refresh().await {
+                    tracing::error!(error = ?error, "failed to refresh daily matches after a notify");
+                }
             }
-        });
+        })
     }
 
     /// One background loop: forfeit expired turns, then republish the

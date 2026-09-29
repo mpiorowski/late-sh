@@ -1459,6 +1459,7 @@ mod inner {
             Refresh::AppFlags => "app_flags",
             Refresh::RunnerLooks => "runner_looks",
             Refresh::CrownHolder => "crown_holder",
+            Refresh::DailyMatches => "daily_matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active_quest_boards",

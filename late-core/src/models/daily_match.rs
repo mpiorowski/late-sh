@@ -5,6 +5,11 @@ use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+/// Cross-process refresh channel. A statement-level trigger (migration 211)
+/// fires it on every write to `daily_matches`, with an empty payload: every
+/// replica re-reads its lobby snapshot, it never trusts a payload.
+pub const DAILY_MATCH_CHANGED_CHANNEL: &str = "daily_match_changed";
+
 crate::model! {
     table = "daily_matches";
     params = DailyMatchParams;
