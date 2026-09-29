@@ -7,11 +7,11 @@
 //!
 //! After the commit, the wire (GAME.md, "The three surfaces"): the room
 //! sees the news, never the play-by-play. `Sheet::news` decides what is
-//! news (a dropped signal, a level gained, the Old Signal put down, a first
-//! kill, a near miss, the last ration of the day); this file words it and
-//! posts it to
-//! #deadchannel as messages from the voice. An ordinary kill, a round, a
-//! run, a purchase post nothing. The Old Signal also pays the mark's
+//! news (a dropped signal, a level gained, the Old Signal put down, a step
+//! off the ledge, a first kill, a near miss, the last ration of the day);
+//! this file words it and posts it to #deadchannel as messages from the
+//! voice. An ordinary kill, a round, a run, a purchase, the locker, and the
+//! bits machine post nothing. The Old Signal also pays the mark's
 //! chips after the commit (`pay_mark`: once per mark and at most once a
 //! month, the door milestones' two gates; the debt is on the row as
 //! `unpaid_mark` until the grant answers, so a grant that errors is
@@ -35,7 +35,7 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use super::data;
-use super::state::{Applied, Command, News, Outcome, Sheet};
+use super::state::{Applied, Command, News, Outcome, Pick, Sheet};
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
 use crate::app::deadchannel::runner::state::Look;
@@ -265,6 +265,9 @@ impl FightService {
                     )
                     .await
                 }
+                News::SteppedOff => {
+                    format!("{username} stepped off the ledge. level 1, bare hands, starting over.")
+                }
                 News::FirstBlood { foe } => {
                     format!("{username} put down their first {foe}. the static will remember.")
                 }
@@ -416,7 +419,8 @@ impl FightService {
 fn beat_for(applied: &Applied) -> FightBeat {
     match applied {
         Applied::Refused(_) => FightBeat::Refused,
-        Applied::Started => FightBeat::Started,
+        Applied::Started { pick: Pick::Fair } => FightBeat::Started,
+        Applied::Started { pick: Pick::Lower } => FightBeat::SteppedDown,
         Applied::Resumed => FightBeat::Resumed,
         Applied::Round => FightBeat::Round,
         Applied::Won { .. } => FightBeat::Won,
@@ -425,6 +429,11 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Escaped => FightBeat::Escaped,
         Applied::Outfitted { .. } => FightBeat::Outfitted,
         Applied::Patched { .. } => FightBeat::Patched,
+        Applied::Deposited { .. } => FightBeat::Deposited,
+        Applied::Withdrew { .. } => FightBeat::Withdrew,
+        Applied::Borrowed { .. } => FightBeat::Borrowed,
+        Applied::Repaid { .. } => FightBeat::Repaid,
+        Applied::Reset => FightBeat::Reset,
     }
 }
 

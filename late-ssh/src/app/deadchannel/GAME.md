@@ -634,7 +634,8 @@ to allocate, and nothing on it another player cannot see.
 | rations | fights left today | 10 per UTC day | `TURNS_PER_DAY` |
 | charge | moves left today | band skill / 3 + 1 per UTC day | specialty uses |
 | bits | money on hand | start with 50 | `START_GOLD` |
-| stash | money in the city's locker | untouched by death | `bank.php` |
+| stash | money in the city's locker | untouched by death; a tenth kept on the way in, no interest; a mark or the ledge empties it | `bank.php` |
+| debt | owed to the bits machine | up to 50 a level; +10% at every roll; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
 | band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
 | band skill | move unlocks | +1 per level gained | specialty points |
 | marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
@@ -673,7 +674,8 @@ replica-safe by construction, and a runner nobody touches costs nothing.
 the wire and still see the lounge theater; you cannot hit, and the wire
 says so when you try. You lose the bits on hand and three tenths of your
 exp (`EXP_KEEP_ON_DEATH`, 0.70; LoGD's tenth made a drop too cheap to
-matter over a month); the stash is untouched, gear is untouched.
+matter over a month); the stash is untouched, gear is untouched, and so
+is the debt.
 Punishment as spectatorship, in the exact surface you live in, and it is
 visible: **your mark renders as static (`░`) in chat until the roll**,
 so the room sees you are down before you tell them. No paid resurrection
@@ -977,7 +979,7 @@ that is enough.
 ### Persistence (the row)
 
 `deadchannel_runners`, one row per user (`user_id` unique), id UUID v7.
-Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash,
+Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash, debt,
 rations_left, charge_left, day (the UTC date of the last roll), band,
 band_skill, the benched band progress, alive, marks, peak_level, and the look as
 four piece codes (hood, eyes, coat, mark). All data ops in one late-core
@@ -1048,9 +1050,10 @@ never does.
   at the top of the wall, pinned by a seeded simulation test. Revisit
   when the bands ship.
 - **What the kill takes:** level back to 1, exp to 0, weapon and armor to
-  tier 0, bits to the starting 50. The climb is a real climb again.
+  tier 0, bits to the starting 50, the locker emptied. The climb is a
+  real climb again, and nothing saved for it carries over.
 - **What it keeps:** the peak level (the tailor's rack stays open), the
-  look, the badges, the kill count, today's rations.
+  look, the badges, the kill count, today's rations, and the debt.
 - **What it gives:** a mark. Marks are the paragon number, shown behind
   the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
   defense up to a cap of five (the second climb is quicker, a veteran
@@ -1063,8 +1066,9 @@ never does.
   second mark inside the month is kept all the same, unpaid. The payout is
   a debt on the row until the house answers: a grant that fails is retried
   on the next step or connect, never lost with the mark.
-- **The stash is undecided.** It is not built; whether a mark empties it
-  is decided when it ships.
+- **A mark empties the stash** (decided with the money pass below): a
+  full locker waiting at level 1 would make the second climb a shopping
+  trip.
 
 ### Build order for this phase
 
@@ -1207,7 +1211,9 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   copy at feed-template standards, design review pending with the rest.
 - **Levels climb on exp in the fight, for now.** The operators are the
   design (beaten once per level); until they exist this is the one
-  stated deviation, so the runner is not level 1 forever.
+  stated deviation, so the runner is not level 1 forever. It can carry a
+  runner into a glyph their gear cannot beat; the step down (the money
+  pass, below) is the way back.
 - **The armorer's till is open.** The first bits sink, and the LoGD one:
   a tier above what you carry, 75% back on the piece you hand in, no
   credit. It runs through the fight's command path on the locked row
@@ -1231,6 +1237,49 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
 
 What comes next on this surface is decided in the next section, "The
 road pass": the exchange loop above is the placeholder it replaces.
+
+## The money pass: the step down, the locker, the machine, the ledge
+
+Status: **built, staff only like the rest** (`fight/` and `city/`,
+`CONTEXT.md` §3c beside this file). The question was a real one: a
+runner walked past the armorer, levelled on exp into the hiss with bare
+hands, dropped, and stood at level 2 with no bits and a fight they win
+three times in a hundred. LoGD never locks there, because promotion is a
+choice (the master), you can go slumming, and the bank keeps your gold.
+Auto-levelling took the first away, so the rest had to exist, and each
+is harder than LoGD's on purpose: this game should cost more than the
+one it borrowed from.
+
+- **The picker before every step in.** `f` no longer starts a fight: it
+  shows the sheet and what waits, each glyph with its numbers, pay, and
+  a threat word (easy, even, risky, grim) that is the fight simulated to
+  the end from where you stand. LoGD's master told you after the fact
+  that you were not ready; the picker tells you before. A fight already
+  waiting skips it. More fight kinds land here later without new keys.
+- **The step down (`g`).** The glyph a level below, at half its pay
+  (LoGD's slumming pays in full). A way out of a fight you cannot win,
+  never a better farm than the fair one.
+- **The lockers.** The stash, finally: a drop never reaches it, a tenth
+  of every deposit is the locker's (LoGD's bank is free and pays
+  interest), out is free, all or nothing. It is only worth anything
+  because it is a walk away: bits earned in a fight are on you until
+  you carry them there, which keeps "one more fight or bank it" a real
+  question.
+- **The bits machine.** The street's joke ("it has never once paid out")
+  pays out: fifty bits a level, a tenth added at every roll, half of
+  every kill's bits taken until it is square, and nothing clears it but
+  paying. The garnish is what keeps a debt from spiralling: playing pays
+  it down.
+- **The ledge.** Two presses of `r` over the drop start the runner over:
+  level 1, bare hands, empty pockets and locker. The marks, the peak, the
+  kills, the face, and the debt come down too, no starting bits, and not
+  with the signal down, so it is never loan forgiveness, a bit farm, or a
+  way back on the wire before the roll. The wire hears it.
+- **The operators stay unbuilt.** The step down and the machine answer
+  the lock from below, for a fraction of fourteen named characters, and
+  the road pass may replace the exchange loop they would gate. If the
+  climb reads too soft once staff have played this, the operators are
+  the cleanest way to make it harder.
 
 ## The road pass: the daily run, the hand, and being seen (2026-09-24)
 
@@ -1426,7 +1475,8 @@ this pass:
    follow as data.
 3. Level badge and color bands in #deadchannel, tints gated by level in
    the tailor.
-4. The locker, then ambush with the replay and the revenge token.
+4. Ambush with the replay and the revenge token (the locker is in, so
+   carrying bits into the day is already a choice).
 5. Arena and bets, then bounties. Bands as tribes when the band choice
    ships.
 

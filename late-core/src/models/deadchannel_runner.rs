@@ -25,7 +25,8 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // (migration 210) is the Old Signal mark whose chips have not been settled:
 // set beside `marks` in the kill's transaction, cleared by `settle_mark`
 // once the grant answers, standing while it errors so the next touch on
-// the row retries it.
+// the row retries it. `stash` (the locker) and `debt` (the bits machine)
+// are migration 214, whole bits, never negative.
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -47,7 +48,9 @@ crate::model! {
         pub runs_today: i32,
         pub peak_level: i32,
         pub marks: i32,
-        pub unpaid_mark: Option<i32>;
+        pub unpaid_mark: Option<i32>,
+        pub stash: i64,
+        pub debt: i64;
 
         @data
         pub user_id: Uuid,
@@ -76,6 +79,8 @@ pub struct SheetWrite {
     pub peak_level: i32,
     pub marks: i32,
     pub unpaid_mark: Option<i32>,
+    pub stash: i64,
+    pub debt: i64,
 }
 
 /// What the directory serves per standing runner: the look as stored, the
@@ -245,7 +250,7 @@ impl DeadchannelRunner {
                      armor_tier = $6, bits = $7, rations_left = $8, day = $9,
                      fight = $10, kills = $11, kills_today = $12, runs_today = $13,
                      peak_level = $14, marks = $15, unpaid_mark = $16,
-                     updated = current_timestamp
+                     stash = $17, debt = $18, updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -265,6 +270,8 @@ impl DeadchannelRunner {
                     &write.peak_level,
                     &write.marks,
                     &write.unpaid_mark,
+                    &write.stash,
+                    &write.debt,
                 ],
             )
             .await

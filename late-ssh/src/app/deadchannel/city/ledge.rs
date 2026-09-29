@@ -270,9 +270,17 @@ fn compose(w: usize, h: usize, t: u64) -> Vec<Line<'static>> {
 /// A neon band shows one text for this many ticks.
 const BILLBOARD_TICKS: u64 = 40;
 
+/// What the ledge box bottom-right says besides the way back: whether the
+/// runner is leaning out (the next `r` steps off), and the last answer
+/// from the row (a refused step off, or the fall itself).
+pub(super) struct LedgeView<'a> {
+    pub armed: bool,
+    pub till: Option<&'a str>,
+}
+
 /// The view: the picture over the whole area, a title top-left and the
-/// way back bottom-right.
-pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64) {
+/// ledge's keys bottom-right.
+pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64, view: LedgeView<'_>) {
     frame.render_widget(Block::default().style(ink(NIGHT)), area);
     let lines = compose(usize::from(area.width), usize::from(area.height), t);
     frame.render_widget(Paragraph::new(lines).style(ink(INK)), area);
@@ -297,12 +305,41 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64) {
         title_rect,
     );
 
-    let back = vec![Line::from(vec![
-        Span::styled("[Enter] ", lit(Neon::Amber)),
-        Span::styled("step back", ink(INK)),
-    ])];
-    let width = 21u16.min(area.width.saturating_sub(2));
-    let height = 3u16.min(area.height.saturating_sub(1));
+    let key = lit(Neon::Amber);
+    let mut lines = Vec::new();
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    let border = match view.armed {
+        true => {
+            lines.push(Line::from(Span::styled(
+                "you lean out over the drop. level 1, bare hands, empty pockets and locker.",
+                lit(Neon::Red),
+            )));
+            lines.push(Line::from(Span::styled(
+                "the marks, the peak, and the debt come down with you.",
+                ink(INK_DIM),
+            )));
+            lines.push(Line::from(vec![
+                Span::styled("[r] ", key),
+                Span::styled("step off", ink(INK)),
+                Span::styled("   any other key leans back", ink(INK_DIM)),
+            ]));
+            lit(Neon::Red)
+        }
+        false => {
+            lines.push(Line::from(vec![
+                Span::styled("[r] ", key),
+                Span::styled("lean out", ink(INK)),
+                Span::styled("   [Enter] ", key),
+                Span::styled("step back", ink(INK)),
+            ]));
+            ink(INK_DIM)
+        }
+    };
+    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4)
+        .min(area.width.saturating_sub(2));
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width + 1),
         y: area.y + area.height.saturating_sub(height),
@@ -311,10 +348,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64) {
     };
     frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(back).style(ink(INK)).block(
+        Paragraph::new(lines).style(ink(INK)).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(ink(INK_DIM))
+                .border_style(border)
                 .title(Span::styled(" the ledge ", lit(Neon::White))),
         ),
         rect,

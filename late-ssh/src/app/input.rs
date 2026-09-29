@@ -2309,11 +2309,16 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     // Esc in the city backs out one step at a time: the guide first, then
-    // the fight scene (a run while the fight is on, `fight/input.rs`), then
-    // an open shop panel or the ledge; on the bare street it goes up to the
-    // chat with #lounge open (the wire and `0` go to the clubhouse instead).
+    // the fight picker, then the fight scene (a run while the fight is on,
+    // `fight/input.rs`), then an open shop panel or the ledge; on the bare
+    // street it goes up to the chat with #lounge open (the wire and `0` go
+    // to the clubhouse instead).
     if ctx.screen == Screen::City && app.guide.state.is_open() {
         app.guide.state.close();
+        return;
+    }
+    if ctx.screen == Screen::City && app.fight.picker_open() {
+        app.fight.close();
         return;
     }
     if ctx.screen == Screen::City && app.fight.scene_open() {

@@ -82,7 +82,7 @@ pub const SECTIONS: &[Section] = &[
                 },
                 Key {
                     key: "f",
-                    does: "fight",
+                    does: "pick a fight",
                 },
                 Key {
                     key: "a",
@@ -123,13 +123,16 @@ pub const SECTIONS: &[Section] = &[
                 "*gear wins fights.* at the armorer `w` buys the weapon and `a` the armor, bits only, one tier above what you carry. buy every tier you can afford before you step in.",
             ),
             Block::Rule(
+                "`f` shows you the fight before you take it. *grim* means your gear is behind: `g` steps down to the glyph a level below, for half the pay.",
+            ),
+            Block::Rule(
                 "`p` heals to full from anywhere for a bit a point, times your level. patch before a fight, not after a drop.",
             ),
             Block::Rule(
                 "at *level 15* with the exp to leave it, the next step into the static meets *the Old Signal*: *240* signal, *36* attack, *22* defense, and no bits.",
             ),
             Block::Rule(
-                "put it down and you wake at level 1 with bare hands and fifty bits. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and every level costs a little more.",
+                "put it down and you wake at level 1 with bare hands, fifty bits, and an empty locker. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and every level costs a little more.",
             ),
         ],
     },
@@ -183,10 +186,10 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Green,
         blocks: &[
             Block::Rule(
-                "the strip top right is you: level, signal, rations, bits, and what you carry.",
+                "the strip top right is you: level, signal, rations, bits, what you owe the bits machine, and what you carry.",
             ),
             Block::Rule(
-                "*signal* is your health, ten a level. at zero you are off the row until the roll, and the street keeps every bit you had on you.",
+                "*signal* is your health, ten a level. at zero you are off the row until the roll, and the street keeps every bit you had on you. the locker keeps the rest.",
             ),
             Block::Rule(
                 "*rations* are fights. ten a day, one spent for every step into the static.",
@@ -209,11 +212,19 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "enter",
-                    does: "at the screen: spend a ration, meet a glyph",
+                    does: "at the screen: see what is in there",
                 },
                 Key {
                     key: "f",
                     does: "the same, from anywhere on the street",
+                },
+                Key {
+                    key: "f again",
+                    does: "spend a ration on the glyph of your level",
+                },
+                Key {
+                    key: "g",
+                    does: "spend it on the glyph a level down, half pay",
                 },
                 Key {
                     key: "a",
@@ -230,6 +241,12 @@ pub const SECTIONS: &[Section] = &[
             ]),
             Block::Rule(
                 "the screen at the end of the row is where the glyphs come from. a run that fails gives the glyph a free swing. there is no stepping out of a fight.",
+            ),
+            Block::Rule(
+                "before you step in you see your sheet and what waits: each glyph's numbers, its pay, and how the fight reads from where you stand, *easy*, *even*, *risky*, or *grim*.",
+            ),
+            Block::Rule(
+                "exp levels you whether your gear is ready or not. when the glyph of your level reads grim, the one below still pays: half, but a kill is a kill.",
             ),
             Block::Rule(
                 "a dropped connection finds the fight waiting on the row when you step back in, for no ration.",
@@ -250,7 +267,7 @@ pub const SECTIONS: &[Section] = &[
                 "at *15*, once you have the exp to leave it, the next step in meets the Old Signal instead of a glyph.",
             ),
             Block::Rule(
-                "put it down and you wake at *level 1*: bare hands, fifty bits, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more.",
+                "put it down and you wake at *level 1*: bare hands, fifty bits, an empty locker, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more. the debt stays too.",
             ),
             Block::Rule(
                 "a kill pays *40,000 chips*, at most *once every 30 days*: the one way bits ever turn into chips. a second mark inside the month is yours all the same. your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
@@ -289,6 +306,73 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Rule(
                 "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), and not when there is nothing to fix.",
+            ),
+        ],
+    },
+    Section {
+        title: "the lockers",
+        neon: Neon::Cyan,
+        blocks: &[
+            Block::Keys(&[
+                Key {
+                    key: "d",
+                    does: "lock up everything on you",
+                },
+                Key {
+                    key: "w",
+                    does: "take everything out",
+                },
+            ]),
+            Block::Rule(
+                "a dropped signal never reaches the locker. it keeps *a tenth* of every deposit, rounded up. taking it out is free.",
+            ),
+            Block::Rule(
+                "not with a glyph waiting on you. an Old Signal mark empties it, and so does the ledge.",
+            ),
+        ],
+    },
+    Section {
+        title: "the bits machine",
+        neon: Neon::Amber,
+        blocks: &[
+            Block::Keys(&[
+                Key {
+                    key: "b",
+                    does: "borrow up to the cap",
+                },
+                Key {
+                    key: "r",
+                    does: "feed it what you carry",
+                },
+            ]),
+            Block::Rule(
+                "it lends *fifty bits a level*, less what you already owe. enough at level 2 for a first weapon and a first coat.",
+            ),
+            Block::Rule(
+                "the debt grows *a tenth* at every roll, rounded up, and *half* of every glyph's bits goes to it until you are square.",
+            ),
+            Block::Rule("a drop does not clear it. neither does a mark, or the ledge."),
+        ],
+    },
+    Section {
+        title: "the ledge",
+        neon: Neon::White,
+        blocks: &[
+            Block::Keys(&[
+                Key {
+                    key: "r",
+                    does: "at the railing: lean out",
+                },
+                Key {
+                    key: "r again",
+                    does: "step off",
+                },
+            ]),
+            Block::Rule(
+                "a step off starts you over: *level 1*, bare hands, nothing on you and nothing in the locker. any other key leans you back in.",
+            ),
+            Block::Rule(
+                "your marks, your peak, your kills, your face, today's rations, and the debt come down with you. not while your signal is down, and the wire hears it.",
             ),
         ],
     },
@@ -335,7 +419,7 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Cyan,
         blocks: &[
             Block::Rule(
-                "the lockers, the bands, dead air, the board, and the bits machine are catalogs. nothing is for sale in them yet.",
+                "the bands, dead air, and the board are catalogs. nothing is for sale in them yet.",
             ),
             Block::Rule(
                 "the carts, the reader, and the stairs talk when you press `enter`. the railing over the drop shows the lower city until `enter`.",
@@ -347,7 +431,7 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Green,
         blocks: &[
             Block::Rule(
-                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a first kill, a near miss, the last ration of the day.",
+                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a near miss, the last ration of the day.",
             ),
             Block::Rule(
                 "your name there wears your mark and your level in the newest tint it opened: grey to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15. marks ride behind the Signal's glyph: ▚3╬2.",

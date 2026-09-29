@@ -1,13 +1,15 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
-//! run), Enter at a landmark (a shop panel, a street line, the static at
-//! the screen, or the wire out), `f` to step into the static and `p` to
-//! open patch from anywhere on the street, Enter to close a panel. The armorer's
-//! panel takes the till keys (`fight/state.rs`, `Command::Outfit`); the
-//! tailor's hands every key to `tailor/input.rs`.
+//! run), Enter at a landmark (a shop panel, a street line, the picker at
+//! the screen, or the wire out), `f` to walk up to the static and `p` to
+//! open patch from anywhere on the street, Enter to close a panel. The
+//! armorer's panel takes the till keys (`fight/state.rs`,
+//! `Command::Outfit`), the lockers `d` and `w`, the bits machine `b` and
+//! `r`, the ledge `r` twice to step off; the tailor's hands every key to
+//! `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page opens it (the site guide's key, taken over
-//! down here: the street has its own). While the fight scene is open
-//! every key goes to `fight/input.rs`. Returns `false` for anything it
+//! down here: the street has its own). While the fight picker or scene is
+//! open every key goes to `fight/input.rs`. Returns `false` for anything it
 //! does not own so global keys (page digits, Tab, `q`) keep working. While a panel is open, or the
 //! runner is looking over the ledge, the walk keys are swallowed so the
 //! runner does not wander under the box. A lone Esc never arrives here:
@@ -34,6 +36,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.fight.scene_open() {
         return crate::app::deadchannel::fight::input::handle_event(app, event);
     }
+    if app.fight.picker_open() {
+        return crate::app::deadchannel::fight::input::handle_picker(app, event);
+    }
     if app.city.panel().is_some() || app.city.at_ledge() {
         return handle_panel(app, event);
     }
@@ -59,18 +64,21 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 app.city.say(landmark, index);
             }
             Enter::Leave => app.set_screen(Screen::Clubhouse),
-            Enter::Ledge => app.city.look_over(),
-            Enter::Fight => app.fight.open(),
+            Enter::Ledge => {
+                app.city.look_over();
+                app.fight.clear_till();
+            }
+            Enter::Fight => app.fight.step_up(),
         }
         return true;
     }
 
-    // `f` steps into the static from anywhere on the street, not only at
-    // one of its three screens. Same path as Enter there: a waiting fight
-    // resumes for free, a new one spends a ration.
+    // `f` walks up to the static from anywhere on the street, not only at
+    // one of its three screens. Same path as Enter there: the picker, or a
+    // waiting fight straight back in.
     if let Some(b'f' | b'F') = event_byte(event) {
         app.music_prefix_armed = false;
-        app.fight.open();
+        app.fight.step_up();
         return true;
     }
 
@@ -127,6 +135,52 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     {
         app.fight.request(Command::Patch);
         return true;
+    }
+    if app.city.panel() == Some(Landmark::Lockers) {
+        match event {
+            ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
+                app.fight.request(Command::Deposit);
+                return true;
+            }
+            ParsedInput::Byte(b'w') | ParsedInput::Char('w') => {
+                app.fight.request(Command::Withdraw);
+                return true;
+            }
+            _ => {}
+        }
+    }
+    if app.city.panel() == Some(Landmark::Bits) {
+        match event {
+            ParsedInput::Byte(b'b') | ParsedInput::Char('b') => {
+                app.fight.request(Command::Borrow);
+                return true;
+            }
+            ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
+                app.fight.request(Command::Repay);
+                return true;
+            }
+            _ => {}
+        }
+    }
+    // The ledge: `r` once to lean out, `r` again to step off. Any other
+    // key leans back in first, so the two presses are one deliberate act.
+    if app.city.at_ledge() {
+        match event {
+            ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
+                match app.city.reset_armed() {
+                    true => {
+                        app.city.disarm_reset();
+                        app.fight.request(Command::Reset);
+                    }
+                    false => {
+                        app.fight.clear_till();
+                        app.city.arm_reset();
+                    }
+                }
+                return true;
+            }
+            _ => app.city.disarm_reset(),
+        }
     }
     match event {
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {

@@ -274,6 +274,7 @@ struct DrawContext<'a> {
     /// row): the street's strip, and the frame HUD on every other page.
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
+    city_picker: Option<&'a crate::app::deadchannel::fight::session::Picker>,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
@@ -1364,6 +1365,7 @@ impl App {
                             .map(|entry| &entry.look),
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
+                        city_picker: self.fight.picker.as_ref(),
                         city_till: self.fight.till.as_deref(),
                         city_tailor: crate::app::deadchannel::tailor::ui::MirrorView {
                             draft: self.tailor.draft.as_ref(),
@@ -1950,6 +1952,7 @@ impl App {
                     look: ctx.city_look,
                     sheet: ctx.city_sheet,
                     scene: ctx.city_scene,
+                    picker: ctx.city_picker,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     guide: ctx.city_guide,

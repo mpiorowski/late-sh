@@ -8,7 +8,7 @@ use super::{FightOutcome, FightService};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
-use crate::app::deadchannel::fight::state::{Applied, Command, Sheet, Slot};
+use crate::app::deadchannel::fight::state::{Applied, Command, Pick, Sheet, Slot};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
 use crate::test_helpers::{age_payout_claims, new_test_db};
@@ -47,11 +47,16 @@ async fn stepping_in_spends_a_ration_on_the_row() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-start").await;
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx.clone(),
+    );
     let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
         panic!("a start answers with the sheet");
     };
-    assert_eq!(outcome.applied, Applied::Started);
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Fair });
     assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
     assert!(sheet.fight.is_some());
 
@@ -66,7 +71,12 @@ async fn stepping_in_spends_a_ration_on_the_row() {
     assert_eq!(Sheet::from_row(&row).expect("sheet"), sheet);
 
     // A second device stepping in finds the same fight and spends nothing.
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx);
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx,
+    );
     let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
         panic!("a resume answers with the sheet");
     };
@@ -138,7 +148,12 @@ async fn a_runner_who_left_has_no_sheet_to_act_on() {
     );
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx.clone(),
+    );
     assert!(matches!(answer(&mut rx).await, FightOutcome::NoRunner));
 
     svc.reload_task(user_id, tx);
@@ -209,7 +224,12 @@ async fn kill_the_old_signal(
         .expect("store");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx.clone(),
+    );
     let FightOutcome::Acted { sheet, .. } = answer(&mut rx).await else {
         panic!("a start answers with the sheet");
     };

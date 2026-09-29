@@ -36,8 +36,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::app::deadchannel::fight::data::TRADE_IN_PERCENT;
-use crate::app::deadchannel::fight::session::Scene as FightScene;
+use crate::app::deadchannel::fight::data::{
+    DEBT_INTEREST_PERCENT, GARNISH_PERCENT, LOCKER_FEE_PERCENT, TRADE_IN_PERCENT,
+};
+use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
@@ -148,7 +150,10 @@ pub(crate) struct CityView<'a> {
     pub sheet: Option<&'a Sheet>,
     /// The fight scene, when one is open over the street.
     pub scene: Option<&'a FightScene>,
-    /// The armorer's last word (`fight/session.rs`), for its panel.
+    /// The picker before a step in, when it is open over the street.
+    pub picker: Option<&'a FightPicker>,
+    /// The counter's last word (`fight/session.rs`): the armorer's, patch's,
+    /// the locker's, the machine's, or the ledge's, for whichever is open.
     pub till: Option<&'a str>,
     /// The tailor's mirror (`tailor/session.rs`), for its panel.
     pub tailor: tailor_ui::MirrorView<'a>,
@@ -174,7 +179,15 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     }
     let t = view.state.anim_tick;
     if view.state.at_ledge() {
-        ledge::draw(frame, area, t);
+        ledge::draw(
+            frame,
+            area,
+            t,
+            ledge::LedgeView {
+                armed: view.state.reset_armed(),
+                till: view.till,
+            },
+        );
         return;
     }
     let carriers = carriers(&view);
@@ -234,10 +247,27 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     draw_street_line(frame, area, &view);
     draw_popover(frame, area, &view);
     draw_panel(frame, area, &view);
-    // The sheet strip and the fight scene (`fight/ui.rs`): the runner's
-    // budget while walking, the scene over everything when one is open.
+    // The sheet strip, the picker, and the fight scene (`fight/ui.rs`): the
+    // runner's budget while walking, the picker or the scene over
+    // everything when one is open. The two are never open together.
+    if let Some(picker) = view.picker {
+        fight_ui::draw_picker(
+            frame,
+            area,
+            fight_ui::PickerView {
+                sheet: view.sheet,
+                picker,
+                look: view.look,
+                own_username: view.own_username,
+            },
+        );
+    }
     match (view.sheet, view.scene) {
-        (Some(sheet), None) => fight_ui::draw_strip(frame, area, sheet),
+        (Some(sheet), None) => {
+            if view.picker.is_none() {
+                fight_ui::draw_strip(frame, area, sheet);
+            }
+        }
         (sheet, Some(scene)) => fight_ui::draw_scene(
             frame,
             area,
@@ -1638,25 +1668,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
     match landmark {
         Landmark::Armorer => lines.extend(armorer_lines(view)),
         Landmark::Tailor => lines.extend(tailor_ui::mirror_lines(&view.tailor)),
-        Landmark::Lockers => {
-            lines.push(Line::from(vec![
-                Span::styled("on hand   ", dim_text),
-                Span::styled("— bits", text),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("locker    ", dim_text),
-                Span::styled("— bits", text),
-            ]));
-            lines.push(blank());
-            lines.push(Line::from(Span::styled(
-                "the locker keeps what you leave in it when your signal drops. the street takes the rest.",
-                text,
-            )));
-            lines.push(Line::from(Span::styled(
-                "[d] deposit   [w] withdraw        (the lockers are humming. not open yet)",
-                muted_text,
-            )));
-        }
+        Landmark::Lockers => lines.extend(locker_lines(view)),
         Landmark::Bands => {
             for (i, band) in data::BANDS.iter().enumerate() {
                 lines.push(Line::from(vec![
@@ -1713,13 +1725,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
                 dim_text,
             )));
         }
-        Landmark::Bits => {
-            lines.push(Line::from(Span::styled("the bits machine hums.", text)));
-            lines.push(Line::from(Span::styled(
-                "it has never once paid out. kicking it is free.",
-                dim_text,
-            )));
-        }
+        Landmark::Bits => lines.extend(machine_lines(view)),
         Landmark::Screen
         | Landmark::Noodles
         | Landmark::Umbrellas
@@ -1846,6 +1852,163 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(Span::styled(
         "a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
+/// The lockers: what is on hand and what is locked up, the two keys priced
+/// (the deposit net of the cut), the refusal ahead of a key that would
+/// meet one, and the locker's last word.
+fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = glow(Neon::Amber);
+    let key = lit(Neon::Amber);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("on hand ", dim_text),
+        Span::styled(format!("{} bits", sheet.bits), number),
+        Span::styled("      locker ", dim_text),
+        Span::styled(format!("{} bits", sheet.stash), number),
+    ]));
+    lines.push(Line::default());
+    match sheet.fight.is_some() {
+        true => lines.push(Line::from(Span::styled(
+            "not with a glyph waiting on you. the locker can wait.",
+            text,
+        ))),
+        false => {
+            match sheet.bits {
+                0 => lines.push(Line::from(Span::styled(
+                    "you have nothing on you to lock up.",
+                    muted_text,
+                ))),
+                bits => {
+                    let fee = sheet.deposit_fee();
+                    lines.push(Line::from(vec![
+                        Span::styled("[d] ", key),
+                        Span::styled("lock up ", text),
+                        Span::styled(format!("{} bits", bits - fee), number),
+                        Span::styled(format!(", the locker keeps {fee}"), text),
+                    ]));
+                }
+            }
+            match sheet.stash {
+                0 => lines.push(Line::from(Span::styled(
+                    "your locker is empty.",
+                    muted_text,
+                ))),
+                stash => lines.push(Line::from(vec![
+                    Span::styled("[w] ", key),
+                    Span::styled("take out ", text),
+                    Span::styled(format!("{stash} bits"), number),
+                ])),
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(
+            "a dropped signal never reaches the locker. it keeps {LOCKER_FEE_PERCENT}% of every deposit; out is free."
+        ),
+        dim_text,
+    )));
+    lines.push(Line::from(Span::styled(
+        "an Old Signal mark empties it. so does the ledge.",
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
+/// The bits machine: what is owed against the cap, the two keys priced,
+/// its terms, and its last word.
+fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = glow(Neon::Amber);
+    let owed = dim(Neon::Red);
+    let key = lit(Neon::Amber);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("on hand ", dim_text),
+        Span::styled(format!("{} bits", sheet.bits), number),
+        Span::styled("      owed ", dim_text),
+        Span::styled(
+            format!("{} bits", sheet.debt),
+            match sheet.debt {
+                0 => number,
+                _ => owed,
+            },
+        ),
+        Span::styled("      it lends up to ", dim_text),
+        Span::styled(format!("{} bits", sheet.loan_cap()), number),
+    ]));
+    lines.push(Line::default());
+    match sheet.fight.is_some() {
+        true => lines.push(Line::from(Span::styled(
+            "not with a glyph waiting on you. the machine can wait.",
+            text,
+        ))),
+        false => {
+            match sheet.loan_room() {
+                0 => lines.push(Line::from(Span::styled(
+                    "it flashes your debt and pays nothing more.",
+                    muted_text,
+                ))),
+                room => lines.push(Line::from(vec![
+                    Span::styled("[b] ", key),
+                    Span::styled("borrow ", text),
+                    Span::styled(format!("{room} bits"), number),
+                ])),
+            }
+            match (sheet.debt, sheet.bits) {
+                (0, _) => lines.push(Line::from(Span::styled("you owe it nothing.", muted_text))),
+                (_, 0) => lines.push(Line::from(Span::styled(
+                    "you have nothing on you to feed it.",
+                    muted_text,
+                ))),
+                (debt, bits) => lines.push(Line::from(vec![
+                    Span::styled("[r] ", key),
+                    Span::styled("feed it ", text),
+                    Span::styled(format!("{} bits", debt.min(bits)), number),
+                ])),
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{DEBT_INTEREST_PERCENT}% on the debt at every roll. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
+        ),
+        dim_text,
+    )));
+    lines.push(Line::from(Span::styled(
+        "a drop does not clear it. neither does a mark, or the ledge.",
         dim_text,
     )));
     if let Some(till) = view.till {

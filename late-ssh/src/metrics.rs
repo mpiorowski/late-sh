@@ -187,11 +187,14 @@ pub enum FirstContactBeat {
 /// One fight command settling on the runner row (`deadchannel/fight`).
 /// `Refused` is a command the row turned down (no rations, signal down,
 /// the armorer's or patch's no); `Outfitted` is a piece bought at the
-/// armorer; `Patched` is the signal bought back at patch; `Failed` is
-/// the write not landing.
+/// armorer; `Patched` is the signal bought back at patch; `SteppedDown`
+/// is a fight started against the glyph a level down; `Deposited` and
+/// `Withdrew` are the locker, `Borrowed` and `Repaid` the bits machine,
+/// `Reset` the step off the ledge; `Failed` is the write not landing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FightBeat {
     Started,
+    SteppedDown,
     Resumed,
     Round,
     Won,
@@ -201,6 +204,11 @@ pub enum FightBeat {
     Escaped,
     Outfitted,
     Patched,
+    Deposited,
+    Withdrew,
+    Borrowed,
+    Repaid,
+    Reset,
     Refused,
     Failed,
 }
@@ -1237,6 +1245,7 @@ mod inner {
     fn fight_beat_label(beat: FightBeat) -> &'static str {
         match beat {
             FightBeat::Started => "started",
+            FightBeat::SteppedDown => "stepped_down",
             FightBeat::Resumed => "resumed",
             FightBeat::Round => "round",
             FightBeat::Won => "won",
@@ -1245,6 +1254,11 @@ mod inner {
             FightBeat::Escaped => "escaped",
             FightBeat::Outfitted => "outfitted",
             FightBeat::Patched => "patched",
+            FightBeat::Deposited => "deposited",
+            FightBeat::Withdrew => "withdrew",
+            FightBeat::Borrowed => "borrowed",
+            FightBeat::Repaid => "repaid",
+            FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
         }

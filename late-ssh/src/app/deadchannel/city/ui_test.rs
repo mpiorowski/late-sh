@@ -22,6 +22,7 @@ fn render(state: &State, width: u16, height: u16) -> String {
                     look: None,
                     sheet: None,
                     scene: None,
+                    picker: None,
                     till: None,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -105,6 +106,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                     look: None,
                     sheet: Some(&sheet),
                     scene: None,
+                    picker: None,
                     till: Some("the armorer hands over the box cutter. 225 bits."),
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -170,6 +172,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                         look: None,
                         sheet,
                         scene: None,
+                        picker: None,
                         till: Some("patch works fast. +18 signal, back to full. 54 bits."),
                         tailor: tailor_ui::MirrorView {
                             draft: None,
@@ -325,6 +328,7 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                     look: None,
                     sheet: None,
                     scene: None,
+                    picker: None,
                     till: None,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -494,6 +498,7 @@ fn other_runners_stand_on_the_street_with_their_names_and_you_are_not_twice() {
                     look: None,
                     sheet: None,
                     scene: None,
+                    picker: None,
                     till: None,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -573,6 +578,7 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
             look: None,
             sheet: None,
             scene: None,
+            picker: None,
             till: None,
             tailor: tailor_ui::MirrorView {
                 draft: None,

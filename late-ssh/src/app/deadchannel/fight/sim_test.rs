@@ -1,4 +1,4 @@
-use super::{CAREFUL, Climb, Player, RECKLESS, climb, summary};
+use super::{CAREFUL, Climb, NEGLECTFUL, Player, RECKLESS, climb, summary};
 
 /// Seeded climbs per player: enough for a stable median, few enough to
 /// stay a unit test.
@@ -63,5 +63,34 @@ fn care_is_the_faster_climb() {
     assert!(
         careful <= reckless,
         "careful marks on day {careful}, reckless on day {reckless}"
+    );
+}
+
+/// The lock a runner found: they walked past the armorer, levelled on
+/// exp into a glyph their bare hands cannot beat, and the street took
+/// every bit. The game must leave a way back that does not wait on luck:
+/// after that first drop the runner gains a level within a week.
+#[test]
+fn a_runner_who_skipped_the_armorer_climbs_again_within_a_week_of_the_drop() {
+    let climbs = climbs(NEGLECTFUL);
+    let dropped = climbs
+        .iter()
+        .filter(|climb| climb.first_drop_on.is_some())
+        .count() as u64;
+    assert!(
+        dropped * 4 >= SEEDS * 3,
+        "the neglectful runner is meant to find the drop; {dropped} of {SEEDS} did"
+    );
+    let stuck = super::median(
+        climbs.iter().filter_map(|climb| {
+            let dropped = climb.first_drop_on?;
+            Some(climb.recovered_on.map(|day| day - dropped))
+        }),
+        MAX_DAYS,
+    );
+    assert!(
+        stuck <= 7,
+        "after the first drop the neglectful runner waits {stuck} days for a level\n{}",
+        summary(&climbs, MAX_DAYS)
     );
 }

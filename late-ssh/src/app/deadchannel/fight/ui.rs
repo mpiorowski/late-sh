@@ -11,6 +11,11 @@
 //! and the box shuddering a column from tick to tick while it
 //! broadcasts; once the fight is over, everything holds still.
 //!
+//! Before the scene, the picker: the runner's sheet on top, then the
+//! glyphs on offer, the one of your level and the one below, each with
+//! its face, its numbers, its pay, and the threat word the sim read for
+//! it. The warning LoGD's master gave, before the fight instead of after.
+//!
 //! Also the sheet strip: level, signal, rations, bits, pinned top-right
 //! while the runner walks the street, so the ritual's budget is always
 //! in view.
@@ -24,9 +29,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::data::FOES;
-use super::session::Scene;
-use super::state::{Fight, Quarry, Sheet, Slot};
+use super::data::{self, FOES, FoeKind, FoeTier, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY};
+use super::session::{Picker, Scene};
+use super::sim::Threat;
+use super::state::{Fight, Pick, Quarry, Sheet, Slot};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, tint_rgb,
@@ -294,7 +300,10 @@ fn header(sheet: &Sheet, look: Option<&Look>, username: &str, dress: &Dress) -> 
     let right: [Vec<Span<'static>>; 3] = match &sheet.fight {
         Some(fight) => [
             vec![
-                Span::styled(format!("lv {}  ", sheet.level), text),
+                match fight.foe_level() {
+                    Some(level) => Span::styled(format!("lv {level}  "), text),
+                    None => Span::styled("", text),
+                },
                 Span::styled(fight.foe().name.to_string(), dress.foe_name),
             ],
             {
@@ -564,6 +573,281 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     }
 }
 
+pub(crate) struct PickerView<'a> {
+    pub sheet: Option<&'a Sheet>,
+    pub picker: &'a Picker,
+    pub look: Option<&'a Look>,
+    pub own_username: &'a str,
+}
+
+fn threat_span(threat: Option<Threat>) -> Span<'static> {
+    match threat {
+        Some(threat) => {
+            let style = match threat {
+                Threat::Easy => lit(Neon::Green),
+                Threat::Even => lit(Neon::Cyan),
+                Threat::Risky => lit(Neon::Amber),
+                Threat::Grim => lit(Neon::Red),
+            };
+            Span::styled(threat.word().to_string(), style)
+        }
+        None => Span::styled("…", ink(INK_MUTED)),
+    }
+}
+
+/// One offer in the picker: the key, the face, and three rows of numbers
+/// beside it.
+struct Offer {
+    key: &'static str,
+    pick: Pick,
+    kind: &'static FoeKind,
+    tier: FoeTier,
+    /// `None` for the Old Signal, which has no level.
+    level: Option<i32>,
+    threat: Option<Threat>,
+    note: &'static str,
+    boss: bool,
+}
+
+fn offer_lines(offer: &Offer, cursor: Pick) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let key = lit(Neon::Amber);
+    let (face, name) = match offer.boss {
+        true => (glow(Neon::Red), lit(Neon::Red)),
+        false => (glow(Neon::Cyan), lit(Neon::Cyan)),
+    };
+    let marker = match offer.pick == cursor {
+        true => Span::styled("  ▸ ", key),
+        false => Span::styled("    ", text),
+    };
+    let pay = match offer.boss {
+        true => "pays nothing on the sheet. a mark, and the climb over".to_string(),
+        false => format!("pays {} bits · {} exp", offer.tier.bits, offer.tier.exp),
+    };
+    let head = {
+        let mut row = vec![Span::styled(offer.kind.name.to_string(), name)];
+        if let Some(level) = offer.level {
+            row.push(Span::styled(format!("  lv {level}"), text));
+        }
+        row
+    };
+    let rows: [Vec<Span<'static>>; 3] = [
+        head,
+        vec![Span::styled(
+            format!(
+                "attack {}  defense {}  signal {}",
+                offer.tier.attack, offer.tier.defense, offer.tier.signal
+            ),
+            dim_text,
+        )],
+        vec![
+            Span::styled(pay, text),
+            Span::styled(format!("   {}", offer.note), dim_text),
+        ],
+    ];
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut spans = vec![match i {
+                0 => marker.clone(),
+                _ => Span::styled("    ", text),
+            }];
+            spans.push(match i {
+                0 => Span::styled(format!("[{}]  ", offer.key), key),
+                _ => Span::styled("     ", text),
+            });
+            spans.push(Span::styled(offer.kind.portrait[i].to_string(), face));
+            spans.push(Span::styled("   ", text));
+            let threat = match i {
+                0 => vec![threat_span(offer.threat)],
+                _ => Vec::new(),
+            };
+            spans.extend(pad(row, INNER.saturating_sub(4 + 5 + 5 + 3 + 8), false));
+            spans.extend(threat);
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// The picker over the street: the sheet, the offers, the keys. Fixed
+/// width like the scene; the height is what it holds.
+pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted = ink(INK_MUTED);
+    let key = lit(Neon::Amber);
+    let frame_style = glow(Neon::Cyan);
+    let mut lines: Vec<Line<'static>> = vec![Line::default()];
+
+    match view.sheet {
+        None => {
+            lines.push(Line::from(Span::styled(
+                "  the static parts. your sheet has not come down the wire yet.",
+                muted,
+            )));
+        }
+        Some(sheet) => {
+            let face = runner_rows(sheet, view.look);
+            let exp = match (
+                sheet.signal_hears(),
+                data::exp_to_advance(sheet.level, sheet.marks),
+            ) {
+                (true, _) => format!("exp {}  the Old Signal hears you", sheet.exp),
+                (false, Some(need)) => format!("exp {}/{need}", sheet.exp),
+                (false, None) => format!("exp {}/{}", sheet.exp, data::exp_to_seek(sheet.marks)),
+            };
+            let stats: [Vec<Span<'static>>; 3] = [
+                vec![
+                    Span::styled(
+                        view.own_username.to_string(),
+                        ink(INK_BRIGHT).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("  lv {}", sheet.level), text),
+                ],
+                {
+                    let mut row = vec![Span::styled("signal ", dim_text)];
+                    row.extend(bar_spans(
+                        sheet.signal,
+                        sheet.max_signal(),
+                        glow(Neon::Green),
+                        false,
+                    ));
+                    row.push(Span::styled(
+                        format!(" {}/{}", sheet.signal, sheet.max_signal()),
+                        text,
+                    ));
+                    row
+                },
+                vec![Span::styled(
+                    format!(
+                        "attack {}  defense {}   {} · {}",
+                        sheet.attack(),
+                        sheet.defense(),
+                        weapon_name(sheet),
+                        armor_name(sheet)
+                    ),
+                    dim_text,
+                )],
+            ];
+            for (row, stats) in face.into_iter().zip(stats) {
+                let mut spans = vec![Span::styled("  ", text)];
+                spans.extend(row);
+                spans.push(Span::styled("   ", text));
+                spans.extend(stats);
+                lines.push(Line::from(spans));
+            }
+            let mut budget = vec![
+                Span::styled(" ".repeat(2 + PORTRAIT_WIDTH + 3), text),
+                Span::styled(
+                    format!(
+                        "rations {}/{RATIONS_PER_DAY} · bits {} · {exp}",
+                        sheet.rations_left, sheet.bits
+                    ),
+                    dim_text,
+                ),
+            ];
+            if sheet.debt > 0 {
+                budget.push(Span::styled(
+                    format!(" · owed {}", sheet.debt),
+                    dim(Neon::Red),
+                ));
+            }
+            lines.push(Line::from(budget));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", "─".repeat(INNER.saturating_sub(4))),
+                dim(Neon::Cyan),
+            )));
+            lines.push(Line::default());
+
+            let closed = match (sheet.is_down(), sheet.rations_left <= 0) {
+                (true, _) => {
+                    Some("your signal is down. nothing in there can see you until tomorrow.")
+                }
+                (false, true) => Some("you are spent for today. the static will keep."),
+                (false, false) => None,
+            };
+            match closed {
+                Some(reason) => {
+                    lines.push(Line::from(Span::styled(format!("    {reason}"), text)));
+                }
+                None => {
+                    let fair = match sheet.signal_hears() {
+                        true => Offer {
+                            key: "f",
+                            pick: Pick::Fair,
+                            kind: &OLD_SIGNAL,
+                            tier: OLD_SIGNAL_TIER,
+                            level: None,
+                            threat: view.picker.fair,
+                            note: "the bottom of the city",
+                            boss: true,
+                        },
+                        false => {
+                            let (index, kind, tier) = data::foe_for_level(sheet.level);
+                            Offer {
+                                key: "f",
+                                pick: Pick::Fair,
+                                kind,
+                                tier,
+                                level: Some(index as i32 + 1),
+                                threat: view.picker.fair,
+                                note: "the glyph of your level",
+                                boss: false,
+                            }
+                        }
+                    };
+                    lines.extend(offer_lines(&fair, view.picker.cursor));
+                    if let Some((index, kind, tier)) = data::lower_foe_for_level(sheet.level) {
+                        lines.push(Line::default());
+                        lines.extend(offer_lines(
+                            &Offer {
+                                key: "g",
+                                pick: Pick::Lower,
+                                kind,
+                                tier,
+                                level: Some(index as i32 + 1),
+                                threat: view.picker.lower,
+                                note: "a step down, half pay",
+                                boss: false,
+                            },
+                            view.picker.cursor,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("    [↑↓] ", key),
+        Span::styled("pick", text),
+        Span::styled("   [Enter] ", key),
+        Span::styled("step in", text),
+        Span::styled("   esc back to the street", dim_text),
+    ]));
+    lines.push(Line::default());
+
+    let width = (INNER + 2).min(usize::from(area.width).saturating_sub(2)) as u16;
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).style(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(frame_style)
+                .title(Span::styled(" the static ", lit(Neon::Cyan))),
+        ),
+        rect,
+    );
+}
+
 /// The sheet strip, top-right: the day's budget and the kit at a glance.
 pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     let text = ink(INK);
@@ -588,6 +872,10 @@ pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     ));
     spans.push(Span::styled("  bits ", dim_text));
     spans.push(Span::styled(sheet.bits.to_string(), number));
+    if sheet.debt > 0 {
+        spans.push(Span::styled("  owed ", dim_text));
+        spans.push(Span::styled(sheet.debt.to_string(), dim(Neon::Red)));
+    }
     spans.push(Span::styled("  weapon ", dim_text));
     spans.push(Span::styled(weapon_name(sheet).to_string(), text));
     spans.push(Span::styled("  armor ", dim_text));
