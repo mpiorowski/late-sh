@@ -1261,7 +1261,6 @@ Test gaps:
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
 - Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
-- News payload fields must sanitize the separator and newlines.
-- Showcase and Work posts do not create chat messages; News posts do.
+- Showcase, Work, and News posts do not create chat messages. A News share goes up on the #lounge live strip instead (§11 News).
 - Game rooms must remain opt-in and `auto_join=false`.
 - Private `kind='game'` rooms (daily match chat) are membership-fixed at creation; no join path may admit a third user, and they stay hidden from the rail/Mentions/IRC like all game rooms. The daily sweeper hard-deletes them 30 days after the match ends.
