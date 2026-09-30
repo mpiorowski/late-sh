@@ -23,7 +23,7 @@ use crate::app::{
     files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
     live::{
         pick::{LiveCandidate, LiveSource},
-        ui::{PICTURE_COLS, PICTURE_ROWS, StripBody, truncate_chars},
+        ui::{HintPart, PICTURE_COLS, PICTURE_ROWS, StripBody, key_hint_spans, truncate_chars},
     },
 };
 
@@ -207,17 +207,12 @@ fn word_rows(budget: usize, track: &TrackStripView) -> Vec<Vec<Span<'static>>> {
         Style::default().fg(theme::TEXT_DIM()),
     )];
     rows[3] = event_spans(budget, track);
-    rows[6] = vec![Span::styled(
-        truncate_chars(
-            if track.listening {
-                "o or click for the booth"
-            } else {
-                "o or click to tune in"
-            },
-            budget,
-        ),
-        Style::default().fg(theme::TEXT_FAINT()),
-    )];
+    let action = if track.listening {
+        " or click for the booth"
+    } else {
+        " or click to tune in"
+    };
+    rows[6] = key_hint_spans(budget, &[HintPart::Key("o"), HintPart::Text(action)]);
     rows
 }
 

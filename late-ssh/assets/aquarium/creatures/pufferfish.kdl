@@ -2,6 +2,7 @@ name "pufferfish"
 title "a small spiky pufferfish"
 description "round body with bristled spines top and bottom and a tiny tail"
 sauce author=hardlygospel date=20260527 license=CCBYSA4.0
+mini left="<*)" right="(*>"
 
 count 1
 

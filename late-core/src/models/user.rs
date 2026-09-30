@@ -327,10 +327,10 @@ impl RoomListMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 3;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 6;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
-/// listed here — it is always pinned at the top of the sidebar. The
+/// listed here: it is always pinned at the top of the sidebar. The
 /// visualizer is not a panel of its own: it renders inline at the top of
 /// `Music`, see `common/sidebar.rs`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -338,22 +338,41 @@ pub enum RightSidebarComponent {
     Music,
     Bonsai,
     Daily,
+    /// The Pet Companion's box; drawn only while the account owns one.
+    Pet,
+    /// A small tank of one-to-three-cell fish; drawn only while the account
+    /// owns the aquarium.
+    Tank,
+    /// Free space: no rule, no rows of its own, it takes whatever the rail
+    /// has left, so the panels under it sit at the bottom.
+    Spacer,
 }
 
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
-    /// to backfill any panels missing from a stored list. Space cuts by
-    /// shrink priority; Bonsai is the one flexible panel and absorbs leftover
-    /// rows. Stale stored keys (e.g. the retired "activity", "visualizer" and
-    /// "pot" panels) are dropped on read by `from_key`.
-    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Daily, Self::Music, Self::Bonsai];
+    /// to backfill any panels missing from a stored list. Every panel has a
+    /// fixed height; when the rail runs short, panels drop from the bottom
+    /// of this order up. Stale stored keys (e.g. the retired "pet",
+    /// "activity", "visualizer" and "pot" panels) are dropped on read by
+    /// `from_key`; the pet panel came back under a new key so an old stored
+    /// "pet" entry cannot switch it on.
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
+        Self::Daily,
+        Self::Music,
+        Self::Spacer,
+        Self::Bonsai,
+        Self::Pet,
+        Self::Tank,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Music => "music",
             Self::Bonsai => "bonsai",
             Self::Daily => "daily",
+            Self::Pet => "pet_box",
+            Self::Tank => "mini_tank",
+            Self::Spacer => "spacer",
         }
     }
 
@@ -362,6 +381,9 @@ impl RightSidebarComponent {
             "music" => Some(Self::Music),
             "bonsai" => Some(Self::Bonsai),
             "daily" => Some(Self::Daily),
+            "pet_box" => Some(Self::Pet),
+            "mini_tank" => Some(Self::Tank),
+            "spacer" => Some(Self::Spacer),
             _ => None,
         }
     }
@@ -371,12 +393,20 @@ impl RightSidebarComponent {
             Self::Music => "Audio playback",
             Self::Bonsai => "Bonsai",
             Self::Daily => "Lobby",
+            Self::Pet => "Pet",
+            Self::Tank => "Tank",
+            Self::Spacer => "Free space",
         }
     }
 
-    /// Whether the panel starts enabled for users without a stored setting.
+    /// Whether the panel starts enabled, for new users and when a new panel
+    /// is backfilled into an existing user's stored list. The pet and the
+    /// tank start off: the rail is tight and they are opt-in.
     pub fn default_enabled(self) -> bool {
-        true
+        match self {
+            Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
+            Self::Pet | Self::Tank => false,
+        }
     }
 }
 
@@ -402,12 +432,8 @@ pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
 
 /// Drop duplicates and backfill any missing panels at the end so the list
 /// always covers every component exactly once, preserving stored order.
-///
-/// Missing panels are backfilled **enabled**, not at `default_enabled()`: a
-/// user with a stored list is an existing user whose effective state must not
-/// silently change when a new panel ships. `default_enabled()` applies only to
-/// the no-stored-list path in `default_right_sidebar_components`, i.e.
-/// genuinely new users.
+/// A backfilled panel takes its `default_enabled()`, the same as a new
+/// user gets it.
 pub fn normalize_right_sidebar_components(
     components: &[RightSidebarComponentSetting],
 ) -> Vec<RightSidebarComponentSetting> {
@@ -422,7 +448,7 @@ pub fn normalize_right_sidebar_components(
         if !result.iter().any(|s| s.component == component) {
             result.push(RightSidebarComponentSetting {
                 component,
-                enabled: true,
+                enabled: component.default_enabled(),
             });
         }
     }

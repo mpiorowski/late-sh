@@ -8,7 +8,7 @@ use ratatui::{
 
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
-use crate::app::common::{markdown::render_body_to_lines, theme};
+use crate::app::common::{markdown::render_body_to_lines, sidebar::SidebarOwnership, theme};
 
 use super::{
     data::country_label,
@@ -22,7 +22,14 @@ use super::{
 pub(crate) const MODAL_WIDTH: u16 = 96;
 pub(crate) const MODAL_HEIGHT: u16 = 34;
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+/// `ownership` marks the shop-gated sidebar panels the account cannot show
+/// yet in the Sidebar panels dialog.
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &SettingsModalState,
+    ownership: SidebarOwnership,
+) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -65,7 +72,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         draw_picker(frame, popup, state);
     }
     if state.right_sidebar_components_open() {
-        draw_right_sidebar_components_dialog(frame, popup, state);
+        draw_right_sidebar_components_dialog(frame, popup, state, ownership);
     }
     if state.chat_badges_open() {
         draw_chat_badges_dialog(frame, popup, state);
@@ -1684,7 +1691,12 @@ fn draw_picker(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     frame.render_widget(Paragraph::new(footer), layout[3]);
 }
 
-fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
+fn draw_right_sidebar_components_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    state: &SettingsModalState,
+    ownership: SidebarOwnership,
+) {
     let components = state.right_sidebar_components();
     let count = components.len() as u16;
     // rows + heading + blank + 2 footer lines + borders.
@@ -1730,13 +1742,18 @@ fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &S
         let marker = if selected { ">" } else { " " };
         let checkbox = if setting.enabled { "[x]" } else { "[ ]" };
         let label = setting.component.label();
-        let text = format!(" {marker} {checkbox} {label}");
+        let owned = ownership.owns(setting.component);
+        let text = if owned {
+            format!(" {marker} {checkbox} {label}")
+        } else {
+            format!(" {marker} {checkbox} {label} (/shop)")
+        };
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
-        } else if setting.enabled {
+        } else if setting.enabled && owned {
             Style::default().fg(theme::TEXT())
         } else {
             Style::default().fg(theme::TEXT_FAINT())

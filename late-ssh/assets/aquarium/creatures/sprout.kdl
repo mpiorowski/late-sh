@@ -3,6 +3,7 @@ kindom plant
 title "a sprout"
 description "a bud on the seafloor: cut it within the week, or it roots as a wigglewort"
 sauce author=late.sh date=20260910 license=CCBYSA4.0
+mini left=",)" right=",)"
 
 count 1
 

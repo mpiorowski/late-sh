@@ -17,6 +17,8 @@ use crate::app::audio::{
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::chat::state::ActiveFriend;
+use crate::app::hub::aquarium::{state::AquariumState, ui as aquarium_ui};
+use crate::app::pet::ui::{Neighbours, PetView, WatchSide, draw_pet_box};
 use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
@@ -46,10 +48,11 @@ const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 // Nightride attribution row).
 const MUSIC_DETAIL_HEIGHT: u16 = 6;
 const MUSIC_QUEUE_HEIGHT: u16 = 3;
-// Bonsai is kept fixed when shown; the preview renderer scales the tree to
-// whatever height it gets.
 /// The bonsai preview block plus its footer row.
-const BONSAI_MIN_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
+const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
+/// The pet's three-row box, nothing else: no name or mood row.
+const PET_HEIGHT: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
+const TANK_HEIGHT: u16 = aquarium_ui::MINI_TANK_HEIGHT;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT;
 
@@ -66,6 +69,12 @@ pub(crate) struct SidebarProps<'a> {
     /// What the music stage's equalizer draws (`viz::eq_state`).
     pub eq_state: EqState,
     pub bonsai: &'a BonsaiState,
+    /// The pet panel's box; `None` without a Pet Companion, which hides
+    /// the panel.
+    pub pet: Option<PetView<'a>>,
+    /// The tank panel's reef; `None` without the aquarium, which hides
+    /// the panel.
+    pub tank: Option<SidebarTank<'a>>,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -107,6 +116,34 @@ pub(crate) struct SidebarProps<'a> {
     pub marquee_tick: usize,
 }
 
+/// What the tank panel draws: the session's reef (its population and
+/// colours) and whether the fish are hungry today.
+pub(crate) struct SidebarTank<'a> {
+    pub aquarium: &'a AquariumState,
+    pub hungry: bool,
+}
+
+/// Which shop-gated panels the account can show. A panel it does not own
+/// is skipped on the rail and marked in the settings list.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SidebarOwnership {
+    pub pet: bool,
+    pub tank: bool,
+}
+
+impl SidebarOwnership {
+    pub(crate) fn owns(self, component: RightSidebarComponent) -> bool {
+        match component {
+            RightSidebarComponent::Pet => self.pet,
+            RightSidebarComponent::Tank => self.tank,
+            RightSidebarComponent::Music
+            | RightSidebarComponent::Bonsai
+            | RightSidebarComponent::Daily
+            | RightSidebarComponent::Spacer => true,
+        }
+    }
+}
+
 pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
     draw_sidebar_new_shell(frame, area, props);
 }
@@ -126,37 +163,34 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     };
 
     // Responsiveness: the core block (clock + presence) is pinned at the
-    // top, then enabled panels render in the user's chosen order. When space
-    // runs short panels are dropped by `shrink_priority` (ambience first,
-    // music stage last), not by list position. Every panel renders at its
-    // full height or not at all. Leftover rows go to the Bonsai panel (the
-    // one flexible panel — the tree renderer scales to whatever height it
-    // gets); otherwise they collect just above the final panel, which sticks
-    // to the bottom of the rail.
-    let visible = visible_components(props.components, area.height);
-    let bonsai_visible = visible.contains(&RightSidebarComponent::Bonsai);
+    // top, then enabled panels render in the user's chosen order, each at
+    // its full fixed height or not at all. When the rail runs short, panels
+    // drop from the bottom of the list up (`visible_components`); fitting
+    // the list to the terminal is the user's call. Leftover rows go to the
+    // Free space panel wherever it sits, else to the bottom of the rail.
+    let ownership = SidebarOwnership {
+        pet: props.pet.is_some(),
+        tank: props.tank.is_some(),
+    };
+    let visible = visible_components(props.components, ownership, area.height);
 
     // Vertical real estate, top to bottom: the core block, then each visible
-    // panel (rule + body at its fixed height; Bonsai's body is a Min so it
-    // absorbs the slack). Without a visible Bonsai panel, the flexible
-    // spacer sits between the final panel's rule and body, so the rule stays
-    // in the natural flow under the panel above while the body sticks to the
-    // bottom of the rail. Every panel renders at its full height or not at
-    // all — nothing is clipped.
-    let last = visible.len().saturating_sub(1);
+    // panel as its rule plus its body, the spacer as a Fill with no rule.
     let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
-    for (idx, component) in visible.iter().enumerate() {
-        constraints.push(Constraint::Length(RULE_HEIGHT)); // ── rule
-        if idx == last && !bonsai_visible {
-            constraints.push(Constraint::Fill(1)); // drop the last body to the bottom
+    for component in &visible {
+        match component {
+            RightSidebarComponent::Spacer => constraints.push(Constraint::Fill(1)),
+            RightSidebarComponent::Music
+            | RightSidebarComponent::Bonsai
+            | RightSidebarComponent::Daily
+            | RightSidebarComponent::Pet
+            | RightSidebarComponent::Tank => {
+                constraints.push(Constraint::Length(RULE_HEIGHT));
+                constraints.push(Constraint::Length(component_height(*component)));
+            }
         }
-        constraints.push(if *component == RightSidebarComponent::Bonsai {
-            Constraint::Min(component_height(*component))
-        } else {
-            Constraint::Length(component_height(*component))
-        });
     }
-    if visible.is_empty() {
+    if !visible.contains(&RightSidebarComponent::Spacer) {
         constraints.push(Constraint::Fill(1));
     }
 
@@ -186,6 +220,10 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     i += 1;
 
     for (idx, component) in visible.iter().enumerate() {
+        if *component == RightSidebarComponent::Spacer {
+            i += 1;
+            continue;
+        }
         // Each panel's separator rule doubles as its section title
         // (`── lobby ────`), so panels don't spend a body row on a name.
         // The lobby label glows while it's the viewer's turn in any match or
@@ -204,9 +242,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
             rule_active,
         );
         i += 1;
-        if idx == last && !bonsai_visible {
-            i += 1; // skip the spacer that drops the last body to the bottom
-        }
         let body = inset(layout[i]);
         i += 1;
         match component {
@@ -246,67 +281,100 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     props.lobby_glow,
                 );
             }
+            RightSidebarComponent::Pet => {
+                let Some(view) = &props.pet else {
+                    unreachable!("an unowned pet panel is never visible");
+                };
+                draw_pet_box(frame, body, view, pet_neighbours(&visible, idx));
+            }
+            RightSidebarComponent::Tank => {
+                let Some(tank) = &props.tank else {
+                    unreachable!("an unowned tank panel is never visible");
+                };
+                aquarium_ui::draw_mini_tank(
+                    frame.buffer_mut(),
+                    body,
+                    tank.aquarium,
+                    tank.hungry,
+                    props.marquee_tick,
+                );
+            }
+            RightSidebarComponent::Spacer => unreachable!("the spacer is skipped above"),
         }
     }
 }
 
-/// Rows a panel needs to render (excluding its rule). A panel shows at this
-/// full height or not at all; the music stage in particular is never clipped
-/// to a partial viewport. Bonsai is the exception in the other direction:
-/// this is its minimum, and it grows into whatever the rail has left over
-/// (the tree renderer scales to its viewport).
+/// The pet goes and watches a bonsai or tank panel right above or below
+/// its own, the sidebar twin of the Zen tile's edge contact. A spacer
+/// between them breaks the contact.
+fn pet_neighbours(visible: &[RightSidebarComponent], pet_idx: usize) -> Neighbours {
+    let above = pet_idx.checked_sub(1).map(|idx| visible[idx]);
+    let below = visible.get(pet_idx + 1).copied();
+    let side_of = |target: RightSidebarComponent| {
+        if above == Some(target) {
+            Some(WatchSide::Above)
+        } else if below == Some(target) {
+            Some(WatchSide::Below)
+        } else {
+            None
+        }
+    };
+    Neighbours {
+        tank: side_of(RightSidebarComponent::Tank),
+        bonsai: side_of(RightSidebarComponent::Bonsai),
+    }
+}
+
+/// Rows a panel's body needs (excluding its rule). Every panel shows at
+/// this full height or not at all; the music stage in particular is never
+/// clipped to a partial viewport. The spacer has none: it takes what the
+/// rail has left.
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
-        RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
+        RightSidebarComponent::Bonsai => BONSAI_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
+        RightSidebarComponent::Pet => PET_HEIGHT,
+        RightSidebarComponent::Tank => TANK_HEIGHT,
+        RightSidebarComponent::Spacer => 0,
     }
 }
 
-/// How eagerly a panel is dropped when the rail runs out of rows: higher
-/// drops first. Deliberately independent of display order — reordering the
-/// sidebar changes where panels sit, not which ones survive a short
-/// terminal. Bonsai (ambience) goes first; the music stage, which now
-/// carries the eq strip too, is the last panel standing.
-fn shrink_priority(component: RightSidebarComponent) -> u8 {
+/// Rows a panel takes on the rail: its rule plus its body, nothing for the
+/// spacer.
+fn rail_rows(component: RightSidebarComponent) -> u16 {
     match component {
-        RightSidebarComponent::Bonsai => 3, // first to go
-        RightSidebarComponent::Daily => 2,
-        RightSidebarComponent::Music => 0, // last panel standing
+        RightSidebarComponent::Spacer => 0,
+        RightSidebarComponent::Music
+        | RightSidebarComponent::Bonsai
+        | RightSidebarComponent::Daily
+        | RightSidebarComponent::Pet
+        | RightSidebarComponent::Tank => RULE_HEIGHT + component_height(component),
     }
 }
 
-/// Pick which enabled panels fit, in render order, given the available height.
-/// Panels are kept most-important-first (`shrink_priority`); a panel that
-/// doesn't fit is skipped rather than ending the walk, so one tall panel
-/// can't shadow a short one that would still fit.
+/// The enabled, owned panels that fit, in display order: walk the list top
+/// down and stop at the first panel that does not fit, so a short rail
+/// drops panels from the bottom up.
 fn visible_components(
     components: &[RightSidebarComponentSetting],
+    ownership: SidebarOwnership,
     height: u16,
 ) -> Vec<RightSidebarComponent> {
     let mut remaining = height.saturating_sub(TIME_HEIGHT);
-    let enabled: Vec<RightSidebarComponent> = components
-        .iter()
-        .filter(|setting| setting.enabled)
-        .map(|setting| setting.component)
-        .collect();
-
-    let mut by_priority = enabled.clone();
-    by_priority.sort_by_key(|component| shrink_priority(*component));
     let mut keep = Vec::new();
-    for component in by_priority {
-        let need = RULE_HEIGHT + component_height(component);
-        if need <= remaining {
-            remaining -= need;
-            keep.push(component);
+    for setting in components {
+        if !setting.enabled || !ownership.owns(setting.component) {
+            continue;
         }
+        let need = rail_rows(setting.component);
+        if need > remaining {
+            break;
+        }
+        remaining -= need;
+        keep.push(setting.component);
     }
-
-    // Survivors render in the user's display order.
-    enabled
-        .into_iter()
-        .filter(|component| keep.contains(component))
-        .collect()
+    keep
 }
 
 /// The pinned two-row core block at the top of the rail. Presence is chrome
@@ -490,6 +558,9 @@ fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
         RightSidebarComponent::Music => "music",
         RightSidebarComponent::Bonsai => "bonsai",
         RightSidebarComponent::Daily => "lobby",
+        RightSidebarComponent::Pet => "pet",
+        RightSidebarComponent::Tank => "tank",
+        RightSidebarComponent::Spacer => unreachable!("the spacer draws no rule"),
     }
 }
 

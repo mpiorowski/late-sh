@@ -400,7 +400,10 @@ struct DrawContext<'a> {
     zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
     zen_track: String,
     zen_date: String,
-    zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
+    /// The pet's box inputs, `None` without a Pet Companion. Taken by
+    /// whichever surface draws the pet this frame: the Zen tile or the
+    /// sidebar panel, never both, since Zen has no sidebar.
+    pet_view: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
 }
@@ -1137,7 +1140,7 @@ impl App {
                 self.pet_state.petted_on(care_day),
             ),
         };
-        let zen_pet_strip = self
+        let pet_view = self
             .shop_state
             .entitlements()
             .has_pet_companion()
@@ -1474,7 +1477,7 @@ impl App {
                         zen_chat_tiles,
                         zen_track,
                         zen_date,
-                        zen_pet_strip,
+                        pet_view,
                         zen_active_friends: &self.active_friends,
                         zen_care,
                     },
@@ -1977,7 +1980,7 @@ impl App {
                     aquarium: ctx.aquarium_state,
                     aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
                     aquarium_care: ctx.aquarium_care,
-                    pet_strip: ctx.zen_pet_strip.take(),
+                    pet_strip: ctx.pet_view.take(),
                     chats: std::mem::take(&mut ctx.zen_chat_tiles),
                     track: ctx.zen_track.clone(),
                     station: crate::app::zen::ui::station_text(
@@ -2053,6 +2056,13 @@ impl App {
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
+                    pet: ctx.pet_view.take(),
+                    tank: ctx.shop_state.entitlements().has_aquarium().then_some(
+                        crate::app::common::sidebar::SidebarTank {
+                            aquarium: ctx.aquarium_state,
+                            hungry: ctx.aquarium_care.hungry(),
+                        },
+                    ),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -2121,7 +2131,15 @@ impl App {
         }
 
         if ctx.show_settings {
-            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
+            settings_modal::ui::draw(
+                frame,
+                inner,
+                ctx.settings_modal_state,
+                crate::app::common::sidebar::SidebarOwnership {
+                    pet: ctx.shop_state.entitlements().has_pet_companion(),
+                    tank: ctx.shop_state.entitlements().has_aquarium(),
+                },
+            );
         }
 
         if ctx.show_mod_modal {

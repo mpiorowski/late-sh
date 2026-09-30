@@ -157,6 +157,41 @@ pub fn draw_pet_box(frame: &mut Frame, area: Rect, view: &PetView<'_>, neighbour
     }
 }
 
+/// The row over the pet's box: its name, its mood, and what it is up to
+/// when that is more than a stroll. Drawn centred over the Zen tile; the
+/// sidebar panel has no such row.
+pub fn status_line(state: &PetState, neighbours: Neighbours) -> Line<'static> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let name = state
+        .name
+        .clone()
+        .unwrap_or_else(|| state.species.as_str().to_string());
+    let pose = PetPose::for_frame(
+        state.mood(),
+        neighbours,
+        state.perch(),
+        state.animation_ticks(),
+    );
+    Line::from(vec![
+        Span::styled(
+            name,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" · {}", state.mood().as_str()), dim),
+        Span::styled(
+            match pose {
+                PetPose::Watch(WatchTarget::Tank, _) => " · watching the fish",
+                PetPose::Watch(WatchTarget::Bonsai, _) => " · watching the tree",
+                PetPose::At(_) => " · at your cursor",
+                PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
+            },
+            dim,
+        ),
+    ])
+}
+
 /// The pet's three art rows inside `zone`, standing where the art says.
 /// Returns the pet's on-screen rect (the click target).
 fn draw_pet(frame: &mut Frame, zone: Rect, state: &PetState, art: PetArt) -> Rect {

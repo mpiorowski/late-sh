@@ -39,7 +39,7 @@ use crate::app::{
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
-    pet::ui::{Neighbours, PetPose, PetView, WatchTarget, draw_pet_box},
+    pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -612,39 +612,8 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neigh
         return;
     }
     let box_area = if area.height >= FLOOR_ROWS + 2 {
-        let state = view.state;
-        let dim = Style::default().fg(theme::TEXT_DIM());
-        let name = state
-            .name
-            .clone()
-            .unwrap_or_else(|| state.species.as_str().to_string());
-        let pose = PetPose::for_frame(
-            state.mood(),
-            neighbours,
-            state.perch(),
-            state.animation_ticks(),
-        );
-        let line = Line::from(vec![
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" · {}", state.mood().as_str()), dim),
-            Span::styled(
-                match pose {
-                    PetPose::Watch(WatchTarget::Tank, _) => " · watching the fish",
-                    PetPose::Watch(WatchTarget::Bonsai, _) => " · watching the tree",
-                    PetPose::At(_) => " · at your cursor",
-                    PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
-                },
-                dim,
-            ),
-        ])
-        .centered();
         frame.render_widget(
-            Paragraph::new(line),
+            Paragraph::new(status_line(view.state, neighbours).centered()),
             Rect::new(area.x, area.y, area.width, 1),
         );
         Rect::new(area.x, area.y + 1, area.width, area.height - 1)

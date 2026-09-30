@@ -2,6 +2,7 @@ name "squigs"
 title "a school of tiny fish"
 description "a drifting cluster of tiny tildefish"
 sauce author=mevanlc date=20260501 license=CCBYSA4.0
+mini left="~~" right="~~"
 
 motion "brownian"
 unit-motion "brownian" rearrange-chance=0.2

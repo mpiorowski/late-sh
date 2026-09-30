@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use crate::app::common::theme;
 use crate::app::games::pool_core::{canvas::Rgb, rules::PoolRules};
-use crate::app::live::ui::{PICTURE_COLS, PICTURE_ROWS, StripBody, truncate_chars};
+use crate::app::live::ui::{
+    HintPart, PICTURE_COLS, PICTURE_ROWS, StripBody, key_hint_spans, truncate_chars,
+};
 
 use super::{
     backgammon, battleship, checkers, connect4,
@@ -65,30 +67,24 @@ fn word_rows(budget: usize, strip: &MatchStripView<'_>) -> Vec<Vec<Span<'static>
     )];
     rows[3] = vec![event_span(budget, strip)];
     rows[6] = match strip.finish {
-        Some(_) => key_hint_spans(budget, "ctrl+g", " to play"),
-        None => key_hint_spans(budget, "o", " or click to watch"),
+        Some(_) => key_hint_spans(
+            budget,
+            &[
+                HintPart::Text("press "),
+                HintPart::Key("ctrl+g"),
+                HintPart::Text(" to play"),
+            ],
+        ),
+        None => key_hint_spans(
+            budget,
+            &[
+                HintPart::Text("press "),
+                HintPart::Key("o"),
+                HintPart::Text(" or click to watch"),
+            ],
+        ),
     };
     rows
-}
-
-/// `press o or click to watch`, the key in amber like the hint bars. Too
-/// narrow for the whole hint, it falls back to one faint truncated run.
-fn key_hint_spans(budget: usize, key: &str, rest: &str) -> Vec<Span<'static>> {
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-    let full = format!("press {key}{rest}");
-    if full.chars().count() > budget {
-        return vec![Span::styled(truncate_chars(&full, budget), faint)];
-    }
-    vec![
-        Span::styled("press ", faint),
-        Span::styled(
-            key.to_string(),
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(rest.to_string(), faint),
-    ]
 }
 
 fn name(username: &Option<String>) -> String {

@@ -225,6 +225,40 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     Line::from(spans)
 }
 
+/// One piece of a body's key hint row: a key to press, or the words around it.
+pub(crate) enum HintPart<'a> {
+    Key(&'a str),
+    Text(&'a str),
+}
+
+/// The key hint row every body ends on (`o read · r reply`): each key in
+/// amber like the hint bars, the words faint. Too narrow for the whole hint,
+/// it falls back to one faint truncated run.
+pub(crate) fn key_hint_spans(budget: usize, parts: &[HintPart<'_>]) -> Vec<Span<'static>> {
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let full: String = parts
+        .iter()
+        .map(|part| match part {
+            HintPart::Key(text) | HintPart::Text(text) => *text,
+        })
+        .collect();
+    if full.chars().count() > budget {
+        return vec![Span::styled(truncate_chars(&full, budget), faint)];
+    }
+    parts
+        .iter()
+        .map(|part| match part {
+            HintPart::Key(key) => Span::styled(
+                key.to_string(),
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            HintPart::Text(text) => Span::styled(text.to_string(), faint),
+        })
+        .collect()
+}
+
 pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();

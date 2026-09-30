@@ -17,7 +17,7 @@ use crate::app::{
     common::theme,
     live::{
         pick::{LiveCandidate, LiveSource},
-        ui::{PICTURE_COLS, PICTURE_ROWS, StripBody, truncate_chars},
+        ui::{HintPart, PICTURE_COLS, PICTURE_ROWS, StripBody, key_hint_spans, truncate_chars},
     },
 };
 
@@ -127,10 +127,15 @@ fn word_rows(budget: usize, article: &ArticleStripView) -> Vec<Vec<Span<'static>
         )];
     }
     rows[4] = event_spans(budget, article);
-    rows[6] = vec![Span::styled(
-        truncate_chars("o read · r reply", budget),
-        Style::default().fg(theme::TEXT_FAINT()),
-    )];
+    rows[6] = key_hint_spans(
+        budget,
+        &[
+            HintPart::Key("o"),
+            HintPart::Text(" read · "),
+            HintPart::Key("r"),
+            HintPart::Text(" reply"),
+        ],
+    );
     rows
 }
 

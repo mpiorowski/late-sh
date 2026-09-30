@@ -2,6 +2,7 @@ name "mj"
 title "a miniature jellyfish"
 description "bell shaped body with three short tentacles descending"
 sauce author=kirii license=unlicense
+mini left="ଳ" right="ଳ"
 
 count 10
 

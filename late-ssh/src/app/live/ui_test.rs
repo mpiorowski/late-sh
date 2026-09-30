@@ -65,3 +65,32 @@ fn a_picture_wider_than_its_column_never_touches_the_words() {
         );
     }
 }
+
+#[test]
+fn every_key_in_a_hint_stands_out_until_it_no_longer_fits() {
+    let parts = [
+        HintPart::Key("o"),
+        HintPart::Text(" read · "),
+        HintPart::Key("r"),
+        HintPart::Text(" reply"),
+    ];
+    let spans = key_hint_spans(16, &parts);
+    let colours: Vec<(String, Option<ratatui::style::Color>)> = spans
+        .iter()
+        .map(|span| (span.content.to_string(), span.style.fg))
+        .collect();
+    assert_eq!(
+        colours,
+        vec![
+            ("o".to_string(), Some(theme::AMBER_DIM())),
+            (" read · ".to_string(), Some(theme::TEXT_FAINT())),
+            ("r".to_string(), Some(theme::AMBER_DIM())),
+            (" reply".to_string(), Some(theme::TEXT_FAINT())),
+        ]
+    );
+
+    let narrow = key_hint_spans(10, &parts);
+    assert_eq!(narrow.len(), 1, "too narrow, one faint run");
+    assert_eq!(narrow[0].content, "o read · …");
+    assert_eq!(narrow[0].style.fg, Some(theme::TEXT_FAINT()));
+}
