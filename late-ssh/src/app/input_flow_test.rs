@@ -3783,11 +3783,7 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
     assert!(app.zen.kind_picker.is_some(), "space opens the picker");
     render_plain(&mut app);
     let (strip, _) = app.live.hit.get().expect("the live tile drew its strip");
-    let click = format!(
-        "\x1b[<0;{};{}M",
-        strip.x + strip.width / 2 + 1,
-        strip.y + 1
-    );
+    let click = format!("\x1b[<0;{};{}M", strip.x + strip.width / 2 + 1, strip.y + 1);
     app.handle_input(click.as_bytes());
     assert_eq!(
         app.chat.news_modal_url(),
