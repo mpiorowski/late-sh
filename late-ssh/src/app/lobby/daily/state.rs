@@ -1090,11 +1090,15 @@ impl DailyState {
     /// weighs it: its last write, and its shooter's aim if one is fresh.
     /// Then every match that just ended, stamped with its finish.
     pub fn live_candidates(&self) -> Vec<LiveCandidate> {
-        let active = self.snapshot.active_matches.iter().map(|item| LiveCandidate {
-            source: LiveSource::DailyMatch(item.id),
-            updated: item.updated,
-            aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
-        });
+        let active = self
+            .snapshot
+            .active_matches
+            .iter()
+            .map(|item| LiveCandidate {
+                source: LiveSource::DailyMatch(item.id),
+                updated: item.updated,
+                aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
+            });
         let results = self.live_results.iter().map(|noted| LiveCandidate {
             source: LiveSource::DailyResult(noted.item.id),
             updated: noted.item.updated,
@@ -1137,8 +1141,7 @@ impl DailyState {
     /// still listed re-reads its headline, since the payout is a second write
     /// behind the finish.
     fn note_results(&mut self, next: &DailySnapshot, now_utc: DateTime<Utc>) {
-        let horizon =
-            chrono::Duration::from_std(LIVE_STAMP_HORIZON).expect("horizon fits chrono");
+        let horizon = chrono::Duration::from_std(LIVE_STAMP_HORIZON).expect("horizon fits chrono");
         for finished in &next.finished_matches {
             if now_utc.signed_duration_since(finished.finished_at) >= horizon {
                 continue;
@@ -2697,4 +2700,3 @@ fn result_item(finished: &DailyFinishedItem) -> DailyMatchItem {
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;
-

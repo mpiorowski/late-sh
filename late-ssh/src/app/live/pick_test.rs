@@ -71,7 +71,11 @@ fn an_entry_that_waited_too_long_is_dropped() {
     let pick = |secs| pick_queued(None, &candidates, at(secs));
 
     assert_eq!(pick(300), up(link(2), 300));
-    assert_eq!(pick(600), up(link(3), 600), "waited 580s, under ten minutes");
+    assert_eq!(
+        pick(600),
+        up(link(3), 600),
+        "waited 580s, under ten minutes"
+    );
     assert_eq!(
         pick(900),
         None,

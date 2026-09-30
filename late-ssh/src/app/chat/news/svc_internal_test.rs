@@ -1,8 +1,7 @@
 use super::{
     TweetIdentity, display_author, handle_from_author_url, is_ai_blocklisted_url, is_youtube_url,
-    truncate_for_chat,
-    tweet_date_from_oembed_html, tweet_status_id, tweet_summary, tweet_text_from_oembed_html,
-    tweet_title,
+    truncate_for_chat, tweet_date_from_oembed_html, tweet_status_id, tweet_summary,
+    tweet_text_from_oembed_html, tweet_title,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -232,4 +231,3 @@ fn post_card_survives_missing_author_and_date() {
         "• hello\n• Posted by an X account on X."
     );
 }
-

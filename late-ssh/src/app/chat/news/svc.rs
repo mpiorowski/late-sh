@@ -2,9 +2,7 @@ use crate::app::ai::svc::AiService;
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
-use late_core::models::article::{
-    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT,
-};
+use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT};
 use late_core::{
     db::Db,
     models::{

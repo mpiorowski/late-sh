@@ -369,7 +369,7 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
 }
 
 /// A link somebody shared to News goes up on the live strip, and `o` opens
-/// the same article modal the #lounge card's news message opens.
+/// the article modal.
 #[tokio::test]
 async fn o_on_a_shared_article_opens_the_article_modal() {
     use late_core::models::article::{Article, ArticleParams};

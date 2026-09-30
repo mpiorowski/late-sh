@@ -1,12 +1,7 @@
 use crate::app::ai::svc::AiService;
 use crate::app::chat::news::svc::ArticleService;
-use crate::app::chat::notifications::svc::NotificationService;
-use crate::app::chat::svc::ChatService;
 use late_core::models::{
-    article::{Article, ArticleParams},
-    article::{ArticleEvent, NEWS_MARKER},
-    chat_message::{ChatMessage, ChatMessageParams},
-    chat_room::ChatRoom,
+    article::{Article, ArticleEvent, ArticleParams},
     moderation_audit_log::ModerationAuditLog,
 };
 use tokio::time::{Duration, timeout};

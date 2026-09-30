@@ -21,9 +21,7 @@ use crate::app::{
     lobby::daily::{live::MatchStripView, state::DailyState},
 };
 
-use super::pick::{
-    Featured, LiveCandidate, LiveSource, aim_overlay, pick_queued,
-};
+use super::pick::{Featured, LiveCandidate, LiveSource, aim_overlay, pick_queued};
 
 /// What the strip paints, by source.
 pub enum LiveStripView<'a> {

@@ -78,9 +78,9 @@ fn open(app: &mut App, source: LiveSource) -> bool {
             }
             false => false,
         },
-        // The article modal the #lounge card's news message opens: Enter
-        // copies the link, `n` jumps to it in News. Gone between the frame
-        // and the key (deleted): nothing to open.
+        // The article modal: Enter copies the link, `n` jumps to it in
+        // News. Gone between the frame and the key (deleted): nothing to
+        // open.
         LiveSource::NewsArticle(article_id) => app.chat.open_news_modal_for_article(article_id),
     }
 }

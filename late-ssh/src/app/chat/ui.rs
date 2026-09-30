@@ -2002,8 +2002,8 @@ fn ensure_chat_rows_cache(
         }
 
         // Skip the author header (when there is one) so selection paints
-        // body rows only. Headerless entries — system lines, news cards,
-        // /me actions, continuations — select from their first row;
+        // body rows only. Headerless entries (system lines, report cards,
+        // /me actions, continuations) select from their first row;
         // deriving this from `is_continuation` alone left the first system
         // line after a normal message with an empty selection range.
         let body_start = if wrapped.header_line_index == Some(0) {
