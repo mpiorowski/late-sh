@@ -385,49 +385,6 @@ fn reply_preview_text_uses_message_body_for_nested_replies() {
 }
 
 #[test]
-fn reply_preview_text_uses_news_title_for_news_messages() {
-    let preview = reply_preview_text(
-        "---NEWS--- Rust 1.95 Released || summary || https://example.com || ascii",
-    );
-    assert_eq!(preview, "Rust 1.95 Released");
-}
-
-#[test]
-fn news_modal_source_uses_full_article_snapshot_payload() {
-    use late_core::models::article::{Article, ArticleFeedItem};
-
-    let created = chrono::DateTime::parse_from_rfc3339("2026-05-08T11:28:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    let user_id = Uuid::from_u128(9);
-    let item = ArticleFeedItem {
-        article: Article {
-            id: Uuid::from_u128(1),
-            created,
-            updated: created,
-            user_id,
-            url: "https://example.com/full".to_string(),
-            title: "Full article title".to_string(),
-            summary: "First full bullet keeps all words for two-line modal wrapping.\nSecond full bullet also keeps all words without chat truncation.\nThird full bullet remains available."
-                .to_string(),
-            ascii_art: ".:-".to_string(),
-        },
-        author_username: "mat".to_string(),
-    };
-
-    let (payload, author, source_created, article_id) =
-        news_modal_source_from_articles(&[item], " https://example.com/full ").unwrap();
-
-    assert_eq!(payload.title, "Full article title");
-    assert!(payload.summary.contains("without chat truncation"));
-    assert!(!payload.summary.contains("..."));
-    assert_eq!(payload.ascii_art, ".:-");
-    assert_eq!(author, "@mat");
-    assert_eq!(source_created, created);
-    assert_eq!(article_id, Uuid::from_u128(1));
-}
-
-#[test]
 fn reply_preview_text_strips_markdown_markers() {
     let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
     assert_eq!(preview, "bold @graybeard docs");
@@ -443,12 +400,6 @@ fn reply_preview_text_preserves_unmatched_backtick_in_kaomoji() {
 fn reply_preview_text_strips_double_backtick_code_markers() {
     let preview = reply_preview_text("``(╯`Д´)╯︵ ┻━┻``");
     assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
-}
-
-#[test]
-fn news_marker_detection_matches_announcement_messages() {
-    assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
-    assert!(news_reply_preview_text("regular chat message").is_none());
 }
 
 #[test]

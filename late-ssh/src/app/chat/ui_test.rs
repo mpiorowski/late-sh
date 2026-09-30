@@ -1012,7 +1012,6 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         composing: true,
         selected_message: false,
         selected_image_message: false,
-        selected_news_message: false,
         reaction_picker_active: false,
         reply_author: None,
         is_editing: false,
@@ -1130,7 +1129,6 @@ fn chat_view<'a>(
         rail_scroll_nudge: 0,
         selected_message_id: None,
         selected_image_message: false,
-        selected_news_message: false,
         reaction_picker_active: false,
         highlighted_message_id: None,
         composer,
@@ -1624,32 +1622,6 @@ fn empty_composer_placeholder_names_the_gild_key_for_a_selected_message() {
     view.selected_message = true;
 
     let expected = "f react · r reply · e edit · d delete · g gild · p profile · t translate · Enter jump to reply";
-    let width = expected.chars().count() as u16;
-    let placeholder = empty_composer_placeholder(&view, width as usize);
-    let backend = TestBackend::new(width, 1);
-    let mut terminal = Terminal::new(backend).expect("term");
-
-    terminal
-        .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
-        .unwrap();
-
-    let buf = terminal.backend().buffer();
-    let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert_eq!(rendered, expected);
-}
-
-#[test]
-fn empty_composer_placeholder_contextualizes_selected_news_message() {
-    use ratatui::{Terminal, backend::TestBackend};
-
-    let ta = TextArea::default();
-    let mut view = composer_view(&ta);
-    view.composing = false;
-    view.selected_message = true;
-    view.selected_news_message = true;
-
-    let expected =
-        "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link";
     let width = expected.chars().count() as u16;
     let placeholder = empty_composer_placeholder(&view, width as usize);
     let backend = TestBackend::new(width, 1);

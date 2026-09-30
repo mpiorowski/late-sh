@@ -13,7 +13,7 @@ use uuid::Uuid;
 use late_core::models::article::ArticleFeedItem;
 
 use crate::app::{
-    chat::ui_text::{format_news_ascii_art_for_display, split_summary_bullets},
+    chat::{news::ui::split_summary_bullets, ui_text::format_news_ascii_art_for_display},
     common::theme,
     live::{
         pick::{LiveCandidate, LiveSource},

@@ -605,8 +605,6 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let dashboard_selected_news_message = shell_active_room
-            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let dashboard_room_effects = shell_active_room
@@ -686,7 +684,6 @@ impl App {
             show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             selected_message_id: self.chat.selected_message_id,
             selected_image_message: dashboard_selected_image_message,
-            selected_news_message: dashboard_selected_news_message,
             highlighted_message_id: self.chat.highlighted_message_id,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
@@ -770,10 +767,6 @@ impl App {
                 payload: &modal.payload,
                 meta: &modal.meta,
             });
-        let selected_news_message = self
-            .chat
-            .selected_room_id
-            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let selected_image_message = self
             .chat
             .selected_room_id
@@ -837,7 +830,6 @@ impl App {
             rail_scroll_nudge: self.chat.rail_scroll_nudge(),
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
-            selected_news_message,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer(),
@@ -1185,7 +1177,6 @@ impl App {
             composing: self.chat.composing,
             selected_message: false,
             selected_image_message: false,
-            selected_news_message: false,
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
