@@ -168,7 +168,7 @@ Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows and Tab / Shift+Tab move focus (the page owns Tab; it is not the page switch here), `space` opens the tile
 picker over the focused tile (`ZenState::kind_picker`: one row per
 `TileKind`, alphabetical (`TileKind::ALL`), scrolled with the selection on a short page, `j` `k` and the arrows move, Enter or `space` picks, Esc
-closes; the picker owns every key while it is up, and a refused row
+closes; the picker owns every key and click while it is up, and a refused row
 stays up with a banner), `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
 `{` `}` one row of height with the nearest split of that direction (i3's
@@ -255,6 +255,7 @@ leaving the page, so a held resize key costs one row update.
   (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), Inbox Enter and Live Enter (`input_flow_test.rs`), and
+  (`rows_test.rs`), Inbox Enter, Live Enter and the click the picker
+  swallows (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
   the empty Live tile (`ui_test.rs`); the rest of the tile drawing is
   untested.

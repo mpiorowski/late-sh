@@ -545,11 +545,7 @@ impl ZenState {
     /// alone. Those paint on the anim_half edge, so the render loop has to
     /// wake that often while one is up.
     pub fn shows_equalizer(&self) -> bool {
-        let visible = match self.zoomed {
-            true => self.focused_kind().into_iter().collect(),
-            false => self.rice.root.leaf_kinds(),
-        };
-        visible.into_iter().any(|kind| match kind {
+        self.drawn_kinds().into_iter().any(|kind| match kind {
             TileKind::Music | TileKind::Visualizer => true,
             TileKind::Bonsai
             | TileKind::Aquarium
@@ -570,6 +566,21 @@ impl ZenState {
     /// Whether any tile on the page is `kind`, zoomed or not.
     pub fn shows(&self, kind: TileKind) -> bool {
         self.rice.root.leaf_kinds().contains(&kind)
+    }
+
+    /// Whether a tile of `kind` is drawn this frame: among every tile, or,
+    /// while zoomed, the focused one alone. The gate for work that only
+    /// pays off on screen (the live strip's view and its wake tier).
+    pub fn draws(&self, kind: TileKind) -> bool {
+        self.drawn_kinds().contains(&kind)
+    }
+
+    /// The kinds on show: every leaf, or the focused one while zoomed.
+    fn drawn_kinds(&self) -> Vec<TileKind> {
+        match self.zoomed {
+            true => self.focused_kind().into_iter().collect(),
+            false => self.rice.root.leaf_kinds(),
+        }
     }
 
     /// The page opening: the first time this session, the focus moves to

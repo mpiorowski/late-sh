@@ -801,8 +801,6 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The #lounge activity feed as a list: newest on top, one event a row with
-/// its age flush right, a friend's line in the friend color.
 /// The live strip while something is up; otherwise a narrow "nothing
 /// live" beside the #lounge feed, which takes the larger share, so the
 /// tile is never dead.
@@ -829,6 +827,8 @@ fn draw_live_tile(
     draw_activity_tile(frame, pad_sides(feed_inner), entries, friends);
 }
 
+/// The #lounge activity feed as a list: newest on top, one event a row with
+/// its age flush right, a friend's line in the friend color.
 fn draw_activity_tile(
     frame: &mut Frame,
     area: Rect,

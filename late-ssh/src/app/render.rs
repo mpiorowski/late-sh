@@ -630,9 +630,9 @@ impl App {
             None
         };
         // Zen's Live tile shows the same strip, built only while the page
-        // holds one.
+        // draws one (not while zoomed on another tile).
         let zen_live_strip = if self.screen == Screen::Zen
-            && self.zen.shows(crate::app::zen::state::TileKind::Live)
+            && self.zen.draws(crate::app::zen::state::TileKind::Live)
         {
             self.live.view(
                 &self.daily,

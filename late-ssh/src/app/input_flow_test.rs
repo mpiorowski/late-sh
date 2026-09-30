@@ -3729,6 +3729,86 @@ async fn zen_enter_on_the_live_tile_opens_what_the_strip_shows() {
 }
 
 #[tokio::test]
+async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
+    use crate::app::zen::state::{KindPick, TileKind};
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-picker-click-viewer").await;
+    let sharer = create_test_user(&test_db.db, "zen-picker-click-sharer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/under-the-picker".to_string(),
+            title: "Under the picker".to_string(),
+            summary: "• a link the strip shows".to_string(),
+            ascii_art: "####\n####".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-picker-click-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
+
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Lobby)
+        .expect("the default has a lobby");
+    app.zen.open_kind_picker();
+    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
+        app.zen.move_kind_picker(1);
+    }
+    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    wait_for_render_contains(&mut app, "Under the picker").await;
+    let live = app.zen.focus;
+
+    // The picker is up over the page. The strip under it still records
+    // its click rect, but a click there belongs to the picker: nothing
+    // opens and the focus stays put, so the picker converts the tile it
+    // opened on.
+    app.handle_input(b" ");
+    assert!(app.zen.kind_picker.is_some(), "space opens the picker");
+    render_plain(&mut app);
+    let (strip, _) = app.live.hit.get().expect("the live tile drew its strip");
+    let click = format!(
+        "\x1b[<0;{};{}M",
+        strip.x + strip.width / 2 + 1,
+        strip.y + 1
+    );
+    app.handle_input(click.as_bytes());
+    assert_eq!(
+        app.chat.news_modal_url(),
+        None,
+        "a click under the picker opens nothing"
+    );
+    assert!(app.zen.kind_picker.is_some(), "the picker stays up");
+    assert_eq!(app.zen.focus, live, "the focus stays under the picker");
+
+    // With the picker closed the same click opens the article.
+    app.zen.close_kind_picker();
+    render_plain(&mut app);
+    app.handle_input(click.as_bytes());
+    assert_eq!(
+        app.chat.news_modal_url(),
+        Some("https://example.com/under-the-picker"),
+        "the click opens the article once the picker is gone"
+    );
+}
+
+#[tokio::test]
 async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_focused_chat() {
     use crate::app::zen::state::TileKind;
 

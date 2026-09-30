@@ -100,7 +100,7 @@ A Zen tile (`StripHost::ZenTile`) draws the same body without the hint and witho
 ## 7. Wiring outside this directory
 
 - `app/state.rs`: `App::live`.
-- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, self.chat.news.all_articles(), reading, picture_settings)` on every tick whatever the page, after the chat tick has drained the News snapshot, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold; `App::live_strip_shown` (the card, or Zen holding a Live tile) gates the aim's half-tick repaint and the wake hint's half tier.
+- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, self.chat.news.all_articles(), reading, picture_settings)` on every tick whatever the page, after the chat tick has drained the News snapshot, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold; `App::live_strip_shown` (the card, or Zen drawing a Live tile: `ZenState::draws`, zoom-aware) gates the aim's half-tick repaint and the wake hint's half tier.
 - `app/render.rs`: builds the view when `home_selected`, never for the chat center, and for Zen while it holds a Live tile (`ZenView::live`).
 - `app/zen`: `TileKind::Live`; `zen/ui.rs::draw_live_tile` draws the strip or, with nothing up, the note beside the activity feed; `zen/input.rs::handle_live` sends Enter to `open_from_key`.
 - `app/chat/ui.rs`: `DashboardChatView.live_strip` + `live_strip_hit`; `draw_dashboard_chat_card` carves the strip off the top of the messages, above the poll strip. While it is up the room header drops its topic row and closing rule (stream and voice rows stay).
