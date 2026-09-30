@@ -202,7 +202,7 @@ async fn main() -> anyhow::Result<()> {
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
         .with_irc_registry(irc_registry.clone());
-    let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone());
     let _article_notify_task =
         article_service.start_notify_worker(pg_listener.subscribe(ArticleService::CHANNELS));
     let feed_service = FeedService::new(db.clone());

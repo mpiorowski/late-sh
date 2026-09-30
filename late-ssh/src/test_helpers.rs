@@ -246,7 +246,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ai_service.clone(),
         test_app_flags_rx(),
     );
-    let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
     let work_service = crate::app::chat::work::svc::WorkService::new(db.clone());
@@ -528,11 +528,7 @@ fn make_app_with_chat_service_and_permissions(
             test_app_flags_rx(),
         ),
         notification_service: notification_service.clone(),
-        article_service: ArticleService::new(
-            db.clone(),
-            AiService::new(false, None),
-            chat_service.clone(),
-        ),
+        article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -795,11 +791,7 @@ pub fn make_app_with_paired_client(
             test_app_flags_rx(),
         ),
         notification_service: notification_service.clone(),
-        article_service: ArticleService::new(
-            db.clone(),
-            AiService::new(false, None),
-            ChatService::new(db.clone(), NotificationService::new(db.clone())),
-        ),
+        article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),

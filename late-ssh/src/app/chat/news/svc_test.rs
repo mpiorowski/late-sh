@@ -16,10 +16,7 @@ use late_core::test_utils::create_test_user;
 use uuid::Uuid;
 
 fn make_article_service(db: late_core::db::Db) -> ArticleService {
-    let ai = AiService::new(false, None);
-    let notif = NotificationService::new(db.clone());
-    let chat = ChatService::new(db.clone(), notif);
-    ArticleService::new(db, ai, chat)
+    ArticleService::new(db, AiService::new(false, None))
 }
 
 fn article_params(user_id: Uuid, url: &str, title: &str) -> ArticleParams {
@@ -242,57 +239,6 @@ async fn admin_delete_of_other_users_article_is_audited() {
         audit[0].metadata["url"].as_str(),
         Some("https://example.com/admin-delete")
     );
-}
-
-#[tokio::test]
-async fn deleting_article_removes_lounge_news_announcement() {
-    let test_db = new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let owner = create_test_user(&test_db.db, "article-delete-announcement").await;
-    let article = Article::create_by_user_id(
-        &client,
-        owner.id,
-        article_params(
-            owner.id,
-            "https://example.com/delete-announcement",
-            "Delete Announcement",
-        ),
-    )
-    .await
-    .expect("seed article");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    let announcement = ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: lounge.id,
-            user_id: owner.id,
-            body: format!(
-                "{NEWS_MARKER} Delete Announcement || Summary || {} || ...",
-                article.url
-            ),
-        },
-    )
-    .await
-    .expect("seed news announcement");
-    drop(client);
-
-    let service = make_article_service(test_db.db.clone());
-    let mut events = service.subscribe_events();
-
-    service.delete_article(owner.id, article.id, false);
-
-    match recv_article_event(&mut events).await {
-        ArticleEvent::Deleted { user_id } => assert_eq!(user_id, owner.id),
-        other => panic!("expected Deleted event, got {other:?}"),
-    }
-
-    let client = test_db.db.get().await.expect("db client");
-    let deleted = ChatMessage::get(&client, announcement.id)
-        .await
-        .expect("reload announcement");
-    assert!(deleted.is_none());
 }
 
 /// News reaches every session through the `articles_changed` notify, so a

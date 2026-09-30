@@ -2327,7 +2327,7 @@ fn chat_state_with_cyberspace(
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
-    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai);
     let (notifier, _outbox) = crate::app::notify::channel();
     // Dead base URL: state logic under test never talks to the network.
     let cyberspace = crate::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -3096,7 +3096,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let mut translation_events = translation.subscribe();
-    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai);
     let (notifier, _outbox) = crate::app::notify::channel();
     let mut state = ChatState::new(
         ChatServices {
@@ -3199,7 +3199,7 @@ async fn a_name_hit_waits_for_its_message_then_lands() {
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
-    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai);
     let (notifier, _outbox) = crate::app::notify::channel();
     let mut state = ChatState::new(
         ChatServices {
@@ -3350,7 +3350,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let mut translation_events = translation.subscribe();
-    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai);
     let (notifier, _outbox) = crate::app::notify::channel();
     let mut state = ChatState::new(
         ChatServices {

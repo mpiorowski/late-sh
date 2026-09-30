@@ -1,12 +1,9 @@
-use crate::app::{
-    ai::svc::AiService,
-    chat::svc::ChatService,
-};
+use crate::app::ai::svc::AiService;
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
 use late_core::models::article::{
-    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT, NEWS_MARKER,
+    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT,
 };
 use late_core::{
     db::Db,
@@ -47,7 +44,6 @@ const TWEET_TEXT_BULLETS: usize = 2;
 pub struct ArticleService {
     db: Db,
     ai_service: AiService,
-    chat_service: ChatService,
     http_client: reqwest::Client,
     snapshot_tx: watch::Sender<ArticleSnapshot>,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
@@ -55,14 +51,13 @@ pub struct ArticleService {
 }
 
 impl ArticleService {
-    pub fn new(db: Db, ai_service: AiService, chat_service: ChatService) -> Self {
+    pub fn new(db: Db, ai_service: AiService) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(ArticleSnapshot::default());
         let (evt_tx, _) = broadcast::channel(512);
 
         Self {
             db,
             ai_service,
-            chat_service,
             http_client: reqwest::Client::new(),
             snapshot_tx,
             snapshot_rx,
@@ -205,8 +200,7 @@ impl ArticleService {
                 let result = async {
                     let client = service.db.get().await?;
 
-                    // Fetch the article so we can (a) enforce ownership, (b)
-                    // clean up its old chat card afterwards.
+                    // Fetch the article to enforce ownership.
                     let Some(article) = Article::get(&client, article_id).await? else {
                         anyhow::bail!("Article not found");
                     };
@@ -228,27 +222,6 @@ impl ArticleService {
                         json!({ "target_user_id": article.user_id, "url": article.url }),
                     )
                     .await?;
-                    drop(client);
-
-                    // Shares no longer post into #lounge, but older ones did:
-                    // delete the article's card if it has one and notify
-                    // active chat clients so it disappears.
-                    if let Err(e) = service
-                        .chat_service
-                        .delete_news_announcements_by_user_and_url(
-                            article.user_id,
-                            NEWS_MARKER,
-                            &article.url,
-                        )
-                        .await
-                    {
-                        tracing::warn!(
-                            error = ?e,
-                            url = %article.url,
-                            "failed to delete news chat announcement"
-                        );
-                    }
-
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
