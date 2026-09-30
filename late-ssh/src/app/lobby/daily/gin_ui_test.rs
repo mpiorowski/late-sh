@@ -111,3 +111,30 @@ fn a_card_drawn_from_the_stock_is_seen_by_the_drawer_alone() {
         "the discard pile is public"
     );
 }
+
+#[test]
+fn the_card_just_taken_from_the_pile_is_dimmed_because_it_cannot_go_back() {
+    let mut state = state();
+    state
+        .apply_move(GinMove::Draw(Pile::Discard))
+        .expect("pone takes the upcard");
+
+    let lines = table_lines(&state.table(), 1, Some(0), None, false, Tier::Full);
+    let faces = |card: Card| -> Vec<bool> {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| span.content.contains(card.label().as_str()))
+            .map(|span| span.style.add_modifier.contains(Modifier::DIM))
+            .collect()
+    };
+    assert_eq!(
+        faces(UPCARD),
+        vec![true],
+        "the taken card reads as unplayable"
+    );
+    assert!(
+        faces(PONE[0]).iter().all(|dim| !dim),
+        "every other card can be thrown"
+    );
+}

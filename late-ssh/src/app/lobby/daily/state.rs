@@ -481,6 +481,33 @@ fn carry_pool_playback(previous: Option<&mut DailyMatchDetail>, fresh: &mut Dail
     now.adopt(was);
 }
 
+/// Where the cursor goes when a reload brings back the stock draw this board
+/// sent: onto the card just drawn, wherever the melds put it. A stock draw is
+/// the one gin move the board does not apply itself, so this is the first
+/// time the card is seen. `None` for every other reload.
+fn gin_drawn_cursor(
+    previous: Option<&DailyMatchDetail>,
+    fresh: &DailyMatchDetail,
+    user_id: Uuid,
+) -> Option<usize> {
+    let DailyGameDetail::GinRummy(was) = &previous?.game else {
+        return None;
+    };
+    let DailyGameDetail::GinRummy(now) = &fresh.game else {
+        return None;
+    };
+    let seat = now.state.seat_of(user_id)?;
+    let table = now.state.table();
+    let drew = was.move_in_flight
+        && was.state.table().phase == gin::Phase::Draw(seat)
+        && table.phase == gin::Phase::Discard(seat);
+    if !drew {
+        return None;
+    }
+    let drawn = table.hands[seat].last().copied()?;
+    table.held(seat).iter().position(|card| *card == drawn)
+}
+
 impl DailyMatchDetail {
     fn from_row(row: DailyMatch) -> Result<Self, String> {
         let standing = MatchStanding::of(&row)?;
@@ -1445,6 +1472,7 @@ impl DailyState {
     /// Returns true when a board load completed (or its channel closed),
     /// mutating the rendered board.
     fn poll_board_load(&mut self) -> bool {
+        let user_id = self.user_id;
         let Some(board) = &mut self.board else {
             return false;
         };
@@ -1458,6 +1486,11 @@ impl DailyState {
                 match DailyMatchDetail::from_row(row) {
                     Ok(mut detail) => {
                         carry_pool_playback(board.detail.as_mut(), &mut detail);
+                        if let Some(cursor) =
+                            gin_drawn_cursor(board.detail.as_ref(), &detail, user_id)
+                        {
+                            board.cursor = cursor;
+                        }
                         board.detail = Some(detail);
                         board.load_error = None;
                         self.drop_stale_board_selection();
@@ -2065,7 +2098,8 @@ impl DailyState {
 
     /// Space/Enter on the gin board. Owing a draw: take from the pile under
     /// the cursor (the stock, or the discard). Owing a discard: pick a card,
-    /// then pick it again to throw it.
+    /// then pick it again to throw it. Everything applies optimistically
+    /// except a stock draw, whose card only the server may turn over.
     fn gin_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
         let detail = board.detail.as_mut().expect("checked by caller");
         let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
@@ -2085,21 +2119,28 @@ impl DailyState {
                     _ => Pile::Discard,
                 };
                 let played = GinMove::Draw(pile);
-                let Ok(outcome) = gin.state.apply_move(played) else {
-                    return;
-                };
-                // Land the cursor on the card just drawn, wherever the
-                // melds put it.
-                let after = gin.state.table();
-                let drawn = match outcome.taken {
-                    Some(card) => Some(card),
-                    None => after.hands[seat].last().copied(),
-                };
-                board.cursor = after
-                    .held(seat)
-                    .iter()
-                    .position(|card| Some(*card) == drawn)
-                    .unwrap_or(0);
+                match pile {
+                    // Never optimistic: the draw is committed before its
+                    // card is seen, so the card arrives with the reload
+                    // (`gin_drawn_cursor` puts the cursor on it). Showing
+                    // it early would turn a failed write into a free look
+                    // at the stock.
+                    Pile::Stock => {}
+                    // The top discard is public already. Land the cursor
+                    // on it, wherever the melds put it.
+                    Pile::Discard => {
+                        let Ok(outcome) = gin.state.apply_move(played) else {
+                            return;
+                        };
+                        board.cursor = gin
+                            .state
+                            .table()
+                            .held(seat)
+                            .iter()
+                            .position(|card| Some(*card) == outcome.taken)
+                            .unwrap_or(0);
+                    }
+                }
                 gin.move_in_flight = true;
                 svc.play_gin_move_task(user_id, board.match_id, played);
             }
@@ -2109,6 +2150,11 @@ impl DailyState {
                     board.cursor = held.len().saturating_sub(1);
                     return;
                 };
+                // The card just taken from the pile cannot go straight
+                // back, so it is never picked; the status line says why.
+                if table.taken == Some(card) {
+                    return;
+                }
                 if gin.marked != Some(card) {
                     gin.marked = Some(card);
                     return;
@@ -2159,7 +2205,12 @@ impl DailyState {
                     Self::gin_throw(board, user_id, &svc, card, true);
                 }
             }
-            None => gin.marked = held.get(board.cursor).copied(),
+            None => {
+                gin.marked = held
+                    .get(board.cursor)
+                    .copied()
+                    .filter(|card| table.taken != Some(*card))
+            }
         }
         true
     }

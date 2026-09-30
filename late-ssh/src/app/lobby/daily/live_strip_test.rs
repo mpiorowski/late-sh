@@ -99,7 +99,11 @@ fn the_words_sit_beside_the_board() {
     assert!(text[1].ends_with("eggy · weslin"), "{}", text[1]);
     assert!(text[2].ends_with("Eight-Ball · shot 0"), "{}", text[2]);
     assert!(text[3].ends_with("waiting for the break"), "{}", text[3]);
-    assert!(text[6].ends_with("press o or click to watch"), "{}", text[6]);
+    assert!(
+        text[6].ends_with("press o or click to watch"),
+        "{}",
+        text[6]
+    );
     let key = lines[6]
         .spans
         .iter()

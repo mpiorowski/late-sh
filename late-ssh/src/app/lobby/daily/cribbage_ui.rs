@@ -498,14 +498,8 @@ fn key_line(
             Style::default().fg(theme::TEXT_DIM()),
         ));
     } else if detail.is_active() {
-        hint(&mut spans, "arrows/wasd", "choose card");
-        match table.phase {
-            Phase::Discard(seat) if seat == my_seat => {
-                hint(&mut spans, "Space/Enter", "pick for crib")
-            }
-            Phase::Discard(_) | Phase::Peg(_) | Phase::AwaitingDeal | Phase::Won(_) => {
-                hint(&mut spans, "Space/Enter", "play")
-            }
+        for (key, desc) in move_hints(table.phase, my_seat) {
+            hint(&mut spans, key, desc);
         }
         hint(&mut spans, "r", "resign");
     }
@@ -518,6 +512,20 @@ fn key_line(
         *last = Span::styled(trimmed, Style::default().fg(theme::TEXT_DIM()));
     }
     Line::from(spans)
+}
+
+/// The keys that move a card, hinted only to the seat that owes the move.
+pub(crate) fn move_hints(phase: Phase, my_seat: usize) -> &'static [(&'static str, &'static str)] {
+    match phase {
+        Phase::Discard(seat) if seat == my_seat => &[
+            ("arrows/wasd", "choose card"),
+            ("Space/Enter", "pick for crib"),
+        ],
+        Phase::Peg(seat) if seat == my_seat => {
+            &[("arrows/wasd", "choose card"), ("Space/Enter", "play")]
+        }
+        Phase::Discard(_) | Phase::Peg(_) | Phase::AwaitingDeal | Phase::Won(_) => &[],
+    }
 }
 
 /// The rail: who deals, the last show counted out, and this hand's pegging.

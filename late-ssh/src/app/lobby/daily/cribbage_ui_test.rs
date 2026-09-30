@@ -118,3 +118,33 @@ fn a_spectator_sees_neither_hand_nor_the_crib_but_does_see_the_cut() {
         "the crib leaked"
     );
 }
+
+#[test]
+fn the_card_keys_are_hinted_only_to_the_seat_that_owes_the_move() {
+    let mut state = state();
+    assert_eq!(
+        move_hints(state.table().phase, 1),
+        [
+            ("arrows/wasd", "choose card"),
+            ("Space/Enter", "pick for crib")
+        ]
+    );
+    assert!(
+        move_hints(state.table().phase, 0).is_empty(),
+        "the dealer waits on pone's discard"
+    );
+
+    for discard in [[PONE[4], PONE[5]], [DEALER[4], DEALER[5]]] {
+        state
+            .apply_move(CribbageMove::Discard(discard))
+            .expect("the discard is legal");
+    }
+    assert_eq!(
+        move_hints(state.table().phase, 1),
+        [("arrows/wasd", "choose card"), ("Space/Enter", "play")]
+    );
+    assert!(
+        move_hints(state.table().phase, 0).is_empty(),
+        "the dealer waits on pone's card"
+    );
+}
