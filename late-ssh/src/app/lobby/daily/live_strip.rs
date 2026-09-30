@@ -132,7 +132,7 @@ fn by_player<T: Copy>(item: &DailyMatchItem, seat0_id: Uuid, pair: [T; 2]) -> [T
 }
 
 /// The name in a seat.
-fn seat_name<'a>(item: &'a DailyMatchItem, seat0_id: Uuid, seat: usize) -> &'a Option<String> {
+fn seat_name(item: &DailyMatchItem, seat0_id: Uuid, seat: usize) -> &Option<String> {
     if seat == top_seat(item, seat0_id) {
         &item.challenger_username
     } else {

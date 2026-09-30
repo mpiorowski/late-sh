@@ -1986,10 +1986,7 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     Span::styled("[b] ", key),
                     Span::styled("borrow ", text),
                     Span::styled(format!("{room} bits"), number),
-                    Span::styled(
-                        format!(", {} more on the debt", sheet.loan_fee()),
-                        text,
-                    ),
+                    Span::styled(format!(", {} more on the debt", sheet.loan_fee()), text),
                 ])),
             }
             match (sheet.debt, sheet.bits) {

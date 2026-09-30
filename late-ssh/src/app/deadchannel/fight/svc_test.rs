@@ -148,13 +148,7 @@ async fn a_loan_and_a_deposit_land_on_the_row() {
     let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
         panic!("a loan answers with the sheet");
     };
-    assert_eq!(
-        outcome.applied,
-        Applied::Borrowed {
-            amount: 50,
-            fee: 5
-        }
-    );
+    assert_eq!(outcome.applied, Applied::Borrowed { amount: 50, fee: 5 });
     svc.act_task(user_id, "mira".to_string(), Command::Deposit, tx);
     let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
         panic!("a deposit answers with the sheet");

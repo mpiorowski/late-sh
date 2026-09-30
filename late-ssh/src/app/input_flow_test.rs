@@ -4448,6 +4448,8 @@ async fn esc_closes_a_scene_the_static_stopped_answering() {
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "[Enter] step in").await;
+    app.handle_input(b"f");
     wait_for_render_contains(&mut app, "[a] attack").await;
 
     // The service fails to answer the next command: an outage, as the
@@ -4512,6 +4514,8 @@ async fn esc_in_a_fight_is_a_run() {
     wait_for_render_contains(&mut app, " Clubhouse ").await;
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Undercity ").await;
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "[Enter] step in").await;
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "[a] attack").await;
 

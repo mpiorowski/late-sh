@@ -946,13 +946,7 @@ fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() 
     let loan = sheet.apply(Command::Borrow, &mut rng);
 
     // A tenth of the loan on top, charged when it lends.
-    assert_eq!(
-        loan.applied,
-        Applied::Borrowed {
-            amount: 50,
-            fee: 5
-        }
-    );
+    assert_eq!(loan.applied, Applied::Borrowed { amount: 50, fee: 5 });
     assert_eq!((sheet.bits, sheet.debt), (50, 55));
     assert_eq!(
         sheet.apply(Command::Borrow, &mut rng).applied,
@@ -963,13 +957,7 @@ fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() 
     // fee included, and the fee on the new loan rounds up.
     sheet.level = 2;
     let more = sheet.apply(Command::Borrow, &mut rng);
-    assert_eq!(
-        more.applied,
-        Applied::Borrowed {
-            amount: 45,
-            fee: 5
-        }
-    );
+    assert_eq!(more.applied, Applied::Borrowed { amount: 45, fee: 5 });
     assert_eq!((sheet.bits, sheet.debt), (95, 105));
 
     // The debt never grows by itself: a roll adds nothing, however many.
