@@ -1528,11 +1528,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     ]),
                     Line::default(),
                     Line::from(vec![
-                        Span::styled("seven daily duels: ", text),
-                        Span::styled("chess, backgammon, battleship,", name),
+                        Span::styled("daily duels: ", text),
+                        Span::styled("chess, backgammon, pool, cribbage,", name),
                     ]),
                     Line::from(vec![
-                        Span::styled("connect four, reversi, checkers, briscola", name),
+                        Span::styled("gin rummy, battleship, briscola and more", name),
                         Span::styled(". challenge anyone,", text),
                     ]),
                     Line::from(Span::styled(

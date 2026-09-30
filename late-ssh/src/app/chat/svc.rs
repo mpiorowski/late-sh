@@ -108,9 +108,8 @@ pub(crate) const HISTORY_PAGE_SIZE: i64 = 50;
 /// The two report-only rooms. `#bugs` and `#suggestions` accept only
 /// `/bug` / `/suggest` report cards from regular users; free-text posting is
 /// reserved for staff so reports don't drown in conversation. A report is a
-/// normal chat message whose body starts with the kind's marker (same trick
-/// as `---NEWS---` cards), so reactions, replies, and deletes all work
-/// on it unchanged.
+/// normal chat message whose body starts with the kind's marker, so
+/// reactions, replies, and deletes all work on it unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReportKind {
     Bug,
@@ -993,10 +992,6 @@ pub enum ChatEvent {
     },
     MessageDeleted {
         user_id: Uuid,
-        room_id: Uuid,
-        message_id: Uuid,
-    },
-    MessageRemoved {
         room_id: Uuid,
         message_id: Uuid,
     },
@@ -5582,25 +5577,6 @@ impl ChatService {
         tx.commit().await?;
         tracing::info!(message_id = %message_id, "message deleted");
         Ok(msg.room_id)
-    }
-
-    pub async fn delete_news_announcements_by_user_and_url(
-        &self,
-        article_user_id: Uuid,
-        news_marker: &str,
-        url: &str,
-    ) -> Result<usize> {
-        let client = self.db.get().await?;
-        let deleted =
-            ChatMessage::delete_news_by_user_and_url(&client, article_user_id, news_marker, url)
-                .await?;
-        for (room_id, message_id) in &deleted {
-            let _ = self.evt_tx.send(ChatEvent::MessageRemoved {
-                room_id: *room_id,
-                message_id: *message_id,
-            });
-        }
-        Ok(deleted.len())
     }
 }
 

@@ -283,13 +283,12 @@ fn a_small_bonsai_tile_shows_the_true_canvas_cut_evenly_around_the_trunk() {
     let (width, height) = (41u16, 12u16);
     let rows = bonsai_tile_rows(width, height);
     let cut = (CANVAS_WIDTH - width as usize) / 2;
-    let tree_rows = height as usize - 1;
     let canvas = canvas_rows();
-    let expected: Vec<String> = canvas[canvas.len() - tree_rows..]
+    let expected: Vec<String> = canvas[canvas.len() - height as usize..]
         .iter()
         .map(|row| row.chars().skip(cut).take(width as usize).collect())
         .collect();
-    assert_eq!(rows[..tree_rows], expected[..]);
+    assert_eq!(rows, expected);
 }
 
 #[test]
@@ -297,7 +296,7 @@ fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
     let (width, height) = (CANVAS_WIDTH as u16 + 20, CANVAS_HEIGHT as u16 + 3);
     let rows = bonsai_tile_rows(width, height);
     let canvas = canvas_rows();
-    let tree_rows = &rows[rows.len() - 1 - canvas.len()..rows.len() - 1];
+    let tree_rows = &rows[rows.len() - canvas.len()..];
     let expected: Vec<String> = canvas
         .iter()
         .map(|row| format!("{:10}{row}{:10}", "", ""))

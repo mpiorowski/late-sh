@@ -8,7 +8,8 @@
 //!
 //! What goes in the frame is the source's own: a daily match paints its
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
-//! (`audio/booth/live.rs`).
+//! (`audio/booth/live.rs`), a News article its ASCII art
+//! (`chat/news/live.rs`).
 
 use std::cell::Cell;
 
@@ -22,6 +23,7 @@ use ratatui::{
 
 use crate::app::{
     audio::booth::live as booth_live,
+    chat::news::live as news_live,
     common::theme,
     games::pool_core::canvas::Rgb,
     lobby::daily::{live_board::canvas_background, live_strip as match_strip},
@@ -47,7 +49,7 @@ const MIN_FULL_WIDTH: u16 = 56;
 const MESSAGE_ROWS_UNDER_FULL: u16 = 12;
 const MIN_COMPACT_HEIGHT: u16 = LIVE_STRIP_COMPACT_HEIGHT + 4;
 /// Columns between the picture and the words.
-const GAP: u16 = 2;
+pub(crate) const GAP: u16 = 2;
 
 /// Which form the card fitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,14 +117,22 @@ pub(crate) fn live_strip_lines(
     background: Rgb,
 ) -> Vec<Line<'static>> {
     let budget = usize::from(width.saturating_sub(PICTURE_COLS + GAP));
+    let body = match strip {
+        LiveStripView::Match(strip) => match_strip::body(budget, strip, background),
+        LiveStripView::Track(track) => booth_live::body(budget, track),
+        LiveStripView::Article(article) => news_live::body(budget, article),
+    };
+    frame_lines(width, body)
+}
+
+/// A source's body in the frame: the picture centred in its column, the
+/// words beside it, the rule under both.
+fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
     let StripBody {
         mut picture,
         words,
         glow,
-    } = match strip {
-        LiveStripView::Match(strip) => match_strip::body(budget, strip, background),
-        LiveStripView::Track(track) => booth_live::body(budget, track),
-    };
+    } = body;
     let mut lines = Vec::with_capacity(LIVE_STRIP_HEIGHT as usize);
 
     picture.truncate(PICTURE_ROWS as usize);
@@ -135,7 +145,7 @@ pub(crate) fn live_strip_lines(
     }
 
     for (row, words) in rows.into_iter().zip(words) {
-        let mut spans = row.spans;
+        let mut spans = clip_spans(row.spans, usize::from(PICTURE_COLS));
         let drawn: usize = spans.iter().map(|span| span.width()).sum();
         let pad = usize::from(PICTURE_COLS + GAP).saturating_sub(drawn);
         spans.push(Span::raw(" ".repeat(pad)));
@@ -144,6 +154,32 @@ pub(crate) fn live_strip_lines(
     }
     lines.push(rule_line(width, glow));
     lines
+}
+
+/// A picture row cut to its column, so nothing a source draws can run into
+/// the gap or the words.
+fn clip_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let mut left = max;
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        if span.width() <= left {
+            left -= span.width();
+            out.push(span);
+            continue;
+        }
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if w > left {
+                break;
+            }
+            left -= w;
+            kept.push(ch);
+        }
+        out.push(Span::styled(kept, span.style));
+        break;
+    }
+    out
 }
 
 /// `── live ────`, the label lit while the source says so.
@@ -173,6 +209,8 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     let glow = match strip {
         LiveStripView::Match(strip) => match_strip::glow(strip),
         LiveStripView::Track(track) => booth_live::glow(track),
+        // A shared link is never happening right now (`news_live::body`).
+        LiveStripView::Article(_) => false,
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -182,6 +220,7 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     spans.extend(match strip {
         LiveStripView::Match(strip) => match_strip::compact_spans(rest, strip),
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
+        LiveStripView::Article(article) => news_live::compact_spans(rest, article),
     });
     Line::from(spans)
 }

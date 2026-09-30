@@ -186,8 +186,6 @@ impl Article {
     }
 }
 
-pub const NEWS_MARKER: &str = "---NEWS---";
-
 /// How many articles the shared news snapshot holds. Each session counts its
 /// unread badge from that snapshot, so the badge saturates here.
 pub const NEWS_FEED_LIMIT: i64 = 20;

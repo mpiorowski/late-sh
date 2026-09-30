@@ -21,6 +21,19 @@ pub fn open_from_key(app: &mut App) -> bool {
     }
 }
 
+/// `r` on the #lounge card replies to what the strip is showing, when that
+/// is something a reply can quote: a shared article. Anything else falls
+/// through untouched.
+pub fn reply_from_key(app: &mut App) -> bool {
+    match app.live.showing() {
+        Some(LiveSource::NewsArticle(article_id)) => app.chat.begin_reply_to_article(article_id),
+        Some(LiveSource::DailyMatch(_))
+        | Some(LiveSource::DailyResult(_))
+        | Some(LiveSource::BoothTrack(_))
+        | None => false,
+    }
+}
+
 /// A left-click on the strip, the mouse twin of the key. A rect is only
 /// recorded on frames where the strip drew something that opens.
 pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
@@ -35,6 +48,8 @@ fn open(app: &mut App, source: LiveSource) -> bool {
         // The same board the Lobby modal opens, read-only unless the viewer
         // plays in it. Gone between the frame and the key (it finished):
         // nothing to open.
+        // Never offered (`LiveState::opens`): the board left the lobby.
+        LiveSource::DailyResult(_) => false,
         LiveSource::DailyMatch(match_id) => match app.daily.live_item(match_id) {
             Some(item) => {
                 app.daily
@@ -63,5 +78,9 @@ fn open(app: &mut App, source: LiveSource) -> bool {
             }
             false => false,
         },
+        // The article modal: Enter copies the link, `n` jumps to it in
+        // News. Gone between the frame and the key (deleted): nothing to
+        // open.
+        LiveSource::NewsArticle(article_id) => app.chat.open_news_modal_for_article(article_id),
     }
 }

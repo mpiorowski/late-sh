@@ -1,8 +1,7 @@
 use super::{
-    TweetIdentity, display_author, encode_ascii_payload, handle_from_author_url,
-    is_ai_blocklisted_url, is_youtube_url, sanitize_payload_field, truncate_for_chat,
-    tweet_date_from_oembed_html, tweet_status_id, tweet_summary, tweet_text_from_oembed_html,
-    tweet_title,
+    TweetIdentity, display_author, handle_from_author_url, is_ai_blocklisted_url, is_youtube_url,
+    truncate_for_chat, tweet_date_from_oembed_html, tweet_status_id, tweet_summary,
+    tweet_text_from_oembed_html, tweet_title,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -49,26 +48,6 @@ fn display_author_falls_back_to_short_id() {
     );
 }
 
-#[test]
-fn encode_summary_bullets_preserves_all_bullets() {
-    let summary = "• first point\n• second point\n• third point";
-    assert_eq!(
-        super::encode_summary_bullets(summary),
-        "first point\\nsecond point\\nthird point"
-    );
-}
-
-#[test]
-fn encode_summary_bullets_empty_input() {
-    assert_eq!(super::encode_summary_bullets(""), "");
-}
-
-#[test]
-fn encode_summary_bullets_skips_no_content_lines() {
-    let summary = "• No content details are available.\n• Actual point";
-    assert_eq!(super::encode_summary_bullets(summary), "Actual point");
-}
-
 // --- truncate_for_chat ---
 
 #[test]
@@ -84,36 +63,6 @@ fn truncate_for_chat_at_exact_limit() {
 #[test]
 fn truncate_for_chat_adds_ellipsis_when_over_limit() {
     assert_eq!(truncate_for_chat("abcdefghij", 7), "abcd...");
-}
-
-// --- sanitize_payload_field ---
-
-#[test]
-fn sanitize_payload_field_replaces_separator() {
-    let input = format!("before{}after", super::NEWS_SEPARATOR);
-    assert_eq!(sanitize_payload_field(&input), "before | after");
-}
-
-#[test]
-fn sanitize_payload_field_replaces_newlines() {
-    assert_eq!(sanitize_payload_field("a\nb\rc"), "a b c");
-}
-
-// --- encode_ascii_payload ---
-
-#[test]
-fn encode_ascii_payload_encodes_newlines() {
-    assert_eq!(encode_ascii_payload("a\nb"), "a\\nb");
-}
-
-#[test]
-fn encode_ascii_payload_escapes_backslashes() {
-    assert_eq!(encode_ascii_payload("a\\b"), "a\\\\b");
-}
-
-#[test]
-fn encode_ascii_payload_handles_both() {
-    assert_eq!(encode_ascii_payload("a\\b\nc"), "a\\\\b\\nc");
 }
 
 // --- edge cases for existing functions ---
@@ -281,19 +230,4 @@ fn post_card_survives_missing_author_and_date() {
         tweet_summary(&identity),
         "• hello\n• Posted by an X account on X."
     );
-}
-
-#[test]
-fn build_news_chat_announcement_is_compact_and_branded() {
-    let msg = super::build_news_chat_announcement(
-        "A very cool post title",
-        "• one interesting summary point\n• another point",
-        "https://example.com/article",
-        ".:-\n+*#",
-    );
-    assert!(msg.starts_with(super::NEWS_MARKER));
-    assert!(msg.contains(super::NEWS_SEPARATOR));
-    assert!(msg.contains("A very cool post title"));
-    assert!(msg.contains("one interesting summary point"));
-    assert!(msg.contains("\\n"));
 }

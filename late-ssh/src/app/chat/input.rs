@@ -563,16 +563,13 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         // `G` always jumps to a reply's referenced message. Enter is overloaded
-        // (image/News modals take precedence), so a reply that contains an image
+        // (the image modal takes precedence), so a reply that contains an image
         // can't be followed with Enter alone; `G` reaches the parent regardless.
         // Lowercase `g` is the gild key above.
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
-            return true;
-        }
-        b'\r' | b'\n' if app.chat.open_selected_news_modal_in_room(room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {

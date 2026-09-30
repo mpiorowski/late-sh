@@ -14,10 +14,12 @@ use crate::app::games::pool_core::{canvas::Rgb, rules::PoolRules};
 use crate::app::live::ui::{PICTURE_COLS, PICTURE_ROWS, StripBody, truncate_chars};
 
 use super::{
-    checkers, connect4,
-    live::{LiveBoard, LiveView, MatchStripView},
-    live_board::{board_lines, live_compact_line},
+    backgammon, battleship, checkers, connect4,
+    gin::{GinMove, HandEnd, Pile},
+    live::{LiveBoard, LiveGinEvent, LiveView, MatchStripView},
+    live_board::{board_lines, live_compact_line, player_marks, top_seat},
     reversi,
+    svc::DailyMatchItem,
 };
 
 /// What the strip paints for a match. The label glows while a cue is up or
@@ -62,18 +64,31 @@ fn word_rows(budget: usize, strip: &MatchStripView<'_>) -> Vec<Vec<Span<'static>
         Style::default().fg(theme::TEXT_DIM()),
     )];
     rows[3] = vec![event_span(budget, strip)];
-    rows[6] = vec![Span::styled(
-        truncate_chars(
-            if strip.finish.is_some() {
-                "ctrl+g to play"
-            } else {
-                "o or click to watch"
-            },
-            budget,
-        ),
-        Style::default().fg(theme::TEXT_FAINT()),
-    )];
+    rows[6] = match strip.finish {
+        Some(_) => key_hint_spans(budget, "ctrl+g", " to play"),
+        None => key_hint_spans(budget, "o", " or click to watch"),
+    };
     rows
+}
+
+/// `press o or click to watch`, the key in amber like the hint bars. Too
+/// narrow for the whole hint, it falls back to one faint truncated run.
+fn key_hint_spans(budget: usize, key: &str, rest: &str) -> Vec<Span<'static>> {
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let full = format!("press {key}{rest}");
+    if full.chars().count() > budget {
+        return vec![Span::styled(truncate_chars(&full, budget), faint)];
+    }
+    vec![
+        Span::styled("press ", faint),
+        Span::styled(
+            key.to_string(),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(rest.to_string(), faint),
+    ]
 }
 
 fn name(username: &Option<String>) -> String {
@@ -83,7 +98,12 @@ fn name(username: &Option<String>) -> String {
 /// `eggy · weslin`, the player on the move in amber.
 fn players_spans(budget: usize, view: &LiveView<'_>) -> Vec<Span<'static>> {
     let item = view.item;
-    let each = budget.saturating_sub(3) / 2;
+    let marks = player_marks(view);
+    let mark_width = match &marks {
+        Some(marks) => marks[0].width(),
+        None => 0,
+    };
+    let each = (budget.saturating_sub(3) / 2).saturating_sub(mark_width);
     let styled = |user_id: Uuid, username: &Option<String>| {
         let style = if item.turn_user_id == Some(user_id) {
             Style::default()
@@ -94,30 +114,87 @@ fn players_spans(budget: usize, view: &LiveView<'_>) -> Vec<Span<'static>> {
         };
         Span::styled(truncate_chars(&name(username), each), style)
     };
-    vec![
-        styled(item.challenger_id, &item.challenger_username),
-        Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT())),
-        styled(item.opponent_id, &item.opponent_username),
-    ]
+    let challenger = styled(item.challenger_id, &item.challenger_username);
+    let opponent = styled(item.opponent_id, &item.opponent_username);
+    let dot = Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
+    match marks {
+        Some([challenger_mark, opponent_mark]) => {
+            vec![challenger_mark, challenger, dot, opponent_mark, opponent]
+        }
+        None => vec![challenger, dot, opponent],
+    }
 }
 
-/// `Chess · move 12`, `Snooker · 34-12`, `Eight-Ball · shot 5`.
+/// A per-seat pair in the words' order: challenger, then opponent.
+fn by_player<T: Copy>(item: &DailyMatchItem, seat0_id: Uuid, pair: [T; 2]) -> [T; 2] {
+    let top = top_seat(item, seat0_id);
+    [pair[top], pair[1 - top]]
+}
+
+/// The name in a seat.
+fn seat_name<'a>(item: &'a DailyMatchItem, seat0_id: Uuid, seat: usize) -> &'a Option<String> {
+    if seat == top_seat(item, seat0_id) {
+        &item.challenger_username
+    } else {
+        &item.opponent_username
+    }
+}
+
+/// `Chess · move 12`, `Snooker · 34-12`, `Eight-Ball · shot 5`,
+/// `Backgammon · pips 167-160`. Every pair reads challenger first, as the
+/// players do.
 fn standing_text(view: &LiveView<'_>) -> String {
-    let game = view.item.game.display_name();
+    let item = view.item;
+    let game = item.game.display_name();
     match view.board {
         LiveBoard::Pool {
             rules: PoolRules::Snooker,
             scores,
+            seat0_id,
             ..
-        } => format!("{game} · {}-{}", scores[0], scores[1]),
-        LiveBoard::Pool { .. } => format!("{game} · shot {}", view.item.move_count),
+        } => {
+            let [a, b] = by_player(item, *seat0_id, *scores);
+            format!("{game} · {a}-{b}")
+        }
+        LiveBoard::Pool { .. } => format!("{game} · shot {}", item.move_count),
+        LiveBoard::Backgammon {
+            white_id, board, ..
+        } => {
+            let white = board.pip_count(backgammon::Color::White);
+            let red = board.pip_count(backgammon::Color::Red);
+            let (a, b) = if *white_id == item.challenger_id {
+                (white, red)
+            } else {
+                (red, white)
+            };
+            format!("{game} · pips {a}-{b}")
+        }
+        LiveBoard::Briscola {
+            seat0_id, points, ..
+        } => {
+            let [a, b] = by_player(item, *seat0_id, *points);
+            format!("{game} · {a}-{b}")
+        }
+        LiveBoard::Cribbage {
+            seat0_id,
+            scores,
+            hand,
+            ..
+        }
+        | LiveBoard::GinRummy {
+            seat0_id,
+            scores,
+            hand,
+            ..
+        } => {
+            let [a, b] = by_player(item, *seat0_id, *scores);
+            format!("{game} · {a}-{b} · hand {hand}")
+        }
         LiveBoard::Chess { .. }
         | LiveBoard::Battleship { .. }
         | LiveBoard::ConnectFour { .. }
         | LiveBoard::Reversi { .. }
-        | LiveBoard::Checkers { .. }
-        | LiveBoard::Backgammon { .. }
-        | LiveBoard::Briscola { .. } => format!("{game} · move {}", view.item.move_count),
+        | LiveBoard::Checkers { .. } => format!("{game} · move {}", item.move_count),
     }
 }
 
@@ -216,9 +293,67 @@ fn last_event_text(view: &LiveView<'_>) -> String {
         | LiveBoard::ConnectFour { last: None, .. }
         | LiveBoard::Checkers { last: None, .. }
         | LiveBoard::Reversi { last: None, .. } => FIRST_MOVE.to_string(),
-        LiveBoard::Battleship { .. }
+        LiveBoard::Battleship {
+            side0_id,
+            last: Some((shooter, shot)),
+            ..
+        } => {
+            let verb = if shot.hit { "hit" } else { "missed" };
+            format!(
+                "{} {verb} {}",
+                name(seat_name(view.item, *side0_id, *shooter)),
+                battleship::cell_label(shot.cell as usize)
+            )
+        }
+        LiveBoard::Briscola {
+            seat0_id,
+            last: Some((seat, card)),
+            ..
+        } => format!(
+            "{} played {}",
+            name(seat_name(view.item, *seat0_id, *seat)),
+            card.label()
+        ),
+        LiveBoard::GinRummy {
+            seat0_id,
+            last: LiveGinEvent::Move { seat, played },
+            ..
+        } => {
+            let what = match played {
+                GinMove::Draw(Pile::Stock) => "drew from the stock".to_string(),
+                GinMove::Draw(Pile::Discard) => "took from the pile".to_string(),
+                GinMove::Discard { card, knock: false } => format!("threw {}", card.label()),
+                GinMove::Discard { card, knock: true } => format!("knocked on {}", card.label()),
+            };
+            format!("{} {what}", name(seat_name(view.item, *seat0_id, *seat)))
+        }
+        LiveBoard::GinRummy {
+            seat0_id,
+            last: LiveGinEvent::HandOver { end, scored },
+            ..
+        } => {
+            let scorer = |seat: usize| name(seat_name(view.item, *seat0_id, seat));
+            match (end, scored) {
+                (HandEnd::Gin, Some((seat, points))) => {
+                    format!("{} went gin · +{points}", scorer(*seat))
+                }
+                (HandEnd::Knock, Some((seat, points))) => {
+                    format!("{} knocked · +{points}", scorer(*seat))
+                }
+                (HandEnd::Undercut, Some((seat, points))) => {
+                    format!("{} undercut · +{points}", scorer(*seat))
+                }
+                (HandEnd::Dead, _) | (_, None) => "dead hand, no score".to_string(),
+            }
+        }
+        LiveBoard::Battleship { last: None, .. }
+        | LiveBoard::Briscola { last: None, .. }
+        | LiveBoard::GinRummy {
+            last: LiveGinEvent::Dealt,
+            ..
+        }
         | LiveBoard::Backgammon { .. }
-        | LiveBoard::Briscola { .. } => {
+        | LiveBoard::Cribbage { .. } => {
             if view.item.move_count == 0 {
                 FIRST_MOVE.to_string()
             } else {

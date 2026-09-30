@@ -24,13 +24,16 @@ use crate::app::games::{
 
 use super::{
     backgammon::{self, DailyBackgammonState},
-    battleship::DailyBattleshipState,
-    briscola::DailyBriscolaState,
+    battleship::{self, DailyBattleshipState},
+    briscola::{self, DailyBriscolaState},
     checkers::{self, DailyCheckersState},
     connect4::{self, DailyConnect4State},
+    cribbage::DailyCribbageState,
     games::DailyGame,
+    gin::{DailyGinState, GinMove, HandEnd},
     pool::{DailyPoolState, PoolAimShare},
     reversi::{self, DailyReversiState},
+    std_deck,
     svc::{DailyChessState, DailyFinishedItem, DailyMatchItem, DailyWinPayout},
 };
 
@@ -93,7 +96,9 @@ pub fn finish_headline(item: &DailyFinishedItem) -> String {
             | DailyResult::EightPotted
             | DailyResult::EarlyEight
             | DailyResult::NinePotted
-            | DailyResult::FrameWon => format!("a draw · {phrase}"),
+            | DailyResult::FrameWon
+            | DailyResult::PeggedOut
+            | DailyResult::ReachedHundred => format!("a draw · {phrase}"),
         },
     }
 }
@@ -119,8 +124,8 @@ pub struct LiveBall {
 }
 
 /// The position, per game. Exhaustive over `DailyGame`: a new roster game
-/// has to say what it looks like from across the room, even if the answer is
-/// two lines of text.
+/// has to say what it looks like from across the room. The card games carry
+/// what lies face up and how many cards each seat holds, never the faces.
 #[derive(Clone, Debug)]
 pub enum LiveBoard {
     /// Chess and chess960 share a board; index is `rank * 8 + file`, rank 0
@@ -131,8 +136,15 @@ pub enum LiveBoard {
         last: Option<(usize, usize)>,
     },
     Battleship {
-        /// Public shot tallies by side, side 0 being the challenger.
-        sides: [ShotTally; 2],
+        /// Side 0's user id.
+        side0_id: Uuid,
+        /// Every shot each side fired: the public salvo record, never a
+        /// fleet. Indexed by shooter.
+        shots: [Vec<LiveShot>; 2],
+        /// Ships each side has sunk, indexed by shooter.
+        sunk: [usize; 2],
+        /// The newest shot and who fired it.
+        last: Option<(usize, LiveShot)>,
     },
     ConnectFour {
         grid: connect4::Grid,
@@ -149,15 +161,51 @@ pub enum LiveBoard {
     },
     Backgammon {
         white_id: Uuid,
-        /// Pips left to bear off, `[white, red]`.
-        pips: [u32; 2],
+        /// The whole position: every point is public.
+        board: backgammon::Board,
+        /// Who rolls next.
+        turn: backgammon::Color,
+        /// The roll waiting on the mover; `None` once the match is over.
+        roll: Option<[u8; 2]>,
+        /// Points the last turn's hops landed on.
+        landed: Vec<u8>,
     },
     Briscola {
         /// Seat 0's user id; the seats are the claim-time coin flip.
         seat0_id: Uuid,
         /// Points captured per seat.
         points: [u32; 2],
+        /// Cards held per seat: how many, never which.
+        held: [usize; 2],
+        /// Cards left to draw, the trump included.
         stock_remaining: usize,
+        trump: briscola::Card,
+        trick: LiveTrick,
+        /// The last card played and its seat.
+        last: Option<(usize, briscola::Card)>,
+    },
+    Cribbage {
+        /// Seat 0's user id; the seats are the claim-time coin flip.
+        seat0_id: Uuid,
+        /// The front pegs.
+        scores: [u32; 2],
+        /// The back pegs: each seat's score before its latest peg.
+        back: [u32; 2],
+        /// The hand in play, from one.
+        hand: usize,
+    },
+    GinRummy {
+        /// Seat 0's user id; the seats are the claim-time coin flip.
+        seat0_id: Uuid,
+        scores: [u32; 2],
+        /// The hand in play, from one.
+        hand: usize,
+        /// Cards held per seat: how many, never which.
+        held: [usize; 2],
+        /// The face-up top of the discard pile, and whether cards lie under it.
+        discard: Option<(std_deck::Card, bool)>,
+        stock: usize,
+        last: LiveGinEvent,
     },
     Pool {
         rules: PoolRules,
@@ -175,12 +223,43 @@ pub enum LiveBoard {
     },
 }
 
-/// One battleship side's public record: what it fired and what it found.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ShotTally {
-    pub shots: usize,
-    pub hits: usize,
-    pub sunk: usize,
+/// One battleship shot as the room saw it land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveShot {
+    pub cell: u8,
+    pub hit: bool,
+}
+
+/// The briscola trick on the table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveTrick {
+    /// Nothing played yet this match.
+    Empty,
+    /// One card down, the follower on the clock.
+    Led { card: briscola::Card },
+    /// The last trick taken, both cards still showing.
+    Taken {
+        lead: briscola::Card,
+        answer: briscola::Card,
+        /// Whether the lead took it.
+        lead_won: bool,
+    },
+}
+
+/// What just happened at a gin table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveGinEvent {
+    /// The first deal, nobody has drawn.
+    Dealt,
+    /// The last move and its seat. A stock draw never names its card.
+    Move { seat: usize, played: GinMove },
+    /// A fresh deal after a hand ended: the service deals the next hand in
+    /// the same write, so the move that ended it is never on a live table.
+    /// How it ended, and who scored what (nobody on a dead hand).
+    HandOver {
+        end: HandEnd,
+        scored: Option<(usize, u32)>,
+    },
 }
 
 impl MatchSummary {
@@ -208,25 +287,47 @@ impl MatchSummary {
             }
             DailyGame::Battleship => {
                 let state = DailyBattleshipState::parse(state)?;
-                let tally = |shooter: usize| {
-                    let side = state.side(shooter);
-                    let target = state.side(DailyBattleshipState::opponent_index(shooter));
-                    ShotTally {
-                        shots: side.shots.len(),
-                        hits: side.shots.iter().filter(|shot| shot.hit).count(),
-                        sunk: target
-                            .ships
-                            .iter()
-                            .filter(|ship| state.ship_sunk(shooter, ship))
-                            .count(),
-                    }
+                let shots = |shooter: usize| -> Vec<LiveShot> {
+                    state
+                        .side(shooter)
+                        .shots
+                        .iter()
+                        .map(|shot| LiveShot {
+                            cell: shot.cell,
+                            hit: shot.hit,
+                        })
+                        .collect()
                 };
+                let sunk = |shooter: usize| {
+                    battleship::FLEET_LENGTHS.len() - state.ships_afloat_against(shooter)
+                };
+                let last = (0..2)
+                    .flat_map(|shooter| {
+                        state
+                            .side(shooter)
+                            .shots
+                            .iter()
+                            .map(move |shot| (shooter, shot))
+                    })
+                    .max_by_key(|(_, shot)| shot.at)
+                    .map(|(shooter, shot)| {
+                        (
+                            shooter,
+                            LiveShot {
+                                cell: shot.cell,
+                                hit: shot.hit,
+                            },
+                        )
+                    });
                 Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.shot_count(),
                     board: LiveBoard::Battleship {
-                        sides: [tally(0), tally(1)],
+                        side0_id: state.side(0).user_id,
+                        shots: [shots(0), shots(1)],
+                        sunk: [sunk(0), sunk(1)],
+                        last,
                     },
                 })
             }
@@ -268,23 +369,41 @@ impl MatchSummary {
             }
             DailyGame::Backgammon => {
                 let state = DailyBackgammonState::parse(state)?;
-                let board = state.board();
+                let landed = state
+                    .last_turn()
+                    .map(|turn| {
+                        turn.hops
+                            .iter()
+                            .map(|&(_, to)| to)
+                            .filter(|&to| (to as usize) < backgammon::POINTS)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 Ok(Self {
                     white_id: None,
                     black_id: None,
                     move_count: state.move_count(),
                     board: LiveBoard::Backgammon {
                         white_id: state.white,
-                        pips: [
-                            board.pip_count(backgammon::Color::White),
-                            board.pip_count(backgammon::Color::Red),
-                        ],
+                        board: state.board(),
+                        turn: state.turn(),
+                        roll: state.next_roll,
+                        landed,
                     },
                 })
             }
             DailyGame::Briscola => {
                 let state = DailyBriscolaState::parse(state)?;
                 let table = state.table();
+                let trick = match (table.led, table.history.last()) {
+                    (Some((_, card)), _) => LiveTrick::Led { card },
+                    (None, Some(taken)) => LiveTrick::Taken {
+                        lead: taken.lead,
+                        answer: taken.answer,
+                        lead_won: taken.winner == taken.leader,
+                    },
+                    (None, None) => LiveTrick::Empty,
+                };
                 Ok(Self {
                     white_id: None,
                     black_id: None,
@@ -292,7 +411,60 @@ impl MatchSummary {
                     board: LiveBoard::Briscola {
                         seat0_id: state.seats[0],
                         points: table.points,
+                        held: [table.hands[0].len(), table.hands[1].len()],
                         stock_remaining: state.stock_remaining(),
+                        trump: state.trump(),
+                        trick,
+                        last: table.last,
+                    },
+                })
+            }
+            DailyGame::Cribbage => {
+                let state = DailyCribbageState::parse(state)?;
+                let table = state.table();
+                let back = |seat: usize| match table.log.iter().rev().find(|peg| peg.seat == seat) {
+                    Some(peg) => table.scores[seat] - peg.points,
+                    None => 0,
+                };
+                Ok(Self {
+                    white_id: None,
+                    black_id: None,
+                    move_count: state.move_count(),
+                    board: LiveBoard::Cribbage {
+                        seat0_id: state.seats[0],
+                        scores: table.scores,
+                        back: [back(0), back(1)],
+                        hand: table.hand + 1,
+                    },
+                })
+            }
+            DailyGame::GinRummy => {
+                let state = DailyGinState::parse(state)?;
+                let table = state.table();
+                let discard = table
+                    .discards
+                    .last()
+                    .map(|&top| (top, table.discards.len() > 1));
+                let last = match (table.last, table.results.last()) {
+                    (Some((seat, played)), _) => LiveGinEvent::Move { seat, played },
+                    (None, Some(result)) => LiveGinEvent::HandOver {
+                        end: result.end,
+                        scored: result.scored,
+                    },
+                    (None, None) => LiveGinEvent::Dealt,
+                };
+                Ok(Self {
+                    white_id: None,
+                    black_id: None,
+                    move_count: state.move_count(),
+                    board: LiveBoard::GinRummy {
+                        seat0_id: state.seats[0],
+                        scores: table.scores,
+                        hand: table.hand + 1,
+                        held: [table.hands[0].len(), table.hands[1].len()],
+                        discard,
+                        stock: table.stock_remaining(),
+                        last,
                     },
                 })
             }

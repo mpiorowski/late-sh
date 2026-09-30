@@ -11,8 +11,8 @@ use late_core::models::{
         DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
         DAILY_BRISCOLA_WIN_REWARD_KEY, DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY,
         DAILY_CHESS960_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
-        DAILY_EIGHTBALL_WIN_REWARD_KEY, DAILY_NINEBALL_WIN_REWARD_KEY,
-        DAILY_REVERSI_WIN_REWARD_KEY, DAILY_SNOOKER_WIN_REWARD_KEY,
+        DAILY_CRIBBAGE_WIN_REWARD_KEY, DAILY_EIGHTBALL_WIN_REWARD_KEY, DAILY_GIN_WIN_REWARD_KEY,
+        DAILY_NINEBALL_WIN_REWARD_KEY, DAILY_REVERSI_WIN_REWARD_KEY, DAILY_SNOOKER_WIN_REWARD_KEY,
     },
 };
 
@@ -26,6 +26,8 @@ pub enum DailyGame {
     Checkers,
     Backgammon,
     Briscola,
+    Cribbage,
+    GinRummy,
     EightBall,
     NineBall,
     Snooker,
@@ -33,7 +35,7 @@ pub enum DailyGame {
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Chess,
         Self::Chess960,
         Self::Battleship,
@@ -42,6 +44,8 @@ impl DailyGame {
         Self::Checkers,
         Self::Backgammon,
         Self::Briscola,
+        Self::Cribbage,
+        Self::GinRummy,
         Self::EightBall,
         Self::NineBall,
         Self::Snooker,
@@ -58,6 +62,8 @@ impl DailyGame {
             Self::Checkers => DailyMatch::GAME_KIND_CHECKERS,
             Self::Backgammon => DailyMatch::GAME_KIND_BACKGAMMON,
             Self::Briscola => DailyMatch::GAME_KIND_BRISCOLA,
+            Self::Cribbage => DailyMatch::GAME_KIND_CRIBBAGE,
+            Self::GinRummy => DailyMatch::GAME_KIND_GIN,
             Self::EightBall => DailyMatch::GAME_KIND_EIGHTBALL,
             Self::NineBall => DailyMatch::GAME_KIND_NINEBALL,
             Self::Snooker => DailyMatch::GAME_KIND_SNOOKER,
@@ -75,6 +81,8 @@ impl DailyGame {
             Self::Checkers => "checkers",
             Self::Backgammon => "backgammon",
             Self::Briscola => "briscola",
+            Self::Cribbage => "cribbage",
+            Self::GinRummy => "gin",
             Self::EightBall => "8ball",
             Self::NineBall => "9ball",
             Self::Snooker => "snooker",
@@ -94,6 +102,8 @@ impl DailyGame {
             Self::Checkers => "Checkers",
             Self::Backgammon => "Backgammon",
             Self::Briscola => "Briscola",
+            Self::Cribbage => "Cribbage",
+            Self::GinRummy => "Gin Rummy",
             Self::EightBall => "Eight-Ball",
             Self::NineBall => "Nine-Ball",
             Self::Snooker => "Snooker",
@@ -112,6 +122,9 @@ impl DailyGame {
             Self::Checkers => 400,
             Self::Backgammon => 400,
             Self::Briscola => 400,
+            // Both are played over several hands, to 61 and to 100.
+            Self::Cribbage => 500,
+            Self::GinRummy => 500,
             Self::EightBall => 400,
             Self::NineBall => 400,
             // A frame is the longest match on the roster by a distance, and the
@@ -130,6 +143,8 @@ impl DailyGame {
             Self::Checkers => DAILY_CHECKERS_WIN_REWARD_KEY,
             Self::Backgammon => DAILY_BACKGAMMON_WIN_REWARD_KEY,
             Self::Briscola => DAILY_BRISCOLA_WIN_REWARD_KEY,
+            Self::Cribbage => DAILY_CRIBBAGE_WIN_REWARD_KEY,
+            Self::GinRummy => DAILY_GIN_WIN_REWARD_KEY,
             Self::EightBall => DAILY_EIGHTBALL_WIN_REWARD_KEY,
             Self::NineBall => DAILY_NINEBALL_WIN_REWARD_KEY,
             Self::Snooker => DAILY_SNOOKER_WIN_REWARD_KEY,
@@ -146,6 +161,8 @@ impl DailyGame {
             Self::Checkers => ChipMove::DailyCheckersWin,
             Self::Backgammon => ChipMove::DailyBackgammonWin,
             Self::Briscola => ChipMove::DailyBriscolaWin,
+            Self::Cribbage => ChipMove::DailyCribbageWin,
+            Self::GinRummy => ChipMove::DailyGinWin,
             Self::EightBall => ChipMove::DailyEightBallWin,
             Self::NineBall => ChipMove::DailyNineBallWin,
             Self::Snooker => ChipMove::DailySnookerWin,
@@ -163,6 +180,8 @@ impl DailyGame {
             Self::Checkers => "one move per day · capture or block to win",
             Self::Backgammon => "one roll per day · bear off all fifteen",
             Self::Briscola => "one card per day · most points wins",
+            Self::Cribbage => "one card per day · first to 61",
+            Self::GinRummy => "draw, discard, knock · first to 100",
             Self::EightBall => "one shot per day · potting shoots again",
             Self::NineBall => "one shot per day · lowest ball first",
             Self::Snooker => "one shot per day · reds, colours, and a scoreboard",
@@ -186,7 +205,9 @@ impl DailyGame {
             | Self::Reversi
             | Self::Checkers
             | Self::Backgammon
-            | Self::Briscola => false,
+            | Self::Briscola
+            | Self::Cribbage
+            | Self::GinRummy => false,
         }
     }
 

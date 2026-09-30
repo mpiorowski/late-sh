@@ -367,3 +367,101 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
     );
     assert!(!app.booth_modal_state.is_open());
 }
+
+/// A link somebody shared to News goes up on the live strip, and `o` opens
+/// the article modal.
+#[tokio::test]
+async fn o_on_a_shared_article_opens_the_article_modal() {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-news-me").await;
+    let them = create_test_user(&test_db.db, "strip-news-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://example.com/terminal-renaissance".to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-news-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "strip-news-them shared it").await;
+    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
+
+    app.handle_input(b"o");
+    assert_eq!(
+        app.chat.news_modal_url(),
+        Some("https://example.com/terminal-renaissance"),
+        "o opens the article"
+    );
+}
+
+/// Shares no longer post into #lounge, so the strip is where a link is
+/// answered: `r` opens the lounge composer replying to the article, and the
+/// sent message quotes its title.
+#[tokio::test]
+async fn r_on_a_shared_article_replies_with_its_title_quoted() {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-reply-me").await;
+    let them = create_test_user(&test_db.db, "strip-reply-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://example.com/terminal-renaissance".to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-reply-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
+
+    app.handle_input(b"r");
+    assert!(app.chat.is_composing(), "r opens the lounge composer");
+    app.handle_input(b"worth a read\r");
+    wait_for_render_contains(&mut app, "worth a read").await;
+
+    let sent = ChatMessage::list_recent(&client, lounge.id, 1)
+        .await
+        .expect("list lounge");
+    assert_eq!(
+        sent.iter()
+            .map(|message| (message.body.as_str(), message.reply_to_message_id))
+            .collect::<Vec<_>>(),
+        vec![(
+            "> @strip-reply-them: 📰 The terminal renaissance\nworth a read",
+            None
+        )],
+        "the reply quotes the article, with no message to point at"
+    );
+}

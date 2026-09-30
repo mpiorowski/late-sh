@@ -471,9 +471,13 @@ impl App {
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
-        changed |= self
-            .live
-            .tick(&self.daily, &self.audio, reading, picture_settings);
+        changed |= self.live.tick(
+            &self.daily,
+            &self.audio,
+            self.chat.news.all_articles(),
+            reading,
+            picture_settings,
+        );
         if let Some(b) = daily_tick.banner {
             self.banner = Some(b);
             changed = true;

@@ -17,7 +17,7 @@ fn kinds_round_trip() {
 fn usage_lists_every_game() {
     assert_eq!(
         DailyGame::usage_labels(),
-        "chess|chess960|battleship|connect4|reversi|checkers|backgammon|briscola|8ball|9ball|snooker"
+        "chess|chess960|battleship|connect4|reversi|checkers|backgammon|briscola|cribbage|gin|8ball|9ball|snooker"
     );
 }
 

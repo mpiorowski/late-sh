@@ -38,7 +38,9 @@ use super::{
     briscola::{self, DailyBriscolaState},
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
+    cribbage::{self, CribbageMove, DailyCribbageState},
     games::DailyGame,
+    gin::{self, DailyGinState, GinMove},
     live::{LiveBoard, MatchSummary},
     pool::{DailyPoolState, PoolAimShare},
     reversi::DailyReversiState,
@@ -126,6 +128,9 @@ pub struct DailyFinishedItem {
     pub challenger_username: Option<String>,
     pub opponent_id: Uuid,
     pub opponent_username: Option<String>,
+    /// Chess only; `None` for games without colors.
+    pub white_id: Option<Uuid>,
+    pub black_id: Option<Uuid>,
     /// `None` for draws.
     pub winner_user_id: Option<Uuid>,
     pub result: DailyResult,
@@ -801,6 +806,29 @@ impl DailyService {
                 let first = state.user_of(0);
                 (serde_json::to_value(state)?, first)
             }
+            DailyGame::Cribbage => {
+                // `new` flips the coin for seat 0, who deals first, and
+                // shuffles the first hand; pone owes the first discard.
+                let state = DailyCribbageState::new(
+                    challenge.challenger_id,
+                    user_id,
+                    &mut rand::thread_rng(),
+                );
+                let first = state
+                    .turn_user()
+                    .context("a fresh cribbage deal waits on a discard")?;
+                (serde_json::to_value(state)?, first)
+            }
+            DailyGame::GinRummy => {
+                // `new` flips the coin for seat 0, who deals first, and
+                // shuffles the first hand; the non-dealer draws first.
+                let state =
+                    DailyGinState::new(challenge.challenger_id, user_id, &mut rand::thread_rng());
+                let first = state
+                    .turn_user()
+                    .context("a fresh gin deal waits on a draw")?;
+                (serde_json::to_value(state)?, first)
+            }
             // The pool games share one state type; the ruleset is a field.
             DailyGame::EightBall => {
                 claim_pool_state(PoolRules::EightBall, challenge.challenger_id, user_id)?
@@ -934,6 +962,10 @@ impl DailyService {
             DailyGame::Backgammon => bail!("backgammon moves use the turn channel"),
             // A briscola "move" is one card; `to` carries its id.
             DailyGame::Briscola => self.play_briscola_card(&client, row, user_id, to).await,
+            // A discard is two cards and a gin turn is a draw or a discard
+            // with a knock: each game rides its own typed channel.
+            DailyGame::Cribbage => bail!("cribbage moves use the cribbage channel"),
+            DailyGame::GinRummy => bail!("gin moves use the gin channel"),
             // A pool shot is an aim, a tip offset, a speed and sometimes a
             // placement; none of that survives two usizes.
             DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {
@@ -996,6 +1028,53 @@ impl DailyService {
         let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
         ensure!(game == DailyGame::Backgammon, "not a backgammon match");
         self.play_backgammon(&client, row, user_id, &hops).await
+    }
+
+    /// Cribbage move channel: a two-card discard or one pegging card.
+    pub fn play_cribbage_move_task(&self, user_id: Uuid, match_id: Uuid, played: CribbageMove) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.play_cribbage_move(user_id, match_id, played).await {
+                tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily cribbage move");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    pub async fn play_cribbage_move(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        played: CribbageMove,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
+        ensure!(game == DailyGame::Cribbage, "not a cribbage match");
+        self.play_cribbage(&client, row, user_id, played).await
+    }
+
+    /// Gin rummy move channel: a draw from either pile, or a discard that
+    /// may knock.
+    pub fn play_gin_move_task(&self, user_id: Uuid, match_id: Uuid, played: GinMove) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.play_gin_move(user_id, match_id, played).await {
+                tracing::error!(error = ?e, %user_id, %match_id, "failed to play daily gin move");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    pub async fn play_gin_move(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        played: GinMove,
+    ) -> Result<()> {
+        let client = self.db.get().await?;
+        let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
+        ensure!(game == DailyGame::GinRummy, "not a gin match");
+        self.play_gin(&client, row, user_id, played).await
     }
 
     /// Pool shot channel: the whole `Shot` (optional ball-in-hand placement,
@@ -1630,6 +1709,166 @@ impl DailyService {
         Ok(())
     }
 
+    /// One cribbage move. The turn follows the replayed table, not a simple
+    /// alternation: a player whose opponent cannot play keeps going, and the
+    /// last card of a hand runs straight into the show. A hand counted out
+    /// with nobody at `WINNING_SCORE` is dealt again here, server-side, so the next
+    /// discard is owed before the row is written.
+    async fn play_cribbage(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        played: CribbageMove,
+    ) -> Result<()> {
+        let mut state = DailyCribbageState::parse(&row.state)?;
+        // The prelude checked the row's turn; the replayed history is the
+        // deeper truth, so a disagreement must fail loudly.
+        ensure!(state.turn_user() == Some(user_id), "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let outcome = state.apply_move(played)?;
+        let step = match outcome.phase {
+            cribbage::Phase::Won(seat) => {
+                CardStep::Finish(state.user_of(seat), DailyResult::PeggedOut)
+            }
+            cribbage::Phase::AwaitingDeal => {
+                state.deal_next(&mut rand::thread_rng())?;
+                CardStep::Pass(
+                    state
+                        .turn_user()
+                        .context("a fresh deal waits on a discard")?,
+                )
+            }
+            cribbage::Phase::Discard(_) | cribbage::Phase::Peg(_) => {
+                CardStep::Pass(state.turn_user().context("a hand in play has a mover")?)
+            }
+        };
+        let deadline = Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS);
+        self.commit_card_move(
+            client,
+            &row,
+            DailyGame::Cribbage,
+            user_id,
+            &state_json(&state)?,
+            state.revision,
+            base_revision,
+            outcome.label(),
+            step,
+            deadline,
+        )
+        .await
+    }
+
+    /// One gin move. A draw keeps the turn and the clock: the draw and the
+    /// discard are one turn split in two only so the drawn card is committed
+    /// before it is seen. A hand that ends short of 100 (a knock, gin, or a
+    /// dead stock) is dealt again here, server-side.
+    async fn play_gin(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        played: GinMove,
+    ) -> Result<()> {
+        let mut state = DailyGinState::parse(&row.state)?;
+        ensure!(state.turn_user() == Some(user_id), "not your turn");
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        let outcome = state.apply_move(played)?;
+        let step = match outcome.phase {
+            gin::Phase::Won(seat) => {
+                CardStep::Finish(state.user_of(seat), DailyResult::ReachedHundred)
+            }
+            gin::Phase::AwaitingDeal => {
+                state.deal_next(&mut rand::thread_rng())?;
+                CardStep::Pass(state.turn_user().context("a fresh deal waits on a draw")?)
+            }
+            gin::Phase::Draw(_) | gin::Phase::Discard(_) => {
+                CardStep::Pass(state.turn_user().context("a hand in play has a mover")?)
+            }
+        };
+        let deadline = match played {
+            GinMove::Draw(_) => row
+                .turn_deadline_at
+                .context("an active daily match has a deadline")?,
+            GinMove::Discard { .. } => Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+        };
+        self.commit_card_move(
+            client,
+            &row,
+            DailyGame::GinRummy,
+            user_id,
+            &state_json(&state)?,
+            state.revision,
+            base_revision,
+            outcome.label(),
+            step,
+            deadline,
+        )
+        .await
+    }
+
+    /// Write one move of a multi-hand card game (cribbage, gin): finish the
+    /// match, or hand the turn on, then broadcast and republish. Both games
+    /// end only on a target score, so a finish always has a winner.
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_card_move(
+        &self,
+        client: &tokio_postgres::Client,
+        row: &DailyMatch,
+        game: DailyGame,
+        user_id: Uuid,
+        state_value: &Value,
+        revision: u64,
+        base_revision: i64,
+        label: String,
+        step: CardStep,
+        deadline: DateTime<Utc>,
+    ) -> Result<()> {
+        let match_id = row.id;
+        let updated = match step {
+            CardStep::Finish(winner, result) => {
+                DailyMatch::finish(
+                    client,
+                    match_id,
+                    Some(winner),
+                    result,
+                    state_value,
+                    base_revision,
+                )
+                .await?
+            }
+            CardStep::Pass(next_turn) => {
+                DailyMatch::update_state(
+                    client,
+                    match_id,
+                    state_value,
+                    user_id,
+                    next_turn,
+                    deadline,
+                    base_revision,
+                )
+                .await?
+            }
+        };
+        ensure!(updated == 1, "move was superseded, reload the match");
+        let _ = self.event_tx.send(DailyEvent::MovePlayed {
+            match_id,
+            by_user_id: user_id,
+            label,
+        });
+        match step {
+            CardStep::Finish(winner, result) => {
+                self.finish_events(row, game, Some(winner), result, revision)
+                    .await;
+            }
+            CardStep::Pass(_) => {}
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
     /// One shot, simulated server-side.
     ///
     /// The physics is the referee: the client's aim is re-simulated here from
@@ -2104,6 +2343,18 @@ pub(crate) fn newly_rejected(
     }
 }
 
+/// Where a card-game move leaves the match.
+#[derive(Clone, Copy, Debug)]
+enum CardStep {
+    Finish(Uuid, DailyResult),
+    /// The match goes on; this player owes the next move.
+    Pass(Uuid),
+}
+
+fn state_json(state: &impl Serialize) -> Result<Value> {
+    serde_json::to_value(state).context("serializing daily match state")
+}
+
 fn snapshot_game(row: &DailyMatch) -> Result<DailyGame, SnapshotRowError> {
     match DailyGame::from_kind(&row.game_kind) {
         Some(game) => Ok(game),
@@ -2185,6 +2436,8 @@ fn finished_item(
         challenger_username: usernames.get(&row.challenger_id).cloned(),
         opponent_id,
         opponent_username: usernames.get(&opponent_id).cloned(),
+        white_id: summary.white_id,
+        black_id: summary.black_id,
         winner_user_id: row.winner_user_id,
         result,
         // The column is CHECKed to these four spellings, so an unreadable

@@ -122,7 +122,6 @@ pub struct DashboardChatView<'a> {
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -194,7 +193,6 @@ pub(crate) struct ComposerBlockView<'a> {
     pub composing: bool,
     pub selected_message: bool,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
@@ -477,11 +475,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     } else if view.selected_image_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
-            dim,
-        ))]
-    } else if view.selected_news_message {
-        vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link",
             dim,
         ))]
     } else if view.selected_message {
@@ -1150,7 +1143,6 @@ pub fn draw_dashboard_chat_card(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1303,7 +1295,6 @@ pub fn draw_dashboard_chat_card(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
-            selected_news_message: view.selected_news_message,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -2011,8 +2002,8 @@ fn ensure_chat_rows_cache(
         }
 
         // Skip the author header (when there is one) so selection paints
-        // body rows only. Headerless entries — system lines, news cards,
-        // /me actions, continuations — select from their first row;
+        // body rows only. Headerless entries (system lines, report cards,
+        // /me actions, continuations) select from their first row;
         // deriving this from `is_continuation` alone left the first system
         // line after a normal message with an empty selection range.
         let body_start = if wrapped.header_line_index == Some(0) {
@@ -3079,7 +3070,6 @@ pub struct ChatRenderInput<'a> {
     pub rail_scroll_nudge: isize,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -3359,7 +3349,6 @@ pub fn draw_embedded_room_chat(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: false,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -3473,7 +3462,6 @@ pub fn draw_embedded_room_chat(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
-            selected_news_message: false,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -3578,7 +3566,6 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         composing: view.composing,
                         selected_message: view.selected_message_id.is_some(),
                         selected_image_message: view.selected_image_message,
-                        selected_news_message: view.selected_news_message,
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
@@ -5641,7 +5628,6 @@ fn draw_selected_content(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,

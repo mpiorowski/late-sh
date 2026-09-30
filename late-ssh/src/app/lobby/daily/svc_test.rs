@@ -10,7 +10,9 @@ use crate::app::games::pool_core::{
 };
 use crate::app::lobby::daily::battleship::DailyBattleshipState;
 use crate::app::lobby::daily::connect4::DailyConnect4State;
+use crate::app::lobby::daily::cribbage::{self, CribbageMove, DailyCribbageState};
 use crate::app::lobby::daily::games::DailyGame;
+use crate::app::lobby::daily::gin::{self, DailyGinState, GinMove, Pile};
 use crate::app::lobby::daily::pool::{DailyPoolState, PoolShotRecord};
 use crate::app::lobby::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChessState, DailyOutcome, DailyService,
@@ -1988,4 +1990,196 @@ fn a_row_that_stays_rejected_is_reported_once() {
         vec![(broken, SnapshotRowError::NoOpponent)],
     );
     assert_eq!(ids(&again.new), vec![broken]);
+}
+
+async fn load(client: &tokio_postgres::Client, match_id: Uuid) -> DailyMatch {
+    DailyMatch::get(client, match_id)
+        .await
+        .expect("load match")
+        .expect("match exists")
+}
+
+#[tokio::test]
+async fn cribbage_plays_hand_after_hand_to_61_and_pays_the_winner() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-crib-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-crib-opponent").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Cribbage, None)
+        .await
+        .expect("post cribbage challenge");
+    assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_CRIBBAGE);
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim cribbage challenge");
+
+    // Seat 0 deals the first hand, so seat 1 owes the first discard.
+    let state = DailyCribbageState::parse(&claimed.state).expect("claim state parses");
+    assert_eq!(claimed.turn_user_id, Some(state.user_of(1)));
+    let dealer = state.user_of(0);
+    let out_of_turn = svc
+        .play_cribbage_move(
+            dealer,
+            claimed.id,
+            CribbageMove::Discard([state.deals[0][6], state.deals[0][7]]),
+        )
+        .await;
+    assert!(out_of_turn.is_err(), "the dealer discarded before pone");
+    assert!(svc.play_move(dealer, claimed.id, 0, 0).await.is_err());
+
+    // Drive it to the end: discard the first two, peg the first card that
+    // fits. The service deals every hand after the first.
+    let row = loop {
+        let row = load(&client, claimed.id).await;
+        if row.status != DailyMatch::STATUS_ACTIVE {
+            break row;
+        }
+        let state = DailyCribbageState::parse(&row.state).expect("state parses");
+        let table = state.table();
+        let mover = row.turn_user_id.expect("someone owes a move");
+        assert_eq!(
+            state.turn_user(),
+            Some(mover),
+            "the row and the replay agree"
+        );
+        let played = match table.phase {
+            cribbage::Phase::Discard(seat) => {
+                CribbageMove::Discard([table.hands[seat][0], table.hands[seat][1]])
+            }
+            cribbage::Phase::Peg(seat) => CribbageMove::Play(
+                *table.hands[seat]
+                    .iter()
+                    .find(|card| table.count + card.value() <= cribbage::MAX_COUNT)
+                    .expect("the mover can play"),
+            ),
+            cribbage::Phase::AwaitingDeal | cribbage::Phase::Won(_) => {
+                panic!("an active row is always mid-hand: {:?}", table.phase)
+            }
+        };
+        svc.play_cribbage_move(mover, claimed.id, played)
+            .await
+            .expect("the bot plays legal cribbage");
+    };
+
+    let state = DailyCribbageState::parse(&row.state).expect("final state parses");
+    let table = state.table();
+    assert!(state.deals.len() > 1, "the service dealt later hands");
+    assert_eq!(row.result, DailyResult::PeggedOut.as_str());
+    let winner = row.winner_user_id.expect("cribbage has a winner");
+    let seat = state.seat_of(winner).expect("the winner is seated");
+    assert!(table.scores[seat] >= cribbage::WINNING_SCORE);
+    assert_eq!(row.turn_user_id, None);
+    assert_eq!(
+        win_deltas(&client, winner, "daily_cribbage_win").await,
+        vec![500]
+    );
+}
+
+#[tokio::test]
+async fn gin_turns_draw_then_discard_on_one_clock_and_a_match_to_100_pays() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-gin-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-gin-opponent").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::GinRummy, None)
+        .await
+        .expect("post gin challenge");
+    assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_GIN);
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim gin challenge");
+    let state = DailyGinState::parse(&claimed.state).expect("claim state parses");
+    let first = state.user_of(1);
+    assert_eq!(
+        claimed.turn_user_id,
+        Some(first),
+        "the non-dealer draws first"
+    );
+
+    let early = svc
+        .play_gin_move(
+            first,
+            claimed.id,
+            GinMove::Discard {
+                card: state.table().hands[1][0],
+                knock: false,
+            },
+        )
+        .await;
+    assert!(early.is_err(), "a discard before the draw");
+
+    // The draw keeps the turn and the clock; the discard hands both over.
+    svc.play_gin_move(first, claimed.id, GinMove::Draw(Pile::Stock))
+        .await
+        .expect("draw from the stock");
+    let drawn = load(&client, claimed.id).await;
+    assert_eq!(drawn.turn_user_id, Some(first));
+    assert_eq!(drawn.turn_deadline_at, claimed.turn_deadline_at);
+    let hand = DailyGinState::parse(&drawn.state)
+        .expect("parses")
+        .table()
+        .hands[1]
+        .clone();
+    svc.play_gin_move(
+        first,
+        claimed.id,
+        GinMove::Discard {
+            card: hand[0],
+            knock: false,
+        },
+    )
+    .await
+    .expect("discard");
+    let thrown = load(&client, claimed.id).await;
+    assert_eq!(thrown.turn_user_id, Some(state.user_of(0)));
+    assert!(thrown.turn_deadline_at > claimed.turn_deadline_at);
+
+    // Drive it to the end: draw from the stock, throw whatever leaves the
+    // least deadwood, knock when allowed.
+    let row = loop {
+        let row = load(&client, claimed.id).await;
+        if row.status != DailyMatch::STATUS_ACTIVE {
+            break row;
+        }
+        let state = DailyGinState::parse(&row.state).expect("state parses");
+        let table = state.table();
+        let mover = row.turn_user_id.expect("someone owes a move");
+        let played = match table.phase {
+            gin::Phase::Draw(_) => GinMove::Draw(Pile::Stock),
+            gin::Phase::Discard(seat) => {
+                let hand = &table.hands[seat];
+                let card = *hand
+                    .iter()
+                    .min_by_key(|card| gin::deadwood_after_discard(hand, **card))
+                    .expect("eleven cards");
+                let knock = gin::deadwood_after_discard(hand, card) <= gin::MAX_KNOCK;
+                GinMove::Discard { card, knock }
+            }
+            gin::Phase::AwaitingDeal | gin::Phase::Won(_) => {
+                panic!("an active row is always mid-hand: {:?}", table.phase)
+            }
+        };
+        svc.play_gin_move(mover, claimed.id, played)
+            .await
+            .expect("the bot plays legal gin");
+    };
+
+    let state = DailyGinState::parse(&row.state).expect("final state parses");
+    assert!(state.deals.len() > 1, "the service dealt later hands");
+    assert_eq!(row.result, DailyResult::ReachedHundred.as_str());
+    let winner = row.winner_user_id.expect("gin has a winner");
+    let seat = state.seat_of(winner).expect("the winner is seated");
+    assert!(state.table().scores[seat] >= gin::TARGET_SCORE);
+    assert_eq!(
+        win_deltas(&client, winner, "daily_gin_win").await,
+        vec![500]
+    );
 }

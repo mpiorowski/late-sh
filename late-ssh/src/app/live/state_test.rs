@@ -4,34 +4,37 @@ use chrono::{TimeZone, Utc};
 use uuid::Uuid;
 
 use super::*;
-use crate::app::live::pick::LIVE_STRIP_LINGER;
+use crate::app::live::pick::LIVE_MAX_UP;
 
 /// One evening on the strip, from the stamps alone: a booth track and a
-/// daily move each get their turn in the order they happened, a result cuts
-/// in for its minute, and the strip comes down when the news is old.
+/// daily move take turns in the order they happened, each for its minimum,
+/// the match's result joins the queue when it ends and opens nothing, a
+/// shared link goes up at the next handover for its five minutes, and the
+/// strip comes down when nothing is left.
 #[test]
-fn a_track_and_a_match_take_turns_and_a_result_cuts_in() {
+fn a_track_a_match_and_its_result_take_turns_and_a_link_cuts_in() {
     let start = Instant::now();
     let t0 = Utc.with_ymd_and_hms(2026, 9, 29, 21, 0, 0).unwrap();
     let track = LiveSource::BoothTrack(Uuid::from_u128(1));
     let chess = LiveSource::DailyMatch(Uuid::from_u128(2));
-    let candidates = [
-        LiveCandidate {
-            source: chess,
-            updated: t0 + chrono::Duration::seconds(20),
-            aimed_at: None,
-        },
-        LiveCandidate {
-            source: track,
-            updated: t0,
-            aimed_at: None,
-        },
+    let result = LiveSource::DailyResult(Uuid::from_u128(2));
+    let article = LiveSource::NewsArticle(Uuid::from_u128(3));
+    let candidate = |source, secs: i64| LiveCandidate {
+        source,
+        updated: t0 + chrono::Duration::seconds(secs),
+        aimed_at: None,
+    };
+    let playing = [candidate(chess, 20), candidate(track, 0)];
+    let finished = [candidate(result, 150), candidate(track, 0)];
+    let shared = [
+        candidate(result, 150),
+        candidate(track, 0),
+        candidate(article, 230),
     ];
     let mut live = LiveState::new();
-    let step = |live: &mut LiveState, secs: u64, finished_at: Option<Instant>| {
+    let mut step = |candidates: &[LiveCandidate], secs: u64| {
         let changed = live.refresh(
-            &candidates,
-            finished_at,
+            candidates,
             start + Duration::from_secs(secs),
             t0 + chrono::Duration::seconds(secs as i64),
             false,
@@ -40,46 +43,36 @@ fn a_track_and_a_match_take_turns_and_a_result_cuts_in() {
     };
 
     assert_eq!(
-        step(&mut live, 5, None),
-        (true, Some(Showing::Featured(track)), Some(track)),
+        step(&playing, 5),
+        (true, Some(track), Some(track)),
         "the track somebody queued goes up"
     );
     assert_eq!(
-        step(&mut live, 30, None),
-        (false, Some(Showing::Featured(track)), Some(track)),
-        "the chess move waits for the track's minute"
+        step(&playing, 119),
+        (false, Some(track), Some(track)),
+        "the chess move waits out the track's two minutes"
     );
     assert_eq!(
-        step(&mut live, 60, None),
-        (true, Some(Showing::Featured(chess)), Some(chess)),
+        step(&playing, 120),
+        (true, Some(chess), Some(chess)),
         "then takes the strip"
     );
-
-    // A match ends at 70: the result holds the strip for a minute and
-    // opens nothing, then the strip goes back to what is featured.
-    let finished_at = Some(start + Duration::from_secs(70));
     assert_eq!(
-        step(&mut live, 70, finished_at),
-        (true, Some(Showing::DailyFinish), None)
+        step(&finished, 150),
+        (true, Some(result), None),
+        "the match ends: its result takes its place and opens nothing"
     );
+    assert_eq!(step(&finished, 209), (false, Some(result), None));
     assert_eq!(
-        step(&mut live, 129, finished_at),
-        (false, Some(Showing::DailyFinish), None)
+        step(&shared, 230),
+        (true, Some(article), Some(article)),
+        "a shared link goes up at the next handover"
     );
+    assert_eq!(step(&shared, 529), (false, Some(article), Some(article)));
     assert_eq!(
-        step(&mut live, 130, finished_at),
-        (true, Some(Showing::Featured(chess)), Some(chess))
-    );
-
-    let stale = 20 + LIVE_STRIP_LINGER.as_secs();
-    assert_eq!(
-        step(&mut live, stale - 1, finished_at),
-        (false, Some(Showing::Featured(chess)), Some(chess))
-    );
-    assert_eq!(
-        step(&mut live, stale, finished_at),
+        step(&shared, 530),
         (true, None, None),
-        "nothing happened for five minutes: the strip comes down"
+        "the link's five minutes are up and nothing is waiting"
     );
 }
 
@@ -98,20 +91,16 @@ fn the_strip_holds_its_height_while_the_viewer_reads() {
     let mut live = LiveState::new();
     let at = |secs: i64| t0 + chrono::Duration::seconds(secs);
 
-    assert!(!live.refresh(&candidates, None, start, at(1), true));
+    assert!(!live.refresh(&candidates, start, at(1), true));
     assert_eq!(live.showing(), None, "it does not go up under a selection");
-    assert!(live.refresh(&candidates, None, start, at(2), false));
-    assert_eq!(live.showing(), Some(Showing::Featured(track)));
+    assert!(live.refresh(&candidates, start, at(2), false));
+    assert_eq!(live.showing(), Some(track));
 
-    let stale = LIVE_STRIP_LINGER.as_secs() as i64;
-    assert!(!live.refresh(&candidates, None, start, at(stale), true));
-    assert_eq!(
-        live.showing(),
-        Some(Showing::Featured(track)),
-        "nor come down"
-    );
+    let stale = LIVE_MAX_UP.as_secs() as i64;
+    assert!(!live.refresh(&candidates, start, at(stale), true));
+    assert_eq!(live.showing(), Some(track), "nor come down");
 
     // The track left the booth: there is nothing left to hold.
-    assert!(live.refresh(&[], None, start, at(stale), true));
+    assert!(live.refresh(&[], start, at(stale), true));
     assert_eq!(live.showing(), None);
 }
