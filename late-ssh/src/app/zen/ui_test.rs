@@ -1,6 +1,6 @@
 use super::{
     Care, Chore, PulseView, care_bar_spans, chat_tile_title, draw_bonsai_tile, draw_headlines_tile,
-    draw_music_tile, draw_pulse_tile, hint_line_fitting, station_text,
+    draw_live_tile, draw_music_tile, draw_pulse_tile, hint_line_fitting, station_text,
 };
 use crate::app::audio::viz::EqState;
 use crate::app::bonsai::{
@@ -302,4 +302,47 @@ fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
         .map(|row| format!("{:10}{row}{:10}", "", ""))
         .collect();
     assert_eq!(tree_rows, &expected[..]);
+}
+
+#[test]
+fn an_empty_live_tile_says_so_beside_the_feed() {
+    use crate::app::chat::state::ActivityTickerEntry;
+
+    let (width, height) = (60, 6);
+    let entries = [ActivityTickerEntry {
+        id: Uuid::from_u128(1),
+        text: "mat won 8ball".to_string(),
+        at: chrono::Utc::now(),
+    }];
+    let hit = std::cell::Cell::new(None);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_live_tile(
+                frame,
+                Rect::new(0, 0, width, height),
+                None,
+                &hit,
+                &entries,
+                &[],
+            )
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let part = |from: u16, to: u16| -> String {
+        (0..height)
+            .map(|y| {
+                (from..to)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let split = width * 3 / 10;
+    let (note, feed) = (part(0, split), part(split, width));
+    assert!(note.contains("nothing live"), "{note}");
+    assert!(!note.contains("mat won"), "{note}");
+    assert!(feed.contains("mat won 8ball"), "{feed}");
+    assert_eq!(hit.get(), None, "nothing up, nothing to click");
 }

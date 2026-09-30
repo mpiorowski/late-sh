@@ -120,6 +120,7 @@ pub(crate) fn body(budget: usize, track: &TrackStripView) -> StripBody {
             None => screen_lines(),
         },
         words: word_rows(budget, track),
+        hint: hint_spans(budget, track),
         glow: glow(track),
     }
 }
@@ -189,8 +190,7 @@ fn screen_lines() -> Vec<Line<'static>> {
 }
 
 /// The words beside the picture, one entry per picture row: the title, the
-/// channel and length, who queued it and where it stands, then how to tune
-/// in.
+/// channel and length, and who queued it and where it stands.
 fn word_rows(budget: usize, track: &TrackStripView) -> Vec<Vec<Span<'static>>> {
     let mut rows: Vec<Vec<Span<'static>>> = (0..PICTURE_ROWS).map(|_| Vec::new()).collect();
     if budget == 0 {
@@ -207,13 +207,17 @@ fn word_rows(budget: usize, track: &TrackStripView) -> Vec<Vec<Span<'static>>> {
         Style::default().fg(theme::TEXT_DIM()),
     )];
     rows[3] = event_spans(budget, track);
+    rows
+}
+
+/// How to tune in, or to open the booth for a viewer already on YouTube.
+fn hint_spans(budget: usize, track: &TrackStripView) -> Vec<Span<'static>> {
     let action = if track.listening {
         " or click for the booth"
     } else {
         " or click to tune in"
     };
-    rows[6] = key_hint_spans(budget, &[HintPart::Key("o"), HintPart::Text(action)]);
-    rows
+    key_hint_spans(budget, &[HintPart::Key("o"), HintPart::Text(action)])
 }
 
 fn title(track: &TrackStripView) -> String {

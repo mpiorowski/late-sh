@@ -50,6 +50,18 @@ const MESSAGE_ROWS_UNDER_FULL: u16 = 10;
 const MIN_COMPACT_HEIGHT: u16 = LIVE_STRIP_COMPACT_HEIGHT + 4;
 /// Columns between the picture and the words.
 pub(crate) const GAP: u16 = 2;
+/// The words row the key hint sits on, under what the source says.
+const HINT_ROW: usize = 6;
+
+/// Where the strip is drawn. The #lounge card names its keys in the hint
+/// row and parts the strip from the chat with the rule; a Zen tile has a
+/// border and a title for both, and its title names the tile's keys, as
+/// every Zen tile's does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StripHost {
+    LoungeCard,
+    ZenTile,
+}
 
 /// Which form the card fitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +75,11 @@ pub(crate) struct StripBody {
     /// Up to `PICTURE_ROWS` lines, each `PICTURE_COLS` wide at most.
     pub picture: Vec<Line<'static>>,
     /// One entry per picture row, each inside the budget it was given.
+    /// The hint row (`HINT_ROW`) is left empty for `hint`.
     pub words: Vec<Vec<Span<'static>>>,
+    /// The keys that act on the source (`key_hint_spans`), inside the same
+    /// budget. Drawn on the #lounge card only (`StripHost`).
+    pub hint: Vec<Span<'static>>,
     /// Whether the rule's label is lit.
     pub glow: bool,
 }
@@ -102,19 +118,69 @@ pub(crate) fn draw_live_strip(
         hit.set(Some((area, source)));
     }
     let lines = match size {
-        StripSize::Full => live_strip_lines(area.width, strip, canvas_background()),
+        StripSize::Full => live_strip_lines(
+            area.width,
+            strip,
+            canvas_background(),
+            StripHost::LoungeCard,
+        ),
         StripSize::Compact => vec![live_strip_compact_line(area.width, strip)],
     };
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Always `LIVE_STRIP_HEIGHT` lines: the picture in its column with the
-/// words beside it, then the rule, which parts the strip from the chat
-/// below. `background` is what a painted picture blends into.
+/// The form a Zen tile's inner area fits: the picture rows when it has
+/// `PICTURE_ROWS` and the card's width, else the one row. A tile always
+/// spares a row (`zen::layout::MIN_TILE_CELLS`).
+pub(crate) fn fit_live_tile(area: Rect) -> StripSize {
+    if area.width >= MIN_FULL_WIDTH && area.height >= PICTURE_ROWS {
+        StripSize::Full
+    } else {
+        StripSize::Compact
+    }
+}
+
+/// The strip in a Zen tile's inner area, centred top to bottom: the
+/// picture rows with no hint and no rule, or the one row without its rule
+/// label, since the tile's title already says what it is.
+pub(crate) fn draw_live_tile(
+    frame: &mut Frame,
+    area: Rect,
+    strip: &LiveStripView<'_>,
+    hit: &Cell<Option<(Rect, LiveSource)>>,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let lines = match fit_live_tile(area) {
+        StripSize::Full => {
+            live_strip_lines(area.width, strip, canvas_background(), StripHost::ZenTile)
+        }
+        StripSize::Compact => vec![Line::from(compact_body_spans(area.width, strip))],
+    };
+    let height = (lines.len() as u16).min(area.height);
+    let drawn = Rect::new(
+        area.x,
+        area.y + (area.height - height) / 2,
+        area.width,
+        height,
+    );
+    if let Some(source) = strip.opens() {
+        hit.set(Some((drawn, source)));
+    }
+    frame.render_widget(Paragraph::new(lines), drawn);
+}
+
+/// The picture in its column with the words beside it. On the #lounge card
+/// the hint row and the rule, which parts the strip from the chat below,
+/// make it `LIVE_STRIP_HEIGHT` lines; in a Zen tile it is the
+/// `PICTURE_ROWS` alone (`StripHost`). `background` is what a painted
+/// picture blends into.
 pub(crate) fn live_strip_lines(
     width: u16,
     strip: &LiveStripView<'_>,
     background: Rgb,
+    host: StripHost,
 ) -> Vec<Line<'static>> {
     let budget = usize::from(width.saturating_sub(PICTURE_COLS + GAP));
     let body = match strip {
@@ -122,18 +188,24 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Track(track) => booth_live::body(budget, track),
         LiveStripView::Article(article) => news_live::body(budget, article),
     };
-    frame_lines(width, body)
+    frame_lines(width, body, host)
 }
 
 /// A source's body in the frame: the picture centred in its column, the
-/// words beside it, the rule under both.
-fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
+/// words beside it, and on the #lounge card the hint among them and the
+/// rule under both.
+fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static>> {
     let StripBody {
         mut picture,
-        words,
+        mut words,
+        hint,
         glow,
     } = body;
     let mut lines = Vec::with_capacity(LIVE_STRIP_HEIGHT as usize);
+    match host {
+        StripHost::LoungeCard => words[HINT_ROW] = hint,
+        StripHost::ZenTile => {}
+    }
 
     picture.truncate(PICTURE_ROWS as usize);
     // Centre whatever the source drew in the fixed band.
@@ -152,7 +224,10 @@ fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
         spans.extend(words);
         lines.push(Line::from(spans));
     }
-    lines.push(rule_line(width, glow));
+    match host {
+        StripHost::LoungeCard => lines.push(rule_line(width, glow)),
+        StripHost::ZenTile => {}
+    }
     lines
 }
 
@@ -217,12 +292,17 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     let used: usize = rule.spans.iter().map(|span| span.width()).sum();
     let rest = width.saturating_sub(used as u16);
     let mut spans = rule.spans;
-    spans.extend(match strip {
+    spans.extend(compact_body_spans(rest, strip));
+    Line::from(spans)
+}
+
+/// What the source says in a line, `rest` columns at most.
+fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>> {
+    match strip {
         LiveStripView::Match(strip) => match_strip::compact_spans(rest, strip),
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
         LiveStripView::Article(article) => news_live::compact_spans(rest, article),
-    });
-    Line::from(spans)
+    }
 }
 
 /// One piece of a body's key hint row: a key to press, or the words around it.
@@ -231,7 +311,7 @@ pub(crate) enum HintPart<'a> {
     Text(&'a str),
 }
 
-/// The key hint row every body ends on (`o read · r reply`): each key in
+/// The key hint every body carries (`o read · r reply`): each key in
 /// amber like the hint bars, the words faint. Too narrow for the whole hint,
 /// it falls back to one faint truncated run.
 pub(crate) fn key_hint_spans(budget: usize, parts: &[HintPart<'_>]) -> Vec<Span<'static>> {

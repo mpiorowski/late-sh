@@ -1509,6 +1509,7 @@ fn zen_help_lines() -> Vec<String> {
         "  a                 feed the tank (free, once a day, +100 chips)",
         "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
         "  click             pet the pet; it reads the rest of your session itself",
+        "  Enter / click     on the live tile, open what the #lounge live strip shows",
         "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
         "",
         "Leaving",

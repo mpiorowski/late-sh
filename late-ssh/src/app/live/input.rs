@@ -11,9 +11,9 @@ use crate::app::{
 
 use super::pick::LiveSource;
 
-/// `o` on the #lounge card opens what the strip is showing. With nothing to
-/// open (no strip up, or a result holding it) the key falls through
-/// untouched.
+/// `o` on the #lounge card, or Enter on a focused Zen Live tile, opens what
+/// the strip is showing. With nothing to open (no strip up, or a result
+/// holding it) the key falls through untouched.
 pub fn open_from_key(app: &mut App) -> bool {
     match app.live.opens() {
         Some(source) => open(app, source),

@@ -49,6 +49,14 @@ fn words(track: &TrackStripView) -> Vec<String> {
         .collect()
 }
 
+fn hint(track: &TrackStripView) -> String {
+    body(usize::from(WIDTH), track)
+        .hint
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
 #[test]
 fn every_track_in_the_booth_is_news_from_when_it_was_queued() {
     let snapshot = booth();
@@ -80,10 +88,11 @@ fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
             "mat put it on · playing now",
             "",
             "",
-            "o or click to tune in",
+            "",
             "",
         ]
     );
+    assert_eq!(hint(&playing), "o or click to tune in");
     assert!(glow(&playing), "the track playing lights the label");
 
     let next = view_of(2, AudioSource::Radio);
@@ -93,7 +102,7 @@ fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
     let waiting = view_of(3, AudioSource::Youtube);
     assert_eq!(words(&waiting)[3], "mat queued it · #2 in line");
     assert_eq!(
-        words(&waiting)[6],
+        hint(&waiting),
         "o or click for the booth",
         "a viewer already on YouTube has nothing to tune in to"
     );

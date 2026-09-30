@@ -3670,6 +3670,64 @@ async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
     );
 }
 
+/// A Live tile shows the #lounge live strip on Zen, and Enter on it opens
+/// what it shows, as `o` does on the card.
+#[tokio::test]
+async fn zen_enter_on_the_live_tile_opens_what_the_strip_shows() {
+    use crate::app::zen::state::{KindPick, TileKind};
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-live-viewer").await;
+    let sharer = create_test_user(&test_db.db, "zen-live-sharer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/terminal-renaissance".to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-live-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "Ctrl+F back").await;
+
+    // The lobby tile becomes a Live tile, which shows the shared link.
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Lobby)
+        .expect("the default has a lobby");
+    app.zen.open_kind_picker();
+    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
+        app.zen.move_kind_picker(1);
+    }
+    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    wait_for_render_contains(&mut app, "The terminal renaissance").await;
+
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.news_modal_url(),
+        Some("https://example.com/terminal-renaissance"),
+        "Enter opens the article"
+    );
+    assert!(!app.chat.is_composing(), "Enter never reaches a composer");
+}
+
 #[tokio::test]
 async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_focused_chat() {
     use crate::app::zen::state::TileKind;

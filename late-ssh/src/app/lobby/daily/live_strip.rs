@@ -30,6 +30,7 @@ pub(crate) fn body(budget: usize, strip: &MatchStripView<'_>, background: Rgb) -
     StripBody {
         picture: board_lines(PICTURE_COLS, &strip.view, background),
         words: word_rows(budget, strip),
+        hint: hint_spans(budget, strip),
         glow: glow(strip),
     }
 }
@@ -53,7 +54,7 @@ pub(crate) fn compact_spans(rest: u16, strip: &MatchStripView<'_>) -> Vec<Span<'
 }
 
 /// The words beside the board, one entry per board row: the players, where
-/// the match stands, what just happened, then how to watch.
+/// the match stands, and what just happened.
 fn word_rows(budget: usize, strip: &MatchStripView<'_>) -> Vec<Vec<Span<'static>>> {
     let view = &strip.view;
     let mut rows: Vec<Vec<Span<'static>>> = (0..PICTURE_ROWS).map(|_| Vec::new()).collect();
@@ -66,7 +67,12 @@ fn word_rows(budget: usize, strip: &MatchStripView<'_>) -> Vec<Vec<Span<'static>
         Style::default().fg(theme::TEXT_DIM()),
     )];
     rows[3] = vec![event_span(budget, strip)];
-    rows[6] = match strip.finish {
+    rows
+}
+
+/// How to watch, or, once it is over, how to play.
+fn hint_spans(budget: usize, strip: &MatchStripView<'_>) -> Vec<Span<'static>> {
+    match strip.finish {
         Some(_) => key_hint_spans(
             budget,
             &[
@@ -83,8 +89,7 @@ fn word_rows(budget: usize, strip: &MatchStripView<'_>) -> Vec<Vec<Span<'static>
                 HintPart::Text(" or click to watch"),
             ],
         ),
-    };
-    rows
+    }
 }
 
 fn name(username: &Option<String>) -> String {

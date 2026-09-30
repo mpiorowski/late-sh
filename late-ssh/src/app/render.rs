@@ -404,6 +404,8 @@ struct DrawContext<'a> {
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
+    zen_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
+    live_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
 }
 
 impl App {
@@ -618,6 +620,20 @@ impl App {
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
         let dashboard_live_strip = if home_selected {
+            self.live.view(
+                &self.daily,
+                &self.audio,
+                self.paired_source,
+                self.chat.news.all_articles(),
+            )
+        } else {
+            None
+        };
+        // Zen's Live tile shows the same strip, built only while the page
+        // holds one.
+        let zen_live_strip = if self.screen == Screen::Zen
+            && self.zen.shows(crate::app::zen::state::TileKind::Live)
+        {
             self.live.view(
                 &self.daily,
                 &self.audio,
@@ -1479,6 +1495,8 @@ impl App {
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
+                        zen_live_strip,
+                        live_hit: &self.live.hit,
                     },
                     &mut terminal_image_frame,
                 );
@@ -2018,6 +2036,8 @@ impl App {
                     } else {
                         Vec::new()
                     },
+                    live: ctx.zen_live_strip.take(),
+                    live_hit: ctx.live_hit,
                     wall_tick: ctx.marquee_tick,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);

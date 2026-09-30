@@ -48,6 +48,9 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     if app.zen.focused_kind() == Some(TileKind::Headlines) && handle_headlines(app, byte) {
         return true;
     }
+    if app.zen.focused_kind() == Some(TileKind::Live) && handle_live(app, byte) {
+        return true;
+    }
     let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
     // The focused chat tile's message keys, the way the house table routes
     // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
@@ -93,6 +96,19 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         // The backtick chain, as on Home: it hops through the games waiting
         // on you and comes home here.
         b'`' => crate::app::workspace::cycle::cycle_game_workspace(app),
+        _ => false,
+    }
+}
+
+/// The focused Live tile: Enter opens what the strip shows, the way `o`
+/// does on the #lounge card. With nothing to open it still takes the key,
+/// as every tile but a chat does.
+fn handle_live(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'\r' | b'\n' => {
+            crate::app::live::input::open_from_key(app);
+            true
+        }
         _ => false,
     }
 }

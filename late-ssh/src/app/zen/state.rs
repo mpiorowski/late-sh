@@ -28,12 +28,15 @@ pub enum TileKind {
     Pulse,
     Inbox,
     Headlines,
+    /// The #lounge live strip (`app/live`), with the feed beside a note
+    /// while nothing is up.
+    Live,
     Blank,
 }
 
 impl TileKind {
     /// Every kind, alphabetical by label: the tile picker's rows.
-    pub const ALL: [TileKind; 14] = [
+    pub const ALL: [TileKind; 15] = [
         TileKind::Activity,
         TileKind::Aquarium,
         TileKind::Blank,
@@ -43,6 +46,7 @@ impl TileKind {
         TileKind::Friends,
         TileKind::Headlines,
         TileKind::Inbox,
+        TileKind::Live,
         TileKind::Lobby,
         TileKind::Music,
         TileKind::Pet,
@@ -65,6 +69,7 @@ impl TileKind {
             TileKind::Pulse => "pulse",
             TileKind::Inbox => "inbox",
             TileKind::Headlines => "headlines",
+            TileKind::Live => "live",
             TileKind::Blank => "blank",
         }
     }
@@ -557,6 +562,7 @@ impl ZenState {
             | TileKind::Pulse
             | TileKind::Inbox
             | TileKind::Headlines
+            | TileKind::Live
             | TileKind::Blank => false,
         })
     }

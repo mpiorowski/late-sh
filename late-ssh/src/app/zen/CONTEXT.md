@@ -43,7 +43,11 @@ rows. It replaced the presence tile, and a stored `presence` reads as
 newest first; see §3 for its keys), headlines (News articles and the
 viewer's RSS entries merged newest first, two rows each (the title with
 its source and age, then the link), an entry shared to News listed once,
-as the article), blank. The look (border style, gap, titles) is
+as the article), live (the #lounge live strip, `../live/CONTEXT.md`: the
+picture rows from 8 rows and 56 columns inside, else its one row, with no
+hint row and no rule since the title names the key; while nothing is up,
+a faint `nothing live` on 30% of the width, beside the #lounge
+activity feed on the rest), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):
@@ -73,7 +77,7 @@ a chat-pane screen in `app/input.rs` (`screen_has_chat_pane`,
 keeps its tail fresh), so the composer, message actions, and chat clicks
 work the same as on Home. The other chat tiles are read-only views of
 their rooms: messages stream in and nothing is marked read until the tile
-is focused, but every tile draws its own composer strip (2026-09-12),
+is focused, but every tile draws its own composer strip,
 because an input box that appears and disappears as the focus walks moves
 every row under the reader. Only the active tile's composer is live; the
 others are inert (`composer_inert` on the chat view, `inert` on
@@ -152,11 +156,14 @@ modal instead, and a page with no chat tile says so in a banner.
 With Headlines focused, `j` `k` walk its items the same way and Enter
 copies the selected link to the clipboard (`pending_clipboard`, the way a
 copied search hit goes).
+With Live focused, Enter opens what the strip shows, as `o` does on the
+#lounge card (`live::input::open_from_key`); a click on the strip opens it
+without focusing the tile. There is no reply key here: `r` flips the split.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
 (`-`, Companions), never a page key: dedicated keys accumulate and
-collide, and the tile draws no caption for it either (2026-09-11). The bonsai has no keys of its own here: `w` is the global
+collide, and the tile draws no caption for it either. The bonsai has no keys of its own here: `w` is the global
 Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows and Tab / Shift+Tab move focus (the page owns Tab; it is not the page switch here), `space` opens the tile
 picker over the focused tile (`ZenState::kind_picker`: one row per
@@ -248,5 +255,6 @@ leaving the page, so a held resize key costs one row update.
   (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), and Inbox Enter (`input_flow_test.rs`); the rest of the
-  tile drawing is untested.
+  (`rows_test.rs`), Inbox Enter and Live Enter (`input_flow_test.rs`), and
+  the empty Live tile (`ui_test.rs`); the rest of the tile drawing is
+  untested.

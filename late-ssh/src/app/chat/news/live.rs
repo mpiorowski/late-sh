@@ -56,6 +56,15 @@ pub(crate) fn body(budget: usize, article: &ArticleStripView) -> StripBody {
     StripBody {
         picture: picture_lines(article),
         words: word_rows(budget, article),
+        hint: key_hint_spans(
+            budget,
+            &[
+                HintPart::Key("o"),
+                HintPart::Text(" read · "),
+                HintPart::Key("r"),
+                HintPart::Text(" reply"),
+            ],
+        ),
         // Nothing about a shared link is happening right now: the strip
         // being up is the whole of the news.
         glow: false,
@@ -103,8 +112,7 @@ fn picture_lines(article: &ArticleStripView) -> Vec<Line<'static>> {
 }
 
 /// The words beside the picture, one entry per picture row: the title, the
-/// first lines of the summary, who shared it, then the keys that read it
-/// and reply to it.
+/// first lines of the summary, and who shared it.
 fn word_rows(budget: usize, article: &ArticleStripView) -> Vec<Vec<Span<'static>>> {
     let mut rows: Vec<Vec<Span<'static>>> = (0..PICTURE_ROWS).map(|_| Vec::new()).collect();
     if budget == 0 {
@@ -127,15 +135,6 @@ fn word_rows(budget: usize, article: &ArticleStripView) -> Vec<Vec<Span<'static>
         )];
     }
     rows[4] = event_spans(budget, article);
-    rows[6] = key_hint_spans(
-        budget,
-        &[
-            HintPart::Key("o"),
-            HintPart::Text(" read · "),
-            HintPart::Key("r"),
-            HintPart::Text(" reply"),
-        ],
-    );
     rows
 }
 

@@ -32,6 +32,60 @@ fn the_card_picks_the_form_and_keeps_rows_for_the_messages() {
 }
 
 #[test]
+fn a_zen_tile_takes_the_picture_rows_from_eight_rows_up() {
+    let tile = |width, height| Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    assert_eq!(fit_live_tile(tile(60, PICTURE_ROWS)), StripSize::Full);
+    assert_eq!(
+        fit_live_tile(tile(60, PICTURE_ROWS - 1)),
+        StripSize::Compact,
+        "a short tile gets the one row, as a short card does"
+    );
+    assert_eq!(
+        fit_live_tile(tile(MIN_FULL_WIDTH - 1, 20)),
+        StripSize::Compact,
+        "a narrow one too"
+    );
+}
+
+#[test]
+fn only_the_lounge_card_draws_the_hint_and_the_rule() {
+    let body = || StripBody {
+        picture: Vec::new(),
+        words: (0..PICTURE_ROWS).map(|_| Vec::new()).collect(),
+        hint: vec![Span::raw("o read")],
+        glow: false,
+    };
+    let text = |lines: Vec<Line<'static>>| -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    };
+    let words = " ".repeat(usize::from(PICTURE_COLS + GAP));
+    let mut card = vec![String::new(); PICTURE_ROWS as usize];
+    card[HINT_ROW] = format!("{words}o read");
+    card.push(format!("── live {}", "─".repeat(32)));
+    assert_eq!(text(frame_lines(40, body(), StripHost::LoungeCard)), card);
+    assert_eq!(
+        text(frame_lines(40, body(), StripHost::ZenTile)),
+        vec![String::new(); PICTURE_ROWS as usize],
+        "the tile's title names its keys and its border parts it"
+    );
+}
+
+#[test]
 fn a_picture_wider_than_its_column_never_touches_the_words() {
     let picture_row = "x".repeat(usize::from(PICTURE_COLS) + 5);
     let body = StripBody {
@@ -41,9 +95,10 @@ fn a_picture_wider_than_its_column_never_touches_the_words() {
         words: (0..PICTURE_ROWS)
             .map(|_| vec![Span::raw("words")])
             .collect(),
+        hint: Vec::new(),
         glow: false,
     };
-    let lines = frame_lines(80, body);
+    let lines = frame_lines(80, body, StripHost::ZenTile);
     let words_at = usize::from(PICTURE_COLS + GAP);
     for line in &lines[..PICTURE_ROWS as usize] {
         let text: String = line
