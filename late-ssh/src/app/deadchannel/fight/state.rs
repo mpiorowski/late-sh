@@ -37,7 +37,7 @@
 //!
 //! So are the lockers and the bits machine, the two money places: the
 //! locker keeps bits from the street for a cut on the way in, the machine
-//! lends against the level and takes its interest at the day roll and its
+//! lends against the level, adds its fee to the debt once, and takes its
 //! share off every kill. And the ledge: a step off it is the runner
 //! started over, the marks and the debt kept.
 
@@ -48,11 +48,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::data::{
-    self, DEBT_INTEREST_PERCENT, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, FoeTier,
-    GARNISH_PERCENT, HEARD_LINE, KILL_LINES, LOAN_PER_LEVEL, LOCKER_FEE_PERCENT, MARK_BONUS_CAP,
-    MAX_LEVEL, NEAR_MISS_SIGNAL, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY, RUN_FAILED_LINES,
-    RUN_LINES, RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS,
-    STEPPED_DOWN_LINE, TRADE_IN_PERCENT, percent_up,
+    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, FoeTier, GARNISH_PERCENT, HEARD_LINE,
+    KILL_LINES, LOAN_FEE_PERCENT, LOAN_PER_LEVEL, LOCKER_FEE_PERCENT, MARK_BONUS_CAP, MAX_LEVEL,
+    NEAR_MISS_SIGNAL, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY, RUN_FAILED_LINES, RUN_LINES,
+    RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STEPPED_DOWN_LINE,
+    TRADE_IN_PERCENT, percent_up,
 };
 use crate::app::deadchannel::city::data::{ARMOR, COST_LADDER, WEAPONS};
 use crate::app::door::greendragon::combat::{Combatant, resolve_extra_foe_strike, resolve_round};
@@ -220,7 +220,7 @@ pub enum Command {
     Deposit,
     /// Everything in the locker back on hand.
     Withdraw,
-    /// The bits machine's loan: up to the level's cap.
+    /// The bits machine's loan: up to the level's cap, its fee on top.
     Borrow,
     /// As much of the debt as the bits on hand cover.
     Repay,
@@ -251,12 +251,16 @@ pub enum Refusal {
     NoLowerGlyph,
     /// A deposit or a repayment with no bits on hand.
     NothingOnHand,
+    /// A deposit the locker's cut would take whole.
+    DepositAllCut,
     /// A withdrawal from an empty locker.
     LockerEmpty,
     /// A loan with the debt already at the level's cap.
     LoanCapped,
     /// A repayment with nothing owed.
     NoDebt,
+    /// A step off the ledge by a runner the fall would take nothing from.
+    NothingToLose,
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
@@ -309,8 +313,10 @@ pub enum Applied {
     Withdrew {
         amount: i64,
     },
+    /// `amount` bits lent; the debt grew by that and the machine's `fee`.
     Borrowed {
         amount: i64,
+        fee: i64,
     },
     Repaid {
         amount: i64,
@@ -506,8 +512,6 @@ impl Sheet {
     /// touch after midnight UTC refills signal and rations together, and
     /// nothing refills in between. A fight left hanging overnight is
     /// dropped with the day; the ration it cost is refilled with the rest.
-    /// The machine's interest lands here too, once per roll, not per
-    /// calendar day: a runner who stays away owes what they owed.
     /// Returns whether anything changed.
     pub fn settle(&mut self, today: NaiveDate) -> bool {
         if self.day >= today {
@@ -516,7 +520,6 @@ impl Sheet {
         self.day = today;
         self.signal = self.max_signal();
         self.rations_left = RATIONS_PER_DAY;
-        self.debt += percent_up(self.debt, DEBT_INTEREST_PERCENT);
         self.fight = None;
         self.kills_today = 0;
         self.runs_today = 0;
@@ -598,9 +601,25 @@ impl Sheet {
     }
 
     /// What a loan would hand over now: the cap less the debt, nothing at
-    /// or past the cap (the interest can carry the debt past it).
+    /// or past the cap (the fee carries the debt past it).
     pub fn loan_room(&self) -> i64 {
         (self.loan_cap() - self.debt).max(0)
+    }
+
+    /// The machine's fee on that loan, added to the debt with it.
+    pub fn loan_fee(&self) -> i64 {
+        percent_up(self.loan_room(), LOAN_FEE_PERCENT)
+    }
+
+    /// Whether a step off the ledge would take anything: a level, exp, a
+    /// piece of gear, or a bit on hand or in the locker.
+    pub fn has_something_to_lose(&self) -> bool {
+        self.level > 1
+            || self.exp > 0
+            || self.weapon_tier > 0
+            || self.armor_tier > 0
+            || self.bits > 0
+            || self.stash > 0
     }
 
     /// The locker's cut of a deposit of everything on hand.
@@ -609,7 +628,8 @@ impl Sheet {
     }
 
     /// Everything on hand into the locker, less the cut. Not with a glyph
-    /// waiting: the bits you carry into a fight are the bits you risk.
+    /// waiting: the bits you carry into a fight are the bits you risk. Not
+    /// when the cut would be all of it: the locker keeps nothing for nothing.
     fn deposit(&mut self) -> Outcome {
         if self.fight.is_some() {
             return fight_waiting("not with a glyph waiting on you. the locker can wait.");
@@ -622,6 +642,12 @@ impl Sheet {
         }
         let fee = self.deposit_fee();
         let stored = self.bits - fee;
+        if stored == 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::DepositAllCut),
+                lines: vec!["the locker's cut would take all of it. bring more.".to_string()],
+            };
+        }
         self.stash += stored;
         self.bits = 0;
         Outcome {
@@ -653,7 +679,8 @@ impl Sheet {
         }
     }
 
-    /// The machine lends up to the level's cap, all the room at once.
+    /// The machine lends up to the level's cap, all the room at once, and
+    /// adds its fee to the debt then and never again.
     fn borrow(&mut self) -> Outcome {
         if self.fight.is_some() {
             return fight_waiting("not with a glyph waiting on you. the machine can wait.");
@@ -668,12 +695,14 @@ impl Sheet {
                 )],
             };
         }
+        let fee = self.loan_fee();
         self.bits += amount;
-        self.debt += amount;
+        self.debt += amount + fee;
         Outcome {
-            applied: Applied::Borrowed { amount },
+            applied: Applied::Borrowed { amount, fee },
             lines: vec![format!(
-                "the bits machine pays out for once. {amount} bits, and it will remember."
+                "the bits machine pays out for once. {amount} bits, and {fee} more on the debt. you owe it {}.",
+                self.debt
             )],
         }
     }
@@ -712,8 +741,9 @@ impl Sheet {
     /// the locker, a level-1 signal. What stays is what was earned or owed:
     /// the marks and their title, the peak (the tailor's rack), the kills,
     /// the look, today's rations, and the debt. Not with the signal down
-    /// (a reset is not a way back on the wire before the roll) and not
-    /// with a glyph waiting.
+    /// (a reset is not a way back on the wire before the roll), not with a
+    /// glyph waiting, and not for a runner the fall would take nothing
+    /// from: a step off is news, and the wire is not a key to hold down.
     fn reset(&mut self) -> Outcome {
         if self.is_down() {
             return Outcome {
@@ -726,6 +756,14 @@ impl Sheet {
         }
         if self.fight.is_some() {
             return fight_waiting("not with a glyph waiting on you. finish it first.");
+        }
+        if !self.has_something_to_lose() {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NothingToLose),
+                lines: vec![
+                    "you have nothing the fall could take. the ledge is only a view.".to_string(),
+                ],
+            };
         }
         self.level = 1;
         self.exp = 0;
@@ -1103,9 +1141,11 @@ fn refused(refusal: Refusal) -> Outcome {
         | Refusal::NothingToPatch
         | Refusal::FightWaiting
         | Refusal::NothingOnHand
+        | Refusal::DepositAllCut
         | Refusal::LockerEmpty
         | Refusal::LoanCapped
-        | Refusal::NoDebt => {
+        | Refusal::NoDebt
+        | Refusal::NothingToLose => {
             unreachable!("till refusals are lined where they are refused")
         }
     };

@@ -924,33 +924,58 @@ fn the_locker_takes_its_cut_going_in_and_keeps_the_rest_from_the_street() {
         sheet.apply(Command::Withdraw, &mut rng).applied,
         Applied::Refused(Refusal::LockerEmpty)
     );
+
+    // A single bit is all cut: the locker refuses it instead of keeping it
+    // for nothing.
+    let mut poor = fresh();
+    poor.bits = 1;
+    let before = poor.clone();
+    assert_eq!(
+        poor.apply(Command::Deposit, &mut rng).applied,
+        Applied::Refused(Refusal::DepositAllCut)
+    );
+    assert_eq!(poor, before);
 }
 
 #[test]
-fn the_bits_machine_lends_to_the_cap_grows_the_debt_and_takes_its_share() {
+fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() {
     let mut sheet = fresh();
-    sheet.level = 2;
     sheet.bits = 0;
     let mut rng = StdRng::seed_from_u64(1);
 
     let loan = sheet.apply(Command::Borrow, &mut rng);
 
-    assert_eq!(loan.applied, Applied::Borrowed { amount: 100 });
-    assert_eq!((sheet.bits, sheet.debt), (100, 100));
+    // A tenth of the loan on top, charged when it lends.
+    assert_eq!(
+        loan.applied,
+        Applied::Borrowed {
+            amount: 50,
+            fee: 5
+        }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (50, 55));
     assert_eq!(
         sheet.apply(Command::Borrow, &mut rng).applied,
         Applied::Refused(Refusal::LoanCapped)
     );
 
-    // The roll grows it by a tenth, rounded up, once per roll however
-    // long the runner stayed away; a second touch the same day adds nothing.
+    // A level up opens the cap by what the debt has not taken of it, the
+    // fee included, and the fee on the new loan rounds up.
+    sheet.level = 2;
+    let more = sheet.apply(Command::Borrow, &mut rng);
+    assert_eq!(
+        more.applied,
+        Applied::Borrowed {
+            amount: 45,
+            fee: 5
+        }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (95, 105));
+
+    // The debt never grows by itself: a roll adds nothing, however many.
     sheet.settle(day(25));
-    assert_eq!(sheet.debt, 110);
-    sheet.settle(day(25));
-    assert_eq!(sheet.debt, 110);
-    sheet.debt = 101;
     sheet.settle(day(30));
-    assert_eq!(sheet.debt, 112);
+    assert_eq!(sheet.debt, 105);
 
     // A kill pays half its bits to the machine first.
     sheet.bits = 0;
@@ -967,14 +992,14 @@ fn the_bits_machine_lends_to_the_cap_grows_the_debt_and_takes_its_share() {
         ),
         "{won:?}"
     );
-    assert_eq!((sheet.bits, sheet.debt), (30, 82));
+    assert_eq!((sheet.bits, sheet.debt), (30, 75));
 
     // Repaying takes what the hand holds, up to the debt.
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
         Applied::Repaid { amount: 30 }
     );
-    assert_eq!((sheet.bits, sheet.debt), (0, 52));
+    assert_eq!((sheet.bits, sheet.debt), (0, 45));
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
         Applied::Refused(Refusal::NothingOnHand)
@@ -982,9 +1007,9 @@ fn the_bits_machine_lends_to_the_cap_grows_the_debt_and_takes_its_share() {
     sheet.bits = 500;
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
-        Applied::Repaid { amount: 52 }
+        Applied::Repaid { amount: 45 }
     );
-    assert_eq!((sheet.bits, sheet.debt), (448, 0));
+    assert_eq!((sheet.bits, sheet.debt), (455, 0));
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
         Applied::Refused(Refusal::NoDebt)
@@ -996,7 +1021,7 @@ fn the_bits_machine_lends_to_the_cap_grows_the_debt_and_takes_its_share() {
         fight_out(&mut sheet, &mut rng),
         Applied::Won { garnished: 0, .. }
     ));
-    assert_eq!(sheet.bits, 508);
+    assert_eq!(sheet.bits, 515);
 }
 
 /// Whole state: a step off the ledge wipes the climb, the purse, and the
@@ -1042,6 +1067,14 @@ fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
         outcome.lines
     );
     assert_eq!(sheet.news(&outcome.applied), vec![News::SteppedOff]);
+
+    // A runner with nothing to lose has no fall to take: the second step
+    // changes nothing and the wire hears nothing.
+    let before = sheet.clone();
+    let again = sheet.apply(Command::Reset, &mut rng);
+    assert_eq!(again.applied, Applied::Refused(Refusal::NothingToLose));
+    assert_eq!(sheet, before);
+    assert_eq!(sheet.news(&again.applied), Vec::new());
 
     // Not as a way back on the wire before the roll.
     let mut down = fresh();

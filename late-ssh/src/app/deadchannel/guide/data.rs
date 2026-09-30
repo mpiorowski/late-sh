@@ -324,7 +324,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "a dropped signal never reaches the locker. it keeps *a tenth* of every deposit, rounded up. taking it out is free.",
+                "a dropped signal never reaches the locker. it keeps *a tenth* of every deposit, rounded up, so a single bit is not worth the walk. taking it out is free.",
             ),
             Block::Rule(
                 "not with a glyph waiting on you. an Old Signal mark empties it, and so does the ledge.",
@@ -349,7 +349,7 @@ pub const SECTIONS: &[Section] = &[
                 "it lends *fifty bits a level*, less what you already owe. enough at level 2 for a first weapon and a first coat.",
             ),
             Block::Rule(
-                "the debt grows *a tenth* at every roll, rounded up, and *half* of every glyph's bits goes to it until you are square.",
+                "it adds *a tenth* of every loan to the debt, rounded up, once. the debt never grows after that, and *half* of every glyph's bits goes to it until you are square.",
             ),
             Block::Rule("a drop does not clear it. neither does a mark, or the ledge."),
         ],
@@ -372,7 +372,7 @@ pub const SECTIONS: &[Section] = &[
                 "a step off starts you over: *level 1*, bare hands, nothing on you and nothing in the locker. any other key leans you back in.",
             ),
             Block::Rule(
-                "your marks, your peak, your kills, your face, today's rations, and the debt come down with you. not while your signal is down, and the wire hears it.",
+                "your marks, your peak, your kills, your face, today's rations, and the debt come down with you. not while your signal is down, not with nothing to lose, and the wire hears it.",
             ),
         ],
     },

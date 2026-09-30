@@ -37,7 +37,7 @@ use ratatui::{
 };
 
 use crate::app::deadchannel::fight::data::{
-    DEBT_INTEREST_PERCENT, GARNISH_PERCENT, LOCKER_FEE_PERCENT, TRADE_IN_PERCENT,
+    GARNISH_PERCENT, LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, TRADE_IN_PERCENT,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
@@ -1891,20 +1891,22 @@ fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             text,
         ))),
         false => {
-            match sheet.bits {
-                0 => lines.push(Line::from(Span::styled(
+            let fee = sheet.deposit_fee();
+            match (sheet.bits, sheet.bits - fee) {
+                (0, _) => lines.push(Line::from(Span::styled(
                     "you have nothing on you to lock up.",
                     muted_text,
                 ))),
-                bits => {
-                    let fee = sheet.deposit_fee();
-                    lines.push(Line::from(vec![
-                        Span::styled("[d] ", key),
-                        Span::styled("lock up ", text),
-                        Span::styled(format!("{} bits", bits - fee), number),
-                        Span::styled(format!(", the locker keeps {fee}"), text),
-                    ]));
-                }
+                (_, 0) => lines.push(Line::from(Span::styled(
+                    "the locker's cut would take all of it. bring more.",
+                    muted_text,
+                ))),
+                (_, stored) => lines.push(Line::from(vec![
+                    Span::styled("[d] ", key),
+                    Span::styled("lock up ", text),
+                    Span::styled(format!("{stored} bits"), number),
+                    Span::styled(format!(", the locker keeps {fee}"), text),
+                ])),
             }
             match sheet.stash {
                 0 => lines.push(Line::from(Span::styled(
@@ -1984,6 +1986,10 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     Span::styled("[b] ", key),
                     Span::styled("borrow ", text),
                     Span::styled(format!("{room} bits"), number),
+                    Span::styled(
+                        format!(", {} more on the debt", sheet.loan_fee()),
+                        text,
+                    ),
                 ])),
             }
             match (sheet.debt, sheet.bits) {
@@ -2003,7 +2009,7 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!(
-            "{DEBT_INTEREST_PERCENT}% on the debt at every roll. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
+            "{LOAN_FEE_PERCENT}% on top of every loan, once. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
         ),
         dim_text,
     )));

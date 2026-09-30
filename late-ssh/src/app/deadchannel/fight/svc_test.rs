@@ -138,6 +138,45 @@ async fn a_purchase_at_the_armorer_lands_on_the_row() {
 }
 
 #[tokio::test]
+async fn a_loan_and_a_deposit_land_on_the_row() {
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-money").await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    // A fresh runner's 50 bits, the level-1 loan of 50 (5 more on the
+    // debt), then all 100 into the locker less its 10.
+    svc.act_task(user_id, "mira".to_string(), Command::Borrow, tx.clone());
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a loan answers with the sheet");
+    };
+    assert_eq!(
+        outcome.applied,
+        Applied::Borrowed {
+            amount: 50,
+            fee: 5
+        }
+    );
+    svc.act_task(user_id, "mira".to_string(), Command::Deposit, tx);
+    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+        panic!("a deposit answers with the sheet");
+    };
+    assert_eq!(
+        outcome.applied,
+        Applied::Deposited {
+            stored: 90,
+            fee: 10
+        }
+    );
+    assert_eq!((sheet.bits, sheet.stash, sheet.debt), (0, 90, 55));
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!((row.bits, row.stash, row.debt), (0, 90, 55));
+}
+
+#[tokio::test]
 async fn a_runner_who_left_has_no_sheet_to_act_on() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-left").await;
     let client = test_db.db.get().await.expect("db client");

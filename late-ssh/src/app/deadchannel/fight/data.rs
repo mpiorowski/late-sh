@@ -389,19 +389,22 @@ pub fn lower_foe_for_level(level: i32) -> Option<(usize, &'static FoeKind, FoeTi
 /// interest; the locker pays none and takes this. Withdrawals are free.
 pub const LOCKER_FEE_PERCENT: i64 = 10;
 
-/// What the bits machine lends a runner, per level: the cap on the debt
-/// a loan can reach. A level-2 runner can borrow the two tier-1 pieces.
+/// What the bits machine lends a runner, per level: the cap a loan fills
+/// the debt up to. A level-2 runner can borrow the two tier-1 pieces.
 pub const LOAN_PER_LEVEL: i64 = 50;
 
-/// What the debt grows by at every day roll, a percentage, rounded up.
-pub const DEBT_INTEREST_PERCENT: i64 = 10;
+/// The machine's fee on every loan, a percentage of what it hands over,
+/// rounded up, added to the debt once when it lends. The debt never grows
+/// after that: a day roll is any touch on the row (a connect is one), so a
+/// daily rate would bill a runner for days they never fought.
+pub const LOAN_FEE_PERCENT: i64 = 10;
 
 /// The share of every glyph's bits the machine takes toward the debt
 /// before the rest reaches your hand, a percentage, rounded down.
 pub const GARNISH_PERCENT: i64 = 50;
 
 /// `amount` times `percent` over a hundred, rounded up: the locker's cut
-/// and the machine's interest never round away to nothing.
+/// and the machine's fee never round away to nothing.
 pub fn percent_up(amount: i64, percent: i64) -> i64 {
     (amount * percent + 99) / 100
 }

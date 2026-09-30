@@ -635,7 +635,7 @@ to allocate, and nothing on it another player cannot see.
 | charge | moves left today | band skill / 3 + 1 per UTC day | specialty uses |
 | bits | money on hand | start with 50 | `START_GOLD` |
 | stash | money in the city's locker | untouched by death; a tenth kept on the way in, no interest; a mark or the ledge empties it | `bank.php` |
-| debt | owed to the bits machine | up to 50 a level; +10% at every roll; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
+| debt | owed to the bits machine | up to 50 a level; +10% of each loan, once; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
 | band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
 | band skill | move unlocks | +1 per level gained | specialty points |
 | marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
@@ -1241,7 +1241,7 @@ road pass": the exchange loop above is the placeholder it replaces.
 ## The money pass: the step down, the locker, the machine, the ledge
 
 Status: **built, staff only like the rest** (`fight/` and `city/`,
-`CONTEXT.md` §3c beside this file). The question was a real one: a
+`fight/MONEY.md`). The question was a real one: a
 runner walked past the armorer, levelled on exp into the hiss with bare
 hands, dropped, and stood at level 2 with no bits and a fight they win
 three times in a hundred. LoGD never locks there, because promotion is a
@@ -1250,7 +1250,7 @@ Auto-levelling took the first away, so the rest had to exist, and each
 is harder than LoGD's on purpose: this game should cost more than the
 one it borrowed from.
 
-- **The picker before every step in.** `f` no longer starts a fight: it
+- **The picker before every step in.** `f` does not start a fight: it
   shows the sheet and what waits, each glyph with its numbers, pay, and
   a threat word (easy, even, risky, grim) that is the fight simulated to
   the end from where you stand. LoGD's master told you after the fact
@@ -1259,22 +1259,25 @@ one it borrowed from.
 - **The step down (`g`).** The glyph a level below, at half its pay
   (LoGD's slumming pays in full). A way out of a fight you cannot win,
   never a better farm than the fair one.
-- **The lockers.** The stash, finally: a drop never reaches it, a tenth
-  of every deposit is the locker's (LoGD's bank is free and pays
-  interest), out is free, all or nothing. It is only worth anything
+- **The lockers.** The stash: a drop never reaches it, a tenth of every
+  deposit is the locker's (LoGD's bank is free and pays interest), out is
+  free, all or nothing. It is only worth anything
   because it is a walk away: bits earned in a fight are on you until
   you carry them there, which keeps "one more fight or bank it" a real
   question.
-- **The bits machine.** The street's joke ("it has never once paid out")
-  pays out: fifty bits a level, a tenth added at every roll, half of
-  every kill's bits taken until it is square, and nothing clears it but
-  paying. The garnish is what keeps a debt from spiralling: playing pays
-  it down.
+- **The bits machine.** The machine that hums on the street lends: fifty
+  bits a level, a tenth of the loan added to the debt once when it pays
+  out, half of every kill's bits taken until it is square, and nothing
+  clears it but paying. No daily rate: a day roll is any touch on the
+  row, a connect included, so interest at the roll would bill a runner
+  for days they never fought and compound past anything the garnish
+  could pay. The debt only goes down, and playing pays it.
 - **The ledge.** Two presses of `r` over the drop start the runner over:
   level 1, bare hands, empty pockets and locker. The marks, the peak, the
   kills, the face, and the debt come down too, no starting bits, and not
   with the signal down, so it is never loan forgiveness, a bit farm, or a
-  way back on the wire before the roll. The wire hears it.
+  way back on the wire before the roll. The wire hears it, so a runner
+  with nothing to lose is refused: the fall is not a free line to post.
 - **The operators stay unbuilt.** The step down and the machine answer
   the lock from below, for a fraction of fourteen named characters, and
   the road pass may replace the exchange loop they would gate. If the

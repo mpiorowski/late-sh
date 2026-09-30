@@ -5,10 +5,10 @@
 -- every deposit pays the locker's cut on the way in, a withdrawal is free,
 -- and an Old Signal mark or a step off the ledge empties it.
 --
--- `debt` is what the bits machine is owed: a loan up to the level's cap,
--- grown by the machine's cut at every day roll, garnished off every glyph's
--- pay until it is gone. Nothing clears it but paying it: not a drop, not a
--- mark, not the ledge.
+-- `debt` is what the bits machine is owed: a loan up to the level's cap
+-- plus the machine's fee, charged once when it lends, garnished off every
+-- glyph's pay until it is gone. Nothing clears it but paying it: not a
+-- drop, not a mark, not the ledge.
 --
 -- Both are whole bits and never negative; the fight loop writes them with
 -- the rest of the sheet under the row lock. The change trigger (migration
