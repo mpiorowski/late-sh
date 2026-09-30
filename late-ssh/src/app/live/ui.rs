@@ -49,7 +49,7 @@ const MIN_FULL_WIDTH: u16 = 56;
 const MESSAGE_ROWS_UNDER_FULL: u16 = 12;
 const MIN_COMPACT_HEIGHT: u16 = LIVE_STRIP_COMPACT_HEIGHT + 4;
 /// Columns between the picture and the words.
-const GAP: u16 = 2;
+pub(crate) const GAP: u16 = 2;
 
 /// Which form the card fitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

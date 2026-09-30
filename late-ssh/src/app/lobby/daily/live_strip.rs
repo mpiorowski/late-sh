@@ -15,8 +15,8 @@ use crate::app::live::ui::{PICTURE_COLS, PICTURE_ROWS, StripBody, truncate_chars
 
 use super::{
     backgammon, battleship, checkers, connect4,
-    gin::{GinMove, Pile},
-    live::{LiveBoard, LiveView, MatchStripView},
+    gin::{GinMove, HandEnd, Pile},
+    live::{LiveBoard, LiveGinEvent, LiveView, MatchStripView},
     live_board::{board_lines, live_compact_line, player_marks, top_seat},
     reversi,
     svc::DailyMatchItem,
@@ -316,7 +316,7 @@ fn last_event_text(view: &LiveView<'_>) -> String {
         ),
         LiveBoard::GinRummy {
             seat0_id,
-            last: Some((seat, played)),
+            last: LiveGinEvent::Move { seat, played },
             ..
         } => {
             let what = match played {
@@ -327,9 +327,31 @@ fn last_event_text(view: &LiveView<'_>) -> String {
             };
             format!("{} {what}", name(seat_name(view.item, *seat0_id, *seat)))
         }
+        LiveBoard::GinRummy {
+            seat0_id,
+            last: LiveGinEvent::HandOver { end, scored },
+            ..
+        } => {
+            let scorer = |seat: usize| name(seat_name(view.item, *seat0_id, seat));
+            match (end, scored) {
+                (HandEnd::Gin, Some((seat, points))) => {
+                    format!("{} went gin · +{points}", scorer(*seat))
+                }
+                (HandEnd::Knock, Some((seat, points))) => {
+                    format!("{} knocked · +{points}", scorer(*seat))
+                }
+                (HandEnd::Undercut, Some((seat, points))) => {
+                    format!("{} undercut · +{points}", scorer(*seat))
+                }
+                (HandEnd::Dead, _) | (_, None) => "dead hand, no score".to_string(),
+            }
+        }
         LiveBoard::Battleship { last: None, .. }
         | LiveBoard::Briscola { last: None, .. }
-        | LiveBoard::GinRummy { last: None, .. }
+        | LiveBoard::GinRummy {
+            last: LiveGinEvent::Dealt,
+            ..
+        }
         | LiveBoard::Backgammon { .. }
         | LiveBoard::Cribbage { .. } => {
             if view.item.move_count == 0 {

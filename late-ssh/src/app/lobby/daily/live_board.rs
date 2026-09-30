@@ -825,7 +825,7 @@ const CARD_BLACK: Color = Color::Rgb(25, 25, 30);
 const CARD_BACK: Color = Color::Rgb(44, 70, 130);
 const CARD_WEAVE: Color = Color::Rgb(100, 130, 190);
 /// The edge of the card that took the trick.
-const CARD_WON: Color = Color::Rgb(230, 170, 40);
+pub(crate) const CARD_WON: Color = Color::Rgb(230, 170, 40);
 
 /// Three rows of spans, one card (or a gap) wide.
 type Block = [Vec<Span<'static>>; 3];

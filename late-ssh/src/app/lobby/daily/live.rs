@@ -30,7 +30,7 @@ use super::{
     connect4::{self, DailyConnect4State},
     cribbage::DailyCribbageState,
     games::DailyGame,
-    gin::{DailyGinState, GinMove},
+    gin::{DailyGinState, GinMove, HandEnd},
     pool::{DailyPoolState, PoolAimShare},
     reversi::{self, DailyReversiState},
     std_deck,
@@ -205,8 +205,7 @@ pub enum LiveBoard {
         /// The face-up top of the discard pile, and whether cards lie under it.
         discard: Option<(std_deck::Card, bool)>,
         stock: usize,
-        /// The last move and its seat. A stock draw never names its card.
-        last: Option<(usize, GinMove)>,
+        last: LiveGinEvent,
     },
     Pool {
         rules: PoolRules,
@@ -244,6 +243,22 @@ pub enum LiveTrick {
         answer: briscola::Card,
         /// Whether the lead took it.
         lead_won: bool,
+    },
+}
+
+/// What just happened at a gin table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveGinEvent {
+    /// The first deal, nobody has drawn.
+    Dealt,
+    /// The last move and its seat. A stock draw never names its card.
+    Move { seat: usize, played: GinMove },
+    /// A fresh deal after a hand ended: the service deals the next hand in
+    /// the same write, so the move that ended it is never on a live table.
+    /// How it ended, and who scored what (nobody on a dead hand).
+    HandOver {
+        end: HandEnd,
+        scored: Option<(usize, u32)>,
     },
 }
 
@@ -430,6 +445,14 @@ impl MatchSummary {
                     .discards
                     .last()
                     .map(|&top| (top, table.discards.len() > 1));
+                let last = match (table.last, table.results.last()) {
+                    (Some((seat, played)), _) => LiveGinEvent::Move { seat, played },
+                    (None, Some(result)) => LiveGinEvent::HandOver {
+                        end: result.end,
+                        scored: result.scored,
+                    },
+                    (None, None) => LiveGinEvent::Dealt,
+                };
                 Ok(Self {
                     white_id: None,
                     black_id: None,
@@ -441,7 +464,7 @@ impl MatchSummary {
                         held: [table.hands[0].len(), table.hands[1].len()],
                         discard,
                         stock: table.stock_remaining(),
-                        last: table.last,
+                        last,
                     },
                 })
             }

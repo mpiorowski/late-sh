@@ -1,13 +1,21 @@
 use chrono::Utc;
+use cozy_chess::Board;
+use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::*;
-use crate::app::games::pool_core::{cue::ShotMode, rules::PoolRules};
+use crate::app::games::{
+    chess_core::rules::random_chess960_board,
+    pool_core::{cue::ShotMode, rules::PoolRules},
+};
+use crate::app::live::ui::{PICTURE_COLS, PICTURE_ROWS};
 use crate::app::lobby::daily::{
+    cribbage::DailyCribbageState,
     games::DailyGame,
+    gin::DailyGinState,
     live::MatchSummary,
     pool::{DailyPoolState, default_table},
-    svc::DailyMatchItem,
+    svc::{DailyChessState, DailyMatchItem},
 };
 
 const WIDTH: u16 = 21;
@@ -158,6 +166,79 @@ fn picture(item: &DailyMatchItem) -> Vec<Line<'static>> {
         },
         BACKGROUND,
     )
+}
+
+/// A roster game's state as its claim builds it. Exhaustive, so a new game
+/// has to be drawn here before the fit test below compiles.
+fn opening_state(game: DailyGame) -> serde_json::Value {
+    let (eggy, weslin) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let mut rng = StdRng::seed_from_u64(7);
+    match game {
+        DailyGame::Chess => {
+            serde_json::to_value(DailyChessState::new(eggy, weslin, &Board::default()))
+        }
+        DailyGame::Chess960 => {
+            serde_json::to_value(DailyChessState::new(eggy, weslin, &random_chess960_board()))
+        }
+        DailyGame::Battleship => {
+            serde_json::to_value(battleship::DailyBattleshipState::new(eggy, weslin))
+        }
+        DailyGame::ConnectFour => {
+            serde_json::to_value(connect4::DailyConnect4State::new(eggy, weslin))
+        }
+        DailyGame::Reversi => serde_json::to_value(reversi::DailyReversiState::new(eggy, weslin)),
+        DailyGame::Checkers => {
+            serde_json::to_value(checkers::DailyCheckersState::new(eggy, weslin))
+        }
+        DailyGame::Backgammon => {
+            serde_json::to_value(backgammon::DailyBackgammonState::new(eggy, weslin))
+        }
+        DailyGame::Briscola => {
+            serde_json::to_value(briscola::DailyBriscolaState::new(eggy, weslin))
+        }
+        DailyGame::Cribbage => {
+            serde_json::to_value(DailyCribbageState::new(eggy, weslin, &mut rng))
+        }
+        DailyGame::GinRummy => serde_json::to_value(DailyGinState::new(eggy, weslin, &mut rng)),
+        DailyGame::EightBall => {
+            serde_json::to_value(DailyPoolState::new(PoolRules::EightBall, eggy, weslin))
+        }
+        DailyGame::NineBall => {
+            serde_json::to_value(DailyPoolState::new(PoolRules::NineBall, eggy, weslin))
+        }
+        DailyGame::Snooker => {
+            serde_json::to_value(DailyPoolState::new(PoolRules::Snooker, eggy, weslin))
+        }
+    }
+    .unwrap()
+}
+
+#[test]
+fn every_games_picture_fits_the_strips_column() {
+    for game in DailyGame::ALL {
+        let item = item_of(game, opening_state(game));
+        let lines = board_lines(
+            PICTURE_COLS,
+            &LiveView {
+                item: &item,
+                board: &item.board,
+                aim: None,
+            },
+            BACKGROUND,
+        );
+        assert!(
+            lines.len() <= PICTURE_ROWS as usize,
+            "{game:?} is {} rows tall",
+            lines.len()
+        );
+        for line in &lines {
+            assert!(
+                line.width() <= usize::from(PICTURE_COLS),
+                "{game:?} runs past its column: {:?}",
+                line_text(line)
+            );
+        }
+    }
 }
 
 #[test]
