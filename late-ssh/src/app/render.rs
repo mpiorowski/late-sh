@@ -311,6 +311,7 @@ struct DrawContext<'a> {
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
+    pet_state: &'a crate::app::pet::state::PetState,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
@@ -400,10 +401,7 @@ struct DrawContext<'a> {
     zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
     zen_track: String,
     zen_date: String,
-    /// The pet's box inputs, `None` without a Pet Companion. Taken by
-    /// whichever surface draws the pet this frame: the Zen tile or the
-    /// sidebar panel, never both, since Zen has no sidebar.
-    pet_view: Option<crate::app::pet::ui::PetView<'a>>,
+    zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
 }
@@ -1140,7 +1138,7 @@ impl App {
                 self.pet_state.petted_on(care_day),
             ),
         };
-        let pet_view = self
+        let zen_pet_strip = self
             .shop_state
             .entitlements()
             .has_pet_companion()
@@ -1397,6 +1395,7 @@ impl App {
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
+                        pet_state: &self.pet_state,
                         leaderboard_page: &self.leaderboard_page,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
@@ -1477,7 +1476,7 @@ impl App {
                         zen_chat_tiles,
                         zen_track,
                         zen_date,
-                        pet_view,
+                        zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
                     },
@@ -1980,7 +1979,7 @@ impl App {
                     aquarium: ctx.aquarium_state,
                     aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
                     aquarium_care: ctx.aquarium_care,
-                    pet_strip: ctx.pet_view.take(),
+                    pet_strip: ctx.zen_pet_strip.take(),
                     chats: std::mem::take(&mut ctx.zen_chat_tiles),
                     track: ctx.zen_track.clone(),
                     station: crate::app::zen::ui::station_text(
@@ -2056,7 +2055,11 @@ impl App {
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
-                    pet: ctx.pet_view.take(),
+                    pet: ctx
+                        .shop_state
+                        .entitlements()
+                        .has_pet_companion()
+                        .then_some(ctx.pet_state),
                     tank: ctx.shop_state.entitlements().has_aquarium().then_some(
                         crate::app::common::sidebar::SidebarTank {
                             aquarium: ctx.aquarium_state,

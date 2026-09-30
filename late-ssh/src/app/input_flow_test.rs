@@ -3813,6 +3813,73 @@ async fn zen_petting_the_pet_leaves_the_focus_on_the_chat() {
 }
 
 #[tokio::test]
+async fn sidebar_pet_panel_is_view_only() {
+    use crate::app::hub::shop::{
+        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
+    };
+    use crate::app::profile::state::profile_params_from_profile;
+    use late_core::models::marketplace::PET_COMPANION_SKU;
+    use late_core::models::pet::PetMood;
+    use late_core::models::profile::Profile;
+    use late_core::models::user::{RightSidebarComponent, RightSidebarComponentSetting};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "rail-pet-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    // The pet panel alone on the rail, so every cell under the clock block
+    // is either the pet's or empty.
+    let profile = Profile::load(&client, viewer.id)
+        .await
+        .expect("load profile");
+    let mut params = profile_params_from_profile(&profile);
+    params.right_sidebar_components = RightSidebarComponent::ALL
+        .into_iter()
+        .map(|component| RightSidebarComponentSetting {
+            component,
+            enabled: component == RightSidebarComponent::Pet,
+        })
+        .collect();
+    Profile::update(&client, viewer.id, params)
+        .await
+        .expect("save the rail");
+
+    let (cols, rows) = (160u16, 40u16);
+    let mut app = make_app(test_db.db.clone(), viewer.id, "rail-pet-flow-it");
+    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
+        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
+        ..Default::default()
+    });
+    app.resize(cols, rows).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "── pet").await;
+
+    // Click every cell of the rail under the top border: wherever the pet
+    // stands in its box, one of these lands on it.
+    let rail_width = crate::app::render::RIGHT_SIDEBAR_WIDTH;
+    for y in 1..rows - 1 {
+        for x in cols - 1 - rail_width..cols - 1 {
+            let click = format!("\x1b[<0;{};{}M", x + 1, y + 1);
+            app.handle_input(click.as_bytes());
+        }
+    }
+    render_plain(&mut app);
+    assert_eq!(
+        app.pet_state.mood(),
+        PetMood::Idle,
+        "a click on the sidebar pet is not a pet: Zen is where it is petted"
+    );
+    assert!(
+        !app.pet_state.petted_on(chrono::Utc::now().date_naive()),
+        "the sidebar pet never claims the daily chips"
+    );
+}
+
+#[tokio::test]
 async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
     use crate::app::zen::state::TileKind;
 

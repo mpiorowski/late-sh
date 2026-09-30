@@ -18,6 +18,7 @@ use crate::app::audio::{
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::chat::state::ActiveFriend;
 use crate::app::hub::aquarium::{state::AquariumState, ui as aquarium_ui};
+use crate::app::pet::state::PetState;
 use crate::app::pet::ui::{Neighbours, PetView, WatchSide, draw_pet_box};
 use late_core::models::user::{
     AudioSource, IcecastStream, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
@@ -69,9 +70,9 @@ pub(crate) struct SidebarProps<'a> {
     /// What the music stage's equalizer draws (`viz::eq_state`).
     pub eq_state: EqState,
     pub bonsai: &'a BonsaiState,
-    /// The pet panel's box; `None` without a Pet Companion, which hides
+    /// The pet panel's pet; `None` without a Pet Companion, which hides
     /// the panel.
-    pub pet: Option<PetView<'a>>,
+    pub pet: Option<&'a PetState>,
     /// The tank panel's reef; `None` without the aquarium, which hides
     /// the panel.
     pub tank: Option<SidebarTank<'a>>,
@@ -282,10 +283,18 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                 );
             }
             RightSidebarComponent::Pet => {
-                let Some(view) = &props.pet else {
+                let Some(state) = props.pet else {
                     unreachable!("an unowned pet panel is never visible");
                 };
-                draw_pet_box(frame, body, view, pet_neighbours(&visible, idx));
+                // View only, like the tank: no click target and no frame
+                // for the tick, so the pet is petted and walks after the
+                // cursor on the Zen page alone.
+                let view = PetView {
+                    state,
+                    pet_rect_slot: None,
+                    frame_slot: None,
+                };
+                draw_pet_box(frame, body, &view, pet_neighbours(&visible, idx));
             }
             RightSidebarComponent::Tank => {
                 let Some(tank) = &props.tank else {

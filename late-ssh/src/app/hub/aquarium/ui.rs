@@ -160,11 +160,11 @@ fn render_surface_wave(buf: &mut Buffer, area: Rect, tick: u64) {
         return;
     }
 
-    let shift = (tick / 2) as u16;
+    let shift = tick / 2;
     let style = Style::new().fg(theme::BORDER_ACTIVE());
     let buffer = &mut *buf;
     for x in 0..area.width {
-        let phase = (x + shift) % 8;
+        let phase = (u64::from(x) + shift) % 8;
         let symbol = match phase {
             0..=2 => "~",
             4..=5 => "-",

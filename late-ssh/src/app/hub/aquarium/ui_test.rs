@@ -66,3 +66,11 @@ fn mini_tank_draws_at_most_two_of_a_kind() {
         .sum();
     assert_eq!(glyphs, 2);
 }
+
+#[test]
+fn mini_tank_surface_keeps_rolling_past_the_u16_wall_tick() {
+    // The wave shifts by half the wall tick: 65_535 here, about 2h24m into
+    // a session, where a u16 sum with the column would overflow.
+    let app = tank_with(&[]);
+    assert_eq!(mini_rows(&app, false, 131_070)[0], "^~~~^--^^~~~^--^^~~~^");
+}
