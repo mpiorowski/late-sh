@@ -89,7 +89,7 @@ Run each tick after the chat, daily and audio ticks (`app/tick.rs`): `pick_queue
 
 ## 6. The frame (`ui.rs`)
 
-The picture sits in a `PICTURE_COLS` column, centred in `PICTURE_ROWS`, with the words to its right, then the rule under them. Two fixed forms picked by the card's size and never by what is shown: the 9-row strip on a card at least 56 wide with 12 rows left for messages (so the chat keeps the larger share), else one row (`── live 8ball eggy v weslin`, `── live booth mat · Naima`, `── live news mat · Some Title`), else nothing. The rule's label glows when the source says so (§0).
+The picture sits in a `PICTURE_COLS` column, centred in `PICTURE_ROWS`, with the words to its right, then the rule under them. The frame cuts every picture row to its column (`frame_lines`), so nothing a source draws can run into the words. Two fixed forms picked by the card's size and never by what is shown: the 9-row strip on a card at least 56 wide with 12 rows left for messages (so the chat keeps the larger share), else one row (`── live 8ball eggy v weslin`, `── live booth mat · Naima`, `── live news mat · Some Title`), else nothing. The rule's label glows when the source says so (§0).
 
 `draw_live_strip` records `LiveState::hit` when what it drew opens something; `App::render` clears it before every draw.
 
@@ -112,6 +112,6 @@ The pick reads only stamps that live in the database, so it is as shared as the 
 
 - `pick_test.rs`: the lanes handing over at each minimum with a link going first and the strip coming down at the max; a burst of links with one dropped past `LIVE_MAX_WAIT`; a session keeping its minimum when a match moves again, and not when its source is gone; the aim drawn over a move and an empty strip but not a link, and not past its window.
 - `state_test.rs`: a track holding its two minutes, a move, the match's result joining in its place, a link going up at the next handover and the strip coming down, asserted as the whole of what the strip shows and opens at each step; the height held under a selection.
-- `ui_test.rs`: the form picked by the card's size.
+- `ui_test.rs`: the form picked by the card's size; a picture wider than its column cut clear of the words.
 - Bodies are tested with their source: `../lobby/daily/live_strip_test.rs`, `../audio/booth/live_test.rs`, `../chat/news/live_test.rs`; results in `../lobby/daily/state_test.rs` (offered on a replica that wrote nothing, outliving their row once both players saw them).
 - End to end in `../dashboard_flow_test.rs`: `o` opening a match, closing back to the card, `o` on a booth track tuning in then opening the booth, `o` on a track that left the booth changing nothing, `o` on a shared article opening the article modal, and `r` on one sending a reply that quotes its title.

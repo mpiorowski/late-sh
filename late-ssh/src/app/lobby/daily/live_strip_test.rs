@@ -146,3 +146,50 @@ fn the_compact_line_names_the_game_and_the_players() {
     ));
     assert!(done.ends_with("a draw"), "{done}");
 }
+
+#[test]
+fn backgammon_words_mark_each_players_colour_and_never_touch_the_board() {
+    let (eggy, weslin) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let mut state = super::super::backgammon::DailyBackgammonState::new(eggy, weslin);
+    state.white = weslin;
+    state.red = eggy;
+    let summary = MatchSummary::of(
+        DailyGame::Backgammon,
+        &serde_json::to_value(&state).unwrap(),
+    )
+    .unwrap();
+    let item = DailyMatchItem {
+        game: DailyGame::Backgammon,
+        turn_user_id: Some(weslin),
+        board: summary.board,
+        ..pool_item()
+    };
+
+    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let text: Vec<String> = lines.iter().map(line_text).collect();
+
+    // The words start past the picture column and its gap, on every row.
+    let words_at = usize::from(crate::app::live::ui::PICTURE_COLS) + 2;
+    assert_eq!(
+        &text[1].chars().skip(words_at).collect::<String>(),
+        "● eggy · ● weslin"
+    );
+    assert_eq!(
+        &text[2].chars().skip(words_at).collect::<String>(),
+        "Backgammon · pips 167-167"
+    );
+    let marks: Vec<_> = lines[1]
+        .spans
+        .iter()
+        .filter(|span| span.content == "● ")
+        .map(|span| span.style.fg)
+        .collect();
+    assert_eq!(
+        marks,
+        vec![
+            Some(crate::app::lobby::daily::live_board::BG_RED),
+            Some(crate::app::lobby::daily::live_board::BG_WHITE),
+        ],
+        "eggy plays red, weslin white"
+    );
+}

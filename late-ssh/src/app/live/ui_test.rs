@@ -30,3 +30,38 @@ fn the_card_picks_the_form_and_keeps_rows_for_the_messages() {
 
     assert!(fit_live_strip(card(80, 4)).is_none(), "no room at all");
 }
+
+#[test]
+fn a_picture_wider_than_its_column_never_touches_the_words() {
+    let picture_row = "x".repeat(usize::from(PICTURE_COLS) + 5);
+    let body = StripBody {
+        picture: (0..PICTURE_ROWS)
+            .map(|_| Line::from(picture_row.clone()))
+            .collect(),
+        words: (0..PICTURE_ROWS)
+            .map(|_| vec![Span::raw("words")])
+            .collect(),
+        glow: false,
+    };
+    let lines = frame_lines(80, body);
+    let words_at = usize::from(PICTURE_COLS + GAP);
+    for line in &lines[..PICTURE_ROWS as usize] {
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        let chars: Vec<char> = text.chars().collect();
+        assert_eq!(
+            chars[words_at..].iter().collect::<String>(),
+            "words",
+            "the words start at their column: {text:?}"
+        );
+        assert!(
+            chars[usize::from(PICTURE_COLS)..words_at]
+                .iter()
+                .all(|c| *c == ' '),
+            "the gap stays blank: {text:?}"
+        );
+    }
+}

@@ -137,3 +137,112 @@ fn the_one_row_form_names_the_game_and_the_players_or_the_shooter() {
         "eggy is aiming"
     );
 }
+
+fn item_of(game: DailyGame, state: serde_json::Value) -> DailyMatchItem {
+    let summary = MatchSummary::of(game, &state).unwrap();
+    DailyMatchItem {
+        game,
+        move_count: summary.move_count,
+        board: summary.board,
+        ..pool_item()
+    }
+}
+
+fn picture(item: &DailyMatchItem) -> Vec<Line<'static>> {
+    board_lines(
+        WIDTH,
+        &LiveView {
+            item,
+            board: &item.board,
+            aim: None,
+        },
+        BACKGROUND,
+    )
+}
+
+#[test]
+fn backgammon_paints_the_opening_position_with_the_roll_on_the_movers_side() {
+    let (eggy, weslin) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let mut state = backgammon::DailyBackgammonState::new(eggy, weslin);
+    state.white = eggy;
+    state.red = weslin;
+    state.next_roll = Some([6, 2]);
+    let item = item_of(DailyGame::Backgammon, serde_json::to_value(&state).unwrap());
+
+    let text: Vec<String> = picture(&item).iter().map(line_text).collect();
+
+    // White's seat: the 13 to 24 points across the top, 12 to 1 along the
+    // bottom. Five-stacks show their count in the innermost row, empty
+    // points taper to a half-block tip, white rolls on its side (row 4).
+    assert_eq!(
+        text,
+        vec![
+            "   ●   ●  ●    ●   ",
+            "   ●   ●  ●    ●   ",
+            "   5▀▀▀●▀ 5▀▀▀▀▀   ",
+            "                   ",
+            "    6  2           ",
+            "   5▄▄▄●▄ 5▄▄▄▄▄   ",
+            "   ●   ●  ●    ●   ",
+            "   ●   ●  ●    ●   ",
+        ]
+    );
+}
+
+#[test]
+fn battleship_charts_the_shots_and_never_a_ship() {
+    let (eggy, weslin) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let mut state = battleship::DailyBattleshipState::new(eggy, weslin);
+    let ship: Vec<usize> = state.side(1).ships[0]
+        .cells
+        .iter()
+        .map(|&cell| cell as usize)
+        .collect();
+    let water = (0..battleship::CELLS)
+        .find(|cell| {
+            !state
+                .side(1)
+                .ships
+                .iter()
+                .any(|ship| ship.cells.contains(&(*cell as u8)))
+        })
+        .unwrap();
+    // eggy (side 0, the challenger) finds the ship, then misses.
+    let at = Utc::now();
+    state.apply_shot(0, ship[0], at).unwrap();
+    state
+        .apply_shot(0, water, at + chrono::Duration::seconds(1))
+        .unwrap();
+    let item = item_of(DailyGame::Battleship, serde_json::to_value(&state).unwrap());
+
+    let lines = picture(&item);
+    // The right-hand sea is weslin's waters, charted by eggy's shots.
+    let colour = |cell: usize| -> Color {
+        let (row, col) = (cell / battleship::GRID, cell % battleship::GRID);
+        let line = &lines[1 + row / 2];
+        let mut x = 0;
+        let span = line
+            .spans
+            .iter()
+            .find(|span| {
+                let here = x;
+                x += span.width();
+                here == battleship::GRID + 1 + col && span.width() == 1
+            })
+            .expect("a cell under every column");
+        if row % 2 == 0 {
+            span.style.fg.unwrap()
+        } else {
+            span.style.bg.unwrap()
+        }
+    };
+
+    assert_eq!(colour(ship[0]), HIT);
+    assert_eq!(colour(water), LAST_SHOT, "the newest shot stands out");
+    for &unshot in &ship[1..] {
+        assert!(
+            [SEA_A, SEA_B].contains(&colour(unshot)),
+            "an unshot ship cell is only sea"
+        );
+    }
+}
