@@ -469,8 +469,9 @@ pub(crate) fn pool_click_cue(app: &mut App, across: f64, up: f64) -> bool {
     };
     // Idle or spin only: in a stroke the press is the start of the pull,
     // and while aiming the face is not what the click is about.
-    if !matches!(draft.mode, ShotMode::Idle | ShotMode::Spin) {
-        return false;
+    match draft.mode {
+        ShotMode::Idle | ShotMode::Spin => {}
+        ShotMode::Aim | ShotMode::Place | ShotMode::Stroke(_) => return false,
     }
     draft.tip = [0.0, 0.0];
     // The drawn face is magnified: its whole radius is the half-radius the

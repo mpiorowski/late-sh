@@ -2,11 +2,12 @@ use std::{cell::Cell, collections::HashMap, collections::HashSet, sync::Arc, tim
 
 use chrono::{DateTime, Utc};
 use cozy_chess::{BitBoard, Board};
-use late_core::models::daily_match::DailyMatch;
+use late_core::models::daily_match::{DailyMatch, DailyResult};
 use ratatui::layout::Rect;
 use tokio::sync::{broadcast, oneshot, watch};
 use uuid::Uuid;
 
+use crate::app::live::pick::{LIVE_AIM_WINDOW, LIVE_STAMP_HORIZON, LiveCandidate, LiveSource};
 use crate::app::{
     common::primitives::{Banner, Screen},
     games::{
@@ -30,10 +31,15 @@ use super::{
     briscola::DailyBriscolaState,
     checkers::DailyCheckersState,
     connect4::DailyConnect4State,
+    cribbage::{self, CribbageMove, DailyCribbageState},
     games::DailyGame,
+    gin::{self, DailyGinState, GinMove, Pile},
+    hand_ui::CardSlots,
+    live::{LiveView, MatchStripView, finish_headline},
     pool::{DailyPoolState, PoolAimShare},
     pool_draft::{self, PoolCueHit, PoolDetail, PoolDraft, should_share_aim},
     reversi::DailyReversiState,
+    std_deck::Card,
     svc::{
         DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyChessState,
         DailyEvent, DailyFinishOutcome, DailyFinishedItem, DailyMatchItem, DailyService,
@@ -42,16 +48,12 @@ use super::{
 };
 
 /// A challenge being composed: a small picker overlay on the Lobby modal.
-/// Step one picks the game from the roster (one row per game, prize shown);
-/// directed challenges add a username step. A vertical list scales to any
-/// roster size where an inline one-row picker would not.
+/// It picks the game from the roster (one row per game, prize shown). A
+/// vertical list scales to any roster size where an inline one-row picker
+/// would not.
 pub struct ChallengeDraft {
     /// Picker cursor into `DailyGame::ALL`.
     pub selected: usize,
-    /// Directed challenges ask for a username after the game is picked.
-    pub directed: bool,
-    /// `Some` once the game is chosen and the username prompt is active.
-    pub username: Option<String>,
 }
 
 impl ChallengeDraft {
@@ -60,12 +62,8 @@ impl ChallengeDraft {
     }
 
     /// Move the picker cursor, wrapping at both ends so up from the first
-    /// game reaches the last. Ignored while the username prompt is active,
-    /// where `j`/`k` are letters being typed.
+    /// game reaches the last.
     pub fn move_selection(&mut self, delta: isize) {
-        if self.username.is_some() {
-            return;
-        }
         let count = DailyGame::ALL.len() as isize;
         self.selected = (self.selected as isize + delta).rem_euclid(count) as usize;
     }
@@ -116,6 +114,22 @@ pub struct DailyState {
     pool_finish_hold: Option<pool_draft::PoolFinishHold>,
 
     pub board: Option<DailyBoardState>,
+
+    /// The latest aim per match another player is lining up, and when it
+    /// arrived. Presentation only, like the aim itself: pruned past
+    /// `LIVE_AIM_WINDOW` on every tick, so it holds tables in play right now.
+    live_aims: HashMap<Uuid, (PoolAimShare, Instant)>,
+    /// Matches that ended inside `LIVE_STAMP_HORIZON`, kept for the live
+    /// strip (`note_results`) after their rows leave the snapshot.
+    live_results: Vec<LiveResult>,
+}
+
+/// A match that just ended, as the #lounge strip shows it: the position it
+/// ended on and the result line. `item.updated` is the finish time, the
+/// stamp the strip queues it by.
+struct LiveResult {
+    item: DailyMatchItem,
+    headline: String,
 }
 
 /// Full-screen correspondence board (`Screen::DailyMatch`).
@@ -162,6 +176,18 @@ impl EventEffect {
     }
 }
 
+/// How a board was opened. A hop from one board to the next keeps the
+/// entry of the first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoardEntry {
+    /// From the Lobby modal, or the backtick cycle: closing reopens the
+    /// modal, so multi-match move-making stays one keypress per hop.
+    Lobby,
+    /// From the #lounge live strip: closing returns to the card, the modal
+    /// was never open.
+    LoungeStrip,
+}
+
 pub struct DailyBoardState {
     pub match_id: Uuid,
     /// You aren't a player in this match: the board is read-only. No cursor,
@@ -169,6 +195,8 @@ pub struct DailyBoardState {
     pub spectating: bool,
     /// Screen to restore when the board closes.
     pub return_screen: Screen,
+    /// How the viewer got here, which decides what closing lands on.
+    pub entry: BoardEntry,
     pub cursor: usize,
     pub selected: Option<usize>,
     pub piece_render_mode: ChessPieceRenderMode,
@@ -229,6 +257,10 @@ pub struct DailyBoardState {
     /// into a spot on the cloth. Same render-recorded contract as
     /// `target_geometry`; `None` whenever the overview is the one on screen.
     pub pool_eye_geometry: Cell<Option<Eye>>,
+    /// The card row a click can pick from in the cribbage and gin boards (a
+    /// hand, or gin's two piles), as last drawn. Same render-recorded
+    /// contract as `target_geometry`.
+    pub card_slots: Cell<Option<CardSlots>>,
 }
 
 impl DailyBoardState {
@@ -258,7 +290,33 @@ impl DailyBoardState {
 /// plus the parsed, per-game view of its state JSON.
 pub struct DailyMatchDetail {
     pub row: DailyMatch,
+    pub standing: MatchStanding,
     pub game: DailyGameDetail,
+}
+
+/// Where a loaded match stands, read once off the row's `status` and
+/// `result` columns. There is no open variant: boards open from the active
+/// list, and a claimed match never goes back to open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatchStanding {
+    Active,
+    Finished(DailyResult),
+    Cancelled,
+}
+
+impl MatchStanding {
+    fn of(row: &DailyMatch) -> Result<Self, String> {
+        match row.status.as_str() {
+            DailyMatch::STATUS_ACTIVE => Ok(Self::Active),
+            DailyMatch::STATUS_FINISHED => match DailyResult::parse(&row.result) {
+                Ok(result) => Ok(Self::Finished(result)),
+                Err(error) => Err(error.to_string()),
+            },
+            DailyMatch::STATUS_CANCELLED => Ok(Self::Cancelled),
+            DailyMatch::STATUS_OPEN => Err("this challenge has not been claimed".to_string()),
+            other => Err(format!("unknown daily match status: {other}")),
+        }
+    }
 }
 
 pub enum DailyGameDetail {
@@ -272,6 +330,8 @@ pub enum DailyGameDetail {
     Checkers(CheckersDetail),
     Backgammon(BackgammonDetail),
     Briscola(BriscolaDetail),
+    Cribbage(CribbageDetail),
+    GinRummy(GinDetail),
     /// Both pool games share one detail, one state type and one renderer; only
     /// the ruleset differs, and that rides inside `DailyPoolState`. Two
     /// variants rather than one so `kind()` can still answer honestly — the
@@ -293,6 +353,8 @@ impl DailyGameDetail {
             Self::Checkers(_) => DailyGame::Checkers,
             Self::Backgammon(_) => DailyGame::Backgammon,
             Self::Briscola(_) => DailyGame::Briscola,
+            Self::Cribbage(_) => DailyGame::Cribbage,
+            Self::GinRummy(_) => DailyGame::GinRummy,
             Self::EightBall(_) => DailyGame::EightBall,
             Self::NineBall(_) => DailyGame::NineBall,
             Self::Snooker(_) => DailyGame::Snooker,
@@ -360,6 +422,27 @@ pub struct BriscolaDetail {
     pub play_in_flight: bool,
 }
 
+pub struct CribbageDetail {
+    pub state: DailyCribbageState,
+    /// Cards picked for the crib while the discard is composed, at most two.
+    /// A third pick replaces the older; picking a marked card again once two
+    /// are marked sends them.
+    pub marked: Vec<Card>,
+    /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
+}
+
+pub struct GinDetail {
+    pub state: DailyGinState,
+    /// The card picked to throw. Picking it again throws it; `g` throws it
+    /// and knocks.
+    pub marked: Option<Card>,
+    /// A move left this session and hasn't come back via reload yet; blocks
+    /// moving again until the canonical row lands.
+    pub move_in_flight: bool,
+}
+
 impl ChessDetail {
     fn from_row(row: &DailyMatch) -> Result<Self, String> {
         let state = DailyChessState::parse(&row.state).map_err(|e| e.to_string())?;
@@ -412,8 +495,36 @@ fn carry_pool_playback(previous: Option<&mut DailyMatchDetail>, fresh: &mut Dail
     now.adopt(was);
 }
 
+/// Where the cursor goes when a reload brings back the stock draw this board
+/// sent: onto the card just drawn, wherever the melds put it. A stock draw is
+/// the one gin move the board does not apply itself, so this is the first
+/// time the card is seen. `None` for every other reload.
+fn gin_drawn_cursor(
+    previous: Option<&DailyMatchDetail>,
+    fresh: &DailyMatchDetail,
+    user_id: Uuid,
+) -> Option<usize> {
+    let DailyGameDetail::GinRummy(was) = &previous?.game else {
+        return None;
+    };
+    let DailyGameDetail::GinRummy(now) = &fresh.game else {
+        return None;
+    };
+    let seat = now.state.seat_of(user_id)?;
+    let table = now.state.table();
+    let drew = was.move_in_flight
+        && was.state.table().phase == gin::Phase::Draw(seat)
+        && table.phase == gin::Phase::Discard(seat);
+    if !drew {
+        return None;
+    }
+    let drawn = table.hands[seat].last().copied()?;
+    table.held(seat).iter().position(|card| *card == drawn)
+}
+
 impl DailyMatchDetail {
     fn from_row(row: DailyMatch) -> Result<Self, String> {
+        let standing = MatchStanding::of(&row)?;
         let game = match DailyGame::from_kind(&row.game_kind) {
             Some(DailyGame::Chess) => DailyGameDetail::Chess(ChessDetail::from_row(&row)?),
             Some(DailyGame::Chess960) => DailyGameDetail::Chess960(ChessDetail::from_row(&row)?),
@@ -444,73 +555,167 @@ impl DailyMatchDetail {
                 state: DailyBriscolaState::parse(&row.state).map_err(|e| e.to_string())?,
                 play_in_flight: false,
             }),
-            Some(game @ (DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker)) => {
-                let state = DailyPoolState::parse(&row.state).map_err(|e| e.to_string())?;
-                let detail = PoolDetail::new(state);
-                match game {
-                    DailyGame::NineBall => DailyGameDetail::NineBall(detail),
-                    DailyGame::Snooker => DailyGameDetail::Snooker(detail),
-                    _ => DailyGameDetail::EightBall(detail),
-                }
-            }
+            Some(DailyGame::Cribbage) => DailyGameDetail::Cribbage(CribbageDetail {
+                state: DailyCribbageState::parse(&row.state).map_err(|e| e.to_string())?,
+                marked: Vec::new(),
+                move_in_flight: false,
+            }),
+            Some(DailyGame::GinRummy) => DailyGameDetail::GinRummy(GinDetail {
+                state: DailyGinState::parse(&row.state).map_err(|e| e.to_string())?,
+                marked: None,
+                move_in_flight: false,
+            }),
+            Some(DailyGame::EightBall) => DailyGameDetail::EightBall(pool_detail(&row)?),
+            Some(DailyGame::NineBall) => DailyGameDetail::NineBall(pool_detail(&row)?),
+            Some(DailyGame::Snooker) => DailyGameDetail::Snooker(pool_detail(&row)?),
             None => return Err(format!("unknown daily game: {}", row.game_kind)),
         };
-        Ok(Self { row, game })
+        Ok(Self {
+            row,
+            standing,
+            game,
+        })
     }
 
     pub fn chess(&self) -> Option<&ChessDetail> {
         match &self.game {
             DailyGameDetail::Chess(chess) | DailyGameDetail::Chess960(chess) => Some(chess),
-            _ => None,
+            DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     fn chess_mut(&mut self) -> Option<&mut ChessDetail> {
         match &mut self.game {
             DailyGameDetail::Chess(chess) | DailyGameDetail::Chess960(chess) => Some(chess),
-            _ => None,
+            DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     pub fn battleship(&self) -> Option<&BattleshipDetail> {
         match &self.game {
             DailyGameDetail::Battleship(battleship) => Some(battleship),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     pub fn connect4(&self) -> Option<&Connect4Detail> {
         match &self.game {
             DailyGameDetail::Connect4(connect4) => Some(connect4),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     pub fn reversi(&self) -> Option<&ReversiDetail> {
         match &self.game {
             DailyGameDetail::Reversi(reversi) => Some(reversi),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     pub fn checkers(&self) -> Option<&CheckersDetail> {
         match &self.game {
             DailyGameDetail::Checkers(checkers) => Some(checkers),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     pub fn backgammon(&self) -> Option<&BackgammonDetail> {
         match &self.game {
             DailyGameDetail::Backgammon(backgammon) => Some(backgammon),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
     pub fn briscola(&self) -> Option<&BriscolaDetail> {
         match &self.game {
             DailyGameDetail::Briscola(briscola) => Some(briscola),
-            _ => None,
+            DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_)
+            | DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::EightBall(_)
+            | DailyGameDetail::NineBall(_)
+            | DailyGameDetail::Snooker(_) => None,
         }
     }
 
@@ -522,7 +727,16 @@ impl DailyMatchDetail {
             DailyGameDetail::EightBall(pool)
             | DailyGameDetail::NineBall(pool)
             | DailyGameDetail::Snooker(pool) => Some(pool),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_) => None,
         }
     }
 
@@ -531,7 +745,16 @@ impl DailyMatchDetail {
             DailyGameDetail::EightBall(pool)
             | DailyGameDetail::NineBall(pool)
             | DailyGameDetail::Snooker(pool) => Some(pool),
-            _ => None,
+            DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_) => None,
         }
     }
 
@@ -540,8 +763,18 @@ impl DailyMatchDetail {
     }
 
     pub fn is_active(&self) -> bool {
-        self.row.status == DailyMatch::STATUS_ACTIVE
+        match self.standing {
+            MatchStanding::Active => true,
+            MatchStanding::Finished(_) | MatchStanding::Cancelled => false,
+        }
     }
+}
+
+/// A pool detail fresh off the row: the ruleset rides inside the state, so
+/// all three pool games build it the same way.
+fn pool_detail(row: &DailyMatch) -> Result<PoolDetail, String> {
+    let state = DailyPoolState::parse(&row.state).map_err(|e| e.to_string())?;
+    Ok(PoolDetail::new(state))
 }
 
 impl DailyState {
@@ -563,6 +796,8 @@ impl DailyState {
             own_loss: false,
             pool_finish_hold: None,
             board: None,
+            live_aims: HashMap::new(),
+            live_results: Vec::new(),
         }
     }
 
@@ -578,7 +813,9 @@ impl DailyState {
         let mut banner = None;
         let mut changed = false;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
-            self.snapshot = self.snapshot_rx.borrow_and_update().clone();
+            let next = self.snapshot_rx.borrow_and_update().clone();
+            self.note_results(&next, Utc::now());
+            self.snapshot = next;
             self.notify_turn_edges();
             changed = true;
         }
@@ -623,6 +860,9 @@ impl DailyState {
             self.own_loss |= held.own_loss;
             changed = true;
         }
+        let now = Instant::now();
+        self.live_aims
+            .retain(|_, (_, at)| now.saturating_duration_since(*at) < LIVE_AIM_WINDOW);
         DailyTick {
             banner,
             changed,
@@ -646,17 +886,11 @@ impl DailyState {
             DailyEvent::ChallengePosted {
                 game,
                 challenger_id,
-                target_username,
                 ..
-            } if challenger_id == self.user_id => EventEffect::raising(match target_username {
-                Some(name) => {
-                    Banner::success(&format!("Daily {} challenge sent to @{name}", game.label()))
-                }
-                None => Banner::success(&format!(
-                    "Daily {} challenge posted to the lobby",
-                    game.label()
-                )),
-            }),
+            } if challenger_id == self.user_id => EventEffect::raising(Banner::success(&format!(
+                "Daily {} challenge posted to the lobby",
+                game.label()
+            ))),
             DailyEvent::MatchFinished {
                 match_id,
                 game,
@@ -705,7 +939,7 @@ impl DailyState {
                         Some(Banner::info(&format!(
                             "Daily {}: you lost the match ({})",
                             game.label(),
-                            result_phrase(&result)
+                            result_phrase(result)
                         )))
                     }
                     DailyFinishOutcome::Draw if playing => Some(Banner::info(&format!(
@@ -715,7 +949,8 @@ impl DailyState {
                     DailyFinishOutcome::Won { .. } | DailyFinishOutcome::Draw => None,
                 };
                 // A match you are not in, finishing while you are not watching
-                // it, is news for the lobby snapshot and not for this frame.
+                // it, is news for the lobby snapshot and not for this frame:
+                // the #lounge strip takes its final board off the snapshot.
                 let changed = reloaded || banner.is_some();
                 // On a pool board the shot that ended the rack has not been
                 // watched yet, so the news waits for it — otherwise the result
@@ -747,6 +982,13 @@ impl DailyState {
                 by_user_id,
                 aim,
             } => {
+                // Every other player's aim is also news for the live strip.
+                // It is stored, not repainted: the strip repaints on the
+                // half-tick edge while it draws a cue (`LiveState::aiming`),
+                // so a shooter sweeping the cue costs no frames beyond that.
+                if by_user_id != self.user_id {
+                    self.live_aims.insert(match_id, (aim, Instant::now()));
+                }
                 let mut drawn_on = false;
                 if by_user_id != self.user_id
                     && let Some(board) = &mut self.board
@@ -772,10 +1014,10 @@ impl DailyState {
                 }
                 EventEffect::touched(mine)
             }
-            // Everything else on the feed is somebody else's match. The lobby
-            // panel and the modal read the snapshot, not this feed, and the
-            // snapshot raises its own flag at the top of the tick.
-            _ => EventEffect::ignored(),
+            // Somebody else's error or challenge. The lobby panel and the
+            // modal read the snapshot, not this feed, and the snapshot raises
+            // its own flag at the top of the tick.
+            DailyEvent::Error { .. } | DailyEvent::ChallengePosted { .. } => EventEffect::ignored(),
         }
     }
 
@@ -876,6 +1118,111 @@ impl DailyState {
         matches
     }
 
+    /// Every active match, the viewer's own included, as the live strip
+    /// weighs it: its last write, and its shooter's aim if one is fresh.
+    /// Then every match that just ended, stamped with its finish.
+    pub fn live_candidates(&self) -> Vec<LiveCandidate> {
+        let active = self
+            .snapshot
+            .active_matches
+            .iter()
+            .map(|item| LiveCandidate {
+                source: LiveSource::DailyMatch(item.id),
+                updated: item.updated,
+                aimed_at: self.live_aims.get(&item.id).map(|(_, at)| *at),
+            });
+        let results = self.live_results.iter().map(|noted| LiveCandidate {
+            source: LiveSource::DailyResult(noted.item.id),
+            updated: noted.item.updated,
+            aimed_at: None,
+        });
+        active.chain(results).collect()
+    }
+
+    /// One active match as the live strip paints it: its board, and a fresh
+    /// aim if its shooter is lining up. `None` once it left the lobby.
+    pub fn live_match_view(&self, match_id: Uuid) -> Option<MatchStripView<'_>> {
+        let item = self
+            .snapshot
+            .active_matches
+            .iter()
+            .find(|item| item.id == match_id)?;
+        let aim = self
+            .live_aims
+            .get(&item.id)
+            .filter(|(_, at)| at.elapsed() < LIVE_AIM_WINDOW)
+            .map(|(aim, _)| aim);
+        Some(MatchStripView {
+            view: LiveView {
+                item,
+                board: &item.board,
+                aim,
+            },
+            finish: None,
+        })
+    }
+
+    /// Keep every match that ended inside `LIVE_STAMP_HORIZON` of `now_utc`,
+    /// with the position it ended on and the result, and drop the ones past
+    /// it. The finished list holds only results a player has not seen, so a
+    /// row can leave it a second after the finish (both players watching):
+    /// what was noted stays until the horizon passes. Read off the snapshot
+    /// rather than the event feed, so it fires on every replica and not only
+    /// where the finish was written; a result both players saw before this
+    /// session's first snapshot is never noted. A noted result whose row is
+    /// still listed re-reads its headline, since the payout is a second write
+    /// behind the finish.
+    fn note_results(&mut self, next: &DailySnapshot, now_utc: DateTime<Utc>) {
+        let horizon = chrono::Duration::from_std(LIVE_STAMP_HORIZON).expect("horizon fits chrono");
+        for finished in &next.finished_matches {
+            if now_utc.signed_duration_since(finished.finished_at) >= horizon {
+                continue;
+            }
+            let result = LiveResult {
+                item: result_item(finished),
+                headline: finish_headline(finished),
+            };
+            match self
+                .live_results
+                .iter_mut()
+                .find(|noted| noted.item.id == finished.id)
+            {
+                Some(noted) => *noted = result,
+                None => self.live_results.push(result),
+            }
+        }
+        self.live_results
+            .retain(|noted| now_utc.signed_duration_since(noted.item.updated) < horizon);
+    }
+
+    /// One match that just ended as the live strip paints it: the final
+    /// board with the result. `None` once it passed the horizon.
+    pub fn live_result_view(&self, match_id: Uuid) -> Option<MatchStripView<'_>> {
+        let result = self
+            .live_results
+            .iter()
+            .find(|noted| noted.item.id == match_id)?;
+        Some(MatchStripView {
+            view: LiveView {
+                item: &result.item,
+                board: &result.item.board,
+                aim: None,
+            },
+            finish: Some(result.headline.as_str()),
+        })
+    }
+
+    /// A match on the live strip, for the key or click that opens it:
+    /// read-only for a spectator, playable for one of its players
+    /// (`open_board` decides).
+    pub fn live_item(&self, match_id: Uuid) -> Option<DailyMatchItem> {
+        self.snapshot
+            .active_matches
+            .iter()
+            .find(|item| item.id == match_id)
+            .cloned()
+    }
+
     /// Open challenges + active matches counted against the per-user cap.
     pub fn entry_count(&self) -> usize {
         let challenges = self
@@ -906,21 +1253,12 @@ impl DailyState {
     // ── Modal actions ──────────────────────────────────────────
 
     pub fn post_open_challenge(&self, game: DailyGame) {
-        self.svc.post_challenge_task(self.user_id, game, None);
+        self.svc.post_challenge_task(self.user_id, game);
     }
 
-    pub fn post_directed_challenge(&self, username: &str, game: DailyGame) {
-        let username = username.trim().trim_start_matches('@').to_string();
-        if username.is_empty() {
-            return;
-        }
-        self.svc
-            .post_challenge_to_username_task(self.user_id, game, username);
-    }
-
-    /// `c` / `C` in the modal: open the challenge picker overlay.
-    pub fn begin_challenge_draft(&mut self, directed: bool) {
-        self.begin_challenge_draft_for(DailyGame::ALL[0], directed);
+    /// `c` in the modal: open the challenge picker overlay.
+    pub fn begin_challenge_draft(&mut self) {
+        self.begin_challenge_draft_for(DailyGame::ALL[0]);
     }
 
     /// The same picker, opened with the cursor already on one game.
@@ -929,16 +1267,12 @@ impl DailyState {
     /// the Lounge's pool table is asking for pool, not for a list. The picker
     /// still opens rather than posting outright, so the choice of variant and
     /// the prize are in front of the player before anything is committed.
-    pub fn begin_challenge_draft_for(&mut self, game: DailyGame, directed: bool) {
+    pub fn begin_challenge_draft_for(&mut self, game: DailyGame) {
         let selected = DailyGame::ALL
             .iter()
             .position(|candidate| *candidate == game)
             .unwrap_or(0);
-        self.challenge_draft = Some(ChallengeDraft {
-            selected,
-            directed,
-            username: None,
-        });
+        self.challenge_draft = Some(ChallengeDraft { selected });
     }
 
     /// Move the picker cursor; see [`ChallengeDraft::move_selection`].
@@ -948,41 +1282,17 @@ impl DailyState {
         }
     }
 
-    /// Enter on the draft: post an open challenge, advance a directed draft
-    /// to its username step, or send it. An empty username is a no-op so a
-    /// stray Enter can't fire a challenge at nobody.
+    /// Enter on the draft: post the picked game as an open challenge.
     pub fn draft_advance(&mut self) {
-        let Some(draft) = &mut self.challenge_draft else {
+        let Some(draft) = self.challenge_draft.take() else {
             return;
         };
-        match &draft.username {
-            None if draft.directed => draft.username = Some(String::new()),
-            None => {
-                let game = draft.game();
-                self.challenge_draft = None;
-                self.post_open_challenge(game);
-            }
-            Some(username) => {
-                if username.trim().trim_start_matches('@').is_empty() {
-                    return;
-                }
-                let game = draft.game();
-                let username = username.clone();
-                self.challenge_draft = None;
-                self.post_directed_challenge(&username, game);
-            }
-        }
+        self.post_open_challenge(draft.game());
     }
 
-    /// Esc on the draft: the username step falls back to the picker, the
-    /// picker closes the draft.
+    /// Esc on the draft: close the picker.
     pub fn draft_back(&mut self) {
-        let Some(draft) = &mut self.challenge_draft else {
-            return;
-        };
-        if draft.username.take().is_none() {
-            self.challenge_draft = None;
-        }
+        self.challenge_draft = None;
     }
 
     pub fn claim_challenge(&self, match_id: Uuid) {
@@ -995,7 +1305,7 @@ impl DailyState {
 
     // ── Board screen ───────────────────────────────────────────
 
-    pub fn open_board(&mut self, item: &DailyMatchItem, return_screen: Screen) {
+    pub fn open_board(&mut self, item: &DailyMatchItem, return_screen: Screen, entry: BoardEntry) {
         let mut names = HashMap::new();
         if let Some(name) = &item.challenger_username {
             names.insert(item.challenger_id, name.clone());
@@ -1005,12 +1315,17 @@ impl DailyState {
         }
         // You're a spectator unless you're one of the two players.
         let spectating = item.challenger_id != self.user_id && item.opponent_id != self.user_id;
-        self.open_board_inner(item.id, item.game, names, spectating, return_screen);
+        self.open_board_inner(item.id, item.game, names, spectating, return_screen, entry);
     }
 
     /// Open the board for an unseen finished match (a result row in the
     /// modal). Always one of your own matches, so never spectating.
-    pub fn open_finished_board(&mut self, item: &DailyFinishedItem, return_screen: Screen) {
+    pub fn open_finished_board(
+        &mut self,
+        item: &DailyFinishedItem,
+        return_screen: Screen,
+        entry: BoardEntry,
+    ) {
         let mut names = HashMap::new();
         if let Some(name) = &item.challenger_username {
             names.insert(item.challenger_id, name.clone());
@@ -1018,7 +1333,7 @@ impl DailyState {
         if let Some(name) = &item.opponent_username {
             names.insert(item.opponent_id, name.clone());
         }
-        self.open_board_inner(item.id, item.game, names, false, return_screen);
+        self.open_board_inner(item.id, item.game, names, false, return_screen, entry);
     }
 
     fn open_board_inner(
@@ -1028,6 +1343,7 @@ impl DailyState {
         names: HashMap<Uuid, String>,
         spectating: bool,
         return_screen: Screen,
+        entry: BoardEntry,
     ) {
         // Hopping straight from one board to another replaces `self.board`
         // without a close; the old board still counts as looked-at.
@@ -1036,6 +1352,7 @@ impl DailyState {
             match_id,
             spectating,
             return_screen,
+            entry,
             // Start the cursor mid-board for each game's grid.
             cursor: match game {
                 DailyGame::Chess | DailyGame::Chess960 => 12,
@@ -1048,8 +1365,9 @@ impl DailyState {
                 // A visual slot on the 2x14 board grid: bottom row, in the
                 // player's own home quadrant.
                 DailyGame::Backgammon => backgammon::SLOT_COLS + 9,
-                // The briscola cursor is a slot in your own hand.
-                DailyGame::Briscola => 0,
+                // The card games' cursor is a slot in your own hand (or, for
+                // gin's draw, one of the two piles: the stock first).
+                DailyGame::Briscola | DailyGame::Cribbage | DailyGame::GinRummy => 0,
                 // Pool aims in table coordinates, not cells; the cursor is
                 // unused and the draft carries the aim.
                 DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => 0,
@@ -1074,6 +1392,7 @@ impl DailyState {
             pool_shared_at: None,
             pool_eye: false,
             pool_eye_geometry: Cell::new(None),
+            card_slots: Cell::new(None),
         });
         self.request_board_reload();
     }
@@ -1114,12 +1433,11 @@ impl DailyState {
         if board.spectating {
             return;
         }
-        let finished = board
-            .detail
-            .as_ref()
-            .is_some_and(|detail| detail.row.status == DailyMatch::STATUS_FINISHED);
-        if finished {
-            self.svc.mark_result_seen_task(self.user_id, board.match_id);
+        match board.detail.as_ref().map(|detail| detail.standing) {
+            Some(MatchStanding::Finished(_)) => {
+                self.svc.mark_result_seen_task(self.user_id, board.match_id);
+            }
+            Some(MatchStanding::Active) | Some(MatchStanding::Cancelled) | None => {}
         }
     }
 
@@ -1153,6 +1471,7 @@ impl DailyState {
     /// Returns true when a board load completed (or its channel closed),
     /// mutating the rendered board.
     fn poll_board_load(&mut self) -> bool {
+        let user_id = self.user_id;
         let Some(board) = &mut self.board else {
             return false;
         };
@@ -1166,6 +1485,11 @@ impl DailyState {
                 match DailyMatchDetail::from_row(row) {
                     Ok(mut detail) => {
                         carry_pool_playback(board.detail.as_mut(), &mut detail);
+                        if let Some(cursor) =
+                            gin_drawn_cursor(board.detail.as_ref(), &detail, user_id)
+                        {
+                            board.cursor = cursor;
+                        }
                         board.detail = Some(detail);
                         board.load_error = None;
                         self.drop_stale_board_selection();
@@ -1265,6 +1589,28 @@ impl DailyState {
                 let max = briscola.state.hand_of(user_id).len().saturating_sub(1) as isize;
                 board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
             }
+            Some(DailyGameDetail::Cribbage(cribbage)) => {
+                // One-dimensional over your own hand, which shrinks as the
+                // discard and the pegging take cards out of it.
+                let held = cribbage
+                    .state
+                    .seat_of(user_id)
+                    .map_or(0, |seat| cribbage.state.table().hands[seat].len());
+                let max = held.saturating_sub(1) as isize;
+                board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
+            }
+            Some(DailyGameDetail::GinRummy(gin)) => {
+                // Over the two piles while you owe a draw, over your hand
+                // once you owe a discard.
+                let table = gin.state.table();
+                let slots = match (table.phase, gin.state.seat_of(user_id)) {
+                    (gin::Phase::Draw(_), Some(_)) => 2,
+                    (_, Some(seat)) => table.hands[seat].len(),
+                    (_, None) => 0,
+                };
+                let max = slots.saturating_sub(1) as isize;
+                board.cursor = (board.cursor as isize + dx).clamp(0, max) as usize;
+            }
             Some(DailyGameDetail::Backgammon(_)) => {
                 // The 2x14 visual slot grid (points, bar, off tray); "up"
                 // (dy=1) moves to the top row.
@@ -1274,8 +1620,13 @@ impl DailyState {
                 board.cursor = (row.clamp(0, backgammon::SLOT_ROWS as isize - 1) * cols
                     + col.clamp(0, cols - 1)) as usize;
             }
-            _ => {
+            Some(DailyGameDetail::Chess(_)) | Some(DailyGameDetail::Chess960(_)) | None => {
                 board.cursor = cursor::move_cursor(board.cursor, orientation, dx, dy);
+            }
+            Some(DailyGameDetail::EightBall(_))
+            | Some(DailyGameDetail::NineBall(_))
+            | Some(DailyGameDetail::Snooker(_)) => {
+                unreachable!("pool boards took pool_move_cursor above")
             }
         }
     }
@@ -1340,6 +1691,8 @@ impl DailyState {
             DailyGame::Checkers => Self::checkers_select(board, user_id, &svc),
             DailyGame::Backgammon => Self::backgammon_select(board, user_id, &svc),
             DailyGame::Briscola => Self::briscola_play(board, user_id, &svc),
+            DailyGame::Cribbage => Self::cribbage_select(board, user_id, &svc),
+            DailyGame::GinRummy => Self::gin_select(board, user_id, &svc),
             // Routed above: firing needs `self`, not just the board.
             DailyGame::EightBall | DailyGame::NineBall | DailyGame::Snooker => {}
         }
@@ -1688,6 +2041,212 @@ impl DailyState {
         svc.play_move_task(user_id, board.match_id, card_id, card_id);
     }
 
+    /// Space/Enter on the cribbage board. Discarding: pick two cards, then
+    /// pick either of them again to send both (a third pick swaps out the
+    /// older). Pegging: play the card under the cursor. Applies
+    /// optimistically; the one thing a client cannot do is deal, so the
+    /// last card of a hand leaves the board waiting on the reload.
+    fn cribbage_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let DailyGameDetail::Cribbage(cribbage) = &mut detail.game else {
+            return;
+        };
+        if cribbage.move_in_flight {
+            return;
+        }
+        let Some(seat) = cribbage.state.seat_of(user_id) else {
+            return;
+        };
+        let table = cribbage.state.table();
+        let held = table.held(seat);
+        let Some(&card) = held.get(board.cursor) else {
+            board.cursor = held.len().saturating_sub(1);
+            return;
+        };
+        let played = match table.phase {
+            cribbage::Phase::Discard(on) if on == seat => {
+                if !cribbage.marked.contains(&card) {
+                    if cribbage.marked.len() == 2 {
+                        cribbage.marked.remove(0);
+                    }
+                    cribbage.marked.push(card);
+                    return;
+                }
+                if cribbage.marked.len() < 2 {
+                    cribbage.marked.retain(|marked| *marked != card);
+                    return;
+                }
+                CribbageMove::Discard([cribbage.marked[0], cribbage.marked[1]])
+            }
+            cribbage::Phase::Peg(on) if on == seat => CribbageMove::Play(card),
+            cribbage::Phase::Discard(_)
+            | cribbage::Phase::Peg(_)
+            | cribbage::Phase::AwaitingDeal
+            | cribbage::Phase::Won(_) => return,
+        };
+        // A card that would pass 31 is refused here as it would be by the
+        // server; the board dims those cards, so nothing is sent.
+        if cribbage.state.apply_move(played).is_err() {
+            return;
+        }
+        cribbage.move_in_flight = true;
+        cribbage.marked.clear();
+        detail.row.turn_user_id = cribbage.state.turn_user();
+        let remaining = cribbage.state.table().hands[seat].len();
+        board.cursor = board.cursor.min(remaining.saturating_sub(1));
+        svc.play_cribbage_move_task(user_id, board.match_id, played);
+    }
+
+    /// Space/Enter on the gin board. Owing a draw: take from the pile under
+    /// the cursor (the stock, or the discard). Owing a discard: pick a card,
+    /// then pick it again to throw it. Everything applies optimistically
+    /// except a stock draw, whose card only the server may turn over.
+    fn gin_select(board: &mut DailyBoardState, user_id: Uuid, svc: &DailyService) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
+            return;
+        };
+        if gin.move_in_flight {
+            return;
+        }
+        let Some(seat) = gin.state.seat_of(user_id) else {
+            return;
+        };
+        let table = gin.state.table();
+        match table.phase {
+            gin::Phase::Draw(on) if on == seat => {
+                let pile = match board.cursor {
+                    0 => Pile::Stock,
+                    _ => Pile::Discard,
+                };
+                let played = GinMove::Draw(pile);
+                match pile {
+                    // Never optimistic: the draw is committed before its
+                    // card is seen, so the card arrives with the reload
+                    // (`gin_drawn_cursor` puts the cursor on it). Showing
+                    // it early would turn a failed write into a free look
+                    // at the stock.
+                    Pile::Stock => {}
+                    // The top discard is public already. Land the cursor
+                    // on it, wherever the melds put it.
+                    Pile::Discard => {
+                        let Ok(outcome) = gin.state.apply_move(played) else {
+                            return;
+                        };
+                        board.cursor = gin
+                            .state
+                            .table()
+                            .held(seat)
+                            .iter()
+                            .position(|card| Some(*card) == outcome.taken)
+                            .unwrap_or(0);
+                    }
+                }
+                gin.move_in_flight = true;
+                svc.play_gin_move_task(user_id, board.match_id, played);
+            }
+            gin::Phase::Discard(on) if on == seat => {
+                let held = table.held(seat);
+                let Some(&card) = held.get(board.cursor) else {
+                    board.cursor = held.len().saturating_sub(1);
+                    return;
+                };
+                // The card just taken from the pile cannot go straight
+                // back, so it is never picked; the status line says why.
+                if table.taken == Some(card) {
+                    return;
+                }
+                if gin.marked != Some(card) {
+                    gin.marked = Some(card);
+                    return;
+                }
+                Self::gin_throw(board, user_id, svc, card, false);
+            }
+            gin::Phase::Draw(_)
+            | gin::Phase::Discard(_)
+            | gin::Phase::AwaitingDeal
+            | gin::Phase::Won(_) => {}
+        }
+    }
+
+    /// `g` on the gin board: knock with the picked card. With nothing picked
+    /// it picks the card under the cursor first, so a knock is always two
+    /// deliberate presses, like every other throw. Returns whether the open
+    /// board is a gin board at all: `g` means nothing anywhere else.
+    pub fn board_knock(&mut self) -> bool {
+        let user_id = self.user_id;
+        let svc = self.svc.clone();
+        let Some(board) = &mut self.board else {
+            return false;
+        };
+        let Some(detail) = &mut board.detail else {
+            return false;
+        };
+        let active = detail.is_active();
+        let row_turn = detail.row.turn_user_id;
+        let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
+            return false;
+        };
+        board.resign_confirm = false;
+        let Some(seat) = gin.state.seat_of(user_id) else {
+            return true;
+        };
+        let table = gin.state.table();
+        if !active
+            || row_turn != Some(user_id)
+            || gin.move_in_flight
+            || table.phase != gin::Phase::Discard(seat)
+        {
+            return true;
+        }
+        let held = table.held(seat);
+        match gin.marked {
+            Some(card) => {
+                if gin::deadwood_after_discard(&held, card) <= gin::MAX_KNOCK {
+                    Self::gin_throw(board, user_id, &svc, card, true);
+                }
+            }
+            None => {
+                gin.marked = held
+                    .get(board.cursor)
+                    .copied()
+                    .filter(|card| table.taken != Some(*card))
+            }
+        }
+        true
+    }
+
+    fn gin_throw(
+        board: &mut DailyBoardState,
+        user_id: Uuid,
+        svc: &DailyService,
+        card: Card,
+        knock: bool,
+    ) {
+        let detail = board.detail.as_mut().expect("checked by caller");
+        let DailyGameDetail::GinRummy(gin) = &mut detail.game else {
+            return;
+        };
+        let played = GinMove::Discard { card, knock };
+        if gin.state.apply_move(played).is_err() {
+            return;
+        }
+        gin.move_in_flight = true;
+        gin.marked = None;
+        detail.row.turn_user_id = gin.state.turn_user();
+        board.cursor = 0;
+        svc.play_gin_move_task(user_id, board.match_id, played);
+    }
+
+    /// A click on a card the cribbage or gin board drew: put the cursor
+    /// there and act as Space would.
+    pub fn board_click_card(&mut self, index: usize) {
+        if let Some(board) = &mut self.board {
+            board.cursor = index;
+        }
+        self.board_select_or_move();
+    }
+
     fn apply_optimistic_move(detail: &mut DailyMatchDetail, from: usize, to: usize) {
         let Some(chess) = detail.chess_mut() else {
             return;
@@ -1749,7 +2308,26 @@ impl DailyState {
             DailyGameDetail::EightBall(pool)
             | DailyGameDetail::NineBall(pool)
             | DailyGameDetail::Snooker(pool) => pool.draft.cancel(),
-            _ => false,
+            // A half-picked discard is put back before Esc leaves.
+            DailyGameDetail::Cribbage(cribbage) if !cribbage.marked.is_empty() => {
+                cribbage.marked.clear();
+                true
+            }
+            DailyGameDetail::GinRummy(gin) if gin.marked.is_some() => {
+                gin.marked = None;
+                true
+            }
+            // Nothing pending: Esc leaves.
+            DailyGameDetail::Checkers(_)
+            | DailyGameDetail::Backgammon(_)
+            | DailyGameDetail::Chess(_)
+            | DailyGameDetail::Chess960(_)
+            | DailyGameDetail::Battleship(_)
+            | DailyGameDetail::Connect4(_)
+            | DailyGameDetail::Reversi(_)
+            | DailyGameDetail::Briscola(_)
+            | DailyGameDetail::Cribbage(_)
+            | DailyGameDetail::GinRummy(_) => false,
         }
     }
 
@@ -1947,25 +2525,25 @@ fn fresh_turn_edges(notified: &mut HashSet<Uuid>, my_turn_ids: &[Uuid]) -> Vec<U
         .collect()
 }
 
-/// Human phrase for a `daily_matches.result` string, for result rows and
-/// banners. Falls back to "finished" for results this build doesn't know.
-pub fn result_phrase(result: &str) -> &'static str {
+/// Human phrase for how a match ended, for result rows and banners.
+pub fn result_phrase(result: DailyResult) -> &'static str {
     match result {
-        DailyMatch::RESULT_CHECKMATE => "checkmate",
-        DailyMatch::RESULT_DRAW => "draw",
-        DailyMatch::RESULT_RESIGN => "resignation",
-        DailyMatch::RESULT_TIMEOUT => "timeout",
-        DailyMatch::RESULT_FLEET_SUNK => "fleet sunk",
-        DailyMatch::RESULT_FOUR_IN_A_ROW => "four in a row",
-        DailyMatch::RESULT_MOST_DISCS => "most discs",
-        DailyMatch::RESULT_NO_MOVES => "no moves left",
-        DailyMatch::RESULT_BORNE_OFF => "borne off",
-        DailyMatch::RESULT_MOST_POINTS => "most points",
-        DailyMatch::RESULT_EIGHT_POTTED => "eight ball",
-        DailyMatch::RESULT_EARLY_EIGHT => "early eight",
-        DailyMatch::RESULT_NINE_POTTED => "nine ball",
-        DailyMatch::RESULT_FRAME_WON => "frame won",
-        _ => "finished",
+        DailyResult::Checkmate => "checkmate",
+        DailyResult::Draw => "draw",
+        DailyResult::Resign => "resignation",
+        DailyResult::Timeout => "timeout",
+        DailyResult::FleetSunk => "fleet sunk",
+        DailyResult::FourInARow => "four in a row",
+        DailyResult::MostDiscs => "most discs",
+        DailyResult::NoMoves => "no moves left",
+        DailyResult::BorneOff => "borne off",
+        DailyResult::MostPoints => "most points",
+        DailyResult::EightPotted => "eight ball",
+        DailyResult::EarlyEight => "early eight",
+        DailyResult::NinePotted => "nine ball",
+        DailyResult::FrameWon => "frame won",
+        DailyResult::PeggedOut => "pegged out",
+        DailyResult::ReachedHundred => "first to 100",
     }
 }
 
@@ -1981,6 +2559,26 @@ pub fn format_deadline(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
         format!("{hours}h {minutes}m")
     } else {
         format!("{minutes}m")
+    }
+}
+
+/// A finished row as the strip paints it: nobody on the clock, stamped with
+/// the finish.
+fn result_item(finished: &DailyFinishedItem) -> DailyMatchItem {
+    DailyMatchItem {
+        id: finished.id,
+        game: finished.game,
+        challenger_id: finished.challenger_id,
+        challenger_username: finished.challenger_username.clone(),
+        opponent_id: finished.opponent_id,
+        opponent_username: finished.opponent_username.clone(),
+        white_id: finished.white_id,
+        black_id: finished.black_id,
+        turn_user_id: None,
+        turn_deadline_at: None,
+        move_count: finished.move_count,
+        updated: finished.finished_at,
+        board: finished.board.clone(),
     }
 }
 

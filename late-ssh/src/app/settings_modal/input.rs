@@ -4,7 +4,8 @@ use crate::app::state::App;
 use super::gem::GemKey;
 use super::state::{
     AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus,
-    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, TweakRow, USERNAME_MAX_LEN,
+    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, StatuslinePane, Tab, TweakRow,
+    USERNAME_MAX_LEN,
 };
 use crate::app::common::textarea_input::{
     EditOutcome, handle_multiline_edit, handle_single_line_edit,
@@ -91,6 +92,13 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         && app.settings_modal_state.theme_searching()
     {
         handle_themes_tab_input(app, event);
+        return;
+    }
+
+    // Statusline's options pane owns Esc, while Tab and tab-strip clicks
+    // above still switch top-level tabs from either pane.
+    if app.settings_modal_state.selected_tab() == Tab::Statusline {
+        handle_statusline_input(app, event);
         return;
     }
 
@@ -354,6 +362,14 @@ fn scroll_current_tab(app: &mut App, delta: isize) -> bool {
             app.settings_modal_state.move_feed_cursor(delta);
             true
         }
+        Tab::Statusline => {
+            let state = &mut app.settings_modal_state;
+            match state.statusline_pane() {
+                StatuslinePane::List => state.move_statusline_cursor(delta),
+                StatuslinePane::Detail => state.move_statusline_dial(delta),
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -419,6 +435,77 @@ fn handle_right_sidebar_components_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => {
             app.settings_modal_state.toggle_right_sidebar_component()
+        }
+        _ => {}
+    }
+}
+
+/// Statusline tab. Two panes: the ordered segment list on the
+/// left and the selected segment's dials on the right. `Enter` opens the
+/// dials and `Esc` returns to the list; `←`/`→` change the focused dial.
+///
+/// Reordering is `⇧↑`/`⇧↓`, with `[`/`]` as the fallback for terminals that
+/// swallow Shift+Arrow (and as the idiom the sibling sidebar-panel dialog
+/// already trains).
+fn handle_statusline_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    let detail = state.statusline_pane() == StatuslinePane::Detail;
+    match event {
+        ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        // Esc backs out of the dials first, then closes.
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            if detail {
+                state.focus_statusline_pane(StatuslinePane::List);
+            } else {
+                app.show_settings = false;
+            }
+        }
+        // Reorder, from either pane: it acts on the selected segment, and
+        // stepping into the dials shouldn't cost the user the shortcut.
+        ParsedInput::ShiftArrow(b'A') | ParsedInput::Byte(b'[') | ParsedInput::Char('[') => {
+            state.move_statusline_component(-1);
+        }
+        ParsedInput::ShiftArrow(b'B') | ParsedInput::Byte(b']') | ParsedInput::Char(']') => {
+            state.move_statusline_component(1);
+        }
+        ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J')
+        | ParsedInput::Arrow(b'B') => {
+            if detail {
+                state.move_statusline_dial(1);
+            } else {
+                state.move_statusline_cursor(1);
+            }
+        }
+        ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K')
+        | ParsedInput::Arrow(b'A') => {
+            if detail {
+                state.move_statusline_dial(-1);
+            } else {
+                state.move_statusline_cursor(-1);
+            }
+        }
+        ParsedInput::Arrow(b'C') if detail => {
+            state.cycle_statusline_dial(true);
+        }
+        ParsedInput::Arrow(b'D') if detail => {
+            state.cycle_statusline_dial(false);
+        }
+        // Space is the list's on/off switch, and the dials' "change this one".
+        ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => {
+            if detail {
+                state.cycle_statusline_dial(true);
+            } else {
+                state.toggle_statusline_component();
+            }
+        }
+        ParsedInput::Byte(b'\r') => {
+            if detail {
+                state.cycle_statusline_dial(true);
+            } else {
+                state.focus_statusline_pane(StatuslinePane::Detail);
+            }
         }
         _ => {}
     }

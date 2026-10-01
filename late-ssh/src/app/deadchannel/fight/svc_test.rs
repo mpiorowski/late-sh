@@ -8,7 +8,7 @@ use super::{FightOutcome, FightService};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
-use crate::app::deadchannel::fight::state::{Applied, Command, Sheet, Slot};
+use crate::app::deadchannel::fight::state::{Applied, Command, Pick, Sheet, Slot};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
 use crate::test_helpers::{age_payout_claims, new_test_db};
@@ -27,7 +27,11 @@ async fn runner_and_service(
         test_db.db.clone(),
         NotificationService::new(test_db.db.clone()),
     );
-    let svc = FightService::new(test_db.db.clone(), chat, ChipService::new(test_db.db.clone()));
+    let svc = FightService::new(
+        test_db.db.clone(),
+        chat,
+        ChipService::new(test_db.db.clone()),
+    );
     (test_db, user.id, svc)
 }
 
@@ -43,11 +47,16 @@ async fn stepping_in_spends_a_ration_on_the_row() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-start").await;
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx.clone(),
+    );
     let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
         panic!("a start answers with the sheet");
     };
-    assert_eq!(outcome.applied, Applied::Started);
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Fair });
     assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
     assert!(sheet.fight.is_some());
 
@@ -62,7 +71,12 @@ async fn stepping_in_spends_a_ration_on_the_row() {
     assert_eq!(Sheet::from_row(&row).expect("sheet"), sheet);
 
     // A second device stepping in finds the same fight and spends nothing.
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx);
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx,
+    );
     let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
         panic!("a resume answers with the sheet");
     };
@@ -124,6 +138,39 @@ async fn a_purchase_at_the_armorer_lands_on_the_row() {
 }
 
 #[tokio::test]
+async fn a_loan_and_a_deposit_land_on_the_row() {
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-money").await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    // A fresh runner's 50 bits, the level-1 loan of 50 (5 more on the
+    // debt), then all 100 into the locker less its 10.
+    svc.act_task(user_id, "mira".to_string(), Command::Borrow, tx.clone());
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a loan answers with the sheet");
+    };
+    assert_eq!(outcome.applied, Applied::Borrowed { amount: 50, fee: 5 });
+    svc.act_task(user_id, "mira".to_string(), Command::Deposit, tx);
+    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+        panic!("a deposit answers with the sheet");
+    };
+    assert_eq!(
+        outcome.applied,
+        Applied::Deposited {
+            stored: 90,
+            fee: 10
+        }
+    );
+    assert_eq!((sheet.bits, sheet.stash, sheet.debt), (0, 90, 55));
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!((row.bits, row.stash, row.debt), (0, 90, 55));
+}
+
+#[tokio::test]
 async fn a_runner_who_left_has_no_sheet_to_act_on() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-left").await;
     let client = test_db.db.get().await.expect("db client");
@@ -134,7 +181,12 @@ async fn a_runner_who_left_has_no_sheet_to_act_on() {
     );
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx.clone(),
+    );
     assert!(matches!(answer(&mut rx).await, FightOutcome::NoRunner));
 
     svc.reload_task(user_id, tx);
@@ -205,7 +257,12 @@ async fn kill_the_old_signal(
         .expect("store");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    svc.act_task(user_id, "mira".to_string(), Command::Start, tx.clone());
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Start { pick: Pick::Fair },
+        tx.clone(),
+    );
     let FightOutcome::Acted { sheet, .. } = answer(&mut rx).await else {
         panic!("a start answers with the sheet");
     };
@@ -326,7 +383,10 @@ async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
         third.lines.last().map(String::as_str),
         Some("the house pays 40,000 chips for the broadcast.")
     );
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 2 * pay);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 2 * pay
+    );
     let ledger = UserChips::recent_ledger(&client, user_id, 20)
         .await
         .expect("ledger");
@@ -383,7 +443,11 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         .await
         .expect("find")
         .expect("row");
-    assert_eq!((row.level, row.marks), (1, 1), "the reset and the mark land");
+    assert_eq!(
+        (row.level, row.marks),
+        (1, 1),
+        "the reset and the mark land"
+    );
     assert_eq!(row.unpaid_mark, Some(1), "the row keeps the debt");
     assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE);
     let awards = list_profile_awards_for_user(&client, user_id)
@@ -408,7 +472,10 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         outcome.lines.last().map(String::as_str),
         Some("the house pays 40,000 chips for the broadcast.")
     );
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 40_000
+    );
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
@@ -428,7 +495,10 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         "{:?}",
         outcome.lines
     );
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 40_000
+    );
     let ledger = UserChips::recent_ledger(&client, user_id, 20)
         .await
         .expect("ledger");

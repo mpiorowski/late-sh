@@ -17,11 +17,14 @@ to. A chat leaf also carries the room it is bound to (`room`, absent for
 the current room), so a page can hold several rooms side by side, up to
 `MAX_CHAT_TILES` (10): each chat tile is a room drawn and row-cached every
 frame, and a page of a hundred rooms would swallow every unread count.
-Tile kinds are a closed enum: bonsai (the true 81x26 canvas when the
-tile has the room, the preview otherwise), aquarium (the real reef
+Tile kinds are a closed enum: bonsai (always the care modal's true
+81x26 canvas, never the preview; a smaller tile cuts it, top rows first
+and the sides evenly so the trunk stays centered, `draw_bonsai_tile`,
+`ui_test.rs`; no status row, every row is tree, since day, vigor, and
+stress live in the `w` care modal), aquarium (the real reef
 simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
-the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, the only place the pet is drawn besides the profile portrait; its top row reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
+the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the daily games, compact:
 only the running games, starting at the name with no marker column
 (`RowMarker::Bare`; the sidebar panel keeps its `►`), plus one footer row of
@@ -40,7 +43,11 @@ rows. It replaced the presence tile, and a stored `presence` reads as
 newest first; see §3 for its keys), headlines (News articles and the
 viewer's RSS entries merged newest first, two rows each (the title with
 its source and age, then the link), an entry shared to News listed once,
-as the article), blank. The look (border style, gap, titles) is
+as the article), live (the #lounge live strip, `../live/CONTEXT.md`: the
+picture rows from 8 rows and 56 columns inside, else its one row, with no
+hint row and no rule since the title names the key; while nothing is up,
+a faint `nothing live` on 30% of the width, beside the #lounge
+activity feed on the rest), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):
@@ -70,7 +77,7 @@ a chat-pane screen in `app/input.rs` (`screen_has_chat_pane`,
 keeps its tail fresh), so the composer, message actions, and chat clicks
 work the same as on Home. The other chat tiles are read-only views of
 their rooms: messages stream in and nothing is marked read until the tile
-is focused, but every tile draws its own composer strip (2026-09-12),
+is focused, but every tile draws its own composer strip,
 because an input box that appears and disappears as the focus walks moves
 every row under the reader. Only the active tile's composer is live; the
 others are inert (`composer_inert` on the chat view, `inert` on
@@ -149,16 +156,19 @@ modal instead, and a page with no chat tile says so in a banner.
 With Headlines focused, `j` `k` walk its items the same way and Enter
 copies the selected link to the clipboard (`pending_clipboard`, the way a
 copied search hit goes).
+With Live focused, Enter opens what the strip shows, as `o` does on the
+#lounge card (`live::input::open_from_key`); a click on the strip opens it
+without focusing the tile. There is no reply key here: `r` flips the split.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
 (`-`, Companions), never a page key: dedicated keys accumulate and
-collide, and the tile draws no caption for it either (2026-09-11). The bonsai has no keys of its own here: `w` is the global
+collide, and the tile draws no caption for it either. The bonsai has no keys of its own here: `w` is the global
 Bonsai Care key and opens the same modal it opens on Home, so watering,
 cutting, and steering work exactly as on the chat page. Layout: arrows and Tab / Shift+Tab move focus (the page owns Tab; it is not the page switch here), `space` opens the tile
 picker over the focused tile (`ZenState::kind_picker`: one row per
 `TileKind`, alphabetical (`TileKind::ALL`), scrolled with the selection on a short page, `j` `k` and the arrows move, Enter or `space` picks, Esc
-closes; the picker owns every key while it is up, and a refused row
+closes; the picker owns every key and click while it is up, and a refused row
 stays up with a banner), `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
 `{` `}` one row of height with the nearest split of that direction (i3's
@@ -242,7 +252,10 @@ leaving the page, so a held resize key costs one row update.
   page (`ZenState::shows`), and Enter rebuilds the same Inbox rows, so the
   marked row is the one that opens.
 - Tests cover the split tree (`state_test.rs`), neighbour detection
-  (`layout_test.rs`), the care bar and the music tile's rows (`ui_test.rs`),
+  (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
+  canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), and Inbox Enter (`input_flow_test.rs`); the rest of the
-  tile drawing is untested.
+  (`rows_test.rs`), Inbox Enter, Live Enter and the click the picker
+  swallows (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
+  the empty Live tile (`ui_test.rs`); the rest of the tile drawing is
+  untested.

@@ -357,6 +357,58 @@ pub fn foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
     )
 }
 
+/// What a glyph a level down pays, as a percentage of its own pay, bits
+/// and exp alike. LoGD's slumming pays the lower creature in full; here the
+/// step down is the way out of a fight you cannot win, not a cheaper farm,
+/// so it pays half. Rounded down.
+pub const LOWER_PAY_PERCENT: i64 = 50;
+
+/// The glyph a level below a runner of `level`, its pay cut to
+/// [`LOWER_PAY_PERCENT`]. `None` at level 1: there is nothing below the
+/// flicker.
+pub fn lower_foe_for_level(level: i32) -> Option<(usize, &'static FoeKind, FoeTier)> {
+    match level {
+        i32::MIN..=1 => None,
+        level => {
+            let (index, kind, tier) = foe_for_level(level - 1);
+            Some((
+                index,
+                kind,
+                FoeTier {
+                    bits: tier.bits * LOWER_PAY_PERCENT / 100,
+                    exp: tier.exp * LOWER_PAY_PERCENT / 100,
+                    ..tier
+                },
+            ))
+        }
+    }
+}
+
+/// The locker's cut of every deposit, a percentage of what goes in,
+/// rounded up so no deposit is free. LoGD's bank takes nothing and pays
+/// interest; the locker pays none and takes this. Withdrawals are free.
+pub const LOCKER_FEE_PERCENT: i64 = 10;
+
+/// What the bits machine lends a runner, per level: the cap a loan fills
+/// the debt up to. A level-2 runner can borrow the two tier-1 pieces.
+pub const LOAN_PER_LEVEL: i64 = 50;
+
+/// The machine's fee on every loan, a percentage of what it hands over,
+/// rounded up, added to the debt once when it lends. The debt never grows
+/// after that: a day roll is any touch on the row (a connect is one), so a
+/// daily rate would bill a runner for days they never fought.
+pub const LOAN_FEE_PERCENT: i64 = 10;
+
+/// The share of every glyph's bits the machine takes toward the debt
+/// before the rest reaches your hand, a percentage, rounded down.
+pub const GARNISH_PERCENT: i64 = 50;
+
+/// `amount` times `percent` over a hundred, rounded up: the locker's cut
+/// and the machine's fee never round away to nothing.
+pub fn percent_up(amount: i64, percent: i64) -> i64 {
+    (amount * percent + 99) / 100
+}
+
 /// The bits the street takes when the signal drops: everything on hand.
 pub const DROP_LINES: [&str; 3] = [
     "your signal drops. the street goes quiet around you, then goes on without you.",
@@ -374,6 +426,9 @@ pub const RUN_LINES: [&str; 2] = [
     "you get away. the static closes behind you.",
     "you back out of the picture. it does not follow.",
 ];
+
+/// The lower glyph's arrival, under its own line: the step down is said.
+pub const STEPPED_DOWN_LINE: &str = "you went looking for something smaller. it pays like it.";
 
 pub const RUN_FAILED_LINES: [&str; 2] = [
     "you turn and it is already there.",

@@ -11,9 +11,8 @@ use crate::app::{
     common::theme,
 };
 
-/// The preview block: one fixed size for the sidebar and the profile, the
-/// sidebar's width, so both show the same picture of the tree and the
-/// scale is the same in each. Twelve tree rows over the pot row.
+/// The preview block: the sidebar's one fixed size. Twelve tree rows over
+/// the pot row.
 pub(crate) const PREVIEW_WIDTH: usize = 21;
 pub(crate) const PREVIEW_HEIGHT: usize = 13;
 
@@ -129,13 +128,24 @@ pub(crate) fn apply_sway(lines: &mut [Line<'static>], wall_tick: usize) {
 
 /// The tree at its one true size: the whole canvas, pot on the last row,
 /// trunk rooted at the center column. The care modal draws exactly this
-/// block; the preview below is a scaled reading of it.
+/// block, the profile's bonsai section draws it through `canvas_lines_in`, and the
+/// preview below is a scaled reading of it.
 pub(crate) fn canvas_lines(state: &BonsaiState, show_selection: bool) -> Vec<Line<'static>> {
     render_tree_lines(state, CANVAS_WIDTH, CANVAS_HEIGHT, show_selection)
 }
 
+/// The canvas at its true size in an area `width` columns wide, for the
+/// profile's bonsai section. Never scaled: a wider area centers it, a narrower one
+/// cuts the same columns off both sides, so the trunk stays centered.
+pub(crate) fn canvas_lines_in(state: &BonsaiState, width: usize) -> Vec<Line<'static>> {
+    let block_width = width.min(CANVAS_WIDTH);
+    let mut lines = render_tree_lines(state, block_width, CANVAS_HEIGHT, false);
+    center_lines(&mut lines, width, block_width);
+    lines
+}
+
 /// The preview: the true canvas fitted into the fixed `PREVIEW_WIDTH` x
-/// `PREVIEW_HEIGHT` block for the sidebar and the profile. It never
+/// `PREVIEW_HEIGHT` block for the sidebar. It never
 /// invents anything. When the tree fits, this is the modal's own glyphs,
 /// trimmed around the trunk. When it does not, one integer scale factor
 /// is applied to both axes, so the block keeps the modal's proportions;

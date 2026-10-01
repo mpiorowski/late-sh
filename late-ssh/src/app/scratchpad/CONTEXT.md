@@ -5,7 +5,7 @@
 - Primary audience: LLM agents working in `late-ssh/src/app/scratchpad`, the `/pair` chat command, or `Screen::Scratchpad`
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
-- Related context: `../chat/CONTEXT.md` (command parsing/dispatch), `../clubhouse/CONTEXT.md` (the `SharedLobby` registry idiom this mirrors)
+- Related context: `../chat/CONTEXT.md` (command parsing/dispatch)
 
 ---
 
@@ -18,7 +18,7 @@ Owned by this domain:
 - `Screen::Scratchpad` input/render.
 
 Out of scope (deliberate v1 boundaries, see root roadmap's "Micro-collab tools" line):
-- DB persistence. The pairing is in-memory only, same tier as `SessionRegistry`/`active_users`/`clubhouse::lobby::SharedLobby`; it is lost if both sides disconnect or the process restarts.
+- DB persistence. The pairing is in-memory only, same tier as `SessionRegistry`/`active_users`; it is lost if both sides disconnect or the process restarts.
 - Operational-transform/CRDT merge. Every publish overwrites the whole buffer; concurrent edits from both sides can clobber each other. Acceptable for a two-person scratchpad, not for a real collaborative editor.
 - More than two participants.
 - Mouse click targets (keyboard-only editing via `ratatui-textarea`).
@@ -44,9 +44,9 @@ late-ssh/src/app/scratchpad/
 ```
 
 Cross-crate/cross-module touchpoints:
-- `late-ssh/src/state.rs`: root `State::scratchpad_registry` (constructed once in `main.rs`, alongside `clubhouse_lobby`).
+- `late-ssh/src/state.rs`: root `State::scratchpad_registry` (constructed once in `main.rs`).
 - `late-ssh/src/app/state.rs`: `SessionConfig::scratchpad_registry`, `App::{scratchpad_registry, scratchpad}`, and the `Screen::Scratchpad` leave hook in `App::set_screen`.
-- `late-ssh/src/session_bootstrap.rs`, `late-ssh/src/ssh.rs`, `late-ssh/src/test_helpers.rs`: thread `scratchpad_registry` through `SessionConfig` construction, same sites as `clubhouse_lobby`.
+- `late-ssh/src/session_bootstrap.rs`, `late-ssh/src/ssh.rs`, `late-ssh/src/test_helpers.rs`: thread `scratchpad_registry` through `SessionConfig` construction.
 - `late-ssh/src/app/tick.rs`: calls `pair::poll` and `scratchpad.sync_from_shared()` once per tick.
 - `late-ssh/src/app/input.rs`: the `Screen::Scratchpad` dedicated-input dispatch. Nothing in this domain gates global input.
 - `late-ssh/src/app/render.rs`: `DrawContext::scratchpad`, the `Screen::Scratchpad` draw arm, and the page-title match.
@@ -62,7 +62,7 @@ Keep `mod.rs` declaration-only.
 
 Pairing is a **mutual handshake**, and that is the load-bearing decision here. `/pair @b` from a records a one-sided intent and leaves b a banner; b's session is otherwise untouched. The pairing exists only once b answers `/pair @a`. Nothing in this domain can push state onto a session that did not ask for it, which is why there is no accept/decline prompt and nothing that gates global input. Do not reintroduce a one-sided invite: a remote-triggered prompt that owns the keyboard wedges the session it lands on.
 
-`SharedScratchpadRegistry` (`registry.rs`) is a single-replica, in-process `Arc<Mutex<..>>`, modeled on `clubhouse::lobby::SharedLobby`:
+`SharedScratchpadRegistry` (`registry.rs`) is a single-replica, in-process `Arc<Mutex<..>>`:
 - `intents: HashMap<Uuid, PairIntent>`: one-sided asks keyed by the user who ran `/pair` first, carrying that session's token and the timestamp. A newer ask from the same user overwrites the old one.
 - `notices: HashMap<Uuid, PairNotice>`: undrained "@x wants to pair" banners keyed by the target. Purely informational.
 - `notified_at: HashMap<(Uuid, Uuid), Instant>`: when each asker last pinged each target, so re-running `/pair` in a loop cannot spam a banner slot. Keyed by both ends on purpose: one asker must not be able to mute anyone else's ask.

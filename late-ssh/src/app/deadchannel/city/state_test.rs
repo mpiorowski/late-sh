@@ -116,3 +116,24 @@ fn enter_at_the_railing_looks_over_the_ledge_and_enter_again_steps_back() {
     state.dismiss();
     assert!(!state.at_ledge());
 }
+
+#[test]
+fn leaning_out_only_happens_at_the_ledge_and_never_outlives_it() {
+    let mut state = State::new();
+    state.arm_reset();
+    assert!(!state.reset_armed(), "no leaning out from the street");
+
+    state.look_over();
+    state.arm_reset();
+    assert!(state.reset_armed());
+    state.disarm_reset();
+    assert!(!state.reset_armed());
+
+    state.arm_reset();
+    state.dismiss();
+    state.look_over();
+    assert!(
+        !state.reset_armed(),
+        "stepping back and looking again starts leaned in"
+    );
+}

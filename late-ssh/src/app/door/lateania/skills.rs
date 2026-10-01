@@ -187,7 +187,8 @@ impl fmt::Display for CraftSkill {
 
 /// The **Animal Taming** trade: the beastmaster's skill. Unlike the gathering
 /// and crafting trades it has no station or node - it is trained by taming wild
-/// beasts of Broceliande into companions (see `taming.rs`). It levels
+/// beasts of Broceliande into companions, and passively by a share of every kill
+/// made with a standing companion at heel (see `taming.rs`). It levels
 /// 1..=SKILL_MAX_LEVEL on the very same shared curve, and its xp lives as a single value on
 /// `PlayerState` (there is only one taming trade, so no enum of variants is
 /// needed). This zero-sized marker just carries the stable key/label so the

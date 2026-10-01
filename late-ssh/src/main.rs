@@ -202,7 +202,7 @@ async fn main() -> anyhow::Result<()> {
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
         .with_irc_registry(irc_registry.clone());
-    let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone());
     let _article_notify_task =
         article_service.start_notify_worker(pg_listener.subscribe(ArticleService::CHANNELS));
     let feed_service = FeedService::new(db.clone());
@@ -241,7 +241,9 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         activity_publisher.clone(),
     );
-    daily_service.refresh_task();
+    let _daily_notify_task = daily_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::lobby::daily::svc::DailyService::CHANNELS),
+    );
     daily_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
@@ -371,6 +373,13 @@ async fn main() -> anyhow::Result<()> {
     let _runner_look_notify_task = runner_look_service.start_notify_worker(
         pg_listener.subscribe(late_ssh::app::deadchannel::runner::svc::RunnerLookService::CHANNELS),
     );
+    // Presence (the tavern, the Nightcap stools, the night city street):
+    // this replica's sessions go out batched over `pg_notify`, every other
+    // replica's come in through the listener. See `app/presence/svc.rs`.
+    let presence_service = late_ssh::app::presence::svc::PresenceService::start(
+        db.clone(),
+        pg_listener.subscribe(late_ssh::app::presence::svc::PresenceService::CHANNELS),
+    );
     // The crown's glyph crosses replicas over Postgres, not over any
     // in-process broadcast; the listener also seeds this replica's holder on
     // every (re)connect. See `app/crown/svc.rs`.
@@ -396,12 +405,12 @@ async fn main() -> anyhow::Result<()> {
     let _quest_notify_task = quest_service
         .start_notify_worker(pg_listener.subscribe(late_ssh::app::QuestService::CHANNELS));
     let flair_directory = late_ssh::app::common::username_effect::new_directory();
-    let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
+    let drunk_map = late_ssh::app::clubhouse::drunk::DrunkMap::new();
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone())
         .with_ai_service(ai_service.clone())
-        .with_clubhouse_lobby(clubhouse_lobby.clone());
+        .with_drunk_map(drunk_map.clone());
     let _shop_notify_task = shop_service
         .start_notify_worker(pg_listener.subscribe(late_ssh::app::ShopService::CHANNELS));
     // Every notify-driven domain is subscribed by now.
@@ -414,7 +423,6 @@ async fn main() -> anyhow::Result<()> {
             late_ssh::app::arcade::nonogram::state::Library::default()
         }
     };
-    let nightcap_lobby = late_ssh::app::clubhouse::nightcap::lobby::SharedSeats::new();
     let nightcap_house = late_ssh::app::clubhouse::nightcap::svc::NightcapHouse::new(
         db.clone(),
         late_ssh::app::clubhouse::nightcap::wall::SharedWall::new(),
@@ -429,7 +437,7 @@ async fn main() -> anyhow::Result<()> {
         activity_tx.clone(),
         username_directory.clone(),
         chip_service.clone(),
-        clubhouse_lobby.clone(),
+        drunk_map.clone(),
         mention_ladders.clone(),
         nightcap_room_id,
     );
@@ -495,8 +503,7 @@ async fn main() -> anyhow::Result<()> {
         conn_counts,
         pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
-        clubhouse_lobby,
-        nightcap_lobby,
+        drunk_map,
         nightcap_house: nightcap_house.clone(),
         mention_ladders,
         scratchpad_registry,
@@ -515,6 +522,7 @@ async fn main() -> anyhow::Result<()> {
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         app_flags: app_flag_service.clone(),
         runner_looks: runner_look_service.clone(),
+        presence: presence_service,
     };
 
     let session_shutdown = CancellationToken::new();

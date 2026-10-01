@@ -361,12 +361,9 @@ pub struct SessionConfig {
         >,
     >,
     pub active_users: Option<ActiveUsers>,
-    /// Process-global clubhouse presence (seats, walkers, emotes). `None`
-    /// on headless/test paths, which keeps the room session-local.
-    pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
-    /// Process-global Nightcap seats. `None` on headless/test paths, same
-    /// as `clubhouse_lobby`.
-    pub nightcap_lobby: Option<crate::app::clubhouse::nightcap::lobby::SharedSeats>,
+    /// The process's drunk map (`clubhouse/drunk.rs`): a mirror of
+    /// `user_drinks` for the tavern's wobble and the chat author tint.
+    pub drunk_map: crate::app::clubhouse::drunk::DrunkMap,
     pub nightcap_house: Option<crate::app::clubhouse::nightcap::svc::NightcapHouse>,
     /// Process-global ghost-bot mention cooldown ladders, peeked at composer
     /// submit for the cooldown banner. Tests pass a fresh instance.
@@ -392,6 +389,10 @@ pub struct SessionConfig {
     /// tick edge into `App::runner_looks` for the #deadchannel portraits.
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
+    /// The replica's presence (`app/presence`): who is where in the tavern,
+    /// on the Nightcap stools and on the night city street, across every
+    /// replica.
+    pub presence: crate::app::presence::svc::PresenceService,
     /// The stored Rice layout (`app/zen`), `None` until first edited.
     pub zen_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
@@ -553,6 +554,12 @@ pub struct App {
     /// The night city page (`app/deadchannel/city`): where the runner
     /// stands, the open shop panel, the street's last line.
     pub(crate) city: crate::app::deadchannel::city::state::State,
+    /// This session's runner on the shared street and its view of everyone
+    /// else's (`app/deadchannel/street`).
+    pub(crate) street: crate::app::deadchannel::street::state::StreetPresence,
+    /// This session's presence: publishes the record the rooms' parts make
+    /// up, and copies everyone's on the tick (`app/presence/session.rs`).
+    pub(crate) presence: crate::app::presence::session::PresenceSession,
     /// Chips backend, kept for the clubhouse's on-the-house welcome pour.
     pub(crate) chip_service: crate::app::games::chips::svc::ChipService,
     /// Staff bot ids from the active-users map, for speech bubbles and the
@@ -560,7 +567,7 @@ pub struct App {
     pub(crate) clubhouse_bartender_id: Option<Uuid>,
     pub(crate) clubhouse_graybeard_id: Option<Uuid>,
     pub(crate) clubhouse_bot_id: Option<Uuid>,
-    /// Per-author drunk levels (1-4) copied from the shared lobby about once
+    /// Per-author drunk levels (1-4) copied from the drunk map about once
     /// a second; chat author labels tint from this owned map, never the mutex.
     pub(crate) drunk_levels: HashMap<Uuid, u8>,
     /// Resolved name flair (username-effect style and rented title), rebuilt
@@ -627,10 +634,11 @@ pub struct App {
     /// The terminal cursor's last reported cell (0-based), for the pet to
     /// walk after. `None` until the terminal reports one.
     pub(crate) last_mouse: Option<(u16, u16)>,
-    /// Where the top-border "N unread mentions" text was drawn last frame,
-    /// for the HUD click hit test; `None` when nothing is unread. Only the
-    /// mentions segment is clickable, not the voice/chips text after it.
-    pub(crate) last_mentions_hud_rect: std::cell::Cell<Option<Rect>>,
+    /// Where each clickable status bar segment landed last frame, in paint
+    /// order. Rebuilt every frame by the bar's layout pass, so a reordered,
+    /// resized, or dropped segment cannot leave a stale click target behind.
+    pub(crate) last_status_hits:
+        std::cell::RefCell<Vec<(late_core::models::statusline::StatusComponent, Rect)>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -866,6 +874,8 @@ pub struct App {
     pub(crate) lobby: crate::app::lobby::state::LobbyState,
     /// Daily correspondence games: sidebar panel and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
+    /// The live strip at the top of the #lounge card.
+    pub(crate) live: crate::app::live::state::LiveState,
     /// House tables: the fixed multiplayer tables behind the Lobby modal.
     pub(crate) house: crate::app::lobby::house::state::HouseState,
     pub(crate) twenty_forty_eight_state: crate::app::arcade::twenty_forty_eight::state::State,
@@ -1422,6 +1432,13 @@ impl App {
             config.first_contact,
             config.first_contact_gate,
         );
+        // One session id for this session's presence record and every room
+        // that owns a part of it; the tavern seats this session now, from
+        // what presence already knows.
+        let session_id = Uuid::now_v7();
+        let presence_records = config.presence.records();
+        let presence =
+            crate::app::presence::session::PresenceSession::new(&config.presence, session_id);
         let mut app = Self {
             running: true,
             size: (cols, rows),
@@ -1485,19 +1502,25 @@ impl App {
             now_playing_rx: config.now_playing_rx,
             radio_meta_rx: config.radio_meta_rx,
             clubhouse: crate::app::clubhouse::state::State::new(
-                config.clubhouse_lobby.clone(),
+                session_id,
                 config.user_id,
                 config.username.clone(),
                 !config.clubhouse_tutorial_done,
+                presence_records.clone(),
+                config.drunk_map.clone(),
+                crate::app::presence::svc::now_ms(),
             ),
             nightcap: crate::app::clubhouse::nightcap::state::State::new(
-                config.nightcap_lobby.clone(),
                 config.nightcap_house.as_ref().map(|house| house.wall()),
+                session_id,
                 config.user_id,
                 config.username.clone(),
+                presence_records,
             ),
             nightcap_house: config.nightcap_house,
             city: crate::app::deadchannel::city::state::State::new(),
+            street: crate::app::deadchannel::street::state::StreetPresence::new(),
+            presence,
             fight,
             tailor,
             guide,
@@ -1545,7 +1568,7 @@ impl App {
             last_pet_rect: std::cell::Cell::new(None),
             last_pet_frame: std::cell::Cell::new(None),
             last_mouse: None,
-            last_mentions_hud_rect: std::cell::Cell::new(None),
+            last_status_hits: std::cell::RefCell::new(Vec::new()),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1721,6 +1744,7 @@ impl App {
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
+            live: crate::app::live::state::LiveState::new(),
             house: crate::app::lobby::house::state::HouseState::new(
                 config.user_id,
                 config.house_registry,
@@ -1777,7 +1801,9 @@ impl App {
         // below for all three). Zen: focus the first chat tile and size the
         // reef to its tile, as `Ctrl+F` would.
         match landing {
-            LandingPage::Clubhouse => app.clubhouse.enter_screen(),
+            LandingPage::Clubhouse => app
+                .clubhouse
+                .enter_screen(crate::app::presence::svc::now_ms()),
             LandingPage::Home => app.chat.request_list(),
             LandingPage::Zen => {
                 app.zen.note_opened();
@@ -2338,10 +2364,10 @@ impl App {
         // There are six of them and sitting is the room's one verb, so a
         // seat kept across a screen change is a claim that outlives the
         // visit: six such claims close the bar for the rest of those
-        // sessions. `SharedSeats::sync` cannot clean this up, since it only
-        // evicts users who left `active_users`, which means disconnected.
+        // sessions; presence only drops a stool with its session.
         if self.screen == Screen::Nightcap && screen != Screen::Nightcap {
-            self.nightcap.leave_screen();
+            self.nightcap
+                .leave_screen(crate::app::presence::svc::now_ms());
         }
 
         if self.screen == Screen::Scratchpad && screen != Screen::Scratchpad {
@@ -2429,7 +2455,8 @@ impl App {
             self.enter_directory();
         }
         if self.screen == Screen::Clubhouse {
-            self.clubhouse.enter_screen();
+            self.clubhouse
+                .enter_screen(crate::app::presence::svc::now_ms());
         }
         // The first-visit tour advances on page entry, so digits and Tab
         // both move it along.
@@ -2731,11 +2758,10 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::ToggleMute)
     }
 
-    /// Sync the clubhouse animation clock to the wall-clock world tick and,
-    /// while the screen is up, sync the shared lobby with the active-users
-    /// map about once a second and pull a fresh crowd snapshot every tick.
-    /// Bots stay out of the seat pool; the two staff bots (@bartender,
-    /// @graybeard) only toggle their fixed spots.
+    /// Advance the tavern's clock and, while the screen is up, look for the
+    /// always-on bots about once a second and redraw the crowd every tick
+    /// (the dog and the emotes run on the clock). The crowd itself comes
+    /// from presence (`App::sync_presence`), on every screen.
     pub(crate) fn tick_clubhouse(&mut self) {
         self.clubhouse.tick(self.marquee_tick as u64);
         if self.screen != Screen::Clubhouse {
@@ -2743,30 +2769,24 @@ impl App {
         }
 
         if self.clubhouse.roster_refresh_due() {
-            let mut roster = Vec::new();
+            // The bots register in the active-users map with no fingerprint
+            // (humans always authenticate with an SSH key). Everyone else
+            // comes from presence.
             let mut graybeard = None;
             let mut bartender = None;
             let mut bot = None;
             if let Some(active_users) = &self.active_users {
                 let active_users = active_users.lock_recover();
                 for (user_id, user) in active_users.iter() {
-                    // Ghost bots register with no fingerprint; humans always
-                    // authenticate with an SSH key.
-                    if user.fingerprint.is_none() {
-                        match user.username.as_str() {
-                            "graybeard" => graybeard = Some(*user_id),
-                            "bartender" => bartender = Some(*user_id),
-                            "bot" => bot = Some(*user_id),
-                            _ => {}
-                        }
+                    if user.fingerprint.is_some() {
                         continue;
                     }
-                    // The roster includes this session's own user: everyone
-                    // holds a seat in the shared lobby until they walk.
-                    roster.push(crate::app::clubhouse::state::Occupant {
-                        user_id: *user_id,
-                        username: user.username.clone(),
-                    });
+                    match user.username.as_str() {
+                        "graybeard" => graybeard = Some(*user_id),
+                        "bartender" => bartender = Some(*user_id),
+                        "bot" => bot = Some(*user_id),
+                        _ => {}
+                    }
                 }
             }
             self.clubhouse.graybeard_online = graybeard.is_some();
@@ -2775,10 +2795,10 @@ impl App {
             self.clubhouse_graybeard_id = graybeard;
             self.clubhouse_bartender_id = bartender;
             self.clubhouse_bot_id = bot;
-            self.clubhouse.refresh_roster(roster);
         }
 
-        self.clubhouse.refresh_snapshot();
+        self.clubhouse
+            .refresh_crowd(crate::app::presence::svc::now_ms());
 
         let lounge_messages = self
             .chat
@@ -2792,37 +2812,63 @@ impl App {
         );
     }
 
-    /// Sync Nightcap's seats with the active-users map about once a second
-    /// while the screen is up, same cadence as `tick_clubhouse`. Only drops
-    /// disconnected occupants — unlike the Clubhouse, nobody holds a seat
-    /// until they press a number key, so there is no roster to seat people
-    /// into.
+    /// Advance Nightcap's clock and land settled orders. The stools come
+    /// from presence (`App::sync_presence`); while the screen is up the row
+    /// and the wall are redrawn every tick, so a pour or a carve by someone
+    /// else shows without a keypress.
     /// Returns whether the bar changed on screen and a frame is owed: a
     /// settled order or carve, another patron's stool, a pour, the TV.
     pub(crate) fn tick_nightcap(&mut self) -> bool {
+        let now_ms = crate::app::presence::svc::now_ms();
         let mut changed = self.nightcap.tick(self.marquee_tick as u64);
         // Settled orders land whether or not the screen is up: the chips
         // moved either way, and the footer should say so on the next visit.
-        changed |= self.nightcap.drain_outcomes();
+        changed |= self.nightcap.drain_outcomes(now_ms);
         if self.screen != Screen::Nightcap {
             return false;
         }
+        changed |= self.nightcap.refresh_snapshot(now_ms);
+        changed
+    }
 
-        if self.nightcap.roster_refresh_due() {
-            let mut roster = Vec::new();
-            if let Some(active_users) = &self.active_users {
-                let active_users = active_users.lock_recover();
-                for (user_id, user) in active_users.iter() {
-                    if user.fingerprint.is_none() {
-                        continue; // ghost bots don't hold a seat
-                    }
-                    roster.push((*user_id, user.username.clone()));
-                }
-            }
-            self.nightcap.refresh_roster(&roster);
+    /// Copy the latest presence records into every room that derives from
+    /// them, then publish this session's record, built from the rooms that
+    /// own its parts. Every tick: `publish` sends only a change. Returns
+    /// whether a room on screen moved.
+    pub(crate) fn sync_presence(&mut self) -> bool {
+        let now_ms = crate::app::presence::svc::now_ms();
+        // The live profile name: the record carries it to everyone else,
+        // and the rooms draw this session's own patron and stool with it.
+        let username = self.profile_state.profile().username.clone();
+        self.clubhouse.set_username(&username);
+        self.nightcap.set_username(&username);
+        let mut changed = false;
+        if self.presence.refresh() {
+            let records = self.presence.records.clone();
+            self.clubhouse.set_records(records.clone(), now_ms);
+            changed |= self.nightcap.set_records(records.clone(), now_ms)
+                && self.screen == Screen::Nightcap;
+            // The city frame builds a light map, so it is bought only when
+            // the street itself moved, not for a step in the tavern.
+            let street_moved = self.street.set_records(&records);
+            changed |=
+                self.screen == Screen::Clubhouse || (street_moved && self.screen == Screen::City);
         }
-
-        changed |= self.nightcap.refresh_snapshot();
+        self.street.sync(
+            self.city.player_x,
+            self.city.player_y,
+            self.screen == Screen::City,
+            now_ms,
+        );
+        let record = late_core::models::presence::PresenceRecord {
+            session_id: self.presence.session_id(),
+            user_id: self.user_id,
+            username,
+            clubhouse: self.clubhouse.stand(),
+            nightcap: self.nightcap.stand(),
+            street: self.street.stand(),
+        };
+        self.presence.publish(record);
         changed
     }
 
@@ -2834,16 +2880,13 @@ impl App {
         let Some(order) = self.nightcap.pick(order) else {
             return;
         };
-        let Some(seats) = self.nightcap.seats_handle() else {
-            return;
-        };
         crate::app::clubhouse::nightcap::svc::spawn_order(
             self.chip_service.clone(),
-            self.clubhouse.lobby_handle(),
-            seats,
+            self.clubhouse.drunk_handle(),
             self.nightcap_voice(),
             self.user_id,
             order,
+            self.nightcap.round_patrons(),
             self.nightcap.outcome_sender(),
         );
     }
@@ -3013,7 +3056,7 @@ impl App {
         );
 
         let chip_service = self.chip_service.clone();
-        let lobby = self.clubhouse.lobby_handle();
+        let drunk = self.clubhouse.drunk_handle();
         let target = self.user_id;
         tokio::spawn(async move {
             // The line is already on screen; the buzz catches up. A failed comp
@@ -3023,9 +3066,7 @@ impl App {
                 .await
             {
                 Ok(Some(drinks)) => {
-                    if let Some(lobby) = lobby {
-                        lobby.record_drink(target, drinks.drunk_points, drinks.last_drink_at);
-                    }
+                    drunk.record_drink(target, drinks.drunk_points, drinks.last_drink_at);
                 }
                 // They have drunk before (a tour rerun after a mid-tour
                 // disconnect): the line is just flavor, nothing to glow.
@@ -3064,14 +3105,20 @@ impl App {
             AudioSource::Youtube => AudioSource::Icecast,
             AudioSource::Icecast => AudioSource::Radio,
         };
-        self.paired_source = next;
+        self.set_paired_playback_source(next);
+        next
+    }
+
+    /// Switch the per-user audio source preference to `source`, persisted
+    /// and pushed to paired clients the same way the toggle is.
+    pub fn set_paired_playback_source(&mut self, source: late_core::models::user::AudioSource) {
+        self.paired_source = source;
         if let Some(active_users) = &self.active_users
             && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
         {
-            active.audio_source = next;
+            active.audio_source = source;
         }
-        self.audio.persist_audio_source(next);
-        next
+        self.audio.persist_audio_source(source);
     }
 
     pub fn select_icecast_stream(&mut self, stream: late_core::models::user::IcecastStream) {

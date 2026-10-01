@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -158,11 +160,11 @@ fn render_surface_wave(buf: &mut Buffer, area: Rect, tick: u64) {
         return;
     }
 
-    let shift = (tick / 2) as u16;
+    let shift = tick / 2;
     let style = Style::new().fg(theme::BORDER_ACTIVE());
     let buffer = &mut *buf;
     for x in 0..area.width {
-        let phase = (x + shift) % 8;
+        let phase = (u64::from(x) + shift) % 8;
         let symbol = match phase {
             0..=2 => "~",
             4..=5 => "-",
@@ -459,3 +461,107 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         height.min(area.height),
     )
 }
+
+/// Rows of the sidebar tank: the surface, four rows of water, the floor.
+pub(crate) const MINI_TANK_HEIGHT: u16 = 6;
+const MINI_WATER_ROWS: usize = MINI_TANK_HEIGHT as usize - 2;
+/// A 21-cell band holds this many glyphs before it reads as noise.
+const MINI_MAX_CREATURES: usize = 10;
+/// Copies of one kind drawn at most, so a school of ten does not crowd out
+/// every other kind.
+const MINI_MAX_PER_KIND: usize = 2;
+/// Wall ticks (66ms) per one-cell step for the quickest fish; the others
+/// take two or three times as long.
+const MINI_STEP_TICKS: usize = 4;
+/// Hungry fish lie on the bottom row and barely move.
+const MINI_HUNGRY_SLOWDOWN: usize = 4;
+const MINI_FLOOR: &str = "._.-^-.__-._";
+
+/// The sidebar tank: the owned population as one-to-three-cell glyphs
+/// (`CreatureDef::mini`) in a fixed band, `MINI_TANK_HEIGHT` rows tall.
+/// Stateless like the bonsai sway: where each creature is comes from the
+/// wall tick alone, so there is no simulation to step and the panel rides
+/// the sidebar's anim_half frames. It reads the reef's population and
+/// colours (the fry in its parent's, the sprout on the floor) and nothing
+/// else of the simulation. Swimmers take the water rows in turn and swim
+/// wall to wall, each at its own pace; floor-bound creatures stand still
+/// on the bottom row; hungry fish sink to that row and slow down.
+pub(crate) fn draw_mini_tank(
+    buf: &mut Buffer,
+    area: Rect,
+    app: &AquariumState,
+    hungry: bool,
+    tick: usize,
+) {
+    if area.width == 0 || area.height < MINI_TANK_HEIGHT {
+        return;
+    }
+    let band = Rect::new(area.x, area.y, area.width, MINI_TANK_HEIGHT);
+    render_surface_wave(buf, band, tick as u64);
+    let floor_style = Style::new().fg(theme::BORDER_DIM());
+    let floor: String = MINI_FLOOR
+        .chars()
+        .cycle()
+        .take(band.width as usize)
+        .collect();
+    buf.set_string(band.x, band.bottom() - 1, floor, floor_style);
+
+    let width = band.width as usize;
+    let bottom_row = band.y + MINI_WATER_ROWS as u16;
+    let mut drawn_per_kind: HashMap<usize, usize> = HashMap::new();
+    let mut plants = 0usize;
+    let mut swimmers = 0usize;
+    for entity in &app.entities {
+        if plants + swimmers == MINI_MAX_CREATURES {
+            break;
+        }
+        let drawn = drawn_per_kind.entry(entity.def).or_insert(0);
+        if *drawn == MINI_MAX_PER_KIND {
+            continue;
+        }
+        *drawn += 1;
+        let def = &app.definitions[entity.def];
+        let style = Style::new().fg(entity.color);
+        if def.is_floor_bound() {
+            let glyph = &def.mini.right;
+            let travel = width.saturating_sub(glyph_width(glyph)) + 1;
+            let x = (plants * 7 + 3) % travel;
+            buf.set_string(band.x + x as u16, bottom_row, glyph, style);
+            plants += 1;
+            continue;
+        }
+        let ordinal = swimmers;
+        swimmers += 1;
+        let (row, step) = if hungry {
+            (bottom_row, MINI_STEP_TICKS * MINI_HUNGRY_SLOWDOWN)
+        } else {
+            (
+                band.y + 1 + (ordinal % MINI_WATER_ROWS) as u16,
+                MINI_STEP_TICKS * (1 + ordinal % 3),
+            )
+        };
+        let glyph_cells = glyph_width(&def.mini.right).max(glyph_width(&def.mini.left));
+        let travel = width.saturating_sub(glyph_cells);
+        let (x, glyph) = match travel {
+            0 => (0, &def.mini.right),
+            _ => {
+                let lap = 2 * travel;
+                let pos = (tick / step + ordinal * 5) % lap;
+                if pos < travel {
+                    (pos, &def.mini.right)
+                } else {
+                    (lap - pos, &def.mini.left)
+                }
+            }
+        };
+        buf.set_string(band.x + x as u16, row, glyph, style);
+    }
+}
+
+fn glyph_width(glyph: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(glyph)
+}
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

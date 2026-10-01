@@ -2,6 +2,7 @@ name "bigbert"
 title "a large sea turtle"
 description "broad hexagonal-patterned shell, small round eye, and trailing rear flippers"
 sauce author=mevanlc date=20260503 license=CCBYSA4.0
+mini left="<@@" right="@@>"
 
 count 0
 

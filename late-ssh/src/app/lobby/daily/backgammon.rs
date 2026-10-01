@@ -326,7 +326,10 @@ impl DailyBackgammonState {
     }
 
     pub fn is_finished(&self) -> bool {
-        !matches!(self.status(), BackgammonStatus::Ongoing)
+        match self.status() {
+            BackgammonStatus::Ongoing => false,
+            BackgammonStatus::Win(_) | BackgammonStatus::Draw => true,
+        }
     }
 
     /// The current verdict: fifteen borne off wins, and the defensive stall
@@ -423,7 +426,7 @@ impl DailyBackgammonState {
     pub fn roll_next(&mut self) {
         let mut rng = rand::thread_rng();
         loop {
-            if !matches!(self.status(), BackgammonStatus::Ongoing) {
+            if self.is_finished() {
                 self.next_roll = None;
                 return;
             }

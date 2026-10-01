@@ -13,6 +13,7 @@ use late_core::models::{
     irc_token::IrcToken,
     profile::ProfileParams,
     server_ban::{ServerBan, ServerBanActivation},
+    statusline::default_statusline_components,
     user::{RightSidebarMode, default_right_sidebar_components},
 };
 use late_core::shutdown::CancellationToken;
@@ -765,6 +766,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,

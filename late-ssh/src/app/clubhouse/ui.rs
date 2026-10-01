@@ -6,7 +6,7 @@
 //! the door. Dwarf Fortress vibes, single-width glyphs only: walking people
 //! are 3-row stick figures (`o` head, `/|\` arms, `Λ` legs; you get an `@`),
 //! a seated user is an `o` perched on their stool, and the dog is a pocket
-//! `(ᴥ)` with a wagging tail that trots wherever the shared lobby says.
+//! `(ᴥ)` with a wagging tail that trots on the clock (`crowd::dog_at`).
 
 use ratatui::{
     Frame,
@@ -26,7 +26,9 @@ use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
 
-use super::lobby::{Emote, Placement};
+use late_core::models::presence::Emote;
+
+use super::crowd::Placement;
 use super::map;
 use super::state::{BannerLine, ClubhouseHit, State, Tutorial};
 
@@ -571,13 +573,14 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
     }
 
     // The dog: a pocket wanderer, `(ᴥ)` plus a wagging tail, drawn from the
-    // shared lobby so every session sees the same trot. Napping slows the
+    // crowd, whose dog runs on the wall clock so every session on every
+    // replica sees the same trot. Napping slows the
     // tail and drifts a `z`; a fresh pet speeds it up, floats hearts, and
     // credits the petter.
-    let dog = view.state.snapshot.dog;
+    let dog = view.state.crowd.dog;
     let (dx, dy) = (dog.x, dog.y);
     let amber = Style::default().fg(theme::AMBER());
-    let petted = view.state.snapshot.dog_pet.as_ref();
+    let petted = view.state.crowd.dog_pet.as_ref();
     set(cells, dx.saturating_sub(1), dy, '(', amber);
     set(cells, dx, dy, 'ᴥ', amber);
     set(cells, dx + 1, dy, ')', amber);
@@ -773,7 +776,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
     }
 
     let own_id = state.own_user_id();
-    for who in state.snapshot.people.iter().filter(|p| p.user_id != own_id) {
+    for who in state.crowd.people.iter().filter(|p| p.user_id != own_id) {
         let style = Style::default().fg(occupant_color(who.user_id));
         let label_style = Style::default().fg(theme::TEXT_DIM());
         let (anchor, (x0, y0, x1, y1)) = draw_presence(
@@ -803,12 +806,12 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
         }
     }
 
-    if view.state.snapshot.door_overflow > 0 {
+    if view.state.crowd.door_overflow > 0 {
         put_label(
             cells,
             map::DOOR_LABEL.0,
             map::DOOR_LABEL.1,
-            &format!("+{} at the door", view.state.snapshot.door_overflow),
+            &format!("+{} at the door", view.state.crowd.door_overflow),
             Style::default().fg(theme::AMBER_DIM()),
         );
     }
@@ -821,15 +824,11 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
         .fg(theme::TEXT_BRIGHT())
         .add_modifier(Modifier::BOLD);
     let own_placement = state
-        .snapshot
+        .crowd
         .find(own_id)
         .map(|p| p.placement)
         .unwrap_or(Placement::Walking(state.player_x, state.player_y));
-    let own_drunk_level = state
-        .snapshot
-        .find(own_id)
-        .map(|p| p.drunk_level)
-        .unwrap_or(0);
+    let own_drunk_level = state.crowd.find(own_id).map(|p| p.drunk_level).unwrap_or(0);
     let (anchor, (x0, y0, x1, y1)) = draw_presence(
         cells,
         own_placement,
@@ -850,7 +849,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
         y1,
     });
     if !is_passed_out(own_drunk_level)
-        && let Some(emote) = state.snapshot.find(own_id).and_then(|p| p.emote)
+        && let Some(emote) = state.crowd.find(own_id).and_then(|p| p.emote)
     {
         draw_emote(cells, own_placement, emote, state.anim_tick, own_style);
     }
@@ -1529,11 +1528,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     ]),
                     Line::default(),
                     Line::from(vec![
-                        Span::styled("seven daily duels: ", text),
-                        Span::styled("chess, backgammon, battleship,", name),
+                        Span::styled("daily duels: ", text),
+                        Span::styled("chess, backgammon, pool, cribbage,", name),
                     ]),
                     Line::from(vec![
-                        Span::styled("connect four, reversi, checkers, briscola", name),
+                        Span::styled("gin rummy, battleship, briscola and more", name),
                         Span::styled(". challenge anyone,", text),
                     ]),
                     Line::from(Span::styled(

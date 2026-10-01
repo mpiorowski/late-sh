@@ -3095,6 +3095,47 @@ fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
 }
 
 #[test]
+fn a_kill_trains_taming_only_beside_a_standing_companion() {
+    let mut s = world();
+    let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+    for n in 1..=3 {
+        s.join(uid(n));
+        s.choose_class(uid(n), Class::Ranger);
+    }
+    // uid(1) fights beside a standing hound, uid(2) has no companion, and
+    // uid(3)'s hound is beaten down.
+    s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+    let mut downed = super::super::pets::Pet::new(species, 0);
+    downed.downed = true;
+    s.players.get_mut(&uid(3)).unwrap().pet = Some(downed);
+    let (mob_id, mob_xp) = s
+        .mobs
+        .iter()
+        .map(|(id, m)| (*id, m.spawn.xp))
+        .max_by_key(|(_, xp)| *xp)
+        .expect("world has mobs");
+    for n in 1..=3 {
+        s.kill_mob(uid(n), mob_id);
+    }
+    let expected = i64::from(mob_xp) * 15 / 100;
+    assert!(expected > 0, "the richest foe is worth some taming");
+    assert_eq!(s.players[&uid(1)].taming_xp, expected);
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains(&format!("+{expected} Animal Taming xp"))),
+        "the kill line names the taming share"
+    );
+    assert_eq!(s.players[&uid(2)].taming_xp, 0, "no companion, no taming");
+    assert_eq!(
+        s.players[&uid(3)].taming_xp,
+        0,
+        "a downed companion did not fight"
+    );
+}
+
+#[test]
 fn an_underskilled_tamer_cannot_take_a_great_beast() {
     let mut s = world();
     s.join(uid(1));

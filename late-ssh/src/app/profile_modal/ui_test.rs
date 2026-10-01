@@ -119,8 +119,7 @@ async fn a_wide_terminal_shows_every_section_in_order() {
     let lines = render(&fixture.state, 130, 60);
     let text = lines.join("\n");
 
-    // The hero: a late.fetch heading, the name heading the grid, and the
-    // grid naming the facts.
+    // late.fetch: a heading over the grid naming the facts.
     let heading = row_of(&lines, "late.fetch ─").expect("late.fetch heading");
     // The name is the modal's title and nothing else: not repeated in the grid.
     assert_eq!(
@@ -149,8 +148,12 @@ async fn a_wide_terminal_shows_every_section_in_order() {
 
     // Then the sections, in the order the design fixes.
     let bio = row_of(&lines, "bio ─").expect("bio heading");
+    let bonsai = row_of(&lines, "bonsai ─").expect("bonsai heading");
     let chips = row_of(&lines, "chips ─").expect("chips heading");
-    assert!(name < bio && bio < chips, "hero, bio, chips:\n{text}");
+    assert!(
+        name < bio && bio < bonsai && bonsai < chips,
+        "late.fetch, bio, bonsai, chips:\n{text}"
+    );
     assert!(
         lines[bio + 1].contains("Not set"),
         "an empty bio says so under its heading:\n{text}"
@@ -250,7 +253,7 @@ async fn a_runners_profile_shows_the_row_to_runners_only() {
 #[tokio::test]
 async fn a_narrow_terminal_scrolls_the_same_column() {
     let fixture = fixture("narrow").await;
-    // Too short for the whole column: the top is the hero, and the ledger
+    // Too short for the whole column: the top is late.fetch, and the ledger
     // is below the fold.
     let top = render(&fixture.state, 70, 18);
     assert!(

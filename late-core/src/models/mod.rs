@@ -54,6 +54,8 @@ pub mod crown;
 mod crown_test;
 pub mod cyberspace_account;
 pub mod daily_match;
+#[cfg(test)]
+mod daily_match_test;
 pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
@@ -130,6 +132,7 @@ mod pet_test;
 pub mod pot;
 #[cfg(test)]
 mod pot_test;
+pub mod presence;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]
@@ -155,6 +158,9 @@ pub mod sliding_puzzle;
 mod sliding_puzzle_test;
 pub mod snake;
 pub mod solitaire;
+pub mod statusline;
+#[cfg(test)]
+mod statusline_test;
 pub mod stream_ban;
 pub mod sudoku;
 pub mod tetris;

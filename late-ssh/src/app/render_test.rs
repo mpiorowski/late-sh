@@ -1,35 +1,15 @@
 use super::{
-    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, HelpHintStyle, StatusHud,
-    StatusHudInputs, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
-    dashboard_home_selected, line_width, resolve_right_sidebar_enabled, resolve_room_list_enabled,
-    room_list_sidebar_enabled, sidebar_enabled, sponsor_line, status_hud_title,
+    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, app_frame_bottom_titles,
+    app_frame_sponsor_title, dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
+    resolve_room_list_enabled, room_list_sidebar_enabled, sidebar_enabled, sponsor_line,
 };
 use crate::app::common::primitives::Screen;
-use crate::app::pot::state::PotView;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 use uuid::Uuid;
 
 /// A terminal wide enough that `Auto` keeps every rail, so the `On`/`Off` cases
 /// below are unaffected by width.
 const WIDE_TERMINAL: u16 = 200;
-
-/// Enough border room that `status_hud_title` never degrades a segment, so
-/// the cases below test content rather than fitting.
-const WIDE_HUD_BORDER: u16 = 200;
-
-/// A HUD with no left title competing for the border row, sized so nothing
-/// degrades. Cases that exercise fitting pass `border_width`/`title_width`
-/// themselves.
-fn hud(balance: Option<i64>, unread: i64, voice_badge: Option<&str>) -> Option<StatusHud> {
-    status_hud_title(StatusHudInputs {
-        balance,
-        unread,
-        voice_badge,
-        pot: None,
-        border_width: WIDE_HUD_BORDER,
-        title_width: 0,
-    })
-}
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
     line.iter().map(|s| s.content.as_ref()).collect()
@@ -176,128 +156,12 @@ fn dashboard_home_selected_rejects_synthetic_and_non_lounge_rooms() {
     assert!(!dashboard_home_selected(None, Some(topic), false));
 }
 
+/// The sponsor line has one flexible part: its thanks. The link itself is
+/// all or nothing.
 #[test]
-fn status_hud_title_hidden_when_empty() {
-    assert!(hud(None, 0, None).is_none());
-    assert!(hud(None, -3, None).is_none());
-}
-
-#[test]
-fn status_hud_title_renders_right_aligned_pluralized_text() {
-    use ratatui::layout::Alignment;
-
-    let one = hud(None, 1, None).expect("one mention should render");
-    assert_eq!(one.line.alignment, Some(Alignment::Right));
-    assert_eq!(line_text(&one.line), " 1 unread mention ");
-    assert_eq!(one.mentions_width, " 1 unread mention ".len() as u16);
-
-    let many = hud(None, 14, None).expect("many mentions should render");
-    assert_eq!(line_text(&many.line), " 14 unread mentions ");
-}
-
-#[test]
-fn status_hud_title_combines_voice_and_mentions() {
-    let combined = hud(None, 2, Some(" mic #lounge [muted] ")).expect("status should render");
-    assert_eq!(
-        line_text(&combined.line),
-        " mic #lounge [muted] | 2 unread mentions "
-    );
-    // Only the mentions segment is clickable, so its width stops at the text
-    // and its offset starts past the voice badge.
-    assert_eq!(combined.mentions_width, " 2 unread mentions ".len() as u16);
-    assert_eq!(
-        combined.mentions_offset,
-        " mic #lounge [muted] |".len() as u16
-    );
-}
-
-#[test]
-fn status_hud_title_renders_balance_right_of_mentions() {
-    use ratatui::layout::Alignment;
-
-    let only = hud(Some(1_500), 0, None).expect("balance should render alone");
-    assert_eq!(only.line.alignment, Some(Alignment::Right));
-    assert_eq!(line_text(&only.line), " 1500 chips ");
-    assert_eq!(only.mentions_width, 0);
-
-    let combined = hud(Some(1_500), 2, Some(" mic #lounge [muted] "))
-        .expect("balance + voice + mentions should render");
-    assert_eq!(
-        line_text(&combined.line),
-        " mic #lounge [muted] | 2 unread mentions | 1500 chips "
-    );
-}
-
-/// The pot sits right before the chips, so the prize reads against the
-/// viewer's own balance, and it is the first segment the border sheds:
-/// countdown first, then the whole badge.
-#[test]
-fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
-    let pot = PotView {
-        size: 84_200,
-        ticket_count: 842,
-        my_tickets: 5,
-        draws_in: "3h12m".to_string(),
-        open: true,
-    };
-    let with_pot = |border_width: u16| {
-        status_hud_title(StatusHudInputs {
-            balance: Some(1_500),
-            unread: 2,
-            voice_badge: Some(" mic #lounge [muted] "),
-            pot: Some(&pot),
-            border_width,
-            title_width: 0,
-        })
-        .map(|hud| line_text(&hud.line))
-    };
-    let full = " mic #lounge [muted] | 2 unread mentions | pot 84,200 · 3h12m | 1500 chips ";
-    let without_clock = " mic #lounge [muted] | 2 unread mentions | pot 84,200 | 1500 chips ";
-    let without_pot = " mic #lounge [muted] | 2 unread mentions | 1500 chips ";
-    let width = |text: &str| text.chars().count() as u16 + 2;
-
-    assert_eq!(with_pot(WIDE_HUD_BORDER).as_deref(), Some(full));
-    assert_eq!(
-        with_pot(width(full) - 1).as_deref(),
-        Some(without_clock),
-        "one cell short drops the countdown, not the pot"
-    );
-    assert_eq!(
-        with_pot(width(without_clock) - 1).as_deref(),
-        Some(without_pot),
-        "too tight for the size drops the whole pot"
-    );
-
-    // Alone with the chips it still reads pot first, balance last, and a
-    // pot with nothing else keeps the HUD alive on its own.
-    let alone = status_hud_title(StatusHudInputs {
-        balance: Some(1_500),
-        unread: 0,
-        voice_badge: None,
-        pot: Some(&pot),
-        border_width: WIDE_HUD_BORDER,
-        title_width: 0,
-    })
-    .expect("pot + chips should render");
-    assert_eq!(line_text(&alone.line), " pot 84,200 · 3h12m | 1500 chips ");
-    assert_eq!(alone.mentions_width, 0);
-    let only = status_hud_title(StatusHudInputs {
-        balance: None,
-        unread: 0,
-        voice_badge: None,
-        pot: Some(&pot),
-        border_width: WIDE_HUD_BORDER,
-        title_width: 0,
-    })
-    .expect("pot alone should render");
-    assert_eq!(line_text(&only.line), " pot 84,200 · 3h12m ");
-}
-
-#[test]
-fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
-    let full_width = line_width(&sponsor_line(true, true));
-    let url_width = line_width(&sponsor_line(false, true));
-    let short_url_width = line_width(&sponsor_line(false, false));
+fn sponsor_title_drops_its_thanks_before_its_link() {
+    let full_width = line_width(&sponsor_line(true));
+    let link_width = line_width(&sponsor_line(false));
 
     let full = app_frame_sponsor_title(full_width).expect("full sponsor should fit");
     assert_eq!(
@@ -305,75 +169,97 @@ fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
         " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
     );
 
-    // Each fallback keeps the blank cell on both sides of the link: the title
-    // is drawn over the bottom border, so a URL flush against `─` gets the
-    // glyph linkified along with it.
-    let url_only = app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
-    assert_eq!(line_text(&url_only), " https://ko-fi.com/mateuszpiorowski ");
-
-    let short_url =
-        app_frame_sponsor_title(url_width - 1).expect("protocol-stripped sponsor should fit");
-    assert_eq!(line_text(&short_url), " ko-fi.com/mateuszpiorowski ");
-
-    let hidden = app_frame_sponsor_title(short_url_width - 1);
-    assert!(hidden.is_none());
-}
-
-#[test]
-fn help_hint_title_lists_exit_last() {
-    let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
+    // The link keeps the blank cell on both sides: the title is drawn over
+    // the bottom border, so a URL flush against `─` gets the glyph linkified
+    // along with it.
+    let link_only = app_frame_sponsor_title(full_width - 1).expect("the link should fit");
     assert_eq!(
-        line_text(&help),
-        " Settings Ctrl+O · Lobby Ctrl+G · Zen Ctrl+F · Shop /shop · Guide ? · Exit qq "
-    );
-}
-
-#[test]
-fn help_hint_title_compacts_separators_then_ctrl_notation() {
-    let dotted = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
-    let spaced = app_frame_help_hint_title(HelpHintStyle::SpacedCtrl);
-    let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
-    assert_eq!(
-        line_text(&spaced),
-        " Settings Ctrl+O  Lobby Ctrl+G  Zen Ctrl+F  Shop /shop  Guide ?  Exit qq "
-    );
-    assert_eq!(
-        line_text(&caret),
-        " Settings ^O  Lobby ^G  Zen ^F  Shop /shop  Guide ?  Exit qq "
+        line_text(&link_only),
+        " https://ko-fi.com/mateuszpiorowski "
     );
 
-    let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);
-    assert_eq!(line_text(&help), line_text(&dotted));
-    assert!(sponsor.is_none());
-
-    let (help, sponsor) = app_frame_bottom_titles((line_width(&spaced) + 2) as u16);
-    assert_eq!(line_text(&help), line_text(&spaced));
-    assert!(sponsor.is_none());
-
-    let (help, sponsor) = app_frame_bottom_titles((line_width(&caret) + 2) as u16);
-    assert_eq!(line_text(&help), line_text(&caret));
-    assert!(sponsor.is_none());
+    assert!(app_frame_sponsor_title(link_width - 1).is_none());
 }
 
-/// A left title wider than the whole border row must not underflow the spare
-/// calculation into a huge budget: the pot is dropped, not force-fitted.
+/// The sponsor's link is set aside before the bar gets any room: however many
+/// segments are switched on, the bar is the one that drops them.
 #[test]
-fn status_hud_title_drops_the_pot_when_the_title_outgrows_the_border() {
-    let pot = PotView {
-        size: 84_200,
-        ticket_count: 842,
-        my_tickets: 5,
-        draws_in: "3h12m".to_string(),
-        open: true,
+fn sponsor_link_keeps_its_place_however_full_the_status_bar_is() {
+    use crate::app::statusline::data::StatusData;
+    use late_core::models::statusline::{StatusComponentSetting, default_statusline_components};
+    use ratatui::layout::Rect;
+
+    let everything_on: Vec<StatusComponentSetting> = default_statusline_components()
+        .into_iter()
+        .map(|setting| StatusComponentSetting {
+            enabled: true,
+            auto_hide: false,
+            ..setting
+        })
+        .collect();
+    let data = StatusData {
+        clock_24: "14:32",
+        clock_ampm: "2:32 pm",
+        station_name: "chillsynth",
+        ..StatusData::default()
     };
-    let squeezed = status_hud_title(StatusHudInputs {
-        balance: Some(1_500),
-        unread: 0,
-        voice_badge: None,
-        pot: Some(&pot),
-        border_width: 10,
-        title_width: 40,
-    })
-    .expect("chips keep the hud alive");
-    assert_eq!(line_text(&squeezed.line), " 1500 chips ");
+    let area = Rect::new(0, 0, 120, 40);
+
+    let (bar, sponsor) = app_frame_bottom_titles(&everything_on, &data, area);
+
+    let sponsor = sponsor.expect("the sponsor link survives a full bar");
+    assert!(line_text(&sponsor).contains("https://ko-fi.com/mateuszpiorowski"));
+    let bar = bar.expect("the bar keeps what fits beside the sponsor");
+    assert!(
+        line_width(&bar.line) + line_width(&sponsor) <= usize::from(area.width - 2),
+        "the two titles share the row without overlapping"
+    );
+    assert!(line_text(&bar.line).contains("Settings"));
+}
+
+/// With room to spare the sponsor line carries its thanks too.
+#[test]
+fn sponsor_line_adds_its_thanks_when_the_status_bar_leaves_room() {
+    use crate::app::statusline::data::StatusData;
+    use late_core::models::statusline::default_statusline_components;
+    use ratatui::layout::Rect;
+
+    let (bar, sponsor) = app_frame_bottom_titles(
+        &default_statusline_components(),
+        &StatusData::default(),
+        Rect::new(0, 0, 200, 40),
+    );
+
+    assert!(bar.is_some());
+    assert_eq!(
+        line_text(&sponsor.expect("sponsor")),
+        " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
+    );
+}
+
+/// No segment is special: on a terminal too narrow for the Keyhints beside
+/// the sponsor's link, the hints are dropped like anything else and the
+/// narrower segments after them still paint.
+#[test]
+fn keyhints_too_wide_for_the_row_are_dropped_like_any_other_segment() {
+    use crate::app::statusline::data::StatusData;
+    use late_core::models::statusline::default_statusline_components;
+    use ratatui::layout::Rect;
+
+    let (bar, sponsor) = app_frame_bottom_titles(
+        &default_statusline_components(),
+        &StatusData {
+            station_name: "chillsynth",
+            ..StatusData::default()
+        },
+        Rect::new(0, 0, 80, 24),
+    );
+
+    assert_eq!(
+        line_text(&sponsor.expect("sponsor link")),
+        " https://ko-fi.com/mateuszpiorowski "
+    );
+    let bar = line_text(&bar.expect("the narrower segments still fit").line);
+    assert!(!bar.contains("Settings"), "{bar:?}");
+    assert!(bar.contains("🎵 chillsynth"), "{bar:?}");
 }

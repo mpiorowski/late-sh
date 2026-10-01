@@ -24,11 +24,22 @@
 //! would sit at level 1 against level-1 flickers forever, so the threshold
 //! itself levels you and the wire says so. The operators replace this.
 //!
+//! Levelling on exp can carry a runner into a glyph their gear cannot
+//! beat, so every step in picks its quarry (`Pick`): the glyph of your
+//! level, or the one a level down at half pay, the way back from a fight
+//! you cannot win (LoGD's slumming, cut).
+//!
 //! The armorer's till is here too (GAME.md, "Gear: two slots, fifteen
 //! tiers"): the same sheet, the same lock, one more command. Bits buy a
 //! tier above the one you carry; the piece you hand back comes off the
 //! price at `TRADE_IN_PERCENT`. The catalog (names, the price ladder) is
 //! the city's, in `city/data.rs`, because the wall is the city's.
+//!
+//! So are the lockers and the bits machine, the two money places: the
+//! locker keeps bits from the street for a cut on the way in, the machine
+//! lends against the level, adds its fee to the debt once, and takes its
+//! share off every kill. And the ledge: a step off it is the runner
+//! started over, the marks and the debt kept.
 
 use chrono::NaiveDate;
 use late_core::models::deadchannel_runner::{DeadchannelRunner, SheetWrite};
@@ -37,10 +48,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::data::{
-    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, FoeTier, HEARD_LINE, KILL_LINES,
-    MARK_BONUS_CAP, MAX_LEVEL, NEAR_MISS_SIGNAL, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY,
-    RUN_FAILED_LINES, RUN_LINES, RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL, SLAIN_LINE,
-    START_BITS, TRADE_IN_PERCENT,
+    self, DROP_LINES, EXP_KEEP_ON_DEATH, FOES, FoeKind, FoeTier, GARNISH_PERCENT, HEARD_LINE,
+    KILL_LINES, LOAN_FEE_PERCENT, LOAN_PER_LEVEL, LOCKER_FEE_PERCENT, MARK_BONUS_CAP, MAX_LEVEL,
+    NEAR_MISS_SIGNAL, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY, RUN_FAILED_LINES, RUN_LINES,
+    RUN_ODDS, RUN_ODDS_OUT_OF, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STEPPED_DOWN_LINE,
+    TRADE_IN_PERCENT, percent_up,
 };
 use crate::app::deadchannel::city::data::{ARMOR, COST_LADDER, WEAPONS};
 use crate::app::door::greendragon::combat::{Combatant, resolve_extra_foe_strike, resolve_round};
@@ -98,6 +110,15 @@ impl Fight {
         }
     }
 
+    /// The glyph's level (one kind per level); `None` for the Old Signal,
+    /// which has none.
+    pub fn foe_level(&self) -> Option<i32> {
+        match self.quarry {
+            Quarry::Glyph(kind) => Some(kind as i32 + 1),
+            Quarry::OldSignal => None,
+        }
+    }
+
     fn push(&mut self, line: String) {
         self.log.push(line);
         if self.log.len() > LOG_KEEP {
@@ -136,6 +157,10 @@ pub struct Sheet {
     /// by the service once the grant answers (migration 210). `None` when
     /// nothing is owed.
     pub unpaid_mark: Option<i32>,
+    /// Bits in the locker: a drop never reaches them.
+    pub stash: i64,
+    /// Bits owed to the machine.
+    pub debt: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -162,12 +187,25 @@ pub enum Slot {
     Armor,
 }
 
+/// Which glyph a step in goes looking for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pick {
+    /// The glyph of your level, or at the top with the exp to leave it,
+    /// the Old Signal.
+    Fair,
+    /// The glyph a level down, at [`data::LOWER_PAY_PERCENT`] of its pay.
+    Lower,
+}
+
 /// What a session asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    /// Step into the static: spend a ration, meet a glyph. With a fight
-    /// already waiting on the row, this resumes it and spends nothing.
-    Start,
+    /// Step into the static: spend a ration, meet the `pick`. With a fight
+    /// already waiting on the row, this resumes it, whatever the pick, and
+    /// spends nothing.
+    Start {
+        pick: Pick,
+    },
     Attack,
     Run,
     /// Buy `tier` (1 to `MAX_TIER`) for `slot` at the armorer, handing
@@ -178,6 +216,16 @@ pub enum Command {
     },
     /// Buy the signal back to full at patch, for `Sheet::patch_price`.
     Patch,
+    /// Everything on hand into the locker, less its cut.
+    Deposit,
+    /// Everything in the locker back on hand.
+    Withdraw,
+    /// The bits machine's loan: up to the level's cap, its fee on top.
+    Borrow,
+    /// As much of the debt as the bits on hand cover.
+    Repay,
+    /// Off the ledge: the runner starts over.
+    Reset,
 }
 
 /// Why nothing happened.
@@ -196,15 +244,32 @@ pub enum Refusal {
     },
     /// Patch with the signal already full.
     NothingToPatch,
-    /// Patch with a glyph waiting on the row: the fight is the fight.
+    /// Patch, the locker, the machine, or the ledge with a glyph waiting
+    /// on the row: the fight is the fight.
     FightWaiting,
+    /// A step down at level 1: nothing is below the flicker.
+    NoLowerGlyph,
+    /// A deposit or a repayment with no bits on hand.
+    NothingOnHand,
+    /// A deposit the locker's cut would take whole.
+    DepositAllCut,
+    /// A withdrawal from an empty locker.
+    LockerEmpty,
+    /// A loan with the debt already at the level's cap.
+    LoanCapped,
+    /// A repayment with nothing owed.
+    NoDebt,
+    /// A step off the ledge by a runner the fall would take nothing from.
+    NothingToLose,
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Applied {
     Refused(Refusal),
-    Started,
+    Started {
+        pick: Pick,
+    },
     /// A fight was already waiting on the row; nothing was spent.
     Resumed,
     /// One exchange, both still standing.
@@ -213,7 +278,9 @@ pub enum Applied {
         /// The glyph's name, for the wire: the fight leaves the row on a
         /// win, so the answer carries it.
         foe: &'static str,
+        /// The glyph's whole pay; `garnished` of it went to the debt.
         bits: i64,
+        garnished: i64,
         exp: i64,
         /// The level reached, if the exp crossed a threshold.
         leveled: Option<i32>,
@@ -238,6 +305,25 @@ pub enum Applied {
         restored: i32,
         paid: i64,
     },
+    /// `stored` bits into the locker; `fee` more was its cut.
+    Deposited {
+        stored: i64,
+        fee: i64,
+    },
+    Withdrew {
+        amount: i64,
+    },
+    /// `amount` bits lent; the debt grew by that and the machine's `fee`.
+    Borrowed {
+        amount: i64,
+        fee: i64,
+    },
+    Repaid {
+        amount: i64,
+    },
+    /// Off the ledge: level 1, bare hands, nothing on hand or in the
+    /// locker. The marks, the peak, the kills, and the debt stay.
+    Reset,
 }
 
 /// One command's result: what settled, and the lines to show for it.
@@ -260,6 +346,8 @@ pub enum News {
     /// The Old Signal put down, the runner reset: the other line the face
     /// rides.
     Slain { marks: i32 },
+    /// A step off the ledge: the runner started over by choice.
+    SteppedOff,
     /// The runner's first glyph, ever.
     FirstBlood { foe: &'static str },
     /// A win with `signal` at or under [`NEAR_MISS_SIGNAL`].
@@ -294,6 +382,8 @@ impl Sheet {
             peak_level: 1,
             marks: 0,
             unpaid_mark: None,
+            stash: 0,
+            debt: 0,
         }
     }
 
@@ -331,6 +421,8 @@ impl Sheet {
             peak_level: row.peak_level,
             marks: row.marks,
             unpaid_mark: row.unpaid_mark,
+            stash: row.stash,
+            debt: row.debt,
         })
     }
 
@@ -355,6 +447,8 @@ impl Sheet {
             peak_level: self.peak_level,
             marks: self.marks,
             unpaid_mark: self.unpaid_mark,
+            stash: self.stash,
+            debt: self.debt,
         }
     }
 
@@ -460,12 +554,20 @@ impl Sheet {
                 }
             }
             Applied::Escaped => {}
+            Applied::Reset => {
+                news.push(News::SteppedOff);
+                return news;
+            }
             Applied::Refused(_)
-            | Applied::Started
+            | Applied::Started { .. }
             | Applied::Resumed
             | Applied::Round
             | Applied::Outfitted { .. }
-            | Applied::Patched { .. } => return news,
+            | Applied::Patched { .. }
+            | Applied::Deposited { .. }
+            | Applied::Withdrew { .. }
+            | Applied::Borrowed { .. }
+            | Applied::Repaid { .. } => return news,
         }
         if self.rations_left == 0 {
             news.push(News::LastRation {
@@ -480,11 +582,209 @@ impl Sheet {
 
     pub fn apply<R: Rng>(&mut self, command: Command, rng: &mut R) -> Outcome {
         match command {
-            Command::Start => self.start(),
+            Command::Start { pick } => self.start(pick),
             Command::Attack => self.attack_round(rng),
             Command::Run => self.run(rng),
             Command::Outfit { slot, tier } => self.outfit(slot, tier),
             Command::Patch => self.patch(),
+            Command::Deposit => self.deposit(),
+            Command::Withdraw => self.withdraw(),
+            Command::Borrow => self.borrow(),
+            Command::Repay => self.repay(),
+            Command::Reset => self.reset(),
+        }
+    }
+
+    /// What the bits machine will have lent at most: the level's cap.
+    pub fn loan_cap(&self) -> i64 {
+        i64::from(self.level) * LOAN_PER_LEVEL
+    }
+
+    /// What a loan would hand over now: the cap less the debt, nothing at
+    /// or past the cap (the fee carries the debt past it).
+    pub fn loan_room(&self) -> i64 {
+        (self.loan_cap() - self.debt).max(0)
+    }
+
+    /// The machine's fee on that loan, added to the debt with it.
+    pub fn loan_fee(&self) -> i64 {
+        percent_up(self.loan_room(), LOAN_FEE_PERCENT)
+    }
+
+    /// Whether a step off the ledge would take anything: a level, exp, a
+    /// piece of gear, or a bit on hand or in the locker.
+    pub fn has_something_to_lose(&self) -> bool {
+        self.level > 1
+            || self.exp > 0
+            || self.weapon_tier > 0
+            || self.armor_tier > 0
+            || self.bits > 0
+            || self.stash > 0
+    }
+
+    /// The locker's cut of a deposit of everything on hand.
+    pub fn deposit_fee(&self) -> i64 {
+        percent_up(self.bits, LOCKER_FEE_PERCENT)
+    }
+
+    /// Everything on hand into the locker, less the cut. Not with a glyph
+    /// waiting: the bits you carry into a fight are the bits you risk. Not
+    /// when the cut would be all of it: the locker keeps nothing for nothing.
+    fn deposit(&mut self) -> Outcome {
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. the locker can wait.");
+        }
+        if self.bits <= 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NothingOnHand),
+                lines: vec!["you have nothing on you to lock up.".to_string()],
+            };
+        }
+        let fee = self.deposit_fee();
+        let stored = self.bits - fee;
+        if stored == 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::DepositAllCut),
+                lines: vec!["the locker's cut would take all of it. bring more.".to_string()],
+            };
+        }
+        self.stash += stored;
+        self.bits = 0;
+        Outcome {
+            applied: Applied::Deposited { stored, fee },
+            lines: vec![format!(
+                "the locker takes {stored} bits and keeps {fee} for the trouble."
+            )],
+        }
+    }
+
+    /// Everything in the locker back on hand. Free, and not with a glyph
+    /// waiting.
+    fn withdraw(&mut self) -> Outcome {
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. the locker can wait.");
+        }
+        if self.stash <= 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::LockerEmpty),
+                lines: vec!["your locker is empty.".to_string()],
+            };
+        }
+        let amount = self.stash;
+        self.bits += amount;
+        self.stash = 0;
+        Outcome {
+            applied: Applied::Withdrew { amount },
+            lines: vec![format!("{amount} bits out of the locker and on you.")],
+        }
+    }
+
+    /// The machine lends up to the level's cap, all the room at once, and
+    /// adds its fee to the debt then and never again.
+    fn borrow(&mut self) -> Outcome {
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. the machine can wait.");
+        }
+        let amount = self.loan_room();
+        if amount == 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::LoanCapped),
+                lines: vec![format!(
+                    "the machine flashes your debt, {} bits, and pays nothing.",
+                    self.debt
+                )],
+            };
+        }
+        let fee = self.loan_fee();
+        self.bits += amount;
+        self.debt += amount + fee;
+        Outcome {
+            applied: Applied::Borrowed { amount, fee },
+            lines: vec![format!(
+                "the bits machine pays out for once. {amount} bits, and {fee} more on the debt. you owe it {}.",
+                self.debt
+            )],
+        }
+    }
+
+    /// As much of the debt as the bits on hand cover.
+    fn repay(&mut self) -> Outcome {
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. the machine can wait.");
+        }
+        if self.debt <= 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NoDebt),
+                lines: vec!["you owe the machine nothing.".to_string()],
+            };
+        }
+        if self.bits <= 0 {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NothingOnHand),
+                lines: vec!["you have nothing on you to feed it.".to_string()],
+            };
+        }
+        let amount = self.bits.min(self.debt);
+        self.bits -= amount;
+        self.debt -= amount;
+        let line = match self.debt {
+            0 => format!("{amount} bits into the machine. you owe it nothing."),
+            left => format!("{amount} bits into the machine. {left} still owed."),
+        };
+        Outcome {
+            applied: Applied::Repaid { amount },
+            lines: vec![line],
+        }
+    }
+
+    /// Off the ledge: level 1, exp 0, bare hands, no bits on hand or in
+    /// the locker, a level-1 signal. What stays is what was earned or owed:
+    /// the marks and their title, the peak (the tailor's rack), the kills,
+    /// the look, today's rations, and the debt. Not with the signal down
+    /// (a reset is not a way back on the wire before the roll), not with a
+    /// glyph waiting, and not for a runner the fall would take nothing
+    /// from: a step off is news, and the wire is not a key to hold down.
+    fn reset(&mut self) -> Outcome {
+        if self.is_down() {
+            return Outcome {
+                applied: Applied::Refused(Refusal::SignalDown),
+                lines: vec![
+                    "your signal is down. you cannot even find the edge until tomorrow."
+                        .to_string(),
+                ],
+            };
+        }
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. finish it first.");
+        }
+        if !self.has_something_to_lose() {
+            return Outcome {
+                applied: Applied::Refused(Refusal::NothingToLose),
+                lines: vec![
+                    "you have nothing the fall could take. the ledge is only a view.".to_string(),
+                ],
+            };
+        }
+        self.level = 1;
+        self.exp = 0;
+        self.weapon_tier = 0;
+        self.armor_tier = 0;
+        self.bits = 0;
+        self.stash = 0;
+        self.signal = self.max_signal();
+        let mut lines = vec![
+            "you step off the ledge. the fall is longer than the city.".to_string(),
+            "you wake at the top of Static Row. level 1, bare hands, empty pockets.".to_string(),
+        ];
+        if self.debt > 0 {
+            lines.push(format!(
+                "the bits machine still knows your name. {} bits owed.",
+                self.debt
+            ));
+        }
+        Outcome {
+            applied: Applied::Reset,
+            lines,
         }
     }
 
@@ -583,7 +883,7 @@ impl Sheet {
         }
     }
 
-    fn start(&mut self) -> Outcome {
+    fn start(&mut self, pick: Pick) -> Outcome {
         if self.fight.is_some() {
             return Outcome {
                 applied: Applied::Resumed,
@@ -596,19 +896,26 @@ impl Sheet {
         if self.rations_left <= 0 {
             return refused(Refusal::NoRations);
         }
-        self.rations_left -= 1;
-        let mut fight = match self.signal_hears() {
-            true => Fight::new(Quarry::OldSignal, OLD_SIGNAL_TIER),
-            false => {
+        let mut fight = match (pick, self.signal_hears()) {
+            (Pick::Fair, true) => Fight::new(Quarry::OldSignal, OLD_SIGNAL_TIER),
+            (Pick::Fair, false) => {
                 let (kind, _, tier) = data::foe_for_level(self.level);
                 Fight::new(Quarry::Glyph(kind), tier)
             }
+            (Pick::Lower, _) => match data::lower_foe_for_level(self.level) {
+                Some((kind, _, tier)) => Fight::new(Quarry::Glyph(kind), tier),
+                None => return refused(Refusal::NoLowerGlyph),
+            },
         };
+        self.rations_left -= 1;
         fight.push(fight.foe().arrives.to_string());
+        if pick == Pick::Lower {
+            fight.push(STEPPED_DOWN_LINE.to_string());
+        }
         let lines = fight.log.clone();
         self.fight = Some(fight);
         Outcome {
-            applied: Applied::Started,
+            applied: Applied::Started { pick },
             lines,
         }
     }
@@ -722,10 +1029,11 @@ impl Sheet {
     }
 
     /// The Old Signal is down: a mark, and the climb starts over. Level,
-    /// exp, gear, and bits go back to a fresh runner's; the peak, the
-    /// kills, today's rations, and everything off the sheet (the look, the
-    /// badges) stay. The mark's chips are owed from this moment
-    /// (`unpaid_mark`), until the service settles them.
+    /// exp, gear, and bits go back to a fresh runner's and the locker is
+    /// emptied; the peak, the kills, today's rations, the debt, and
+    /// everything off the sheet (the look, the badges) stay. The mark's
+    /// chips are owed from this moment (`unpaid_mark`), until the service
+    /// settles them.
     fn slay(&mut self, mut lines: Vec<String>) -> Outcome {
         self.marks += 1;
         self.unpaid_mark = Some(self.marks);
@@ -737,11 +1045,18 @@ impl Sheet {
         self.armor_tier = 0;
         self.bits = START_BITS;
         self.signal = self.max_signal();
+        let emptied = self.stash;
+        self.stash = 0;
         lines.push(SLAIN_LINE.to_string());
         lines.push(format!(
             "you wake at the top of Static Row. level 1, bare hands, {START_BITS} bits, and mark {} that does not come off.",
             self.marks
         ));
+        if emptied > 0 {
+            lines.push(format!(
+                "your locker stands open. the {emptied} bits in it went with the broadcast."
+            ));
+        }
         Outcome {
             applied: Applied::Slain { marks: self.marks },
             lines,
@@ -750,7 +1065,9 @@ impl Sheet {
 
     fn put_down<R: Rng>(&mut self, fight: Fight, rng: &mut R, mut lines: Vec<String>) -> Outcome {
         let heard_before = self.signal_hears();
-        self.bits += fight.foe_bits;
+        let garnished = (fight.foe_bits * GARNISH_PERCENT / 100).min(self.debt);
+        self.debt -= garnished;
+        self.bits += fight.foe_bits - garnished;
         self.exp += fight.foe_exp;
         self.kills += 1;
         self.kills_today += 1;
@@ -760,6 +1077,13 @@ impl Sheet {
             fight.foe_bits,
             fight.foe_exp
         ));
+        if garnished > 0 {
+            let owed = match self.debt {
+                0 => "you owe it nothing.".to_string(),
+                left => format!("{left} still owed."),
+            };
+            lines.push(format!("the bits machine takes {garnished} of it. {owed}"));
+        }
         let mut leveled = None;
         while let Some(need) = data::exp_to_advance(self.level, self.marks) {
             if self.exp < need {
@@ -780,6 +1104,7 @@ impl Sheet {
             applied: Applied::Won {
                 foe: fight.foe().name,
                 bits: fight.foe_bits,
+                garnished,
                 exp: fight.foe_exp,
                 leveled,
             },
@@ -810,15 +1135,30 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::NoRations => "you are spent for today. the static will keep.",
         Refusal::SignalDown => "your signal is down. nothing in there can see you until tomorrow.",
         Refusal::NoFight => "there is nothing in front of you.",
+        Refusal::NoLowerGlyph => "there is nothing smaller than a flicker in there.",
         Refusal::NotAnUpgrade
         | Refusal::Short { .. }
         | Refusal::NothingToPatch
-        | Refusal::FightWaiting => {
-            unreachable!("till refusals are lined in outfit and patch")
+        | Refusal::FightWaiting
+        | Refusal::NothingOnHand
+        | Refusal::DepositAllCut
+        | Refusal::LockerEmpty
+        | Refusal::LoanCapped
+        | Refusal::NoDebt
+        | Refusal::NothingToLose => {
+            unreachable!("till refusals are lined where they are refused")
         }
     };
     Outcome {
         applied: Applied::Refused(refusal),
+        lines: vec![line.to_string()],
+    }
+}
+
+/// A till command with a glyph waiting on the row, in the till's words.
+fn fight_waiting(line: &str) -> Outcome {
+    Outcome {
+        applied: Applied::Refused(Refusal::FightWaiting),
         lines: vec![line.to_string()],
     }
 }

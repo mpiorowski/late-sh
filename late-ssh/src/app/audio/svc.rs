@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
-use super::youtube::YoutubeClient;
+use super::{thumbnail::Thumbnail, youtube::YoutubeClient};
 use crate::{
     authz::Permissions, metrics, paired_clients::PairedClientRegistry, state::ActiveUsers,
 };
@@ -49,6 +49,24 @@ pub struct AudioService {
     state: Arc<Mutex<QueueState>>,
     paired_clients: PairedClientRegistry,
     active_users: ActiveUsers,
+    /// Thumbnails of the tracks in the booth, by video id, fetched once per
+    /// replica as a track first shows up in a snapshot.
+    thumbnails: Arc<std::sync::Mutex<HashMap<String, ThumbnailSlot>>>,
+}
+
+enum ThumbnailSlot {
+    Fetching,
+    Ready(Thumbnail),
+    /// The fetch failed; the track keeps the drawn screen and is not retried
+    /// while it sits in the booth.
+    Failed,
+}
+
+/// How one thumbnail fetch ended, for `metrics::record_booth_thumbnail`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThumbnailFetch {
+    Fetched,
+    Failed,
 }
 
 #[derive(Default)]
@@ -253,6 +271,13 @@ pub struct QueueItemView {
     pub vote_score: i32,
     #[serde(default)]
     pub unskippable: bool,
+    /// When the track was brought to the booth. For the live strip; paired
+    /// clients have no use for it.
+    #[serde(skip)]
+    pub queued_at: DateTime<Utc>,
+    /// For the live strip, once fetched (`attach_thumbnails`).
+    #[serde(skip)]
+    pub thumbnail: Option<Thumbnail>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,6 +358,7 @@ impl AudioService {
             state: Arc::new(Mutex::new(QueueState::default())),
             paired_clients,
             active_users,
+            thumbnails: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1763,12 +1789,24 @@ impl AudioService {
         state.sequence = state.sequence.saturating_add(1);
         let mut snapshot = self.load_snapshot(state.mode).await?;
         snapshot.skip_progress = self.compute_skip_progress(state, snapshot.current.as_ref());
-        // `send` fails without active receivers and would leave the watch at
-        // its constructor's empty value. Startup often publishes before any
-        // SSH session has opened the booth, so replace the retained value even
-        // when receiver_count == 0; later subscribers then see the real DB
-        // queue immediately after a restart.
-        self.snapshot_tx.send_replace(snapshot.clone());
+        // The thumbnails stay locked from the attach to the publish, and a
+        // fetch that lands takes the same lock to patch the published
+        // snapshot (`fetch_thumbnail_task`): it either is on this snapshot
+        // or patches it, never an older one this publish then replaces.
+        let to_fetch = {
+            let mut thumbnails = self.thumbnails.lock_recover();
+            let to_fetch = self.attach_thumbnails(&mut thumbnails, &mut snapshot);
+            // `send` fails without active receivers and would leave the watch
+            // at its constructor's empty value. Startup often publishes before
+            // any SSH session has opened the booth, so replace the retained
+            // value even when receiver_count == 0; later subscribers then see
+            // the real DB queue immediately after a restart.
+            self.snapshot_tx.send_replace(snapshot.clone());
+            to_fetch
+        };
+        for video_id in to_fetch {
+            self.fetch_thumbnail_task(video_id);
+        }
         let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,
@@ -1776,6 +1814,82 @@ impl AudioService {
             skip_progress: snapshot.skip_progress,
         });
         Ok(())
+    }
+
+    /// Put the thumbnails already fetched on the snapshot's tracks, mark
+    /// each track seen for the first time as fetching, and forget the ones
+    /// that left the booth. Returns the video ids to fetch. Without a
+    /// YouTube API key the YouTube side of the house is off (nothing can be
+    /// queued), and so is this.
+    fn attach_thumbnails(
+        &self,
+        thumbnails: &mut HashMap<String, ThumbnailSlot>,
+        snapshot: &mut QueueSnapshot,
+    ) -> Vec<String> {
+        let mut to_fetch = Vec::new();
+        if !self.youtube.has_api_key() {
+            return to_fetch;
+        }
+        let in_booth: HashSet<&str> = snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .map(|item| item.video_id.as_str())
+            .collect();
+        thumbnails.retain(|video_id, _| in_booth.contains(video_id.as_str()));
+        for item in snapshot.current.iter_mut().chain(snapshot.queue.iter_mut()) {
+            match thumbnails.get(&item.video_id) {
+                Some(ThumbnailSlot::Ready(thumbnail)) => {
+                    item.thumbnail = Some(thumbnail.clone());
+                }
+                Some(ThumbnailSlot::Fetching) | Some(ThumbnailSlot::Failed) => {}
+                None => {
+                    thumbnails.insert(item.video_id.clone(), ThumbnailSlot::Fetching);
+                    to_fetch.push(item.video_id.clone());
+                }
+            }
+        }
+        to_fetch
+    }
+
+    /// Fetch one thumbnail and put it on the published snapshot. Nobody
+    /// waits on this, so its failure is logged and counted here.
+    fn fetch_thumbnail_task(&self, video_id: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let slot = match svc.youtube.fetch_thumbnail(&video_id).await {
+                Ok(image) => {
+                    metrics::record_booth_thumbnail(ThumbnailFetch::Fetched);
+                    ThumbnailSlot::Ready(Arc::new(image))
+                }
+                Err(error) => {
+                    metrics::record_booth_thumbnail(ThumbnailFetch::Failed);
+                    tracing::warn!(error = ?error, %video_id, "failed to fetch booth thumbnail");
+                    ThumbnailSlot::Failed
+                }
+            };
+            let fetched = match &slot {
+                ThumbnailSlot::Ready(thumbnail) => Some(thumbnail.clone()),
+                ThumbnailSlot::Fetching | ThumbnailSlot::Failed => None,
+            };
+            // Locked through the patch, so a publish cannot read this slot
+            // as still fetching and then replace the patched snapshot.
+            let mut thumbnails = svc.thumbnails.lock_recover();
+            // A track that left the booth while this ran was forgotten by
+            // `attach_thumbnails`; it stays forgotten.
+            if let Some(entry) = thumbnails.get_mut(&video_id) {
+                *entry = slot;
+            }
+            if let Some(thumbnail) = fetched {
+                svc.snapshot_tx.send_modify(|snapshot| {
+                    for item in snapshot.current.iter_mut().chain(snapshot.queue.iter_mut()) {
+                        if item.video_id == video_id {
+                            item.thumbnail = Some(thumbnail.clone());
+                        }
+                    }
+                });
+            }
+        });
     }
 
     /// Compute the skip-vote progress for the currently playing item. Returns
@@ -2218,6 +2332,8 @@ fn queue_item_view(
 ) -> QueueItemView {
     QueueItemView {
         id: item.id,
+        queued_at: item.created,
+        thumbnail: None,
         video_id: item.external_id,
         title: item.title,
         channel: item.channel,

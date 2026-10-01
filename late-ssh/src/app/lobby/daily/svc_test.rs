@@ -10,7 +10,9 @@ use crate::app::games::pool_core::{
 };
 use crate::app::lobby::daily::battleship::DailyBattleshipState;
 use crate::app::lobby::daily::connect4::DailyConnect4State;
+use crate::app::lobby::daily::cribbage::{self, CribbageMove, DailyCribbageState};
 use crate::app::lobby::daily::games::DailyGame;
+use crate::app::lobby::daily::gin::{self, DailyGinState, GinMove, Pile};
 use crate::app::lobby::daily::pool::{DailyPoolState, PoolShotRecord};
 use crate::app::lobby::daily::svc::{
     DAILY_MAX_ACTIVE_ENTRIES, DAILY_WIN_MIN_MOVES, DailyChessState, DailyOutcome, DailyService,
@@ -20,7 +22,7 @@ use late_core::{
     models::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
-        daily_match::DailyMatch,
+        daily_match::{DailyMatch, DailyResult},
         voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
     test_utils::{TestDb, create_test_user},
@@ -104,7 +106,7 @@ async fn resigned_match(
     played: bool,
 ) -> DailyMatch {
     let challenge = svc
-        .post_challenge(challenger, game, None)
+        .post_challenge(challenger, game)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -157,7 +159,7 @@ async fn claim_has_exactly_one_winner() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
 
@@ -194,26 +196,48 @@ async fn claim_has_exactly_one_winner() {
 }
 
 #[tokio::test]
-async fn directed_challenge_is_claimable_only_by_target() {
+async fn a_match_whose_state_does_not_read_is_left_out_of_the_snapshot() {
     let test_db = new_test_db().await;
-    let challenger = create_test_user(&test_db.db, "daily-direct-challenger").await;
-    let target = create_test_user(&test_db.db, "daily-direct-target").await;
-    let bystander = create_test_user(&test_db.db, "daily-direct-bystander").await;
+    let challenger = create_test_user(&test_db.db, "daily-unreadable-challenger").await;
+    let claimer = create_test_user(&test_db.db, "daily-unreadable-claimer").await;
     let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
 
-    let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, Some(target.id))
+    let broken = svc
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
-        .expect("post directed challenge");
-
-    let stolen = svc.claim_challenge(bystander.id, challenge.id).await;
-    assert!(stolen.is_err(), "non-target claimed a directed challenge");
-
-    let claimed = svc
-        .claim_challenge(target.id, challenge.id)
+        .expect("post challenge");
+    let broken = svc
+        .claim_challenge(claimer.id, broken.id)
         .await
-        .expect("target claims");
-    assert_eq!(claimed.opponent_id, Some(target.id));
+        .expect("claim challenge");
+    let turn = broken.turn_user_id.expect("claimed match has a turn");
+    let updated = DailyMatch::update_state(
+        &client,
+        broken.id,
+        &serde_json::json!({}),
+        turn,
+        turn,
+        chrono::Utc::now() + chrono::Duration::days(1),
+        0,
+    )
+    .await
+    .expect("overwrite state");
+    assert_eq!(updated, 1);
+
+    // The next publish (this claim's) reads the broken row and leaves it out,
+    // rather than listing it with no board.
+    let healthy = svc
+        .post_challenge(challenger.id, DailyGame::ConnectFour)
+        .await
+        .expect("post challenge");
+    svc.claim_challenge(claimer.id, healthy.id)
+        .await
+        .expect("claim challenge");
+
+    let snapshot = svc.subscribe_snapshot().borrow().clone();
+    let active: Vec<Uuid> = snapshot.active_matches.iter().map(|item| item.id).collect();
+    assert_eq!(active, vec![healthy.id]);
 }
 
 #[tokio::test]
@@ -225,7 +249,7 @@ async fn moves_validate_turn_and_legality() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -274,7 +298,7 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -305,7 +329,7 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_CHECKMATE);
+    assert_eq!(row.result, DailyResult::Checkmate.as_str());
     assert_eq!(row.winner_user_id, Some(white));
     assert_eq!(row.turn_user_id, None);
     assert_eq!(row.turn_deadline_at, None);
@@ -337,7 +361,7 @@ async fn win_under_the_move_floor_pays_nothing() {
     // Post, claim, four plies, resign: the shape of the two-account loop the
     // gate exists for. The match finishes as a real win, the chips never move.
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -479,7 +503,7 @@ async fn pair_day_cap_keys_on_the_day_the_match_was_posted() {
     // Two long games against the same person finishing on the same day is
     // ordinary; they were posted on different days, so both pay.
     let challenge = svc
-        .post_challenge(a.id, DailyGame::Chess, None)
+        .post_challenge(a.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -516,7 +540,7 @@ async fn chess960_claim_shuffles_the_start_and_a_win_pays_the_chess960_reward() 
     let mut claimed = Vec::new();
     for _ in 0..3 {
         let challenge = svc
-            .post_challenge(challenger.id, DailyGame::Chess960, None)
+            .post_challenge(challenger.id, DailyGame::Chess960)
             .await
             .expect("post chess960 challenge");
         claimed.push(
@@ -556,7 +580,7 @@ async fn chess960_claim_shuffles_the_start_and_a_win_pays_the_chess960_reward() 
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_RESIGN);
+    assert_eq!(row.result, DailyResult::Resign.as_str());
     assert_eq!(row.winner_user_id, Some(opponent.id));
 
     // The payout rides the chess960 reward key and chip move, not chess's:
@@ -576,7 +600,7 @@ async fn finished_match_posts_a_lounge_result_line() {
     let (svc, mut activity_rx) = daily_service_with_activity(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -631,7 +655,7 @@ async fn resign_finishes_match_for_the_other_player() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -649,7 +673,7 @@ async fn resign_finishes_match_for_the_other_player() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_RESIGN);
+    assert_eq!(row.result, DailyResult::Resign.as_str());
     assert_eq!(row.winner_user_id, Some(white));
 }
 
@@ -661,7 +685,7 @@ async fn stale_revision_writes_are_rejected() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -724,7 +748,7 @@ async fn same_revision_writes_that_keep_the_turn_are_serialized() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Battleship, None)
+        .post_challenge(challenger.id, DailyGame::Battleship)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -767,7 +791,7 @@ async fn sweeper_forfeits_matches_past_their_deadline() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -796,7 +820,7 @@ async fn sweeper_forfeits_matches_past_their_deadline() {
     let row = &forfeited[0];
     assert_eq!(row.id, claimed.id);
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_TIMEOUT);
+    assert_eq!(row.result, DailyResult::Timeout.as_str());
     // White was on the clock, so black wins on time.
     assert_eq!(row.winner_user_id, Some(black));
     assert_ne!(row.winner_user_id, Some(white));
@@ -820,12 +844,12 @@ async fn active_entry_cap_counts_challenges_and_matches() {
     let mut challenges = Vec::new();
     for _ in 0..DAILY_MAX_ACTIVE_ENTRIES {
         challenges.push(
-            svc.post_challenge(poster.id, DailyGame::Chess, None)
+            svc.post_challenge(poster.id, DailyGame::Chess)
                 .await
                 .expect("post challenge under the cap"),
         );
     }
-    let over = svc.post_challenge(poster.id, DailyGame::Chess, None).await;
+    let over = svc.post_challenge(poster.id, DailyGame::Chess).await;
     assert!(over.is_err(), "posted past the cap");
 
     // A claim converts one open challenge into an active match: the poster's
@@ -833,7 +857,7 @@ async fn active_entry_cap_counts_challenges_and_matches() {
     svc.claim_challenge(claimer.id, challenges[0].id)
         .await
         .expect("claim");
-    let still_over = svc.post_challenge(poster.id, DailyGame::Chess, None).await;
+    let still_over = svc.post_challenge(poster.id, DailyGame::Chess).await;
     assert!(
         still_over.is_err(),
         "active matches must count toward the cap"
@@ -843,7 +867,7 @@ async fn active_entry_cap_counts_challenges_and_matches() {
     svc.cancel_challenge(poster.id, challenges[1].id)
         .await
         .expect("cancel own challenge");
-    svc.post_challenge(poster.id, DailyGame::Chess, None)
+    svc.post_challenge(poster.id, DailyGame::Chess)
         .await
         .expect("slot freed by cancel");
 
@@ -855,18 +879,6 @@ async fn active_entry_cap_counts_challenges_and_matches() {
         foreign_cancel.is_err(),
         "cancelled someone else's challenge"
     );
-}
-
-#[tokio::test]
-async fn self_challenge_is_rejected() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "daily-self").await;
-    let svc = daily_service(&test_db);
-
-    let result = svc
-        .post_challenge(user.id, DailyGame::Chess, Some(user.id))
-        .await;
-    assert!(result.is_err(), "self-challenge accepted");
 }
 
 fn battleship_state(row: &DailyMatch) -> DailyBattleshipState {
@@ -881,7 +893,7 @@ async fn battleship_hits_fire_again_and_sinking_the_fleet_pays() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Battleship, None)
+        .post_challenge(challenger.id, DailyGame::Battleship)
         .await
         .expect("post battleship challenge");
     assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_BATTLESHIP);
@@ -966,7 +978,7 @@ async fn battleship_hits_fire_again_and_sinking_the_fleet_pays() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_FLEET_SUNK);
+    assert_eq!(row.result, DailyResult::FleetSunk.as_str());
     assert_eq!(row.winner_user_id, Some(shooter));
     assert_eq!(row.turn_user_id, None);
     assert_eq!(row.turn_deadline_at, None);
@@ -1000,7 +1012,7 @@ async fn battleship_resign_finishes_for_the_other_player() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Battleship, None)
+        .post_challenge(challenger.id, DailyGame::Battleship)
         .await
         .expect("post battleship challenge");
     let claimed = svc
@@ -1018,7 +1030,7 @@ async fn battleship_resign_finishes_for_the_other_player() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_RESIGN);
+    assert_eq!(row.result, DailyResult::Resign.as_str());
     assert_eq!(row.winner_user_id, Some(opponent.id));
 }
 
@@ -1034,7 +1046,7 @@ async fn connect4_turns_alternate_and_connecting_four_pays() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .post_challenge(challenger.id, DailyGame::ConnectFour)
         .await
         .expect("post connect4 challenge");
     assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_CONNECTFOUR);
@@ -1099,7 +1111,7 @@ async fn connect4_turns_alternate_and_connecting_four_pays() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_FOUR_IN_A_ROW);
+    assert_eq!(row.result, DailyResult::FourInARow.as_str());
     assert_eq!(row.winner_user_id, Some(red));
     assert_eq!(row.turn_user_id, None);
     assert_eq!(row.turn_deadline_at, None);
@@ -1135,7 +1147,7 @@ async fn connect4_full_board_draws_and_pays_nobody() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .post_challenge(challenger.id, DailyGame::ConnectFour)
         .await
         .expect("post connect4 challenge");
     let claimed = svc
@@ -1168,7 +1180,7 @@ async fn connect4_full_board_draws_and_pays_nobody() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_DRAW);
+    assert_eq!(row.result, DailyResult::Draw.as_str());
     assert_eq!(row.winner_user_id, None);
     assert_eq!(connect4_state(&row).move_count(), 42);
 
@@ -1195,7 +1207,7 @@ async fn finished_results_linger_until_each_player_acks() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -1255,7 +1267,7 @@ async fn claim_creates_match_chat_with_voice() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::Chess, None)
+        .post_challenge(challenger.id, DailyGame::Chess)
         .await
         .expect("post challenge");
     // An open challenge has nobody to talk to yet.
@@ -1318,7 +1330,7 @@ async fn stale_match_chat_rooms_are_reaped_after_30_days() {
     let mut match_ids = Vec::new();
     for _ in 0..3 {
         let challenge = svc
-            .post_challenge(challenger.id, DailyGame::Chess, None)
+            .post_challenge(challenger.id, DailyGame::Chess)
             .await
             .expect("post challenge");
         let claimed = svc
@@ -1419,7 +1431,7 @@ async fn claimed_challenge_rejects_a_later_claim() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::ConnectFour, None)
+        .post_challenge(challenger.id, DailyGame::ConnectFour)
         .await
         .expect("post challenge");
     svc.claim_challenge(opponent.id, challenge.id)
@@ -1540,7 +1552,7 @@ async fn pool_claim_racks_the_table_and_puts_the_breaker_on_the_clock() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::EightBall, None)
+        .post_challenge(challenger.id, DailyGame::EightBall)
         .await
         .expect("post eight-ball challenge");
     assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_EIGHTBALL);
@@ -1577,7 +1589,7 @@ async fn pool_shots_validate_the_turn_and_the_stroke() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .post_challenge(challenger.id, DailyGame::NineBall)
         .await
         .expect("post nine-ball challenge");
     let claimed = svc
@@ -1651,7 +1663,7 @@ async fn potting_keeps_the_table_and_a_miss_hands_it_over() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .post_challenge(challenger.id, DailyGame::NineBall)
         .await
         .expect("post nine-ball challenge");
     let claimed = svc
@@ -1733,7 +1745,7 @@ async fn nine_ball_out_finishes_the_match_and_pays_the_winner() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .post_challenge(challenger.id, DailyGame::NineBall)
         .await
         .expect("post nine-ball challenge");
     let claimed = svc
@@ -1761,7 +1773,7 @@ async fn nine_ball_out_finishes_the_match_and_pays_the_winner() {
         .expect("load match")
         .expect("match exists");
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
-    assert_eq!(row.result, DailyMatch::RESULT_NINE_POTTED);
+    assert_eq!(row.result, DailyResult::NinePotted.as_str());
     assert_eq!(row.winner_user_id, Some(shooter));
     assert_eq!(row.turn_user_id, None);
     assert_eq!(row.turn_deadline_at, None);
@@ -1798,7 +1810,7 @@ async fn potting_the_eight_early_hands_the_match_to_the_other_player() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::EightBall, None)
+        .post_challenge(challenger.id, DailyGame::EightBall)
         .await
         .expect("post eight-ball challenge");
     let claimed = svc
@@ -1841,7 +1853,7 @@ async fn potting_the_eight_early_hands_the_match_to_the_other_player() {
     assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
     assert_eq!(
         row.result,
-        DailyMatch::RESULT_EARLY_EIGHT,
+        DailyResult::EarlyEight.as_str(),
         "an early eight is its own result: the loser is the one who potted it"
     );
     assert_eq!(row.winner_user_id, Some(other));
@@ -1855,7 +1867,7 @@ async fn a_superseded_pool_shot_is_rejected_rather_than_applied_twice() {
     let svc = daily_service(&test_db);
 
     let challenge = svc
-        .post_challenge(challenger.id, DailyGame::NineBall, None)
+        .post_challenge(challenger.id, DailyGame::NineBall)
         .await
         .expect("post nine-ball challenge");
     let claimed = svc
@@ -1909,4 +1921,232 @@ async fn a_superseded_pool_shot_is_rejected_rather_than_applied_twice() {
     .await
     .expect("update state");
     assert_eq!(stale, 0, "a write expecting a revision the row never had");
+}
+
+#[test]
+fn a_row_that_stays_rejected_is_reported_once() {
+    use crate::app::lobby::daily::svc::{SnapshotRowError, newly_rejected};
+    use std::collections::HashSet;
+
+    let (broken, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let ids = |report: &[(Uuid, SnapshotRowError)]| -> Vec<Uuid> {
+        report.iter().map(|(match_id, _)| *match_id).collect()
+    };
+
+    let first = newly_rejected(
+        &HashSet::new(),
+        vec![(broken, SnapshotRowError::NoOpponent)],
+    );
+    assert_eq!(ids(&first.new), vec![broken], "news the first time");
+
+    // The next publish still leaves it out, and finds a second one.
+    let second = newly_rejected(
+        &first.still_rejected,
+        vec![
+            (broken, SnapshotRowError::NoOpponent),
+            (other, SnapshotRowError::NoOpponent),
+        ],
+    );
+    assert_eq!(ids(&second.new), vec![other], "only the new one is news");
+    assert_eq!(second.still_rejected, HashSet::from([broken, other]));
+
+    // A row that reads again and breaks again is news again.
+    let healed = newly_rejected(&second.still_rejected, vec![]);
+    let again = newly_rejected(
+        &healed.still_rejected,
+        vec![(broken, SnapshotRowError::NoOpponent)],
+    );
+    assert_eq!(ids(&again.new), vec![broken]);
+}
+
+async fn load(client: &tokio_postgres::Client, match_id: Uuid) -> DailyMatch {
+    DailyMatch::get(client, match_id)
+        .await
+        .expect("load match")
+        .expect("match exists")
+}
+
+#[tokio::test]
+async fn cribbage_plays_hand_after_hand_to_61_and_pays_the_winner() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-crib-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-crib-opponent").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::Cribbage)
+        .await
+        .expect("post cribbage challenge");
+    assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_CRIBBAGE);
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim cribbage challenge");
+
+    // Seat 0 deals the first hand, so seat 1 owes the first discard.
+    let state = DailyCribbageState::parse(&claimed.state).expect("claim state parses");
+    assert_eq!(claimed.turn_user_id, Some(state.user_of(1)));
+    let dealer = state.user_of(0);
+    let out_of_turn = svc
+        .play_cribbage_move(
+            dealer,
+            claimed.id,
+            CribbageMove::Discard([state.deals[0][6], state.deals[0][7]]),
+        )
+        .await;
+    assert!(out_of_turn.is_err(), "the dealer discarded before pone");
+    assert!(svc.play_move(dealer, claimed.id, 0, 0).await.is_err());
+
+    // Drive it to the end: discard the first two, peg the first card that
+    // fits. The service deals every hand after the first.
+    let row = loop {
+        let row = load(&client, claimed.id).await;
+        if row.status != DailyMatch::STATUS_ACTIVE {
+            break row;
+        }
+        let state = DailyCribbageState::parse(&row.state).expect("state parses");
+        let table = state.table();
+        let mover = row.turn_user_id.expect("someone owes a move");
+        assert_eq!(
+            state.turn_user(),
+            Some(mover),
+            "the row and the replay agree"
+        );
+        let played = match table.phase {
+            cribbage::Phase::Discard(seat) => {
+                CribbageMove::Discard([table.hands[seat][0], table.hands[seat][1]])
+            }
+            cribbage::Phase::Peg(seat) => CribbageMove::Play(
+                *table.hands[seat]
+                    .iter()
+                    .find(|card| table.count + card.value() <= cribbage::MAX_COUNT)
+                    .expect("the mover can play"),
+            ),
+            cribbage::Phase::AwaitingDeal | cribbage::Phase::Won(_) => {
+                panic!("an active row is always mid-hand: {:?}", table.phase)
+            }
+        };
+        svc.play_cribbage_move(mover, claimed.id, played)
+            .await
+            .expect("the bot plays legal cribbage");
+    };
+
+    let state = DailyCribbageState::parse(&row.state).expect("final state parses");
+    let table = state.table();
+    assert!(state.deals.len() > 1, "the service dealt later hands");
+    assert_eq!(row.result, DailyResult::PeggedOut.as_str());
+    let winner = row.winner_user_id.expect("cribbage has a winner");
+    let seat = state.seat_of(winner).expect("the winner is seated");
+    assert!(table.scores[seat] >= cribbage::WINNING_SCORE);
+    assert_eq!(row.turn_user_id, None);
+    assert_eq!(
+        win_deltas(&client, winner, "daily_cribbage_win").await,
+        vec![500]
+    );
+}
+
+#[tokio::test]
+async fn gin_turns_draw_then_discard_on_one_clock_and_a_match_to_100_pays() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-gin-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-gin-opponent").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    let challenge = svc
+        .post_challenge(challenger.id, DailyGame::GinRummy)
+        .await
+        .expect("post gin challenge");
+    assert_eq!(challenge.game_kind, DailyMatch::GAME_KIND_GIN);
+    let claimed = svc
+        .claim_challenge(opponent.id, challenge.id)
+        .await
+        .expect("claim gin challenge");
+    let state = DailyGinState::parse(&claimed.state).expect("claim state parses");
+    let first = state.user_of(1);
+    assert_eq!(
+        claimed.turn_user_id,
+        Some(first),
+        "the non-dealer draws first"
+    );
+
+    let early = svc
+        .play_gin_move(
+            first,
+            claimed.id,
+            GinMove::Discard {
+                card: state.table().hands[1][0],
+                knock: false,
+            },
+        )
+        .await;
+    assert!(early.is_err(), "a discard before the draw");
+
+    // The draw keeps the turn and the clock; the discard hands both over.
+    svc.play_gin_move(first, claimed.id, GinMove::Draw(Pile::Stock))
+        .await
+        .expect("draw from the stock");
+    let drawn = load(&client, claimed.id).await;
+    assert_eq!(drawn.turn_user_id, Some(first));
+    assert_eq!(drawn.turn_deadline_at, claimed.turn_deadline_at);
+    let hand = DailyGinState::parse(&drawn.state)
+        .expect("parses")
+        .table()
+        .hands[1]
+        .clone();
+    svc.play_gin_move(
+        first,
+        claimed.id,
+        GinMove::Discard {
+            card: hand[0],
+            knock: false,
+        },
+    )
+    .await
+    .expect("discard");
+    let thrown = load(&client, claimed.id).await;
+    assert_eq!(thrown.turn_user_id, Some(state.user_of(0)));
+    assert!(thrown.turn_deadline_at > claimed.turn_deadline_at);
+
+    // Drive it to the end: draw from the stock, throw whatever leaves the
+    // least deadwood, knock when allowed.
+    let row = loop {
+        let row = load(&client, claimed.id).await;
+        if row.status != DailyMatch::STATUS_ACTIVE {
+            break row;
+        }
+        let state = DailyGinState::parse(&row.state).expect("state parses");
+        let table = state.table();
+        let mover = row.turn_user_id.expect("someone owes a move");
+        let played = match table.phase {
+            gin::Phase::Draw(_) => GinMove::Draw(Pile::Stock),
+            gin::Phase::Discard(seat) => {
+                let hand = &table.hands[seat];
+                let card = *hand
+                    .iter()
+                    .min_by_key(|card| gin::deadwood_after_discard(hand, **card))
+                    .expect("eleven cards");
+                let knock = gin::deadwood_after_discard(hand, card) <= gin::MAX_KNOCK;
+                GinMove::Discard { card, knock }
+            }
+            gin::Phase::AwaitingDeal | gin::Phase::Won(_) => {
+                panic!("an active row is always mid-hand: {:?}", table.phase)
+            }
+        };
+        svc.play_gin_move(mover, claimed.id, played)
+            .await
+            .expect("the bot plays legal gin");
+    };
+
+    let state = DailyGinState::parse(&row.state).expect("final state parses");
+    assert!(state.deals.len() > 1, "the service dealt later hands");
+    assert_eq!(row.result, DailyResult::ReachedHundred.as_str());
+    let winner = row.winner_user_id.expect("gin has a winner");
+    let seat = state.seat_of(winner).expect("the winner is seated");
+    assert!(state.table().scores[seat] >= gin::TARGET_SCORE);
+    assert_eq!(
+        win_deltas(&client, winner, "daily_gin_win").await,
+        vec![500]
+    );
 }

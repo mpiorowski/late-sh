@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use reqwest::Url;
 use serde::Deserialize;
 
+use super::thumbnail::{THUMBNAIL_MAX_BYTES, shrink, thumbnail_url};
+
 const MIN_DURATION_MS: i32 = 30_000;
+const THUMBNAIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct YoutubeClient {
@@ -32,6 +35,32 @@ impl YoutubeClient {
             .as_deref()
             .map(|key| !key.trim().is_empty())
             .unwrap_or(false)
+    }
+
+    /// The video's thumbnail, shrunk for the live strip
+    /// (`thumbnail::shrink`). Needs no API key: the image host is public.
+    pub async fn fetch_thumbnail(&self, video_id: &str) -> Result<image::RgbaImage> {
+        let mut response = self
+            .http
+            .get(thumbnail_url(video_id))
+            .timeout(THUMBNAIL_TIMEOUT)
+            .send()
+            .await
+            .context("failed to call the YouTube thumbnail host")?
+            .error_for_status()
+            .context("the YouTube thumbnail host refused the request")?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("failed to read the YouTube thumbnail")?
+        {
+            if bytes.len() + chunk.len() > THUMBNAIL_MAX_BYTES {
+                anyhow::bail!("YouTube thumbnail is past {THUMBNAIL_MAX_BYTES} bytes");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        shrink(&bytes)
     }
 
     pub async fn validate_url(&self, url: &str) -> Result<YoutubeVideo> {

@@ -3,11 +3,14 @@
 //! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
 
-use std::time::{Duration, Instant};
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
@@ -16,7 +19,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{
     bigclock,
-    layout::{self, BONSAI_STATUS_ROWS, FLOOR_ROWS},
+    layout::{self, FLOOR_ROWS},
     rows::{Headline, InboxRow},
     state::{BorderKind, TileKind, ZenState},
 };
@@ -27,8 +30,8 @@ use crate::app::{
     audio::stations::{icecast_stream_display_name, radio_station_display_name},
     audio::viz::{Dance, EqState, dance_lines, render_eq},
     bonsai::{
-        render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
-        state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
+        render::{apply_sway, canvas_lines, center_lines},
+        state::{BonsaiState, CANVAS_WIDTH},
     },
     chat::state::{ActiveFriend, ActivityTickerEntry},
     chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat},
@@ -38,8 +41,9 @@ use crate::app::{
     },
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
+    live::{pick::LiveSource, state::LiveStripView},
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
-    pet::ui::{Neighbours, PetPose, PetView, WatchTarget, draw_pet_box},
+    pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -108,6 +112,11 @@ pub(crate) struct ZenView<'a> {
     /// Built only while an Inbox or Headlines tile is on the page.
     pub inbox: Vec<InboxRow>,
     pub headlines: Vec<Headline>,
+    /// What the #lounge live strip shows, built only while a Live tile is
+    /// on the page; `None` when nothing is up.
+    pub live: Option<LiveStripView<'a>>,
+    /// Where the Live tile drew the strip, for the click that opens it.
+    pub live_hit: &'a Cell<Option<(Rect, LiveSource)>>,
     pub wall_tick: usize,
 }
 
@@ -168,6 +177,7 @@ pub(crate) fn draw_rice(
             | TileKind::Pulse
             | TileKind::Inbox
             | TileKind::Headlines
+            | TileKind::Live
             | TileKind::Blank => None,
         };
         let title = match (kind, &chat_tile) {
@@ -188,6 +198,7 @@ pub(crate) fn draw_rice(
                 | TileKind::Pulse
                 | TileKind::Inbox
                 | TileKind::Headlines
+                | TileKind::Live
                 | TileKind::Blank,
                 _,
             ) => kind.label().to_string(),
@@ -211,6 +222,7 @@ pub(crate) fn draw_rice(
             | TileKind::Pulse
             | TileKind::Inbox
             | TileKind::Headlines
+            | TileKind::Live
             | TileKind::Blank => None,
         };
         let keys = tile_keys(*kind, &view);
@@ -276,6 +288,14 @@ pub(crate) fn draw_rice(
                 &view.headlines,
                 zen.headlines_selected,
                 focused,
+            ),
+            TileKind::Live => draw_live_tile(
+                frame,
+                inner,
+                view.live.as_ref(),
+                view.live_hit,
+                view.activity,
+                view.active_friends,
             ),
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
@@ -389,6 +409,15 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
         TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
         TileKind::Headlines => &[("jk", "pick"), ("enter", "copy")],
+        TileKind::Live
+            if view
+                .live
+                .as_ref()
+                .is_some_and(|strip| strip.opens().is_some()) =>
+        {
+            &[("enter", "open")]
+        }
+        TileKind::Live => &[],
         TileKind::Clock
         | TileKind::Visualizer
         | TileKind::Activity
@@ -557,79 +586,25 @@ fn hint_line_fitting(hints: &[(&str, &str)], width: usize) -> Line<'static> {
     hint_line(&hints[..keep])
 }
 
-/// The tree at its true size when the tile has the room, the preview
-/// otherwise; pot on the floor, status row under it.
+/// The care modal's canvas at its true size, never the preview, pot on the
+/// floor. No status row: the numbers live in the care modal (`w`), so the
+/// tile gives every row to the tree. A tile smaller than the canvas cuts it:
+/// the top rows go first, and the sides go evenly so the trunk stays centered.
 fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
-    if area.height < 4 || area.width < PREVIEW_WIDTH as u16 {
-        return;
-    }
-    let tree_area = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(BONSAI_STATUS_ROWS),
-    );
-    let full = tree_area.width >= CANVAS_WIDTH as u16 && tree_area.height >= CANVAS_HEIGHT as u16;
-    let (mut lines, block_width) = if full {
-        (canvas_lines(state, true), CANVAS_WIDTH)
-    } else {
-        (render_preview_lines(state), PREVIEW_WIDTH)
-    };
+    let mut lines = canvas_lines(state, true);
     apply_sway(&mut lines, wall_tick);
-    center_lines(&mut lines, tree_area.width as usize, block_width);
-    let visible = lines.len().min(tree_area.height as usize);
+    center_lines(&mut lines, area.width as usize, CANVAS_WIDTH);
+    let cut_left = CANVAS_WIDTH.saturating_sub(area.width as usize) / 2;
+    let visible = lines.len().min(area.height as usize);
     let dropped = lines.len() - visible;
     let mut lines: Vec<Line<'static>> = lines.into_iter().skip(dropped).collect();
-    let top_pad = (tree_area.height as usize).saturating_sub(lines.len());
+    let top_pad = (area.height as usize).saturating_sub(lines.len());
     let mut padded = Vec::with_capacity(top_pad + lines.len());
     for _ in 0..top_pad {
         padded.push(Line::from(""));
     }
     padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded), tree_area);
-
-    let status_area = Rect::new(area.x, tree_area.bottom(), area.width, BONSAI_STATUS_ROWS);
-    frame.render_widget(
-        Paragraph::new(bonsai_status_line(state)).centered(),
-        status_area,
-    );
-}
-
-fn bonsai_status_line(state: &BonsaiState) -> Line<'static> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let dot = || Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
-    let (label, color) = if !state.is_alive {
-        ("rip", theme::ERROR())
-    } else if state.water_stress >= 60 {
-        ("dry", theme::ERROR())
-    } else if state.water_stress >= 25 {
-        ("watch", theme::AMBER())
-    } else {
-        ("alive", theme::SUCCESS())
-    };
-    let mut spans = vec![
-        Span::styled(format!("day {}", state.age_days), dim),
-        dot(),
-        Span::styled(
-            format!("vigor {}", state.vigor),
-            Style::default().fg(theme::SUCCESS()),
-        ),
-        dot(),
-        Span::styled(
-            format!("stress {}", state.water_stress),
-            Style::default().fg(color),
-        ),
-        dot(),
-        Span::styled(label, Style::default().fg(color)),
-    ];
-    if let Some(message) = state.message.as_deref() {
-        spans.push(dot());
-        spans.push(Span::styled(
-            message.to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-    }
-    Line::from(spans)
+    frame.render_widget(Paragraph::new(padded).scroll((0, cut_left as u16)), area);
 }
 
 /// The tank. Without the shop unlock the tile reads like the pet's, a
@@ -666,39 +641,8 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neigh
         return;
     }
     let box_area = if area.height >= FLOOR_ROWS + 2 {
-        let state = view.state;
-        let dim = Style::default().fg(theme::TEXT_DIM());
-        let name = state
-            .name
-            .clone()
-            .unwrap_or_else(|| state.species.as_str().to_string());
-        let pose = PetPose::for_frame(
-            state.mood(),
-            neighbours,
-            state.perch(),
-            state.animation_ticks(),
-        );
-        let line = Line::from(vec![
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" · {}", state.mood().as_str()), dim),
-            Span::styled(
-                match pose {
-                    PetPose::Watch(WatchTarget::Tank, _) => " · watching the fish",
-                    PetPose::Watch(WatchTarget::Bonsai, _) => " · watching the tree",
-                    PetPose::At(_) => " · at your cursor",
-                    PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
-                },
-                dim,
-            ),
-        ])
-        .centered();
         frame.render_widget(
-            Paragraph::new(line),
+            Paragraph::new(status_line(view.state, neighbours).centered()),
             Rect::new(area.x, area.y, area.width, 1),
         );
         Rect::new(area.x, area.y + 1, area.width, area.height - 1)
@@ -857,6 +801,32 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// The live strip while something is up; otherwise a narrow "nothing
+/// live" beside the #lounge feed, which takes the larger share, so the
+/// tile is never dead.
+fn draw_live_tile(
+    frame: &mut Frame,
+    area: Rect,
+    strip: Option<&LiveStripView<'_>>,
+    hit: &Cell<Option<(Rect, LiveSource)>>,
+    entries: &[ActivityTickerEntry],
+    friends: &[ActiveFriend],
+) {
+    if let Some(strip) = strip {
+        crate::app::live::ui::draw_live_tile(frame, area, strip, hit);
+        return;
+    }
+    let [note, feed] =
+        Layout::horizontal([Constraint::Percentage(30), Constraint::Fill(1)]).areas(area);
+    draw_centered_note(frame, pad_sides(note), &["nothing live"]);
+    let feed_block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
+    let feed_inner = feed_block.inner(feed);
+    frame.render_widget(feed_block, feed);
+    draw_activity_tile(frame, pad_sides(feed_inner), entries, friends);
+}
+
 /// The #lounge activity feed as a list: newest on top, one event a row with
 /// its age flush right, a friend's line in the friend color.
 fn draw_activity_tile(
@@ -972,6 +942,16 @@ pub(crate) struct PulseView {
     pub mentions: i64,
     pub friends: usize,
     pub care: Care,
+}
+
+impl Care {
+    /// How many owned companions still wait on today's care.
+    pub(crate) fn due_count(&self) -> usize {
+        [self.bonsai, self.tank, self.pet]
+            .into_iter()
+            .filter(|chore| *chore == Chore::Due)
+            .count()
+    }
 }
 
 /// Today's care for one companion: tended, still due, or not owned.

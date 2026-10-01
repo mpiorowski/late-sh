@@ -62,6 +62,8 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::DailyCheckersWin => "checkers win",
         ChipMove::DailyBackgammonWin => "backgammon win",
         ChipMove::DailyBriscolaWin => "briscola win",
+        ChipMove::DailyCribbageWin => "cribbage win",
+        ChipMove::DailyGinWin => "gin rummy win",
         ChipMove::DailyEightBallWin => "eight-ball win",
         ChipMove::DailyNineBallWin => "nine-ball win",
         ChipMove::DailySnookerWin => "snooker frame",

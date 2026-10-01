@@ -188,28 +188,34 @@ fn match_line(width: u16, row: &DailyPanelMatchRow, lead: RowMarker) -> Line<'st
         DailyPanelRowStatus::Draw => (theme::AMBER(), "draw", theme::AMBER()),
         DailyPanelRowStatus::Waiting => (theme::TEXT_FAINT(), "waiting", theme::TEXT_FAINT()),
     };
-    let (marker, marker_style, name_style, status_style) =
-        if matches!(row.status, DailyPanelRowStatus::Waiting) {
-            (
-                "  ",
-                Style::default().fg(marker_color),
-                Style::default().fg(theme::TEXT_DIM()),
-                Style::default().fg(status_color),
-            )
-        } else {
-            (
-                "► ",
-                Style::default()
-                    .fg(marker_color)
-                    .add_modifier(Modifier::BOLD),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-                Style::default()
-                    .fg(status_color)
-                    .add_modifier(Modifier::BOLD),
-            )
-        };
+    let waiting = match row.status {
+        DailyPanelRowStatus::Waiting => true,
+        DailyPanelRowStatus::YourTurn
+        | DailyPanelRowStatus::Won
+        | DailyPanelRowStatus::Lost
+        | DailyPanelRowStatus::Draw => false,
+    };
+    let (marker, marker_style, name_style, status_style) = if waiting {
+        (
+            "  ",
+            Style::default().fg(marker_color),
+            Style::default().fg(theme::TEXT_DIM()),
+            Style::default().fg(status_color),
+        )
+    } else {
+        (
+            "► ",
+            Style::default()
+                .fg(marker_color)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
     let (marker, marker_w) = match lead {
         RowMarker::Arrow => (marker, 2),
         RowMarker::Bare => ("", 0),

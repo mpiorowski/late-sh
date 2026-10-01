@@ -1,0 +1,76 @@
+# Statusline Context
+
+## Metadata
+- Scope: `late-ssh/src/app/statusline`, the status bars painted on the app frame's two horizontal borders, plus their persisted model in `late-core/src/models/statusline.rs` and their customizer in `late-ssh/src/app/settings_modal`.
+- Parent context: root `CONTEXT.md`.
+- Status: Active
+
+## 1. Shape
+
+Framed pages use one component renderer on both borders. Zen is frameless: it paints no bar and clears the click targets.
+
+- **Top-right bar**: fixed UI policy, not persisted. The pot, then the chips, sharing the row with the page tabs. These are the ambient readings, kept in the one corner that never moves.
+- **Bottom-left bar**: the user's arrangement, sharing the row with the sponsor line. By default it is the Keyhints, the station (icon label), voice, mentions (DMs counted), your move, and care. All six stay visible while idle (`mic -`, `unread 0`), so a newcomer sees the whole default bar and trims it in Settings. Every other reading is opt-in and starts auto-hiding. The default order (`StatusComponent::ALL`) runs most valuable first: Keyhints, station, voice, mentions, your move, care, quests, pot, chips, users online, time.
+- **Move, never duplicate**: a component the bottom bar painted this frame is skipped on the top bar, so turning the pot or the chips on at the bottom moves the reading down. Painted, not merely enabled: a segment the bottom bar had no room for stays on the top. `render.rs` builds the bottom bar first and hands `StatusBar::painted` to `build_top_status_bar`.
+
+Text labels and icon labels both precede their values (`unread 3`, `chips 1204`).
+
+## 2. Module map
+
+| File | Responsibility |
+|---|---|
+| `mod.rs` | Declarations only. |
+| `data.rs` | `StatusData`, the per-frame inputs gathered once in `App::render`, and the value each component paints. Pure: the clock arrives pre-formatted, so the draw path reads no wall clock. |
+| `bar.rs` | The three passes (build, fit, lay out), the fixed top bar (`build_top_status_bar`), the Keyhints copy, and `click_action`. |
+| `late-core/src/models/statusline.rs` | The persisted model: `StatusComponent` roster, `LabelMode`, `StatusVariant`, `StatusComponentSetting`, and the `parse_` / `normalize_` / `_json` trio. |
+| `app/render.rs::app_frame_bottom_titles` | Owns the sponsor line: sets its link's width aside, gives the bar the rest of the row, and adds the thanks when the bar leaves room. |
+| `app/input.rs::handle_status_bar_click` | Routes a click to the segment under it. |
+| `app/settings_modal` | The customizer: `StatuslinePane` / `StatuslineDial` in `state.rs`, `draw_statusline_tab` in `ui.rs`, `handle_statusline_input` in `input.rs`. |
+
+## 3. Three passes
+
+No segment knows its own x.
+
+1. `build_segments` turns component settings plus this frame's `StatusData` into spans. Disabled components produce nothing, and so do auto-hiding components that read inactive.
+2. `fit` keeps the segments that fit the columns it was given and drops the rest whole.
+3. `lay_out` joins the survivors with `─` separators and converts accumulated widths into click rects.
+
+Widths are measured with ratatui's own `Span::width`, the same function that decides which cells a span occupies, so a hit rect cannot disagree with what the user sees. That is what lets segments be reordered, resized, and dropped freely. The rects are rebuilt every frame into `App::last_status_hits`.
+
+## 4. Fitting
+
+There are no render rules beyond this one: **a segment fits whole or is dropped.** Nothing is shortened (no label shedding, no tighter wording), there is no priority dial, and no segment is special, the Keyhints included.
+
+- The list order is the only priority. Segments claim room starting from the frame corner the bar is anchored to (`Placement::claim_order`): the leftmost first on the bottom-left bar, the rightmost first on the top-right one, so the chips outlast the pot.
+- Each segment is kept or dropped on its own. One too wide for the room left does not block a narrower one after it.
+- Getting a bar that fits a small terminal is the user's job: reorder, switch things off, or set Keyhints to Brief (`⚙ ^o · ⚄ ^g · ◉ ^s`). The default Keyhints are caret notation: `Settings ^O  Lobby ^G  Zen ^F  Shop ^S  Guide ?  Exit qq`.
+
+**The sponsor link has first claim on the bottom row.** `app_frame_bottom_titles` sets the link's width aside and gives the bar the rest. The one thing on the row that flexes is the sponsor's own "thanks for hanging out", shown only when the fitted bar leaves room for it. A row too narrow for the link at all goes to the bar.
+
+## 5. Persisted model
+
+Stored account-wide in `users.settings.statusline_components` as `[{key, enabled, brief, label, auto_hide, variant}]`, in paint order. An absent key reads as the default list. Per-device scoping is not designed.
+
+- `normalize_statusline_components` is the boundary: it drops duplicates, clears `brief` on anything but Keyhints, clears `auto_hide` where `can_auto_hide()` is false, replaces a variant that does not belong to its component with that component's default, and backfills missing components. Interior code trusts the result and does not re-check it.
+- A component missing from a stored list backfills at its own `backfill_existing()`: the Keyhints (inserted at the front), voice, and mentions are forced on because the frame shows them nowhere else; every other component, the station included, appends disabled.
+- `can_auto_hide()` is true exactly for the components that can read inactive: mentions, pot, your move, quests, care, voice. Keyhints, time, chips, users online, and station always have a reading, so they get no auto-hide dial. `default_auto_hide()` turns it on only for the opt-in components; what ships enabled stays visible while idle.
+- Variants are stored by key, never by index. Each dial is read through one exhaustive match in `data.rs`, so a new `StatusVariant` breaks the build there.
+
+## 6. Icons
+
+Every icon must be Emoji_Presentation, unambiguously two cells wide. A text-default glyph that only becomes emoji through VS16 (`♟️`, `✉️`, `☎️`) is painted at a width the terminal and `unicode-width` disagree about, which slides every hit rect and can overrun the title at the other end of the row. Time's icon is hour-dependent (`clock_icon`) and Keyhints has none. Brief Keyhints paints literal text glyphs.
+
+## 7. Clicks
+
+`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles. Time, voice, pot, and Keyhints are readouts and get no hit rect. Both bars feed the same hit list.
+
+## 8. Customizer
+
+Settings > Statusline, the tab after Tweaks. The list on the left reads top to bottom the way the bar reads left to right; the selected component's description and dials sit on the right.
+
+- List: `j`/`k` or arrows select, `Space` toggles, `Enter` opens the dials.
+- Dials: `Left`/`Right` or `Space` change the focused one, `Esc` returns to the list.
+- `Shift+Up`/`Shift+Down` (or `[`/`]`) reorder from either pane; `Tab`/`Shift+Tab` switch settings tabs from either pane.
+- Keyhints offers only Brief. Every other component offers Label, Auto-hide when it can read inactive, and its own variant dial when it has one.
+
+Every change saves immediately, and the frame previews the draft while the modal is open. Switching mentions off leaves no unread counter on the frame; the Mentions entry in the Home rail still carries one.

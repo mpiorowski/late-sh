@@ -71,6 +71,16 @@ pub(crate) fn short_duration(secs: i64) -> String {
     }
 }
 
+/// The last call's lead time, as the #lounge lines say it. It is a sentence,
+/// not a ticking badge, so a whole hour reads `1h` rather than the badge's
+/// width-stable `1h00m`; anything else reads as the badge does.
+pub(crate) fn lead_time(secs: i64) -> String {
+    match (secs / 3_600, secs % 3_600) {
+        (hours @ 1..=23, 0) => format!("{hours}h"),
+        _ => short_duration(secs),
+    }
+}
+
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;

@@ -8,5 +8,6 @@ pub mod stations;
 pub mod svc;
 #[cfg(test)]
 mod svc_test;
+pub mod thumbnail;
 pub mod viz;
 pub mod youtube;

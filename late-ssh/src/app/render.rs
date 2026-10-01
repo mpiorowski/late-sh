@@ -9,9 +9,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
-use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::statusline::{StatusComponent, StatusComponentSetting};
 use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
 use super::{
@@ -274,9 +274,18 @@ struct DrawContext<'a> {
     /// row): the street's strip, and the frame HUD on every other page.
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
+    city_picker: Option<&'a crate::app::deadchannel::fight::session::Picker>,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
+    /// The other runners on the shared street, their marks, and (through
+    /// `usernames`) their names.
+    city_street: &'a crate::app::deadchannel::street::state::StreetView,
+    city_own_user_id: uuid::Uuid,
+    city_runner_looks: &'a std::collections::HashMap<
+        uuid::Uuid,
+        crate::app::deadchannel::runner::svc::RunnerEntry,
+    >,
     /// A chat overlay that lands on the Lounge (a `/summary` or reaction list
     /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
@@ -302,6 +311,7 @@ struct DrawContext<'a> {
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
+    pet_state: &'a crate::app::pet::state::PetState,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
@@ -324,9 +334,6 @@ struct DrawContext<'a> {
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
-    /// The pot as this viewer sees it, resolved on the ~1s tick. Feeds the
-    /// border HUD segment; there is no pot panel in the sidebar.
-    pot: &'a crate::app::pot::state::PotView,
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -378,12 +385,15 @@ struct DrawContext<'a> {
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
-    mentions_unread_count: i64,
-    chip_balance: i64,
-    /// Slot for where the top-border mentions text lands this frame, read by
-    /// the HUD click hit test in `input.rs`.
-    mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
-    voice_badge: Option<String>,
+    /// The user's ordered bottom status bar (draft while the settings modal is
+    /// open, else the saved profile). Order is paint order, left to right.
+    statusline_components: Vec<StatusComponentSetting>,
+    /// Configurable readings for either status bar, with the clock pre-formatted
+    /// so the bar builder stays a pure function of its inputs.
+    status_data: crate::app::statusline::data::StatusData<'a>,
+    /// Slot for where each clickable top- or bottom-bar segment landed this
+    /// frame, read by the hit test in `input.rs`.
+    status_hits: &'a std::cell::RefCell<Vec<(StatusComponent, Rect)>>,
     home_selected: bool,
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
@@ -394,6 +404,8 @@ struct DrawContext<'a> {
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
+    zen_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
+    live_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
 }
 
 impl App {
@@ -412,6 +424,7 @@ impl App {
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
         self.last_pet_frame.set(None);
+        self.live.hit.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -500,6 +513,16 @@ impl App {
                 .profile()
                 .right_sidebar_components
                 .clone()
+        };
+        // Same draft-aware live preview as the sidebar panels above. These are
+        // the user-arranged bottom-left components; the top bar is fixed.
+        let statusline_components = if self.show_settings {
+            self.settings_modal_state
+                .draft()
+                .statusline_components
+                .clone()
+        } else {
+            self.profile_state.profile().statusline_components.clone()
         };
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.synthetic_entry_selected();
@@ -596,8 +619,6 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let dashboard_selected_news_message = shell_active_room
-            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let dashboard_room_effects = shell_active_room
@@ -606,6 +627,32 @@ impl App {
             .unwrap_or_default();
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
+        // The strip is the #lounge card's alone; another room's card, or
+        // the chat center, never carries it.
+        let dashboard_live_strip = if home_selected {
+            self.live.view(
+                &self.daily,
+                &self.audio,
+                self.paired_source,
+                self.chat.news.all_articles(),
+            )
+        } else {
+            None
+        };
+        // Zen's Live tile shows the same strip, built only while the page
+        // draws one (not while zoomed on another tile).
+        let zen_live_strip = if self.screen == Screen::Zen
+            && self.zen.draws(crate::app::zen::state::TileKind::Live)
+        {
+            self.live.view(
+                &self.daily,
+                &self.audio,
+                self.paired_source,
+                self.chat.news.all_articles(),
+            )
+        } else {
+            None
+        };
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
             .map(|channel| channel.id);
@@ -631,6 +678,31 @@ impl App {
                         })
                     })
             });
+        // Status bar inputs. Formatted here, once, so the draw path reads no
+        // wall clock and a frame stays reproducible from its inputs.
+        let status_local_now = crate::app::common::time::timezone_now(
+            chrono::Utc::now(),
+            self.profile_state.profile().timezone.as_deref(),
+        );
+        let status_clock_24 = status_local_now.format("%H:%M").to_string();
+        let status_clock_ampm = status_local_now.format("%-I:%M %P").to_string();
+        let (status_quests_daily, status_quests_weekly) = self.quest_state.open_counts();
+        let status_station_name = match self.paired_source {
+            late_core::models::user::AudioSource::Radio => {
+                crate::app::audio::stations::radio_station_display_name(selected_radio_station)
+            }
+            late_core::models::user::AudioSource::Icecast => {
+                crate::app::audio::stations::icecast_stream_display_name(selected_icecast_stream)
+            }
+            late_core::models::user::AudioSource::Youtube => "youtube",
+        };
+        let status_station_track = match self.paired_source {
+            late_core::models::user::AudioSource::Radio => radio_now_playing.as_deref(),
+            late_core::models::user::AudioSource::Icecast => {
+                now_playing.as_ref().map(|np| np.track.title.as_str())
+            }
+            late_core::models::user::AudioSource::Youtube => None,
+        };
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -665,7 +737,6 @@ impl App {
             show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             selected_message_id: self.chat.selected_message_id,
             selected_image_message: dashboard_selected_image_message,
-            selected_news_message: dashboard_selected_news_message,
             highlighted_message_id: self.chat.highlighted_message_id,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
@@ -687,6 +758,8 @@ impl App {
             translation_hidden: &self.chat.translation_hidden,
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
+            live_strip: dashboard_live_strip,
+            live_strip_hit: &self.live.hit,
             inline_images: &self.chat.inline_image_cache,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -747,10 +820,6 @@ impl App {
                 payload: &modal.payload,
                 meta: &modal.meta,
             });
-        let selected_news_message = self
-            .chat
-            .selected_room_id
-            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let selected_image_message = self
             .chat
             .selected_room_id
@@ -814,7 +883,6 @@ impl App {
             rail_scroll_nudge: self.chat.rail_scroll_nudge(),
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
-            selected_news_message,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer(),
@@ -1162,7 +1230,6 @@ impl App {
             composing: self.chat.composing,
             selected_message: false,
             selected_image_message: false,
-            selected_news_message: false,
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
@@ -1346,6 +1413,7 @@ impl App {
                             .map(|entry| &entry.look),
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
+                        city_picker: self.fight.picker.as_ref(),
                         city_till: self.fight.till.as_deref(),
                         city_tailor: crate::app::deadchannel::tailor::ui::MirrorView {
                             draft: self.tailor.draft.as_ref(),
@@ -1354,6 +1422,9 @@ impl App {
                             saving: self.tailor.saving,
                         },
                         city_guide: &self.guide.state,
+                        city_street: &self.street.view,
+                        city_own_user_id: self.user_id,
+                        city_runner_looks: &self.runner_looks,
                         clubhouse_overlay: self.chat.overlay(),
                         artboard_interacting: self.artboard_interacting,
                         leaderboard: &self.leaderboard,
@@ -1375,6 +1446,7 @@ impl App {
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
+                        pet_state: &self.pet_state,
                         leaderboard_page: &self.leaderboard_page,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
@@ -1397,7 +1469,6 @@ impl App {
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
-                        pot: &self.pot_view,
                         paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
@@ -1446,10 +1517,29 @@ impl App {
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
-                        mentions_unread_count: self.chat.notifications.unread_count(),
-                        chip_balance: self.chip_balance,
-                        mentions_hud_rect: &self.last_mentions_hud_rect,
-                        voice_badge,
+                        statusline_components,
+                        status_data: crate::app::statusline::data::StatusData {
+                            clock_24: &status_clock_24,
+                            clock_ampm: &status_clock_ampm,
+                            hour: chrono::Timelike::hour(&status_local_now),
+                            chip_balance: self.chip_balance,
+                            mentions_unread: self.chat.notifications.unread_count(),
+                            dms_unread: self.chat.unread_dm_count(),
+                            pot_size: self.pot_view.open.then_some(self.pot_view.size),
+                            pot_draws_in: self
+                                .pot_view
+                                .open
+                                .then_some(self.pot_view.draws_in.as_str()),
+                            online_count,
+                            turns_waiting: self.daily.my_turn_matches().len(),
+                            station_name: status_station_name,
+                            station_track: status_station_track,
+                            quests_open_daily: status_quests_daily,
+                            quests_open_weekly: status_quests_weekly,
+                            care_due: zen_care.due_count(),
+                            voice: voice_badge.as_deref(),
+                        },
+                        status_hits: &self.last_status_hits,
                         home_selected,
                         zen: &self.zen,
                         zen_chat_tiles,
@@ -1458,6 +1548,8 @@ impl App {
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
+                        zen_live_strip,
+                        live_hit: &self.live.hit,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1519,9 +1611,9 @@ impl App {
         terminal_images: &mut TerminalImageFrame,
     ) {
         if ctx.show_splash {
-            // No HUD on the splash: keep the click slot in step with what is
-            // actually on screen.
-            ctx.mentions_hud_rect.set(None);
+            // No status bars on the splash: keep the click slots in step with
+            // what is actually on screen.
+            ctx.status_hits.borrow_mut().clear();
             let msg = "take a break, grab a coffee";
             // Animate typing the message (1 char per tick instead of 1 char per 2 ticks)
             let len = msg.len();
@@ -1644,7 +1736,7 @@ impl App {
         // other page keeps the app frame.
         let zen_page = screen == Screen::Zen;
         let inner = if zen_page {
-            ctx.mentions_hud_rect.set(None);
+            ctx.status_hits.borrow_mut().clear();
             frame.render_widget(Clear, area);
             area
         } else {
@@ -1654,38 +1746,29 @@ impl App {
                 .title(title)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-            match status_hud_title(StatusHudInputs {
-                balance: Some(ctx.chip_balance),
-                unread: ctx.mentions_unread_count,
-                voice_badge: ctx.voice_badge.as_deref(),
-                pot: Some(ctx.pot).filter(|view| view.open),
-                border_width: area.width,
-                title_width,
-            }) {
-                Some(hud) => {
-                    // The right-aligned title's last cell sits just inside the
-                    // top-right corner; the mentions segment sits `mentions_offset`
-                    // cells into the line, after the status and voice badges.
-                    let total = hud.line.width() as u16;
-                    let rect = (hud.mentions_width > 0).then(|| Rect {
-                        x: area
-                            .right()
-                            .saturating_sub(total + 1)
-                            .saturating_add(hud.mentions_offset),
-                        y: area.y,
-                        width: hud.mentions_width,
-                        height: 1,
-                    });
-                    ctx.mentions_hud_rect.set(rect);
-                    block = block.title_top(hud.line);
-                }
-                None => ctx.mentions_hud_rect.set(None),
+            // Bottom first: the top bar skips whatever the bottom one painted.
+            let mut status_hits = Vec::new();
+            let mut painted_on_bottom = Vec::new();
+            let (bottom_bar, sponsor_title) =
+                app_frame_bottom_titles(&ctx.statusline_components, &ctx.status_data, area);
+            if let Some(bar) = bottom_bar {
+                painted_on_bottom = bar.painted;
+                status_hits.extend(bar.hits);
+                block = block.title_bottom(bar.line);
             }
-            let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
-            block = block.title_bottom(help_hint_title);
             if let Some(sponsor_title) = sponsor_title {
                 block = block.title_bottom(sponsor_title);
             }
+            if let Some(bar) = crate::app::statusline::bar::build_top_status_bar(
+                &ctx.status_data,
+                area,
+                title_width,
+                &painted_on_bottom,
+            ) {
+                status_hits.extend(bar.hits);
+                block = block.title_top(bar.line);
+            }
+            *ctx.status_hits.borrow_mut() = status_hits;
 
             let inner = app_frame_inner_area(area);
             frame.render_widget(block, area);
@@ -1929,9 +2012,14 @@ impl App {
                     look: ctx.city_look,
                     sheet: ctx.city_sheet,
                     scene: ctx.city_scene,
+                    picker: ctx.city_picker,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     guide: ctx.city_guide,
+                    own_user_id: ctx.city_own_user_id,
+                    street: ctx.city_street,
+                    runner_looks: ctx.city_runner_looks,
+                    usernames: ctx.usernames,
                 },
             ),
             Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(
@@ -1965,12 +2053,12 @@ impl App {
                     clock: ctx.sidebar_clock,
                     date: ctx.zen_date.clone(),
                     online_count: ctx.online_count,
-                    mentions_unread: ctx.mentions_unread_count,
+                    mentions_unread: ctx.status_data.mentions_unread,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
                     active_friends: ctx.zen_active_friends,
-                    chip_balance: ctx.chip_balance,
+                    chip_balance: ctx.status_data.chip_balance,
                     care: ctx.zen_care,
                     inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
                         crate::app::zen::rows::inbox_rows(
@@ -1992,6 +2080,8 @@ impl App {
                     } else {
                         Vec::new()
                     },
+                    live: ctx.zen_live_strip.take(),
+                    live_hit: ctx.live_hit,
                     wall_tick: ctx.marquee_tick,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
@@ -2029,6 +2119,17 @@ impl App {
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
+                    pet: ctx
+                        .shop_state
+                        .entitlements()
+                        .has_pet_companion()
+                        .then_some(ctx.pet_state),
+                    tank: ctx.shop_state.entitlements().has_aquarium().then_some(
+                        crate::app::common::sidebar::SidebarTank {
+                            aquarium: ctx.aquarium_state,
+                            hungry: ctx.aquarium_care.hungry(),
+                        },
+                    ),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -2097,7 +2198,15 @@ impl App {
         }
 
         if ctx.show_settings {
-            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
+            settings_modal::ui::draw(
+                frame,
+                inner,
+                ctx.settings_modal_state,
+                crate::app::common::sidebar::SidebarOwnership {
+                    pet: ctx.shop_state.entitlements().has_pet_companion(),
+                    tank: ctx.shop_state.entitlements().has_aquarium(),
+                },
+            );
         }
 
         if ctx.show_mod_modal {
@@ -2135,7 +2244,12 @@ impl App {
         }
 
         if ctx.show_gild_modal {
-            chat::gild::ui::draw_modal(frame, inner, ctx.gild_modal_state, ctx.chip_balance);
+            chat::gild::ui::draw_modal(
+                frame,
+                inner,
+                ctx.gild_modal_state,
+                ctx.status_data.chip_balance,
+            );
         }
 
         if let Some(cyberspace_modal) = ctx.cyberspace_modal {
@@ -2752,93 +2866,55 @@ fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_
 }
 
 fn line_width(line: &Line<'_>) -> usize {
-    line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum()
+    line.width()
 }
 
-fn app_frame_bottom_titles(area_width: u16) -> (Line<'static>, Option<Line<'static>>) {
-    let title_width = usize::from(area_width.saturating_sub(2));
-    for hint_style in [
-        HelpHintStyle::DottedCtrl,
-        HelpHintStyle::SpacedCtrl,
-        HelpHintStyle::SpacedCaret,
-    ] {
-        let help_hint_title = app_frame_help_hint_title(hint_style);
-        let help_hint_width = line_width(&help_hint_title);
-        if help_hint_width <= title_width {
-            let sponsor_title = app_frame_sponsor_title(title_width - help_hint_width);
-            return (help_hint_title, sponsor_title);
-        }
-    }
-
-    (app_frame_help_hint_title(HelpHintStyle::SpacedCaret), None)
-}
-
-fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
-    [
-        sponsor_line(true, true),
-        sponsor_line(false, true),
-        sponsor_line(false, false),
-    ]
-    .into_iter()
-    .find(|line| line_width(line) <= sponsor_width)
-}
-
-#[derive(Clone, Copy)]
-enum HelpHintStyle {
-    DottedCtrl,
-    SpacedCtrl,
-    SpacedCaret,
-}
-
-fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let key = Style::default()
-        .fg(theme::AMBER_DIM())
-        .add_modifier(Modifier::BOLD);
-    let sep_style = Style::default().fg(theme::TEXT_FAINT());
-    let separator = match hint_style {
-        HelpHintStyle::DottedCtrl => " · ",
-        HelpHintStyle::SpacedCtrl | HelpHintStyle::SpacedCaret => "  ",
+/// The two titles sharing the app frame's bottom border row: the user's
+/// status bar on the left and the sponsor line on the right.
+///
+/// The sponsor's link is set aside first and the bar gets the rest of the
+/// row; segments with no room there are dropped (`statusline::bar::fit`).
+/// The one thing that flexes is the sponsor's own "thanks for hanging out",
+/// shown only when the fitted bar leaves room for it. A row too narrow for
+/// the link at all goes to the bar.
+fn app_frame_bottom_titles(
+    components: &[StatusComponentSetting],
+    data: &crate::app::statusline::data::StatusData<'_>,
+    area: Rect,
+) -> (
+    Option<crate::app::statusline::bar::StatusBar>,
+    Option<Line<'static>>,
+) {
+    let row_width = area.width.saturating_sub(2);
+    let link_width = line_width(&sponsor_line(false)) as u16;
+    let reserved_for_sponsor = match link_width <= row_width {
+        true => link_width,
+        false => 0,
     };
-    let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
-    let hints = [
-        ("Settings", ctrl_hint("O", use_caret)),
-        ("Lobby", ctrl_hint("G", use_caret)),
-        ("Zen", ctrl_hint("F", use_caret)),
-        ("Shop", "/shop"),
-        ("Guide", "?"),
-        ("Exit", "qq"),
-    ];
-
-    let mut spans = Vec::new();
-    for (idx, (label, key_text)) in hints.into_iter().enumerate() {
-        if idx == 0 {
-            spans.push(Span::styled(" ", dim));
-        } else {
-            spans.push(Span::styled(separator, sep_style));
-        }
-        spans.push(Span::styled(format!("{label} "), dim));
-        spans.push(Span::styled(key_text, key));
-    }
-    spans.push(Span::styled(" ", dim));
-    Line::from(spans)
+    let bar = crate::app::statusline::bar::build_status_bar(
+        components,
+        data,
+        crate::app::statusline::bar::Placement::BottomLeft,
+        area,
+        reserved_for_sponsor,
+    );
+    let bar_width = match &bar {
+        Some(bar) => line_width(&bar.line),
+        None => 0,
+    };
+    let sponsor = app_frame_sponsor_title(usize::from(row_width).saturating_sub(bar_width));
+    (bar, sponsor)
 }
 
-fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
-    match (use_caret, key) {
-        (true, "O") => "^O",
-        (true, "G") => "^G",
-        (true, "F") => "^F",
-        (false, "O") => "Ctrl+O",
-        (false, "G") => "Ctrl+G",
-        (false, "F") => "Ctrl+F",
-        _ => key,
-    }
+/// The sponsor line for the room it is given: with its thanks when that
+/// fits, the bare link when only that does, nothing when neither does.
+fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
+    [sponsor_line(true), sponsor_line(false)]
+        .into_iter()
+        .find(|line| line_width(line) <= sponsor_width)
 }
 
-fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
+fn sponsor_line(include_thanks: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if include_thanks {
         spans.push(Span::styled(
@@ -2850,179 +2926,11 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     // The link carries its own blank cell on each side: this line is drawn
     // over the bottom border, so without them the `─` glyphs on either side
     // get swallowed into the URL by terminals that linkify what they see.
-    let url = if include_protocol {
-        " https://ko-fi.com/mateuszpiorowski "
-    } else {
-        " ko-fi.com/mateuszpiorowski "
-    };
-    spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
+    spans.push(Span::styled(
+        " https://ko-fi.com/mateuszpiorowski ",
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
     Line::from(spans).right_aligned()
-}
-
-/// The top-border status line plus where its mentions segment sits, so the
-/// click hit test can find the mentions text inside the right-aligned line
-/// (no other segment is clickable).
-struct StatusHud {
-    line: Line<'static>,
-    /// Display cells of the mentions segment, 0 when nothing is unread.
-    mentions_width: u16,
-    /// Cells between the start of the line and the mentions segment, so the
-    /// hit test still lands on the text behind the badges leading the HUD.
-    mentions_offset: u16,
-}
-
-/// Everything the status HUD needs, named, so a call site cannot swap two
-/// fields of the same type without a compile error. `border_width` and `title_width` come in raw
-/// rather than pre-subtracted so the fitting math below is covered by the
-/// tests instead of living uncovered at the one call site.
-struct StatusHudInputs<'a> {
-    balance: Option<i64>,
-    unread: i64,
-    voice_badge: Option<&'a str>,
-    /// The open pot, `None` before the first refresh or without a pot
-    /// service. Sits right before the chips so the prize reads against the
-    /// viewer's own balance.
-    pot: Option<&'a crate::app::pot::state::PotView>,
-    /// Full width of the bordered frame, corners included.
-    border_width: u16,
-    /// Width of the left-aligned frame title sharing the top border row.
-    title_width: u16,
-}
-
-/// One HUD segment: the spans between two dividers, padding spaces included.
-type HudSegment = Vec<Span<'static>>;
-
-fn hud_segment_width(segment: &HudSegment) -> u16 {
-    segment.iter().map(Span::width).sum::<usize>() as u16
-}
-
-fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
-    let StatusHudInputs {
-        balance,
-        unread,
-        voice_badge,
-        pot,
-        border_width,
-        title_width,
-    } = inputs;
-    // What the right-aligned HUD can use before it starts painting over the
-    // left title (both live on the top border row, corners excluded).
-    let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
-
-    // The three long-standing segments always render; the order of the line
-    // is voice | mentions | pot | chips, and the pot is fitted against
-    // whatever the fixed three leave.
-    let mentions: Option<HudSegment> = (unread > 0).then(|| {
-        let noun = if unread == 1 { "mention" } else { "mentions" };
-        vec![
-            Span::styled(
-                format!(" {unread}"),
-                Style::default()
-                    .fg(theme::MENTION())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" unread {noun} "),
-                Style::default().fg(theme::TEXT_MUTED()),
-            ),
-        ]
-    });
-    let voice: Option<HudSegment> = voice_badge.map(|voice_badge| {
-        vec![Span::styled(
-            voice_badge.to_string(),
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD),
-        )]
-    });
-    let chips: Option<HudSegment> = balance.map(|balance| {
-        vec![
-            Span::styled(
-                format!(" {balance}"),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" chips ", Style::default().fg(theme::TEXT_MUTED())),
-        ]
-    });
-
-    // Width the fixed segments take, dividers between them included, so a
-    // newcomer fits when its own width plus its one divider still fits.
-    let fixed: Vec<&HudSegment> = [&mentions, &voice, &chips].into_iter().flatten().collect();
-    let count = fixed.len() as u16;
-    let used = fixed
-        .iter()
-        .map(|segment| hud_segment_width(segment))
-        .sum::<u16>()
-        + count.saturating_sub(1);
-    let fits = |used: u16, count: u16, text_width: u16| {
-        // +2 for the spaces padding the badge inside its segment, +1 for the
-        // divider it brings when it is not the only segment.
-        let divider = u16::from(count > 0);
-        used + divider + text_width + 2 <= spare_cols
-    };
-
-    // The HUD is a right-aligned title on the same border row as the left
-    // title, and ratatui paints it over anything already there: a HUD wider
-    // than `spare_cols` eats the page tabs, so every newcomer below yields
-    // when it does not fit.
-
-    // The pot: `pot 84,200 · 3h12m` when it fits, `pot 84,200` when only
-    // that does, nothing when neither does. It is ambient, so it is the
-    // first thing the border sheds; `/pot` and the #lounge lines still
-    // carry it.
-    let pot: Option<HudSegment> = pot.and_then(|view| {
-        let size = crate::app::common::primitives::thousands(view.size);
-        let label = " pot ".to_string();
-        let with_clock = format!(" · {} ", view.draws_in);
-        let without_clock = " ".to_string();
-        let tail = [with_clock, without_clock].into_iter().find(|tail| {
-            let width = UnicodeWidthStr::width(label.as_str())
-                + UnicodeWidthStr::width(size.as_str())
-                + UnicodeWidthStr::width(tail.as_str());
-            // The padding is already inside the label and the tail.
-            fits(used, count, width.saturating_sub(2) as u16)
-        })?;
-        Some(vec![
-            Span::styled(label, Style::default().fg(theme::TEXT_MUTED())),
-            Span::styled(
-                size,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(tail, Style::default().fg(theme::TEXT_MUTED())),
-        ])
-    });
-
-    // Mentions sit behind the voice badge, so the hit test needs how far into
-    // the line they start: the segment before them, with the divider it
-    // brings.
-    let mentions_width = mentions.as_ref().map_or(0, hud_segment_width);
-    let mentions_offset: u16 = match (&mentions, &voice) {
-        (Some(_), Some(voice)) => hud_segment_width(voice) + 1,
-        (Some(_), None) | (None, _) => 0,
-    };
-    let segments: Vec<HudSegment> = [voice, mentions, pot, chips]
-        .into_iter()
-        .flatten()
-        .collect();
-    if segments.is_empty() {
-        return None;
-    }
-    let mut spans = Vec::new();
-    for (index, segment) in segments.into_iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
-        }
-        spans.extend(segment);
-    }
-    Some(StatusHud {
-        line: Line::from(spans).right_aligned(),
-        mentions_width,
-        mentions_offset,
-    })
 }
 
 #[cfg(test)]

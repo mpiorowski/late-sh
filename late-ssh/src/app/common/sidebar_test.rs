@@ -206,6 +206,11 @@ fn off(component: RightSidebarComponent) -> RightSidebarComponentSetting {
     }
 }
 
+const OWNS_ALL: SidebarOwnership = SidebarOwnership {
+    pet: true,
+    tank: true,
+};
+
 #[test]
 fn visible_components_respects_order() {
     let components = [
@@ -215,7 +220,7 @@ fn visible_components_respects_order() {
     ];
     // Tall enough for everything: order is preserved exactly.
     assert_eq!(
-        visible_components(&components, 100),
+        visible_components(&components, OWNS_ALL, 100),
         vec![
             RightSidebarComponent::Bonsai,
             RightSidebarComponent::Music,
@@ -232,68 +237,102 @@ fn visible_components_skips_disabled() {
         on(RightSidebarComponent::Bonsai),
     ];
     assert_eq!(
-        visible_components(&components, 100),
+        visible_components(&components, OWNS_ALL, 100),
         vec![RightSidebarComponent::Music, RightSidebarComponent::Bonsai]
     );
 }
 
 #[test]
-fn visible_components_drops_by_priority_not_position() {
-    // Music sits at the TOP of the display order. With room for only one
-    // panel, music survives (lowest shrink priority) even though the old
-    // cut-from-the-top rule would have dropped it first.
+fn visible_components_drops_from_the_bottom_up() {
+    // Room for the bonsai and one row short of the music stage under it:
+    // the bottom panel goes, whatever it is.
     let components = [
-        on(RightSidebarComponent::Music),
         on(RightSidebarComponent::Bonsai),
+        on(RightSidebarComponent::Music),
+        on(RightSidebarComponent::Daily),
     ];
-    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + 1;
+    let height = TIME_HEIGHT + RULE_HEIGHT + BONSAI_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT - 1;
     assert_eq!(
-        visible_components(&components, height),
-        vec![RightSidebarComponent::Music]
+        visible_components(&components, OWNS_ALL, height),
+        vec![RightSidebarComponent::Bonsai]
     );
 }
 
-/// Survivors render in the user's display order, not the shrink one.
 #[test]
-fn visible_components_keeps_display_order_after_a_cut() {
+fn visible_components_stops_at_the_first_panel_that_does_not_fit() {
+    // The lobby under the music stage would fit on its own, but the walk
+    // ends at the music stage: nothing below a dropped panel is shown.
+    let components = [
+        on(RightSidebarComponent::Music),
+        on(RightSidebarComponent::Daily),
+    ];
+    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT - 1;
+    assert_eq!(
+        visible_components(&components, OWNS_ALL, height),
+        Vec::<RightSidebarComponent>::new()
+    );
+}
+
+#[test]
+fn visible_components_skips_unowned_panels_without_stopping() {
+    let components = [
+        on(RightSidebarComponent::Pet),
+        on(RightSidebarComponent::Tank),
+        on(RightSidebarComponent::Daily),
+    ];
+    let owns_pet = SidebarOwnership {
+        pet: true,
+        tank: false,
+    };
+    assert_eq!(
+        visible_components(&components, owns_pet, 100),
+        vec![RightSidebarComponent::Pet, RightSidebarComponent::Daily]
+    );
+}
+
+#[test]
+fn visible_components_spacer_costs_no_rows() {
     let components = [
         on(RightSidebarComponent::Daily),
+        on(RightSidebarComponent::Spacer),
         on(RightSidebarComponent::Bonsai),
-        on(RightSidebarComponent::Music),
     ];
-    // Room for the music stage, the lobby, and nothing else.
-    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + DAILY_HEIGHT;
+    let height = TIME_HEIGHT + RULE_HEIGHT + DAILY_HEIGHT + RULE_HEIGHT + BONSAI_HEIGHT;
     assert_eq!(
-        visible_components(&components, height),
-        vec![RightSidebarComponent::Daily, RightSidebarComponent::Music]
-    );
-
-    // Given the whole rail, everything renders in the stored order.
-    assert_eq!(
-        visible_components(&components, 100),
+        visible_components(&components, OWNS_ALL, height),
         vec![
             RightSidebarComponent::Daily,
+            RightSidebarComponent::Spacer,
             RightSidebarComponent::Bonsai,
-            RightSidebarComponent::Music,
         ]
     );
 }
 
 #[test]
-fn visible_components_skips_unfit_panel_without_stopping() {
-    // Music (the biggest panel, now carrying the visualizer strip on top
-    // too) doesn't fit in a short rail, but Daily below the cut still does:
-    // the walk skips Music instead of ending, so a lower-priority panel
-    // that fits is kept. Bonsai's fixed 13-row preview block no longer
-    // fits beside Daily in what Music leaves, so it is skipped too.
-    let components = [
-        on(RightSidebarComponent::Music),
-        on(RightSidebarComponent::Daily),
-        on(RightSidebarComponent::Bonsai),
+fn pet_watches_the_bonsai_and_tank_panels_it_touches() {
+    let touching = [
+        RightSidebarComponent::Bonsai,
+        RightSidebarComponent::Pet,
+        RightSidebarComponent::Tank,
     ];
-    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT - 1;
     assert_eq!(
-        visible_components(&components, height),
-        vec![RightSidebarComponent::Daily]
+        pet_neighbours(&touching, 1),
+        Neighbours {
+            tank: Some(WatchSide::Below),
+            bonsai: Some(WatchSide::Above),
+        }
+    );
+    // Free space between the panels breaks the contact.
+    let apart = [
+        RightSidebarComponent::Bonsai,
+        RightSidebarComponent::Spacer,
+        RightSidebarComponent::Pet,
+    ];
+    assert_eq!(
+        pet_neighbours(&apart, 2),
+        Neighbours {
+            tank: None,
+            bonsai: None,
+        }
     );
 }

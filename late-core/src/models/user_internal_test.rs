@@ -192,10 +192,23 @@ fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
         extract_right_sidebar_components(&settings),
         default_right_sidebar_components()
     );
-    // Every panel ships enabled.
-    for setting in default_right_sidebar_components() {
-        assert!(setting.enabled, "{:?}", setting.component);
-    }
+    // A new user's rail: free space above the bonsai keeps the tree at the
+    // bottom; the pet and the tank are opt-in.
+    let shipped: Vec<(RightSidebarComponent, bool)> = default_right_sidebar_components()
+        .into_iter()
+        .map(|setting| (setting.component, setting.enabled))
+        .collect();
+    assert_eq!(
+        shipped,
+        vec![
+            (RightSidebarComponent::Daily, true),
+            (RightSidebarComponent::Music, true),
+            (RightSidebarComponent::Spacer, true),
+            (RightSidebarComponent::Bonsai, true),
+            (RightSidebarComponent::Pet, false),
+            (RightSidebarComponent::Tank, false),
+        ]
+    );
 }
 
 #[test]
@@ -205,6 +218,7 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
             { "key": "bonsai", "enabled": false },
             { "key": "music", "enabled": true },
             { "key": "bogus", "enabled": true },
+            { "key": "pet", "enabled": true },
             { "key": "activity", "enabled": true },
             { "key": "visualizer", "enabled": true },
             { "key": "pot", "enabled": true },
@@ -212,12 +226,10 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
     });
     let components = extract_right_sidebar_components(&settings);
     // Stored order kept for known entries, unknown dropped (including the
-    // retired "pet", "activity", "visualizer", and "pot" keys — the
-    // visualizer now renders inline atop Music instead of as its own panel,
-    // and the pot lives only in the border HUD, see `common/sidebar.rs`),
-    // missing (daily) backfilled ENABLED at the end in ALL order: an
-    // existing user's stored list predates newer panels, so they should
-    // appear rather than silently stay hidden.
+    // retired "pet", "activity", "visualizer", and "pot" keys), missing
+    // panels backfilled at the end in ALL order at their default: the
+    // lobby and free space on, the pet and the tank off. The retired "pet"
+    // key must not switch on the pet panel, which lives under "pet_box".
     assert_eq!(
         components,
         vec![
@@ -232,6 +244,18 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
             RightSidebarComponentSetting {
                 component: RightSidebarComponent::Daily,
                 enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Spacer,
+                enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Pet,
+                enabled: false,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Tank,
+                enabled: false,
             },
         ]
     );

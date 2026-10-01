@@ -34,19 +34,21 @@ Out of scope here (lives elsewhere):
 
 ```text
 late-ssh/src/app/audio/
-├── mod.rs                  # declarations only (booth, client_state, input, now_playing, radio_meta, state, stations, svc, viz, youtube)
+├── mod.rs                  # declarations only (booth, client_state, input, now_playing, radio_meta, state, stations, svc, thumbnail, viz, youtube)
 ├── svc.rs                  # AudioService: queue/history state machine, WS broadcast, resume, fallback debounce, periodic LoadVideo heartbeat, votes/skip-vote
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── input.rs                # v+* music suffix handling: booth, source cycling, stream/station selection
 ├── stations.rs             # server-side stream/station registry and URL resolution
 ├── viz.rs                  # render_eq + Spectrum: live client spectrum, wall-tick ambient fallback
-├── youtube.rs              # URL parsing + optional YouTube Data API validation client
+├── youtube.rs              # URL parsing + optional YouTube Data API validation client, thumbnail fetch
+├── thumbnail.rs            # pure: a fetched thumbnail shrunk to what the live strip's picture column uses (168x96 pixels)
 ├── booth/
 │   ├── mod.rs
 │   ├── state.rs            # BoothModalState: open flag, submit input, queue/history selections, focus
 │   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip, history focus, Enter requeue)
-│   └── ui.rs               # ratatui modal: submit row, current track, queue list with duration + score, history list with duration + play count
+│   ├── ui.rs               # ratatui modal: submit row, current track, queue list with duration + score, history list with duration + play count
+│   └── live.rs             # a booth track on the live strip (app/live/): candidates, view, render_picture (chafa), words
 ├── now_playing/
 │   ├── mod.rs
 │   └── svc.rs              # NowPlayingService: 10s Icecast poll, watch<HashMap<mount, NowPlaying>>
@@ -120,6 +122,16 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `requeue_history_item` — inserts a fresh `media_queue_items` row from stored validated history metadata. Live queue votes always start at 0.
 - `delete_history_item` — requires centralized `Caps::DELETE_AUDIO_TRACK` via `Permissions::can_delete_audio_track(false)`.
 - `toggle_unskippable` / `toggle_unskippable_task` — staff-only path that flips `media_queue_items.unskippable` only while the item is still `queued`; `u` in Booth Queue mode triggers it.
+
+### The live strip and thumbnails
+Every track playing or queued is a candidate for the live strip (`../live/CONTEXT.md`), stamped with `QueueItemView::queued_at` (the row's `created`): a track is news when somebody brings it, and stops being a candidate when it leaves the booth. `booth/live.rs` paints it: the thumbnail in the picture column, then the title, `channel · 3:45`, and `mat queued it · up next`. `o` tunes a viewer on another source in to YouTube, and opens the booth for one already there.
+
+- `attach_thumbnails` runs on every queue publish: tracks already fetched get their `QueueItemView::thumbnail`, a track seen for the first time starts `fetch_thumbnail_task`, and tracks that left the booth are forgotten. The fetch patches the published snapshot in place (`send_modify`), so the strip repaints when the image lands. The thumbnail map stays locked from the attach to `send_replace`, and the fetch holds the same lock from its slot write through `send_modify`, so a fetch landing mid-publish is either on the new snapshot or patches it, never lost to it.
+- The image is `https://i.ytimg.com/vi/<id>/mqdefault.jpg` (16:9, no bars), capped at `THUMBNAIL_MAX_BYTES` and shrunk to 168x96 pixels (8 by 16 a cell, about 64 KB a track). Until it lands, or if the fetch fails, the strip draws a framed play mark of the same size. A failed fetch is not retried while the track sits in the booth.
+- Painting is per session, not per replica: `booth/live.rs::render_picture` runs the image through the same chafa symbol picker as chat's inline images (`files/inline_image.rs::render_rgba_preview`) at 21 columns by `THUMBNAIL_ROWS` (6), with the session's `InlineImageRenderSettings`, so a terminal that draws octants or sextants gets them. `LiveState` renders it on the tick, once per track, thumbnail and settings, and the frame paints the kept lines.
+- Fetched once per track per replica, in memory only: nothing is stored. Both fields are `#[serde(skip)]`, so paired clients never see them.
+- Off when `LATE_YOUTUBE_API_KEY` is unset: nothing can be queued then, and tests never reach the network.
+- `late_ssh_booth_thumbnails_total{outcome}` counts `fetched` and `failed`; a failure is logged with the video id.
 
 ### Submission reward
 Queueing a track pays the person who brought it `SONG_QUEUE_REWARD_CHIPS`

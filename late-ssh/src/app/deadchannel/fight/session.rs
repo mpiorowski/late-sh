@@ -1,12 +1,16 @@
 //! A session's side of the fight: a mirror of the sheet to draw from, the
-//! scene open over the street, and the requests that ask `FightService`
-//! to change the row. Nothing here decides anything: a key press becomes
-//! a command, and the bars move when the service's answer arrives.
+//! picker and the scene open over the street, and the requests that ask
+//! `FightService` to change the row. Nothing here decides anything: a key
+//! press becomes a command, and the bars move when the service's answer
+//! arrives. The picker's threat words are the sim's odds over the mirror
+//! (`sim::odds`), read once when it opens and again when the mirror moves,
+//! never per frame.
 
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::state::{Applied, Command, Quarry, Sheet};
+use super::sim::{ODDS_FIGHTS, Threat, odds};
+use super::state::{Applied, Command, Pick, Quarry, Sheet};
 use super::svc::{FightOutcome, FightService};
 
 /// Lines of the exchange the scene shows.
@@ -35,10 +39,24 @@ pub struct Scene {
     pub old_signal: bool,
 }
 
+/// The picker over the street, before a step in: the runner's sheet and
+/// the glyphs on offer, each with its threat word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picker {
+    /// The row under the cursor.
+    pub cursor: Pick,
+    /// The threat of each pick from the mirror as it stands; `None` when
+    /// that step in would not start a fight (the signal down, the rations
+    /// spent, nothing below the flicker) or before the mirror landed.
+    pub fair: Option<Threat>,
+    pub lower: Option<Threat>,
+}
+
 pub(crate) struct FightSession {
     /// The mirror: `None` until the first reload answers, or when there is
     /// no standing runner.
     pub sheet: Option<Sheet>,
+    pub picker: Option<Picker>,
     pub scene: Option<Scene>,
     /// The counter's last word: the answer to a command sent with no
     /// scene open (a purchase or a patch, or its refusal), shown in the
@@ -59,6 +77,7 @@ impl FightSession {
         let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
         Self {
             sheet: None,
+            picker: None,
             scene: None,
             till: None,
             user_id,
@@ -81,8 +100,33 @@ impl FightSession {
         self.sheet = None;
     }
 
-    /// Step into the static: open the scene and ask for a fight.
-    pub(crate) fn open(&mut self) {
+    /// Walk up to the static (`f`, or Enter at the screen). A fight the
+    /// mirror shows waiting goes straight back in: a dropped session never
+    /// opens a menu over a live fight. Otherwise the picker opens, and the
+    /// sheet re-reads so it shows today's bars.
+    pub(crate) fn step_up(&mut self) {
+        let waiting = self
+            .sheet
+            .as_ref()
+            .is_some_and(|sheet| sheet.fight.is_some());
+        if waiting {
+            self.step_in(Pick::Fair);
+            return;
+        }
+        self.picker = Some(Picker {
+            cursor: Pick::Fair,
+            fair: None,
+            lower: None,
+        });
+        self.read_odds();
+        self.reload();
+    }
+
+    /// Step in with `pick`: close the picker, open the scene, ask the row.
+    /// The row decides: a fight it has waiting resumes whatever the pick,
+    /// and a refusal lands on the scene.
+    pub(crate) fn step_in(&mut self, pick: Pick) {
+        self.picker = None;
         self.scene = Some(Scene {
             lines: Vec::new(),
             latest: 0,
@@ -91,18 +135,55 @@ impl FightSession {
             old_signal: false,
             failed: false,
         });
-        self.request(Command::Start);
+        self.request(Command::Start { pick });
     }
 
-    /// Back to the street: a finished scene, or the page left under an
-    /// open one. A fight still on stays on the row and is found waiting on
-    /// the next step in (Esc over the scene is the run, not this).
+    /// The picker's cursor: up to the fair fight, down to the lower one.
+    pub(crate) fn pick_up(&mut self) {
+        if let Some(picker) = &mut self.picker {
+            picker.cursor = Pick::Fair;
+        }
+    }
+
+    pub(crate) fn pick_down(&mut self) {
+        let below = self.sheet.as_ref().is_some_and(|sheet| sheet.level > 1);
+        if let Some(picker) = &mut self.picker
+            && below
+        {
+            picker.cursor = Pick::Lower;
+        }
+    }
+
+    /// Back to the street: the picker, a finished scene, or the page left
+    /// under an open one. A fight still on stays on the row and is found
+    /// waiting on the next step in (Esc over the scene is the run, not
+    /// this).
     pub(crate) fn close(&mut self) {
+        self.picker = None;
         self.scene = None;
     }
 
     pub(crate) fn scene_open(&self) -> bool {
         self.scene.is_some()
+    }
+
+    pub(crate) fn picker_open(&self) -> bool {
+        self.picker.is_some()
+    }
+
+    /// The picker's threat words from the mirror as it stands.
+    fn read_odds(&mut self) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        let threat = |pick| {
+            self.sheet
+                .as_ref()
+                .and_then(|sheet| odds(sheet, pick, ODDS_FIGHTS))
+                .map(Threat::of)
+        };
+        picker.fair = threat(Pick::Fair);
+        picker.lower = threat(Pick::Lower);
     }
 
     /// Stepping up to the counter again: the last word is not repeated.
@@ -143,9 +224,11 @@ impl FightSession {
                     self.action_in_flight = false;
                     self.sheet = Some(sheet);
                     self.show(outcome.applied, outcome.lines);
+                    self.read_odds();
                 }
                 FightOutcome::Reloaded { sheet } => {
                     self.sheet = Some(sheet);
+                    self.read_odds();
                 }
                 FightOutcome::NoRunner => {
                     self.action_in_flight = false;
@@ -165,7 +248,7 @@ impl FightSession {
                         }
                         None => {
                             self.till =
-                                Some("the armorer is not answering. try again.".to_string());
+                                Some("nobody at the counter is answering. try again.".to_string());
                         }
                     }
                 }
@@ -186,7 +269,7 @@ impl FightSession {
         scene.latest = lines.len();
         let fight = self.sheet.as_ref().and_then(|sheet| sheet.fight.as_ref());
         match applied {
-            Applied::Started => {
+            Applied::Started { .. } => {
                 scene.lines = lines;
                 scene.old_signal = fight.is_some_and(|fight| fight.quarry == Quarry::OldSignal);
             }
@@ -209,7 +292,13 @@ impl FightSession {
             }
             // The till is never asked from inside the scene; an answer
             // that lands here anyway is shown, not lost.
-            Applied::Outfitted { .. } | Applied::Patched { .. } => scene.lines.extend(lines),
+            Applied::Outfitted { .. }
+            | Applied::Patched { .. }
+            | Applied::Deposited { .. }
+            | Applied::Withdrew { .. }
+            | Applied::Borrowed { .. }
+            | Applied::Repaid { .. }
+            | Applied::Reset => scene.lines.extend(lines),
         }
         if scene.lines.len() > SCENE_KEEP {
             let drop = scene.lines.len() - SCENE_KEEP;

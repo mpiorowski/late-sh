@@ -160,3 +160,308 @@ async fn c_on_dashboard_copies_selected_message() {
     app.handle_input(b"c");
     wait_for_render_contains(&mut app, "Message copied to clipboard!").await;
 }
+
+/// `o` on the #lounge card opens the match the live strip is showing, and
+/// does nothing while no strip is up.
+#[tokio::test]
+async fn o_opens_the_live_strip_match_from_the_lounge_card() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::common::primitives::Screen;
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-key-me").await;
+    let them = create_test_user(&test_db.db, "strip-key-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-key-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::Dashboard, "no strip, nothing to open");
+
+    // The challenge is posted by another service over the same database;
+    // claiming it through the app's own puts it in the app's snapshot.
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel::<ActivityEvent>(8);
+    let poster = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = poster
+        .post_challenge(them.id, DailyGame::Chess)
+        .await
+        .expect("post");
+    app.daily.claim_challenge(posted.id);
+    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
+    wait_for_render_contains(&mut app, "Daily Match").await;
+}
+
+/// A board opened from the live strip closes back to the #lounge card: the
+/// viewer never opened the Lobby modal, so it stays shut and the challenge
+/// they have not looked at keeps its glow.
+#[tokio::test]
+async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::common::primitives::Screen;
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-close-me").await;
+    let them = create_test_user(&test_db.db, "strip-close-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-close-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel::<ActivityEvent>(8);
+    let poster = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = poster
+        .post_challenge(them.id, DailyGame::Chess)
+        .await
+        .expect("post");
+    // A second challenge stays open: news the viewer has not looked at.
+    poster
+        .post_challenge(them.id, DailyGame::Reversi)
+        .await
+        .expect("post the open one");
+    app.daily.claim_challenge(posted.id);
+    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    assert!(app.lobby.glow(), "the open challenge glows");
+
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::DailyMatch);
+    wait_for_render_contains(&mut app, "Daily Match").await;
+
+    app.handle_input(b"q");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(!app.show_lobby_modal, "the modal was never open");
+    assert!(app.lobby.glow(), "nothing looked at the lobby");
+}
+
+/// A track somebody queued in the booth goes up on the live strip, and `o`
+/// tunes a viewer on another source in to YouTube; once there, `o` opens
+/// the booth.
+#[tokio::test]
+async fn o_on_a_booth_track_tunes_in_then_opens_the_booth() {
+    use crate::app::audio::youtube::YoutubeVideo;
+    use late_core::models::user::AudioSource;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-booth-me").await;
+    let them = create_test_user(&test_db.db, "strip-booth-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-booth-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.set_paired_playback_source(AudioSource::Icecast);
+
+    app.audio
+        .service()
+        .submit_validated_video(
+            them.id,
+            YoutubeVideo {
+                video_id: "ggggggggggg".to_string(),
+                title: Some("Blue in Green".to_string()),
+                channel: Some("Late Night Tapes".to_string()),
+                duration_ms: Some(225_000),
+                is_stream: false,
+            },
+        )
+        .await
+        .expect("queue a track");
+    wait_for_render_contains(&mut app, "Late Night Tapes \u{b7} 3:45").await;
+    wait_for_render_contains(&mut app, "o or click to tune in").await;
+
+    app.handle_input(b"o");
+    assert_eq!(app.paired_source, AudioSource::Youtube, "o tunes in");
+    assert!(!app.booth_modal_state.is_open());
+    wait_for_render_contains(&mut app, "o or click for the booth").await;
+
+    app.handle_input(b"o");
+    assert!(app.booth_modal_state.is_open(), "then o opens the booth");
+}
+
+/// A track that left the booth between the strip's last tick and the key
+/// has nothing to tune in to: `o` leaves the viewer's audio source alone.
+#[tokio::test]
+async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
+    use crate::app::audio::youtube::YoutubeVideo;
+    use late_core::models::user::AudioSource;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-gone-me").await;
+    let them = create_test_user(&test_db.db, "strip-gone-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-gone-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.set_paired_playback_source(AudioSource::Icecast);
+
+    app.audio
+        .service()
+        .submit_validated_video(
+            them.id,
+            YoutubeVideo {
+                video_id: "hhhhhhhhhhh".to_string(),
+                title: Some("Naima".to_string()),
+                channel: Some("Late Night Tapes".to_string()),
+                duration_ms: Some(225_000),
+                is_stream: false,
+            },
+        )
+        .await
+        .expect("queue a track");
+    wait_for_render_contains(&mut app, "o or click to tune in").await;
+
+    // The track is skipped, and the key lands before the next tick.
+    app.audio
+        .service()
+        .force_skip()
+        .await
+        .expect("skip the track");
+    let snapshot = app.audio.queue_snapshot();
+    assert!(
+        snapshot.current.is_none() && snapshot.queue.is_empty(),
+        "the track left the booth"
+    );
+
+    app.handle_input(b"o");
+    assert_eq!(
+        app.paired_source,
+        AudioSource::Icecast,
+        "nothing to tune in to"
+    );
+    assert!(!app.booth_modal_state.is_open());
+}
+
+/// A link somebody shared to News goes up on the live strip, and `o` opens
+/// the article modal.
+#[tokio::test]
+async fn o_on_a_shared_article_opens_the_article_modal() {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-news-me").await;
+    let them = create_test_user(&test_db.db, "strip-news-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://example.com/terminal-renaissance".to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-news-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "strip-news-them shared it").await;
+    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
+
+    app.handle_input(b"o");
+    assert_eq!(
+        app.chat.news_modal_url(),
+        Some("https://example.com/terminal-renaissance"),
+        "o opens the article"
+    );
+}
+
+/// Shares no longer post into #lounge, so the strip is where a link is
+/// answered: `r` opens the lounge composer replying to the article, and the
+/// sent message quotes its title.
+#[tokio::test]
+async fn r_on_a_shared_article_replies_with_its_title_quoted() {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-reply-me").await;
+    let them = create_test_user(&test_db.db, "strip-reply-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://example.com/terminal-renaissance".to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-reply-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
+
+    app.handle_input(b"r");
+    assert!(app.chat.is_composing(), "r opens the lounge composer");
+    app.handle_input(b"worth a read\r");
+    wait_for_render_contains(&mut app, "worth a read").await;
+
+    let sent = ChatMessage::list_recent(&client, lounge.id, 1)
+        .await
+        .expect("list lounge");
+    assert_eq!(
+        sent.iter()
+            .map(|message| (message.body.as_str(), message.reply_to_message_id))
+            .collect::<Vec<_>>(),
+        vec![(
+            "> @strip-reply-them: 📰 The terminal renaissance\nworth a read",
+            None
+        )],
+        "the reply quotes the article, with no message to point at"
+    );
+}

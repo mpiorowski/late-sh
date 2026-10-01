@@ -3,7 +3,9 @@ use late_core::models::deadchannel_runner::DeadchannelRunner;
 use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
-use super::{Applied, Command, Fight, News, Outcome, Quarry, Refusal, Sheet, SheetError, Slot};
+use super::{
+    Applied, Command, Fight, News, Outcome, Pick, Quarry, Refusal, Sheet, SheetError, Slot,
+};
 use crate::app::deadchannel::fight::data::{
     FOES, HEARD_LINE, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL, RATIONS_PER_DAY, START_BITS,
     exp_to_advance, exp_to_seek, title,
@@ -23,9 +25,9 @@ fn stepping_in_spends_a_ration_and_meets_the_glyph_of_your_level() {
     let mut sheet = fresh();
     let mut rng = StdRng::seed_from_u64(1);
 
-    let outcome = sheet.apply(Command::Start, &mut rng);
+    let outcome = sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
 
-    assert_eq!(outcome.applied, Applied::Started);
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Fair });
     assert_eq!(outcome.lines, vec![FOES[0].arrives.to_string()]);
     assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
     let fight = sheet.fight.as_ref().expect("a fight on the row");
@@ -34,7 +36,7 @@ fn stepping_in_spends_a_ration_and_meets_the_glyph_of_your_level() {
     assert_eq!(fight.log, outcome.lines);
 
     // A second step in with a fight waiting spends nothing and resumes it.
-    let again = sheet.apply(Command::Start, &mut rng);
+    let again = sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     assert_eq!(again.applied, Applied::Resumed);
     assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
 }
@@ -43,7 +45,7 @@ fn stepping_in_spends_a_ration_and_meets_the_glyph_of_your_level() {
 fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
     let mut sheet = fresh();
     let mut rng = StdRng::seed_from_u64(7);
-    sheet.apply(Command::Start, &mut rng);
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
 
     let mut rounds = 0;
     let ended = loop {
@@ -63,11 +65,15 @@ fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
         Applied::Won {
             foe,
             bits,
+            garnished,
             exp,
             leveled,
         } => {
             // LoGD's flicker pays 36 bits and 14 exp; `PAY_SCALE` triples it.
-            assert_eq!((foe, bits, exp, leveled), ("flicker", 108, 42, None));
+            assert_eq!(
+                (foe, bits, garnished, exp, leveled),
+                ("flicker", 108, 0, 42, None)
+            );
             assert_eq!(sheet.bits, START_BITS + 108);
             assert_eq!(sheet.exp, 42);
             assert!(sheet.signal > 0);
@@ -125,6 +131,7 @@ fn winning_past_the_threshold_levels_up() {
         Applied::Won {
             foe: "flicker",
             bits: 36,
+            garnished: 0,
             exp: 14,
             leveled: Some(2)
         }
@@ -149,7 +156,7 @@ fn running_gets_away_or_takes_a_free_strike() {
     for seed in 0..30u64 {
         let mut sheet = fresh();
         let mut rng = StdRng::seed_from_u64(seed);
-        sheet.apply(Command::Start, &mut rng);
+        sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
         let outcome = sheet.apply(Command::Run, &mut rng);
         match outcome.applied {
             Applied::Escaped => {
@@ -189,14 +196,14 @@ fn spent_or_down_is_refused_and_changes_nothing() {
     let mut spent = fresh();
     spent.rations_left = 0;
     let before = spent.clone();
-    let outcome = spent.apply(Command::Start, &mut rng);
+    let outcome = spent.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     assert_eq!(outcome.applied, Applied::Refused(Refusal::NoRations));
     assert_eq!(spent, before);
 
     let mut down = fresh();
     down.signal = 0;
     let before = down.clone();
-    let outcome = down.apply(Command::Start, &mut rng);
+    let outcome = down.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     assert_eq!(outcome.applied, Applied::Refused(Refusal::SignalDown));
     assert_eq!(down, before);
 
@@ -249,6 +256,7 @@ fn the_wire_hears_only_the_results_worth_a_story() {
     let won = |leveled| Applied::Won {
         foe: "hiss",
         bits: 1,
+        garnished: 0,
         exp: 1,
         leveled,
     };
@@ -463,7 +471,7 @@ fn patch_buys_the_signal_back_and_refuses_down_waiting_full_or_short() {
 
     let mut waiting = fresh();
     waiting.signal = 4;
-    waiting.apply(Command::Start, &mut rng);
+    waiting.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     assert!(waiting.fight.is_some());
     let before = waiting.clone();
     let outcome = waiting.apply(Command::Patch, &mut rng);
@@ -543,6 +551,8 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         peak_level: 1,
         marks: 0,
         unpaid_mark: None,
+        stash: 0,
+        debt: 0,
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []
@@ -615,7 +625,7 @@ fn the_old_signal_is_a_real_fight_that_marks_make_easier() {
         for seed in 0..2000 {
             let mut sheet = at_the_top(marks);
             let mut rng = StdRng::seed_from_u64(seed);
-            sheet.apply(Command::Start, &mut rng);
+            sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
             if matches!(fight_out(&mut sheet, &mut rng), Applied::Slain { .. }) {
                 wins += 1;
             }
@@ -640,14 +650,14 @@ fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
     let mut short = at_the_top(0);
     short.exp -= 1;
     assert!(!short.signal_hears());
-    short.apply(Command::Start, &mut rng);
+    short.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     assert_eq!(
         short.fight.as_ref().map(|fight| fight.quarry),
         Some(Quarry::Glyph(14))
     );
 
     let mut ready = at_the_top(0);
-    let outcome = ready.apply(Command::Start, &mut rng);
+    let outcome = ready.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     let fight = ready.fight.as_ref().expect("a fight on the row");
     assert_eq!(fight.quarry, Quarry::OldSignal);
     assert_eq!(fight.foe().name, "Old Signal");
@@ -659,13 +669,16 @@ fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
     assert!(!again.signal_hears());
 }
 
-/// Whole state: the kill leaves a mark and a fresh runner's sheet, and
-/// keeps the peak, the kill count, and today's rations.
+/// Whole state: the kill leaves a mark and a fresh runner's sheet with an
+/// empty locker, and keeps the peak, the kill count, today's rations, and
+/// the debt.
 #[test]
 fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
     let mut sheet = at_the_top(0);
     let mut rng = StdRng::seed_from_u64(1);
-    sheet.apply(Command::Start, &mut rng);
+    sheet.stash = 4000;
+    sheet.debt = 120;
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
     sheet.fight.as_mut().expect("a fight").foe_signal = 1;
     sheet.kills = 900;
     sheet.kills_today = 4;
@@ -690,10 +703,17 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
         peak_level: MAX_LEVEL,
         marks: 1,
         unpaid_mark: Some(1),
+        stash: 0,
+        debt: 120,
     };
     assert_eq!(sheet, expected);
-    assert_eq!(outcome.lines.len(), 3, "{:?}", outcome.lines);
+    assert_eq!(outcome.lines.len(), 4, "{:?}", outcome.lines);
     assert!(outcome.lines[2].contains("mark 1"), "{:?}", outcome.lines);
+    assert!(
+        outcome.lines[3].contains("4000 bits"),
+        "{:?}",
+        outcome.lines
+    );
     assert_eq!(sheet.news(&outcome.applied), vec![News::Slain { marks: 1 }]);
     assert_eq!(
         (sheet.attack(), sheet.defense()),
@@ -716,7 +736,10 @@ fn marks_scale_the_ladder_and_the_peak_only_climbs() {
     sheet.peak_level = 9;
     sheet.marks = 1;
     sheet.exp = exp_to_advance(1, 1).expect("a threshold") - 1;
-    sheet.apply(Command::Start, &mut StdRng::seed_from_u64(2));
+    sheet.apply(
+        Command::Start { pick: Pick::Fair },
+        &mut StdRng::seed_from_u64(2),
+    );
     sheet.fight.as_mut().expect("a fight").foe_signal = 1;
     let mut rng = StdRng::seed_from_u64(2);
     let outcome = loop {
@@ -806,4 +829,246 @@ fn win_out(sheet: &mut Sheet, rng: &mut StdRng) -> Outcome {
         }
     }
     panic!("a fight always ends");
+}
+
+/// A foe that cannot hurt you and cannot survive you, paying `bits`.
+fn a_sure_kill(sheet: &mut Sheet, bits: i64) {
+    sheet.weapon_tier = 50;
+    sheet.fight = Some(Fight {
+        quarry: Quarry::Glyph(0),
+        foe_signal: 1,
+        foe_max_signal: 1,
+        foe_attack: 0,
+        foe_defense: 0,
+        foe_bits: bits,
+        foe_exp: 1,
+        log: Vec::new(),
+    });
+}
+
+#[test]
+fn stepping_down_meets_the_glyph_a_level_below_at_half_pay() {
+    let mut sheet = fresh();
+    sheet.level = 3;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let outcome = sheet.apply(Command::Start { pick: Pick::Lower }, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Lower });
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
+    let fight = sheet.fight.as_ref().expect("a fight on the row");
+    // The hiss, level 2: LoGD's 97 bits and 24 exp, tripled, then halved.
+    assert_eq!(fight.foe().name, "hiss");
+    assert_eq!(fight.foe_level(), Some(2));
+    assert_eq!((fight.foe_bits, fight.foe_exp), (145, 36));
+    assert_eq!(outcome.lines.len(), 2, "the step down is said");
+
+    // Nothing is below the flicker, and asking spends nothing.
+    let mut first = fresh();
+    let refused = first.apply(Command::Start { pick: Pick::Lower }, &mut rng);
+    assert_eq!(refused.applied, Applied::Refused(Refusal::NoLowerGlyph));
+    assert_eq!(first.rations_left, RATIONS_PER_DAY);
+    assert_eq!(first.fight, None);
+}
+
+#[test]
+fn the_locker_takes_its_cut_going_in_and_keeps_the_rest_from_the_street() {
+    let mut sheet = fresh();
+    sheet.bits = 101;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let deposit = sheet.apply(Command::Deposit, &mut rng);
+
+    // A tenth of 101, rounded up: no deposit is free.
+    assert_eq!(
+        deposit.applied,
+        Applied::Deposited {
+            stored: 90,
+            fee: 11
+        }
+    );
+    assert_eq!((sheet.bits, sheet.stash), (0, 90));
+    assert_eq!(
+        sheet.apply(Command::Deposit, &mut rng).applied,
+        Applied::Refused(Refusal::NothingOnHand)
+    );
+
+    // A drop takes what is on hand, never what is locked up.
+    sheet.bits = 30;
+    sheet.signal = 1;
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    let fight = sheet.fight.as_mut().expect("a fight");
+    fight.foe_attack = 500;
+    fight.foe_signal = 500;
+    fight.foe_max_signal = 500;
+    assert!(matches!(
+        fight_out(&mut sheet, &mut rng),
+        Applied::Lost { bits_lost: 30 }
+    ));
+    assert_eq!((sheet.bits, sheet.stash), (0, 90));
+
+    // Out is free, and not with a glyph waiting.
+    sheet.signal = 10;
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert_eq!(
+        sheet.apply(Command::Withdraw, &mut rng).applied,
+        Applied::Refused(Refusal::FightWaiting)
+    );
+    sheet.fight = None;
+    assert_eq!(
+        sheet.apply(Command::Withdraw, &mut rng).applied,
+        Applied::Withdrew { amount: 90 }
+    );
+    assert_eq!((sheet.bits, sheet.stash), (90, 0));
+    assert_eq!(
+        sheet.apply(Command::Withdraw, &mut rng).applied,
+        Applied::Refused(Refusal::LockerEmpty)
+    );
+
+    // A single bit is all cut: the locker refuses it instead of keeping it
+    // for nothing.
+    let mut poor = fresh();
+    poor.bits = 1;
+    let before = poor.clone();
+    assert_eq!(
+        poor.apply(Command::Deposit, &mut rng).applied,
+        Applied::Refused(Refusal::DepositAllCut)
+    );
+    assert_eq!(poor, before);
+}
+
+#[test]
+fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() {
+    let mut sheet = fresh();
+    sheet.bits = 0;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let loan = sheet.apply(Command::Borrow, &mut rng);
+
+    // A tenth of the loan on top, charged when it lends.
+    assert_eq!(loan.applied, Applied::Borrowed { amount: 50, fee: 5 });
+    assert_eq!((sheet.bits, sheet.debt), (50, 55));
+    assert_eq!(
+        sheet.apply(Command::Borrow, &mut rng).applied,
+        Applied::Refused(Refusal::LoanCapped)
+    );
+
+    // A level up opens the cap by what the debt has not taken of it, the
+    // fee included, and the fee on the new loan rounds up.
+    sheet.level = 2;
+    let more = sheet.apply(Command::Borrow, &mut rng);
+    assert_eq!(more.applied, Applied::Borrowed { amount: 45, fee: 5 });
+    assert_eq!((sheet.bits, sheet.debt), (95, 105));
+
+    // The debt never grows by itself: a roll adds nothing, however many.
+    sheet.settle(day(25));
+    sheet.settle(day(30));
+    assert_eq!(sheet.debt, 105);
+
+    // A kill pays half its bits to the machine first.
+    sheet.bits = 0;
+    a_sure_kill(&mut sheet, 60);
+    let won = fight_out(&mut sheet, &mut rng);
+    assert!(
+        matches!(
+            won,
+            Applied::Won {
+                bits: 60,
+                garnished: 30,
+                ..
+            }
+        ),
+        "{won:?}"
+    );
+    assert_eq!((sheet.bits, sheet.debt), (30, 75));
+
+    // Repaying takes what the hand holds, up to the debt.
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Repaid { amount: 30 }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (0, 45));
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Refused(Refusal::NothingOnHand)
+    );
+    sheet.bits = 500;
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Repaid { amount: 45 }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (455, 0));
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Refused(Refusal::NoDebt)
+    );
+
+    // Paid off, a kill is the runner's own again.
+    a_sure_kill(&mut sheet, 60);
+    assert!(matches!(
+        fight_out(&mut sheet, &mut rng),
+        Applied::Won { garnished: 0, .. }
+    ));
+    assert_eq!(sheet.bits, 515);
+}
+
+/// Whole state: a step off the ledge wipes the climb, the purse, and the
+/// locker, and keeps the marks, the peak, the kills, today's rations, and
+/// the debt.
+#[test]
+fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
+    let mut sheet = at_the_top(2);
+    sheet.stash = 900;
+    sheet.debt = 70;
+    sheet.kills = 300;
+    sheet.rations_left = 4;
+    sheet.signal = 12;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let outcome = sheet.apply(Command::Reset, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Reset);
+    let expected = Sheet {
+        user_id: Uuid::nil(),
+        level: 1,
+        exp: 0,
+        signal: 10,
+        weapon_tier: 0,
+        armor_tier: 0,
+        bits: 0,
+        rations_left: 4,
+        day: day(24),
+        fight: None,
+        kills: 300,
+        kills_today: 0,
+        runs_today: 0,
+        peak_level: MAX_LEVEL,
+        marks: 2,
+        unpaid_mark: None,
+        stash: 0,
+        debt: 70,
+    };
+    assert_eq!(sheet, expected);
+    assert!(
+        outcome.lines[2].contains("70 bits owed"),
+        "{:?}",
+        outcome.lines
+    );
+    assert_eq!(sheet.news(&outcome.applied), vec![News::SteppedOff]);
+
+    // A runner with nothing to lose has no fall to take: the second step
+    // changes nothing and the wire hears nothing.
+    let before = sheet.clone();
+    let again = sheet.apply(Command::Reset, &mut rng);
+    assert_eq!(again.applied, Applied::Refused(Refusal::NothingToLose));
+    assert_eq!(sheet, before);
+    assert_eq!(sheet.news(&again.applied), Vec::new());
+
+    // Not as a way back on the wire before the roll.
+    let mut down = fresh();
+    down.signal = 0;
+    assert_eq!(
+        down.apply(Command::Reset, &mut rng).applied,
+        Applied::Refused(Refusal::SignalDown)
+    );
 }

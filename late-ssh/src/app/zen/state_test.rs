@@ -297,3 +297,23 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
     });
     assert!(!no_eq.shows_equalizer());
 }
+
+#[test]
+fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
+    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium.
+    let mut zen = ZenState::new(RiceLayout::default());
+    let lobby = zen.first_tile_of(TileKind::Lobby).expect("a lobby tile");
+    assert!(zen.shows(TileKind::Lobby));
+    assert!(zen.draws(TileKind::Lobby), "unzoomed, every tile draws");
+
+    zen.zoomed = true;
+    zen.focus = 0;
+    assert!(zen.shows(TileKind::Lobby), "the tile is still on the page");
+    assert!(
+        !zen.draws(TileKind::Lobby),
+        "zoomed on the bonsai, the lobby tile is not drawn"
+    );
+    zen.focus = lobby;
+    assert!(zen.draws(TileKind::Lobby), "zoomed on it, it draws");
+    assert!(!zen.draws(TileKind::Bonsai), "and the bonsai does not");
+}

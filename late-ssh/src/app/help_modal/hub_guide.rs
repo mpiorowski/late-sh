@@ -369,7 +369,7 @@ fn room_game_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Daily Matches",
             body: vec![
-                "Press c (or C for a directed challenge) in the Lobby to post a daily correspondence match, open to anyone or aimed at one user."
+                "Press c in the Lobby to post a daily correspondence match anyone can claim."
                     .to_string(),
                 "Chess, battleship, connect4, reversi, checkers, and backgammon.".to_string(),
                 "24h per move; Enter in the Lobby claims an open match or opens one of yours."

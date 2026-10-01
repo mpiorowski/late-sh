@@ -137,7 +137,7 @@ pub enum ActivityKind {
     },
     /// The open pot draws soon: one reminder per pot, claimed in the table
     /// so one replica posts it. Nobody did anything, so there is no user;
-    /// the ticker line reads "pot draws in 30m ...". `pot_id` keys the
+    /// the ticker line reads "pot draws in 1h ...". `pot_id` keys the
     /// #lounge repeat throttle.
     PotClosing {
         pot_id: Uuid,
@@ -775,7 +775,7 @@ impl ActivityEvent {
     }
 
     /// The open pot is about to draw. Authored by nobody: the ticker line
-    /// names the pot itself, so it reads "pot draws in 30m: ...".
+    /// names the pot itself, so it reads "pot draws in 1h: ...".
     pub fn pot_closing(
         pot_id: Uuid,
         size: i64,
@@ -784,10 +784,10 @@ impl ActivityEvent {
         draws_in_secs: i64,
     ) -> Self {
         use crate::app::common::primitives::thousands;
-        use crate::app::pot::state::short_duration;
+        use crate::app::pot::state::lead_time;
         let action = format!(
             "draws in {}: {} chips on {} tickets",
-            short_duration(draws_in_secs),
+            lead_time(draws_in_secs),
             thousands(size),
             thousands(total_tickets)
         );

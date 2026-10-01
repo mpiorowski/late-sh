@@ -3,7 +3,7 @@
 //! spans.
 //!
 //! Distribution deliberately copies the `usernames::UsernameDirectory`
-//! snapshot-swap shape instead of the SharedLobby drunk map: flair changes
+//! snapshot-swap shape instead of the drunk map's mutex: flair changes
 //! rarely (a purchase or an expiry), so readers clone an `Arc` per second
 //! rather than copying a map under a mutex. Writes are event-driven — the
 //! shop service seeds once at startup, writes through on a local purchase,

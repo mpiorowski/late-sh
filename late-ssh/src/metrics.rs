@@ -6,6 +6,7 @@ use late_core::models::media_queue_item::SongQueueReward;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
+use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::chat::news::svc::XMediaLookup;
@@ -15,7 +16,7 @@ use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
-use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome};
+use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::pg_listener::Refresh;
 
@@ -186,11 +187,14 @@ pub enum FirstContactBeat {
 /// One fight command settling on the runner row (`deadchannel/fight`).
 /// `Refused` is a command the row turned down (no rations, signal down,
 /// the armorer's or patch's no); `Outfitted` is a piece bought at the
-/// armorer; `Patched` is the signal bought back at patch; `Failed` is
-/// the write not landing.
+/// armorer; `Patched` is the signal bought back at patch; `SteppedDown`
+/// is a fight started against the glyph a level down; `Deposited` and
+/// `Withdrew` are the locker, `Borrowed` and `Repaid` the bits machine,
+/// `Reset` the step off the ledge; `Failed` is the write not landing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FightBeat {
     Started,
+    SteppedDown,
     Resumed,
     Round,
     Won,
@@ -200,6 +204,11 @@ pub enum FightBeat {
     Escaped,
     Outfitted,
     Patched,
+    Deposited,
+    Withdrew,
+    Borrowed,
+    Repaid,
+    Reset,
     Refused,
     Failed,
 }
@@ -223,6 +232,30 @@ pub enum TailorBeat {
     Worn,
     NoRunner,
     Failed,
+}
+
+/// What the presence wire did (`app/presence`): `Published` a notify
+/// sent, `PublishFailed` one that did not land (the next heartbeat carries
+/// it again), `Heard` another replica's batch folded in, `Rejected` a
+/// payload that failed to parse, `Expired` a remote session dropped
+/// because its replica went quiet (a dead replica, or a leaver missed
+/// across a LISTEN reconnect).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresenceWire {
+    Published,
+    PublishFailed,
+    Heard,
+    Rejected,
+    Expired,
+}
+
+/// Which presence records a replica counts (`app/presence`): `Local` its
+/// own sessions, `All` every live record it holds, its own and every other
+/// replica's. `All` should read the same on every replica.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresenceScope {
+    Local,
+    All,
 }
 
 /// A stage of a session's start, from TCP accept to the first frame on
@@ -365,11 +398,11 @@ mod inner {
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
-        SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        TailorBeat, TranslationResult, VizWireBands,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
+        RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -910,6 +943,18 @@ mod inner {
         })
     }
 
+    fn daily_snapshot_rows_rejected_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_daily_snapshot_rows_rejected_total")
+                .with_description(
+                    "Daily match rows left out of the lobby snapshot, by reason, counted once per replica when a row first goes missing. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
+                )
+                .build()
+        })
+    }
+
     fn pool_shots_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -950,6 +995,18 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_news_share_chips_paid_total")
                 .with_description("Chips minted as News share rewards")
+                .build()
+        })
+    }
+
+    fn booth_thumbnails_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_booth_thumbnails_total")
+                .with_description(
+                    "YouTube thumbnail fetches for the live strip, once per track per replica",
+                )
                 .build()
         })
     }
@@ -1071,6 +1128,28 @@ mod inner {
         })
     }
 
+    fn presence_records() -> &'static Gauge<u64> {
+        static METRIC: OnceLock<Gauge<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_gauge("late_ssh_presence_records")
+                .with_description(
+                    "presence records a replica holds, its own sessions (local) or every one (all)",
+                )
+                .build()
+        })
+    }
+
+    fn presence_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_presence_total")
+                .with_description("presence (tavern, stools, street) on the wire, by beat")
+                .build()
+        })
+    }
+
     fn deadchannel_tailor_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1166,6 +1245,7 @@ mod inner {
     fn fight_beat_label(beat: FightBeat) -> &'static str {
         match beat {
             FightBeat::Started => "started",
+            FightBeat::SteppedDown => "stepped_down",
             FightBeat::Resumed => "resumed",
             FightBeat::Round => "round",
             FightBeat::Won => "won",
@@ -1174,6 +1254,11 @@ mod inner {
             FightBeat::Escaped => "escaped",
             FightBeat::Outfitted => "outfitted",
             FightBeat::Patched => "patched",
+            FightBeat::Deposited => "deposited",
+            FightBeat::Withdrew => "withdrew",
+            FightBeat::Borrowed => "borrowed",
+            FightBeat::Repaid => "repaid",
+            FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
         }
@@ -1189,6 +1274,34 @@ mod inner {
 
     pub fn record_deadchannel_tailor(beat: TailorBeat) {
         deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
+    }
+
+    fn presence_wire_label(beat: PresenceWire) -> &'static str {
+        match beat {
+            PresenceWire::Published => "published",
+            PresenceWire::PublishFailed => "publish_failed",
+            PresenceWire::Heard => "heard",
+            PresenceWire::Rejected => "rejected",
+            PresenceWire::Expired => "expired",
+        }
+    }
+
+    pub fn record_presence(beat: PresenceWire) {
+        presence_total().add(1, &[KeyValue::new("beat", presence_wire_label(beat))]);
+    }
+
+    fn presence_scope_label(scope: PresenceScope) -> &'static str {
+        match scope {
+            PresenceScope::Local => "local",
+            PresenceScope::All => "all",
+        }
+    }
+
+    pub fn record_presence_records(scope: PresenceScope, count: usize) {
+        presence_records().record(
+            count as u64,
+            &[KeyValue::new("scope", presence_scope_label(scope))],
+        );
     }
 
     pub fn record_deadchannel_fight(beat: FightBeat) {
@@ -1385,6 +1498,7 @@ mod inner {
             Refresh::AppFlags => "app_flags",
             Refresh::RunnerLooks => "runner_looks",
             Refresh::CrownHolder => "crown_holder",
+            Refresh::DailyMatches => "daily_matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active_quest_boards",
@@ -1600,6 +1714,25 @@ mod inner {
         );
     }
 
+    fn daily_snapshot_row_rejected_label(error: &SnapshotRowError) -> &'static str {
+        match error {
+            SnapshotRowError::UnknownGame(_) => "unknown_game",
+            SnapshotRowError::NoOpponent => "no_opponent",
+            SnapshotRowError::UnknownResult(_) => "unknown_result",
+            SnapshotRowError::UnreadableState(_) => "unreadable_state",
+        }
+    }
+
+    pub fn record_daily_snapshot_row_rejected(error: &SnapshotRowError) {
+        daily_snapshot_rows_rejected_total().add(
+            1,
+            &[KeyValue::new(
+                "reason",
+                daily_snapshot_row_rejected_label(error),
+            )],
+        );
+    }
+
     fn pool_shot_outcome_label(outcome: PoolShotOutcome) -> &'static str {
         match outcome {
             PoolShotOutcome::Settled => "settled",
@@ -1663,6 +1796,20 @@ mod inner {
             SongQueueReward::Paid => "paid",
             SongQueueReward::DailyCapReached => "daily_cap",
         }
+    }
+
+    fn thumbnail_fetch_label(outcome: ThumbnailFetch) -> &'static str {
+        match outcome {
+            ThumbnailFetch::Fetched => "fetched",
+            ThumbnailFetch::Failed => "failed",
+        }
+    }
+
+    pub fn record_booth_thumbnail(outcome: ThumbnailFetch) {
+        booth_thumbnails_total().add(
+            1,
+            &[KeyValue::new("outcome", thumbnail_fetch_label(outcome))],
+        );
     }
 
     pub fn record_song_queued(reward: SongQueueReward) {
@@ -2186,11 +2333,11 @@ mod inner {
         GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
         GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        Presence, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen,
-        SessionStartStage, SessionUser, SongQueueReward, SshRejectReason, SummaryResult,
-        TailorBeat, TranslationResult, VizWireBands,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome,
+        RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2200,6 +2347,8 @@ mod inner {
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
+    pub fn record_presence(_beat: PresenceWire) {}
+    pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
     pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
@@ -2242,9 +2391,11 @@ mod inner {
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
+    pub fn record_daily_snapshot_row_rejected(_error: &SnapshotRowError) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
+    pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}

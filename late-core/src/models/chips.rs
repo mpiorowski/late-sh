@@ -204,6 +204,8 @@ chip_moves!(
     DailyCheckersWin,
     DailyBackgammonWin,
     DailyBriscolaWin,
+    DailyCribbageWin,
+    DailyGinWin,
     DailyEightBallWin,
     DailyNineBallWin,
     DailySnookerWin,
@@ -291,6 +293,8 @@ impl ChipMove {
             Self::DailyCheckersWin => "daily_checkers_win",
             Self::DailyBackgammonWin => "daily_backgammon_win",
             Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::DailyCribbageWin => "daily_cribbage_win",
+            Self::DailyGinWin => "daily_gin_win",
             Self::DailyEightBallWin => "daily_eightball_win",
             Self::DailyNineBallWin => "daily_nineball_win",
             Self::DailySnookerWin => "daily_snooker_win",
@@ -347,6 +351,8 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
@@ -396,6 +402,8 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
@@ -485,6 +493,8 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin

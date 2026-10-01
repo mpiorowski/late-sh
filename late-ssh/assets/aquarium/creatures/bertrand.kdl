@@ -2,6 +2,7 @@ name "bertrand"
 title "a medium sea turtle"
 description "compact shell with a zigzag pattern, small eye, and a flipper mid-stride"
 sauce author=mevanlc date=20260513 license=CCBYSA4.0
+mini left="<@)" right="(@>"
 
 count 0
 

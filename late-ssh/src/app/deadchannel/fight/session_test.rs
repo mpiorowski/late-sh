@@ -6,7 +6,7 @@ use super::{FightSession, Scene};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::FOES;
-use crate::app::deadchannel::fight::state::Command;
+use crate::app::deadchannel::fight::state::{Command, Pick};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
@@ -48,7 +48,7 @@ async fn answered(session: &mut FightSession) {
 async fn one_action_is_out_at_a_time() {
     let (_test_db, mut session) = session_with_runner("fight-session-guard").await;
 
-    session.open();
+    session.step_in(Pick::Fair);
     assert!(
         !session.request(Command::Attack),
         "a press while the start is out is dropped"
@@ -69,12 +69,12 @@ async fn one_action_is_out_at_a_time() {
 async fn a_second_step_in_shows_the_fight_the_row_remembers() {
     let (_test_db, mut session) = session_with_runner("fight-session-resume").await;
 
-    session.open();
+    session.step_in(Pick::Fair);
     answered(&mut session).await;
     session.close();
     assert!(!session.scene_open());
 
-    session.open();
+    session.step_in(Pick::Fair);
     answered(&mut session).await;
     let scene = session.scene.as_ref().expect("the scene reopened");
     assert_eq!(
@@ -91,11 +91,40 @@ async fn a_second_step_in_shows_the_fight_the_row_remembers() {
 }
 
 #[tokio::test]
+async fn walking_up_opens_the_picker_unless_a_fight_is_waiting() {
+    let (_test_db, mut session) = session_with_runner("fight-session-picker").await;
+
+    session.step_up();
+    assert!(session.picker_open());
+    assert!(!session.scene_open());
+    answered(&mut session).await;
+    let picker = session.picker.as_ref().expect("the picker stays open");
+    assert_eq!(picker.cursor, Pick::Fair);
+    assert!(
+        picker.fair.is_some(),
+        "the reload's sheet reads the fair fight"
+    );
+    assert_eq!(picker.lower, None, "nothing below the flicker");
+
+    session.step_in(Pick::Fair);
+    assert!(!session.picker_open());
+    answered(&mut session).await;
+    session.close();
+
+    // The fight is on the row: walking up goes straight back into it.
+    session.step_up();
+    assert!(!session.picker_open());
+    answered(&mut session).await;
+    let scene = session.scene.as_ref().expect("back in the fight");
+    assert_eq!(scene.lines, vec![FOES[0].arrives.to_string()]);
+}
+
+#[tokio::test]
 async fn a_failed_action_answers_where_it_was_asked_and_frees_the_guard() {
     let (_test_db, mut session) = session_with_runner("fight-session-failed").await;
 
     // On the scene, when one is open.
-    session.open();
+    session.step_in(Pick::Fair);
     answered(&mut session).await;
     session.action_in_flight = true;
     session
@@ -121,7 +150,7 @@ async fn a_failed_action_answers_where_it_was_asked_and_frees_the_guard() {
     assert!(session.tick());
     assert_eq!(
         session.till.as_deref(),
-        Some("the armorer is not answering. try again.")
+        Some("nobody at the counter is answering. try again.")
     );
     assert!(!session.action_in_flight);
 }

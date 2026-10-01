@@ -3,8 +3,8 @@
 //! to you. Pure: no I/O, no clock reads (the tick is handed in).
 //!
 //! The city is the wallet (GAME.md, "The three surfaces"): nothing happens
-//! here that you could miss, so there is no shared lobby and no crowd. One
-//! runner, one street, the doors you walk up to.
+//! here that you could miss. This is your runner only; the other runners
+//! on the street are `deadchannel/street`'s.
 
 use super::data::COST_LADDER;
 use super::map::{self, Landmark};
@@ -29,8 +29,9 @@ pub enum Enter {
     Leave,
     /// Look over the ledge: the lower city fills the screen until Enter.
     Ledge,
-    /// Step into the static: the screen is the forest (`fight/`), a
-    /// ration spent against a glyph, the scene over the street.
+    /// Walk up to the static: the screen is the forest (`fight/`). The
+    /// picker opens over the street (or a waiting fight resumes), and a
+    /// pick spends a ration against a glyph in the scene.
     Fight,
 }
 
@@ -70,6 +71,8 @@ pub struct State {
     pick: usize,
     /// Looking over the ledge: the lower city instead of the street.
     ledge: bool,
+    /// Leaning out over the ledge: the next `r` steps off (`Command::Reset`).
+    reset_armed: bool,
     /// A line the street said, and the tick it stops showing.
     line: Option<(Landmark, usize, u64)>,
 }
@@ -89,6 +92,7 @@ impl State {
             panel: None,
             pick: 0,
             ledge: false,
+            reset_armed: false,
             line: None,
         }
     }
@@ -173,6 +177,20 @@ impl State {
 
     pub fn look_over(&mut self) {
         self.ledge = true;
+        self.reset_armed = false;
+    }
+
+    /// Leaning out: the first `r` at the ledge. The second steps off.
+    pub fn arm_reset(&mut self) {
+        self.reset_armed = self.ledge;
+    }
+
+    pub fn disarm_reset(&mut self) {
+        self.reset_armed = false;
+    }
+
+    pub fn reset_armed(&self) -> bool {
+        self.reset_armed
     }
 
     /// Back on the street: closes the panel and steps back from the ledge,
@@ -181,6 +199,7 @@ impl State {
     pub fn dismiss(&mut self) {
         self.panel = None;
         self.ledge = false;
+        self.reset_armed = false;
     }
 
     /// The street says something: which landmark spoke and which line of

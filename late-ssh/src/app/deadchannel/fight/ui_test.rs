@@ -3,10 +3,11 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use uuid::Uuid;
 
-use super::{SceneView, corrupt, draw_scene};
+use super::{PickerView, SceneView, corrupt, draw_picker, draw_scene};
 use crate::app::deadchannel::fight::data::OLD_SIGNAL_TIER;
-use crate::app::deadchannel::fight::session::Scene;
-use crate::app::deadchannel::fight::state::{Fight, Quarry, Sheet};
+use crate::app::deadchannel::fight::session::{Picker, Scene};
+use crate::app::deadchannel::fight::sim::Threat;
+use crate::app::deadchannel::fight::state::{Fight, Pick, Quarry, Sheet};
 
 #[test]
 fn corruption_takes_cells_in_proportion_and_holds_still() {
@@ -211,4 +212,75 @@ fn a_finished_old_signal_scene_holds_still() {
         rows,
         "nothing moves once it is over\n{screen}"
     );
+}
+
+/// The picker drawn on a 90 by 30 terminal, as one block of text.
+fn render_picker(sheet: &Sheet, picker: &Picker) -> String {
+    let backend = TestBackend::new(90, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_picker(
+                frame,
+                frame.area(),
+                PickerView {
+                    sheet: Some(sheet),
+                    picker,
+                    look: None,
+                    own_username: "mira",
+                },
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect()
+}
+
+#[test]
+fn the_picker_offers_the_glyph_of_your_level_and_the_one_below_with_their_threat() {
+    let mut sheet = Sheet::fresh(Uuid::nil(), NaiveDate::from_ymd_opt(2026, 9, 24).unwrap());
+    sheet.level = 2;
+    sheet.signal = 20;
+    sheet.bits = 0;
+    let picker = Picker {
+        cursor: Pick::Fair,
+        fair: Some(Threat::Grim),
+        lower: Some(Threat::Easy),
+    };
+
+    let text = render_picker(&sheet, &picker);
+
+    assert!(text.contains("the static"), "{text}");
+    assert!(text.contains("mira"), "{text}");
+    assert!(text.contains("hiss  lv 2"), "{text}");
+    assert!(text.contains("grim"), "{text}");
+    assert!(text.contains("pays 291 bits · 72 exp"), "{text}");
+    assert!(text.contains("flicker  lv 1"), "{text}");
+    assert!(text.contains("easy"), "{text}");
+    assert!(text.contains("pays 54 bits · 21 exp"), "{text}");
+    assert!(text.contains("a step down, half pay"), "{text}");
+    assert!(
+        text.contains("▸ [f]"),
+        "the cursor sits on the fair fight: {text}"
+    );
+
+    // At level 1 there is nothing below the flicker to offer.
+    sheet.level = 1;
+    sheet.signal = 10;
+    let first = render_picker(&sheet, &picker);
+    assert!(first.contains("flicker  lv 1"), "{first}");
+    assert!(!first.contains("[g]"), "{first}");
+
+    // A dropped signal says why instead of offering anything.
+    sheet.signal = 0;
+    let down = render_picker(&sheet, &picker);
+    assert!(down.contains("your signal is down"), "{down}");
+    assert!(!down.contains("[f]"), "{down}");
 }

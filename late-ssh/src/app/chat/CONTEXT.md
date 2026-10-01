@@ -43,7 +43,7 @@ late-ssh/src/app/chat/
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- gild/                        # Gild tier picker: state/input/ui for the `g` message action
 |-- history_modal/               # `/history` scroll-back modal: state/input/ui (§14 History Modal)
-|-- news/                        # Synthetic News entry: articles + #lounge announcement
+|-- news/                        # Synthetic News entry: articles + live strip body (`live.rs`)
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
 |-- showcase/                    # Projects service/state/UI reused by Directory page 5
@@ -75,7 +75,7 @@ Chat-owned moderation commands also use `room_ban.rs`,
 - `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs. It reads no palette: anything it builds for the screen carries ink, and `ui.rs` (or `common/overlay.rs`) picks the colour in the draw.
 - `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and the embedded game-chat panes.
 - `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
-- `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, `---NEWS---` cards, and reaction footers.
+- `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, report cards, and reaction footers.
 
 Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 
@@ -90,7 +90,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
 - `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, and discover reads.
-- `send_lounge_message_task` is the shared internal producer for custom `#lounge` announcements. It resolves `#lounge`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
+- `send_lounge_message_task` is the shared internal producer for custom `#lounge` announcements. It resolves `#lounge`, optionally joins the author first, then sends through the normal `send_message` path. The activity feed uses it (`app/activity/lounge.rs`).
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
@@ -245,7 +245,7 @@ RSS:
 - The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
 - Feed URLs are user-supplied, so fetches go through the SSRF-guarded downloader (`files::image_upload::download_url_bytes_following_redirects`): private/link-local/reserved resolved IPs rejected, DNS pinned, every redirect hop re-validated (up to 5 hops; feeds legitimately redirect), 1 MB body cap. Do not swap in a plain `reqwest::Client`.
 - The visible entry list is capped per feed (`PER_FEED_ENTRY_LIMIT`, 20) inside the flat `ENTRY_LIMIT` (100) window via `RssEntry::list_visible_for_user`, so a high-volume feed (news site, ~20 posts/day) cannot evict weekly/monthly feeds from the inbox.
-- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#lounge` announcement, and only then does it pay the share reward (see §11 News).
+- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article (and go up on the #lounge live strip), and only then does it pay the share reward (see §11 News).
 - Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
 Game rooms stay in `ChatState.rooms` for the embedded game-chat panes, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
@@ -264,7 +264,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `chat::ui::draw_dashboard_chat_card`: the lounge chat card, full height.
+- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `chat::ui::draw_dashboard_chat_card`: the lounge chat card, full height. It is the one chat surface carrying the live strip (`DashboardChatView.live_strip`, drawn in the topic's place under any stream or voice row and above the poll strip; owned by `app/live/`, see that domain's CONTEXT).
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -332,7 +332,7 @@ User commands:
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
 - `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs mail` the C-Mail picker that pins conversations the same way, `/cs mail @user` starts (or finds) a conversation, pins it, and walks into it, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
-- `/aquarium feed` (alias `/aq feed`) feeds the Shop-unlocked tank, which lives on the Zen page only (the sprout is cut on its Shop row; there is no `/aquarium cut` and no Home tray); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
+- `/aquarium feed` (alias `/aq feed`) feeds the Shop-unlocked tank, which lives on the Zen page and in the opt-in sidebar Tank panel (the sprout is cut on its Shop row; there is no `/aquarium cut` and no Home tray); bare `/aquarium` answers with a usage banner. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
 - There is no `/pet` command: the pet is fed by nothing and toggled by nothing. `ChatState::last_own_send_at` (stamped on `SendSucceeded`) is the pet's "chatty" signal, read by the tick; `/petname` stays.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
@@ -362,14 +362,14 @@ User commands:
 - `/paste-image` asks a paired `late` CLI with `clipboard_image` capability to read the local system clipboard image, sends it back over `/api/ws/pair`, uploads the PNG bytes through the normal image upload path, and inserts the resulting public URL into the composer. Pending clipboard requests time out after 15s so a dead paired client cannot wedge the command.
 - `/petname [name]` shows or sets the user's cat name; `/petname clear` removes it.
 - `/brb` sends this session away now instead of after 30 quiet minutes; the next key brings it back. No announcement message, no free-text note (trailing text gets a usage banner), no audio muting. Parsed in `submit_composer`, drained via `take_requested_brb` into `App::sent_away`. See away above.
-- `/bug <text>` and `/suggest <text>` post a report card into `#bugs` / `#suggestions` regardless of the composer's current room (`ChatService::send_report_task` resolves the room by slug and joins the caller first). A report is a normal chat message whose body starts with `ReportKind::marker()` (`---BUG---` / `---SUGGESTION---`, same trick as `---NEWS---` cards), so reactions, replies, pins, and deletes work unchanged; `ui_text::wrap_report_to_lines` renders the card. Text under 10 chars (`REPORT_MIN_CHARS`) banners usage instead of posting. Those two rooms are report-only: `send_message` rejects free-text sends from non-staff (`report-only:<slug>` error, covers IRC too since it checks the DB slug), while admins/moderators keep plain text so they can reply under a report; everyone keeps reactions ("+1"). The staff-flag DB lookup runs only on that rare gated path.
+- `/bug <text>` and `/suggest <text>` post a report card into `#bugs` / `#suggestions` regardless of the composer's current room (`ChatService::send_report_task` resolves the room by slug and joins the caller first). A report is a normal chat message whose body starts with `ReportKind::marker()` (`---BUG---` / `---SUGGESTION---`), so reactions, replies, pins, and deletes work unchanged; `ui_text::wrap_report_to_lines` renders the card. Text under 10 chars (`REPORT_MIN_CHARS`) banners usage instead of posting. Those two rooms are report-only: `send_message` rejects free-text sends from non-staff (`report-only:<slug>` error, covers IRC too since it checks the DB slug), while admins/moderators keep plain text so they can reply under a report; everyone keeps reactions ("+1"). The staff-flag DB lookup runs only on that rare gated path.
 - `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `. `/chips [@user]` is the same modal opened on its chips ledger (`ProfileSection::Chips` rides on `OpenProfileResolved` and the `requested_open_profile` handoff; the modal scrolls there on its first measured draw).
 - `/public #room` (alias `/join #room`) opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `app/sheet_modal`.
 - `/settings` opens settings.
-- `/shop` opens the Shop modal (the Shop has no global chord; this and the locked-feature nudges are its only entry points).
+- `/shop` opens the Shop modal, as does Ctrl+S outside profile/job editors and active Artboard input. Locked-feature nudges use the same entry point.
 - `/unignore [@user]` removes an ignored user.
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
@@ -407,8 +407,9 @@ Admin commands:
   title so the same painter tints it), the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
   message: the hood level with the header, the eyes and the coat on the
-  body rows under it, wearing what the entry has rows for (a one-liner
-  the head only, a taller message the coat too, so no message grows a
+  body rows under it, wearing what the block has rows for (a one-liner
+  the head only, its coat seated on a continuation right under it when
+  one follows, a taller message the coat itself, so no message grows a
   row for its face; `attach_portrait` / `seat_portrait_row`). The blank
   separator above the block stays blank and belongs to nobody, so two
   faces stacked down the wire never touch; the mention wash and the jump
@@ -857,7 +858,7 @@ Reactions:
 - One reaction per `(message_id, user_id)`.
 - Reactions are stored as icon text in `chat_message_reactions.icon`.
 - Quick reaction keys `1..9` map to the default emoji set; `0` opens the full icon picker.
-- UI appends reaction footer chips under the message body or news card.
+- UI appends reaction footer chips under the message body.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay (`ff`) waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`. The event also carries the message's gilds (`ChatMessageGild::list_for_message`, best tier first), which `reaction_owner_lines` lists above the reactions as one block per tier held (`◆◆◆ 1 Gold gild`, buyers under it), sharing the reaction blocks' name capping.
 
@@ -869,6 +870,7 @@ Ignores:
 - Ignore filtering applies to DMs too. An ignored peer's DM messages are filtered, and the DM room is hidden from the room rail/navigation while the peer is ignored (both mirrors skip DMs whose `dm_peer_id` is ignored: `visual_order_for_rooms` and the rail's own DM filter, via the shared `dm_peer_is_ignored`), so a new DM from the ignored user can't resurface the room or its unread badge. Unignoring restores the DM on the next render/snapshot.
 - `IgnoreListUpdated` refilters local messages in place (all rooms, including DMs and `reply_to_user_id` matches) with no DB refetch, then refreshes the Mentions list/unread count.
 - `unignore` does not retroactively restore already-filtered local messages until a future tail/snapshot naturally reloads them.
+- Ignores cover messages only. A News article is not a message: the News room and the #lounge live strip show every share, whoever shared it (§11 News).
 
 ---
 
@@ -879,17 +881,17 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 ### News
 
 - Backed by persisted `articles`.
-- `ArticleService::process_url` extracts title/summary/image, stores an article, and posts a compact `---NEWS---` announcement into `#lounge`.
+- `ArticleService::process_url` extracts title/summary/image and stores an article. It posts nothing into chat: the #lounge live strip features the new article (below).
 - **Three extraction paths, picked by URL shape in `do_process_url`.** YouTube (`is_youtube_url`): oEmbed pins title/author/thumbnail, then the AI writes only the summary against that verified identity, so the video can never be misidentified; an AI failure degrades to `youtube_fallback_summary`. X posts (`is_tweet_url`): **no AI at all**, see below. Everything else: `extract_via_ai`, Gemini with Google Search grounding, which works because those pages are server-rendered, indexed, and carry real `og:` tags.
 - **X posts carry their own metadata, so nothing about them is guessed.** `extract_tweet` reads `publish.x.com/oembed` and parses the author, the post's own text, and the date straight out of the returned `<blockquote>` (oEmbed has no plain-text field for the text; `tweet_text_from_oembed_html` turns `<br>` into the author's line breaks, unwraps `<a>` to its text, and drops X's own `pic.twitter.com/...` media shortlinks). A post's words *are* the content, so there is nothing to research or summarize and the AI never sees the URL. This is not a preference: x.com serves no `og:` tags even to `Twitterbot`, and Search has next to nothing indexed against a bare status URL, so the AI path invented titles for these links. Only `/status/<id>` URLs take this path; a profile, search, or list URL has no post to resolve and stays on the generic AI path.
-- oEmbed carries neither an image nor a sensitivity flag, so `fetch_tweet_media` gets both from **fxtwitter** (`api.fxtwitter.com/i/status/<id>`), the one third-party dependency in the pipeline, isolated in that single function. It sends an explicit `User-Agent` because fxtwitter answers `401` without one and `reqwest` sends none by default. Its `possibly_sensitive` is the **only NSFW gate on the X path**, so the lookup **fails closed**: any error, non-2xx status, or body without a post rejects the share with "X could not confirm this post is safe to share right now" rather than posting it unscreened. A successful lookup with no image still posts, falling back to `procedural_ascii_art`. `metrics::record_news_x_media_lookup` labels `late_ssh_news_x_media_lookups_total` by the closed `XMediaLookup` outcome (`clean` / `sensitive` / `unavailable`); a run of `unavailable` is what an fxtwitter outage looks like.
+- oEmbed carries neither an image nor a sensitivity flag, so `fetch_tweet_media` gets both from **fxtwitter** (`api.fxtwitter.com/i/status/<id>`), the one third-party dependency in the pipeline, isolated in that single function. It sends an explicit `User-Agent` because fxtwitter answers `401` without one and `reqwest` sends none by default. Its `possibly_sensitive` is the **only NSFW gate on the X path**, so the lookup **fails closed**: any error, non-2xx status, or body without a post rejects the share with "X could not confirm this post is safe to share right now" rather than posting it unscreened. A successful lookup with no image still publishes, falling back to `procedural_ascii_art`. `metrics::record_news_x_media_lookup` labels `late_ssh_news_x_media_lookups_total` by the closed `XMediaLookup` outcome (`clean` / `sensitive` / `unavailable`); a run of `unavailable` is what an fxtwitter outage looks like.
 - Publishing pays the sharer `NEWS_SHARE_REWARD_CHIPS` (500) as `ChipMove::NewsShared`. `Article::create_shared` (`late-core/src/models/article.rs`) is the only path a user-facing share may take, so the News composer and an RSS `s` share pay exactly the same. Chips are minted, not moved, and count toward Top Chips.
 - The reward is capped at one per URL per user and at `NEWS_SHARE_MAX_PAID_PER_DAY` (3) paid shares per UTC day, and the `chip_ledger` row is what enforces both, keyed on `(user_id, url)` and counted by `created_at` date like pot tickets (hence `source_ref` holds the URL, not an article id; migration 163 indexes the lookup). The `articles` row cannot be the record of payment: deleting a story frees its URL, so paying on insert alone would let one player share, delete, and re-share the same link forever. `articles.url` is unique, so while a story is live only its first sharer was paid.
-- A repeat or capped share still succeeds and still posts to `#lounge`; it just mints nothing. `Article::create_shared` returns a closed `NewsShareReward` (`Paid` / `RepeatUrl` / `DailyCapReached`) that rides `ArticleEvent::Created` and `FeedEvent::EntryShared`, so `news::state::news_share_banner` says what the ledger did ("+500 chips" / "Already paid for this link" / "Today's 3 paid shares are used up") and `metrics::record_news_shared` labels `late_ssh_news_shares_total` by the same outcome. An RSS entry marked shared because its link was already in News carries `reward: None` and raises no second banner over "Already shared.".
+- A repeat or capped share still succeeds and still goes up on the live strip; it just mints nothing. `Article::create_shared` returns a closed `NewsShareReward` (`Paid` / `RepeatUrl` / `DailyCapReached`) that rides `ArticleEvent::Created` and `FeedEvent::EntryShared`, so `news::state::news_share_banner` says what the ledger did ("+500 chips" / "Already paid for this link" / "Today's 3 paid shares are used up") and `metrics::record_news_shared` labels `late_ssh_news_shares_total` by the same outcome. An RSS entry marked shared because its link was already in News carries `reward: None` and raises no second banner over "Already shared.".
 - Insert, ledger lookup, and credit are one transaction under a `pg_advisory_xact_lock` keyed on `('news_share', user_id)`, the shape `GamePayout` and the pot use: a failed credit leaves no orphan article squatting on a globally unique URL, and two shares by one person landing together serialize, so the day cap is exact rather than read-then-write.
-- Announcement payload format is `NEWS_MARKER title || summary || url || ascii`.
-- Rendering/parsing of announcement cards lives in `ui_text.rs`.
-- Delete removes the article and deletes matching news announcements by marker/user/url, then broadcasts silent `MessageRemoved` chat events so active #lounge views drop the generated card without showing a second message-delete banner; article deletion can still succeed if chat cleanup only logs a warning.
+- Every snapshot article is a live strip candidate, stamped with its `created` (`news/live.rs`, `../live/CONTEXT.md`): a share joins the strip's News lane, which goes ahead of everything else at the next handover, and stays up exactly five minutes. `o` there opens the article modal (`ChatState::open_news_modal_for_article`); `r` opens the #lounge composer replying to it (`ChatState::begin_reply_to_article`, `ReplyTo::Article`), and the sent message carries `> @sharer: 📰 Title` with no `reply_to_message_id`, since there is no message to point at.
+- A share has no chat message. Old #lounge rows whose body starts with `---NEWS---` (the cards shares used to post) are still in `chat_messages`; nothing writes, parses, or deletes them, so they render as plain text.
+- Delete removes the article (its author, or an admin with an audit row); there is no chat-side cleanup.
 - URL processing has a 5-minute timeout. Image ASCII fetch has byte, pixel, and time limits.
 - News snapshot is global: the newest `NEWS_FEED_LIMIT` (20) articles, one `watch` per replica. It is refreshed only by `ArticleService::start_notify_worker` (subscribed in `main.rs`), fed `articles_changed` (migration 198, a statement trigger on any `articles` write, empty payload) by the process listener (`pg_listener.rs`); it re-reads on the resync after LISTEN is live and on every notify, a burst collapsing into one read. Share and delete never refresh it directly; the notify brings the change back to the writing replica like any other.
 - The News badge is counted in the session, not in SQL: `news::state::unread_in_snapshot` counts snapshot articles newer than the reader's `article_feed_reads` cursor (no row = all unread, own shares included), and `news_unread_label` renders a full snapshot as `20+`. The cursor arrives as `ArticleEvent::ReadCursorLoaded` (at session start and after `mark_read`); until then `ReadCursor::Loading` keeps the badge empty. The "N new articles in news" banner fires when a refreshed snapshot holds an unread article by someone else that the previous snapshot did not (`has_fresh_unread_from_others`); a session's first snapshot never announces. No per-user event is ever published for other users, so a write costs one list query per replica whatever the users table holds.
@@ -944,7 +946,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 ### Room Header
 
-`ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Each content row pairs live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width rule when voice and a topic are both present, the topic row with a `/rules` hint when the room has rules, and a closing rule that separates the block from the conversation. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
+`ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Each content row pairs live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width rule when voice and a topic are both present, the topic row with a `/rules` hint when the room has rules, and a closing rule that separates the block from the conversation (`RoomHeader.closing_rule`). While the live strip is up, the #lounge card drops the topic row and the closing rule and keeps only the stream and voice rows: the strip stands in for the topic, and the strip ends in its own rule. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
 - The stream row (`stream_header_line`) fits everything around its watch link, not the other way round: `row_with_hint` drops a hint it cannot fit rather than wrapping it, and here the hint *is* the URL. So the hint is measured first, the title clips to whatever is left, and the ` · N watching` count drops when even that is not enough. A `watch: https://…/live/<id>` plus its load-bearing trailing cell runs 51 columns, which is why stream capability ids moved from 32-char hex to 22-char base64url (`stream/CONTEXT.md` §2): at hex width the link almost never rendered, and a title budget guessed ahead of the hint (a hardcoded `width - 30`) meant the link was what got dropped rather than the title. The watcher count survives down to 73 columns.
 - `/` opens an inline substring filter over room slugs (footer shows the live query); typing edits it, `selected`/`visible_items` track the filtered subset, and `Esc` clears+closes it. While `discover.is_filtering()`, `app::input::handle_byte_event` and `chat::input::handle_byte` route every byte (digits, `space`, `h`/`l`) into the filter so it captures an unrestricted query; arrows still navigate. `start_slash_command_composer` excludes Discover so `/` never starts a slash command there.
 
@@ -981,7 +983,6 @@ Message rendering:
 - Ratatui wide/VS16 investigation detail: Ratatui owns the buffer diff model: it renders widgets into a buffer, diffs current vs previous, then writes only changed cells to the backend. Official docs describe that flow at `https://ratatui.rs/concepts/rendering/under-the-hood/`. In this app's failure mode, `ratatui-core` emits extra trailing-cell updates for wide VS16 emoji, while `ratatui-crossterm` prints `cell.symbol()` but tracks the last position as if every printed symbol advances exactly 1 cell. A glyph like `🛡️` is one visible grapheme but 2 terminal cells wide, so the backend's "next update is adjacent, no `MoveTo` needed" optimization can become wrong after wide glyphs. This should be treated first as a Ratatui backend/diff issue, not a `crossterm` crate issue: crossterm is printing what Ratatui asks it to print, while Ratatui's backend decides when cursor moves are needed.
 - Proposed upstream path: build a tiny repro outside late.sh that renders rows with `🛡️ 🔨️ 🌼`, then shifts/swaps rows like chat scrolling or room switching; add a Ratatui regression test around wide VS16 glyph diff/backend output; then patch either `ratatui-crossterm` cursor accounting or `ratatui-core`'s VS16 trailing-cell strategy. The naive backend fix is to track printed width instead of cell count, but test it carefully because Ratatui's explicit trailing-cell update may also need adjustment. A failing test/repro first will make the PR easier to get accepted.
 - The small Markdown subset supports headings, bold, italic, inline code, blockquotes, and simple `- ` list items.
-- `---NEWS---` cards use special boxed rendering.
 
 Cache:
 - `ChatRowsCache` stores wrapped rows plus selected/highlighted row ranges.
@@ -1096,7 +1097,7 @@ When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus 
 4. `#announcements` is admin-only in the send path.
 5. Message create/edit broadcasts full `ChatMessage` plus optional `target_user_ids`.
 6. Sender receives success/failure ack keyed by `request_id`.
-7. Delete hard-deletes by author or admin and broadcasts `MessageDeleted`; linked data cleanup such as News announcement removal broadcasts silent `MessageRemoved`.
+7. Delete hard-deletes by author or admin and broadcasts `MessageDeleted`.
 
 `target_user_ids = None` means public event. `Some(ids)` means scoped event. Consumers rely on this for privacy and notifications.
 
@@ -1109,7 +1110,7 @@ A patron deep enough into the tavern's drinks types like it. `ChatService::slurr
 - **Runs last**, so report markers, `contains_link` cooldown, and slow mode all judged the sober text. `create_mentions_task` gets the slurred body so the notification preview matches the room.
 - **Readability rests on one rule:** a word's first and last character never move. Only interior letters are reordered (never added or dropped), which is the typoglycemia effect and is why level 4 stays legible at all. Two dials climb per level: what share of words get scrambled (6/32/60/85%) and how far each goes (one swap, one swap, one-or-two swaps, full interior shuffle). Tipsy and buzzed deliberately share a depth: the same fumble, just far more often. The change in *kind* lands at sloshed. Measured over ordinary prose that is roughly 3/21/34/54% of *all* words visibly changed, since short words are ineligible; `each_drink_reads_harder_than_the_last` pins those bands.
 - **The hiccup belongs to the top of the ladder.** A single `*hic*` is dropped into an existing gap in 33% of a wasted patron's messages and 10% of a sloshed one's; tipsy and buzzed never hiccup, so the stammer marks the top of the ladder rather than drinking as such. One roll per message at every level: two hiccups in one line is the joke repeating itself. `only_the_top_of_the_ladder_hiccups` pins the bands.
-- **Protected tokens are never touched:** `@mentions` (they drive notifications and the mention wash), `#slugs`, URLs, backtick code spans, `---NEWS---`-family markers, the leading `> ` reply quote line (someone else's words), and anything non-ASCII (so CJK and emoji pass through whole). The `*hic*` only widens an existing gap and respects the same exclusions.
+- **Protected tokens are never touched:** `@mentions` (they drive notifications and the mention wash), `#slugs`, URLs, backtick code spans, `---BUG---`-family markers, the leading `> ` reply quote line (someone else's words), and anything non-ASCII (so CJK and emoji pass through whole). The `*hic*` only widens an existing gap and respects the same exclusions.
 - `slur(body, level, seed)` is pure with a caller-supplied seed; `svc.rs::slur_seed` supplies a fresh one per message. Tests live in `slur_test.rs`.
 
 ### Translation
@@ -1260,7 +1261,6 @@ Test gaps:
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
 - Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
-- News payload fields must sanitize the separator and newlines.
-- Showcase and Work posts do not create chat messages; News posts do.
+- Showcase, Work, and News posts do not create chat messages. A News share goes up on the #lounge live strip instead (§11 News).
 - Game rooms must remain opt-in and `auto_join=false`.
 - Private `kind='game'` rooms (daily match chat) are membership-fixed at creation; no join path may admit a third user, and they stay hidden from the rail/Mentions/IRC like all game rooms. The daily sweeper hard-deletes them 30 days after the match ends.

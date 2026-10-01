@@ -372,6 +372,44 @@ is no real pressure yet. It restarted twice in the window. Worth a look before
 streams get an audience, since the 1 CPU limit was sized on the assumption that
 a packet forwarder never approaches it.
 
+### 9. Every ingress-nginx reload drops every SSH session 240 s later
+
+Accepted for now, not fixed. Public port 22 is a TCP stream on the RKE2
+ingress-nginx controller (`infra/ssh-tcp.tf`), so every SSH session and every
+paired websocket is held by an nginx worker. Any ingress change makes nginx
+reload: new workers take new connections, and the old ones keep the existing
+ones until `worker_shutdown_timeout` (chart default `240s`), when they are
+killed along with everything they hold. `service-ssh` itself stays up (no
+restart, no crash). Every client disconnects in the same ~50 ms, and most
+reconnect within 2 s, which then looks like a small connect storm (Pain Point 3).
+
+What triggers a reload:
+
+- **cert-manager HTTP-01 renewals.** Each one adds and then removes an ACME
+  solver ingress, so there are two reloads and one mass drop. Five certificates
+  renew this way (`service-web-tls`, `irc-tls`, `icecast-tls`, `livekit-tls`,
+  `livekit-whip-tls`), each about every 60 days, so roughly two or three drops a
+  month. `kubectl get certificates -A` shows the next `renewalTime`s.
+- **Any `terraform apply` that touches an Ingress or the controller's
+  HelmChartConfig.** The HelmChartConfig change also rolls the controller pod,
+  which is worse than a reload.
+
+How to recognise it: `service-ssh` logs a burst of `websocket dirty close or
+error ... ResetWithoutClosingHandshake` plus `unregistered cli session token`
+lines at one instant, with 0 restarts, about 240 s after a `RELOAD` event on
+`rke2-ingress-nginx-controller` in `kube-system`.
+
+Fixes, if the drops start to matter:
+
+1. **Raise `worker-shutdown-timeout`** (for example `24h`) under
+   `controller.config` in the same HelmChartConfig. It is one line, but old
+   workers and their memory stay around for up to a day after each reload, and
+   the next controller rollout still drops everyone.
+2. **Take port 22 off ingress-nginx.** Put a dedicated hostPort or LoadBalancer
+   on `service-ssh` that still speaks PROXY protocol, so ingress reloads never
+   affect SSH. This is the real fix, and it fits naturally with the sharding
+   work in Pain Point 2.
+
 ## Render-Cost Program (shipped 2026-07-22/23)
 
 Consolidated from RENDER_COST.md (deleted). The canonical description of the gate contract and the adaptive tick lives in CONTEXT.md §2.6; this section keeps the scale-relevant summary, the rules that must not be violated, and the open follow-ups.

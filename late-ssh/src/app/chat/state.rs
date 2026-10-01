@@ -11,7 +11,6 @@ use late_core::models::cyberspace_account::CmailThread;
 use late_core::{
     MutexRecover,
     models::{
-        article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
         chat_message_gild::{ChatMessageGild, ChatMessageGildSummary, GildTier},
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
@@ -62,7 +61,7 @@ use super::{
         ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
         ProfileSection, ReportKind, RoomMemberListItem,
     },
-    ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
+    ui_text::{NewsPayload, parse_report_payload},
     work,
 };
 
@@ -169,9 +168,19 @@ pub(crate) struct MentionAutocomplete {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReplyTarget {
-    pub message_id: Uuid,
+    pub to: ReplyTo,
     pub author: String,
     pub preview: String,
+}
+
+/// What a reply answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplyTo {
+    /// A chat message, stored as the reply's `reply_to_message_id`.
+    Message(Uuid),
+    /// A News article off the #lounge live strip. There is no message to
+    /// point at, so the reply carries only the quoted title.
+    Article,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,7 +299,7 @@ pub enum RoomInfoAuthority {
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
-    pub article_id: Option<Uuid>,
+    pub article_id: Uuid,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1541,6 +1550,16 @@ impl ChatState {
             .map(|(room, _)| room.id);
     }
 
+    /// Unread messages across every DM room, for the status bar's `mentions`
+    /// segment when the user has it counting DMs too.
+    pub fn unread_dm_count(&self) -> i64 {
+        self.rooms
+            .iter()
+            .filter(|(room, _)| room.kind == "dm")
+            .filter_map(|(room, _)| self.unread_counts.get(&room.id))
+            .sum()
+    }
+
     pub fn mark_room_read(&mut self, room_id: Uuid) {
         self.note_sticky_unread_dm(room_id);
         self.pending_read_rooms.insert(room_id);
@@ -2049,13 +2068,7 @@ impl ChatState {
             return false;
         };
         self.select_news();
-        if let Some(article_id) = modal.article_id {
-            self.news.select_article_by_id(article_id);
-            return true;
-        }
-        if let Some(article_id) = self.news.article_id_by_url(&modal.payload.url) {
-            self.news.select_article_by_id(article_id);
-        }
+        self.news.select_article_by_id(modal.article_id);
         true
     }
 
@@ -2449,7 +2462,7 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(message_user_id));
         self.reply_target = Some(ReplyTarget {
-            message_id: message.id,
+            to: ReplyTo::Message(message.id),
             author,
             preview: reply_preview_text(&message_body),
         });
@@ -2458,6 +2471,40 @@ impl ChatState {
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
+    }
+
+    /// Start a reply in #lounge to a News article, the one the live strip
+    /// features: the composer opens with `> @sharer: 📰 Title` to go on top.
+    /// False when the article left the snapshot or #lounge is not known yet.
+    pub(crate) fn begin_reply_to_article(&mut self, article_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some(lounge_id) = self.lounge_room_id() else {
+            return false;
+        };
+        let Some(item) = self
+            .news
+            .all_articles()
+            .iter()
+            .find(|item| item.article.id == article_id)
+        else {
+            return false;
+        };
+        let author = match item.author_username.trim() {
+            "" => short_user_id(item.article.user_id),
+            name => name.to_string(),
+        };
+        // The 📰 says what is quoted: with no card in the chat, a bare title
+        // would read as something the sharer said.
+        self.reply_target = Some(ReplyTarget {
+            to: ReplyTo::Article,
+            author,
+            preview: truncate_reply_preview(&format!("📰 {}", item.article.title.trim())),
+        });
+        self.composing = true;
+        self.composer_room_id = Some(lounge_id);
+        self.edited_message_id = None;
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
+        true
     }
 
     /// Try to jump from a selected reply message to the original message in
@@ -2570,12 +2617,6 @@ impl ChatState {
 
     pub fn selected_message_id_in_room(&self, room_id: Uuid) -> Option<Uuid> {
         self.selected_message_in_room(room_id).map(|m| m.id)
-    }
-
-    pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
-        self.selected_message_in_room(room_id)
-            .and_then(|m| parse_news_payload(&m.body))
-            .is_some()
     }
 
     pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
@@ -2841,33 +2882,27 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
+    /// Open the article modal on a News article by id, the one the live
+    /// strip features. False when it left the snapshot (deleted).
+    pub(crate) fn open_news_modal_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
-        let Some((chat_payload, user_id, created)) =
-            self.selected_message_in_room(room_id).and_then(|m| {
-                parse_news_payload(&m.body).map(|payload| (payload, m.user_id, m.created))
-            })
+        let Some(item) = self
+            .news
+            .all_articles()
+            .iter()
+            .find(|item| item.article.id == article_id)
         else {
             return false;
         };
-
-        let (payload, author, created, article_id) = if let Some((payload, author, created, id)) =
-            news_modal_source_from_articles(self.news.all_articles(), &chat_payload.url)
-        {
-            (payload, author, created, Some(id))
-        } else {
-            let author =
-                modal_author_label(self.usernames.get(&user_id).map(String::as_str), user_id);
-            (chat_payload, author, created, None)
-        };
-        let relative = crate::app::common::primitives::format_relative_time(created);
-        let meta = format!(
-            "{author} - {relative} - {}",
-            created.format("%a %Y-%m-%d %H:%M UTC")
-        );
+        let author = modal_author_label(Some(&item.author_username), item.article.user_id);
         self.news_modal = Some(NewsModalState {
-            payload,
-            meta,
+            payload: NewsPayload {
+                title: item.article.title.clone(),
+                summary: item.article.summary.clone(),
+                url: item.article.url.clone(),
+                ascii_art: item.article.ascii_art.clone(),
+            },
+            meta: news_modal_meta(&author, item.article.created),
             article_id,
         });
         true
@@ -4594,7 +4629,10 @@ impl ChatState {
             && !body.is_empty()
         {
             let request_id = Uuid::now_v7();
-            let reply_to_message_id = self.reply_target.as_ref().map(|reply| reply.message_id);
+            let reply_to_message_id = match self.reply_target.as_ref().map(|reply| reply.to) {
+                Some(ReplyTo::Message(message_id)) => Some(message_id),
+                Some(ReplyTo::Article) | None => None,
+            };
             // Peek the ghost-bot ladders on the typed body, before the reply
             // quote is prepended, matching what the responders react to
             // (quoted lines never count as mentions on their side either).
@@ -6256,12 +6294,6 @@ impl ChatState {
                     if self.user_id == user_id {
                         banner = Some(Banner::success("Message deleted"));
                     }
-                }
-                ChatEvent::MessageRemoved {
-                    room_id,
-                    message_id,
-                } => {
-                    self.remove_message(room_id, message_id);
                 }
                 ChatEvent::MessageEdited {
                     message,
@@ -8240,29 +8272,13 @@ fn adjacent_composer_room(
     Some(rooms[wrapped_index(current, delta, rooms.len())])
 }
 
-fn news_modal_source_from_articles(
-    articles: &[ArticleFeedItem],
-    url: &str,
-) -> Option<(NewsPayload, String, chrono::DateTime<chrono::Utc>, Uuid)> {
-    let url = url.trim();
-    if url.is_empty() {
-        return None;
-    }
-
-    let item = articles
-        .iter()
-        .find(|item| item.article.url.trim() == url)?;
-    Some((
-        NewsPayload {
-            title: item.article.title.clone(),
-            summary: item.article.summary.clone(),
-            url: item.article.url.clone(),
-            ascii_art: item.article.ascii_art.clone(),
-        },
-        modal_author_label(Some(&item.author_username), item.article.user_id),
-        item.article.created,
-        item.article.id,
-    ))
+/// `mat - 2m ago - Tue 2026-09-29 21:00 UTC`, under the article modal's title.
+fn news_modal_meta(author: &str, created: chrono::DateTime<chrono::Utc>) -> String {
+    let relative = crate::app::common::primitives::format_relative_time(created);
+    format!(
+        "{author} - {relative} - {}",
+        created.format("%a %Y-%m-%d %H:%M UTC")
+    )
 }
 
 fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
@@ -8644,10 +8660,6 @@ fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Opt
 }
 
 fn reply_preview_text(body: &str) -> String {
-    if let Some(title) = news_reply_preview_text(body) {
-        return title;
-    }
-
     if let Some((kind, text)) = parse_report_payload(body) {
         let first_line = text.lines().find_map(|line| {
             let trimmed = line.trim();
@@ -8726,23 +8738,6 @@ fn global_char_to_line_col(text: &str, target: usize) -> (usize, usize) {
         }
     }
     (line, col)
-}
-
-fn news_reply_preview_text(body: &str) -> Option<String> {
-    let trimmed = body.trim_start();
-    if !trimmed.starts_with(NEWS_MARKER) {
-        return None;
-    }
-
-    let raw = trimmed[NEWS_MARKER.len()..].trim_start();
-    let title = raw
-        .split(" || ")
-        .next()
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("news update");
-
-    Some(truncate_reply_preview(title))
 }
 
 fn truncate_reply_preview(text: &str) -> String {

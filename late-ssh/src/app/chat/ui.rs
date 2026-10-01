@@ -122,7 +122,6 @@ pub struct DashboardChatView<'a> {
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -154,6 +153,12 @@ pub struct DashboardChatView<'a> {
     pub translation_hidden: &'a HashSet<Uuid>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
+    /// The #lounge live strip (`app/live/`): one thing that just happened
+    /// in the house, drawn above the poll strip. `None` when nothing is
+    /// live; the card then looks as it always has.
+    pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
+    /// Receives the strip's rect and source for the click that opens it.
+    pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -188,7 +193,6 @@ pub(crate) struct ComposerBlockView<'a> {
     pub composing: bool,
     pub selected_message: bool,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
@@ -471,11 +475,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     } else if view.selected_image_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
-            dim,
-        ))]
-    } else if view.selected_news_message {
-        vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link",
             dim,
         ))]
     } else if view.selected_message {
@@ -1144,7 +1143,6 @@ pub fn draw_dashboard_chat_card(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1187,10 +1185,25 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             voice,
-            topic: view.room.and_then(room_topic),
-            has_rules: view.room.is_some_and(room_has_rules),
+            // The live strip stands in for the topic while it is up: the
+            // board is the room's news, and the topic is a key away in
+            // `/rules`. Voice and stream rows carry live state, so they stay.
+            topic: view
+                .room
+                .and_then(room_topic)
+                .filter(|_| view.live_strip.is_none()),
+            has_rules: view.room.is_some_and(room_has_rules) && view.live_strip.is_none(),
+            closing_rule: view.live_strip.is_none(),
         },
     );
+    // The live strip takes its rows off the top, so the newest messages,
+    // anchored at the bottom, stay where they are when it comes and goes.
+    if let Some(strip) = &view.live_strip
+        && let Some((size, strip_area, rest)) = crate::app::live::ui::fit_live_strip(messages_area)
+    {
+        crate::app::live::ui::draw_live_strip(frame, strip_area, size, strip, view.live_strip_hit);
+        messages_area = rest;
+    }
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
@@ -1282,7 +1295,6 @@ pub fn draw_dashboard_chat_card(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
-            selected_news_message: view.selected_news_message,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -1657,6 +1669,9 @@ fn ensure_chat_rows_cache(
     let mut prev_was_system = false;
     let mut unread_divider_inserted = false;
     let mut left_app_divider_inserted = false;
+    // A coat the last entry had no row for: a runner's one-liner wears the
+    // head only, and the coat waits for the next entry to seat it.
+    let mut pending_coat: Option<Span<'static>> = None;
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
@@ -1897,6 +1912,11 @@ fn ensure_chat_rows_cache(
         }
         left_app_divider_inserted |= left_app_here.is_some();
         unread_divider_inserted |= afk_here;
+        // The waiting coat seats only on a continuation that sits right
+        // under the one-liner: a divider between them splits the block.
+        let carried_coat = pending_coat
+            .take()
+            .filter(|_| is_continuation && left_app_here.is_none() && !afk_here);
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
@@ -1937,17 +1957,23 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
-        if let Some([hood, eyes, coat]) = portrait {
-            // The face starts level with the header and wears as much as
-            // the entry has rows for: a one-liner (the header and one body
-            // row) shows the head only, anything taller the coat too, so
-            // no message grows a row for its face. The blank separator
-            // above the block stays blank on purpose: with the hood seated
-            // there, faces down the wire read as one stuck column.
-            match wrapped.lines.len() {
-                0..=2 => attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width),
+        // The face starts level with the header and wears as much as the
+        // block has rows for: a one-liner (the header and one body row)
+        // shows the head only and hands the coat to the continuation right
+        // under it, anything taller wears the coat itself, so no message
+        // grows a row for its face. The blank separator above the block
+        // stays blank on purpose: with the hood seated there, faces down
+        // the wire read as one stuck column.
+        match (portrait, carried_coat) {
+            (Some([hood, eyes, coat]), _) => match wrapped.lines.len() {
+                0..=2 => {
+                    attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width);
+                    pending_coat = Some(coat);
+                }
                 _ => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
-            }
+            },
+            (None, Some(coat)) => attach_portrait(&mut wrapped.lines, vec![coat], text_width),
+            (None, None) => {}
         }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -1976,8 +2002,8 @@ fn ensure_chat_rows_cache(
         }
 
         // Skip the author header (when there is one) so selection paints
-        // body rows only. Headerless entries — system lines, news cards,
-        // /me actions, continuations — select from their first row;
+        // body rows only. Headerless entries (system lines, report cards,
+        // /me actions, continuations) select from their first row;
         // deriving this from `is_continuation` alone left the first system
         // line after a normal message with an empty selection range.
         let body_start = if wrapped.header_line_index == Some(0) {
@@ -3044,7 +3070,6 @@ pub struct ChatRenderInput<'a> {
     pub rail_scroll_nudge: isize,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -3324,7 +3349,6 @@ pub fn draw_embedded_room_chat(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: false,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -3438,7 +3462,6 @@ pub fn draw_embedded_room_chat(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
-            selected_news_message: false,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -3543,7 +3566,6 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         composing: view.composing,
                         selected_message: view.selected_message_id.is_some(),
                         selected_image_message: view.selected_image_message,
-                        selected_news_message: view.selected_news_message,
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
@@ -5015,12 +5037,15 @@ struct RoomHeader<'a> {
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     topic: Option<&'a str>,
     has_rules: bool,
+    /// Whether the block ends in a rule. False when the daily live strip
+    /// follows: the strip brings its own rule under the board.
+    closing_rule: bool,
 }
 
 impl RoomHeader<'_> {
     /// Rows this header wants: one per present row (stream, voice, topic),
-    /// a divider between each adjacent pair, and a closing rule that
-    /// separates the whole block from the messages.
+    /// a divider between each adjacent pair, and the closing rule that
+    /// separates the whole block from the messages when it has one.
     fn height(&self) -> u16 {
         let rows = u16::from(self.stream.is_some())
             + u16::from(self.voice.is_some())
@@ -5028,7 +5053,7 @@ impl RoomHeader<'_> {
         if rows == 0 {
             return 0;
         }
-        rows + (rows - 1) + 1
+        rows + (rows - 1) + u16::from(self.closing_rule)
     }
 }
 
@@ -5168,7 +5193,9 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
         )));
     }
     // Closes the block off from the conversation below it.
-    lines.push(rule());
+    if header.closing_rule {
+        lines.push(rule());
+    }
 
     frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
     Rect {
@@ -5296,6 +5323,7 @@ fn draw_selected_content(
                     voice,
                     topic: room_topic(room),
                     has_rules: room_has_rules(room),
+                    closing_rule: true,
                 },
             )
         } else {
@@ -5600,7 +5628,6 @@ fn draw_selected_content(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,

@@ -3,11 +3,60 @@
 //! the runner does not walk under the panel; a lone Esc never arrives
 //! through `handle_event` (the root's `dispatch_escape` calls
 //! `handle_escape`: a run while the fight is on, a close once it is over).
+//!
+//! Before it, the picker (`handle_picker`): `f` steps in against the glyph
+//! of your level, `g` against the one below (its neighbour on the keys),
+//! up and down move the cursor and Enter takes it. Esc closes it from the
+//! root, the same way.
 
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
-use super::state::Command;
+use super::state::{Command, Pick};
+
+/// Keys while the picker is open. The row decides what a step in meets;
+/// the picker only keeps `g` from asking for a glyph under the flicker.
+pub fn handle_picker(app: &mut App, event: &ParsedInput) -> bool {
+    let Some(picker) = &app.fight.picker else {
+        return false;
+    };
+    let cursor = picker.cursor;
+    let below = app
+        .fight
+        .sheet
+        .as_ref()
+        .is_some_and(|sheet| sheet.level > 1);
+    match event {
+        ParsedInput::Byte(b'f') | ParsedInput::Char('f') => {
+            app.fight.step_in(Pick::Fair);
+            true
+        }
+        ParsedInput::Byte(b'g') | ParsedInput::Char('g') => {
+            if below {
+                app.fight.step_in(Pick::Lower);
+            }
+            true
+        }
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
+            app.fight.step_in(cursor);
+            true
+        }
+        ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {
+            app.fight.pick_up();
+            true
+        }
+        ParsedInput::Arrow(b'B') | ParsedInput::Byte(b'j') | ParsedInput::Char('j') => {
+            app.fight.pick_down();
+            true
+        }
+        // Digits, Tab, `q` stay global, as in the scene.
+        ParsedInput::Byte(b'0'..=b'9')
+        | ParsedInput::Byte(b'\t')
+        | ParsedInput::Byte(b'q')
+        | ParsedInput::Byte(b'?') => false,
+        _ => true,
+    }
+}
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     let Some(scene) = &app.fight.scene else {

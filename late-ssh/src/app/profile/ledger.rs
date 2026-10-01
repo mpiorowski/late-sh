@@ -175,6 +175,8 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::DailyCheckersWin
         | ChipMove::DailyBackgammonWin
         | ChipMove::DailyBriscolaWin
+        | ChipMove::DailyCribbageWin
+        | ChipMove::DailyGinWin
         | ChipMove::DailyEightBallWin
         | ChipMove::DailyNineBallWin
         | ChipMove::DailySnookerWin

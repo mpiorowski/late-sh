@@ -120,6 +120,11 @@ impl App {
         }
 
         self.sync_visible_chat_room();
+        // Presence (`app/presence`): everyone's records into the tavern,
+        // the stools and the street, and this session's record out: a send
+        // only when it changed, so a step or leaving a page reaches every
+        // replica.
+        changed |= self.sync_presence();
         self.tick_clubhouse();
         changed |= self.tick_nightcap();
         changed |= crate::app::scratchpad::pair::poll(self);
@@ -165,7 +170,7 @@ impl App {
         if self.screen == Screen::City && anim_half {
             // Rain, neon, steam and the screen's static ride the same
             // ~7.5fps ambience edge as the clubhouse; the runner's steps
-            // are input-driven.
+            // are input-driven, the other runners' arrive with presence.
             self.city.tick(self.marquee_tick as u64);
             changed = true;
         }
@@ -462,8 +467,17 @@ impl App {
                 _ => (),
             }
         }
+        let reading = self.lounge_card_shown() && self.chat.selected_message_id.is_some();
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
+        let picture_settings = self.inline_image_render_settings();
+        changed |= self.live.tick(
+            &self.daily,
+            &self.audio,
+            self.chat.news.all_articles(),
+            reading,
+            picture_settings,
+        );
         if let Some(b) = daily_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -743,7 +757,7 @@ impl App {
         // into paintable styles (which is also what steps shimmer at 1 Hz)
         // and expired at read.
         if one_hz {
-            let drunk_levels = self.clubhouse.drunk_levels();
+            let drunk_levels = self.clubhouse.drunk_levels(chrono::Utc::now());
             if self.drunk_levels != drunk_levels {
                 self.drunk_levels = drunk_levels;
                 self.chat_ctx_epoch += 1;
@@ -781,6 +795,9 @@ impl App {
                 // other replica. This edge is the only place in the process
                 // that can notice: the gate on `0` guards the descent, not
                 // the standing there.
+                if !self.is_runner() {
+                    self.street.leave();
+                }
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();
@@ -1177,6 +1194,9 @@ impl App {
         // strip, which the frame diff then drops.
         changed |=
             anim_half && (sidebar_visible || self.show_bonsai_modal || self.screen == Screen::Zen);
+        // The live strip draws a shooter's cue: the aim is stored, the
+        // half-tick edge paints it.
+        changed |= anim_half && self.live_strip_shown() && self.live.aiming();
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1255,7 +1275,7 @@ impl App {
         if self.show_profile_modal && anim_quarter {
             changed |= self.profile_modal_state.step_reef();
         }
-        // The profile hero's bonsai sways like the sidebar's.
+        // The profile's bonsai sways like the sidebar's.
         changed |=
             self.show_profile_modal && anim_half && self.profile_modal_state.bonsai().is_some();
 
@@ -1300,13 +1320,14 @@ impl App {
         // Slower tiers match the frame edges their surfaces paint on. The
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
         // so the pet box rides the half tier it paints on. The
-        // bonsai care modal and the profile hero sway on the same edge as
+        // bonsai care modal and the profile's bonsai sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway. A
         // Zen music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || self.right_sidebar_visible()
+            || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
@@ -1339,6 +1360,25 @@ impl App {
             None => false,
             Some(client) => !client.muted,
         }
+    }
+
+    /// Whether Home is showing the #lounge card, the one surface that
+    /// carries the live strip.
+    pub(crate) fn lounge_card_shown(&self) -> bool {
+        self.screen == Screen::Dashboard
+            && crate::app::render::dashboard_home_selected(
+                self.chat.lounge_room_id(),
+                self.chat.selected_room_id,
+                self.chat.synthetic_entry_selected(),
+            )
+    }
+
+    /// Whether the live strip is on screen: the #lounge card, or a Live
+    /// tile drawn on Zen (a Live tile zoomed away from doesn't count).
+    fn live_strip_shown(&self) -> bool {
+        self.lounge_card_shown()
+            || (self.screen == Screen::Zen
+                && self.zen.draws(crate::app::zen::state::TileKind::Live))
     }
 
     /// Whether the right sidebar draws this frame (the settings draft

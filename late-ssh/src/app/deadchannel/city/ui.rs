@@ -12,6 +12,10 @@
 //! with distance). The ambience is painted on top: rain where there is
 //! light to see it by, puddles catching what shines on them, signs that
 //! short out (and their light with them), steam, the screen's static.
+//! Other runners stand on it too (`deadchannel/street`, every replica's):
+//! one whose session is looking at the street carries its own light like
+//! you do, one whose session is on another page stands where it was left,
+//! dim, lit only by what the street throws on it.
 //! Walkers pace the street under the same light, a car crosses it with
 //! its headlights ahead of it, the monorail passes overhead, the signs
 //! smear into the wet ground below them, the billboards cycle through
@@ -32,8 +36,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::app::deadchannel::fight::data::TRADE_IN_PERCENT;
-use crate::app::deadchannel::fight::session::Scene as FightScene;
+use crate::app::deadchannel::fight::data::{
+    GARNISH_PERCENT, LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, TRADE_IN_PERCENT,
+};
+use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
@@ -41,6 +47,14 @@ use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::guide::ui as guide_ui;
 use crate::app::deadchannel::runner::state::{Look, Tint};
 use crate::app::deadchannel::tailor::ui as tailor_ui;
+
+use std::collections::HashMap;
+
+use uuid::Uuid;
+
+use crate::app::deadchannel::runner::svc::RunnerEntry;
+use crate::app::deadchannel::street::state::StreetView;
+use crate::usernames::UsernameLookup;
 
 use super::data;
 use super::ledge;
@@ -85,6 +99,12 @@ const INSIDE_DARK: f32 = 0.45;
 /// always the best lit place on the street.
 const CARRY_RADIUS: u16 = 7;
 const CARRY: f32 = 0.7;
+/// The most other runners whose light a frame spreads, nearest first: a
+/// crowd costs a bounded frame.
+const CARRIERS_MAX: usize = 24;
+/// Another runner whose session is looking, and one whose is not.
+const RUNNER_HERE: Rgb = [0.90, 0.88, 0.84];
+const RUNNER_AWAY: Rgb = [0.42, 0.43, 0.48];
 /// How many rows a sign smears into the wet ground in front of it.
 const REFLECT_ROWS: u16 = 6;
 const REFLECT: f32 = 0.5;
@@ -130,12 +150,24 @@ pub(crate) struct CityView<'a> {
     pub sheet: Option<&'a Sheet>,
     /// The fight scene, when one is open over the street.
     pub scene: Option<&'a FightScene>,
-    /// The armorer's last word (`fight/session.rs`), for its panel.
+    /// The picker before a step in, when it is open over the street.
+    pub picker: Option<&'a FightPicker>,
+    /// The counter's last word (`fight/session.rs`): the armorer's, patch's,
+    /// the locker's, the machine's, or the ledge's, for whichever is open.
     pub till: Option<&'a str>,
     /// The tailor's mirror (`tailor/session.rs`), for its panel.
     pub tailor: tailor_ui::MirrorView<'a>,
     /// The guide (`guide/state.rs`): drawn over everything when open.
     pub guide: &'a GuideState,
+    /// This session's user, left out of `street`: your own runner is drawn
+    /// from `state`, where the step already landed.
+    pub own_user_id: Uuid,
+    /// Every runner on the street (`deadchannel/street`), one per user.
+    pub street: &'a StreetView,
+    /// The runner directory, for the other runners' marks.
+    pub runner_looks: &'a HashMap<Uuid, RunnerEntry>,
+    /// For the other runners' names.
+    pub usernames: &'a UsernameLookup<'a>,
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
@@ -147,12 +179,22 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     }
     let t = view.state.anim_tick;
     if view.state.at_ledge() {
-        ledge::draw(frame, area, t);
+        ledge::draw(
+            frame,
+            area,
+            t,
+            ledge::LedgeView {
+                armed: view.state.reset_armed(),
+                till: view.till,
+            },
+        );
         return;
     }
-    let scene = Scene::build(t, view.state.player_x, view.state.player_y);
+    let carriers = carriers(&view);
+    let scene = Scene::build(t, view.state.player_x, view.state.player_y, &carriers);
     let mut cells = compose_grid(&scene);
     animate(&mut cells, t, &scene);
+    draw_others(&mut cells, &scene, &view);
     draw_runner(&mut cells, &view);
 
     let vw = usize::from(area.width);
@@ -205,10 +247,27 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     draw_street_line(frame, area, &view);
     draw_popover(frame, area, &view);
     draw_panel(frame, area, &view);
-    // The sheet strip and the fight scene (`fight/ui.rs`): the runner's
-    // budget while walking, the scene over everything when one is open.
+    // The sheet strip, the picker, and the fight scene (`fight/ui.rs`): the
+    // runner's budget while walking, the picker or the scene over
+    // everything when one is open. The two are never open together.
+    if let Some(picker) = view.picker {
+        fight_ui::draw_picker(
+            frame,
+            area,
+            fight_ui::PickerView {
+                sheet: view.sheet,
+                picker,
+                look: view.look,
+                own_username: view.own_username,
+            },
+        );
+    }
     match (view.sheet, view.scene) {
-        (Some(sheet), None) => fight_ui::draw_strip(frame, area, sheet),
+        (Some(sheet), None) => {
+            if view.picker.is_none() {
+                fight_ui::draw_strip(frame, area, sheet);
+            }
+        }
         (sheet, Some(scene)) => fight_ui::draw_scene(
             frame,
             area,
@@ -376,9 +435,9 @@ struct Scene {
 }
 
 impl Scene {
-    fn build(t: u64, player_x: u16, player_y: u16) -> Scene {
+    fn build(t: u64, player_x: u16, player_y: u16, carriers: &[(u16, u16)]) -> Scene {
         Scene {
-            light: light_map(t, player_x, player_y),
+            light: light_map(t, player_x, player_y, carriers),
             vis: visibility_map(player_x, player_y),
         }
     }
@@ -401,16 +460,18 @@ fn index(x: u16, y: u16) -> usize {
 /// crosses open floor, doorways and water, lands on walls, and stops
 /// there. Takes the raw tick: the fixed lights run at the slow clock, the
 /// car at the full one.
-fn light_map(t: u64, player_x: u16, player_y: u16) -> Vec<Rgb> {
+fn light_map(t: u64, player_x: u16, player_y: u16, carriers: &[(u16, u16)]) -> Vec<Rgb> {
     let mut out = vec![[0.0f32; 3]; usize::from(map::MAP_W) * usize::from(map::MAP_H)];
-    // What the runner carries.
-    spread(
-        &mut out,
-        player_x,
-        player_y,
-        CARRY_RADIUS,
-        scale([1.0, 0.95, 0.85], CARRY),
-    );
+    // What the runner carries, and every other runner who is looking.
+    for &(x, y) in std::iter::once(&(player_x, player_y)).chain(carriers) {
+        spread(
+            &mut out,
+            x,
+            y,
+            CARRY_RADIUS,
+            scale([1.0, 0.95, 0.85], CARRY),
+        );
+    }
     // The car's headlights: a pool ahead of it, and its own glow.
     if let Some(car) = car_at(t) {
         let route = car_route();
@@ -1417,6 +1478,55 @@ fn wire_pulse(cells: &mut Cells, t: u64, scene: &Scene) {
 
 // --------------------------------------------------------------- runner
 
+/// The other runners who carry a light this frame: present, within sight,
+/// nearest first, at most `CARRIERS_MAX`.
+fn carriers(view: &CityView<'_>) -> Vec<(u16, u16)> {
+    let (px, py) = (view.state.player_x, view.state.player_y);
+    let mut near: Vec<(u16, u16)> = view
+        .street
+        .iter()
+        .filter(|(user_id, runner)| **user_id != view.own_user_id && runner.present)
+        .map(|(_, runner)| (runner.x, runner.y))
+        .filter(|&(x, _)| f32::from(x.abs_diff(px)) < SEE_END)
+        .collect();
+    near.sort_by_key(|&(x, y)| (x.abs_diff(px) + 2 * y.abs_diff(py), x, y));
+    near.truncate(CARRIERS_MAX);
+    near
+}
+
+/// Every other runner on the street, under this frame's light and faded
+/// with distance like everything else. A present one is bright and bold
+/// with its name over it; an absent one stands dim, its name barely there.
+fn draw_others(cells: &mut Cells, scene: &Scene, view: &CityView<'_>) {
+    for (user_id, runner) in view.street.iter() {
+        if *user_id == view.own_user_id {
+            continue;
+        }
+        let (x, y) = (runner.x, runner.y);
+        let mark = view
+            .runner_looks
+            .get(user_id)
+            .map(|entry| entry.look.mark)
+            .unwrap_or('@');
+        let (body, name) = match runner.present {
+            true => (RUNNER_HERE, INK_DIM),
+            false => (RUNNER_AWAY, INK_MUTED),
+        };
+        set(
+            cells,
+            x,
+            y,
+            mark,
+            styled(lit_surface(body), scene, x, y, runner.present),
+        );
+        if let Some(username) = view.usernames.get(user_id) {
+            let label = truncate_name(username);
+            let style = styled(emissive(name), scene, x, y, false);
+            put_label(cells, x, y.saturating_sub(1), &label, style);
+        }
+    }
+}
+
 fn draw_runner(cells: &mut Cells, view: &CityView<'_>) {
     let (x, y) = (view.state.player_x, view.state.player_y);
     let mark = view.look.map(|look| look.mark).unwrap_or('@');
@@ -1558,25 +1668,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
     match landmark {
         Landmark::Armorer => lines.extend(armorer_lines(view)),
         Landmark::Tailor => lines.extend(tailor_ui::mirror_lines(&view.tailor)),
-        Landmark::Lockers => {
-            lines.push(Line::from(vec![
-                Span::styled("on hand   ", dim_text),
-                Span::styled("— bits", text),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("locker    ", dim_text),
-                Span::styled("— bits", text),
-            ]));
-            lines.push(blank());
-            lines.push(Line::from(Span::styled(
-                "the locker keeps what you leave in it when your signal drops. the street takes the rest.",
-                text,
-            )));
-            lines.push(Line::from(Span::styled(
-                "[d] deposit   [w] withdraw        (the lockers are humming. not open yet)",
-                muted_text,
-            )));
-        }
+        Landmark::Lockers => lines.extend(locker_lines(view)),
         Landmark::Bands => {
             for (i, band) in data::BANDS.iter().enumerate() {
                 lines.push(Line::from(vec![
@@ -1633,13 +1725,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
                 dim_text,
             )));
         }
-        Landmark::Bits => {
-            lines.push(Line::from(Span::styled("the bits machine hums.", text)));
-            lines.push(Line::from(Span::styled(
-                "it has never once paid out. kicking it is free.",
-                dim_text,
-            )));
-        }
+        Landmark::Bits => lines.extend(machine_lines(view)),
         Landmark::Screen
         | Landmark::Noodles
         | Landmark::Umbrellas
@@ -1766,6 +1852,166 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(Span::styled(
         "a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
+/// The lockers: what is on hand and what is locked up, the two keys priced
+/// (the deposit net of the cut), the refusal ahead of a key that would
+/// meet one, and the locker's last word.
+fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = glow(Neon::Amber);
+    let key = lit(Neon::Amber);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("on hand ", dim_text),
+        Span::styled(format!("{} bits", sheet.bits), number),
+        Span::styled("      locker ", dim_text),
+        Span::styled(format!("{} bits", sheet.stash), number),
+    ]));
+    lines.push(Line::default());
+    match sheet.fight.is_some() {
+        true => lines.push(Line::from(Span::styled(
+            "not with a glyph waiting on you. the locker can wait.",
+            text,
+        ))),
+        false => {
+            let fee = sheet.deposit_fee();
+            match (sheet.bits, sheet.bits - fee) {
+                (0, _) => lines.push(Line::from(Span::styled(
+                    "you have nothing on you to lock up.",
+                    muted_text,
+                ))),
+                (_, 0) => lines.push(Line::from(Span::styled(
+                    "the locker's cut would take all of it. bring more.",
+                    muted_text,
+                ))),
+                (_, stored) => lines.push(Line::from(vec![
+                    Span::styled("[d] ", key),
+                    Span::styled("lock up ", text),
+                    Span::styled(format!("{stored} bits"), number),
+                    Span::styled(format!(", the locker keeps {fee}"), text),
+                ])),
+            }
+            match sheet.stash {
+                0 => lines.push(Line::from(Span::styled(
+                    "your locker is empty.",
+                    muted_text,
+                ))),
+                stash => lines.push(Line::from(vec![
+                    Span::styled("[w] ", key),
+                    Span::styled("take out ", text),
+                    Span::styled(format!("{stash} bits"), number),
+                ])),
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(
+            "a dropped signal never reaches the locker. it keeps {LOCKER_FEE_PERCENT}% of every deposit; out is free."
+        ),
+        dim_text,
+    )));
+    lines.push(Line::from(Span::styled(
+        "an Old Signal mark empties it. so does the ledge.",
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
+/// The bits machine: what is owed against the cap, the two keys priced,
+/// its terms, and its last word.
+fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = glow(Neon::Amber);
+    let owed = dim(Neon::Red);
+    let key = lit(Neon::Amber);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("on hand ", dim_text),
+        Span::styled(format!("{} bits", sheet.bits), number),
+        Span::styled("      owed ", dim_text),
+        Span::styled(
+            format!("{} bits", sheet.debt),
+            match sheet.debt {
+                0 => number,
+                _ => owed,
+            },
+        ),
+        Span::styled("      it lends up to ", dim_text),
+        Span::styled(format!("{} bits", sheet.loan_cap()), number),
+    ]));
+    lines.push(Line::default());
+    match sheet.fight.is_some() {
+        true => lines.push(Line::from(Span::styled(
+            "not with a glyph waiting on you. the machine can wait.",
+            text,
+        ))),
+        false => {
+            match sheet.loan_room() {
+                0 => lines.push(Line::from(Span::styled(
+                    "it flashes your debt and pays nothing more.",
+                    muted_text,
+                ))),
+                room => lines.push(Line::from(vec![
+                    Span::styled("[b] ", key),
+                    Span::styled("borrow ", text),
+                    Span::styled(format!("{room} bits"), number),
+                    Span::styled(format!(", {} more on the debt", sheet.loan_fee()), text),
+                ])),
+            }
+            match (sheet.debt, sheet.bits) {
+                (0, _) => lines.push(Line::from(Span::styled("you owe it nothing.", muted_text))),
+                (_, 0) => lines.push(Line::from(Span::styled(
+                    "you have nothing on you to feed it.",
+                    muted_text,
+                ))),
+                (debt, bits) => lines.push(Line::from(vec![
+                    Span::styled("[r] ", key),
+                    Span::styled("feed it ", text),
+                    Span::styled(format!("{} bits", debt.min(bits)), number),
+                ])),
+            }
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{LOAN_FEE_PERCENT}% on top of every loan, once. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
+        ),
+        dim_text,
+    )));
+    lines.push(Line::from(Span::styled(
+        "a drop does not clear it. neither does a mark, or the ledge.",
         dim_text,
     )));
     if let Some(till) = view.till {

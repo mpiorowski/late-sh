@@ -5,7 +5,7 @@
 //! the Daily Games modal.
 
 use chrono::Utc;
-use late_core::models::daily_match::DailyMatch;
+use late_core::models::daily_match::DailyResult;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -26,7 +26,7 @@ use crate::app::{
         games::DailyGame,
         state::{
             ChessDetail, DailyBoardState, DailyGameDetail, DailyMatchDetail, DailyState,
-            format_deadline,
+            MatchStanding, format_deadline,
         },
     },
 };
@@ -143,6 +143,7 @@ pub(crate) fn draw(
     };
     board.board_geometry.set(None);
     board.target_geometry.set(None);
+    board.card_slots.set(None);
 
     if let Some(error) = &board.load_error {
         draw_center_message(frame, area, &format!("Failed to load match: {error}"));
@@ -254,6 +255,14 @@ fn draw_match(
         }
         DailyGameDetail::Briscola(briscola) => {
             super::briscola_ui::draw(frame, area, daily, board, detail, briscola);
+            return;
+        }
+        DailyGameDetail::Cribbage(cribbage) => {
+            super::cribbage_ui::draw(frame, area, daily, board, detail, cribbage);
+            return;
+        }
+        DailyGameDetail::GinRummy(gin) => {
+            super::gin_ui::draw(frame, area, daily, board, detail, gin);
             return;
         }
         DailyGameDetail::EightBall(pool)
@@ -486,47 +495,46 @@ pub(super) fn result_banner(
     } else {
         theme::TEXT_MUTED()
     };
-    match detail.row.result.as_str() {
-        DailyMatch::RESULT_CHECKMATE => {
-            ("Checkmate", winner_text(detail.row.winner_user_id), color)
+    let result = match detail.standing {
+        MatchStanding::Finished(result) => result,
+        MatchStanding::Cancelled => {
+            return (
+                "Cancelled",
+                "challenge withdrawn".to_string(),
+                theme::TEXT_MUTED(),
+            );
         }
-        DailyMatch::RESULT_DRAW => ("Draw", "game drawn".to_string(), theme::TEXT_MUTED()),
-        DailyMatch::RESULT_RESIGN => ("Resignation", winner_text(detail.row.winner_user_id), color),
-        DailyMatch::RESULT_FLEET_SUNK => {
-            ("Fleet sunk", winner_text(detail.row.winner_user_id), color)
-        }
-        DailyMatch::RESULT_FOUR_IN_A_ROW => (
+        MatchStanding::Active => unreachable!("result banner drawn for an active match"),
+    };
+    match result {
+        DailyResult::Checkmate => ("Checkmate", winner_text(detail.row.winner_user_id), color),
+        DailyResult::Draw => ("Draw", "game drawn".to_string(), theme::TEXT_MUTED()),
+        DailyResult::Resign => ("Resignation", winner_text(detail.row.winner_user_id), color),
+        DailyResult::FleetSunk => ("Fleet sunk", winner_text(detail.row.winner_user_id), color),
+        DailyResult::FourInARow => (
             "Four in a row",
             winner_text(detail.row.winner_user_id),
             color,
         ),
-        DailyMatch::RESULT_MOST_DISCS => {
-            ("Most discs", winner_text(detail.row.winner_user_id), color)
-        }
-        DailyMatch::RESULT_NO_MOVES => ("Game over", winner_text(detail.row.winner_user_id), color),
-        DailyMatch::RESULT_BORNE_OFF => {
-            ("Borne off", winner_text(detail.row.winner_user_id), color)
-        }
-        DailyMatch::RESULT_MOST_POINTS => {
-            ("Most points", winner_text(detail.row.winner_user_id), color)
-        }
-        DailyMatch::RESULT_EIGHT_POTTED => {
-            ("Eight ball", winner_text(detail.row.winner_user_id), color)
-        }
+        DailyResult::MostDiscs => ("Most discs", winner_text(detail.row.winner_user_id), color),
+        DailyResult::NoMoves => ("Game over", winner_text(detail.row.winner_user_id), color),
+        DailyResult::BorneOff => ("Borne off", winner_text(detail.row.winner_user_id), color),
+        DailyResult::MostPoints => ("Most points", winner_text(detail.row.winner_user_id), color),
+        DailyResult::EightPotted => ("Eight ball", winner_text(detail.row.winner_user_id), color),
         // The loser potted it, so the heading has to say which way it went —
         // "eight ball" over a loss reads as a win.
-        DailyMatch::RESULT_EARLY_EIGHT => {
-            ("Early eight", winner_text(detail.row.winner_user_id), color)
-        }
-        DailyMatch::RESULT_NINE_POTTED => {
-            ("Nine ball", winner_text(detail.row.winner_user_id), color)
-        }
+        DailyResult::EarlyEight => ("Early eight", winner_text(detail.row.winner_user_id), color),
+        DailyResult::NinePotted => ("Nine ball", winner_text(detail.row.winner_user_id), color),
         // A frame is won on points, so it names no ball: the last black is
         // just the last ball.
-        DailyMatch::RESULT_FRAME_WON => {
-            ("Frame won", winner_text(detail.row.winner_user_id), color)
-        }
-        DailyMatch::RESULT_TIMEOUT => (
+        DailyResult::FrameWon => ("Frame won", winner_text(detail.row.winner_user_id), color),
+        DailyResult::PeggedOut => ("Pegged out", winner_text(detail.row.winner_user_id), color),
+        DailyResult::ReachedHundred => (
+            "First to 100",
+            winner_text(detail.row.winner_user_id),
+            color,
+        ),
+        DailyResult::Timeout => (
             "Timeout",
             format!(
                 "{} on the 24h clock",
@@ -534,12 +542,6 @@ pub(super) fn result_banner(
             ),
             color,
         ),
-        _ if detail.row.status == DailyMatch::STATUS_CANCELLED => (
-            "Cancelled",
-            "challenge withdrawn".to_string(),
-            theme::TEXT_MUTED(),
-        ),
-        _ => ("Finished", winner_text(detail.row.winner_user_id), color),
     }
 }
 

@@ -5,13 +5,13 @@
 //! then the visible rows are blitted into the frame. That is what lets the
 //! aquarium (a live widget that paints cells) sit in the middle of a
 //! scrolling text column without a second layout for small screens: every
-//! section takes exactly the rows it needs, and nothing is ever cut.
+//! section takes exactly the rows it needs, and nothing is ever cut but the
+//! bonsai's sides when the column is narrower than the canvas.
 //!
-//! Top to bottom: late.fetch (the fact grid in the left half, the bonsai as
-//! the neofetch logo in the right half, the tree scaled to the grid's
-//! height), bio, the aquarium, showcases, badges (all of them, always), and
-//! the chips ledger. The same order on every screen; the only reflow is the
-//! hero stacking when the column is too narrow for two halves.
+//! Top to bottom: late.fetch (the fact grid), bio, the bonsai (the whole
+//! canvas at its true size), runner, pet, the aquarium, showcases, badges
+//! (all of them, always), and the chips ledger. The same order and the same
+//! layout on every screen; nothing reflows.
 
 use chrono::Utc;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
@@ -28,7 +28,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    bonsai::render::{PREVIEW_WIDTH, apply_sway, center_lines, render_preview_lines},
+    bonsai::render::{apply_sway, canvas_lines_in},
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     deadchannel::{
         fight::data as fight_data, fight::ui as fight_ui, runner::state::PORTRAIT_HEIGHT,
@@ -53,12 +53,6 @@ const MIN_WIDTH: u16 = 48;
 const CHROME_ROWS: u16 = 4;
 /// Left and right breathing room inside the border.
 const SIDE_MARGIN: u16 = 2;
-/// The hero is two equal halves when the body is at least this wide: the
-/// left half has to hold the chips row, the widest fact.
-const HERO_SIDE_BY_SIDE_MIN_WIDTH: u16 = 90;
-/// The hero is never shorter than this: a short fact grid must not squash
-/// the tree, which is the one thing on the card that is a picture.
-const HERO_MIN_HEIGHT: usize = 14;
 /// The reef band: the tallest creature plus the surface and floor rows.
 const AQUARIUM_HEIGHT: u16 = 11;
 
@@ -66,11 +60,6 @@ const AQUARIUM_HEIGHT: u16 = 11;
 /// measured before it is painted.
 enum Segment {
     Text(Vec<Line<'static>>),
-    Hero {
-        art: Vec<Line<'static>>,
-        grid: Vec<Line<'static>>,
-        side_by_side: bool,
-    },
     Aquarium,
 }
 
@@ -78,17 +67,6 @@ impl Segment {
     fn height(&self) -> u16 {
         match self {
             Segment::Text(lines) => lines.len() as u16,
-            Segment::Hero {
-                art,
-                grid,
-                side_by_side,
-            } => {
-                if *side_by_side {
-                    art.len().max(grid.len()) as u16
-                } else {
-                    (art.len() + 1 + grid.len()) as u16
-                }
-            }
             Segment::Aquarium => AQUARIUM_HEIGHT,
         }
     }
@@ -200,26 +178,11 @@ fn build_segments(
 
     let mut segments = Vec::new();
 
-    // ── late.fetch: the grid as the info column, the bonsai as the logo ──
-    // The tree is fitted to the grid's height, so the hero is exactly as
-    // tall as the facts and never a column of air beside them.
-    let side_by_side = width >= HERO_SIDE_BY_SIDE_MIN_WIDTH;
-    let grid = late_fetch_lines(state, profile);
-    let art_width = if side_by_side { width / 2 } else { width };
-    let art = bonsai_block(
-        state,
-        art_width as usize,
-        grid.len().max(HERO_MIN_HEIGHT),
-        wall_tick,
-    );
-    let mut heading = section_lines("late.fetch", width_usize);
-    heading.remove(0); // the row under the border already breathes
-    segments.push(Segment::Text(heading));
-    segments.push(Segment::Hero {
-        art,
-        grid,
-        side_by_side,
-    });
+    // ── late.fetch ──
+    let mut lines = section_lines("late.fetch", width_usize);
+    lines.remove(0); // the row under the border already breathes
+    lines.extend(late_fetch_lines(state, profile));
+    segments.push(Segment::Text(lines));
 
     // ── bio ──
     let mut lines = section_lines("bio", width_usize);
@@ -233,6 +196,13 @@ fn build_segments(
             text,
         ));
     }
+    segments.push(Segment::Text(lines));
+
+    // ── bonsai ──
+    // The whole canvas at its true size, never a preview: a column
+    // narrower than the canvas cuts the tree evenly on both sides.
+    let mut lines = section_lines("bonsai", width_usize);
+    lines.extend(bonsai_lines(state, width_usize, wall_tick));
     segments.push(Segment::Text(lines));
 
     // ── runner ──
@@ -328,38 +298,6 @@ fn compose(segments: &[Segment], width: u16, height: u16, state: &ProfileModalSt
         match segment {
             Segment::Text(lines) => {
                 Paragraph::new(lines.clone()).render(area, &mut buf);
-            }
-            Segment::Hero {
-                art,
-                grid,
-                side_by_side,
-            } => {
-                if *side_by_side {
-                    let half = width / 2;
-                    let grid_area = Rect {
-                        width: half,
-                        ..area
-                    };
-                    let art_area = Rect {
-                        x: half,
-                        width: width - half,
-                        ..area
-                    };
-                    Paragraph::new(art.clone()).render(art_area, &mut buf);
-                    Paragraph::new(grid.clone()).render(grid_area, &mut buf);
-                } else {
-                    let art_area = Rect {
-                        height: art.len() as u16,
-                        ..area
-                    };
-                    let grid_area = Rect {
-                        y: area.y + art.len() as u16 + 1,
-                        height: grid.len() as u16,
-                        ..area
-                    };
-                    Paragraph::new(art.clone()).render(art_area, &mut buf);
-                    Paragraph::new(grid.clone()).render(grid_area, &mut buf);
-                }
             }
             Segment::Aquarium => draw_aquarium(&mut buf, area, state),
         }
@@ -519,40 +457,21 @@ fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
     ]
 }
 
-/// The bonsai as exactly `height` rows, the pot on the last one: the same
-/// fixed preview block the sidebar shows, centered, swaying on the wall
-/// tick.
-fn bonsai_block(
-    state: &ProfileModalState,
-    width: usize,
-    height: usize,
-    wall_tick: usize,
-) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let placeholder = |text: &str| vec![Line::from(Span::styled(text.to_string(), dim)).centered()];
-
-    let mut tree = match state.bonsai() {
+/// The bonsai section's body: the whole canvas at its true size, centered
+/// (or cut evenly on both sides when `width` is narrower than the canvas),
+/// swaying on the wall tick.
+fn bonsai_lines(state: &ProfileModalState, width: usize, wall_tick: usize) -> Vec<Line<'static>> {
+    match state.bonsai() {
         Some(bonsai) => {
-            let mut lines = render_preview_lines(bonsai);
+            let mut lines = canvas_lines_in(bonsai, width);
             apply_sway(&mut lines, wall_tick);
-            center_lines(&mut lines, width, PREVIEW_WIDTH);
             lines
         }
-        None => placeholder("no bonsai yet"),
-    };
-
-    if tree.len() > height {
-        tree.drain(0..tree.len() - height);
+        None => vec![Line::from(Span::styled(
+            "no bonsai yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))],
     }
-    bottom_pad(tree, height)
-}
-
-/// Pad `lines` with blank rows on top until they are `height` tall.
-fn bottom_pad(mut lines: Vec<Line<'static>>, height: usize) -> Vec<Line<'static>> {
-    let top_pad = height.saturating_sub(lines.len());
-    let mut out = vec![Line::from(""); top_pad];
-    out.append(&mut lines);
-    out
 }
 
 /// The neofetch column: one `key   value` row per fact (the name is already

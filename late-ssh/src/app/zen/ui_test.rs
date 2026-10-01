@@ -1,14 +1,19 @@
 use super::{
-    Care, Chore, PulseView, care_bar_spans, chat_tile_title, draw_headlines_tile, draw_music_tile,
-    draw_pulse_tile, hint_line_fitting, station_text,
+    Care, Chore, PulseView, care_bar_spans, chat_tile_title, draw_bonsai_tile, draw_headlines_tile,
+    draw_live_tile, draw_music_tile, draw_pulse_tile, hint_line_fitting, station_text,
 };
 use crate::app::audio::viz::EqState;
+use crate::app::bonsai::{
+    render::canvas_lines,
+    state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
+};
 use crate::app::common::{primitives::hint_line, theme};
 use crate::app::hub::aquarium::state::CareBar;
 use crate::app::zen::rows::Headline;
 use late_core::models::aquarium_care::CARE_DAYS;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use unicode_width::UnicodeWidthStr;
+use uuid::Uuid;
 
 fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -243,4 +248,101 @@ fn a_stream_chat_tile_title_keeps_the_watcher_count_on_a_narrow_tile() {
     let title = chat_tile_title("#mat-live", Some("[12]"), 20);
     assert_eq!(title, "chat · #ma… [12]");
     assert_eq!(UnicodeWidthStr::width(title.as_str()), 16);
+}
+
+fn bonsai_tile_rows(width: u16, height: u16) -> Vec<String> {
+    let state = BonsaiState::fallback(Uuid::nil(), 42);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| draw_bonsai_tile(frame, Rect::new(0, 0, width, height), &state, 0))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+/// The care modal's canvas as plain rows, each padded to the canvas width.
+fn canvas_rows() -> Vec<String> {
+    let state = BonsaiState::fallback(Uuid::nil(), 42);
+    canvas_lines(&state, true)
+        .iter()
+        .map(|line| {
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            format!("{text:<width$}", width = CANVAS_WIDTH)
+        })
+        .collect()
+}
+
+#[test]
+fn a_small_bonsai_tile_shows_the_true_canvas_cut_evenly_around_the_trunk() {
+    let (width, height) = (41u16, 12u16);
+    let rows = bonsai_tile_rows(width, height);
+    let cut = (CANVAS_WIDTH - width as usize) / 2;
+    let canvas = canvas_rows();
+    let expected: Vec<String> = canvas[canvas.len() - height as usize..]
+        .iter()
+        .map(|row| row.chars().skip(cut).take(width as usize).collect())
+        .collect();
+    assert_eq!(rows, expected);
+}
+
+#[test]
+fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
+    let (width, height) = (CANVAS_WIDTH as u16 + 20, CANVAS_HEIGHT as u16 + 3);
+    let rows = bonsai_tile_rows(width, height);
+    let canvas = canvas_rows();
+    let tree_rows = &rows[rows.len() - canvas.len()..];
+    let expected: Vec<String> = canvas
+        .iter()
+        .map(|row| format!("{:10}{row}{:10}", "", ""))
+        .collect();
+    assert_eq!(tree_rows, &expected[..]);
+}
+
+#[test]
+fn an_empty_live_tile_says_so_beside_the_feed() {
+    use crate::app::chat::state::ActivityTickerEntry;
+
+    let (width, height) = (60, 6);
+    let entries = [ActivityTickerEntry {
+        id: Uuid::from_u128(1),
+        text: "mat won 8ball".to_string(),
+        at: chrono::Utc::now(),
+    }];
+    let hit = std::cell::Cell::new(None);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_live_tile(
+                frame,
+                Rect::new(0, 0, width, height),
+                None,
+                &hit,
+                &entries,
+                &[],
+            )
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let part = |from: u16, to: u16| -> String {
+        (0..height)
+            .map(|y| {
+                (from..to)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let split = width * 3 / 10;
+    let (note, feed) = (part(0, split), part(split, width));
+    assert!(note.contains("nothing live"), "{note}");
+    assert!(!note.contains("mat won"), "{note}");
+    assert!(feed.contains("mat won 8ball"), "{feed}");
+    assert_eq!(hit.get(), None, "nothing up, nothing to click");
 }

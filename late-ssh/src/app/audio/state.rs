@@ -8,9 +8,10 @@ use uuid::Uuid;
 
 use super::{
     svc::{AudioEvent, AudioService, QueueSnapshot},
+    thumbnail::Thumbnail,
     viz::{LiveBands, Spectrum},
 };
-use crate::app::common::primitives::Banner;
+use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
 
 pub struct AudioTick {
     pub banner: Option<Banner>,
@@ -60,6 +61,32 @@ impl AudioState {
 
     pub(crate) fn live_bands(&self) -> Option<LiveBands> {
         self.spectrum.as_ref().map(Spectrum::bands)
+    }
+
+    /// The booth's tracks as the live strip weighs them.
+    pub fn live_candidates(&self) -> Vec<LiveCandidate> {
+        super::booth::live::candidates(&self.snapshot_rx.borrow())
+    }
+
+    /// Whether a track is still in the booth, playing or queued.
+    pub fn in_booth(&self, item_id: Uuid) -> bool {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .any(|item| item.id == item_id)
+    }
+
+    /// The thumbnail of one track in the booth, once it has been fetched.
+    pub fn queue_thumbnail(&self, item_id: Uuid) -> Option<Thumbnail> {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .find(|item| item.id == item_id)
+            .and_then(|item| item.thumbnail.clone())
     }
 
     pub fn queue_snapshot(&self) -> QueueSnapshot {

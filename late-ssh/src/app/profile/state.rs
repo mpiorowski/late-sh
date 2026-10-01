@@ -204,6 +204,7 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
+        statusline_components: profile.statusline_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
         room_list_mode: profile.room_list_mode,
         keep_composer_focused: profile.keep_composer_focused,

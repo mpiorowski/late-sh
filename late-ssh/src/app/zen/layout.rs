@@ -6,8 +6,6 @@ use ratatui::layout::Rect;
 use super::state::{BorderKind, Dir, Look, Node, TileKind};
 use crate::app::pet::ui::{Neighbours, WatchSide};
 
-/// One row under the tree for its status line.
-pub const BONSAI_STATUS_ROWS: u16 = 1;
 /// The pet box at its smallest: its three art rows.
 pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 /// The Rice page: one hint row at the bottom, tiles above.

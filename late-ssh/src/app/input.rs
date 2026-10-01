@@ -13,6 +13,7 @@ use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::help_modal::data::HelpTopic;
+use crate::app::statusline::bar::StatusClick;
 use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -33,6 +34,7 @@ const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
 /// Global force-repaint ("refresh").
 const CTRL_R: u8 = 0x12;
+const CTRL_S: u8 = 0x13;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
 /// Zen: the one page that is a chord, not a tab, so it is reachable from
@@ -1037,7 +1039,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
-            if handle_notifications_hud_click(app, mouse) {
+            if handle_status_bar_click(app, mouse) {
                 return;
             }
             if ctx.screen == Screen::Leaderboard
@@ -2309,11 +2311,16 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     // Esc in the city backs out one step at a time: the guide first, then
-    // the fight scene (a run while the fight is on, `fight/input.rs`), then
-    // an open shop panel or the ledge; on the bare street it goes up to the
-    // chat with #lounge open (the wire and `0` go to the clubhouse instead).
+    // the fight picker, then the fight scene (a run while the fight is on,
+    // `fight/input.rs`), then an open shop panel or the ledge; on the bare
+    // street it goes up to the chat with #lounge open (the wire and `0` go
+    // to the clubhouse instead).
     if ctx.screen == Screen::City && app.guide.state.is_open() {
         app.guide.state.close();
+        return;
+    }
+    if ctx.screen == Screen::City && app.fight.picker_open() {
+        app.fight.close();
         return;
     }
     if ctx.screen == Screen::City && app.fight.scene_open() {
@@ -2721,6 +2728,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if handle_pet_click(app, x, y) {
         return true;
     }
+    if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
+        return true;
+    }
     // A click on a Zen tile focuses it, then falls through so the composer
     // and the messages of that tile still take the click. A modal over the
     // page takes the click itself, the same guard the pet click uses.
@@ -3068,34 +3078,50 @@ fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     })
 }
 
-fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
+/// Route a click on either frame status bar to the segment under it.
+///
+/// The rects come from the bar's own layout pass, rebuilt every frame, so this
+/// stays correct however the bottom bar is reordered or resized, and a segment
+/// either fit pass dropped simply has no rect to hit.
+fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }
     if app.show_splash {
         return false;
     }
-    // Where the last frame drew the "N unread mentions" text; `None` when
-    // nothing is unread. The voice/chips text after it is not clickable.
-    let Some(rect) = app.last_mentions_hud_rect.get() else {
+    // SGR mouse coords are 1-indexed; the rects are in 0-indexed frame cells.
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
         return false;
     };
-    // SGR mouse coords are 1-indexed; the rect is in 0-indexed frame cells.
-    let Some(x) = mouse.x.checked_sub(1) else {
+    let hit = app
+        .last_status_hits
+        .borrow()
+        .iter()
+        .find(|(_, rect)| rect_contains(*rect, x, y))
+        .and_then(|(component, _)| crate::app::statusline::bar::click_action(*component));
+    let Some(action) = hit else {
         return false;
     };
-    let Some(y) = mouse.y.checked_sub(1) else {
-        return false;
-    };
-    if !rect_contains(rect, x, y) {
-        return false;
-    }
 
     app.pending_chat_profile_open = None;
-    app.chat.reset_composer();
-    app.chat.clear_message_selection();
-    app.set_screen(Screen::Dashboard);
-    app.chat.select_notifications();
+    match action {
+        StatusClick::Mentions => {
+            app.chat.reset_composer();
+            app.chat.clear_message_selection();
+            app.set_screen(Screen::Dashboard);
+            app.chat.select_notifications();
+        }
+        StatusClick::Shop => open_shop_modal_globally(app),
+        StatusClick::Lobby => open_daily_modal_globally(app),
+        StatusClick::Booth => {
+            let submit_enabled = app.audio.booth_submit_enabled();
+            app.booth_modal_state.open(submit_enabled);
+        }
+        StatusClick::Arcade => app.set_screen(Screen::Arcade),
+        StatusClick::Profiles => app.set_screen(Screen::Profiles),
+        StatusClick::Zen => open_zen_globally(app),
+    }
     true
 }
 
@@ -3371,9 +3397,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-/// Open the Shop modal from anywhere. The Shop has no global chord: it is
-/// reached by typing `/shop` into a composer or through the locked-feature
-/// nudges, so this is the one shared entry point for both.
+/// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3540,6 +3564,38 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
     true
 }
 
+/// Live games own Ctrl+S even when they currently leave it unbound. Running
+/// terminal doors receive raw bytes in App::handle_input before this router;
+/// their launchers and the Arcade/Games menus still offer the Shop shortcut.
+fn game_owns_ctrl_s(app: &App) -> bool {
+    match app.screen {
+        Screen::Arcade => app.is_playing_game,
+        Screen::Lateania => app.lateania_state.is_some(),
+        Screen::GreenDragon => app.greendragon_state.is_some(),
+        Screen::Darkroom => app.darkroom_state.is_some(),
+        Screen::DailyMatch | Screen::HouseTable | Screen::City => true,
+        // Menus, launchers and plain pages. A running terminal door never
+        // gets here, so its screen only ever means the launcher.
+        Screen::Dashboard
+        | Screen::Games
+        | Screen::Rebels
+        | Screen::Nethack
+        | Screen::Dcss
+        | Screen::Brogue
+        | Screen::Dopewars
+        | Screen::Bashquest
+        | Screen::Codekeep
+        | Screen::Usurper
+        | Screen::Artboard
+        | Screen::Profiles
+        | Screen::Leaderboard
+        | Screen::Clubhouse
+        | Screen::Nightcap
+        | Screen::Zen
+        | Screen::Scratchpad => false,
+    }
+}
+
 fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     let ParsedInput::Byte(byte) = event else {
         return false;
@@ -3564,6 +3620,14 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             app.force_full_repaint();
             true
         }
+        // A Settings text field being edited holds typing that is not in the
+        // draft yet. Each of these chords closes or reopens the modal and
+        // would drop it, so the field keeps the key instead.
+        CTRL_O | CTRL_G | CTRL_F | CTRL_S
+            if app.show_settings && app.settings_modal_state.editing_text() =>
+        {
+            false
+        }
         CTRL_O => {
             open_settings_modal_globally(app);
             true
@@ -3576,6 +3640,18 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         }
         CTRL_F => {
             toggle_zen_globally(app);
+            true
+        }
+        // Games keep their controls; these editors own Ctrl+S for save/post.
+        // Their tag picker also keeps input until it closes, leaving the draft
+        // underneath.
+        CTRL_S
+            if !game_owns_ctrl_s(app)
+                && !app.directory_editor.is_open()
+                && !app.jobs.post.is_open()
+                && !app.tag_picker.is_open() =>
+        {
+            open_shop_modal_globally(app);
             true
         }
         _ => false,
@@ -3891,6 +3967,26 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             open_bonsai_modal_globally(app);
             true
         }
+        b'o' | b'O'
+            if global_letter_keys
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && app.lounge_card_shown() =>
+        {
+            crate::app::live::input::open_from_key(app)
+        }
+        // With a message selected, `r` replies to it (chat's message keys).
+        b'r' | b'R'
+            if global_letter_keys
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && app.lounge_card_shown()
+                && app.chat.selected_message_id.is_none() =>
+        {
+            crate::app::live::input::reply_from_key(app)
+        }
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);
@@ -3940,6 +4036,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                     // The first descent opens the guide by itself, once
                     // per runner (`app/deadchannel/guide`).
                     app.guide.descend();
+                    // On the shared street from here until the session
+                    // ends (`deadchannel/street`).
+                    app.street.descend();
                     Screen::City
                 }
                 _ => Screen::Clubhouse,

@@ -568,7 +568,7 @@ fn history_line(
     ])
 }
 
-fn format_queue_duration(item: &QueueItemView) -> String {
+pub(super) fn format_queue_duration(item: &QueueItemView) -> String {
     if item.is_stream {
         return "live".to_string();
     }

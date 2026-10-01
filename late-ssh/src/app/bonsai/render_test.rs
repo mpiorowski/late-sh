@@ -96,6 +96,40 @@ fn the_canvas_is_the_one_size_with_the_pot_on_the_last_row() {
     assert!(rendered.selected_cells.is_empty());
 }
 
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// The profile's bonsai section: the canvas at its true size, never scaled. A wider
+/// area centers it; a narrower one cuts both sides evenly around the trunk.
+#[test]
+fn canvas_in_an_area_is_centered_or_cut_evenly_never_scaled() {
+    let trunk = branch(1, None, (0, 0), (0, 4));
+    let mut left = branch(2, Some(1), (0, 4), (-30, 8));
+    left.status = BranchStatus::LeafPad;
+    let mut right = branch(3, Some(1), (0, 4), (30, 8));
+    right.status = BranchStatus::LeafPad;
+    let state = state_with_branches(vec![trunk, left, right]);
+    let canvas = render_ascii(&state, CANVAS_WIDTH, CANVAS_HEIGHT, false).lines;
+
+    let wide = canvas_lines_in(&state, CANVAS_WIDTH + 20);
+    let expected = canvas
+        .iter()
+        .map(|line| format!("{}{line}", " ".repeat(10)))
+        .collect::<Vec<_>>();
+    assert_eq!(wide.iter().map(line_text).collect::<Vec<_>>(), expected);
+
+    let narrow = canvas_lines_in(&state, 41);
+    let expected = canvas
+        .iter()
+        .map(|line| line.chars().skip(20).take(41).collect::<String>())
+        .collect::<Vec<_>>();
+    assert_eq!(narrow.iter().map(line_text).collect::<Vec<_>>(), expected);
+}
+
 /// A tree that fits the preview box is the modal's own glyphs: nothing
 /// merged, nothing invented, the pot on the last row.
 #[test]

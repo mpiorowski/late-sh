@@ -930,11 +930,14 @@ fn prompt_for(pool: &PoolDetail) -> Option<Prompt> {
 pub(crate) fn shooter_spans(mode: ShotMode, prompt: Option<Prompt>) -> Vec<Span<'static>> {
     let prompt = match prompt {
         Some(Prompt::MustPlace | Prompt::InHand) if mode == ShotMode::Place => None,
-        other => other,
+        Some(
+            prompt @ (Prompt::MustPlace | Prompt::InHand | Prompt::CallPocket | Prompt::Calling(_)),
+        ) => Some(prompt),
+        None => None,
     };
     let hint = match prompt {
         Some(Prompt::MustPlace) => None,
-        _ => Some(mode.hint()),
+        Some(Prompt::InHand | Prompt::CallPocket | Prompt::Calling(_)) | None => Some(mode.hint()),
     };
     let mut spans = vec![Span::styled(
         format!("   {}", mode.label()),

@@ -179,7 +179,7 @@ fn slur_token(token: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
 
 /// The byte range of the ASCII-letter core of `token`, or `None` when the
 /// token is off limits. Protected: handles (`@mat`), room slugs (`#lounge`),
-/// slash commands, URLs, the `---NEWS---` family of card markers, and anything
+/// slash commands, URLs, the `---BUG---` family of card markers, and anything
 /// carrying non-ASCII, so CJK and emoji pass through whole rather than being
 /// sliced at a byte boundary.
 fn word_span(token: &str) -> Option<(usize, usize)> {
