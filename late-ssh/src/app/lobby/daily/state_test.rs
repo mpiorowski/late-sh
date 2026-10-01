@@ -1,3 +1,4 @@
+use super::pool_draft::ReplaySpan;
 use super::*;
 use chrono::TimeZone;
 
@@ -554,4 +555,284 @@ async fn a_gin_stock_draw_shows_its_card_only_once_the_server_has_it() {
         Some(&stock_top),
         "the cursor lands on the drawn card"
     );
+}
+
+// ── The pool board's playback seam ─────────────────────────────────────
+
+/// An eight-ball match, claimed and unbroken, with the service that plays it.
+async fn pool_match(name: &str) -> (late_core::test_utils::TestDb, DailyService, DailyMatch) {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::games::chips::svc::ChipService;
+    use late_core::test_utils::create_test_user;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let challenger = create_test_user(&test_db.db, &format!("{name}-challenger")).await;
+    let claimer = create_test_user(&test_db.db, &format!("{name}-claimer")).await;
+    let (activity_tx, _activity_rx) = broadcast::channel::<ActivityEvent>(8);
+    let svc = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = svc
+        .post_challenge(challenger.id, DailyGame::EightBall)
+        .await
+        .expect("post");
+    let claimed = svc
+        .claim_challenge(claimer.id, posted.id)
+        .await
+        .expect("claim");
+    (test_db, svc, claimed)
+}
+
+/// `user_id`'s board on that match, loaded.
+async fn pool_board(svc: &DailyService, user_id: Uuid, match_id: Uuid) -> DailyState {
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = DailyState::new(svc.clone(), user_id, notifier);
+    state.open_board_inner(
+        match_id,
+        DailyGame::EightBall,
+        HashMap::new(),
+        false,
+        Screen::Dashboard,
+        BoardEntry::Lobby,
+    );
+    crate::test_helpers::wait_until(
+        || {
+            let _ = state.tick();
+            std::future::ready(open_pool(&state).is_some())
+        },
+        "the board loads the match",
+    )
+    .await;
+    state
+}
+
+fn open_pool(state: &DailyState) -> Option<&PoolDetail> {
+    state.board.as_ref()?.detail.as_ref()?.pool()
+}
+
+/// A stroke from where the cue ball lies. At `speed` 7 it is a break; at a
+/// fraction of that it rolls a hand's width and is over in a second or two.
+fn pool_shot(speed: f64) -> Shot {
+    Shot {
+        place: None,
+        azimuth: 0.0,
+        tip: [0.0, 0.0],
+        speed,
+        called_pocket: None,
+        play_again: false,
+    }
+}
+
+/// The two players of `row`: whoever is at the table, then the other one.
+fn shooter_and_watcher(row: &DailyMatch) -> (Uuid, Uuid) {
+    let shooter = row.turn_user_id.expect("somebody is at the table");
+    let watcher = [Some(row.challenger_id), row.opponent_id]
+        .into_iter()
+        .flatten()
+        .find(|user_id| *user_id != shooter)
+        .expect("a claimed match has two players");
+    (shooter, watcher)
+}
+
+/// Whoever's turn it is plays `shot`.
+async fn play_pool_shot(svc: &DailyService, match_id: Uuid, shot: Shot) {
+    let row = svc
+        .load_match(match_id)
+        .await
+        .expect("load")
+        .expect("the match exists");
+    let shooter = row.turn_user_id.expect("somebody is at the table");
+    svc.play_pool_shot(shooter, match_id, shot)
+        .await
+        .expect("the shot is played");
+}
+
+#[tokio::test]
+async fn r_replays_the_last_shot_off_the_stored_rack_and_r_again_stops_it() {
+    let (_test_db, svc, claimed) = pool_match("pool-replay").await;
+    play_pool_shot(&svc, claimed.id, pool_shot(0.3)).await;
+    play_pool_shot(&svc, claimed.id, pool_shot(0.3)).await;
+    let viewer = claimed.turn_user_id.expect("somebody breaks");
+    let mut state = pool_board(&svc, viewer, claimed.id).await;
+    assert!(
+        !state.pool_is_animating(),
+        "opening a match shows the table as it stands"
+    );
+
+    // An earlier shot today's rules would refuse, which is what a change to
+    // the rules leaves in every match that was under way. The last shot does
+    // not depend on it: the rack it was played on is stored.
+    let board = state.board.as_mut().expect("the board is open");
+    let pool = board
+        .detail
+        .as_mut()
+        .and_then(DailyMatchDetail::pool_mut)
+        .expect("a pool board");
+    pool.state.shots[0].seat ^= 1;
+
+    pool_draft::start_pool_replay(board, ReplaySpan::LastShot);
+    crate::test_helpers::wait_until(
+        || {
+            let _ = state.tick();
+            std::future::ready(open_pool(&state).is_some_and(|pool| pool.playback.is_some()))
+        },
+        "the last shot plays again",
+    )
+    .await;
+    let pool = open_pool(&state).expect("a pool board");
+    assert!(pool.replaying && pool.is_busy(false));
+
+    // The same key is the way out, and it gives the board back.
+    let board = state.board.as_mut().expect("the board is open");
+    pool_draft::start_pool_replay(board, ReplaySpan::LastShot);
+    let pool = open_pool(&state).expect("a pool board");
+    assert!(pool.playback.is_none() && !pool.is_busy(false));
+    assert!(!state.pool_is_animating());
+
+    // The whole visit has to be played forward from the opening rack, through
+    // the shot the rules refuse, so there is nothing honest to show.
+    let board = state.board.as_mut().expect("the board is open");
+    pool_draft::start_pool_replay(board, ReplaySpan::LastVisit);
+    crate::test_helpers::wait_until(
+        || {
+            let _ = state.tick();
+            std::future::ready(!state.pool_is_animating())
+        },
+        "the refused visit is dropped",
+    )
+    .await;
+    let pool = open_pool(&state).expect("a pool board");
+    assert!(pool.playback.is_none() && !pool.is_busy(false));
+}
+
+#[tokio::test]
+async fn a_replay_whose_worker_goes_away_gives_the_board_back() {
+    let (_test_db, svc, claimed) = pool_match("pool-replay-lost").await;
+    play_pool_shot(&svc, claimed.id, pool_shot(0.3)).await;
+    let (_, viewer) = shooter_and_watcher(&claimed);
+    let mut state = pool_board(&svc, viewer, claimed.id).await;
+
+    let board = state.board.as_mut().expect("the board is open");
+    pool_draft::start_pool_replay(board, ReplaySpan::LastShot);
+    // A worker that went away is a sender dropped with nothing sent.
+    let (tx, rx) = oneshot::channel();
+    drop(tx);
+    board.timeline_rx = Some(rx);
+
+    let _ = state.tick();
+    let pool = open_pool(&state).expect("a pool board");
+    assert!(
+        !pool.is_busy(false),
+        "a replay that will never arrive must not keep the board"
+    );
+    assert!(!state.pool_is_animating());
+}
+
+#[tokio::test]
+async fn a_shot_that_lands_shows_the_rack_it_was_played_on_until_it_plays() {
+    let (_test_db, svc, claimed) = pool_match("pool-pending").await;
+    let (_, watcher) = shooter_and_watcher(&claimed);
+    let mut state = pool_board(&svc, watcher, claimed.id).await;
+    let opening = open_pool(&state).expect("a pool board").state.rack.clone();
+
+    play_pool_shot(&svc, claimed.id, pool_shot(7.0)).await;
+    crate::test_helpers::wait_until(
+        || {
+            let _ = state.tick();
+            std::future::ready(open_pool(&state).is_some_and(|pool| pool.state.move_count() == 1))
+        },
+        "the break lands",
+    )
+    .await;
+
+    // The reload brought the settled rack. How the balls got there is still
+    // on the blocking thread, so the board owes the player the rack the break
+    // was played on, and the tick that collects the animation promptly.
+    let board = state.board.as_ref().expect("the board is open");
+    let pool = open_pool(&state).expect("a pool board");
+    assert!(board.pool_shot_pending());
+    assert!(state.pool_is_animating());
+    let shown = pool.frames_before_shot().expect("the rack before the break");
+    for ball in &opening.balls {
+        let frame = shown
+            .iter()
+            .find(|frame| frame.id == ball.id)
+            .expect("every ball is drawn");
+        assert_eq!(frame.pos, ball.pos, "ball {} has already moved", ball.id);
+    }
+
+    crate::test_helpers::wait_until(
+        || {
+            let _ = state.tick();
+            std::future::ready(open_pool(&state).is_some_and(|pool| pool.playback.is_some()))
+        },
+        "the break plays",
+    )
+    .await;
+    let board = state.board.as_ref().expect("the board is open");
+    assert!(
+        !board.pool_shot_pending(),
+        "the animation has the board now"
+    );
+}
+
+#[tokio::test]
+async fn a_finish_waits_for_the_shot_still_playing_on_the_board() {
+    let (_test_db, svc, claimed) = pool_match("pool-finish-hold").await;
+    let (_, watcher) = shooter_and_watcher(&claimed);
+    let mut state = pool_board(&svc, watcher, claimed.id).await;
+    play_pool_shot(&svc, claimed.id, pool_shot(0.3)).await;
+    crate::test_helpers::wait_until(
+        || {
+            let _ = state.tick();
+            std::future::ready(open_pool(&state).is_some_and(|pool| pool.playback.is_some()))
+        },
+        "the shot plays",
+    )
+    .await;
+
+    // The match ends while that shot is still rolling.
+    let effect = state.apply_event(DailyEvent::MatchFinished {
+        match_id: claimed.id,
+        game: DailyGame::EightBall,
+        challenger_id: claimed.challenger_id,
+        opponent_id: claimed.opponent_id,
+        outcome: DailyFinishOutcome::Won {
+            user_id: watcher,
+            payout: DailyWinPayout::Paid,
+        },
+        result: DailyResult::Resign,
+    });
+    assert!(
+        effect.banner.is_none(),
+        "the result was announced over a shot that is still rolling"
+    );
+    let tick = state.tick();
+    assert!(tick.banner.is_none() && !tick.own_win);
+
+    // News that would never be released is released by the clock instead.
+    let held = state
+        .pool_finish_hold
+        .as_ref()
+        .expect("the finish is held");
+    let now = Instant::now();
+    assert!(!held.released(state.board.as_ref(), now));
+    assert!(held.released(state.board.as_ref(), now + pool_draft::FINISH_HOLD_MAX));
+
+    // And once the board goes quiet it is told, win and all.
+    let mut told = None;
+    crate::test_helpers::wait_until(
+        || {
+            let tick = state.tick();
+            if tick.banner.is_some() {
+                told = Some((tick.own_win, state.pool_is_animating()));
+            }
+            std::future::ready(told.is_some())
+        },
+        "the finish is told once the shot has played",
+    )
+    .await;
+    assert_eq!(told, Some((true, false)));
 }

@@ -74,7 +74,7 @@ const MAX_PANEL_WIDTH: u16 = 60;
 const INFO_ROWS: u16 = 8;
 /// Readout rows under the cue drawing (aim, what it is on, spin, power).
 const READOUT_ROWS: u16 = 4;
-/// The key legend under the readouts: the seven rows of `LEGEND` and one
+/// The key legend under the readouts: the eight rows of `LEGEND` and one
 /// more for leaving the board (chat, lobby).
 const LEGEND_ROWS: u16 = LEGEND.len() as u16 + 1;
 /// The cue drawing stops growing here.
@@ -537,11 +537,21 @@ fn info_lines(
 
     let targets = state.legal_targets();
     lines.push(Line::from(on_line(state, &targets)));
-    // What the last shot did is the shot's own news to break. While one is
-    // still on the wire or waiting to be animated, the panel already holds the
-    // rack it was played on, and a "last: 8 down · rack over" beside it would
-    // be the result arriving before the shot that earned it.
-    if board.pool_shot_pending() || pool.shot_in_flight {
+    lines.extend(last_shot_lines(pool, board.pool_shot_pending()));
+    lines
+}
+
+/// What the last shot did: the free ball it left, the foul it was, or its
+/// label. Empty while that is still the shot's own news to break.
+///
+/// Until a fresh shot has finished playing the board is still showing the
+/// rack it was played on, or the balls on their way, and a "last: 8 down ·
+/// rack over" beside either would be the result arriving before the shot that
+/// earned it (`PoolDetail::withholds_result`).
+fn last_shot_lines(pool: &PoolDetail, shot_pending: bool) -> Vec<Line<'static>> {
+    let state = &pool.state;
+    let mut lines = Vec::new();
+    if pool.withholds_result(shot_pending) {
         return lines;
     }
     if state.free_ball {
@@ -558,7 +568,7 @@ fn info_lines(
     } else if let Some(shot) = state.shots.last() {
         lines.push(Line::from(Span::styled(
             format!("last: {}", shot.label),
-            dim,
+            Style::default().fg(theme::TEXT_DIM()),
         )));
     }
     lines

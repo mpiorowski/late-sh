@@ -1671,10 +1671,9 @@ fn nudge(azimuth: f64) -> Shot {
 }
 
 #[test]
-fn a_replay_covers_the_last_shot_or_the_whole_visit() {
+fn a_replay_covers_the_whole_of_the_last_visit() {
     let mut state = state(PoolRules::NineBall);
-    assert_eq!(state.replay_from(false), None, "nothing to watch yet");
-    assert_eq!(state.replay_from(true), None);
+    assert_eq!(state.visit_start(), None, "nothing to watch yet");
 
     // Four shots. Which seat played which is the simulation's business, so the
     // visit is read back off the record rather than assumed.
@@ -1690,12 +1689,7 @@ fn a_replay_covers_the_last_shot_or_the_whole_visit() {
     let played = state.shots.len();
     assert!(played >= 2, "enough history to have a visit in it");
 
-    assert_eq!(
-        state.replay_from(false),
-        Some(played - 1),
-        "just the last one"
-    );
-    let visit = state.replay_from(true).expect("a visit to replay");
+    let visit = state.visit_start().expect("a visit to replay");
     let last_seat = state.shots[played - 1].seat;
     assert!(
         state.shots[visit..].iter().all(|s| s.seat == last_seat),
@@ -1708,7 +1702,7 @@ fn a_replay_covers_the_last_shot_or_the_whole_visit() {
 
     // One timeline per shot replayed, and each one is a shot: it starts with
     // the cue ball somewhere and moves it.
-    let timelines = state.replay(visit);
+    let timelines = state.replay(visit).expect("the history replays");
     assert_eq!(timelines.len(), played - visit);
     for timeline in &timelines {
         assert!(timeline.duration > 0.0, "a replayed shot takes time");
@@ -1733,8 +1727,9 @@ fn a_replayed_shot_is_the_shot_that_was_played() {
         .apply_shot(shooter, &nudge(0.1))
         .expect("a shot at what is left is legal");
 
-    let from = state.replay_from(false).expect("one shot to replay");
-    let timelines = state.replay(from);
+    let timelines = state
+        .replay(state.shots.len() - 1)
+        .expect("the history replays");
     assert_eq!(timelines.len(), 1);
     let settled = timelines[0].sample(timelines[0].duration + 1.0);
     for ball in &state.rack.balls {
@@ -1781,12 +1776,49 @@ fn handing_the_shot_back_is_replayed_without_being_watched() {
         .apply_shot(fouled, &hand_back())
         .expect("handing it back is a move");
 
-    let timelines = state.replay(0);
+    let timelines = state.replay(0).expect("the history replays");
     assert_eq!(
         timelines.len(),
         1,
         "two moves, one of them nothing to watch"
     );
+}
+
+#[test]
+fn a_history_the_rules_no_longer_agree_with_is_not_replayed() {
+    // A stored match was judged by the rules of the day each shot was played,
+    // and a replay judges all of it again by today's. Where the two disagree
+    // the replay is of a match that never happened, so it must say so rather
+    // than play it.
+    let mut state = state(PoolRules::EightBall);
+    state
+        .apply_shot(0, &break_shot())
+        .expect("the break is legal");
+    let shooter = state.turn;
+    state
+        .apply_shot(shooter, &nudge(0.1))
+        .expect("a shot at what is left is legal");
+
+    // A ruling that left a different table then than it leaves now: a ball
+    // the stored rack has somewhere the replay does not put it.
+    let mut respotted = state.clone();
+    let ball = respotted
+        .rack
+        .balls
+        .iter_mut()
+        .find(|ball| ball.id != CUE && ball.potted.is_none())
+        .expect("a ball on the table");
+    ball.pos[0] += 0.05;
+    assert_eq!(respotted.replay(0).err(), Some(ReplayError::Diverged));
+
+    // A shot today's rules refuse outright: the turn it was played on is not
+    // the turn the replay arrives at.
+    let mut refused = state.clone();
+    refused.shots[0].seat = rules::other_seat(refused.shots[0].seat);
+    assert!(matches!(
+        refused.replay(0),
+        Err(ReplayError::Refused { shot: 0, .. })
+    ));
 }
 
 /// Eight-ball with seat 0's group cleared, so the eight is all they have left

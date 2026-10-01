@@ -16,7 +16,9 @@ use crate::app::games::pool_core::cue::{MISCUE_LIMIT, PowerBand, ShotMode};
 use crate::app::games::pool_core::shot::Shot;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 use crate::app::lobby::daily::pool::DailyPoolState;
-use crate::app::lobby::daily::pool_draft::{self, AimGear, PointerOutcome, PoolCueHit, PoolDraft};
+use crate::app::lobby::daily::pool_draft::{
+    self, AimGear, PointerOutcome, PoolCueHit, PoolDraft, ReplaySpan,
+};
 use crate::app::lobby::daily::state::DailyMatchDetail;
 use crate::app::state::App;
 
@@ -55,9 +57,14 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 ///
 /// **`r` is replay here, not resign.** Every other board resigns on `r`, and
 /// on this one the key a player reaches for over and over is "show me that
-/// again" — so pool takes `r`/`R` and puts resigning on `X`, which the legend
-/// and the confirm prompt both say. Resigning still needs two presses, so the
-/// swap cannot cost anybody a match by muscle memory.
+/// again", so pool takes `r`/`R` and puts resigning on `X`, which the legend
+/// and the confirm prompt both say. The shared map behind this one still
+/// resigns on `r`, so both replay keys are swallowed here whether or not
+/// there is anything to replay.
+///
+/// **`X` has that one job.** The stroke keys are lowercase only: resigning is
+/// two presses of `X` and arming then dropping a stroke is two presses of
+/// `x`, and a held Shift or a Caps Lock must not turn one into the other.
 ///
 /// This overlaps wasd, which is why it runs before the shared cursor keys —
 /// but pool has no cell cursor for wasd to move, so nothing is lost.
@@ -96,8 +103,14 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
         // visit it belongs to, which on a correspondence board is exactly what
         // happened while you were away. Allowed to whoever is looking, because
         // it shows what has already been played and cannot become a move.
-        b'r' => pool_replay(app, false),
-        b'R' => pool_replay(app, true),
+        b'r' => {
+            pool_replay(app, ReplaySpan::LastShot);
+            true
+        }
+        b'R' => {
+            pool_replay(app, ReplaySpan::LastVisit);
+            true
+        }
         // Resigning, moved off `r` to make room for the replay.
         b'X' => {
             app.daily.board_resign();
@@ -107,7 +120,7 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
         b'l' => pool_aim(app, 1, false),
         b'H' => pool_aim(app, -1, true),
         b'L' => pool_aim(app, 1, true),
-        _ => match PowerBand::from_key(byte.to_ascii_lowercase() as char) {
+        _ => match PowerBand::from_key(byte as char) {
             Some(band) => pool_toggle_mode(app, ShotMode::Stroke(band)),
             None => false,
         },
@@ -356,13 +369,9 @@ pub(crate) fn pool_commit_mode(app: &mut App) -> bool {
 /// Not gated on the turn: a replay is a camera, like the eye view, and both
 /// players and a spectator have the same reason to want one. Pressing it again
 /// while one is rolling stops it.
-pub(crate) fn pool_replay(app: &mut App, whole_visit: bool) -> bool {
-    if !is_pool_board(app) {
-        return false;
-    }
-    match &mut app.daily.board {
-        Some(board) => pool_draft::start_pool_replay(board, whole_visit),
-        None => false,
+pub(crate) fn pool_replay(app: &mut App, span: ReplaySpan) {
+    if let Some(board) = &mut app.daily.board {
+        pool_draft::start_pool_replay(board, span);
     }
 }
 
@@ -571,3 +580,7 @@ pub(crate) fn pool_pointer_released(app: &mut App) -> bool {
         None => false,
     }
 }
+
+#[cfg(test)]
+#[path = "pool_input_test.rs"]
+mod pool_input_test;

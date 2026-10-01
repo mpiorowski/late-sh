@@ -56,6 +56,18 @@ pub fn default_table(rules: PoolRules) -> &'static TableSpec {
     }
 }
 
+/// Why a stored history could not be replayed from the opening rack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplayError {
+    /// The match is on a table this build no longer knows.
+    UnknownTable,
+    /// Today's rules refuse a shot the stored history holds.
+    Refused { shot: usize, reason: String },
+    /// The history plays through and ends on a different table than the one
+    /// stored: a ruling came out differently when it was played.
+    Diverged,
+}
+
 /// One shot as played, for the move list and for a full replay.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoolShotRecord {
@@ -170,13 +182,8 @@ impl DailyPoolState {
     /// history, nothing decided. What a replay starts from.
     ///
     /// Rebuilt from the stored `seed` rather than kept around, which is the
-    /// whole reason the seed is stored. A state on a table this build no
-    /// longer knows has no opening rack to rebuild, and comes back unchanged
-    /// so the caller's replay simply finds nothing to play.
-    fn rewound(&self) -> Self {
-        let Ok(spec) = self.spec() else {
-            return self.clone();
-        };
+    /// whole reason the seed is stored.
+    fn rewound(&self, spec: &TableSpec) -> Self {
         Self {
             turn: 0,
             groups: None,
@@ -293,8 +300,8 @@ impl DailyPoolState {
         Some(sim::simulate(spec, &spec.geometry(), &start, &strike).timeline)
     }
 
-    /// Which shot a replay should start from: the last one, or the first of the
-    /// last **visit** — the whole run the same player is in the middle of.
+    /// Where the last **visit** began: the first shot of the run the same
+    /// player is in the middle of, or has just finished.
     ///
     /// The visit is what a correspondence game takes away. Come back after a
     /// day and the other player has had four shots and left you the table;
@@ -302,12 +309,8 @@ impl DailyPoolState {
     /// run of shots by one seat is exactly what you were not there for.
     ///
     /// `None` on a match with no shots in it yet.
-    pub fn replay_from(&self, whole_visit: bool) -> Option<usize> {
-        let last = self.shots.len().checked_sub(1)?;
-        if !whole_visit {
-            return Some(last);
-        }
-        let seat = self.shots[last].seat;
+    pub fn visit_start(&self) -> Option<usize> {
+        let seat = self.shots.last()?.seat;
         Some(
             self.shots
                 .iter()
@@ -319,43 +322,56 @@ impl DailyPoolState {
     /// Re-simulate the match from the opening rack and hand back the timeline
     /// of every shot from `from` onward, in order.
     ///
-    /// **A replay cannot be assembled from `prev_rack`.** That is one rack, and
-    /// a visit is several shots — so the only way back to where the third shot
+    /// **A visit cannot be assembled from `prev_rack`.** That is one rack, and
+    /// a visit is several shots, so the only way back to where the third shot
     /// of a visit began is to play the first two. Replaying them through
     /// `apply_shot` rather than through the simulator alone is what makes the
     /// re-spots land where they landed: a colour a foul put back is not
-    /// something physics knows about.
+    /// something physics knows about. The last shot on its own needs none of
+    /// this: `last_shot_sim` reads the rack it was played on.
     ///
-    /// Expensive by the standards of a tick — a whole frame of physics, and
-    /// twice over for the shots being watched, since `apply_shot` runs its own
-    /// — so callers run it on a blocking thread. It stops at the first shot the
-    /// rules refuse rather than guessing, which can only happen if a stored
-    /// history and this build's rules disagree.
-    pub fn replay(&self, from: usize) -> Vec<Timeline> {
-        let Ok(spec) = self.spec() else {
-            return Vec::new();
+    /// **This judges the whole match again by today's rules**, and each stored
+    /// shot was judged by the rules of the day it was played. Where the two
+    /// disagree the timelines would be of a match that never happened, so the
+    /// answer is a `ReplayError` instead: a stored shot the rules now refuse,
+    /// or a history that plays through and arrives at a different table than
+    /// the stored one.
+    ///
+    /// Expensive by the standards of a tick: a whole match of physics, and
+    /// twice over for the shots being watched, since `apply_shot` runs its
+    /// own. Callers run it on a blocking thread.
+    pub fn replay(&self, from: usize) -> Result<Vec<Timeline>, ReplayError> {
+        let spec = match self.spec() {
+            Ok(spec) => spec,
+            Err(_) => return Err(ReplayError::UnknownTable),
         };
-        let geom = spec.geometry();
-        let mut scratch = self.rewound();
+        let mut scratch = self.rewound(spec);
         let mut out = Vec::new();
         for (index, record) in self.shots.iter().enumerate() {
-            // Handing the shot back moves no ball, so there is nothing to
-            // watch — but it still took the turn, so the replay has to play it.
-            if !record.shot.play_again && index >= from {
-                let mut start = scratch.rack.clone();
-                let Ok(()) = apply_placement(&mut start, record.shot.place) else {
-                    break;
-                };
-                let Ok(strike) = strike_of(&record.shot) else {
-                    break;
-                };
-                out.push(sim::simulate(spec, &geom, &start, &strike).timeline);
+            match scratch.apply_shot(record.seat, &record.shot) {
+                Ok(_) => {}
+                Err(error) => {
+                    return Err(ReplayError::Refused {
+                        shot: index,
+                        reason: error.to_string(),
+                    });
+                }
             }
-            if scratch.apply_shot(record.seat, &record.shot).is_err() {
-                break;
+            if index < from {
+                continue;
+            }
+            // Handing the shot back moves no ball and leaves no rack behind
+            // it, so it took its turn above and there is nothing to watch.
+            if let Some(timeline) = scratch.last_timeline() {
+                out.push(timeline);
             }
         }
-        out
+        // Rounded on both sides: the stored rack has been through JSON and
+        // back, and equal to the micron is what "the same table" means here.
+        if scratch.rack.rounded(PERSIST_DECIMALS) != self.rack.rounded(PERSIST_DECIMALS) {
+            return Err(ReplayError::Diverged);
+        }
+        Ok(out)
     }
 
     /// Play one shot: place the cue ball if asked, strike, simulate, judge,

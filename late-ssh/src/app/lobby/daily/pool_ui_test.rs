@@ -13,7 +13,7 @@ use crate::app::games::pool_core::{
     rules::{Group, PoolRules},
     shot::Shot,
 };
-use crate::app::lobby::daily::pool_draft::{PoolDraft, PoolPlayback};
+use crate::app::lobby::daily::pool_draft::{PoolDetail, PoolDraft, PoolPlayback};
 
 fn pool_state() -> DailyPoolState {
     DailyPoolState::new(PoolRules::EightBall, Uuid::new_v4(), Uuid::new_v4())
@@ -428,6 +428,53 @@ fn playback_runs_then_retires() {
         duration > 0.0,
         "a break takes time, or there is nothing to animate"
     );
+}
+
+#[test]
+fn the_panel_keeps_the_result_to_itself_until_the_shot_has_played() {
+    let mut state = pool_state();
+    state
+        .apply_shot(
+            0,
+            &Shot {
+                place: None,
+                azimuth: 0.0,
+                tip: [0.0, 0.0],
+                speed: 7.0,
+                called_pocket: None,
+                play_again: false,
+            },
+        )
+        .expect("the break is legal");
+    let timeline = state.last_timeline().expect("the break replays");
+    let said = |pool: &PoolDetail, shot_pending: bool| -> String {
+        last_shot_lines(pool, shot_pending)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.to_string())
+            .collect()
+    };
+
+    let mut pool = PoolDetail::new(state);
+    assert!(
+        said(&pool, false).contains("last:"),
+        "a settled board says what the last shot did"
+    );
+    assert!(
+        !said(&pool, true).contains("last:"),
+        "a shot waiting on its animation has not been seen yet"
+    );
+    // The animation itself is the long part of the wait, seconds where the
+    // other two are a tick apiece, and the status line and the win banner
+    // already sit through it.
+    pool.playback = Some(PoolPlayback::new(timeline));
+    assert!(
+        !said(&pool, false).contains("last:"),
+        "the result was on the panel while the shot was still rolling"
+    );
+    // A replay is watched with the result already known.
+    pool.replaying = true;
+    assert!(said(&pool, false).contains("last:"));
 }
 
 #[test]

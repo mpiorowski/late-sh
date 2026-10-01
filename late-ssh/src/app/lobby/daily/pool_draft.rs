@@ -31,15 +31,15 @@ use crate::app::common::primitives::Banner;
 use crate::app::games::pool_core::{
     aim::{self, ShotLine},
     ball::CUE,
-    cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode},
+    cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode, Strike},
     cue_ui::PanelHit,
     rack, rules as pool_rules,
-    shot::{BallFrame, Shot, Timeline},
+    shot::{BallFrame, RackState, Shot, Timeline},
     sim,
-    table::Geometry,
+    table::{Geometry, TableSpec},
 };
 
-use super::pool::{DailyPoolState, PoolAimShare};
+use super::pool::{DailyPoolState, PoolAimShare, ReplayError};
 use super::state::{DailyBoardState, DailyMatchDetail};
 
 /// Where the cue panel drew its parts, for the click hit test. The pixel
@@ -110,6 +110,17 @@ impl PoolDetail {
     /// holding the board's detail borrowed when it asks.
     pub fn is_busy(&self, shot_pending: bool) -> bool {
         self.shot_in_flight || self.playback.is_some() || self.replaying || shot_pending
+    }
+
+    /// A fresh shot has not finished showing, so what it did is not the
+    /// board's to say yet: it is on the wire, waiting on its animation, or
+    /// still rolling. The animation is the long part of that, seconds where
+    /// the other two are a tick apiece.
+    ///
+    /// A replay does not count. It is watched with the result already known,
+    /// so hiding the result for it would only take the panel away.
+    pub fn withholds_result(&self, shot_pending: bool) -> bool {
+        self.shot_in_flight || shot_pending || (self.playback.is_some() && !self.replaying)
     }
 
     /// Take over what the detail being replaced was in the middle of showing.
@@ -1144,12 +1155,7 @@ pub(super) fn start_pool_playback(board: &mut DailyBoardState) {
             };
             pool.replaying = false;
             pool.queue.clear();
-            let (tx, rx) = oneshot::channel();
-            tokio::task::spawn_blocking(move || {
-                let geom = spec.geometry();
-                let _ = tx.send(vec![sim::simulate(spec, &geom, &start, &strike).timeline]);
-            });
-            board.timeline_rx = Some(rx);
+            board.timeline_rx = Some(simulate_off_tick(spec, start, strike));
             board.pool_shot_pending = true;
         }
         Some(_) => {}
@@ -1166,11 +1172,19 @@ pub(super) fn poll_pool_timeline(board: &mut DailyBoardState) -> bool {
         Ok(timelines) => timelines,
         Err(oneshot::error::TryRecvError::Empty) => return false,
         // The worker is gone, so no animation is coming. The board still shows
-        // the settled rack, which is the truth either way — and it has to stop
-        // holding the result back, or it would hold it for ever.
+        // the settled rack, which is the truth either way, and it has to let
+        // go of everything that was waiting on the animation: the held result,
+        // and a replay that would otherwise keep the board until `r` again.
         Err(oneshot::error::TryRecvError::Closed) => {
+            tracing::error!(
+                match_id = %board.match_id,
+                "pool physics worker went away before sending a timeline"
+            );
             board.timeline_rx = None;
             board.pool_shot_pending = false;
+            if let Some(pool) = board.detail.as_mut().and_then(DailyMatchDetail::pool_mut) {
+                pool.replaying = false;
+            }
             return true;
         }
     };
@@ -1225,19 +1239,89 @@ pub(super) fn pool_is_animating(board: &DailyBoardState) -> bool {
             .is_some_and(|pool| pool.playback.is_some())
 }
 
+/// One shot simulated on a blocking thread, for `poll_pool_timeline` to
+/// collect. The tick path runs no physics.
+fn simulate_off_tick(
+    spec: &'static TableSpec,
+    start: RackState,
+    strike: Strike,
+) -> oneshot::Receiver<Vec<Timeline>> {
+    let (tx, rx) = oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let geom = spec.geometry();
+        let _ = tx.send(vec![sim::simulate(spec, &geom, &start, &strike).timeline]);
+    });
+    rx
+}
+
+/// The visit from shot `from` onward, replayed from the opening rack on a
+/// blocking thread.
+///
+/// Every way a history fails to replay ends the same for the board (nothing
+/// plays) and is said here, since nobody upstream will.
+fn replay_off_tick(
+    match_id: Uuid,
+    state: DailyPoolState,
+    from: usize,
+) -> oneshot::Receiver<Vec<Timeline>> {
+    let (tx, rx) = oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let timelines = match state.replay(from) {
+            Ok(timelines) => timelines,
+            Err(ReplayError::UnknownTable) => {
+                tracing::warn!(%match_id, "pool replay dropped: unknown table");
+                Vec::new()
+            }
+            Err(ReplayError::Refused { shot, reason }) => {
+                tracing::warn!(
+                    %match_id,
+                    shot,
+                    reason,
+                    "pool replay dropped: the rules refuse a stored shot"
+                );
+                Vec::new()
+            }
+            Err(ReplayError::Diverged) => {
+                tracing::warn!(
+                    %match_id,
+                    "pool replay dropped: the history ends on a different rack than the stored one"
+                );
+                Vec::new()
+            }
+        };
+        let _ = tx.send(timelines);
+    });
+    rx
+}
+
+/// How much of the match a replay shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplaySpan {
+    /// `r`: the shot just played.
+    LastShot,
+    /// `R`: every shot of the visit it belongs to.
+    LastVisit,
+}
+
 /// `r` / `R`: watch the last shot again, or the whole of the last visit.
 ///
-/// The timelines are re-simulated from the opening rack on a blocking thread,
-/// for the same reason a fresh shot's is: the tick path runs no physics.
+/// The two take different roads. The last shot is one simulation off the rack
+/// it was played on, which the state stores, so it owes nothing to the
+/// history before it. A visit has to be played forward from the opening rack
+/// (`DailyPoolState::replay`), which judges the whole match again and can
+/// refuse. Both run on a blocking thread, for the same reason a fresh shot's
+/// simulation does: the tick path runs no physics.
+///
 /// Pressing it again while a replay is rolling puts the board back, so the key
 /// is its own way out.
 ///
-/// Open to whoever is looking — both players, a spectator, a finished match.
+/// Open to whoever is looking: both players, a spectator, a finished match.
 /// Nothing here can become a move, and the shot it shows has already been
 /// played.
-pub(crate) fn start_pool_replay(board: &mut DailyBoardState, whole_visit: bool) -> bool {
+pub(crate) fn start_pool_replay(board: &mut DailyBoardState, span: ReplaySpan) {
+    let match_id = board.match_id;
     let Some(pool) = board.detail.as_mut().and_then(DailyMatchDetail::pool_mut) else {
-        return false;
+        return;
     };
     if pool.replaying {
         pool.playback = None;
@@ -1245,24 +1329,29 @@ pub(crate) fn start_pool_replay(board: &mut DailyBoardState, whole_visit: bool) 
         pool.replaying = false;
         board.timeline_rx = None;
         board.pool_shot_pending = false;
-        return true;
+        return;
     }
-    let Some(from) = pool.state.replay_from(whole_visit) else {
-        return false;
+    let rx = match span {
+        ReplaySpan::LastShot => {
+            let Some((spec, start, strike)) = pool.state.last_shot_sim() else {
+                return;
+            };
+            simulate_off_tick(spec, start, strike)
+        }
+        ReplaySpan::LastVisit => {
+            let Some(from) = pool.state.visit_start() else {
+                return;
+            };
+            replay_off_tick(match_id, pool.state.clone(), from)
+        }
     };
-    let state = pool.state.clone();
     pool.playback = None;
     pool.queue.clear();
     pool.replaying = true;
-    let (tx, rx) = oneshot::channel();
-    tokio::task::spawn_blocking(move || {
-        let _ = tx.send(state.replay(from));
-    });
     board.timeline_rx = Some(rx);
     // A replay is asked for, so there is no result to hold back: the board is
     // already showing it.
     board.pool_shot_pending = false;
-    true
 }
 
 /// News of a finish this session has been told about but is not yet showing,
@@ -1276,32 +1365,32 @@ pub(super) struct PoolFinishHold {
     pub own_win: bool,
     pub own_loss: bool,
     /// When it was held. The hold is released by the shot finishing; this is
-    /// the backstop for the case where it never does — a reload that errored, a
-    /// physics worker that went away — because news that never arrives is worse
-    /// than news that arrives late.
+    /// the backstop for the case where it never does (a reload that errored, a
+    /// physics worker that went away), because news that never arrives is
+    /// worse than news that arrives late.
     at: Instant,
 }
 
 impl PoolFinishHold {
-    pub(super) fn new(banner: Banner, own_win: bool, own_loss: bool) -> Self {
+    pub(super) fn new(banner: Banner, own_win: bool, own_loss: bool, at: Instant) -> Self {
         Self {
             banner,
             own_win,
             own_loss,
-            at: Instant::now(),
+            at,
         }
     }
 
-    /// Whether the hold is up: the board has finished showing the shot, or the
-    /// backstop has expired.
-    pub(super) fn released(&self, board: Option<&DailyBoardState>) -> bool {
-        self.at.elapsed() >= FINISH_HOLD_MAX || !pool_board_is_rolling(board)
+    /// Whether the hold is up at `now`: the board has finished showing the
+    /// shot, or the backstop has expired.
+    pub(super) fn released(&self, board: Option<&DailyBoardState>, now: Instant) -> bool {
+        now.saturating_duration_since(self.at) >= FINISH_HOLD_MAX || !pool_board_is_rolling(board)
     }
 }
 
 /// Longest a finish is held waiting for a shot to play out. A shot is seconds;
 /// this is the belt to that braces.
-const FINISH_HOLD_MAX: Duration = Duration::from_secs(20);
+pub(super) const FINISH_HOLD_MAX: Duration = Duration::from_secs(20);
 
 /// Whether news that `match_id` has finished should wait.
 ///

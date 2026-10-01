@@ -849,10 +849,11 @@ impl DailyState {
             changed |= pool_draft::poll_pool_timeline(board);
             changed |= pool_draft::drive_pool_playback(board);
         }
+        let now = Instant::now();
         if self
             .pool_finish_hold
             .as_ref()
-            .is_some_and(|held| held.released(self.board.as_ref()))
+            .is_some_and(|held| held.released(self.board.as_ref(), now))
             && let Some(held) = self.pool_finish_hold.take()
         {
             banner = Some(held.banner);
@@ -860,7 +861,6 @@ impl DailyState {
             self.own_loss |= held.own_loss;
             changed = true;
         }
-        let now = Instant::now();
         self.live_aims
             .retain(|_, (_, at)| now.saturating_duration_since(*at) < LIVE_AIM_WINDOW);
         DailyTick {
@@ -964,6 +964,7 @@ impl DailyState {
                             banner,
                             self.own_win && !was_win,
                             self.own_loss && !was_loss,
+                            Instant::now(),
                         ));
                         self.own_win = was_win;
                         self.own_loss = was_loss;
@@ -1336,7 +1337,7 @@ impl DailyState {
         self.open_board_inner(item.id, item.game, names, false, return_screen, entry);
     }
 
-    fn open_board_inner(
+    pub(super) fn open_board_inner(
         &mut self,
         match_id: Uuid,
         game: DailyGame,
