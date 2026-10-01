@@ -65,7 +65,7 @@ Every icon must be Emoji_Presentation, unambiguously two cells wide. A text-defa
 
 ## 7. Clicks
 
-`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles, live opens what the live strip shows, as `o` on the #lounge card does (the watch page, the board, the booth, the article; nothing while the strip is down or holds a result). Time, date, voice, pot, and Keyhints are readouts and get no hit rect. On Zen's row, care does nothing (the companions are on the page). Every bar feeds the same hit list, `App::last_status_hits`, as `(StatusClick, Rect)`.
+`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles, live opens what the live strip shows, as `o` on the #lounge card does (the stream's room, the board, the booth, the article; nothing while the strip is down or holds a result). Time, date, voice, pot, and Keyhints are readouts and get no hit rect. On Zen's row, care does nothing (the companions are on the page). Every bar feeds the same hit list, `App::last_status_hits`, as `(StatusClick, Rect)`.
 
 ## 8. Customizer
 

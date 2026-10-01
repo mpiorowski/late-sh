@@ -120,8 +120,8 @@ Cross-domain touchpoints:
   on the `Pending -> Live` edge (a stop and resume through grace keeps it),
   so the strip inherits "never before media flows" and a page refresh never
   queues the stream twice. It stays up at least `LIVE_STREAM_MIN` (2 min);
-  `o`, Enter on a Zen Live tile, or a click opens the watch page through
-  `App::watch_stream`, the path `/watch @user` takes. See
+  `o`, Enter on a Zen Live tile, or a click walks into the stream room on
+  Home, the path the rail row takes (lazy join, named-viewer note). See
   `../live/CONTEXT.md`.
 - `app/notify/` — `Notification::friend_live` and
   `Notification::stream_viewer`, both on `Kind::Streams` behind one
@@ -146,7 +146,7 @@ Cross-domain touchpoints:
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
 - `app/state.rs` — `App::tick_stream` (commands, events, snapshot),
-  `watch_stream` (`/watch @user` and the live strip's key), `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
+  `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
   `voice_toggle_join`'s one-time ON AIR confirm, `StreamQrModal`.
 - `paired_clients.rs` / `late-cli/src/ws.rs` — `PairControlMessage::OpenUrl`
   + the `open_url` capability (xdg-open/open/cmd start).

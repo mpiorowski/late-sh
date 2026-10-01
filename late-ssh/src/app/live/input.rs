@@ -4,6 +4,7 @@ use late_core::models::user::AudioSource;
 use ratatui::layout::Position;
 
 use crate::app::{
+    chat::state::RoomSlot,
     common::primitives::{Banner, Screen},
     lobby::daily::state::BoardEntry,
     state::App,
@@ -11,9 +12,10 @@ use crate::app::{
 
 use super::pick::LiveSource;
 
-/// `o` on the #lounge card, or Enter on a focused Zen Live tile, opens what
-/// the strip is showing. With nothing to open (no strip up, or a result
-/// holding it) the key falls through untouched.
+/// `o` on the #lounge card or on Zen with a Live tile shown, or Enter on a
+/// focused Zen Live tile, opens what the strip is showing. With nothing to
+/// open (no strip up, or a result holding it) the key falls through
+/// untouched.
 pub fn open_from_key(app: &mut App) -> bool {
     match app.live.opens() {
         Some(source) => open(app, source),
@@ -83,18 +85,23 @@ fn open(app: &mut App, source: LiveSource) -> bool {
         // News. Gone between the frame and the key (deleted): nothing to
         // open.
         LiveSource::NewsArticle(article_id) => app.chat.open_news_modal_for_article(article_id),
-        // The watch page, as `/watch @streamer` opens it. Gone between the
-        // frame and the key (the stream ended): nothing to watch.
+        // The streamer's room on Home, as its rail row opens it: joined on
+        // the first visit, and the visit counts as a named viewer. Its
+        // header carries the watch link. Gone between the frame and the key
+        // (the stream ended): nothing to open.
         LiveSource::Stream(streamer_id) => {
-            let streamer = app
+            let room = app
                 .chat
                 .live_streams
                 .iter()
                 .find(|stream| stream.user_id == streamer_id && stream.live)
-                .map(|stream| stream.username.clone());
-            match streamer {
-                Some(username) => {
-                    app.watch_stream(&username);
+                .map(|stream| stream.room_id);
+            match room {
+                Some(room_id) => {
+                    app.chat.reset_composer();
+                    app.chat.select_room_slot(RoomSlot::Room(room_id));
+                    app.set_screen(Screen::Dashboard);
+                    app.sync_visible_chat_room();
                     true
                 }
                 None => false,

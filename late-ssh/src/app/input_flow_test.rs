@@ -4275,9 +4275,9 @@ async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
     assert_eq!(app.screen, Screen::Leaderboard);
 }
 
-/// Zen opened over a table, then a Lobby jump from Zen onto a table: the
-/// jump lands on the same screen Ctrl+F would hand back, but it is going in
-/// from Zen, not closing it. Esc and backtick must agree that home is Zen.
+/// Zen opened over a table, then a Lobby jump from Zen onto a table: going
+/// in from Zen, not closing it. Esc and backtick must agree that home is
+/// Zen.
 #[tokio::test]
 async fn a_lobby_jump_from_zen_opened_over_a_table_comes_home_to_zen() {
     use crate::app::common::primitives::Screen;
@@ -4310,9 +4310,10 @@ async fn a_lobby_jump_from_zen_opened_over_a_table_comes_home_to_zen() {
         "backtick wraps to Zen, where Esc would go"
     );
 
-    // Zen still hands back the table it was first opened over.
+    // Zen still hands back what it was first opened over: not the table,
+    // which closed on the way in, but Home, where the table was opened.
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::HouseTable);
+    assert_eq!(app.screen, Screen::Dashboard);
 }
 
 #[tokio::test]
@@ -4449,10 +4450,10 @@ async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
     );
 }
 
-/// A Live tile shows the #lounge live strip on Zen, and Enter on it opens
-/// what it shows, as `o` does on the card.
+/// A Live tile shows the #lounge live strip on Zen. Enter on it opens what
+/// it shows, and so does `o` from any tile, as on the card.
 #[tokio::test]
-async fn zen_enter_on_the_live_tile_opens_what_the_strip_shows() {
+async fn zen_enter_on_the_live_tile_or_o_anywhere_opens_what_the_strip_shows() {
     use crate::app::zen::state::{KindPick, TileKind};
     use late_core::models::article::{Article, ArticleParams};
 
@@ -4505,6 +4506,20 @@ async fn zen_enter_on_the_live_tile_opens_what_the_strip_shows() {
         "Enter opens the article"
     );
     assert!(!app.chat.is_composing(), "Enter never reaches a composer");
+
+    // `o` with a chat tile focused opens the same article.
+    app.chat.close_news_modal();
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Chat)
+        .expect("the default has a chat");
+    app.handle_input(b"o");
+    assert_eq!(
+        app.chat.news_modal_url(),
+        Some("https://example.com/terminal-renaissance"),
+        "o opens the article from a chat tile"
+    );
+    assert!(!app.chat.is_composing(), "o never reaches a composer");
 }
 
 #[tokio::test]

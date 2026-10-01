@@ -59,7 +59,7 @@ fn the_body_names_the_stream_the_streamer_and_the_key() {
     assert_eq!(words[1], "late night rust");
     assert_eq!(words[2], "3 watching");
     assert_eq!(words[3], "mat went live");
-    assert_eq!(text(&body.hint), "o or click to watch");
+    assert_eq!(text(&body.hint), "o or click for the room");
     assert!(body.glow);
     assert_eq!(
         text(&compact_spans(60, &strip)),

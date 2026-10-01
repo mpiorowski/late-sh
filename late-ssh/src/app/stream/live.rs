@@ -1,5 +1,5 @@
 //! A stream on the live strip (`app/live/`): somebody went live, so the room
-//! sees who and what, and can open the watch page with a key. A drawn screen
+//! sees who and what, and can walk into the stream's room with a key. A drawn screen
 //! with the on-air mark sits in the picture column; the words beside it are
 //! the title, the room and how many are watching, and who went live.
 
@@ -63,7 +63,7 @@ pub(crate) fn body(budget: usize, strip: &StreamStripView) -> StripBody {
         words: word_rows(budget, strip),
         hint: key_hint_spans(
             budget,
-            &[HintPart::Key("o"), HintPart::Text(" or click to watch")],
+            &[HintPart::Key("o"), HintPart::Text(" or click for the room")],
         ),
         glow: glow(),
     }

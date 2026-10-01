@@ -422,7 +422,7 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
                 .as_ref()
                 .is_some_and(|strip| strip.opens().is_some()) =>
         {
-            &[("enter", "open")]
+            &[("o", "open")]
         }
         TileKind::Live => &[],
         TileKind::Clock

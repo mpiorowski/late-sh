@@ -317,7 +317,7 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
         app.zen.move_kind_picker(1);
     }
     assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    wait_for_render_contains(&mut app, "enter open").await;
+    wait_for_render_contains(&mut app, "o open").await;
     app.handle_input(b"\r");
     assert_eq!(app.screen, Screen::DailyMatch, "Enter opens the match");
     app.handle_input(b"\x06");

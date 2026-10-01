@@ -3,7 +3,7 @@
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
 - Purpose: the full-bleed page that cuts the clubhouse down to the things you keep alive.
-- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The one route back that is not the chord is the backtick chain: going into the games from Zen makes Zen the chain's base (`App::workspace_base`), which carries the return page and refills it when the wrap or an Esc off a board or table lands back here. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
+- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). A daily board or a house table closes on the way in, so over one of those Zen remembers the page the board or table was opened from, and Zen's own page when that was Zen (`input.rs::zen_return_screen`). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The one route back that is not the chord is the backtick chain: going into the games from Zen makes Zen the chain's base (`App::workspace_base`), which carries the return page and refills it when the wrap or an Esc off a board or table lands back here. The first-visit tour's `VisitZen` stop is reached with the chord (or Enter, for terminals that swallow it) and left with `0`.
 - Parent context: `../../../../CONTEXT.md`
 
 ---
@@ -160,9 +160,11 @@ modal instead, and a page with no chat tile says so in a banner.
 With Headlines focused, `j` `k` walk its items the same way and Enter
 copies the selected link to the clipboard (`pending_clipboard`, the way a
 copied search hit goes).
-With Live focused, Enter opens what the strip shows, as `o` does on the
-#lounge card (`live::input::open_from_key`); a click on the strip opens it
-without focusing the tile. There is no reply key here: `r` flips the split.
+With a Live tile on the page (`ZenState::draws`, so not one zoomed away
+from), `o` opens what the strip shows from whichever tile has the focus,
+as on the #lounge card (`live::input::open_from_key`); with Live focused,
+Enter does too, and a click on the strip opens it without focusing the
+tile. There is no reply key here: `r` flips the split.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
@@ -263,7 +265,7 @@ leaving the page, so a held resize key costs one row update.
   (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), Inbox Enter, Live Enter, the click the picker
+  (`rows_test.rs`), Inbox Enter, Live Enter and `o`, the click the picker
   swallows, `?` opening the Zen topic, and the status row's all-off
   removal (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
   the Live tile, empty and sharing a wide tile with the feed (`ui_test.rs`); the rest of the tile drawing is
