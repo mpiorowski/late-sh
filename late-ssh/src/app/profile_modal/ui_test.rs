@@ -282,6 +282,105 @@ async fn a_runners_profile_shows_the_runner_to_runners_only() {
     assert!(row_of(&lines, "signal  ").is_none(), "{}", lines.join("\n"));
 }
 
+/// A profile with a tank and a pet draws them as one row on a wide body:
+/// the reef under its heading, the pet under its own beside it, name and
+/// mood on a row each. A narrow body keeps them two sections, pet first.
+#[tokio::test]
+async fn a_pet_sits_beside_its_owners_reef() {
+    use late_core::models::marketplace::{
+        AQUARIUM_SKU, PET_COMPANION_SKU, purchase_durable_item_by_sku,
+    };
+
+    let fixture = fixture("reef").await;
+    let db = fixture._test_db.db.clone();
+    {
+        let mut client = db.get().await.expect("db client");
+        UserChips::admin_grant(&**client, fixture.user_id, 1_000_000)
+            .await
+            .expect("fund chips");
+        // The tank arrives with a welcome fry swimming, the pet with its row.
+        for sku in [AQUARIUM_SKU, PET_COMPANION_SKU] {
+            purchase_durable_item_by_sku(&mut client, fixture.user_id, sku)
+                .await
+                .expect("purchase")
+                .expect("affordable");
+        }
+    }
+    let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
+    let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);
+    let mut state = ProfileModalState::new(profile_service);
+    state.open(fixture.user_id, "reef-viewed".to_string());
+    timeout(Duration::from_secs(5), async {
+        loop {
+            snapshot_rx.changed().await.expect("watch open");
+            if snapshot_rx.borrow().pet.is_some() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("pet snapshot");
+    assert!(state.tick());
+    let (species, mood) = {
+        let snapshot = snapshot_rx.borrow();
+        let pet = snapshot.pet.as_ref().expect("pet");
+        assert!(!snapshot.aquarium_fish.is_empty(), "the welcome fry swims");
+        (pet.species.as_str(), pet.mood.as_str())
+    };
+    // Columns, not bytes: the rules are multi-byte.
+    let col_of = |line: &str, needle: &str| -> Option<usize> {
+        line.find(needle).map(|at| line[..at].chars().count())
+    };
+    let cells = |line: &str, from: usize, len: usize| -> String {
+        line.chars().skip(from).take(len).collect()
+    };
+
+    // Wide: one heading row for both, the pet's rows inside the band's
+    // eleven, and the reef stopping short of the pet's column.
+    let lines = render_as(&state, 130, 70, false);
+    let text = lines.join("\n");
+    let heading = row_of(&lines, "aquarium ─").expect("aquarium heading");
+    let pet_col = col_of(&lines[heading], "pet ─").expect("pet heading on the reef's row");
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("pet ─")).count(),
+        1,
+        "{text}"
+    );
+    let band = &lines[heading + 1..heading + 12];
+    let name = band
+        .iter()
+        .position(|line| cells(line, pet_col, species.len() + 1).trim_end() == species)
+        .unwrap_or_else(|| panic!("the pet's name under its heading:\n{text}"));
+    assert_eq!(
+        cells(&band[name + 1], pet_col, mood.len() + 1).trim_end(),
+        mood,
+        "the mood under the name:\n{text}"
+    );
+    assert!(name >= 3, "three art rows above the name:\n{text}");
+    for row in band {
+        assert_eq!(
+            cells(row, pet_col - 3, 3),
+            "   ",
+            "the reef keeps out of the gap:\n{text}"
+        );
+    }
+    assert!(
+        !cells(&band[0], pet_col - 10, 7).trim().is_empty(),
+        "the reef's surface runs up to the gap:\n{text}"
+    );
+
+    // Narrow: two sections, the pet's above the reef's, one caption row.
+    let lines = render_as(&state, 70, 70, false);
+    let text = lines.join("\n");
+    let pet = row_of(&lines, "pet ─").expect("pet heading");
+    let reef = row_of(&lines, "aquarium ─").expect("aquarium heading");
+    assert!(pet < reef, "pet, then aquarium:\n{text}");
+    assert!(
+        lines[pet + 4].contains(&format!("{species} · {mood}")),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn a_narrow_terminal_scrolls_the_same_column() {
     let fixture = fixture("narrow").await;

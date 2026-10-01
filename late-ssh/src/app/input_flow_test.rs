@@ -2947,26 +2947,20 @@ async fn default_bottom_bar_shows_every_default_component_even_while_idle() {
         enabled,
         vec![
             StatusComponent::Shortcuts,
-            StatusComponent::Station,
-            StatusComponent::Voice,
             StatusComponent::Mentions,
-            StatusComponent::Turns,
-            StatusComponent::Care,
+            StatusComponent::Voice,
+            StatusComponent::Live,
+            StatusComponent::Date,
         ]
     );
 
-    // Every default stays on the bar while idle. A new account's bonsai has
-    // not been watered today, so care is due. Wide enough for all of it
-    // beside the sponsor line.
+    // Every default stays on the bar while idle. Wide enough for all of it
+    // beside the sponsor line. The account has no timezone, so the date is
+    // UTC's.
     app.resize(160, 40).expect("resize test terminal");
+    let today = chrono::Utc::now().format("%a %-d %b").to_string();
     let frame = render_plain(&mut app);
-    for reading in [
-        "🎵 chillsynth",
-        "mic -",
-        "unread 0",
-        "your move 0",
-        "care 1",
-    ] {
+    for reading in ["unread 0", "mic -", "live -", today.as_str()] {
         assert!(
             frame.contains(reading),
             "{reading:?} shows by default: {frame:?}"
@@ -3055,11 +3049,10 @@ async fn keyhints_brief_property_toggles_and_persists_in_settings() {
                                 enabled.iter().map(|entry| entry["key"].as_str()).collect();
                             keys == [
                                 Some("shortcuts"),
-                                Some("station"),
-                                Some("voice"),
                                 Some("mentions"),
-                                Some("turns"),
-                                Some("care"),
+                                Some("voice"),
+                                Some("live"),
+                                Some("date"),
                             ] && enabled[0]["brief"] == brief
                         })
                 }
@@ -3238,8 +3231,8 @@ async fn clicking_a_status_bar_segment_opens_its_own_destination() {
     let screen = terminal.screen().contents();
     let top_row = screen.lines().next().expect("top border row");
     let bottom_row = screen.lines().last().expect("bottom border row");
-    // Display columns, not chars: the station's note ahead of the counter is
-    // two cells wide.
+    // Display columns, not chars: a wide glyph ahead of a segment takes two
+    // cells.
     let display_col = |row: &str, needle: &str| {
         let byte = row.find(needle).expect("needle on the border row");
         unicode_width::UnicodeWidthStr::width(&row[..byte])

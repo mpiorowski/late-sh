@@ -2529,6 +2529,7 @@ async fn sync_selection_keeps_a_selected_stream_room() {
         voice_channel_id: Uuid::now_v7(),
         stream_id: "stream-id".to_string(),
         live: true,
+        went_live_at: None,
         watching: 0,
         watch_url: String::new(),
     }];
@@ -2559,6 +2560,7 @@ fn visual_order_lists_only_live_streams() {
         voice_channel_id: Uuid::from_u128(n + 200),
         stream_id: format!("stream-{n}"),
         live,
+        went_live_at: None,
         watching: 0,
         watch_url: String::new(),
     };

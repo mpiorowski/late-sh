@@ -58,7 +58,7 @@ The runtime is ambient-only for now:
 - `+` / `-` on a fish or plant row adjust its active count, bounded by owned quantity and its kind's cap (`ShopState::adjust_selected_tank_stock`).
 - Care events are private (`AquariumFed`, `AquariumFryHatched`, `AquariumFishLost`, `AquariumSprouted`, `AquariumSproutRooted`, `AquariumSproutCut`: never shipped to #lounge); the tank's own session banners them.
 - It steps only while the Zen page is up and rebinds on terminal resize; the sidebar Tank panel reads its population and colours but never steps it.
-- Active fish and plants are also projected into profile snapshots via `marketplace::active_aquarium_creatures_for_user`; the profile modal paints the reef as a band of its scrolling column (`aquarium::ui::draw_into`, into an off-screen buffer) for viewed users with active fish.
+- Active fish and plants are also projected into profile snapshots via `marketplace::active_aquarium_creatures_for_user`; the profile modal paints the reef as a band of its scrolling column (the pet in a column beside it when the user owns both) (`aquarium::ui::draw_into`, into an off-screen buffer) for viewed users with active fish.
 
 Assets live under `late-ssh/assets/aquarium`. The source was adapted from `github.com/mevanlc/reefs`; keep attribution/licensing notes with any future asset or behavior changes. `fry.kdl` is ours: the two-cell hatchling, never sold, coloured like its parent by the population builder. `sprout.kdl` and `seatuft.kdl` (the second plant, kingdom plant, five by three) are ours too.
 

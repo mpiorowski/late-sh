@@ -249,7 +249,7 @@ fn build_segment(setting: &StatusComponentSetting, data: &StatusData<'_>) -> Opt
 /// count at all.
 fn resting_value(component: StatusComponent) -> String {
     match component {
-        StatusComponent::Voice => "-".to_string(),
+        StatusComponent::Voice | StatusComponent::Live => "-".to_string(),
         StatusComponent::Pot => "closed".to_string(),
         StatusComponent::Mentions
         | StatusComponent::Turns
@@ -259,6 +259,7 @@ fn resting_value(component: StatusComponent) -> String {
         // always have a reading, and Keyhints never reaches the value path.
         StatusComponent::Shortcuts
         | StatusComponent::Time
+        | StatusComponent::Date
         | StatusComponent::Chips
         | StatusComponent::Users
         | StatusComponent::Station => {
@@ -307,10 +308,11 @@ fn accent(component: StatusComponent) -> ratatui::style::Color {
         StatusComponent::Mentions => theme::MENTION(),
         StatusComponent::Chips | StatusComponent::Pot => theme::AMBER(),
         StatusComponent::Voice => theme::SUCCESS(),
-        StatusComponent::Turns | StatusComponent::Quests | StatusComponent::Care => {
-            theme::AMBER_GLOW()
-        }
-        StatusComponent::Users | StatusComponent::Station => theme::TEXT(),
+        StatusComponent::Turns
+        | StatusComponent::Quests
+        | StatusComponent::Care
+        | StatusComponent::Live => theme::AMBER_GLOW(),
+        StatusComponent::Users | StatusComponent::Station | StatusComponent::Date => theme::TEXT(),
         StatusComponent::Time => theme::TEXT_BRIGHT(),
     }
 }
@@ -455,6 +457,8 @@ pub(crate) enum StatusClick {
     Profiles,
     /// Zen, where the bonsai, the tank, and the pet all live.
     Zen,
+    /// What the live strip shows, as `o` on the #lounge card opens it.
+    Live,
 }
 
 pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {
@@ -467,8 +471,12 @@ pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {
         StatusComponent::Station => Some(StatusClick::Booth),
         StatusComponent::Quests => Some(StatusClick::Arcade),
         StatusComponent::Users => Some(StatusClick::Profiles),
-        // The clock, pot and the mic badge are readouts: there is no
-        // screen a click on them obviously means.
-        StatusComponent::Time | StatusComponent::Voice | StatusComponent::Pot => None,
+        StatusComponent::Live => Some(StatusClick::Live),
+        // The clock, the date, the pot and the mic badge are readouts: there
+        // is no screen a click on them obviously means.
+        StatusComponent::Time
+        | StatusComponent::Date
+        | StatusComponent::Voice
+        | StatusComponent::Pot => None,
     }
 }

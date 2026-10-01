@@ -30,6 +30,7 @@ pub fn reply_from_key(app: &mut App) -> bool {
         Some(LiveSource::DailyMatch(_))
         | Some(LiveSource::DailyResult(_))
         | Some(LiveSource::BoothTrack(_))
+        | Some(LiveSource::Stream(_))
         | None => false,
     }
 }
@@ -82,5 +83,22 @@ fn open(app: &mut App, source: LiveSource) -> bool {
         // News. Gone between the frame and the key (deleted): nothing to
         // open.
         LiveSource::NewsArticle(article_id) => app.chat.open_news_modal_for_article(article_id),
+        // The watch page, as `/watch @streamer` opens it. Gone between the
+        // frame and the key (the stream ended): nothing to watch.
+        LiveSource::Stream(streamer_id) => {
+            let streamer = app
+                .chat
+                .live_streams
+                .iter()
+                .find(|stream| stream.user_id == streamer_id && stream.live)
+                .map(|stream| stream.username.clone());
+            match streamer {
+                Some(username) => {
+                    app.watch_stream(&username);
+                    true
+                }
+                None => false,
+            }
+        }
     }
 }

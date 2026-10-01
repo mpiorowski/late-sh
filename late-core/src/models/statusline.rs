@@ -16,7 +16,7 @@
 
 use serde_json::Value;
 
-pub const STATUS_COMPONENT_COUNT: usize = 11;
+pub const STATUS_COMPONENT_COUNT: usize = 13;
 
 /// A segment the user can place on the status bar. Order in the stored list is
 /// the paint order, left to right.
@@ -33,28 +33,33 @@ pub enum StatusComponent {
     Quests,
     Care,
     Voice,
+    Live,
+    Date,
 }
 
 impl StatusComponent {
     /// Default paint order, left to right. `ALL` is also the backfill order for
     /// components missing from a stored list.
     ///
-    /// Most valuable first. Keyhints lead, then the station, which is always
-    /// there, then the two signals shown nowhere else on the frame (voice and
-    /// mentions), which appear to its right so nothing shifts when they pop
-    /// in. After them comes what is waiting on the user today: games to move
-    /// in and daily care. Those six ship enabled; the rest are opt-in: quests,
+    /// Most valuable first, since the order is also who keeps their room on
+    /// a narrow frame. Keyhints lead, then the signals that call for the
+    /// user: unread, their own mic, and what the house is doing right now
+    /// (the live strip). The date closes the default bar, the first to give
+    /// way. Those five ship enabled; the rest are opt-in: what is waiting on
+    /// the user today (games to move in, daily care, quests), the station,
     /// then the pot and the chips, which live on the fixed top bar until a
     /// user places them here (that moves them down rather than showing them
     /// twice), then the ambient readings.
     pub const ALL: [StatusComponent; STATUS_COMPONENT_COUNT] = [
         Self::Shortcuts,
-        Self::Station,
-        Self::Voice,
         Self::Mentions,
+        Self::Voice,
+        Self::Live,
+        Self::Date,
         Self::Turns,
         Self::Care,
         Self::Quests,
+        Self::Station,
         Self::Pot,
         Self::Chips,
         Self::Users,
@@ -74,6 +79,8 @@ impl StatusComponent {
             Self::Quests => "quests",
             Self::Care => "care",
             Self::Voice => "voice",
+            Self::Live => "live",
+            Self::Date => "date",
         }
     }
 
@@ -90,6 +97,8 @@ impl StatusComponent {
             "quests" => Some(Self::Quests),
             "care" => Some(Self::Care),
             "voice" => Some(Self::Voice),
+            "live" => Some(Self::Live),
+            "date" => Some(Self::Date),
             _ => None,
         }
     }
@@ -108,6 +117,8 @@ impl StatusComponent {
             Self::Quests => "Quests",
             Self::Care => "Care",
             Self::Voice => "Voice",
+            Self::Live => "Live",
+            Self::Date => "Date",
         }
     }
 
@@ -125,6 +136,10 @@ impl StatusComponent {
             Self::Quests => "Unfinished daily quests, optionally including weekly quests.",
             Self::Care => "Daily care still due today: bonsai, tank, and pet.",
             Self::Voice => "Your voice channel: speaking, listening, muted or deafened.",
+            Self::Live => {
+                "What the #lounge live strip shows: a stream, a match, a booth track, a shared link."
+            }
+            Self::Date => "Today's date in your chosen timezone.",
         }
     }
 
@@ -143,6 +158,8 @@ impl StatusComponent {
             Self::Quests => "quests",
             Self::Care => "care",
             Self::Voice => "mic",
+            Self::Live => "live",
+            Self::Date => "",
         }
     }
 
@@ -170,46 +187,60 @@ impl StatusComponent {
             Self::Quests => "❕",
             Self::Care => "🌱",
             Self::Voice => "🔊",
+            Self::Live => "🔴",
+            Self::Date => "📅",
         }
     }
 
     /// Whether this component has an "inactive" reading at all, and so whether
-    /// the customizer offers it an auto-hide switch. Keyhints, Time, Chips,
-    /// Users, and Station always have something to say (a balance of zero is
-    /// still a balance, and an audio source always names itself); the rest can
-    /// read zero/idle.
+    /// the customizer offers it an auto-hide switch. Keyhints, Time, Date,
+    /// Chips, Users, and Station always have something to say (a balance of
+    /// zero is still a balance, and an audio source always names itself); the
+    /// rest can read zero/idle.
     pub fn can_auto_hide(self) -> bool {
         match self {
-            Self::Shortcuts | Self::Time | Self::Chips | Self::Users | Self::Station => false,
-            Self::Mentions | Self::Pot | Self::Turns | Self::Quests | Self::Care | Self::Voice => {
-                true
-            }
+            Self::Shortcuts
+            | Self::Time
+            | Self::Date
+            | Self::Chips
+            | Self::Users
+            | Self::Station => false,
+            Self::Mentions
+            | Self::Pot
+            | Self::Turns
+            | Self::Quests
+            | Self::Care
+            | Self::Voice
+            | Self::Live => true,
         }
     }
 
     /// Whether the component starts enabled for a user with no stored list.
     ///
-    /// Keyhints and the station, then voice and mentions, which the frame
-    /// shows nowhere else, and what is waiting on the user today (games to
-    /// move in, daily care). Every other reading is opt-in.
+    /// Keyhints, then mentions and voice, which the frame shows nowhere
+    /// else, the live strip's reading and the date. Every other reading is
+    /// opt-in.
     pub fn default_enabled(self) -> bool {
         match self {
-            Self::Shortcuts
+            Self::Shortcuts | Self::Mentions | Self::Voice | Self::Live | Self::Date => true,
+            Self::Time
             | Self::Station
-            | Self::Voice
-            | Self::Mentions
+            | Self::Chips
+            | Self::Pot
+            | Self::Users
             | Self::Turns
-            | Self::Care => true,
-            Self::Time | Self::Chips | Self::Pot | Self::Users | Self::Quests => false,
+            | Self::Quests
+            | Self::Care => false,
         }
     }
 
     pub fn default_label_mode(self) -> LabelMode {
         match self {
-            // The clock reads as a clock; a label would only cost columns.
-            Self::Shortcuts | Self::Time => LabelMode::None,
-            // A station name says what it is; the note costs four columns
-            // fewer than `on air`, and the station is always on the bar.
+            // The clock reads as a clock and a date as a date; a label would
+            // only cost columns.
+            Self::Shortcuts | Self::Time | Self::Date => LabelMode::None,
+            // A station name says what it is, and the note costs four
+            // columns fewer than `on air`.
             Self::Station => LabelMode::Icon,
             Self::Chips
             | Self::Mentions
@@ -218,7 +249,8 @@ impl StatusComponent {
             | Self::Turns
             | Self::Quests
             | Self::Care
-            | Self::Voice => LabelMode::Text,
+            | Self::Voice
+            | Self::Live => LabelMode::Text,
         }
     }
 
@@ -233,14 +265,16 @@ impl StatusComponent {
     /// already saved. `false` (the default for anything cosmetic or niche)
     /// backfills it disabled, leaving a customized bar untouched; `true`
     /// forces it on, and is reserved for what the frame shows nowhere else:
-    /// the keyboard hint, the voice badge, and the unread counter. Diverges on
+    /// the keyboard hint, the voice badge, the unread counter, the live
+    /// strip's reading (drawn only on the Home #lounge card and a Zen tile),
+    /// and the date. Diverges on
     /// purpose from `normalize_right_sidebar_components`, which backfills
     /// everything enabled: a sidebar panel that appears costs a user rows in a
     /// rail built to hold panels, while a bar segment that appears costs
     /// horizontal frame space.
     pub fn backfill_existing(self) -> bool {
         match self {
-            Self::Shortcuts | Self::Voice | Self::Mentions => true,
+            Self::Shortcuts | Self::Voice | Self::Mentions | Self::Live | Self::Date => true,
             Self::Time
             | Self::Chips
             | Self::Pot
@@ -261,13 +295,19 @@ impl StatusComponent {
             Self::Mentions => &[StatusVariant::MentionsAndDms, StatusVariant::MentionsOnly],
             Self::Quests => &[StatusVariant::QuestsDaily, StatusVariant::QuestsDailyWeekly],
             Self::Station => &[StatusVariant::StationName, StatusVariant::StationTrack],
+            Self::Date => &[
+                StatusVariant::DateShort,
+                StatusVariant::DateFull,
+                StatusVariant::DateIso,
+            ],
             Self::Shortcuts
             | Self::Chips
             | Self::Pot
             | Self::Users
             | Self::Turns
             | Self::Care
-            | Self::Voice => &[],
+            | Self::Voice
+            | Self::Live => &[],
         }
     }
 
@@ -278,13 +318,15 @@ impl StatusComponent {
             Self::Mentions => Some("Count"),
             Self::Quests => Some("Count"),
             Self::Station => Some("Show"),
+            Self::Date => Some("Format"),
             Self::Shortcuts
             | Self::Chips
             | Self::Pot
             | Self::Users
             | Self::Turns
             | Self::Care
-            | Self::Voice => None,
+            | Self::Voice
+            | Self::Live => None,
         }
     }
 
@@ -359,6 +401,12 @@ pub enum StatusVariant {
     QuestsDailyWeekly,
     StationName,
     StationTrack,
+    /// `Thu 1 Oct`.
+    DateShort,
+    /// `Thursday, 1 October`.
+    DateFull,
+    /// `2026-10-01`.
+    DateIso,
 }
 
 impl StatusVariant {
@@ -372,6 +420,9 @@ impl StatusVariant {
             Self::QuestsDailyWeekly => "quests_daily_weekly",
             Self::StationName => "station_name",
             Self::StationTrack => "station_track",
+            Self::DateShort => "date_short",
+            Self::DateFull => "date_full",
+            Self::DateIso => "date_iso",
         }
     }
 
@@ -385,6 +436,9 @@ impl StatusVariant {
             "quests_daily_weekly" => Some(Self::QuestsDailyWeekly),
             "station_name" => Some(Self::StationName),
             "station_track" => Some(Self::StationTrack),
+            "date_short" => Some(Self::DateShort),
+            "date_full" => Some(Self::DateFull),
+            "date_iso" => Some(Self::DateIso),
             _ => None,
         }
     }
@@ -399,6 +453,9 @@ impl StatusVariant {
             Self::QuestsDailyWeekly => "Daily + weekly",
             Self::StationName => "Station",
             Self::StationTrack => "Track",
+            Self::DateShort => "Short",
+            Self::DateFull => "Full",
+            Self::DateIso => "ISO",
         }
     }
 }

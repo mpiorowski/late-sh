@@ -10,7 +10,7 @@
 Framed pages use one component renderer on both borders. Zen is frameless, so it has no top bar and paints the bottom one on a row of its own (see Zen row below).
 
 - **Top-right bar**: fixed UI policy, not persisted. The pot, then the chips, sharing the row with the page tabs. These are the ambient readings, kept in the one corner that never moves.
-- **Bottom-left bar**: the user's arrangement, sharing the row with the sponsor line. By default it is the Keyhints, the station (icon label), voice, mentions (DMs counted), your move, and care. All six stay visible while idle (`mic -`, `unread 0`), so a newcomer sees the whole default bar and trims it in Settings. Every other reading is opt-in and starts auto-hiding. The default order (`StatusComponent::ALL`) runs most valuable first: Keyhints, station, voice, mentions, your move, care, quests, pot, chips, users online, time.
+- **Bottom-left bar**: the user's arrangement, sharing the row with the sponsor line. By default it is the Keyhints, mentions (DMs counted), voice, live, and the date. All five stay visible while idle (`unread 0`, `mic -`, `live -`), so a newcomer sees the whole default bar and trims it in Settings. Every other reading is opt-in and starts auto-hiding. The default order (`StatusComponent::ALL`) runs most valuable first, since the order is also who keeps their room: Keyhints, mentions, voice, live, date, your move, care, quests, station, pot, chips, users online, time. Beside the sponsor link the five need about 140 columns while idle; on a narrower frame the later ones are dropped whole (at 120: Keyhints, unread, mic). The live reading is capped at 20 columns (`live::ui::STATUS_COLS`) so the segment does not outgrow its room the moment something goes live.
 - **Move, never duplicate**: a component the bottom bar painted this frame is skipped on the top bar, so turning the pot or the chips on at the bottom moves the reading down. Painted, not merely enabled: a segment the bottom bar had no room for stays on the top. `render.rs` builds the bottom bar first and hands `StatusBar::painted` to `build_top_status_bar`.
 
 - **Zen row**: Zen's last row (`build_zen_status_row`, `Placement::ZenRow`), the bar's alone: the same segments and fit, left-aligned, joined by faint `·` since there is no border to continue. The guide (`?`, Keyhints' `Guide ?`) opens on the Zen topic there. The row exists while any component is enabled (`zen_row_shown`): a setting, not a reading, so it stays (blank) while every enabled segment is auto-hidden and the tiles never jump as a count comes and goes. With every component off the row goes and the tiles take the page. Every Zen caller of `zen::layout::rice_areas` reads the flag through `App::zen_status_row`, and tick re-binds the reef when it changes under the page (`App::zen_row_bound`).
@@ -22,7 +22,7 @@ Text labels and icon labels both precede their values (`unread 3`, `chips 1204`)
 | File | Responsibility |
 |---|---|
 | `mod.rs` | Declarations only. |
-| `data.rs` | `StatusData`, the per-frame inputs gathered once in `App::render`, and the value each component paints. Pure: the clock arrives pre-formatted, so the draw path reads no wall clock. |
+| `data.rs` | `StatusData`, the per-frame inputs gathered once in `App::render`, and the value each component paints. Pure: the clock and the date arrive pre-formatted, so the draw path reads no wall clock, and the live reading arrives as the strip's own one-row text (`live::ui::status_text`, built only while the Live segment is enabled). |
 | `bar.rs` | The three passes (build, fit, lay out), the fixed top bar (`build_top_status_bar`), Zen's row (`build_zen_status_row`, `zen_row_shown`), the Keyhints copy, and `click_action`. |
 | `late-core/src/models/statusline.rs` | The persisted model: `StatusComponent` roster, `LabelMode`, `StatusVariant`, `StatusComponentSetting`, and the `parse_` / `normalize_` / `_json` trio. |
 | `app/render.rs::app_frame_bottom_titles` | Owns the sponsor line: sets its link's width aside, gives the bar the rest of the row, and adds the thanks when the bar leaves room. |
@@ -55,17 +55,17 @@ There are no render rules beyond this one: **a segment fits whole or is dropped.
 Stored account-wide in `users.settings.statusline_components` as `[{key, enabled, brief, label, auto_hide, variant}]`, in paint order. An absent key reads as the default list. Per-device scoping is not designed.
 
 - `normalize_statusline_components` is the boundary: it drops duplicates, clears `brief` on anything but Keyhints, clears `auto_hide` where `can_auto_hide()` is false, replaces a variant that does not belong to its component with that component's default, and backfills missing components. Interior code trusts the result and does not re-check it.
-- A component missing from a stored list backfills at its own `backfill_existing()`: the Keyhints (inserted at the front), voice, and mentions are forced on because the frame shows them nowhere else; every other component, the station included, appends disabled.
-- `can_auto_hide()` is true exactly for the components that can read inactive: mentions, pot, your move, quests, care, voice. Keyhints, time, chips, users online, and station always have a reading, so they get no auto-hide dial. `default_auto_hide()` turns it on only for the opt-in components; what ships enabled stays visible while idle.
+- A component missing from a stored list backfills at its own `backfill_existing()`: the Keyhints (inserted at the front), voice, mentions, live, and the date are forced on because the frame shows them nowhere else (the live strip is drawn only on the Home #lounge card and a Zen tile); every other component, the station included, appends disabled. A forced-on component other than the Keyhints appends at the end of the stored list, so on an already saved bar live and the date arrive as its last, lowest-priority segments.
+- `can_auto_hide()` is true exactly for the components that can read inactive: mentions, pot, your move, quests, care, voice, live. Keyhints, time, date, chips, users online, and station always have a reading, so they get no auto-hide dial. `default_auto_hide()` turns it on only for the opt-in components; what ships enabled stays visible while idle.
 - Variants are stored by key, never by index. Each dial is read through one exhaustive match in `data.rs`, so a new `StatusVariant` breaks the build there.
 
 ## 6. Icons
 
-Every icon must be Emoji_Presentation, unambiguously two cells wide. A text-default glyph that only becomes emoji through VS16 (`♟️`, `✉️`, `☎️`) is painted at a width the terminal and `unicode-width` disagree about, which slides every hit rect and can overrun the title at the other end of the row. Time's icon is hour-dependent (`clock_icon`) and Keyhints has none. Brief Keyhints paints literal text glyphs.
+Every icon must be Emoji_Presentation, unambiguously two cells wide. A text-default glyph that only becomes emoji through VS16 (`♟️`, `✉️`, `☎️`) is painted at a width the terminal and `unicode-width` disagree about, which slides every hit rect and can overrun the title at the other end of the row. Time's icon is hour-dependent (`clock_icon`) and Keyhints has none. Live is `🔴`, the date `📅`. Brief Keyhints paints literal text glyphs.
 
 ## 7. Clicks
 
-`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles. Time, voice, pot, and Keyhints are readouts and get no hit rect. On Zen's row, care does nothing (the companions are on the page). Every bar feeds the same hit list, `App::last_status_hits`, as `(StatusClick, Rect)`.
+`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles, live opens what the live strip shows, as `o` on the #lounge card does (the watch page, the board, the booth, the article; nothing while the strip is down or holds a result). Time, date, voice, pot, and Keyhints are readouts and get no hit rect. On Zen's row, care does nothing (the companions are on the page). Every bar feeds the same hit list, `App::last_status_hits`, as `(StatusClick, Rect)`.
 
 ## 8. Customizer
 
@@ -74,6 +74,6 @@ Settings > Statusline, the tab after Tweaks. The list on the left reads top to b
 - List: `j`/`k` or arrows select, `Space` toggles, `Enter` opens the dials.
 - Dials: `Left`/`Right` or `Space` change the focused one, `Esc` returns to the list.
 - `Shift+Up`/`Shift+Down` (or `[`/`]`) reorder from either pane; `Tab`/`Shift+Tab` switch settings tabs from either pane.
-- Keyhints offers only Brief. Every other component offers Label, Auto-hide when it can read inactive, and its own variant dial when it has one.
+- Keyhints offers only Brief. Every other component offers Label, Auto-hide when it can read inactive, and its own variant dial when it has one: the clock (24-hour, AM/PM), mentions, quests, the station, and the date's Format (Short `Thu 1 Oct`, Full `Thursday, 1 October`, ISO `2026-10-01`).
 
 Every change saves immediately, and the frame previews the draft while the modal is open. Switching mentions off leaves no unread counter on the frame; the Mentions entry in the Home rail still carries one.

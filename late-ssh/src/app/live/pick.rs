@@ -34,6 +34,9 @@ pub enum LiveSource {
     BoothTrack(Uuid),
     /// A link somebody shared to News, by article id.
     NewsArticle(Uuid),
+    /// A stream that went live, by the streamer's user id (one stream per
+    /// user).
+    Stream(Uuid),
 }
 
 /// The two lanes of the queue. The strip always takes from `News` first.
@@ -46,9 +49,10 @@ enum Lane {
 fn lane(source: LiveSource) -> Lane {
     match source {
         LiveSource::NewsArticle(_) => Lane::News,
-        LiveSource::DailyMatch(_) | LiveSource::DailyResult(_) | LiveSource::BoothTrack(_) => {
-            Lane::Rest
-        }
+        LiveSource::DailyMatch(_)
+        | LiveSource::DailyResult(_)
+        | LiveSource::BoothTrack(_)
+        | LiveSource::Stream(_) => Lane::Rest,
     }
 }
 
@@ -59,6 +63,9 @@ pub const LIVE_MATCH_MIN: Duration = Duration::from_secs(60);
 /// A booth track stays up at least this long: long enough to hear what it
 /// is and tune in.
 pub const LIVE_TRACK_MIN: Duration = Duration::from_secs(2 * 60);
+/// A stream that just went live stays up at least this long, the same as a
+/// booth track: long enough to see who it is and open the watch page.
+pub const LIVE_STREAM_MIN: Duration = Duration::from_secs(2 * 60);
 /// A shared link stays up at least this long: a link takes longer to read
 /// than a board takes to glance at. It equals `LIVE_MAX_UP`, so a link is
 /// up exactly this long.
@@ -84,6 +91,7 @@ fn min_for(source: LiveSource) -> chrono::Duration {
     chrono_of(match source {
         LiveSource::DailyMatch(_) | LiveSource::DailyResult(_) => LIVE_MATCH_MIN,
         LiveSource::BoothTrack(_) => LIVE_TRACK_MIN,
+        LiveSource::Stream(_) => LIVE_STREAM_MIN,
         LiveSource::NewsArticle(_) => LIVE_NEWS_MIN,
     })
 }
@@ -93,8 +101,9 @@ fn min_for(source: LiveSource) -> chrono::Duration {
 pub struct LiveCandidate {
     pub source: LiveSource,
     /// When it joined its lane: a match row's `updated` (the claim, every
-    /// move), when a match finished, when a track was queued, when a link
-    /// was shared. A match that moves again joins again at the back.
+    /// move), when a match finished, when a track was queued, when a stream
+    /// went live, when a link was shared. A match that moves again joins
+    /// again at the back.
     pub updated: DateTime<Utc>,
     /// When somebody last acted on it right now, if they have: a pool
     /// shooter moving their cue, the one source of it today.

@@ -30,12 +30,12 @@ fn default_list_covers_every_component_exactly_once() {
     }
 }
 
-/// A user without a stored list gets the keyboard hint and the station, then
-/// the two signals the frame shows nowhere else and what is waiting on them
-/// today. All of it stays visible while idle, so a newcomer sees the whole
+/// A user without a stored list gets the keyboard hint, then the signals
+/// that call for them (unread, their mic, the live strip's reading) and the
+/// date. All of it stays visible while idle, so a newcomer sees the whole
 /// default bar. Every other reading is opt-in and starts auto-hiding.
 #[test]
-fn default_bottom_bar_is_six_always_visible_components() {
+fn default_bottom_bar_is_five_always_visible_components() {
     let defaults = default_statusline_components();
     let enabled: Vec<StatusComponent> = defaults
         .iter()
@@ -46,21 +46,25 @@ fn default_bottom_bar_is_six_always_visible_components() {
         enabled,
         vec![
             StatusComponent::Shortcuts,
-            StatusComponent::Station,
-            StatusComponent::Voice,
             StatusComponent::Mentions,
-            StatusComponent::Turns,
-            StatusComponent::Care,
+            StatusComponent::Voice,
+            StatusComponent::Live,
+            StatusComponent::Date,
         ]
+    );
+    assert_eq!(
+        find(&defaults, StatusComponent::Date).variant,
+        Some(StatusVariant::DateShort)
     );
     for component in [
         StatusComponent::Voice,
         StatusComponent::Mentions,
-        StatusComponent::Turns,
-        StatusComponent::Care,
+        StatusComponent::Live,
     ] {
         assert!(!find(&defaults, component).auto_hide);
     }
+    assert!(find(&defaults, StatusComponent::Turns).auto_hide);
+    assert!(find(&defaults, StatusComponent::Care).auto_hide);
     assert!(find(&defaults, StatusComponent::Quests).auto_hide);
     assert!(find(&defaults, StatusComponent::Pot).auto_hide);
     assert_eq!(
@@ -122,8 +126,9 @@ fn normalize_drops_duplicates_and_keeps_stored_order() {
 }
 
 /// Backfill diverges from the sidebar's blanket enable. Only what the frame
-/// shows nowhere else is forced on (the keyboard hint, voice, mentions);
-/// optional status components stay off in an existing custom roster.
+/// shows nowhere else is forced on (the keyboard hint, voice, mentions, the
+/// live strip's reading, the date); optional status components stay off in
+/// an existing custom roster.
 #[test]
 fn normalize_backfills_each_component_at_its_own_policy() {
     let stored = vec![StatusComponentSetting::new(StatusComponent::Chips)];
@@ -144,7 +149,10 @@ fn normalize_backfills_each_component_at_its_own_policy() {
             setting.enabled,
             matches!(
                 setting.component,
-                StatusComponent::Voice | StatusComponent::Mentions
+                StatusComponent::Voice
+                    | StatusComponent::Mentions
+                    | StatusComponent::Live
+                    | StatusComponent::Date
             ),
             "{} only forces itself on when it is shown nowhere else",
             setting.component.as_str()
@@ -243,8 +251,10 @@ fn parse_of_an_empty_array_yields_the_full_default_list() {
         enabled,
         vec![
             StatusComponent::Shortcuts,
-            StatusComponent::Voice,
             StatusComponent::Mentions,
+            StatusComponent::Voice,
+            StatusComponent::Live,
+            StatusComponent::Date,
         ],
         "what the frame shows nowhere else comes back on; optional entries stay off"
     );

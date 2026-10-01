@@ -3125,6 +3125,10 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         // and reopening would make Zen its own return page.
         StatusClick::Zen if app.screen == Screen::Zen => {}
         StatusClick::Zen => open_zen_globally(app),
+        // Nothing up, or a result holding the strip: nothing to open.
+        StatusClick::Live => {
+            crate::app::live::input::open_from_key(app);
+        }
     }
     true
 }
@@ -3741,13 +3745,55 @@ fn open_zen_globally(app: &mut App) {
     app.show_bonsai_modal = false;
     app.show_settings = false;
     app.show_lobby_modal = false;
-    app.zen_return_screen = Some(app.screen);
+    app.zen_return_screen = zen_return_screen(app);
     reset_composers_for_page_change(app);
     // The first opening this session lands on the first chat tile, so the
     // chat keys work before anyone reads the footer.
     app.zen.note_opened();
     app.set_screen(Screen::Zen);
     app.chat.clear_message_selection();
+}
+
+/// The page the chord on Zen hands back. A daily board or a house table
+/// does not survive the trip (`set_screen` closes it on the way out), so Zen
+/// remembers the page it was opened from instead. One opened from Zen hands
+/// back Zen's own page, which the workspace base carries; with none, Zen
+/// walks into the Clubhouse like a session that landed there.
+fn zen_return_screen(app: &App) -> Option<Screen> {
+    use crate::app::workspace::cycle::WorkspaceBase;
+
+    let opened_from = match app.screen {
+        Screen::DailyMatch => app.daily.board.as_ref().map(|board| board.return_screen),
+        Screen::HouseTable => Some(app.house.return_screen),
+        Screen::Dashboard
+        | Screen::Games
+        | Screen::Arcade
+        | Screen::Rebels
+        | Screen::Nethack
+        | Screen::Dcss
+        | Screen::Brogue
+        | Screen::Lateania
+        | Screen::Darkroom
+        | Screen::GreenDragon
+        | Screen::Dopewars
+        | Screen::Bashquest
+        | Screen::Codekeep
+        | Screen::Usurper
+        | Screen::Artboard
+        | Screen::Profiles
+        | Screen::Leaderboard
+        | Screen::Clubhouse
+        | Screen::Nightcap
+        | Screen::City
+        | Screen::Zen
+        | Screen::Scratchpad => return Some(app.screen),
+    };
+    match (opened_from, app.workspace_base) {
+        (Some(Screen::Zen), WorkspaceBase::Zen { back }) => back,
+        (Some(Screen::Zen), WorkspaceBase::Home) => None,
+        (Some(screen), _) => Some(screen),
+        (None, _) => None,
+    }
 }
 
 /// Hands the page back to wherever Ctrl+F was pressed. A session that

@@ -13,7 +13,7 @@
 A queue with two lanes, and one overlay. Every clock is a database stamp or the wall clock, so every session on every replica sees the same thing in the same order (the aim is the one exception, §8).
 
 **The queue** (`pick_queued`, `replay`):
-1. Two lanes, first come first served: **News** (shared links) and **Rest** (match moves, match results, booth tracks). When the strip hands over, it takes the oldest link if one is waiting, else the oldest of the rest.
+1. Two lanes, first come first served: **News** (shared links) and **Rest** (match moves, match results, booth tracks, streams going live). When the strip hands over, it takes the oldest link if one is waiting, else the oldest of the rest.
 2. Whatever is up stays **at least its minimum**, counted from when it went up.
 3. After its minimum it hands over as soon as anything is waiting. With **nothing waiting it stays up to `LIVE_MAX_UP` (5 min)** from when it went up, then the strip comes down.
 4. Anything that waited in its lane longer than **`LIVE_MAX_WAIT` (10 min)** is dropped, so a busy evening never builds a backlog.
@@ -26,13 +26,15 @@ A queue with two lanes, and one overlay. Every clock is a database stamp or the 
 | `DailyMatch` | Rest | the claim, and again on every move (`updated`) | `LIVE_MATCH_MIN` (1 min) | while aimed | the board | nothing |
 | `DailyResult` | Rest | the finish (`finished_at`) | `LIVE_MATCH_MIN` (1 min) | yes | nothing (the board left the lobby) | nothing |
 | `BoothTrack` | Rest | when it was queued, not when it starts playing | `LIVE_TRACK_MIN` (2 min) | while it is the one playing | tune in to YouTube, or the booth if already there | nothing |
+| `Stream` | Rest | when its media first flowed (`went_live_at`), never at `/golive` | `LIVE_STREAM_MIN` (2 min) | yes | the watch page, as `/watch @streamer` | nothing |
 
 The cases, in words:
 - **A link is shared** while a track is up: the track keeps its two minutes, then the link goes ahead of everything waiting in Rest and stays five minutes.
 - **A match moves again.** Its entry is its newest move, so it joins the back of Rest again; with nothing waiting, it goes straight back up and its five minutes restart. A session showing it keeps it for its minimum even though the replay's history moved (`pick_queued`).
 - **A YouTube track.** Every track playing or waiting in the booth is an entry, stamped when it was queued. Queue three and each takes at least two minutes in order, reading "#3 in line", "up next" or "playing now" as it stands. A track that starts playing long after it was queued does not join again.
+- **A stream goes live.** It joins Rest once, at the `Pending -> Live` edge, and takes at least two minutes like a track. A refresh through grace keeps its stamp, so it does not join again; it is a candidate until the stream ends, so with nothing waiting it stays its five minutes.
 - **A match ends.** Its move leaves with the active row and its result joins Rest, showing the final board and the result line.
-- **Something disappears** (a track skipped, a link deleted): if it was up, the strip moves on at once; if it was waiting, it leaves its lane.
+- **Something disappears** (a track skipped, a link deleted, a stream ended): if it was up, the strip moves on at once; if it was waiting, it leaves its lane.
 - **The viewer is reading.** Going up or coming down changes the card's height, so it waits while a message is selected, unless what the strip was showing is gone. Switching what is shown while it stays up does not wait. A Zen tile's size is its own, so nothing waits there.
 
 ## 1. What it is
@@ -48,9 +50,9 @@ It is also where News shares land: a share posts nothing into the #lounge chat (
 | File | Role |
 |---|---|
 | `mod.rs` | Declarations only. |
-| `pick.rs` | Pure rules: `LiveSource` (the closed enum of sources), `Lane` and `lane`, `min_for`, `LiveCandidate`, `Featured`, `pick_queued` over `replay` and `take_next`, `aim_overlay`, and the clocks `LIVE_AIM_WINDOW` (8s), `LIVE_MATCH_MIN` (1 min), `LIVE_TRACK_MIN` (2 min), `LIVE_NEWS_MIN` (5 min), `LIVE_MAX_UP` (5 min), `LIVE_MAX_WAIT` (10 min), `LIVE_STAMP_HORIZON` (the two added: the oldest stamp the strip can still show). |
-| `state.rs` | Per-session `LiveState`: what the queue has up (`queued`), what the strip shows (`shown`: the overlay, else the queue), the render-recorded `hit` rect. `refresh` is the pure rule over candidates and clocks; `tick` and `view` are the glue that reads `DailyState`, `AudioState` and the session's News snapshot (`chat.news.all_articles()`). `tick` also keeps the featured booth track's thumbnail rendered for this session's terminal (`TrackPicture`), so the frame never renders an image. `LiveStripView` is what gets painted, one variant per kind of body. |
-| `ui.rs` | The frame: `fit_live_strip` (the form, from the card's size alone), `draw_live_strip`, `fit_live_tile` and `draw_live_tile` (the Zen tile's), `live_strip_lines` for a `StripHost` (the card, or a Zen tile), `live_strip_compact_line`, the `── live ──` rule, `PICTURE_ROWS` (8), `PICTURE_COLS` (21), `StripBody` (what a source hands the frame: picture, words, the key `hint`, glow), `key_hint_spans` over `HintPart` (the key hint every body carries: keys in amber, words faint). |
+| `pick.rs` | Pure rules: `LiveSource` (the closed enum of sources), `Lane` and `lane`, `min_for`, `LiveCandidate`, `Featured`, `pick_queued` over `replay` and `take_next`, `aim_overlay`, and the clocks `LIVE_AIM_WINDOW` (8s), `LIVE_MATCH_MIN` (1 min), `LIVE_TRACK_MIN` (2 min), `LIVE_STREAM_MIN` (2 min), `LIVE_NEWS_MIN` (5 min), `LIVE_MAX_UP` (5 min), `LIVE_MAX_WAIT` (10 min), `LIVE_STAMP_HORIZON` (the two added: the oldest stamp the strip can still show). |
+| `state.rs` | Per-session `LiveState`: what the queue has up (`queued`), what the strip shows (`shown`: the overlay, else the queue), the render-recorded `hit` rect. `refresh` is the pure rule over candidates and clocks; `tick` and `view` are the glue that reads `DailyState`, `AudioState`, the session's News snapshot (`chat.news.all_articles()`) and its copy of the stream registry (`chat.live_streams`). `tick` also keeps the featured booth track's thumbnail rendered for this session's terminal (`TrackPicture`), so the frame never renders an image. `LiveStripView` is what gets painted, one variant per kind of body. |
+| `ui.rs` | The frame: `fit_live_strip` (the form, from the card's size alone), `draw_live_strip`, `fit_live_tile` and `draw_live_tile` (the Zen tile's), `live_strip_lines` for a `StripHost` (the card, or a Zen tile), `live_strip_compact_line`, the `── live ──` rule, `PICTURE_ROWS` (8), `PICTURE_COLS` (21), `StripBody` (what a source hands the frame: picture, words, the key `hint`, glow), `key_hint_spans` over `HintPart` (the key hint every body carries: keys in amber, words faint), `status_text` (the one-row form cut to `STATUS_COLS`, 20, for the status line's Live segment). |
 | `input.rs` | `open_from_key` (`o` on the card, Enter on a focused Zen Live tile), `open_from_click`, `reply_from_key` (`r`, the card only): exhaustive matches on `LiveSource` that say what each key does to each source. |
 
 ## 3. Sources
@@ -61,14 +63,16 @@ It is also where News shares land: a share posts nothing into the #lounge chat (
 | `DailyResult(match id)` | `DailyState::live_candidates`: every match that ended inside `LIVE_STAMP_HORIZON` (`note_results`) | the same body with the final board and the result line (`live_result_view`) |
 | `BoothTrack(queue item id)` | `AudioState::live_candidates`: every track playing or queued in the YouTube booth | `audio/booth/live.rs`: the thumbnail, the title, channel and length, who queued it and where it stands |
 | `NewsArticle(article id)` | `chat/news/live.rs::candidates`: every article in the News snapshot (the newest `NEWS_FEED_LIMIT`) | `chat/news/live.rs`: the article's ASCII art centred in the picture column, the title, the first two summary lines, who shared it, `o read · r reply` |
+| `Stream(streamer's user id)` | `stream/live.rs::candidates`: every stream in `ChatState::live_streams` that has gone live (`went_live_at`); a pending one is never offered | `stream/live.rs`: a drawn screen with `⦿ LIVE`, the title, how many are watching, who went live, `o or click to watch` |
 
 What each key does (`input.rs`). On a Zen Live tile, Enter is `o` and there is no `r`: `r` flips the split there, and a #lounge draft would sit under whichever chat tile holds the composer.
 - `o` / click on a match: `open_board` with `BoardEntry::LoungeStrip`, then `Screen::DailyMatch`. On a result: nothing, `LiveState::opens` never offers it.
 - `o` / click on a track: on another source, switch to YouTube (`App::set_paired_playback_source`); already on YouTube, open the booth modal. Nothing if the track left the booth since the last tick (`AudioState::in_booth`).
 - `o` / click on an article: `ChatState::open_news_modal_for_article`, the article modal (Enter copies the link, `n` jumps to it in News). Nothing if the article left the snapshot.
+- `o` / click on a stream: `App::watch_stream`, the same path as `/watch @streamer` (the paired CLI's browser, else the QR modal, and the named-viewer note). Nothing if the stream ended since the last tick.
 - `r` on an article: `ChatState::begin_reply_to_article` opens the #lounge composer with a reply target of `ReplyTo::Article`; the sent message carries `> @sharer: 📰 Title` on top and no `reply_to_message_id`, since there is no message to point at. `r` on anything else falls through.
 
-Sources are state, not events: a candidate exists while the thing is still going on (the match is active, the track is in the booth, the article is in News), so the strip never advertises something that is over. A result is the exception that proves it: the finished list (`list_finished_unseen`) drops a row once both players have seen it, which in a live pool game is a second after the finish, so `DailyState` keeps each result it saw, stamped with the shared `finished_at`, for `LIVE_STAMP_HORIZON`: long enough to wait its longest and then stay up its longest. A result both players saw before this session's first snapshot is never noted.
+Sources are state, not events: a candidate exists while the thing is still going on (the match is active, the track is in the booth, the article is in News, the stream is live), so the strip never advertises something that is over. A result is the exception that proves it: the finished list (`list_finished_unseen`) drops a row once both players have seen it, which in a live pool game is a second after the finish, so `DailyState` keeps each result it saw, stamped with the shared `finished_at`, for `LIVE_STAMP_HORIZON`: long enough to wait its longest and then stay up its longest. A result both players saw before this session's first snapshot is never noted.
 
 ### Adding a source
 1. Add a variant to `LiveSource`. The build breaks at `pick.rs::lane` and `min_for`, `state.rs::view` and `opens`, `input.rs`, and wherever a body is matched.
@@ -100,8 +104,9 @@ A Zen tile (`StripHost::ZenTile`) draws the same body without the hint and witho
 ## 7. Wiring outside this directory
 
 - `app/state.rs`: `App::live`.
-- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, self.chat.news.all_articles(), reading, picture_settings)` on every tick whatever the page, after the chat tick has drained the News snapshot, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold; `App::live_strip_shown` (the card, or Zen drawing a Live tile: `ZenState::draws`, zoom-aware) gates the aim's half-tick repaint and the wake hint's half tier.
-- `app/render.rs`: builds the view when `home_selected`, never for the chat center, and for Zen while it holds a Live tile (`ZenView::live`).
+- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, self.chat.news.all_articles(), &self.chat.live_streams, reading, picture_settings)` on every tick whatever the page, after the chat tick has drained the News snapshot and `tick_stream` has copied the stream registry, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold; `App::live_strip_shown` (the card, or Zen drawing a Live tile: `ZenState::draws`, zoom-aware) gates the aim's half-tick repaint and the wake hint's half tier.
+- `app/render.rs`: builds the view when `home_selected`, never for the chat center, and for Zen while it holds a Live tile (`ZenView::live`). It also builds it on any page while the status line carries the Live segment, for `status_text`.
+- `app/statusline`: the Live segment (`StatusComponent::Live`) reads `status_text` and its click is `open_from_key`, so the strip's reading and its key reach every page (`../statusline/CONTEXT.md`).
 - `app/zen`: `TileKind::Live`; `zen/ui.rs::draw_live_tile` draws the strip or, with nothing up, the note beside the activity feed; `zen/input.rs::handle_live` sends Enter to `open_from_key`.
 - `app/chat/ui.rs`: `DashboardChatView.live_strip` + `live_strip_hit`; `draw_dashboard_chat_card` carves the strip off the top of the messages, above the poll strip. While it is up the room header drops its topic row and closing rule (stream and voice rows stay).
 - `app/input.rs`: `o` and `r` in `handle_global_key`, gated on `App::lounge_card_shown` and no composer; `r` also on no message being selected, so `r` on a selected message still replies to the message. The click, on either surface, gated on `chat_scroll_clicks_blocked` and taken before a click focuses a Zen tile.
@@ -111,13 +116,14 @@ A Zen tile (`StripHost::ZenTile`) draws the same body without the hint and witho
 The pick reads only stamps that live in the database, so it is as shared as the snapshot that carries them.
 - Daily matches and results: every write fires `daily_match_changed` and every replica re-reads (`../lobby/daily/CONTEXT.md`). The aim stays on the writer's replica by choice.
 - News articles: every `articles` write fires `articles_changed` and every replica re-reads its snapshot (`../chat/CONTEXT.md` §11 News), so an article reaches every strip.
+- Streams: the registry is in-process by design (`../stream/CONTEXT.md`), so a stream and its `went_live_at` exist only on the replica that hosts it.
 - Booth tracks: the queue snapshot is published by the replica that handled the write and by its own reconcile; `../audio/CONTEXT.md` documents audio as single-replica. A track queued on another replica reaches this one's strip only when this one next publishes.
 
 ## 9. Tests
 
-- `pick_test.rs`: the lanes handing over at each minimum with a link going first and the strip coming down at the max; a burst of links with one dropped past `LIVE_MAX_WAIT`; a session keeping its minimum when a match moves again, and not when its source is gone; the aim drawn over a move and an empty strip but not a link, and not past its window.
+- `pick_test.rs`: the lanes handing over at each minimum with a link going first and the strip coming down at the max; a stream queuing behind a track and keeping its two minutes; a burst of links with one dropped past `LIVE_MAX_WAIT`; a session keeping its minimum when a match moves again, and not when its source is gone; the aim drawn over a move and an empty strip but not a link, and not past its window.
 - `state_test.rs`: a track holding its two minutes, a move, the match's result joining in its place, a link going up at the next handover and the strip coming down, asserted as the whole of what the strip shows and opens at each step; the height held under a selection.
 - `ui_test.rs`: the form picked by the card's size, and by a Zen tile's; the hint and the rule drawn on the card and not in a tile; a picture wider than its column cut clear of the words; every key in a hint lit, one faint run once it no longer fits.
-- Bodies are tested with their source: `../lobby/daily/live_strip_test.rs`, `../audio/booth/live_test.rs`, `../chat/news/live_test.rs`; results in `../lobby/daily/state_test.rs` (offered on a replica that wrote nothing, outliving their row once both players saw them).
+- Bodies are tested with their source: `../lobby/daily/live_strip_test.rs`, `../audio/booth/live_test.rs`, `../chat/news/live_test.rs`, `../stream/live_test.rs` (only a stream that went live offered, its words and hint); results in `../lobby/daily/state_test.rs` (offered on a replica that wrote nothing, outliving their row once both players saw them).
 - The Zen tile: its empty 30/70 split in `../zen/ui_test.rs`, Enter on it opening a shared article in `../input_flow_test.rs`.
 - End to end in `../dashboard_flow_test.rs`: `o` opening a match, closing back to the card, `o` on a booth track tuning in then opening the booth, `o` on a track that left the booth changing nothing, `o` on a shared article opening the article modal, and `r` on one sending a reply that quotes its title.

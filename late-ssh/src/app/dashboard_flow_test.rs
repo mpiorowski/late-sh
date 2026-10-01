@@ -258,6 +258,74 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
     assert!(app.lobby.glow(), "nothing looked at the lobby");
 }
 
+/// Ctrl+F on a board goes to Zen and closes the board, so the chord back
+/// hands over the page the board was opened from, never an empty board. A
+/// board opened from Zen's Live tile hands back Zen's own page.
+#[tokio::test]
+async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::common::primitives::Screen;
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
+    use crate::app::zen::state::{KindPick, TileKind};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-zen-me").await;
+    let them = create_test_user(&test_db.db, "strip-zen-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-zen-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel::<ActivityEvent>(8);
+    let poster = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = poster
+        .post_challenge(them.id, DailyGame::Chess)
+        .await
+        .expect("post");
+    app.daily.claim_challenge(posted.id);
+    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+
+    // Opened from Home: Ctrl+F twice comes back to Home.
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::DailyMatch);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen, "Ctrl+F on the board opens Zen");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Dashboard, "the board was opened from Home");
+
+    // Opened from Zen's Live tile: Ctrl+F twice comes back to Home, the
+    // page Zen was opened over.
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Lobby)
+        .expect("the default has a lobby");
+    app.zen.open_kind_picker();
+    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
+        app.zen.move_kind_picker(1);
+    }
+    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    wait_for_render_contains(&mut app, "enter open").await;
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::DailyMatch, "Enter opens the match");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen, "Ctrl+F on the board opens Zen");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Dashboard, "Zen was opened over Home");
+}
+
 /// A track somebody queued in the booth goes up on the live strip, and `o`
 /// tunes a viewer on another source in to YouTube; once there, `o` opens
 /// the booth.

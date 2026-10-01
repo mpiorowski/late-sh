@@ -10,13 +10,16 @@
 //!
 //! Top to bottom: late.fetch (the fact grid, with the runner column
 //! beside it for runners, each under its own heading), bio, the bonsai (the
-//! whole canvas at its true size), pet, the aquarium, showcases, badges
-//! (all of them, always), and the chips ledger. The same order on every
-//! screen; the only reflow is the runner column becoming a section under
-//! the grid when the body is too narrow for both.
+//! whole canvas at its true size), the aquarium with the pet beside it
+//! (each a full-width section when the other is not owned), showcases,
+//! badges (all of them, always), and the chips ledger. The same order on
+//! every screen; the only reflow is a pair of columns (grid and runner,
+//! reef and pet) stacking into sections when the body is too narrow for
+//! both.
 
 use chrono::Utc;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
+use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
 use ratatui::{
     Frame,
@@ -38,7 +41,7 @@ use crate::app::{
     },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
     pet::ui::portrait_lines as pet_portrait_lines,
-    profile::svc::ProfileRunner,
+    profile::svc::{ProfilePet, ProfileRunner},
     settings_modal::data::country_label,
 };
 
@@ -60,12 +63,14 @@ const AQUARIUM_HEIGHT: u16 = 11;
 /// The runner column: the portrait, the keys, and the widest row, `exp`
 /// with its bar and six-digit figures on a marked climb.
 const RUNNER_WIDTH: u16 = 42;
-/// Columns between the fact grid and the runner column.
-const RUNNER_GAP: u16 = 3;
-/// The runner column sits beside the grid when the body is at least this
-/// wide: the grid keeps 45 columns, enough for every fact but a long
-/// free-text one.
-const RUNNER_BESIDE_MIN_WIDTH: u16 = 90;
+/// Columns between two columns that sit side by side.
+const COLUMN_GAP: u16 = 3;
+/// Two columns sit side by side when the body is at least this wide. Beside
+/// the runner the grid keeps 45 columns, enough for every fact but a long
+/// free-text one; beside the pet the reef keeps 63.
+const BESIDE_MIN_WIDTH: u16 = 90;
+/// The pet column beside the reef: the longest name a pet can carry.
+const PET_WIDTH: u16 = PET_NAME_MAX_CHARS as u16;
 /// Cells in the runner's signal and exp bars, the fight scene's count.
 const RUNNER_BAR_CELLS: usize = 12;
 
@@ -81,6 +86,12 @@ enum Segment {
         right_width: u16,
     },
     Aquarium,
+    /// The reef with a text column `right_width` wide against the right
+    /// edge: the pet beside its owner's tank.
+    AquariumBeside {
+        right: Vec<Line<'static>>,
+        right_width: u16,
+    },
 }
 
 impl Segment {
@@ -88,7 +99,7 @@ impl Segment {
         match self {
             Segment::Text(lines) => lines.len() as u16,
             Segment::Beside { left, right, .. } => left.len().max(right.len()) as u16,
-            Segment::Aquarium => AQUARIUM_HEIGHT,
+            Segment::Aquarium | Segment::AquariumBeside { .. } => AQUARIUM_HEIGHT,
         }
     }
 }
@@ -211,8 +222,8 @@ fn build_segments(
             lines.extend(grid);
             segments.push(Segment::Text(lines));
         }
-        Some(runner) if width >= RUNNER_BESIDE_MIN_WIDTH => {
-            let left_width = usize::from(width - RUNNER_WIDTH - RUNNER_GAP);
+        Some(runner) if width >= BESIDE_MIN_WIDTH => {
+            let left_width = usize::from(width - RUNNER_WIDTH - COLUMN_GAP);
             let mut left = vec![section_heading("late.fetch", left_width)];
             left.extend(grid);
             let mut right = vec![runner_heading(runner, usize::from(RUNNER_WIDTH))];
@@ -254,32 +265,47 @@ fn build_segments(
     lines.extend(bonsai_lines(state, width_usize, wall_tick));
     segments.push(Segment::Text(lines));
 
-    // ── pet ──
-    // The mood is the one the owner's session last wrote: a readout of
-    // how their night is going, honest because they never set it.
-    if let Some(pet) = state.pet() {
-        let mut lines = section_lines("pet", width_usize);
-        lines.extend(pet_portrait_lines(pet.species, pet.mood, wall_tick));
-        let name = pet
-            .name
-            .clone()
-            .unwrap_or_else(|| pet.species.as_str().to_string());
-        lines.push(Line::from(vec![
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" · {}", pet.mood.as_str()), dim),
-        ]));
-        segments.push(Segment::Text(lines));
-    }
+    // ── aquarium, and the pet ──
+    // The pet's mood is the one the owner's session last wrote: a readout
+    // of how their night is going, honest because they never set it. With
+    // a tank too, the pet sits in a column beside the reef, each under its
+    // own heading; alone, or on a narrow body, each is a section.
+    let has_fish = !state.aquarium_fish().is_empty();
+    match state.pet() {
+        Some(pet) if has_fish && width >= BESIDE_MIN_WIDTH => {
+            let reef_width = usize::from(width - PET_WIDTH - COLUMN_GAP);
+            let mut heading = section_heading("aquarium", reef_width).spans;
+            heading.push(Span::raw(" ".repeat(usize::from(COLUMN_GAP))));
+            heading.extend(section_heading("pet", usize::from(PET_WIDTH)).spans);
+            segments.push(Segment::Text(vec![Line::from(""), Line::from(heading)]));
 
-    // ── aquarium ──
-    if !state.aquarium_fish().is_empty() {
-        segments.push(Segment::Text(section_lines("aquarium", width_usize)));
-        segments.push(Segment::Aquarium);
+            // The pet stands halfway down the band, its name and its mood
+            // on a row each so the longest name still fits the column.
+            let mut right = pet_portrait_lines(pet.species, pet.mood, wall_tick);
+            right.push(Line::from(pet_name_span(pet)));
+            right.push(Line::from(Span::styled(pet.mood.as_str(), dim)));
+            let above = usize::from(AQUARIUM_HEIGHT).saturating_sub(right.len()) / 2;
+            right.splice(0..0, vec![Line::from(""); above]);
+            segments.push(Segment::AquariumBeside {
+                right,
+                right_width: PET_WIDTH,
+            });
+        }
+        pet => {
+            if let Some(pet) = pet {
+                let mut lines = section_lines("pet", width_usize);
+                lines.extend(pet_portrait_lines(pet.species, pet.mood, wall_tick));
+                lines.push(Line::from(vec![
+                    pet_name_span(pet),
+                    Span::styled(format!(" · {}", pet.mood.as_str()), dim),
+                ]));
+                segments.push(Segment::Text(lines));
+            }
+            if has_fish {
+                segments.push(Segment::Text(section_lines("aquarium", width_usize)));
+                segments.push(Segment::Aquarium);
+            }
+        }
     }
 
     // ── showcases ──
@@ -350,13 +376,26 @@ fn compose(segments: &[Segment], width: u16, height: u16, state: &ProfileModalSt
                     ..area
                 };
                 let left_area = Rect {
-                    width: right_area.x.saturating_sub(RUNNER_GAP),
+                    width: right_area.x.saturating_sub(COLUMN_GAP),
                     ..area
                 };
                 Paragraph::new(left.clone()).render(left_area, &mut buf);
                 Paragraph::new(right.clone()).render(right_area, &mut buf);
             }
             Segment::Aquarium => draw_aquarium(&mut buf, area, state),
+            Segment::AquariumBeside { right, right_width } => {
+                let right_area = Rect {
+                    x: width.saturating_sub(*right_width),
+                    width: (*right_width).min(width),
+                    ..area
+                };
+                let reef_area = Rect {
+                    width: right_area.x.saturating_sub(COLUMN_GAP),
+                    ..area
+                };
+                draw_aquarium(&mut buf, reef_area, state);
+                Paragraph::new(right.clone()).render(right_area, &mut buf);
+            }
         }
         y = y.saturating_add(segment_height);
     }
@@ -406,6 +445,20 @@ fn draw_aquarium(body: &mut Buffer, area: Rect, state: &ProfileModalState) {
         .render(band, &mut reef),
     }
     blit(body, &reef, area, 0);
+}
+
+/// The pet's name, or its species while it has none.
+fn pet_name_span(pet: &ProfilePet) -> Span<'static> {
+    let name = match &pet.name {
+        Some(name) => name.clone(),
+        None => pet.species.as_str().to_string(),
+    };
+    Span::styled(
+        name,
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn header_name(state: &ProfileModalState) -> String {

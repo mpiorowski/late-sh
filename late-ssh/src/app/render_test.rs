@@ -248,10 +248,7 @@ fn keyhints_too_wide_for_the_row_are_dropped_like_any_other_segment() {
 
     let (bar, sponsor) = app_frame_bottom_titles(
         &default_statusline_components(),
-        &StatusData {
-            station_name: "chillsynth",
-            ..StatusData::default()
-        },
+        &StatusData::default(),
         Rect::new(0, 0, 80, 24),
     );
 
@@ -261,5 +258,5 @@ fn keyhints_too_wide_for_the_row_are_dropped_like_any_other_segment() {
     );
     let bar = line_text(&bar.expect("the narrower segments still fit").line);
     assert!(!bar.contains("Settings"), "{bar:?}");
-    assert!(bar.contains("🎵 chillsynth"), "{bar:?}");
+    assert!(bar.contains("unread 0"), "{bar:?}");
 }

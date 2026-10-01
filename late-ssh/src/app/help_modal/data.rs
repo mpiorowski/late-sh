@@ -1632,11 +1632,13 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Segments paint left to right in the order the list shows them top to bottom."
             .to_string(),
-        "  Available segments: Keyhints, station, voice, mentions, your move, care, quests, pot, chips, users online, time"
+        "  Available segments: Keyhints, mentions, voice, live, date, your move, care, quests, station, pot, chips, users online, time"
             .to_string(),
-        "  On by default, and visible even while idle: Keyhints, station, voice, mentions, your move, care."
+        "  On by default, and visible even while idle: Keyhints, mentions, voice, live, date."
             .to_string(),
         "  Care counts the bonsai, tank, and pet still waiting on today's care; click it for Zen."
+            .to_string(),
+        "  Live reads what the #lounge live strip shows (a stream, a match, a booth track, a shared link); click it to open that."
             .to_string(),
         "  Status segments with a destination are clickable and jump to what they count."
             .to_string(),

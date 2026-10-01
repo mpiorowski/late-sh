@@ -103,6 +103,7 @@ fn live_stream_view(watch_url: &str) -> crate::app::stream::registry::LiveStream
         voice_channel_id: Uuid::from_u128(9),
         stream_id: "abc123".to_string(),
         live: true,
+        went_live_at: None,
         watching: 3,
         watch_url: watch_url.to_string(),
     }
@@ -3063,6 +3064,7 @@ fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::Li
         voice_channel_id: Uuid::from_u128(3),
         stream_id: "s1".to_string(),
         live: true,
+        went_live_at: None,
         watching: 3,
         watch_url: watch_url.to_string(),
     }

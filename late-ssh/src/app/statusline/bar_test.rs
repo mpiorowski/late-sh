@@ -15,6 +15,9 @@ fn data() -> StatusData<'static> {
         clock_24: "14:32",
         clock_ampm: "2:32 pm",
         hour: 14,
+        date_short: "Thu 1 Oct",
+        date_full: "Thursday, 1 October",
+        date_iso: "2026-10-01",
         chip_balance: 1204,
         mentions_unread: 3,
         dms_unread: 2,
@@ -28,6 +31,7 @@ fn data() -> StatusData<'static> {
         quests_open_weekly: 1,
         care_due: 1,
         voice: Some("lounge [talking]"),
+        live: Some("stream mat · late night rust"),
     }
 }
 
@@ -433,12 +437,16 @@ fn auto_hide_drops_a_component_reading_zero() {
     assert!(bar.is_none(), "an empty bar is no bar at all");
 }
 
-/// Care counts the companions still waiting on today's care. It ships always
-/// visible, and leaves the bar once everything is tended only for a user who
-/// turned auto-hide on.
+/// Care counts the companions still waiting on today's care. With auto-hide
+/// on, as it ships, it leaves the bar once everything is tended; off, it
+/// rests at zero.
 #[test]
 fn care_shows_what_is_still_due() {
-    let always = StatusComponentSetting::new(StatusComponent::Care);
+    let always = StatusComponentSetting {
+        enabled: true,
+        auto_hide: false,
+        ..StatusComponentSetting::new(StatusComponent::Care)
+    };
     let auto_hiding = StatusComponentSetting {
         auto_hide: true,
         ..always
@@ -814,4 +822,71 @@ fn zen_row_stays_while_any_component_is_on() {
         ..StatusComponentSetting::new(component)
     });
     assert!(!zen_row_shown(&all_off));
+}
+
+/// The date paints in the format its dial picks, bare like the clock, and is
+/// a readout: no click target.
+#[test]
+fn the_date_paints_the_format_its_dial_picks() {
+    let render = |variant: StatusVariant| {
+        let components = [StatusComponentSetting {
+            variant: Some(variant),
+            ..StatusComponentSetting::new(StatusComponent::Date)
+        }];
+        build_status_bar(
+            &components,
+            &data(),
+            Placement::BottomLeft,
+            Rect::new(0, 0, 120, 24),
+            0,
+        )
+        .map(|bar| (bar.line.to_string(), bar.hits.len()))
+    };
+
+    assert_eq!(
+        render(StatusVariant::DateShort),
+        Some(("─ Thu 1 Oct ".to_string(), 0))
+    );
+    assert_eq!(
+        render(StatusVariant::DateFull),
+        Some(("─ Thursday, 1 October ".to_string(), 0))
+    );
+    assert_eq!(
+        render(StatusVariant::DateIso),
+        Some(("─ 2026-10-01 ".to_string(), 0))
+    );
+}
+
+/// The Live segment reads what the live strip shows and a click opens it;
+/// with the strip down it rests at `-`, or hides when told to.
+#[test]
+fn live_reads_the_strip_and_rests_or_hides_when_it_is_down() {
+    let always = StatusComponentSetting::new(StatusComponent::Live);
+    let auto_hiding = StatusComponentSetting {
+        auto_hide: true,
+        ..always
+    };
+    let quiet = StatusData {
+        live: None,
+        ..data()
+    };
+    let render = |setting: StatusComponentSetting, data: &StatusData<'_>| {
+        build_status_bar(
+            &[setting],
+            data,
+            Placement::BottomLeft,
+            Rect::new(0, 0, 120, 24),
+            0,
+        )
+        .map(|bar| bar.line.to_string())
+    };
+
+    assert_eq!(
+        render(always, &data()).as_deref(),
+        Some("─ live stream mat · late night rust ")
+    );
+    assert_eq!(render(always, &quiet).as_deref(), Some("─ live - "));
+    assert_eq!(render(auto_hiding, &quiet), None);
+    assert_eq!(click_action(StatusComponent::Live), Some(StatusClick::Live));
+    assert_eq!(click_action(StatusComponent::Date), None);
 }

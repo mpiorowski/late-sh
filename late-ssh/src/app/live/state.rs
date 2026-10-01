@@ -19,6 +19,10 @@ use crate::app::{
     chat::news::live::{self as news_live, ArticleStripView},
     files::inline_image::InlineImageRenderSettings,
     lobby::daily::{live::MatchStripView, state::DailyState},
+    stream::{
+        live::{self as stream_live, StreamStripView},
+        registry::LiveStreamView,
+    },
 };
 
 use super::pick::{Featured, LiveCandidate, LiveSource, aim_overlay, pick_queued};
@@ -28,6 +32,7 @@ pub enum LiveStripView<'a> {
     Match(MatchStripView<'a>),
     Track(TrackStripView),
     Article(ArticleStripView),
+    Stream(StreamStripView),
 }
 
 impl LiveStripView<'_> {
@@ -41,6 +46,7 @@ impl LiveStripView<'_> {
             },
             Self::Track(track) => Some(LiveSource::BoothTrack(track.item.id)),
             Self::Article(article) => Some(LiveSource::NewsArticle(article.item.article.id)),
+            Self::Stream(strip) => Some(LiveSource::Stream(strip.stream.user_id)),
         }
     }
 }
@@ -79,7 +85,8 @@ impl LiveState {
     }
 
     /// Read the sources and decide what the strip shows. `articles` is the
-    /// session's News snapshot. `reading` is
+    /// session's News snapshot and `streams` its copy of the stream
+    /// registry (`ChatState::live_streams`). `reading` is
     /// whether the viewer has a message selected in the card: the strip then
     /// holds its height. `picture_settings` is how this session's terminal
     /// paints an image. True when what the strip draws changed.
@@ -88,12 +95,14 @@ impl LiveState {
         daily: &DailyState,
         audio: &AudioState,
         articles: &[ArticleFeedItem],
+        streams: &[LiveStreamView],
         reading: bool,
         picture_settings: InlineImageRenderSettings,
     ) -> bool {
         let mut candidates = daily.live_candidates();
         candidates.extend(audio.live_candidates());
         candidates.extend(news_live::candidates(articles));
+        candidates.extend(stream_live::candidates(streams));
         let changed = self.refresh(&candidates, Instant::now(), Utc::now(), reading);
         let thumbnail = match self.showing() {
             Some(LiveSource::BoothTrack(item_id)) => audio
@@ -102,6 +111,7 @@ impl LiveState {
             Some(LiveSource::DailyMatch(_))
             | Some(LiveSource::DailyResult(_))
             | Some(LiveSource::NewsArticle(_))
+            | Some(LiveSource::Stream(_))
             | None => None,
         };
         let picture_changed = self.refresh_track_picture(thumbnail, picture_settings);
@@ -198,13 +208,15 @@ impl LiveState {
 
     /// What the strip paints, if it is up. `listening_on` is the viewer's
     /// audio source, which decides what opening a booth track does;
-    /// `articles` is the session's News snapshot.
+    /// `articles` is the session's News snapshot and `streams` its copy of
+    /// the stream registry.
     pub fn view<'a>(
         &self,
         daily: &'a DailyState,
         audio: &AudioState,
         listening_on: AudioSource,
         articles: &[ArticleFeedItem],
+        streams: &[LiveStreamView],
     ) -> Option<LiveStripView<'a>> {
         match self.showing()? {
             LiveSource::DailyMatch(match_id) => {
@@ -225,6 +237,9 @@ impl LiveState {
             LiveSource::NewsArticle(article_id) => {
                 news_live::view(articles, article_id).map(LiveStripView::Article)
             }
+            LiveSource::Stream(streamer_id) => {
+                stream_live::view(streams, streamer_id).map(LiveStripView::Stream)
+            }
         }
     }
 
@@ -235,7 +250,8 @@ impl LiveState {
             LiveSource::DailyResult(_) => None,
             source @ (LiveSource::DailyMatch(_)
             | LiveSource::BoothTrack(_)
-            | LiveSource::NewsArticle(_)) => Some(source),
+            | LiveSource::NewsArticle(_)
+            | LiveSource::Stream(_)) => Some(source),
         }
     }
 }

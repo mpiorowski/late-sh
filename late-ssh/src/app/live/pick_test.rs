@@ -57,6 +57,26 @@ fn the_lanes_hand_over_at_each_minimum_and_news_goes_first() {
     assert_eq!(pick(780), None, "five minutes up, and the strip comes down");
 }
 
+/// A stream that goes live waits its turn in the Rest lane like a booth
+/// track, then keeps its own two minutes before handing over.
+#[test]
+fn a_stream_going_live_queues_like_a_track_and_keeps_two_minutes() {
+    let track = LiveSource::BoothTrack(Uuid::from_u128(1));
+    let stream = LiveSource::Stream(Uuid::from_u128(2));
+    let chess = LiveSource::DailyMatch(Uuid::from_u128(3));
+    let candidates = [
+        candidate(track, 0),
+        candidate(stream, 10),
+        candidate(chess, 20),
+    ];
+    let pick = |secs| pick_queued(None, &candidates, at(secs));
+
+    assert_eq!(pick(119), up(track, 0), "the track keeps its two minutes");
+    assert_eq!(pick(120), up(stream, 120), "the stream went live first");
+    assert_eq!(pick(239), up(stream, 120), "and keeps its two minutes");
+    assert_eq!(pick(240), up(chess, 240));
+}
+
 /// A burst of links: each gets its five minutes in turn, and one that would
 /// have waited past `LIVE_MAX_WAIT` is dropped rather than shown late.
 #[test]

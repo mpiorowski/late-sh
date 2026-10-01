@@ -9,7 +9,7 @@
 //! What goes in the frame is the source's own: a daily match paints its
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
 //! (`audio/booth/live.rs`), a News article its ASCII art
-//! (`chat/news/live.rs`).
+//! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`).
 
 use std::cell::Cell;
 
@@ -27,6 +27,7 @@ use crate::app::{
     common::theme,
     games::pool_core::canvas::Rgb,
     lobby::daily::{live_board::canvas_background, live_strip as match_strip},
+    stream::live as stream_live,
 };
 
 use super::{pick::LiveSource, state::LiveStripView};
@@ -187,6 +188,7 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Match(strip) => match_strip::body(budget, strip, background),
         LiveStripView::Track(track) => booth_live::body(budget, track),
         LiveStripView::Article(article) => news_live::body(budget, article),
+        LiveStripView::Stream(stream) => stream_live::body(budget, stream),
     };
     frame_lines(width, body, host)
 }
@@ -286,6 +288,7 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
         LiveStripView::Track(track) => booth_live::glow(track),
         // A shared link is never happening right now (`news_live::body`).
         LiveStripView::Article(_) => false,
+        LiveStripView::Stream(_) => stream_live::glow(),
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -302,7 +305,23 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
         LiveStripView::Match(strip) => match_strip::compact_spans(rest, strip),
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
         LiveStripView::Article(article) => news_live::compact_spans(rest, article),
+        LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
     }
+}
+
+/// Columns the status line's Live segment gives what the strip says in a
+/// line: enough for the kind, who, and the start of what. Kept short on
+/// purpose: a segment fits whole or is dropped, and one that grew wide
+/// exactly when something went live would be the one dropped.
+const STATUS_COLS: u16 = 20;
+
+/// What the strip shows, as the status line's Live segment reads it
+/// (`statusline/`): the source's own one-row form, cut to `STATUS_COLS`.
+pub(crate) fn status_text(strip: &LiveStripView<'_>) -> String {
+    compact_body_spans(STATUS_COLS, strip)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 /// One piece of a body's key hint row: a key to press, or the words around it.

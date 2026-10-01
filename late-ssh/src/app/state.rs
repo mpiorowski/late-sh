@@ -3335,6 +3335,29 @@ impl App {
             .map(|stream| stream.live)
     }
 
+    /// Open `username`'s watch page (the paired CLI's browser, else the QR
+    /// modal) and count this account as a named viewer; a banner when they
+    /// are not live. Shared by `/watch @user` and the live strip's key.
+    pub(crate) fn watch_stream(&mut self, username: &str) {
+        match self.stream_service.watch_url_for_username(username) {
+            Some(url) => {
+                self.stream_service
+                    .note_viewer_of_username(username, self.user_id, &self.username);
+                self.open_stream_url(
+                    url,
+                    "Watch Stream".to_string(),
+                    format!("@{username} is live. Open on any device or scan:"),
+                    true,
+                );
+            }
+            None => {
+                self.banner = Some(Banner::error(&format!(
+                    "@{username} is not live right now."
+                )));
+            }
+        }
+    }
+
     /// Stream plumbing drained once per tick: composer commands, go-live
     /// task results, and the registry snapshot. This is the orchestration
     /// point for the whole `/golive` / `/watch` session flow, so every
@@ -3374,26 +3397,7 @@ impl App {
 
         if let Some(username) = self.chat.take_requested_watch() {
             changed = true;
-            match self.stream_service.watch_url_for_username(&username) {
-                Some(url) => {
-                    self.stream_service.note_viewer_of_username(
-                        &username,
-                        self.user_id,
-                        &self.username,
-                    );
-                    self.open_stream_url(
-                        url,
-                        "Watch Stream".to_string(),
-                        format!("@{username} is live. Open on any device or scan:"),
-                        true,
-                    );
-                }
-                None => {
-                    self.banner = Some(Banner::error(&format!(
-                        "@{username} is not live right now."
-                    )));
-                }
-            }
+            self.watch_stream(&username);
         }
 
         // Walking into a stream room counts as arriving at the stream. No

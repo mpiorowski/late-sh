@@ -18,6 +18,12 @@ pub(crate) struct StatusData<'a> {
     pub clock_ampm: &'a str,
     /// Local hour, 0..=23, for the hour-dependent clock icon.
     pub hour: u32,
+    /// `Thu 1 Oct`, in the same timezone as the clock.
+    pub date_short: &'a str,
+    /// `Thursday, 1 October`.
+    pub date_full: &'a str,
+    /// `2026-10-01`.
+    pub date_iso: &'a str,
     pub chip_balance: i64,
     pub mentions_unread: i64,
     pub dms_unread: i64,
@@ -40,6 +46,9 @@ pub(crate) struct StatusData<'a> {
     pub care_due: usize,
     /// The voice badge body, `channel [status]`; `None` when not in a room.
     pub voice: Option<&'a str>,
+    /// What the live strip shows, in a line (`live::ui::status_text`);
+    /// `None` while the strip is down.
+    pub live: Option<&'a str>,
 }
 
 /// The hour hand matching `hour`, so the clock icon reads as the current time
@@ -113,6 +122,15 @@ impl<'a> StatusData<'a> {
             }
             StatusComponent::Care => (self.care_due > 0).then(|| self.care_due.to_string()),
             StatusComponent::Voice => self.voice.map(str::to_string),
+            StatusComponent::Live => self.live.map(str::to_string),
+            StatusComponent::Date => Some(
+                match date_format(variant) {
+                    DateFormat::Short => self.date_short,
+                    DateFormat::Full => self.date_full,
+                    DateFormat::Iso => self.date_iso,
+                }
+                .to_string(),
+            ),
         }
     }
 }
@@ -137,7 +155,10 @@ fn clock_format(variant: Option<StatusVariant>) -> ClockFormat {
             | StatusVariant::QuestsDaily
             | StatusVariant::QuestsDailyWeekly
             | StatusVariant::StationName
-            | StatusVariant::StationTrack,
+            | StatusVariant::StationTrack
+            | StatusVariant::DateShort
+            | StatusVariant::DateFull
+            | StatusVariant::DateIso,
         ) => unreachable!("the clock carries a clock dial"),
     }
 }
@@ -152,7 +173,10 @@ fn counts_dms(variant: Option<StatusVariant>) -> bool {
             | StatusVariant::QuestsDaily
             | StatusVariant::QuestsDailyWeekly
             | StatusVariant::StationName
-            | StatusVariant::StationTrack,
+            | StatusVariant::StationTrack
+            | StatusVariant::DateShort
+            | StatusVariant::DateFull
+            | StatusVariant::DateIso,
         ) => unreachable!("mentions carry a mentions dial"),
     }
 }
@@ -167,7 +191,10 @@ fn counts_weekly(variant: Option<StatusVariant>) -> bool {
             | StatusVariant::MentionsOnly
             | StatusVariant::MentionsAndDms
             | StatusVariant::StationName
-            | StatusVariant::StationTrack,
+            | StatusVariant::StationTrack
+            | StatusVariant::DateShort
+            | StatusVariant::DateFull
+            | StatusVariant::DateIso,
         ) => unreachable!("quests carry a quests dial"),
     }
 }
@@ -182,7 +209,34 @@ fn shows_track(variant: Option<StatusVariant>) -> bool {
             | StatusVariant::MentionsOnly
             | StatusVariant::MentionsAndDms
             | StatusVariant::QuestsDaily
-            | StatusVariant::QuestsDailyWeekly,
+            | StatusVariant::QuestsDailyWeekly
+            | StatusVariant::DateShort
+            | StatusVariant::DateFull
+            | StatusVariant::DateIso,
         ) => unreachable!("the station carries a station dial"),
+    }
+}
+
+enum DateFormat {
+    Short,
+    Full,
+    Iso,
+}
+
+fn date_format(variant: Option<StatusVariant>) -> DateFormat {
+    match variant {
+        Some(StatusVariant::DateShort) | None => DateFormat::Short,
+        Some(StatusVariant::DateFull) => DateFormat::Full,
+        Some(StatusVariant::DateIso) => DateFormat::Iso,
+        Some(
+            StatusVariant::Clock24
+            | StatusVariant::ClockAmPm
+            | StatusVariant::MentionsOnly
+            | StatusVariant::MentionsAndDms
+            | StatusVariant::QuestsDaily
+            | StatusVariant::QuestsDailyWeekly
+            | StatusVariant::StationName
+            | StatusVariant::StationTrack,
+        ) => unreachable!("the date carries a date dial"),
     }
 }

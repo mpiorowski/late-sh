@@ -62,6 +62,7 @@ late-ssh/src/app/stream/
 ├── mod.rs        # declarations only
 ├── registry.rs   # StreamRegistry state machine + snapshot watch
 ├── svc.rs        # StreamService: DB, VoiceService tickets, ingress, events
+├── live.rs       # the stream as a live strip source: candidates, view, body
 └── ui.rs         # OBS handoff overlay (WHIP URL + bearer token modal)
 ```
 
@@ -113,6 +114,15 @@ Cross-domain touchpoints:
   `ActivityKind::WatchingStream { streamer }` is the audience half: "bob is
   watching mat's stream", attributed to the viewer, `watching:{streamer}`
   shape key. See §3b.
+- `app/live/` — a stream is a live strip source (`LiveSource::Stream`, by
+  the streamer's user id). `live.rs` offers every stream that has gone live,
+  stamped with `LiveStreamView::went_live_at`, which the registry sets once
+  on the `Pending -> Live` edge (a stop and resume through grace keeps it),
+  so the strip inherits "never before media flows" and a page refresh never
+  queues the stream twice. It stays up at least `LIVE_STREAM_MIN` (2 min);
+  `o`, Enter on a Zen Live tile, or a click opens the watch page through
+  `App::watch_stream`, the path `/watch @user` takes. See
+  `../live/CONTEXT.md`.
 - `app/notify/` — `Notification::friend_live` and
   `Notification::stream_viewer`, both on `Kind::Streams` behind one
   "Streams (friends live, your viewers)" settings row. `friend_live` is the
@@ -136,7 +146,7 @@ Cross-domain touchpoints:
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
 - `app/state.rs` — `App::tick_stream` (commands, events, snapshot),
-  `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
+  `watch_stream` (`/watch @user` and the live strip's key), `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
   `voice_toggle_join`'s one-time ON AIR confirm, `StreamQrModal`.
 - `paired_clients.rs` / `late-cli/src/ws.rs` — `PairControlMessage::OpenUrl`
   + the `open_url` capability (xdg-open/open/cmd start).
@@ -280,7 +290,9 @@ Cross-domain touchpoints:
 ## 5. Testing
 
 - `registry_test.rs` — the phase machine: one-stream-per-user, pending
-  visibility, the exactly-once `went_live` transition, grace on stop,
+  visibility, the exactly-once `went_live` transition and its
+  `went_live_at` stamp (set on the first media report, kept through a stop
+  and resume), grace on stop,
   heartbeat counting (including the `WATCHERS_MAX` cap),
   teardown, username lookup, the claim-once publisher lock, and all four
   TTL transitions via the clock-injected `sweep_at` (pending expiry,
@@ -293,6 +305,9 @@ Cross-domain touchpoints:
   own room, and an unknown streamer stay quiet; a fresh stream re-announces
   the same regular) and stays quiet while pending without burning the
   announcement.
+- `live_test.rs` — the live strip source: a pending stream is not offered,
+  a live one is stamped with when it went live, and its body names the
+  title, the watcher count, the streamer and the key.
 - `ui_test.rs` — the OBS overlay renders every hand-copied value unclipped
   and survives a tiny terminal.
 - `input_flow_test.rs::only_esc_closes_the_stream_modal`: keys, Enter, and

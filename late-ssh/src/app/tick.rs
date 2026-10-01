@@ -475,6 +475,7 @@ impl App {
             &self.daily,
             &self.audio,
             self.chat.news.all_articles(),
+            &self.chat.live_streams,
             reading,
             picture_settings,
         );

@@ -629,6 +629,7 @@ impl App {
                 &self.audio,
                 self.paired_source,
                 self.chat.news.all_articles(),
+                &self.chat.live_streams,
             )
         } else {
             None
@@ -643,6 +644,7 @@ impl App {
                 &self.audio,
                 self.paired_source,
                 self.chat.news.all_articles(),
+                &self.chat.live_streams,
             )
         } else {
             None
@@ -680,6 +682,27 @@ impl App {
         );
         let status_clock_24 = status_local_now.format("%H:%M").to_string();
         let status_clock_ampm = status_local_now.format("%-I:%M %P").to_string();
+        let status_date_short = status_local_now.format("%a %-d %b").to_string();
+        let status_date_full = status_local_now.format("%A, %-d %B").to_string();
+        let status_date_iso = status_local_now.format("%Y-%m-%d").to_string();
+        // What the live strip shows, in a line, built only while the bar
+        // carries the Live segment.
+        let status_live = if statusline_components.iter().any(|setting| {
+            setting.enabled
+                && setting.component == late_core::models::statusline::StatusComponent::Live
+        }) {
+            self.live
+                .view(
+                    &self.daily,
+                    &self.audio,
+                    self.paired_source,
+                    self.chat.news.all_articles(),
+                    &self.chat.live_streams,
+                )
+                .map(|strip| crate::app::live::ui::status_text(&strip))
+        } else {
+            None
+        };
         let (status_quests_daily, status_quests_weekly) = self.quest_state.open_counts();
         let status_station_name = match self.paired_source {
             late_core::models::user::AudioSource::Radio => {
@@ -1167,7 +1190,7 @@ impl App {
             self.selected_radio_station,
             radio_now_playing.as_deref(),
         );
-        let zen_date = zen_date_text(self.profile_state.profile().timezone.as_deref());
+        let zen_date = status_date_full.clone();
         let care_day = chrono::Utc::now().date_naive();
         let zen_care = crate::app::zen::ui::Care {
             bonsai: crate::app::zen::ui::Chore::of(
@@ -1517,6 +1540,9 @@ impl App {
                             clock_24: &status_clock_24,
                             clock_ampm: &status_clock_ampm,
                             hour: chrono::Timelike::hour(&status_local_now),
+                            date_short: &status_date_short,
+                            date_full: &status_date_full,
+                            date_iso: &status_date_iso,
                             chip_balance: self.chip_balance,
                             mentions_unread: self.chat.notifications.unread_count(),
                             dms_unread: self.chat.unread_dm_count(),
@@ -1533,6 +1559,7 @@ impl App {
                             quests_open_weekly: status_quests_weekly,
                             care_due: zen_care.due_count(),
                             voice: voice_badge.as_deref(),
+                            live: status_live.as_deref(),
                         },
                         status_hits: &self.last_status_hits,
                         home_selected,
@@ -2957,13 +2984,3 @@ fn sponsor_line(include_thanks: bool) -> Line<'static> {
 #[cfg(test)]
 #[path = "render_test.rs"]
 mod render_test;
-
-/// Today's date in the profile timezone (UTC when unset or unparseable),
-/// for the Zen clock tile.
-fn zen_date_text(timezone: Option<&str>) -> String {
-    let now = chrono::Utc::now();
-    match timezone.and_then(|tz| tz.parse::<chrono_tz::Tz>().ok()) {
-        Some(tz) => now.with_timezone(&tz).format("%A, %-d %B").to_string(),
-        None => now.format("%A, %-d %B").to_string(),
-    }
-}
