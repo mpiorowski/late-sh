@@ -3205,7 +3205,10 @@ impl ChatService {
         );
     }
 
-    async fn send_lounge_message(
+    /// Post to #lounge and wait for the result. For callers that already
+    /// run in their own task and own the outcome's telemetry; everyone else
+    /// goes through `send_lounge_message_task`.
+    pub async fn send_lounge_message(
         &self,
         user_id: Uuid,
         body: String,

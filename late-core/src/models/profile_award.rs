@@ -614,46 +614,46 @@ pub struct AwardRollEntry {
 /// expression `snapshot_previous_month_profile_awards` uses, so the two
 /// cannot disagree at the rollover. Once per month across every replica,
 /// restart and fallback pass: the claim row's unique month is the gate, so
-/// only the caller that inserts it gets `Some`. A month with no monthly
-/// award rows is left unclaimed, so a later pass can still announce it once
-/// rows land. Milestones are not on the roll: they belong to the month they
-/// were earned in, not to the rollover.
+/// only the caller that inserts it gets `Some`. The claim and the read are
+/// one statement, so an error here never spends the month. A month with no
+/// monthly award rows is left unclaimed, so a later pass can still announce
+/// it once rows land. Milestones are not on the roll: they belong to the
+/// month they were earned in, not to the rollover.
 pub async fn claim_previous_month_award_announcement(client: &Client) -> Result<Option<AwardRoll>> {
     let milestone_categories: Vec<&str> = MILESTONE_AWARD_CATEGORIES.to_vec();
-    let claimed = client
-        .query_opt(
+    let rows = client
+        .query(
             "WITH bounds AS (
                 SELECT (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date AS period_month
+             ),
+             claimed AS (
+                INSERT INTO profile_award_announcements (period_month)
+                SELECT bounds.period_month
+                FROM bounds
+                WHERE EXISTS (
+                   SELECT 1
+                   FROM profile_awards
+                   WHERE period_month = bounds.period_month
+                     AND category <> ALL($1)
+                )
+                ON CONFLICT (period_month) DO NOTHING
+                RETURNING period_month
              )
-             INSERT INTO profile_award_announcements (period_month)
-             SELECT bounds.period_month
-             FROM bounds
-             WHERE EXISTS (
-                SELECT 1
-                FROM profile_awards
-                WHERE period_month = bounds.period_month
-                  AND category <> ALL($1)
-             )
-             ON CONFLICT (period_month) DO NOTHING
-             RETURNING period_month",
+             SELECT claimed.period_month, u.username, a.category, a.rank, a.score_value
+             FROM claimed
+             JOIN profile_awards a ON a.period_month = claimed.period_month
+             JOIN users u ON u.id = a.user_id
+             WHERE a.category <> ALL($1)
+             ORDER BY a.rank ASC, a.score_value DESC, u.username ASC",
             &[&milestone_categories],
         )
         .await?;
-    let period_month: NaiveDate = match claimed {
+    // A won claim always has rows: the insert is guarded by the same award
+    // rows this reads, in the same snapshot.
+    let period_month: NaiveDate = match rows.first() {
         Some(row) => row.get("period_month"),
         None => return Ok(None),
     };
-    let rows = client
-        .query(
-            "SELECT u.username, a.category, a.rank, a.score_value
-             FROM profile_awards a
-             JOIN users u ON u.id = a.user_id
-             WHERE a.period_month = $1
-               AND a.category <> ALL($2)
-             ORDER BY a.rank ASC, a.score_value DESC, u.username ASC",
-            &[&period_month, &milestone_categories],
-        )
-        .await?;
     Ok(Some(AwardRoll {
         period_month,
         entries: rows

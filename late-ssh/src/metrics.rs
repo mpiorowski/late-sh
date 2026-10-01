@@ -920,7 +920,8 @@ mod inner {
     fn award_announcement_label(outcome: AwardAnnouncementOutcome) -> &'static str {
         match outcome {
             AwardAnnouncementOutcome::Posted => "posted",
-            AwardAnnouncementOutcome::Failed => "failed",
+            AwardAnnouncementOutcome::ClaimFailed => "claim_failed",
+            AwardAnnouncementOutcome::PostFailed => "post_failed",
         }
     }
 

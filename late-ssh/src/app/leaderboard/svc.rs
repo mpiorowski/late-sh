@@ -21,7 +21,7 @@ use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
-use crate::app::chat::svc::{ChatService, SendLoungeMessageTask};
+use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
 use crate::app::common::username_effect::CROWN_GLYPH;
 use crate::metrics;
@@ -63,11 +63,14 @@ const AWARD_SNAPSHOT_FALLBACK: Duration = Duration::from_secs(24 * 60 * 60);
 /// was already announced records nothing: that is every pass but one a month.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AwardAnnouncementOutcome {
-    /// Claimed and handed to #lounge.
+    /// Claimed and posted to #lounge.
     Posted,
     /// The system user lookup or the claim errored; nothing was claimed, so
     /// the next hourly tick retries.
-    Failed,
+    ClaimFailed,
+    /// Claimed, but the post to #lounge errored. The claim is spent, so
+    /// nobody retries and the month's roll is lost.
+    PostFailed,
 }
 
 #[derive(Clone)]
@@ -591,26 +594,44 @@ impl LeaderboardService {
                 match self.announce_award_roll().await {
                     Ok(None) => last_run = Some((target_month, Instant::now())),
                     Ok(Some(claimed)) => {
-                        metrics::record_award_announcement(AwardAnnouncementOutcome::Posted);
-                        tracing::info!(
-                            period_month = %claimed.roll.period_month,
-                            placements = claimed.roll.entries.len(),
-                            "monthly award roll posted to lounge"
-                        );
-                        chat.send_lounge_message_task(SendLoungeMessageTask {
-                            user_id: claimed.system_user_id,
-                            body: award_roll_body(&claimed.roll),
-                            request_id: None,
-                            join_if_needed: true,
-                            failure_log: "failed to post monthly award roll",
-                        });
+                        // The month is claimed whatever the post does, so the
+                        // pass is done either way: a retry could not post it.
                         last_run = Some((target_month, Instant::now()));
+                        let posted = chat
+                            .send_lounge_message(
+                                claimed.system_user_id,
+                                award_roll_body(&claimed.roll),
+                                true,
+                            )
+                            .await;
+                        match posted {
+                            Ok(()) => {
+                                metrics::record_award_announcement(
+                                    AwardAnnouncementOutcome::Posted,
+                                );
+                                tracing::info!(
+                                    period_month = %claimed.roll.period_month,
+                                    placements = claimed.roll.entries.len(),
+                                    "monthly award roll posted to lounge"
+                                );
+                            }
+                            Err(e) => {
+                                metrics::record_award_announcement(
+                                    AwardAnnouncementOutcome::PostFailed,
+                                );
+                                tracing::error!(
+                                    error = ?e,
+                                    period_month = %claimed.roll.period_month,
+                                    "monthly award roll claimed but not posted"
+                                );
+                            }
+                        }
                     }
                     // Unclaimed, so the next hourly tick retries the roll; the
                     // snapshot above is idempotent and re-runs harmlessly.
                     Err(e) => {
-                        metrics::record_award_announcement(AwardAnnouncementOutcome::Failed);
-                        tracing::warn!(error = ?e, "monthly award roll failed");
+                        metrics::record_award_announcement(AwardAnnouncementOutcome::ClaimFailed);
+                        tracing::warn!(error = ?e, "monthly award roll claim failed");
                     }
                 }
             }
