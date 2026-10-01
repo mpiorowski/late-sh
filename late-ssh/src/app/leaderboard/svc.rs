@@ -5,14 +5,26 @@ use std::{
 };
 
 use anyhow::Result;
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, Months, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::leaderboard::{
     LeaderboardData, OnlineTimeIncrement, apply_online_time_batch, fetch_leaderboard_data,
 };
-use late_core::models::profile_award::snapshot_previous_month_profile_awards;
+use late_core::models::profile_award::{
+    AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
+    LATE_TIME_AWARD_CATEGORY, all_award_categories, award_category_label,
+    claim_previous_month_award_announcement, format_score_value, gallery_prize_chips,
+    is_milestone_award, snapshot_previous_month_profile_awards,
+};
+use late_core::models::user::User;
 use tokio::sync::{Notify, watch};
 use uuid::Uuid;
+
+use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
+use crate::app::chat::svc::{ChatService, SendLoungeMessageTask};
+use crate::app::common::primitives::thousands;
+use crate::app::common::username_effect::CROWN_GLYPH;
+use crate::metrics;
 
 /// How often the leaderboard is rebuilt from the DB while at least one session
 /// is watching it.
@@ -46,6 +58,17 @@ const AWARD_SNAPSHOT_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// rows are frozen, so this pass is a cheap re-confirmation kept as a safety
 /// net against a missed rollover check (clock skew, a long stall).
 const AWARD_SNAPSHOT_FALLBACK: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How a pass's #lounge award roll ended, for the metric. A pass whose month
+/// was already announced records nothing: that is every pass but one a month.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AwardAnnouncementOutcome {
+    /// Claimed and handed to #lounge.
+    Posted,
+    /// The system user lookup or the claim errored; nothing was claimed, so
+    /// the next hourly tick retries.
+    Failed,
+}
 
 #[derive(Clone)]
 pub struct LeaderboardService {
@@ -283,6 +306,92 @@ fn should_snapshot_awards(
     }
 }
 
+/// A month's roll this process won the claim for, with the author to post
+/// it as.
+struct ClaimedAwardRoll {
+    system_user_id: Uuid,
+    roll: AwardRoll,
+}
+
+/// The #lounge roll call for a settled month: a headline, one line per board
+/// in badge order with its placements in rank order, and a sign-off. Every
+/// winner is an @mention, so the roll reaches the people on it even when they
+/// slept through the rollover. Boards nobody placed on are left out.
+fn award_roll_body(roll: &AwardRoll) -> String {
+    let wearing_month = roll
+        .period_month
+        .checked_add_months(Months::new(1))
+        .expect("the month after a settled month exists");
+    let mut lines = vec![format!(
+        "\u{1F3C6} The {} awards are in! Winners wear their badges all {}.",
+        roll.period_month.format("%B %Y"),
+        wearing_month.format("%B")
+    )];
+    for category in all_award_categories() {
+        if is_milestone_award(category) {
+            continue;
+        }
+        let placements: Vec<String> = roll
+            .entries
+            .iter()
+            .filter(|entry| entry.category == category)
+            .map(award_roll_placement)
+            .collect();
+        if placements.is_empty() {
+            continue;
+        }
+        lines.push(format!(
+            "{}: {}",
+            award_category_label(category),
+            placements.join(" \u{00B7} ")
+        ));
+    }
+    lines.push("Congrats! Full standings on the Leaderboards page.".to_string());
+    lines.join("\n")
+}
+
+/// One winner on a board's line. Nothing follows a name directly but a
+/// space, so the mention parser takes the whole name and only the name.
+fn award_roll_placement(entry: &AwardRollEntry) -> String {
+    let name = &entry.username;
+    let value = entry.score_value;
+    let medal = award_roll_medal(entry.rank);
+    match entry.category.as_str() {
+        CROWN_AWARD_CATEGORY => {
+            format!(
+                "{CROWN_GLYPH} @{name} took it last for {} chips",
+                thousands(value)
+            )
+        }
+        LATE_TIME_AWARD_CATEGORY => format!(
+            "\u{1F319} @{name} with {}",
+            format_score_value(LATE_TIME_AWARD_CATEGORY, value)
+        ),
+        GALLERY_AWARD_CATEGORY => match gallery_prize_chips(entry.rank) {
+            Some(prize) => format!(
+                "{medal} @{name} {} applause (+{} chips)",
+                thousands(value),
+                thousands(prize)
+            ),
+            None => format!("{medal} @{name} {} applause", thousands(value)),
+        },
+        "top_chips" => format!("{medal} @{name} {} chips", thousands(value)),
+        "arcade_wins" => format!("{medal} @{name} {} pts", thousands(value)),
+        // The score boards: Lateris, 2048, Snake. A bare best score.
+        _ => format!("{medal} @{name} {}", thousands(value)),
+    }
+}
+
+fn award_roll_medal(rank: i32) -> String {
+    match rank {
+        1 => "\u{1F947}".to_string(),
+        2 => "\u{1F948}".to_string(),
+        3 => "\u{1F949}".to_string(),
+        // Migration 081 caps placements at three; a deeper row still reads.
+        rank => format!("#{rank}"),
+    }
+}
+
 /// First day of the UTC month before the one containing `today`: the month
 /// `snapshot_previous_month_profile_awards` writes rows for.
 fn previous_utc_month(today: NaiveDate) -> NaiveDate {
@@ -448,7 +557,13 @@ impl LeaderboardService {
         })
     }
 
-    pub fn start_profile_award_snapshot_loop(self) -> tokio::task::JoinHandle<()> {
+    /// The monthly award loop: snapshot last month's placements, then post
+    /// the roll to #lounge as the `system` user. `chat` is required because
+    /// the roll is part of the rollover, not an optional extra.
+    pub fn start_profile_award_snapshot_loop(
+        self,
+        chat: ChatService,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut last_run: Option<(NaiveDate, Instant)> = None;
             let mut interval = tokio::time::interval(AWARD_SNAPSHOT_CHECK_INTERVAL);
@@ -465,10 +580,38 @@ impl LeaderboardService {
                     continue;
                 }
                 match self.snapshot_profile_awards().await {
-                    Ok(()) => last_run = Some((target_month, Instant::now())),
+                    Ok(()) => {}
                     // `last_run` is untouched, so the next hourly tick retries
                     // instead of waiting out the fallback.
-                    Err(e) => tracing::warn!(error = ?e, "profile award snapshot failed"),
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "profile award snapshot failed");
+                        continue;
+                    }
+                }
+                match self.announce_award_roll().await {
+                    Ok(None) => last_run = Some((target_month, Instant::now())),
+                    Ok(Some(claimed)) => {
+                        metrics::record_award_announcement(AwardAnnouncementOutcome::Posted);
+                        tracing::info!(
+                            period_month = %claimed.roll.period_month,
+                            placements = claimed.roll.entries.len(),
+                            "monthly award roll posted to lounge"
+                        );
+                        chat.send_lounge_message_task(SendLoungeMessageTask {
+                            user_id: claimed.system_user_id,
+                            body: award_roll_body(&claimed.roll),
+                            request_id: None,
+                            join_if_needed: true,
+                            failure_log: "failed to post monthly award roll",
+                        });
+                        last_run = Some((target_month, Instant::now()));
+                    }
+                    // Unclaimed, so the next hourly tick retries the roll; the
+                    // snapshot above is idempotent and re-runs harmlessly.
+                    Err(e) => {
+                        metrics::record_award_announcement(AwardAnnouncementOutcome::Failed);
+                        tracing::warn!(error = ?e, "monthly award roll failed");
+                    }
                 }
             }
         })
@@ -485,6 +628,25 @@ impl LeaderboardService {
             tracing::info!(%user_id, rank, chips, "artboard gallery prize paid");
         }
         Ok(())
+    }
+
+    /// Claim last month's #lounge roll. `None` when another pass, replica or
+    /// restart already posted it, or when the month has no awards yet. The
+    /// system user is looked up before the claim so a missing author can
+    /// never spend it.
+    async fn announce_award_roll(&self) -> Result<Option<ClaimedAwardRoll>> {
+        let client = self.db.get().await?;
+        let system_user_id = match User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT).await? {
+            Some(user) => user.id,
+            None => anyhow::bail!("system user not ensured yet"),
+        };
+        match claim_previous_month_award_announcement(&client).await? {
+            Some(roll) => Ok(Some(ClaimedAwardRoll {
+                system_user_id,
+                roll,
+            })),
+            None => Ok(None),
+        }
     }
 }
 

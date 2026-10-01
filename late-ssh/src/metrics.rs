@@ -16,6 +16,7 @@ use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
+use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::pg_listener::Refresh;
@@ -409,16 +410,17 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
-        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
-        DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryContentRatingResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
-        GiftDrinkRefusal, GildRefusal, GildTier, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OldSignalPayout, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands,
+        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
+        BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, FightBeat,
+        FirstContactBeat, GalleryApplauseResult, GalleryContentRatingResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
+        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use crate::app::bonsai::state::BranchAction;
@@ -913,6 +915,25 @@ mod inner {
             PotReminderOutcome::Posted => "posted",
             PotReminderOutcome::Failed => "failed",
         }
+    }
+
+    fn award_announcement_label(outcome: AwardAnnouncementOutcome) -> &'static str {
+        match outcome {
+            AwardAnnouncementOutcome::Posted => "posted",
+            AwardAnnouncementOutcome::Failed => "failed",
+        }
+    }
+
+    fn award_announcements_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_award_announcements_total")
+                .with_description(
+                    "The monthly award roll in #lounge, by outcome; a month with no posted roll is a rollover nobody heard about",
+                )
+                .build()
+        })
     }
 
     fn pot_reminders_total() -> &'static Counter<u64> {
@@ -1941,6 +1962,15 @@ mod inner {
         pot_reminders_total().add(1, &[KeyValue::new("outcome", pot_reminder_label(outcome))]);
     }
 
+    /// The award loop's roll arm. Only claims that happened or errored count;
+    /// a pass whose month was already announced is silence, not an outcome.
+    pub fn record_award_announcement(outcome: AwardAnnouncementOutcome) {
+        award_announcements_total().add(
+            1,
+            &[KeyValue::new("outcome", award_announcement_label(outcome))],
+        );
+    }
+
     fn translation_result_label(result: TranslationResult) -> &'static str {
         match result {
             TranslationResult::CacheHit => "cache_hit",
@@ -2381,16 +2411,17 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
-        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, BioScreenOutcome, CrownRefusal,
-        DailyPuzzle, DailyWinPayout, DoorGame, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryContentRatingResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
-        GiftDrinkRefusal, GildRefusal, GildTier, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OldSignalPayout, OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands,
+        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
+        BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, FightBeat,
+        FirstContactBeat, GalleryApplauseResult, GalleryContentRatingResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
+        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
 
@@ -2465,6 +2496,7 @@ mod inner {
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_pot_reminder(_outcome: PotReminderOutcome) {}
+    pub fn record_award_announcement(_outcome: AwardAnnouncementOutcome) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}

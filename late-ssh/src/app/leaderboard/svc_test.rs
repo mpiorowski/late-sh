@@ -267,3 +267,49 @@ fn online_time_adds_disjoint_reconnections() {
         .expect("two completed intervals");
     assert_eq!(increment_for(&batch, user_id, august), 15_000);
 }
+
+fn placement(username: &str, category: &str, rank: i32, score_value: i64) -> AwardRollEntry {
+    AwardRollEntry {
+        username: username.to_string(),
+        category: category.to_string(),
+        rank,
+        score_value,
+    }
+}
+
+/// The whole #lounge roll from a fixed month: boards in badge order whatever
+/// order the rows came in, medals in rank order, a shared first place shown
+/// twice, the gallery's prizes, the single-holder awards worded as such, and
+/// a board nobody placed on (Snake) left out.
+#[test]
+fn award_roll_body_reads_as_one_message_per_month() {
+    let roll = AwardRoll {
+        period_month: month(2026, 9),
+        entries: vec![
+            placement("mira", "top_chips", 1, 120_500),
+            placement("ada", "arcade_wins", 1, 340),
+            placement("kai", "arcade_wins", 1, 340),
+            placement("rex", "tetris", 1, 45_000),
+            placement("ada", "artboard", 1, 12),
+            placement("pip", "crown", 1, 7_500),
+            placement("owl", "late_time", 1, 133_979_000),
+            placement("bo", "top_chips", 2, 98_000),
+            placement("zed", "twenty_forty_eight", 2, 2_048),
+            placement("kai", "artboard", 2, 9),
+            placement("cy", "top_chips", 3, 50_000),
+        ],
+    };
+
+    assert_eq!(
+        award_roll_body(&roll),
+        "\u{1F3C6} The September 2026 awards are in! Winners wear their badges all October.\n\
+         Arcade Wins: \u{1F947} @ada 340 pts \u{00B7} \u{1F947} @kai 340 pts\n\
+         Top Chips: \u{1F947} @mira 120,500 chips \u{00B7} \u{1F948} @bo 98,000 chips \u{00B7} \u{1F949} @cy 50,000 chips\n\
+         Lateris: \u{1F947} @rex 45,000\n\
+         2048: \u{1F948} @zed 2,048\n\
+         The Crown: \u{1F451} @pip took it last for 7,500 chips\n\
+         Artboard Gallery: \u{1F947} @ada 12 applause (+40,000 chips) \u{00B7} \u{1F948} @kai 9 applause (+15,000 chips)\n\
+         Late Time: \u{1F319} @owl with 37h 12m online\n\
+         Congrats! Full standings on the Leaderboards page."
+    );
+}

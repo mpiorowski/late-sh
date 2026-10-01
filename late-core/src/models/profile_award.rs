@@ -592,6 +592,82 @@ pub async fn snapshot_previous_month_profile_awards(
     })
 }
 
+/// A settled month's award roll, as the #lounge announcement reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AwardRoll {
+    pub period_month: NaiveDate,
+    /// Rank order, then score, then name: the order medals are handed out.
+    pub entries: Vec<AwardRollEntry>,
+}
+
+/// One placement on the roll: the winner's name, not their id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AwardRollEntry {
+    pub username: String,
+    pub category: String,
+    pub rank: i32,
+    pub score_value: i64,
+}
+
+/// Claim the #lounge announcement for last UTC month's awards and read the
+/// roll to announce. "Last month" comes from the DB clock, the same
+/// expression `snapshot_previous_month_profile_awards` uses, so the two
+/// cannot disagree at the rollover. Once per month across every replica,
+/// restart and fallback pass: the claim row's unique month is the gate, so
+/// only the caller that inserts it gets `Some`. A month with no monthly
+/// award rows is left unclaimed, so a later pass can still announce it once
+/// rows land. Milestones are not on the roll: they belong to the month they
+/// were earned in, not to the rollover.
+pub async fn claim_previous_month_award_announcement(client: &Client) -> Result<Option<AwardRoll>> {
+    let milestone_categories: Vec<&str> = MILESTONE_AWARD_CATEGORIES.to_vec();
+    let claimed = client
+        .query_opt(
+            "WITH bounds AS (
+                SELECT (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date AS period_month
+             )
+             INSERT INTO profile_award_announcements (period_month)
+             SELECT bounds.period_month
+             FROM bounds
+             WHERE EXISTS (
+                SELECT 1
+                FROM profile_awards
+                WHERE period_month = bounds.period_month
+                  AND category <> ALL($1)
+             )
+             ON CONFLICT (period_month) DO NOTHING
+             RETURNING period_month",
+            &[&milestone_categories],
+        )
+        .await?;
+    let period_month: NaiveDate = match claimed {
+        Some(row) => row.get("period_month"),
+        None => return Ok(None),
+    };
+    let rows = client
+        .query(
+            "SELECT u.username, a.category, a.rank, a.score_value
+             FROM profile_awards a
+             JOIN users u ON u.id = a.user_id
+             WHERE a.period_month = $1
+               AND a.category <> ALL($2)
+             ORDER BY a.rank ASC, a.score_value DESC, u.username ASC",
+            &[&period_month, &milestone_categories],
+        )
+        .await?;
+    Ok(Some(AwardRoll {
+        period_month,
+        entries: rows
+            .into_iter()
+            .map(|row| AwardRollEntry {
+                username: row.get("username"),
+                category: row.get("category"),
+                rank: row.get("rank"),
+                score_value: row.get("score_value"),
+            })
+            .collect(),
+    }))
+}
+
 /// Grant a one-time, rankless milestone award (Lateania bosses, NetHack
 /// milestones) to a user. Idempotent per (user, category): the `NOT EXISTS`
 /// guard means a re-run after the award already exists is a no-op, so this is

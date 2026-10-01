@@ -399,7 +399,7 @@ async fn main() -> anyhow::Result<()> {
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
         .clone()
-        .start_profile_award_snapshot_loop();
+        .start_profile_award_snapshot_loop(chat_service.clone());
     let quest_service = late_ssh::app::QuestService::new(db.clone(), activity_tx.clone());
     let _quest_activity_task = quest_service.start_activity_task();
     let _quest_notify_task = quest_service

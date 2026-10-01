@@ -6,13 +6,14 @@ use crate::models::chips::{ChipMove, Difficulty, UserChips};
 use crate::models::crown::CrownReign;
 use crate::models::leaderboard::{OnlineTimeIncrement, apply_online_time_batch};
 use crate::models::profile_award::{
-    CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY,
+    GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
     NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label,
-    find_profile_awards_by_ids, format_score_value, is_milestone_award, is_rankless_award,
-    list_profile_awards_for_user, snapshot_previous_month_profile_awards, top_badge_per_game,
+    claim_previous_month_award_announcement, find_profile_awards_by_ids, format_score_value,
+    is_milestone_award, is_rankless_award, list_profile_awards_for_user,
+    snapshot_previous_month_profile_awards, top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
 use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
@@ -181,6 +182,60 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
             .iter()
             .any(|award| award.category == CROWN_AWARD_CATEGORY),
         "only the month's last holder is crowned"
+    );
+}
+
+/// The #lounge roll is posted by whichever replica claims the month first,
+/// and never again. A month whose snapshot wrote nothing stays unclaimed, so
+/// the announcement is not spent on an empty roll.
+#[tokio::test]
+async fn the_award_announcement_is_claimed_once_per_month() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let holder = create_test_user(&test_db.db, "award-roll-holder").await;
+    let last_month = (Utc::now().date_naive().with_day(1).expect("day 1"))
+        .checked_sub_months(Months::new(1))
+        .expect("last month");
+
+    assert_eq!(
+        claim_previous_month_award_announcement(&client)
+            .await
+            .expect("claim before the snapshot"),
+        None,
+        "a month with no awards must not spend the claim"
+    );
+
+    let tx = client.transaction().await.expect("tx");
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    CrownReign::open_in_tx(&tx, holder.id, 7_500, taken_at)
+        .await
+        .expect("open");
+    tx.commit().await.expect("commit");
+    roll_crown_reigns_back_a_month(&client).await;
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+
+    assert_eq!(
+        claim_previous_month_award_announcement(&client)
+            .await
+            .expect("first claim"),
+        Some(AwardRoll {
+            period_month: last_month,
+            entries: vec![AwardRollEntry {
+                username: holder.username.clone(),
+                category: CROWN_AWARD_CATEGORY.to_string(),
+                rank: 1,
+                score_value: 7_500,
+            }],
+        })
+    );
+    assert_eq!(
+        claim_previous_month_award_announcement(&client)
+            .await
+            .expect("second claim"),
+        None,
+        "the roll must be announced once"
     );
 }
 
