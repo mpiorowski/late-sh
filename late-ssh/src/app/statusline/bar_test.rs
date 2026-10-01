@@ -768,35 +768,31 @@ fn a_title_wider_than_the_border_row_does_not_underflow_the_budget() {
     assert!(bar.is_none(), "nothing fits behind an oversized title");
 }
 
-/// Zen's row: the guide is set aside at the right edge first, the bar fits in
-/// the rest with dots between segments, and a segment with no room is dropped
-/// whole rather than painted under the guide.
+/// Zen's row: the bar has the whole row, dots between segments, and a
+/// segment with no room is dropped whole.
 #[test]
-fn zen_row_fits_the_bar_beside_the_guide() {
+fn zen_row_fits_the_bar_in_its_own_row() {
     let components = [
         on(StatusComponent::Mentions, LabelMode::Text),
         on(StatusComponent::Chips, LabelMode::Text),
         on(StatusComponent::Users, LabelMode::Text),
     ];
-    let row = Rect::new(0, 39, 40, 1);
+    let row = Rect::new(0, 39, 30, 1);
     let zen_row = build_zen_status_row(&components, &data(), row);
 
     let bar = zen_row.bar.expect("bar");
     assert_eq!(bar.to_string(), " unread 5 · chips 1204 ");
-    let guide = zen_row.guide.expect("guide");
-    assert_eq!(guide.to_string(), " ? guide / keys ");
     assert_eq!(
         zen_row.hits,
         vec![
             (StatusClick::Mentions, Rect::new(0, 39, 10, 1)),
             (StatusClick::Shop, Rect::new(11, 39, 12, 1)),
-            (StatusClick::Guide, Rect::new(24, 39, 16, 1)),
         ]
     );
 }
 
-/// The row is a setting, not a reading: one component on keeps it (and the
-/// guide) even while that component has nothing to say; all off removes it.
+/// The row is a setting, not a reading: one component on keeps it, blank,
+/// even while that component has nothing to say; all off removes it.
 #[test]
 fn zen_row_stays_while_any_component_is_on() {
     let quiet = StatusData {
@@ -811,10 +807,7 @@ fn zen_row_stays_while_any_component_is_on() {
     assert!(zen_row_shown(&auto_hidden));
     let zen_row = build_zen_status_row(&auto_hidden, &quiet, Rect::new(0, 39, 40, 1));
     assert!(zen_row.bar.is_none());
-    assert_eq!(
-        zen_row.hits,
-        vec![(StatusClick::Guide, Rect::new(24, 39, 16, 1))]
-    );
+    assert!(zen_row.hits.is_empty());
 
     let all_off = StatusComponent::ALL.map(|component| StatusComponentSetting {
         enabled: false,

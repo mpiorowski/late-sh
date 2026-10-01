@@ -178,14 +178,14 @@ async fn a_wide_terminal_shows_every_section_in_order() {
     );
 }
 
-/// A standing runner's profile grows a runner card beside the late.fetch
-/// grid, for a runner looking: the boxed face beside the level, the
-/// signal and exp bars, and the bits, then the kit and the tally. A
-/// narrow column stacks the card under the grid, still above the bio. A
-/// civilian looking sees the profile they always did, and a runner who
-/// left has nothing to show.
+/// A standing runner's profile grows a runner column beside the late.fetch
+/// grid, for a runner looking: its own heading on the grid's heading row
+/// carrying the level badge, then the face beside one key column (the
+/// signal and exp bars, bits, the kit, the tally), no frame anywhere. A narrow body makes it a section under
+/// the grid, still above the bio. A civilian looking sees the profile they
+/// always did, and a runner who left has nothing to show.
 #[tokio::test]
-async fn a_runners_profile_shows_the_card_to_runners_only() {
+async fn a_runners_profile_shows_the_runner_to_runners_only() {
     use crate::app::deadchannel::runner::state::Look;
     use late_core::models::deadchannel_runner::DeadchannelRunner;
     use rand::SeedableRng;
@@ -194,8 +194,8 @@ async fn a_runners_profile_shows_the_card_to_runners_only() {
     let fixture = fixture("runner").await;
     let lines = render_as(&fixture.state, 130, 60, true);
     assert!(
-        row_of(&lines, "╭─ runner").is_none(),
-        "no card for a civilian:\n{}",
+        row_of(&lines, "signal  ").is_none(),
+        "no runner column for a civilian:\n{}",
         lines.join("\n")
     );
 
@@ -224,51 +224,62 @@ async fn a_runners_profile_shows_the_card_to_runners_only() {
     .expect("runner snapshot");
     assert!(state.tick());
 
-    // Wide: the card's top border shares the grid's first row, and the
-    // whole card sits above the bio.
+    // Wide: the runner's heading shares the late.fetch heading's row, the
+    // rows run beside the grid, and all of it sits above the bio.
     let lines = render_as(&state, 130, 60, true);
     let text = lines.join("\n");
-    let card = row_of(&lines, &format!("╭─ runner {}1 ─", look.mark)).expect("card title");
+    let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
     assert!(
-        lines[card].contains("country   "),
+        lines[heading].contains("late.fetch ─"),
+        "one row, two headings:\n{text}"
+    );
+    assert!(
+        lines[heading + 1].contains("country   "),
         "beside the grid:\n{text}"
     );
     let face = look.rows().map(|worn| worn.piece.row);
-    for expected in [
-        "lv 1".to_string(),
-        format!("│{}│   signal ████████ 10/10", face[0]),
-        format!("│{}│   exp    ░░░░░░░░ 0/100", face[1]),
-        format!("│{}│   bits   50", face[2]),
-        "weapon bare hands".to_string(),
-        "armor  street clothes".to_string(),
-        "glyphs 0 down".to_string(),
-    ] {
-        assert!(row_of(&lines, &expected).is_some(), "{expected}:\n{text}");
+    let expected = [
+        format!("{}  signal  ████████████ 10/10", face[0]),
+        format!("{}  exp     ░░░░░░░░░░░░ 0/100", face[1]),
+        format!("{}  bits    50", face[2]),
+        "       weapon  bare hands".to_string(),
+        "       armor   street clothes".to_string(),
+        "       glyphs  0 down".to_string(),
+    ];
+    for (offset, expected) in expected.iter().enumerate() {
+        assert!(
+            lines[heading + 1 + offset].contains(expected),
+            "{expected}:\n{text}"
+        );
     }
-    let bottom = row_of(&lines, "╰──").expect("card bottom");
     let bio = row_of(&lines, "bio ─").expect("bio heading");
-    assert!(card < bottom && bottom < bio, "the card, then bio:\n{text}");
     assert!(
-        row_of(&lines, "runner ─").is_none(),
-        "no runner section:\n{text}"
+        heading + expected.len() < bio,
+        "the runner, then bio:\n{text}"
+    );
+    assert!(
+        row_of(&lines, "level   ").is_none(),
+        "the level is the badge, not a row:\n{text}"
     );
 
-    // Narrow: the same card under the grid, still above the bio.
+    // Narrow: the same rows as a section under the grid, above the bio.
     let lines = render_as(&state, 70, 80, true);
     let text = lines.join("\n");
     let langs = row_of(&lines, "langs     ").expect("last grid row");
-    let card = row_of(&lines, "╭─ runner").expect("card title");
+    let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
     let bio = row_of(&lines, "bio ─").expect("bio heading");
-    assert!(langs < card && card < bio, "grid, card, bio:\n{text}");
-    assert!(row_of(&lines, "signal ████████ 10/10").is_some(), "{text}");
+    assert!(
+        langs < heading && heading < bio,
+        "grid, runner, bio:\n{text}"
+    );
+    assert!(
+        lines[heading + 1].contains("signal  ████████████ 10/10"),
+        "{text}"
+    );
 
     // The same profile to a civilian: the row is not theirs to see.
     let lines = render_as(&state, 130, 60, false);
-    assert!(
-        row_of(&lines, "╭─ runner").is_none(),
-        "{}",
-        lines.join("\n")
-    );
+    assert!(row_of(&lines, "signal  ").is_none(), "{}", lines.join("\n"));
 }
 
 #[tokio::test]

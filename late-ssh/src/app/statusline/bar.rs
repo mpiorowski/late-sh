@@ -23,7 +23,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::data::{StatusData, clock_icon};
-use crate::app::common::{primitives::hint_line, theme};
+use crate::app::common::theme;
 
 /// Which row the bar is painted on, and therefore which end of it collides
 /// with the other title on that row.
@@ -35,9 +35,9 @@ pub(crate) enum Placement {
     /// Left-aligned on the bottom border, sharing the row with the sponsor
     /// line on the right. The corner end has first claim on the room.
     BottomLeft,
-    /// Left-aligned on Zen's own bottom row, sharing it with the guide
-    /// button on the right. Zen has no frame, so there is no border to run
-    /// on: no corners, and the dividers are dots.
+    /// Left-aligned on Zen's own bottom row, which it has to itself. Zen
+    /// has no frame, so there is no border to run on: no corners, and the
+    /// dividers are dots.
     ZenRow,
 }
 
@@ -120,55 +120,38 @@ pub(crate) fn build_top_status_bar(
     build_status_bar(&components, data, Placement::TopRight, area, title_width)
 }
 
-/// Zen's bottom row: the user's bar on the left, the guide on the right.
+/// Zen's bottom row for one frame.
 pub(crate) struct ZenStatusRow {
-    /// `None` while every enabled component is auto-hidden or dropped.
+    /// `None` while every enabled component is auto-hidden: the row stays,
+    /// blank.
     pub bar: Option<Line<'static>>,
-    /// `? guide / keys`, right-aligned; `None` only on a row too narrow for it.
-    pub guide: Option<Line<'static>>,
     pub hits: Vec<(StatusClick, Rect)>,
 }
 
 /// Whether Zen gives its bottom row to the status line. A setting, not a
 /// reading: the row stays while every enabled component reads inactive, so
 /// the tiles never jump as a count comes and goes. With every component
-/// switched off the row goes, guide included, and the tiles take it.
+/// switched off the row goes and the tiles take it.
 pub(crate) fn zen_row_shown(components: &[StatusComponentSetting]) -> bool {
     components.iter().any(|setting| setting.enabled)
 }
 
-/// Build Zen's bottom row for one frame. `row` is the row itself. The guide
-/// is set aside first and the bar fits in the rest, the way the frame's
-/// bottom bar fits beside the sponsor link.
+/// Build Zen's bottom row; `row` is the row itself, all of it the bar's.
 pub(crate) fn build_zen_status_row(
     components: &[StatusComponentSetting],
     data: &StatusData<'_>,
     row: Rect,
 ) -> ZenStatusRow {
-    let mut guide = hint_line(&[("?", "guide / keys")]);
-    guide.spans.push(Span::raw(" "));
-    let guide_width = guide.width() as u16;
-    // A row too narrow for the guide goes to the bar.
-    let guide = match guide_width <= row.width {
-        true => Some(guide.right_aligned()),
-        false => None,
-    };
-    let reserved_for_guide = match guide {
-        Some(_) => guide_width,
-        None => 0,
-    };
-    let (bar, mut hits) =
-        match build_status_bar(components, data, Placement::ZenRow, row, reserved_for_guide) {
-            Some(bar) => (Some(bar.line), bar.hits),
-            None => (None, Vec::new()),
-        };
-    if guide.is_some() {
-        hits.push((
-            StatusClick::Guide,
-            Rect::new(row.right() - guide_width, row.y, guide_width, 1),
-        ));
+    match build_status_bar(components, data, Placement::ZenRow, row, 0) {
+        Some(bar) => ZenStatusRow {
+            bar: Some(bar.line),
+            hits: bar.hits,
+        },
+        None => ZenStatusRow {
+            bar: None,
+            hits: Vec::new(),
+        },
     }
-    ZenStatusRow { bar, guide, hits }
 }
 
 /// The keyboard hint was the original bottom-left frame title. It stays its
@@ -379,7 +362,7 @@ fn separator(placement: Placement) -> Span<'static> {
 /// each adjacent pair. A frame bar adds one more at the corner end so it
 /// meets the frame corner through a border glyph instead of a blank cell.
 /// `fit` budgets that corner glyph on every placement, so Zen's row keeps
-/// the cell as air before the guide.
+/// the cell as air at its right end.
 fn total_width(segments: &[Segment]) -> u16 {
     let segments_width: u16 = segments.iter().map(Segment::width).sum();
     segments_width + (segments.len() as u16)
@@ -472,8 +455,6 @@ pub(crate) enum StatusClick {
     Profiles,
     /// Zen, where the bonsai, the tank, and the pet all live.
     Zen,
-    /// The guide on its current page's topic: Zen's `? guide / keys`.
-    Guide,
 }
 
 pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {

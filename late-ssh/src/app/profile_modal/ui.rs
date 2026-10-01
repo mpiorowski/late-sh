@@ -8,12 +8,12 @@
 //! section takes exactly the rows it needs, and nothing is ever cut but the
 //! bonsai's sides when the column is narrower than the canvas.
 //!
-//! Top to bottom: late.fetch (the fact grid, with the runner card beside
-//! it for runners), bio, the bonsai (the whole canvas at its true size),
-//! pet, the aquarium, showcases, badges (all of them, always), and the
-//! chips ledger. The same order on every screen; the only reflow is the
-//! runner card stacking under the grid when the column is too narrow for
-//! both.
+//! Top to bottom: late.fetch (the fact grid, with the runner column
+//! beside it for runners, each under its own heading), bio, the bonsai (the
+//! whole canvas at its true size), pet, the aquarium, showcases, badges
+//! (all of them, always), and the chips ledger. The same order on every
+//! screen; the only reflow is the runner column becoming a section under
+//! the grid when the body is too narrow for both.
 
 use chrono::Utc;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
@@ -33,9 +33,7 @@ use crate::app::{
     bonsai::render::{apply_sway, canvas_lines_in},
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     deadchannel::{
-        fight::data as fight_data,
-        fight::ui as fight_ui,
-        runner::state::{PORTRAIT_HEIGHT, PORTRAIT_WIDTH},
+        fight::data as fight_data, fight::ui as fight_ui, runner::state::PORTRAIT_WIDTH,
         runner::ui as runner_ui,
     },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -59,18 +57,17 @@ const CHROME_ROWS: u16 = 4;
 const SIDE_MARGIN: u16 = 2;
 /// The reef band: the tallest creature plus the surface and floor rows.
 const AQUARIUM_HEIGHT: u16 = 11;
-/// The runner card's inside, between its borders: the boxed portrait and
-/// the stat column, the widest row being `exp` with five-digit figures.
-const CARD_INNER: usize = 40;
-/// The whole card: the inside plus a border on each side.
-const CARD_WIDTH: u16 = CARD_INNER as u16 + 2;
-/// Columns between the fact grid and the card.
-const CARD_GAP: u16 = 2;
-/// The card sits beside the grid when the body is at least this wide: the
-/// grid keeps 46 columns, enough for every fact but a long free-text one.
-const CARD_BESIDE_MIN_WIDTH: u16 = 90;
-/// Cells in the card's signal and exp bars.
-const CARD_BAR_CELLS: usize = 8;
+/// The runner column: the portrait, the keys, and the widest row, `exp`
+/// with its bar and six-digit figures on a marked climb.
+const RUNNER_WIDTH: u16 = 42;
+/// Columns between the fact grid and the runner column.
+const RUNNER_GAP: u16 = 3;
+/// The runner column sits beside the grid when the body is at least this
+/// wide: the grid keeps 45 columns, enough for every fact but a long
+/// free-text one.
+const RUNNER_BESIDE_MIN_WIDTH: u16 = 90;
+/// Cells in the runner's signal and exp bars, the fight scene's count.
+const RUNNER_BAR_CELLS: usize = 12;
 
 /// One stretch of the body. Each knows its height, so the column can be
 /// measured before it is painted.
@@ -96,7 +93,7 @@ impl Segment {
     }
 }
 
-/// `viewer_is_runner` gates the runner card: until the public flip
+/// `viewer_is_runner` gates the runner column: until the public flip
 /// (deadchannel CONTEXT.md), what happens on the row is shown only to
 /// people on it. One argument to drop at the flip.
 pub(crate) fn draw(
@@ -202,33 +199,36 @@ fn build_segments(
 
     let mut segments = Vec::new();
 
-    // ── late.fetch ──
-    // The runner card rides beside the grid, for runners looking at a
-    // runner: the row is nobody else's business until the public flip.
-    let mut lines = section_lines("late.fetch", width_usize);
-    lines.remove(0); // the row under the border already breathes
+    // ── late.fetch, and the runner ──
+    // The runner is a second column beside the grid, each under its own
+    // heading, for runners looking at a runner: the row is nobody else's
+    // business until the public flip. A narrow body makes it a section.
     let grid = late_fetch_lines(state, profile);
-    let card = state
-        .runner()
-        .filter(|_| viewer_is_runner)
-        .map(runner_card_lines);
-    match card {
+    let runner = state.runner().filter(|_| viewer_is_runner);
+    match runner {
         None => {
+            let mut lines = vec![section_heading("late.fetch", width_usize)];
             lines.extend(grid);
             segments.push(Segment::Text(lines));
         }
-        Some(card) if width >= CARD_BESIDE_MIN_WIDTH => {
-            segments.push(Segment::Text(lines));
+        Some(runner) if width >= RUNNER_BESIDE_MIN_WIDTH => {
+            let left_width = usize::from(width - RUNNER_WIDTH - RUNNER_GAP);
+            let mut left = vec![section_heading("late.fetch", left_width)];
+            left.extend(grid);
+            let mut right = vec![runner_heading(runner, usize::from(RUNNER_WIDTH))];
+            right.extend(runner_lines(runner));
             segments.push(Segment::Beside {
-                left: grid,
-                right: card,
-                right_width: CARD_WIDTH,
+                left,
+                right,
+                right_width: RUNNER_WIDTH,
             });
         }
-        Some(card) => {
+        Some(runner) => {
+            let mut lines = vec![section_heading("late.fetch", width_usize)];
             lines.extend(grid);
             lines.push(Line::from(""));
-            lines.extend(card);
+            lines.push(runner_heading(runner, width_usize));
+            lines.extend(runner_lines(runner));
             segments.push(Segment::Text(lines));
         }
     }
@@ -350,7 +350,7 @@ fn compose(segments: &[Segment], width: u16, height: u16, state: &ProfileModalSt
                     ..area
                 };
                 let left_area = Rect {
-                    width: right_area.x.saturating_sub(CARD_GAP),
+                    width: right_area.x.saturating_sub(RUNNER_GAP),
                     ..area
                 };
                 Paragraph::new(left.clone()).render(left_area, &mut buf);
@@ -438,52 +438,46 @@ fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The runner card: a framed panel titled with the runner's badge. The
-/// portrait sits in its own box, losing cells to static in proportion to
-/// the missing signal (`fight::ui::corrupt`, the fight scene's wound), with
-/// the level, the signal and exp bars, and the bits beside it; the kit and
-/// the glyphs put down (and the Old Signal marks with their title once
-/// there are any) run under it. The sheet arrives settled for today (the
-/// service applies the day roll to the view), so the signal is what the
-/// runner would find on the row. Rations are not here: the street's strip
-/// and the frame HUD carry them for the runner themself.
-fn runner_card_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let text = Style::default().fg(theme::TEXT());
-    let key = Style::default().fg(theme::AMBER_DIM());
-    let bright = Style::default().fg(theme::TEXT_BRIGHT());
-    let frame = Style::default().fg(theme::BORDER_DIM());
+/// The runner's heading: `runner`, then the wire's own badge (`▚7`,
+/// `▚7╬2`) in the level's band color, then the rule.
+fn runner_heading(runner: &ProfileRunner, width: usize) -> Line<'static> {
     let sheet = &runner.sheet;
-    let level = Style::default()
-        .fg(runner_ui::level_color(sheet.level))
-        .add_modifier(Modifier::BOLD);
-
-    // The badge in the title, the wire's own token (`▚7`, `▚7╬2`).
     let badge = match sheet.marks {
         0 => format!("{}{}", runner.look.mark, sheet.level),
         marks => format!("{}{}╬{marks}", runner.look.mark, sheet.level),
     };
-    let title = vec![
-        Span::styled("╭─ ", frame),
-        Span::styled(
-            "runner",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", frame),
-        Span::styled(badge, level),
-        Span::styled(" ", frame),
-    ];
-    let title_width: usize = title.iter().map(Span::width).sum();
-    let mut top = title;
-    top.push(Span::styled(
-        format!(
-            "{}╮",
-            "─".repeat((CARD_INNER + 1).saturating_sub(title_width))
-        ),
-        frame,
-    ));
+    heading_line(
+        vec![
+            heading_label("runner"),
+            Span::raw(" "),
+            Span::styled(
+                badge,
+                Style::default()
+                    .fg(runner_ui::level_color(sheet.level))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ],
+        width,
+    )
+}
+
+/// The runner's rows, no frame anywhere: the three-row portrait on the
+/// left, losing cells to static in proportion to the missing signal
+/// (`fight::ui::corrupt`, the fight scene's wound), and one `key  value`
+/// column beside and below it, the grid's own shape: the signal and exp
+/// bars and the bits beside the face, then the kit by name, the glyphs put
+/// down, and the Old Signal marks with their title once there are any.
+/// The level is the heading's badge, so it has no row. The sheet arrives
+/// settled for today (the service applies the day roll to the view), so
+/// the signal is what the runner would find on the row. Rations are not
+/// here: the street's strip and the frame HUD carry them for the runner
+/// themself.
+fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let text = Style::default().fg(theme::TEXT());
+    let key = Style::default().fg(theme::AMBER_DIM());
+    let bright = Style::default().fg(theme::TEXT_BRIGHT());
+    let sheet = &runner.sheet;
 
     // The face, wounded by the missing signal; the seed is the runner, so
     // the same cells are gone on every open.
@@ -495,123 +489,101 @@ fn runner_card_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
         missing,
         sheet.user_id.as_u128() as u64,
     );
-    let face_rows: Vec<Vec<Span<'static>>> = face
-        .into_iter()
-        .zip(worn)
-        .map(|(cells, worn)| {
-            let tint = Style::default().fg(runner_ui::tint_color(worn.tint));
-            cells
-                .into_iter()
-                .map(|(ch, lost)| match lost {
-                    true => Span::styled(ch.to_string(), dim),
-                    false => Span::styled(ch.to_string(), tint),
-                })
-                .collect()
-        })
-        .collect();
+    let portrait = face.into_iter().zip(worn).map(|(cells, worn)| {
+        let tint = Style::default().fg(runner_ui::tint_color(worn.tint));
+        cells
+            .into_iter()
+            .map(|(ch, lost)| match lost {
+                true => Span::styled(ch.to_string(), dim),
+                false => Span::styled(ch.to_string(), tint),
+            })
+            .collect::<Vec<Span<'static>>>()
+    });
 
+    let fact = |label: &str, mut value: Vec<Span<'static>>| {
+        let mut row = vec![Span::styled(format!("{label:<8}"), key)];
+        row.append(&mut value);
+        row
+    };
     let signal = match sheet.is_down() {
-        true => Span::styled("down", Style::default().fg(theme::ERROR())),
-        false => Span::styled(format!("{}/{}", sheet.signal, sheet.max_signal()), text),
+        true => Span::styled(" down", Style::default().fg(theme::ERROR())),
+        false => Span::styled(format!(" {}/{}", sheet.signal, sheet.max_signal()), text),
     };
     // Past the top of the ladder the exp climbs toward the Old Signal.
     let exp_goal = match fight_data::exp_to_advance(sheet.level, sheet.marks) {
         Some(need) => need,
         None => fight_data::exp_to_seek(sheet.marks),
     };
-    let stats: [Vec<Span<'static>>; PORTRAIT_HEIGHT] = [
-        {
-            let mut row = vec![Span::styled("signal ", key)];
-            row.extend(card_bar(
-                sheet.signal.into(),
-                sheet.max_signal().into(),
-                Style::default().fg(theme::BONSAI_LEAF()),
-            ));
-            row.push(Span::raw(" "));
-            row.push(signal);
-            row
-        },
-        {
-            let mut row = vec![Span::styled("exp    ", key)];
-            row.extend(card_bar(
-                sheet.exp,
-                exp_goal,
-                Style::default().fg(theme::AMBER()),
-            ));
-            row.push(Span::styled(format!(" {}/{exp_goal}", sheet.exp), text));
-            row
-        },
-        vec![
-            Span::styled("bits   ", key),
-            Span::styled(ledger::thousands(sheet.bits), bright),
-        ],
-    ];
-
-    let rule = "─".repeat(PORTRAIT_WIDTH);
-    let mut inner: Vec<Vec<Span<'static>>> = vec![
-        vec![],
-        vec![
-            Span::styled(format!(" ┌{rule}┐   "), frame),
-            Span::styled(format!("lv {}", sheet.level), level),
-        ],
-    ];
-    for (face, stat) in face_rows.into_iter().zip(stats) {
-        let mut row = vec![Span::styled(" │", frame)];
-        row.extend(face);
-        row.push(Span::styled("│   ", frame));
-        row.extend(stat);
-        inner.push(row);
-    }
-    inner.push(vec![Span::styled(format!(" └{rule}┘"), frame)]);
-    inner.push(vec![]);
-    inner.push(vec![
-        Span::styled(" weapon ", key),
-        Span::styled(fight_ui::weapon_name(sheet).to_string(), text),
-    ]);
-    inner.push(vec![
-        Span::styled(" armor  ", key),
-        Span::styled(fight_ui::armor_name(sheet).to_string(), text),
-    ]);
     let glyphs = match sheet.kills {
         1 => "1 down".to_string(),
         n => format!("{n} down"),
     };
-    inner.push(vec![
-        Span::styled(" glyphs ", key),
-        Span::styled(glyphs, text),
-    ]);
+    let mut facts = vec![
+        fact("signal", {
+            let mut value = runner_bar(
+                sheet.signal.into(),
+                sheet.max_signal().into(),
+                Style::default().fg(theme::BONSAI_LEAF()),
+            )
+            .to_vec();
+            value.push(signal);
+            value
+        }),
+        fact("exp", {
+            let mut value =
+                runner_bar(sheet.exp, exp_goal, Style::default().fg(theme::AMBER())).to_vec();
+            value.push(Span::styled(format!(" {}/{exp_goal}", sheet.exp), text));
+            value
+        }),
+        fact(
+            "bits",
+            vec![Span::styled(ledger::thousands(sheet.bits), bright)],
+        ),
+        fact(
+            "weapon",
+            vec![Span::styled(fight_ui::weapon_name(sheet).to_string(), text)],
+        ),
+        fact(
+            "armor",
+            vec![Span::styled(fight_ui::armor_name(sheet).to_string(), text)],
+        ),
+        fact("glyphs", vec![Span::styled(glyphs, text)]),
+    ];
     if let Some(title) = fight_data::title(sheet.marks) {
-        inner.push(vec![
-            Span::styled(" marks  ", key),
-            Span::styled(format!("╬{} {title}", sheet.marks), text),
-        ]);
+        facts.push(fact(
+            "marks",
+            vec![Span::styled(format!("╬{} {title}", sheet.marks), text)],
+        ));
     }
 
-    let mut lines = vec![Line::from(top)];
-    for mut row in inner {
-        let used: usize = row.iter().map(Span::width).sum();
-        row.insert(0, Span::styled("│", frame));
-        row.push(Span::raw(" ".repeat(CARD_INNER.saturating_sub(used))));
-        row.push(Span::styled("│", frame));
-        lines.push(Line::from(row));
-    }
-    lines.push(Line::from(Span::styled(
-        format!("╰{}╯", "─".repeat(CARD_INNER)),
-        frame,
-    )));
-    lines
+    // The facts run past the portrait; the rows under it keep its column
+    // empty so the keys stay in one line.
+    let blank = " ".repeat(PORTRAIT_WIDTH);
+    let mut portrait = portrait.into_iter();
+    facts
+        .into_iter()
+        .map(|fact| {
+            let mut row = match portrait.next() {
+                Some(row) => row,
+                None => vec![Span::raw(blank.clone())],
+            };
+            row.push(Span::raw("  "));
+            row.extend(fact);
+            Line::from(row)
+        })
+        .collect()
 }
 
-/// A card bar: `CARD_BAR_CELLS` cells, the filled run in `filled` and the
-/// rest as dim shade.
-fn card_bar(current: i64, max: i64, filled: Style) -> [Span<'static>; 2] {
+/// A runner bar: `RUNNER_BAR_CELLS` cells, the filled run in `filled` and
+/// the rest as dim shade.
+fn runner_bar(current: i64, max: i64, filled: Style) -> [Span<'static>; 2] {
     let max = max.max(1);
     let cells =
-        ((current.clamp(0, max) as f64 / max as f64) * CARD_BAR_CELLS as f64).round() as usize;
+        ((current.clamp(0, max) as f64 / max as f64) * RUNNER_BAR_CELLS as f64).round() as usize;
     [
         Span::styled("█".repeat(cells), filled),
         Span::styled(
-            "░".repeat(CARD_BAR_CELLS - cells),
+            "░".repeat(RUNNER_BAR_CELLS - cells),
             Style::default().fg(theme::BORDER_DIM()),
         ),
     ]
@@ -620,21 +592,32 @@ fn card_bar(current: i64, max: i64, filled: Style) -> [Span<'static>; 2] {
 /// A section heading: a dim label trailed by a rule, with a blank row above
 /// it so sections breathe.
 fn section_lines(label: &str, width: usize) -> Vec<Line<'static>> {
-    let used = label.chars().count() + 1;
-    let rule = width.saturating_sub(used);
-    vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                label.to_string(),
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled("─".repeat(rule), Style::default().fg(theme::BORDER_DIM())),
-        ]),
-    ]
+    vec![Line::from(""), section_heading(label, width)]
+}
+
+/// A section's heading row alone: the label, then the rule out to `width`.
+fn section_heading(label: &str, width: usize) -> Line<'static> {
+    heading_line(vec![heading_label(label)], width)
+}
+
+fn heading_label(label: &str) -> Span<'static> {
+    Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+/// `spans`, a space, then a dim rule filling the rest of `width`.
+fn heading_line(mut spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let used: usize = spans.iter().map(Span::width).sum::<usize>() + 1;
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        "─".repeat(width.saturating_sub(used)),
+        Style::default().fg(theme::BORDER_DIM()),
+    ));
+    Line::from(spans)
 }
 
 /// The bonsai section's body: the whole canvas at its true size, centered

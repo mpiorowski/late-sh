@@ -543,14 +543,11 @@ pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
     ]
 }
 
-/// The user's status line on the left, `? guide / keys` on the right. The
-/// layout keys live in the guide; each tile names its own in its title.
+/// The user's status line. The layout keys live in the guide (`?`); each
+/// tile names its own in its title.
 fn draw_status_row(frame: &mut Frame, area: Rect, row: ZenStatusRow) {
     if let Some(bar) = row.bar {
         frame.render_widget(Paragraph::new(bar), area);
-    }
-    if let Some(guide) = row.guide {
-        frame.render_widget(Paragraph::new(guide), area);
     }
 }
 

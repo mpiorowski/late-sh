@@ -3125,7 +3125,6 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         // and reopening would make Zen its own return page.
         StatusClick::Zen if app.screen == Screen::Zen => {}
         StatusClick::Zen => open_zen_globally(app),
-        StatusClick::Guide => open_guide_globally(app),
     }
     true
 }

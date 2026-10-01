@@ -123,12 +123,12 @@ aquarium stepping and anim edge in `tick.rs`; `extract_zen_layout` /
 
 Where they are shown: each tile names its own keys on the right of its
 title (`tile_keys`, drawn with `hint_line` so the key is amber and the
-word dim), always, so `t` hides them with the titles. The page's last row
-is the user's status line with `? guide / keys` flush right
-(`../statusline/CONTEXT.md`, Zen row); the guide button, like `?`, opens
-`HelpTopic::Zen`, which lists the layout keys and everything else. With
-every status line component switched off the row is gone, button
-included, and the tiles take the whole page; `?` still works. Nothing
+word dim), always, so `t` hides them with the titles. `?` opens
+`HelpTopic::Zen`, which lists the layout keys and everything else. The
+page's last row is the user's status line (`../statusline/CONTEXT.md`,
+Zen row), where the default Keyhints already say `Guide ?`; with every
+status line component switched off the row is gone and the tiles take
+the whole page. Nothing
 else on the page names a key: the lobby's compact footer lost its key
 pair to the title.
 
@@ -264,7 +264,7 @@ leaving the page, so a held resize key costs one row update.
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
   (`rows_test.rs`), Inbox Enter, Live Enter, the click the picker
-  swallows, and the status row's guide click and all-off removal
-  (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
+  swallows, `?` opening the Zen topic, and the status row's all-off
+  removal (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
   the Live tile, empty and sharing a wide tile with the feed (`ui_test.rs`); the rest of the tile drawing is
   untested.
