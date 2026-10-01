@@ -5,8 +5,8 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use super::bar::{
-    Placement, StatusClick, build_status_bar, build_top_status_bar, click_action,
-    fixed_topbar_components,
+    Placement, StatusClick, build_status_bar, build_top_status_bar, build_zen_status_row,
+    click_action, fixed_topbar_components, zen_row_shown,
 };
 use super::data::{StatusData, clock_icon};
 
@@ -273,7 +273,7 @@ fn brief_keyhints_fits_its_exact_glyphs_and_keeps_adjacent_click_targets_aligned
     assert_eq!(
         bar.hits,
         vec![(
-            StatusComponent::Chips,
+            StatusClick::Shop,
             Rect::new(
                 8 + Line::raw("─ ⚙ ^o · ⚄ ^g · ◉ ^s ─").width() as u16,
                 25,
@@ -400,7 +400,7 @@ fn bottom_left_hit_rects_follow_the_leading_edge_glyph() {
     .expect("bar");
 
     assert_eq!(bar.hits.len(), 1);
-    assert_eq!(bar.hits[0].0, StatusComponent::Chips);
+    assert_eq!(bar.hits[0].0, StatusClick::Shop);
     assert_eq!(bar.hits[0].1, Rect::new(2, area.bottom() - 1, 6, 1));
 }
 
@@ -648,9 +648,9 @@ fn hit_rects_track_the_right_aligned_line() {
     let start = area.right() - total - 1;
 
     assert_eq!(bar.hits.len(), 2);
-    assert_eq!(bar.hits[0].0, StatusComponent::Mentions);
+    assert_eq!(bar.hits[0].0, StatusClick::Mentions);
     assert_eq!(bar.hits[0].1, Rect::new(start, 0, 3, 1));
-    assert_eq!(bar.hits[1].0, StatusComponent::Chips);
+    assert_eq!(bar.hits[1].0, StatusClick::Shop);
     assert_eq!(bar.hits[1].1, Rect::new(start + 4, 0, 6, 1));
 }
 
@@ -668,8 +668,8 @@ fn reordering_the_list_moves_the_hit_rects() {
     let a = build_status_bar(&forward, &data(), Placement::TopRight, area, 10).expect("bar");
     let b = build_status_bar(&reversed, &data(), Placement::TopRight, area, 10).expect("bar");
 
-    assert_eq!(a.hits[0].0, StatusComponent::Mentions);
-    assert_eq!(b.hits[0].0, StatusComponent::Chips);
+    assert_eq!(a.hits[0].0, StatusClick::Mentions);
+    assert_eq!(b.hits[0].0, StatusClick::Shop);
     // Same widths, so the leading slot is the same cells either way.
     assert_eq!(a.hits[0].1.x, b.hits[0].1.x);
     assert_ne!(a.hits[0].1.width, b.hits[0].1.width);
@@ -712,7 +712,7 @@ fn readout_components_get_no_hit_rect() {
     )
     .expect("bar");
     assert_eq!(bar.hits.len(), 1);
-    assert_eq!(bar.hits[0].0, StatusComponent::Chips);
+    assert_eq!(bar.hits[0].0, StatusClick::Shop);
 }
 
 #[test]
@@ -730,7 +730,7 @@ fn a_dropped_segment_leaves_no_hit_rect_behind() {
     )
     .expect("bar");
     assert!(
-        bar.hits.iter().all(|(c, _)| *c != StatusComponent::Users),
+        bar.hits.iter().all(|(c, _)| *c != StatusClick::Profiles),
         "the dropped segment kept a rect"
     );
 }
@@ -766,4 +766,59 @@ fn a_title_wider_than_the_border_row_does_not_underflow_the_budget() {
         40,
     );
     assert!(bar.is_none(), "nothing fits behind an oversized title");
+}
+
+/// Zen's row: the guide is set aside at the right edge first, the bar fits in
+/// the rest with dots between segments, and a segment with no room is dropped
+/// whole rather than painted under the guide.
+#[test]
+fn zen_row_fits_the_bar_beside_the_guide() {
+    let components = [
+        on(StatusComponent::Mentions, LabelMode::Text),
+        on(StatusComponent::Chips, LabelMode::Text),
+        on(StatusComponent::Users, LabelMode::Text),
+    ];
+    let row = Rect::new(0, 39, 40, 1);
+    let zen_row = build_zen_status_row(&components, &data(), row);
+
+    let bar = zen_row.bar.expect("bar");
+    assert_eq!(bar.to_string(), " unread 5 · chips 1204 ");
+    let guide = zen_row.guide.expect("guide");
+    assert_eq!(guide.to_string(), " ? guide / keys ");
+    assert_eq!(
+        zen_row.hits,
+        vec![
+            (StatusClick::Mentions, Rect::new(0, 39, 10, 1)),
+            (StatusClick::Shop, Rect::new(11, 39, 12, 1)),
+            (StatusClick::Guide, Rect::new(24, 39, 16, 1)),
+        ]
+    );
+}
+
+/// The row is a setting, not a reading: one component on keeps it (and the
+/// guide) even while that component has nothing to say; all off removes it.
+#[test]
+fn zen_row_stays_while_any_component_is_on() {
+    let quiet = StatusData {
+        mentions_unread: 0,
+        dms_unread: 0,
+        ..data()
+    };
+    let auto_hidden = [StatusComponentSetting {
+        auto_hide: true,
+        ..on(StatusComponent::Mentions, LabelMode::Text)
+    }];
+    assert!(zen_row_shown(&auto_hidden));
+    let zen_row = build_zen_status_row(&auto_hidden, &quiet, Rect::new(0, 39, 40, 1));
+    assert!(zen_row.bar.is_none());
+    assert_eq!(
+        zen_row.hits,
+        vec![(StatusClick::Guide, Rect::new(24, 39, 16, 1))]
+    );
+
+    let all_off = StatusComponent::ALL.map(|component| StatusComponentSetting {
+        enabled: false,
+        ..StatusComponentSetting::new(component)
+    });
+    assert!(!zen_row_shown(&all_off));
 }

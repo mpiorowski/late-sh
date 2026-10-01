@@ -44,6 +44,7 @@ use crate::app::{
     live::{pick::LiveSource, state::LiveStripView},
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
     pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
+    statusline::bar::ZenStatusRow,
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -79,6 +80,9 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
 /// Everything the Zen page reads, assembled once per frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
+    /// The bottom row, `None` when every status line component is off and
+    /// the tiles take the whole page.
+    pub status_row: Option<ZenStatusRow>,
     pub bonsai: &'a BonsaiState,
     /// The reef is drawn for everyone; `aquarium_owned` says whether the
     /// account has fish in it or gets the shop caption instead.
@@ -130,7 +134,8 @@ pub(crate) fn draw_rice(
         crate::app::common::primitives::draw_too_small(frame, area, "Rice", 40, 12);
         return;
     }
-    let (tiles_area, hint_area) = layout::rice_areas(area);
+    let status_row = view.status_row.take();
+    let (tiles_area, row_area) = layout::rice_areas(area, status_row.is_some());
     // One frame per chat tile in layout order. Zoomed, the one tile drawn
     // is the focused one, so it takes the active chat's frame, not the
     // first.
@@ -300,7 +305,9 @@ pub(crate) fn draw_rice(
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
-    draw_rice_hint(frame, hint_area, zen);
+    if let (Some(row), Some(row_area)) = (status_row, row_area) {
+        draw_status_row(frame, row_area, row);
+    }
     draw_kind_picker(frame, area, zen);
 }
 
@@ -391,7 +398,7 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
 
 /// The keys a tile answers to, named on the right of its title so the
 /// page explains itself in one place per tile; `t` hides the titles and
-/// the keys with them. The layout keys are the footer's.
+/// the keys with them. The layout keys are the guide's (`?`).
 fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'static str)] {
     match kind {
         TileKind::Bonsai => &[("w", "tend")],
@@ -536,45 +543,15 @@ pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
     ]
 }
 
-fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
-    if area.height == 0 {
-        return;
+/// The user's status line on the left, `? guide / keys` on the right. The
+/// layout keys live in the guide; each tile names its own in its title.
+fn draw_status_row(frame: &mut Frame, area: Rect, row: ZenStatusRow) {
+    if let Some(bar) = row.bar {
+        frame.render_widget(Paragraph::new(bar), area);
     }
-    let focus = zen.focused_kind().map(TileKind::label).unwrap_or("nothing");
-    let mut spans = vec![
-        Span::styled(" ▌ ", Style::default().fg(theme::AMBER())),
-        Span::styled(
-            focus.to_string(),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            if zen.zoomed { " zoomed" } else { "" },
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ];
-    // The layout keys, the way out and the guide first, then by how often
-    // they are used; the tail is dropped hint by hint on a narrow terminal
-    // so nothing is cut in half. The tiles name their own keys.
-    let head_width: usize = spans.iter().map(Span::width).sum();
-    let hints = hint_line_fitting(
-        &[
-            ("Ctrl+F", "back"),
-            ("?", "keys"),
-            ("Tab ←→", "focus"),
-            ("space", "kind"),
-            ("S", "split"),
-            ("X", "close"),
-            ("z", "zoom"),
-            ("<>{}", "resize"),
-            ("r", "flip"),
-            ("R", "reset"),
-        ],
-        (area.width as usize).saturating_sub(head_width),
-    );
-    spans.extend(hints.spans);
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    if let Some(guide) = row.guide {
+        frame.render_widget(Paragraph::new(guide), area);
+    }
 }
 
 /// `hint_line` with as many leading hints as fit in `width` cells.

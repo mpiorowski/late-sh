@@ -3078,11 +3078,12 @@ fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     })
 }
 
-/// Route a click on either frame status bar to the segment under it.
+/// Route a click on a status bar (either frame bar, or Zen's row) to the
+/// segment under it.
 ///
 /// The rects come from the bar's own layout pass, rebuilt every frame, so this
-/// stays correct however the bottom bar is reordered or resized, and a segment
-/// either fit pass dropped simply has no rect to hit.
+/// stays correct however the bar is reordered or resized, and a segment a fit
+/// pass dropped simply has no rect to hit.
 fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
@@ -3099,7 +3100,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         .borrow()
         .iter()
         .find(|(_, rect)| rect_contains(*rect, x, y))
-        .and_then(|(component, _)| crate::app::statusline::bar::click_action(*component));
+        .map(|(action, _)| *action);
     let Some(action) = hit else {
         return false;
     };
@@ -3120,7 +3121,11 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         }
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
+        // Care on Zen's own row: the companions are already on the page,
+        // and reopening would make Zen its own return page.
+        StatusClick::Zen if app.screen == Screen::Zen => {}
         StatusClick::Zen => open_zen_globally(app),
+        StatusClick::Guide => open_guide_globally(app),
     }
     true
 }
@@ -3663,7 +3668,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
     use crate::app::zen::layout as zen_layout;
     let (cols, rows) = app.size;
-    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows));
+    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows), app.zen_status_row());
     let zoomed = app.zen.zoomed.then_some(app.zen.focus);
     let rects = zen_layout::tile_rects(
         &app.zen.rice.root,

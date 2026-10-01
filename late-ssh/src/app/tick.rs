@@ -1031,6 +1031,10 @@ impl App {
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
+        if self.screen == Screen::Zen && self.zen_status_row() != self.zen_row_bound {
+            self.sync_aquarium_bounds();
+            changed = true;
+        }
         if anim_quarter && self.aquarium_visible() {
             self.aquarium_state.tick();
             changed = true;

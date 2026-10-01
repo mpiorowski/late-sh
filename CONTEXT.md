@@ -1237,7 +1237,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 
 ### Frame status bars [STABLE]
 
-Framed pages paint a status bar on each horizontal border through one component renderer (`late-ssh/src/app/statusline/`): a fixed top-right bar (pot, chips) beside the page tabs, and a user-arranged bottom-left bar (Keyhints, station, voice, mentions, your move, and care by default, all visible while idle) beside the sponsor line. A reading the user places on the bottom bar leaves the top one. The sponsor link has first claim on its row. Nothing on either bar is ever shortened: segments take room in list order and one that does not fit is dropped whole. Zen is frameless and has neither. The model, fitting rules, click targets, and customizer live in `late-ssh/src/app/statusline/CONTEXT.md`.
+Framed pages paint a status bar on each horizontal border through one component renderer (`late-ssh/src/app/statusline/`): a fixed top-right bar (pot, chips) beside the page tabs, and a user-arranged bottom-left bar (Keyhints, station, voice, mentions, your move, and care by default, all visible while idle) beside the sponsor line. A reading the user places on the bottom bar leaves the top one. The sponsor link has first claim on its row. Nothing on either bar is ever shortened: segments take room in list order and one that does not fit is dropped whole. Zen is frameless: it paints the user's bar on its own bottom row beside `? guide / keys`, and drops the row when every component is off. The model, fitting rules, click targets, and customizer live in `late-ssh/src/app/statusline/CONTEXT.md`.
 
 ### Global guide (`?`) [STABLE]
 

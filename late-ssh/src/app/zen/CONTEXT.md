@@ -104,7 +104,7 @@ never the count (`chat_tile_title`, `ui_test.rs`).
 late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
-|-- layout.rs     # pure rect math: rice_areas, tile_rects, tile_inner, neighbour_side, pet_neighbours
+|-- layout.rs     # pure rect math: rice_areas (tiles + optional status row), tile_rects, tile_inner, neighbour_side, pet_neighbours
 |-- rows.rs       # pure row builders for the Inbox and Headlines tiles
 |-- ui.rs         # ZenView, draw_rice, the tile widgets
 |-- input.rs      # feed keys, room walk, focus and layout keys
@@ -112,10 +112,10 @@ late-ssh/src/app/zen/
 ```
 
 Glue: `Screen::Zen` in `common/primitives.rs`; the frame skip, `ZenView`
-assembly, and `zen_chat_view` in `render.rs`; the digit `7`, the top-bar
+assembly, the status row build, and `zen_chat_view` in `render.rs`; the digit `7`, the top-bar
 hit test, the picker staying put in `room_search_modal/input.rs`, and the
 dedicated-input hook in `input.rs`; `App::zen`, `App::zen_chat_rows_cache`,
-`sync_aquarium_bounds`, and `mark_zen_layout_dirty` / `flush_zen_layout` in `state.rs`; the
+`zen_status_row`, `sync_aquarium_bounds`, and `mark_zen_layout_dirty` / `flush_zen_layout` in `state.rs`; the
 aquarium stepping and anim edge in `tick.rs`; `extract_zen_layout` /
 `User::set_zen_layout` in `late-core/src/models/user.rs`.
 
@@ -123,12 +123,14 @@ aquarium stepping and anim edge in `tick.rs`; `extract_zen_layout` /
 
 Where they are shown: each tile names its own keys on the right of its
 title (`tile_keys`, drawn with `hint_line` so the key is amber and the
-word dim, as in the footer), always, so `t` hides them with the titles; the footer
-carries Esc and `?` first, then the layout keys by use (focus, kind,
-split, close, zoom, resize, flip, reset), and drops whole hints from the
-right when the terminal is narrow;
-`?` opens `HelpTopic::Zen` with everything. Nothing else on the page
-names a key: the lobby's compact footer lost its key pair to the title.
+word dim), always, so `t` hides them with the titles. The page's last row
+is the user's status line with `? guide / keys` flush right
+(`../statusline/CONTEXT.md`, Zen row); the guide button, like `?`, opens
+`HelpTopic::Zen`, which lists the layout keys and everything else. With
+every status line component switched off the row is gone, button
+included, and the tiles take the whole page; `?` still works. Nothing
+else on the page names a key: the lobby's compact footer lost its key
+pair to the title.
 
 `Ctrl+F` leaves. Esc only peels the tile picker, the composer, or a selected
 message, and otherwise does nothing: it never leaves. Backtick runs the
@@ -188,6 +190,10 @@ leaving the page, so a held resize key costs one row update.
   re-binds it on every `set_screen`, resize, and layout edit to the
   aquarium tile's inner rect, from the same pure functions the renderer
   uses (`layout.rs`), so the sim and the drawing never disagree on size.
+  The status row comes and goes with a setting, not an edit here (a
+  Settings preview, the profile landing after login), so tick also
+  re-binds when `App::zen_status_row` differs from the row the reef was
+  bound with (`App::zen_row_bound`).
   It steps on the quarter edge whenever the page is up, owned or not
   (`aquarium_visible` in `tick.rs`), though the tile only draws it
   once the tank is owned; unowned it is the shop note.
@@ -257,7 +263,8 @@ leaving the page, so a held resize key costs one row update.
   (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), Inbox Enter, Live Enter and the click the picker
-  swallows (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
+  (`rows_test.rs`), Inbox Enter, Live Enter, the click the picker
+  swallows, and the status row's guide click and all-off removal
+  (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
   the Live tile, empty and sharing a wide tile with the feed (`ui_test.rs`); the rest of the tile drawing is
   untested.

@@ -23,10 +23,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::data::{StatusData, clock_icon};
-use crate::app::common::theme;
+use crate::app::common::{primitives::hint_line, theme};
 
-/// Which border row the bar is painted on, and therefore which end of it
-/// collides with the other title on that row.
+/// Which row the bar is painted on, and therefore which end of it collides
+/// with the other title on that row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Placement {
     /// Right-aligned on the top border, sharing the row with the page tabs on
@@ -35,6 +35,10 @@ pub(crate) enum Placement {
     /// Left-aligned on the bottom border, sharing the row with the sponsor
     /// line on the right. The corner end has first claim on the room.
     BottomLeft,
+    /// Left-aligned on Zen's own bottom row, sharing it with the guide
+    /// button on the right. Zen has no frame, so there is no border to run
+    /// on: no corners, and the dividers are dots.
+    ZenRow,
 }
 
 impl Placement {
@@ -43,7 +47,15 @@ impl Placement {
     fn claim_order(self, len: usize) -> Vec<usize> {
         match self {
             Self::TopRight => (0..len).rev().collect(),
-            Self::BottomLeft => (0..len).collect(),
+            Self::BottomLeft | Self::ZenRow => (0..len).collect(),
+        }
+    }
+
+    /// Cells of `area` that are not frame corners.
+    fn usable_cols(self, area: Rect) -> u16 {
+        match self {
+            Self::TopRight | Self::BottomLeft => area.width.saturating_sub(2),
+            Self::ZenRow => area.width,
         }
     }
 }
@@ -74,9 +86,9 @@ pub(crate) struct StatusBar {
     pub line: Line<'static>,
     /// Every component that survived the fit, in paint order.
     pub painted: Vec<StatusComponent>,
-    /// Screen rects for the segments a click can act on, in paint order.
-    /// Components with no click action are absent.
-    pub hits: Vec<(StatusComponent, Rect)>,
+    /// Screen rects for the segments a click can act on, in paint order,
+    /// with what the click does. Components with no click action are absent.
+    pub hits: Vec<(StatusClick, Rect)>,
 }
 
 /// The top-right bar is fixed UI policy, not part of the user's saved
@@ -106,6 +118,57 @@ pub(crate) fn build_top_status_bar(
         .filter(|setting| !painted_on_bottom.contains(&setting.component))
         .collect();
     build_status_bar(&components, data, Placement::TopRight, area, title_width)
+}
+
+/// Zen's bottom row: the user's bar on the left, the guide on the right.
+pub(crate) struct ZenStatusRow {
+    /// `None` while every enabled component is auto-hidden or dropped.
+    pub bar: Option<Line<'static>>,
+    /// `? guide / keys`, right-aligned; `None` only on a row too narrow for it.
+    pub guide: Option<Line<'static>>,
+    pub hits: Vec<(StatusClick, Rect)>,
+}
+
+/// Whether Zen gives its bottom row to the status line. A setting, not a
+/// reading: the row stays while every enabled component reads inactive, so
+/// the tiles never jump as a count comes and goes. With every component
+/// switched off the row goes, guide included, and the tiles take it.
+pub(crate) fn zen_row_shown(components: &[StatusComponentSetting]) -> bool {
+    components.iter().any(|setting| setting.enabled)
+}
+
+/// Build Zen's bottom row for one frame. `row` is the row itself. The guide
+/// is set aside first and the bar fits in the rest, the way the frame's
+/// bottom bar fits beside the sponsor link.
+pub(crate) fn build_zen_status_row(
+    components: &[StatusComponentSetting],
+    data: &StatusData<'_>,
+    row: Rect,
+) -> ZenStatusRow {
+    let mut guide = hint_line(&[("?", "guide / keys")]);
+    guide.spans.push(Span::raw(" "));
+    let guide_width = guide.width() as u16;
+    // A row too narrow for the guide goes to the bar.
+    let guide = match guide_width <= row.width {
+        true => Some(guide.right_aligned()),
+        false => None,
+    };
+    let reserved_for_guide = match guide {
+        Some(_) => guide_width,
+        None => 0,
+    };
+    let (bar, mut hits) =
+        match build_status_bar(components, data, Placement::ZenRow, row, reserved_for_guide) {
+            Some(bar) => (Some(bar.line), bar.hits),
+            None => (None, Vec::new()),
+        };
+    if guide.is_some() {
+        hits.push((
+            StatusClick::Guide,
+            Rect::new(row.right() - guide_width, row.y, guide_width, 1),
+        ));
+    }
+    ZenStatusRow { bar, guide, hits }
 }
 
 /// The keyboard hint was the original bottom-left frame title. It stays its
@@ -149,10 +212,10 @@ fn shortcut_spans(brief: bool) -> Vec<Span<'static>> {
 
 /// Build the bar for one frame.
 ///
-/// `area` is the full bordered frame (corners included) and `title_width` is
-/// the width of the other title sharing this border row. Both arrive raw
-/// rather than pre-subtracted so the fitting math is covered by tests instead
-/// of living uncovered at the call site.
+/// `area` is the full bordered frame (corners included), or Zen's row itself
+/// for `ZenRow`, and `title_width` is the width of the other title sharing
+/// the row. Both arrive raw rather than pre-subtracted so the fitting math is
+/// covered by tests instead of living uncovered at the call site.
 pub(crate) fn build_status_bar(
     components: &[StatusComponentSetting],
     data: &StatusData<'_>,
@@ -160,8 +223,7 @@ pub(crate) fn build_status_bar(
     area: Rect,
     title_width: u16,
 ) -> Option<StatusBar> {
-    // Corners are not writable, hence the 2.
-    let spare_cols = area.width.saturating_sub(2).saturating_sub(title_width);
+    let spare_cols = placement.usable_cols(area).saturating_sub(title_width);
     let segments = fit(build_segments(components, data), spare_cols, placement);
     lay_out(segments, placement, area)
 }
@@ -294,18 +356,30 @@ pub(crate) fn fit(segments: Vec<Segment>, spare_cols: u16, placement: Placement)
         .collect()
 }
 
-/// The bar is painted *over* the frame's border row, so its separators are
-/// border glyphs rather than pipes: the line reads as the border running on
-/// through the gaps between components.
+/// The frame bars are painted *over* the frame's border row, so their
+/// separators are border glyphs rather than pipes: the line reads as the
+/// border running on through the gaps between components.
 ///
 /// ```text
 /// ───── 3 ─ 12:04 ─ 1204 ─┐
 /// ```
-const SEPARATOR: &str = "─";
+///
+/// Zen's row has no border to continue, so it is dotted like the page's
+/// other hint rows.
+fn separator(placement: Placement) -> Span<'static> {
+    match placement {
+        Placement::TopRight | Placement::BottomLeft => {
+            Span::styled("─", Style::default().fg(theme::BORDER_ACTIVE()))
+        }
+        Placement::ZenRow => Span::styled("·", Style::default().fg(theme::TEXT_FAINT())),
+    }
+}
 
-/// Painted width of the whole bar: every segment, a separator between each
-/// adjacent pair, and one more at the corner end so the bar meets the frame
-/// corner through a border glyph instead of a blank cell.
+/// Painted width of the whole bar: every segment and a separator between
+/// each adjacent pair. A frame bar adds one more at the corner end so it
+/// meets the frame corner through a border glyph instead of a blank cell.
+/// `fit` budgets that corner glyph on every placement, so Zen's row keeps
+/// the cell as air before the guide.
 fn total_width(segments: &[Segment]) -> u16 {
     let segments_width: u16 = segments.iter().map(Segment::width).sum();
     segments_width + (segments.len() as u16)
@@ -331,35 +405,33 @@ pub(crate) fn lay_out(
     let start_x = match placement {
         Placement::TopRight => area.right().saturating_sub(total).saturating_sub(1),
         Placement::BottomLeft => area.x.saturating_add(1),
+        Placement::ZenRow => area.x,
     };
     let y = match placement {
-        Placement::TopRight => area.y,
+        Placement::TopRight | Placement::ZenRow => area.y,
         Placement::BottomLeft => area.bottom().saturating_sub(1),
     };
 
-    // Matches the frame's own border colour so the separators read as the
-    // border line continuing between components.
-    let separator = || Span::styled(SEPARATOR, Style::default().fg(theme::BORDER_ACTIVE()));
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut painted = Vec::new();
     let mut hits = Vec::new();
     let mut cursor = start_x;
     if placement == Placement::BottomLeft {
         // The bar starts at the corner, so its own edge glyph leads.
-        spans.push(separator());
+        spans.push(separator(placement));
         cursor = cursor.saturating_add(1);
     }
     for (idx, segment) in segments.into_iter().enumerate() {
         if idx > 0 {
-            spans.push(separator());
+            spans.push(separator(placement));
             cursor = cursor.saturating_add(1);
         }
         let width = segment.width();
         let component = segment.component;
         painted.push(component);
-        if click_action(component).is_some() {
+        if let Some(action) = click_action(component) {
             hits.push((
-                component,
+                action,
                 Rect {
                     x: cursor,
                     y,
@@ -373,12 +445,12 @@ pub(crate) fn lay_out(
     }
     if placement == Placement::TopRight {
         // The bar ends at the corner, so its edge glyph trails.
-        spans.push(separator());
+        spans.push(separator(placement));
     }
 
     let line = match placement {
         Placement::TopRight => Line::from(spans).right_aligned(),
-        Placement::BottomLeft => Line::from(spans).left_aligned(),
+        Placement::BottomLeft | Placement::ZenRow => Line::from(spans).left_aligned(),
     };
     Some(StatusBar {
         line,
@@ -400,6 +472,8 @@ pub(crate) enum StatusClick {
     Profiles,
     /// Zen, where the bonsai, the tank, and the pet all live.
     Zen,
+    /// The guide on its current page's topic: Zen's `? guide / keys`.
+    Guide,
 }
 
 pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {

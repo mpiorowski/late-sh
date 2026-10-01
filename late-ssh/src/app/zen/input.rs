@@ -342,7 +342,10 @@ pub(crate) fn focus_moved(app: &mut App) {
 /// nothing to trade.
 fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
     let (cols, rows) = app.size;
-    let (tiles_area, _) = super::layout::rice_areas(ratatui::layout::Rect::new(0, 0, cols, rows));
+    let (tiles_area, _) = super::layout::rice_areas(
+        ratatui::layout::Rect::new(0, 0, cols, rows),
+        app.zen_status_row(),
+    );
     if app.zen.resize_focused(dir, delta_cells, tiles_area) {
         return true;
     }
@@ -360,7 +363,10 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
 /// twice as tall as wide, so width is halved before comparing).
 fn focused_tile_is_wide(app: &App) -> bool {
     let (cols, rows) = app.size;
-    let (tiles_area, _) = super::layout::rice_areas(ratatui::layout::Rect::new(0, 0, cols, rows));
+    let (tiles_area, _) = super::layout::rice_areas(
+        ratatui::layout::Rect::new(0, 0, cols, rows),
+        app.zen_status_row(),
+    );
     let rects = super::layout::tile_rects(
         &app.zen.rice.root,
         tiles_area,

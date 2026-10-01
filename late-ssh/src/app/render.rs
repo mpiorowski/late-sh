@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use late_core::models::leaderboard::LeaderboardData;
-use late_core::models::statusline::{StatusComponent, StatusComponentSetting};
+use late_core::models::statusline::StatusComponentSetting;
 use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
 use super::{
@@ -394,7 +394,7 @@ struct DrawContext<'a> {
     status_data: crate::app::statusline::data::StatusData<'a>,
     /// Slot for where each clickable top- or bottom-bar segment landed this
     /// frame, read by the hit test in `input.rs`.
-    status_hits: &'a std::cell::RefCell<Vec<(StatusComponent, Rect)>>,
+    status_hits: &'a std::cell::RefCell<Vec<(crate::app::statusline::bar::StatusClick, Rect)>>,
     home_selected: bool,
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
@@ -517,14 +517,7 @@ impl App {
         };
         // Same draft-aware live preview as the sidebar panels above. These are
         // the user-arranged bottom-left components; the top bar is fixed.
-        let statusline_components = if self.show_settings {
-            self.settings_modal_state
-                .draft()
-                .statusline_components
-                .clone()
-        } else {
-            self.profile_state.profile().statusline_components.clone()
-        };
+        let statusline_components = self.statusline_components().to_vec();
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.synthetic_entry_selected();
         let home_selected = dashboard_home_selected(
@@ -1735,10 +1728,10 @@ impl App {
         }
 
         // The Zen pages are full-bleed: no frame, no HUD, no tab bar. Every
-        // other page keeps the app frame.
+        // other page keeps the app frame. Zen paints its own status row and
+        // fills the click slots below.
         let zen_page = screen == Screen::Zen;
         let inner = if zen_page {
-            ctx.status_hits.borrow_mut().clear();
             frame.render_widget(Clear, area);
             area
         } else {
@@ -2043,7 +2036,23 @@ impl App {
                 },
             ),
             Screen::Zen => {
+                let (_, row) = crate::app::zen::layout::rice_areas(
+                    content_area,
+                    crate::app::statusline::bar::zen_row_shown(&ctx.statusline_components),
+                );
+                let status_row = row.map(|row| {
+                    crate::app::statusline::bar::build_zen_status_row(
+                        &ctx.statusline_components,
+                        &ctx.status_data,
+                        row,
+                    )
+                });
+                *ctx.status_hits.borrow_mut() = match &status_row {
+                    Some(status_row) => status_row.hits.clone(),
+                    None => Vec::new(),
+                };
                 let view = crate::app::zen::ui::ZenView {
+                    status_row,
                     zen: ctx.zen,
                     bonsai: ctx.bonsai,
                     aquarium: ctx.aquarium_state,

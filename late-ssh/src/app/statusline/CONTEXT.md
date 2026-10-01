@@ -1,17 +1,19 @@
 # Statusline Context
 
 ## Metadata
-- Scope: `late-ssh/src/app/statusline`, the status bars painted on the app frame's two horizontal borders, plus their persisted model in `late-core/src/models/statusline.rs` and their customizer in `late-ssh/src/app/settings_modal`.
+- Scope: `late-ssh/src/app/statusline`, the status bars painted on the app frame's two horizontal borders and on Zen's bottom row, plus their persisted model in `late-core/src/models/statusline.rs` and their customizer in `late-ssh/src/app/settings_modal`.
 - Parent context: root `CONTEXT.md`.
 - Status: Active
 
 ## 1. Shape
 
-Framed pages use one component renderer on both borders. Zen is frameless: it paints no bar and clears the click targets.
+Framed pages use one component renderer on both borders. Zen is frameless, so it has no top bar and paints the bottom one on a row of its own (see Zen row below).
 
 - **Top-right bar**: fixed UI policy, not persisted. The pot, then the chips, sharing the row with the page tabs. These are the ambient readings, kept in the one corner that never moves.
 - **Bottom-left bar**: the user's arrangement, sharing the row with the sponsor line. By default it is the Keyhints, the station (icon label), voice, mentions (DMs counted), your move, and care. All six stay visible while idle (`mic -`, `unread 0`), so a newcomer sees the whole default bar and trims it in Settings. Every other reading is opt-in and starts auto-hiding. The default order (`StatusComponent::ALL`) runs most valuable first: Keyhints, station, voice, mentions, your move, care, quests, pot, chips, users online, time.
 - **Move, never duplicate**: a component the bottom bar painted this frame is skipped on the top bar, so turning the pot or the chips on at the bottom moves the reading down. Painted, not merely enabled: a segment the bottom bar had no room for stays on the top. `render.rs` builds the bottom bar first and hands `StatusBar::painted` to `build_top_status_bar`.
+
+- **Zen row**: Zen's last row (`build_zen_status_row`, `Placement::ZenRow`). The user's bar on the left, the same segments and fit, joined by faint `·` since there is no border to continue, and `? guide / keys` flush right, which opens the guide on the Zen topic. The guide is set aside first and the bar fits in the rest, the way the frame bar fits beside the sponsor link. The row exists while any component is enabled (`zen_row_shown`): a setting, not a reading, so it stays while every enabled segment is auto-hidden and the tiles never jump as a count comes and goes. With every component off the row goes, guide included, and the tiles take the page (`?` still opens the guide). Every Zen caller of `zen::layout::rice_areas` reads the flag through `App::zen_status_row`, and tick re-binds the reef when it changes under the page (`App::zen_row_bound`).
 
 Text labels and icon labels both precede their values (`unread 3`, `chips 1204`).
 
@@ -21,10 +23,11 @@ Text labels and icon labels both precede their values (`unread 3`, `chips 1204`)
 |---|---|
 | `mod.rs` | Declarations only. |
 | `data.rs` | `StatusData`, the per-frame inputs gathered once in `App::render`, and the value each component paints. Pure: the clock arrives pre-formatted, so the draw path reads no wall clock. |
-| `bar.rs` | The three passes (build, fit, lay out), the fixed top bar (`build_top_status_bar`), the Keyhints copy, and `click_action`. |
+| `bar.rs` | The three passes (build, fit, lay out), the fixed top bar (`build_top_status_bar`), Zen's row (`build_zen_status_row`, `zen_row_shown`), the Keyhints copy, and `click_action`. |
 | `late-core/src/models/statusline.rs` | The persisted model: `StatusComponent` roster, `LabelMode`, `StatusVariant`, `StatusComponentSetting`, and the `parse_` / `normalize_` / `_json` trio. |
 | `app/render.rs::app_frame_bottom_titles` | Owns the sponsor line: sets its link's width aside, gives the bar the rest of the row, and adds the thanks when the bar leaves room. |
 | `app/input.rs::handle_status_bar_click` | Routes a click to the segment under it. |
+| `app/render.rs` (`Screen::Zen` arm) | Builds Zen's row and hands it to `zen::ui::draw_rice`, which paints it under the tiles. |
 | `app/settings_modal` | The customizer: `StatuslinePane` / `StatuslineDial` in `state.rs`, `draw_statusline_tab` in `ui.rs`, `handle_statusline_input` in `input.rs`. |
 
 ## 3. Three passes
@@ -33,7 +36,7 @@ No segment knows its own x.
 
 1. `build_segments` turns component settings plus this frame's `StatusData` into spans. Disabled components produce nothing, and so do auto-hiding components that read inactive.
 2. `fit` keeps the segments that fit the columns it was given and drops the rest whole.
-3. `lay_out` joins the survivors with `─` separators and converts accumulated widths into click rects.
+3. `lay_out` joins the survivors with separators (`─` on the frame, `·` on Zen's row) and converts accumulated widths into click rects, each tagged with its `StatusClick`.
 
 Widths are measured with ratatui's own `Span::width`, the same function that decides which cells a span occupies, so a hit rect cannot disagree with what the user sees. That is what lets segments be reordered, resized, and dropped freely. The rects are rebuilt every frame into `App::last_status_hits`.
 
@@ -62,7 +65,7 @@ Every icon must be Emoji_Presentation, unambiguously two cells wide. A text-defa
 
 ## 7. Clicks
 
-`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles. Time, voice, pot, and Keyhints are readouts and get no hit rect. Both bars feed the same hit list.
+`click_action` is the roster of what a segment does: mentions opens Home on the notifications feed, chips opens the Shop, your move opens the Lobby, care opens Zen, station opens the Music Booth, quests goes to The Arcade, users online goes to Profiles. Time, voice, pot, and Keyhints are readouts and get no hit rect. On Zen's row, care does nothing (the companions are on the page) and `? guide / keys` opens the guide (`StatusClick::Guide`). Every bar feeds the same hit list, `App::last_status_hits`, as `(StatusClick, Rect)`.
 
 ## 8. Customizer
 

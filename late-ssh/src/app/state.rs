@@ -522,6 +522,11 @@ pub struct App {
     /// one-hertz edge and on leaving the page, so a held resize key costs
     /// one row update rather than one per key repeat.
     pub(crate) zen_layout_dirty: bool,
+    /// Whether Zen had its status row when the reef was last bound. The row
+    /// follows the status line setting, which changes outside any screen
+    /// switch (a Settings preview, a profile arriving), so tick re-binds the
+    /// reef when the two disagree.
+    pub(crate) zen_row_bound: bool,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -635,10 +640,11 @@ pub struct App {
     /// walk after. `None` until the terminal reports one.
     pub(crate) last_mouse: Option<(u16, u16)>,
     /// Where each clickable status bar segment landed last frame, in paint
-    /// order. Rebuilt every frame by the bar's layout pass, so a reordered,
-    /// resized, or dropped segment cannot leave a stale click target behind.
+    /// order, with what a click on it does. Rebuilt every frame by the bar's
+    /// layout pass, so a reordered, resized, or dropped segment cannot leave a
+    /// stale click target behind.
     pub(crate) last_status_hits:
-        std::cell::RefCell<Vec<(late_core::models::statusline::StatusComponent, Rect)>>,
+        std::cell::RefCell<Vec<(crate::app::statusline::bar::StatusClick, Rect)>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -1488,6 +1494,7 @@ impl App {
                 }
             },
             zen_layout_dirty: false,
+            zen_row_bound: false,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -2973,6 +2980,25 @@ impl App {
         self.chat.lounge_room_id()
     }
 
+    /// The user's ordered status bar: the draft while the settings modal is
+    /// open, so the frame previews it, else the saved profile.
+    pub(crate) fn statusline_components(
+        &self,
+    ) -> &[late_core::models::statusline::StatusComponentSetting] {
+        if self.show_settings {
+            &self.settings_modal_state.draft().statusline_components
+        } else {
+            &self.profile_state.profile().statusline_components
+        }
+    }
+
+    /// Whether Zen gives its bottom row to the status line; every caller of
+    /// `zen::layout::rice_areas` reads it from here, so the tiles, the
+    /// clicks, and the reef agree on where the row is.
+    pub(crate) fn zen_status_row(&self) -> bool {
+        crate::app::statusline::bar::zen_row_shown(self.statusline_components())
+    }
+
     /// The rect the aquarium simulation should fill on the current screen:
     /// the tank tile's inner rect on Zen, the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
@@ -2981,7 +3007,7 @@ impl App {
         let full = Rect::new(0, 0, cols, rows);
         match self.screen {
             Screen::Zen => {
-                let (tiles, _) = zen_layout::rice_areas(full);
+                let (tiles, _) = zen_layout::rice_areas(full, self.zen_status_row());
                 let zoomed = self.zen.zoomed.then_some(self.zen.focus);
                 zen_layout::tile_rects(
                     &self.zen.rice.root,
@@ -3012,6 +3038,7 @@ impl App {
     pub(crate) fn sync_aquarium_bounds(&mut self) {
         let area = self.aquarium_area_for_screen();
         self.aquarium_state.handle_resize(area.width, area.height);
+        self.zen_row_bound = self.zen_status_row();
     }
 
     /// Note a Zen layout edit. The write itself is debounced: see

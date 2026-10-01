@@ -1485,7 +1485,7 @@ fn zen_help_lines() -> Vec<String> {
         "",
         "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef, the pet, your rooms' chat, music, a clock, and the lobby, as tiles you arrange yourself. Ctrl+F opens it from any page and the same chord hands you back; Esc stays on the page. The layout is saved per account, the rooms your chat tiles are bound to included.",
         "",
-        "Each tile names its own keys on the right of its title (t hides the titles). The footer shows the keys you use most; the full list is here.",
+        "Each tile names its own keys on the right of its title (t hides the titles). The bottom row is your status line (Settings, Statusline) with ? guide / keys on the right, which opens this list; switch every status line component off and the row goes, button included, and ? still works.",
         "",
         "Focus and tiles",
         "  Tab / Shift+Tab   focus the next or previous tile",
