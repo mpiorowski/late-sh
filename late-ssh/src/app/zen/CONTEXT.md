@@ -45,9 +45,11 @@ viewer's RSS entries merged newest first, two rows each (the title with
 its source and age, then the link), an entry shared to News listed once,
 as the article), live (the #lounge live strip, `../live/CONTEXT.md`: the
 picture rows from 8 rows and 56 columns inside, else its one row, with no
-hint row and no rule since the title names the key; while nothing is up,
-a faint `nothing live` on 30% of the width, beside the #lounge
-activity feed on the rest), blank. The look (border style, gap, titles) is
+hint row and no rule since the title names the key, on three fifths of
+the width (56 columns at least) beside the #lounge activity feed on the
+rest, or the whole tile when the feed would get under 30 columns; while
+nothing is up, a faint `nothing live` on 30% of the width beside the
+feed), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):
@@ -257,5 +259,5 @@ leaving the page, so a held resize key costs one row update.
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
   (`rows_test.rs`), Inbox Enter, Live Enter and the click the picker
   swallows (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
-  the empty Live tile (`ui_test.rs`); the rest of the tile drawing is
+  the Live tile, empty and sharing a wide tile with the feed (`ui_test.rs`); the rest of the tile drawing is
   untested.

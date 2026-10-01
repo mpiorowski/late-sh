@@ -37,6 +37,7 @@ pub enum HubGroup {
     House,
     Roguelikes,
     Remakes,
+    Servers,
     Doors,
 }
 
@@ -46,23 +47,26 @@ impl HubGroup {
             HubGroup::House => "the house",
             HubGroup::Roguelikes => "roguelikes",
             HubGroup::Remakes => "remakes",
+            HubGroup::Servers => "servers",
             HubGroup::Doors => "doors",
         }
     }
 }
 
 impl HubGame {
-    /// Selector order, top to bottom: the house games first (Lateania, ours
-    /// from the ground up, then the Minecraft server we host), the roguelikes by stature, the remakes (our own
-    /// builds of A Dark Room and Green Dragon), then the doors (foreign upstream
-    /// terminal games hosted on a PTY).
+    /// Selector order, top to bottom: the house game first (Lateania, ours
+    /// from the ground up), the roguelikes by stature, the remakes (our own
+    /// build of A Dark Room), the servers we host and you play from a game
+    /// client (Minecraft), then the doors: Green Dragon (our native LORD
+    /// remake, filed with the BBS doors it descends from) and the foreign
+    /// upstream terminal games hosted on a PTY.
     pub const ALL: [HubGame; 12] = [
         HubGame::Lateania,
-        HubGame::Minecraft,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
         HubGame::Darkroom,
+        HubGame::Minecraft,
         HubGame::GreenDragon,
         HubGame::Usurper,
         HubGame::Dopewars,
@@ -90,10 +94,12 @@ impl HubGame {
 
     pub fn group(self) -> HubGroup {
         match self {
-            HubGame::Lateania | HubGame::Minecraft => HubGroup::House,
+            HubGame::Lateania => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::Darkroom | HubGame::GreenDragon => HubGroup::Remakes,
-            HubGame::Usurper
+            HubGame::Darkroom => HubGroup::Remakes,
+            HubGame::Minecraft => HubGroup::Servers,
+            HubGame::GreenDragon
+            | HubGame::Usurper
             | HubGame::Dopewars
             | HubGame::Bashquest
             | HubGame::Rebels

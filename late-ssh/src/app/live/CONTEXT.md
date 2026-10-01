@@ -39,7 +39,7 @@ The cases, in words:
 
 A window onto what the room is doing right now, for discovery, living where the room is: the top of the Home #lounge card (no other room, not the chat center, not the Zen chat tiles, not the sidebar), in the topic row's place while it is up. It cannot be turned off there. It is up only while something just happened, so it appearing is the news.
 
-Zen also has a Live tile (`TileKind::Live`) the user places like any other. It shows the same strip, from the same per-session `LiveState`; while nothing is up it splits 30/70, a faint `nothing live` beside the #lounge activity feed, which takes the larger share, since a tile is always on the page.
+Zen also has a Live tile (`TileKind::Live`) the user places like any other. It shows the same strip, from the same per-session `LiveState`, beside the #lounge activity feed: while something is up the strip takes three fifths of the tile (never under `MIN_FULL_WIDTH`, 56) and the feed the rest, unless the feed would get fewer than 30 columns, when the strip keeps the whole tile; while nothing is up it splits 30/70, a faint `nothing live` beside the feed, since a tile is always on the page.
 
 It is also where News shares land: a share posts nothing into the #lounge chat (`../chat/CONTEXT.md` §11 News), so the strip is how the room sees a link, and `r` is how it answers one.
 

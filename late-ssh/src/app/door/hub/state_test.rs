@@ -7,8 +7,6 @@ fn selection_clamps_at_both_ends() {
     s.select_prev();
     assert_eq!(s.selected_game(), HubGame::Lateania);
     s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Minecraft);
-    s.select_next();
     assert_eq!(s.selected_game(), HubGame::Dcss);
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Nethack);
@@ -16,6 +14,8 @@ fn selection_clamps_at_both_ends() {
     assert_eq!(s.selected_game(), HubGame::Brogue);
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Darkroom);
+    s.select_next();
+    assert_eq!(s.selected_game(), HubGame::Minecraft);
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::GreenDragon);
     s.select_next();
@@ -47,11 +47,11 @@ fn all_games_are_listed_in_order() {
         HubGame::ALL.map(HubGame::label),
         [
             "Lateania",
-            "Minecraft",
             "DCSS",
             "NetHack",
             "Brogue",
             "A Dark Room",
+            "Minecraft",
             "Green Dragon",
             "Usurper",
             "dopewars",
