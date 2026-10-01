@@ -3134,6 +3134,28 @@ async fn runner_stays_off_the_fixed_bar_and_zen_paints_its_own_row() {
     assert!(!app.last_status_hits.borrow().is_empty());
 }
 
+/// Under 40x12 Zen draws its too-small notice and nothing else: the status
+/// row is not painted, so no click target is left behind on the page.
+#[tokio::test]
+async fn zen_too_small_to_draw_keeps_no_status_click_targets() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-small-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-small-flow-it");
+    app.resize(120, 40).expect("resize test terminal");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    wait_for_render_contains(&mut app, "w tend").await;
+    assert!(!app.last_status_hits.borrow().is_empty());
+
+    app.resize(39, 40).expect("resize test terminal");
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("Rice needs at least"), "{frame:?}");
+    assert!(!frame.contains("unread"), "{frame:?}");
+    assert!(app.last_status_hits.borrow().is_empty());
+}
+
 /// `?` on Zen opens the guide on the Zen topic, which lists the layout keys;
 /// with every status line component off Zen's bottom row is gone and the
 /// tiles run down to the last row.

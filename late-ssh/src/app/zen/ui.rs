@@ -130,8 +130,14 @@ pub(crate) fn draw_rice(
     mut view: ZenView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    if area.width < 40 || area.height < 12 {
-        crate::app::common::primitives::draw_too_small(frame, area, "Rice", 40, 12);
+    if !layout::rice_fits(area) {
+        crate::app::common::primitives::draw_too_small(
+            frame,
+            area,
+            "Rice",
+            layout::RICE_MIN_COLS,
+            layout::RICE_MIN_ROWS,
+        );
         return;
     }
     let status_row = view.status_row.take();

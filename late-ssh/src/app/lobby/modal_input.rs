@@ -106,19 +106,7 @@ fn activate_selection(app: &mut App) {
         Some(LobbyEntry::House(table)) => Some(Action::OpenHouseTable(table)),
         None => None,
     };
-    // Switching surfaces while a board or table is already open keeps the
-    // original return screen, so Esc never lands on a dead board.
-    let return_screen = if app.screen == Screen::DailyMatch {
-        app.daily
-            .board
-            .as_ref()
-            .map(|board| board.return_screen)
-            .unwrap_or(Screen::Dashboard)
-    } else if app.screen == Screen::HouseTable {
-        app.house.return_screen
-    } else {
-        app.screen
-    };
+    let return_screen = return_screen_for_opening(app);
     match action {
         Some(Action::OpenBoard(item)) => {
             app.daily
@@ -155,6 +143,27 @@ fn activate_selection(app: &mut App) {
 
 /// Keys on the challenge picker overlay: `j`/`k` walk the game list, Esc
 /// closes it, Enter posts the picked game.
+/// The page a board or table opened right now hands back when it closes:
+/// the current page, unless that is itself a board or a table. Switching
+/// surfaces while one is already open keeps the original return screen, so
+/// Esc never lands on a dead board. Every entry that can fire with a board
+/// or table up reads it from here: the modal, and the live strip's opener
+/// (`live/input.rs`), which the status line's Live segment reaches from
+/// any page.
+pub(crate) fn return_screen_for_opening(app: &App) -> Screen {
+    if app.screen == Screen::DailyMatch {
+        app.daily
+            .board
+            .as_ref()
+            .map(|board| board.return_screen)
+            .unwrap_or(Screen::Dashboard)
+    } else if app.screen == Screen::HouseTable {
+        app.house.return_screen
+    } else {
+        app.screen
+    }
+}
+
 fn handle_draft_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => {

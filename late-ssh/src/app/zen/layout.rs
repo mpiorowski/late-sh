@@ -8,6 +8,15 @@ use crate::app::pet::ui::{Neighbours, WatchSide};
 
 /// The pet box at its smallest: its three art rows.
 pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
+/// The smallest page Rice draws. Under it the page is its too-small notice
+/// alone: no tiles, and no status row to click.
+pub const RICE_MIN_COLS: u16 = 40;
+pub const RICE_MIN_ROWS: u16 = 12;
+
+pub fn rice_fits(area: Rect) -> bool {
+    area.width >= RICE_MIN_COLS && area.height >= RICE_MIN_ROWS
+}
+
 /// The Rice page: the tiles, then the status row at the bottom when the
 /// page has one (`statusline::bar::zen_row_shown`); without it the tiles
 /// take the whole page.

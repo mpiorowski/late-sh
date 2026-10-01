@@ -104,7 +104,7 @@ never the count (`chat_tile_title`, `ui_test.rs`).
 late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
-|-- layout.rs     # pure rect math: rice_areas (tiles + optional status row), tile_rects, tile_inner, neighbour_side, pet_neighbours
+|-- layout.rs     # pure rect math: rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + optional status row), tile_rects, tile_inner, neighbour_side, pet_neighbours
 |-- rows.rs       # pure row builders for the Inbox and Headlines tiles
 |-- ui.rs         # ZenView, draw_rice, the tile widgets
 |-- input.rs      # feed keys, room walk, focus and layout keys

@@ -1,7 +1,7 @@
 # late.sh Stream Context
 
 ## Metadata
-- Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
+- Domain: "watch me" streaming rooms (the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section)
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
@@ -20,23 +20,23 @@ never touches a media byte; it moves capability ids, registry state, and
 one activity line.
 
 Owned by this domain:
-- `registry.rs` — the process-global `StreamRegistry`: one stream per user,
+- `registry.rs`: the process-global `StreamRegistry`: one stream per user,
   phase machine (`Pending -> Live -> Grace`), watcher heartbeats, publisher
   heartbeats/grace, capability ids (`capability_id()`: base64url over a v4
-  UUID's 16 bytes — 122 bits in 22 characters. Unguessable *is* the access
+  UUID's 16 bytes: 122 bits in 22 characters. Unguessable *is* the access
   model, so the entropy is non-negotiable; the encoding is not, and the short
   form exists because a 32-char hex id made the watch link too wide for the
   chat room header to render at all. The alphabet is `[A-Za-z0-9_-]`, which
-  `late-web`'s `valid_capability_id` gate must keep accepting — dropping `_`
+  `late-web`'s `valid_capability_id` gate must keep accepting: dropping `_`
   would 404 roughly half of all streams), and the `StreamPublisher` kind
-  (`Console` vs `Obs(ObsIngress)` — the publisher kinds conflict instead of
+  (`Console` vs `Obs(ObsIngress)`: the publisher kinds conflict instead of
   silently rewiring; `/golive stop` switches). In-memory only, single
   replica, dies with the process (scratchpad-registry tier).
-- `svc.rs` — `StreamService` orchestration: lazy stream-room creation,
+- `svc.rs`: `StreamService` orchestration: lazy stream-room creation,
   ticket minting via `VoiceService`, WHIP ingress create/reuse/delete, the
   `WentLive` announcement, the event channel back to sessions, the ingress
   status poll, the sweeper.
-- `ui.rs` — the OBS handoff overlay (`/golive obs`: WHIP server URL +
+- `ui.rs`: the OBS handoff overlay (`/golive obs`: WHIP server URL +
   bearer token + watch link, hand-copied into OBS). **Esc is the only way
   out**, for it and for the `/golive`/`/watch` QR modal alike: the values
   are read off the screen and typed elsewhere, so a stray keystroke must not
@@ -67,7 +67,7 @@ late-ssh/src/app/stream/
 ```
 
 Cross-domain touchpoints:
-- `late-core/src/models/chat_room.rs::get_or_create_stream_room` — the
+- `late-core/src/models/chat_room.rs::get_or_create_stream_room`: the
   permanent per-streamer room: `kind='game'`, `game_kind='stream'`, slug
   `{username}-live`, public. Chat history persists between streams; `kind='game'`
   keeps it out of the normal rail/IRC surfaces, and the public game-room
@@ -77,8 +77,8 @@ Cross-domain touchpoints:
   a renamed streamer keeps their room (old slug) and a freed-and-reclaimed
   username never inherits another account's room; a squatted slug falls back
   to `{username}-live-{id-suffix}`.
-- `app/voice/svc.rs` — `stream_publish_ticket` (publish restricted at the
-  SFU grant level to `screen_share`/`screen_share_audio` only — no browser
+- `app/voice/svc.rs`: `stream_publish_ticket` (publish restricted at the
+  SFU grant level to `screen_share`/`screen_share_audio` only: no browser
   mic exists, voice is CLI-only with zero exceptions; identity
   `stream-{user_id}` so it never collides with the CLI voice identity) and
   `stream_watch_ticket` (`canPublish=false`, `hidden=true`).
@@ -89,11 +89,11 @@ Cross-domain touchpoints:
   `../voice/CONTEXT.md` §7.
 - Infra: `infra/redis.tf` (LiveKit<->ingress bus; the server refuses
   Ingress API calls without redis), `infra/livekit-ingress.tf`
-  (`whip.<domain>`, WHIP only — no RTMP ingest is ever minted), the
+  (`whip.<domain>`, WHIP only: no RTMP ingest is ever minted), the
   `redis`/`livekit-ingress` docker-compose services with
   `infra/livekit/dev-config.yaml` + `infra/livekit-ingress/dev-config.yaml`
   (dev OBS pushes to `http://localhost:7888/w`).
-- `api.rs` — `/api/stream/publish/{token}`, `/api/stream/publish/{token}/state`,
+- `api.rs`: `/api/stream/publish/{token}`, `/api/stream/publish/{token}/state`,
   `/api/stream/watch/{id}`, `/api/stream/watch/{id}/grant`,
   `/api/stream/watch/{id}/heartbeat`. Capability id in the URL is the whole
   auth; everything is served from registry memory. The publish token is
@@ -105,16 +105,16 @@ Cross-domain touchpoints:
   (403); leaked *before* the console opens, the intruder claims first and
   the real console fails loudly instead of silently losing its stream.
   Claims die with the stream; fresh `/golive` = fresh unclaimed token.
-- `late-web/src/pages/live/` — `/live/{id}` (watch page) and
+- `late-web/src/pages/live/`: `/live/{id}` (watch page) and
   `/golive/{token}` (broadcast console), plus same-origin proxies of the
   API routes above. Pages are thin LiveKit browser clients.
-- `app/activity/` — `ActivityKind::WentLive`; the lounge line fires only on
+- `app/activity/`: `ActivityKind::WentLive`; the lounge line fires only on
   the `Pending -> Live` transition (first media report), repeat-throttled by
   the standard 30-minute window (`went-live` shape key). No "ended" line.
   `ActivityKind::WatchingStream { streamer }` is the audience half: "bob is
   watching mat's stream", attributed to the viewer, `watching:{streamer}`
   shape key. See §3b.
-- `app/live/` — a stream is a live strip source (`LiveSource::Stream`, by
+- `app/live/`: a stream is a live strip source (`LiveSource::Stream`, by
   the streamer's user id). `live.rs` offers every stream that has gone live,
   stamped with `LiveStreamView::went_live_at`, which the registry sets once
   on the `Pending -> Live` edge (a stop and resume through grace keeps it),
@@ -123,14 +123,14 @@ Cross-domain touchpoints:
   `o`, Enter on a Zen Live tile, or a click walks into the stream room on
   Home, the path the rail row takes (lazy join, named-viewer note). See
   `../live/CONTEXT.md`.
-- `app/notify/` — `Notification::friend_live` and
+- `app/notify/`: `Notification::friend_live` and
   `Notification::stream_viewer`, both on `Kind::Streams` behind one
   "Streams (friends live, your viewers)" settings row. `friend_live` is the
   one friend-shaped notification NOT on the always-on `Friends` kind: a
   nightly streamer would otherwise cost you their login pings. Opt-in
   therefore, and off for existing accounts until they toggle it; the in-app
   banners fire either way.
-- `app/chat/state.rs` / `app/chat/ui.rs` — `ChatState::live_streams` (copied
+- `app/chat/state.rs` / `app/chat/ui.rs`: `ChatState::live_streams` (copied
   from the registry watch ~1/s in `App::tick_stream`, epoch-bumped on
   change), the rail's `RoomSection::Stream` (under Core, above
   Cyberspace/Channels, live streams only: a pending stream has no row; the
@@ -142,15 +142,15 @@ Cross-domain touchpoints:
   detection swallows the pane border `│` or the `────` rule below it and
   hands the clicker a 404), and the stream-room arm in `select_room_slot`
   (lazy join on first open).
-- `app/voice/ui.rs::OnAirView` — the ⦿ ON AIR strip marker while the
+- `app/voice/ui.rs::OnAirView`: the ⦿ ON AIR strip marker while the
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
-- `app/state.rs` — `App::tick_stream` (commands, events, snapshot),
+- `app/state.rs`: `App::tick_stream` (commands, events, snapshot),
   `open_stream_url` (paired-CLI `OpenUrl` control or the QR modal),
   `voice_toggle_join`'s one-time ON AIR confirm, `StreamQrModal`.
-- `paired_clients.rs` / `late-cli/src/ws.rs` — `PairControlMessage::OpenUrl`
+- `paired_clients.rs` / `late-cli/src/ws.rs`: `PairControlMessage::OpenUrl`
   + the `open_url` capability (xdg-open/open/cmd start).
-- `late-cli/src/voice.rs` — the audio-only voice runtime unsubscribes from
+- `late-cli/src/voice.rs`: the audio-only voice runtime unsubscribes from
   any remote video track (`publication.set_subscribed(false)`), so a CLI
   voice participant in a stream room never downloads the screen share. Same
   rule for audio (`keep_remote_audio`): only microphone-source tracks from
@@ -159,7 +159,7 @@ Cross-domain touchpoints:
   the ingress label may not survive transcoding-off passthrough. One audio
   path per sound: program audio lives on the watch page; CLI voice carries
   human voices; a streamer talks through CLI voice like everyone else.
-- `main.rs` — service construction and the 5s sweeper task.
+- `main.rs`: service construction and the 5s sweeper task.
 
 ## 3. Lifecycle
 
@@ -259,8 +259,8 @@ Cross-domain touchpoints:
 
 1. **No server-side client detection.** The *publishing* direction is born
    silent (the human clicks share; the go-live page's room audio starts
-   muted), and the page reports its own state. The watch page — ears only,
-   `canPublish=false` — defaults audio ON, falling back to the unmute click
+   muted), and the page reports its own state. The watch page (ears only,
+   `canPublish=false`) defaults audio ON, falling back to the unmute click
    when browser autoplay blocks it; it splits audio by track source
    (mic = voices, everything else = stream) behind a voices on/off toggle,
    so a CLI viewer keeps the game audio without hearing the room's voices
@@ -278,7 +278,7 @@ Cross-domain touchpoints:
 4. **No invisible speaker.** Every mouth in the room is a CLI voice
    participant on the strip's roster: no browser mic exists, so the roster
    is complete by construction. Anonymous *ears* are expected (the count is
-   shown); anonymous *mouths* are forbidden — watch grants are
+   shown); anonymous *mouths* are forbidden: watch grants are
    `canPublish=false` at the SFU level, so a tampered page still cannot
    open a mic.
 5. **Voice is CLI-only, zero exceptions.** The publish grant carries
@@ -289,7 +289,7 @@ Cross-domain touchpoints:
 
 ## 5. Testing
 
-- `registry_test.rs` — the phase machine: one-stream-per-user, pending
+- `registry_test.rs`: the phase machine: one-stream-per-user, pending
   visibility, the exactly-once `went_live` transition and its
   `went_live_at` stamp (set on the first media report, kept through a stop
   and resume), grace on stop,
@@ -305,29 +305,29 @@ Cross-domain touchpoints:
   own room, and an unknown streamer stay quiet; a fresh stream re-announces
   the same regular) and stays quiet while pending without burning the
   announcement.
-- `live_test.rs` — the live strip source: a pending stream is not offered,
+- `live_test.rs`: the live strip source: a pending stream is not offered,
   a live one is stamped with when it went live, and its body names the
   title, the watcher count, the streamer and the key.
-- `ui_test.rs` — the OBS overlay renders every hand-copied value unclipped
+- `ui_test.rs`: the OBS overlay renders every hand-copied value unclipped
   and survives a tiny terminal.
 - `input_flow_test.rs::only_esc_closes_the_stream_modal`: keys, Enter, and
   a left click all leave the handoff modal up; Esc closes it.
 - `chat/ui_test.rs::stream_header_never_lets_the_watch_url_touch_the_right_edge`:
   the header row's watch URL always ends one column short of the edge.
-- `chat/state_internal_test.rs` — `/golive` parse routing (console vs `obs`
+- `chat/state_internal_test.rs`: `/golive` parse routing (console vs `obs`
   vs `stop`) and the title clamp.
-- `activity/filter_test.rs` — the `is watching` line ships to #lounge and
+- `activity/filter_test.rs`: the `is watching` line ships to #lounge and
   reads `bob is watching mat's stream`.
-- `activity/event_test.rs` — feed titles are mention-safe: `@` is stripped
+- `activity/event_test.rs`: feed titles are mention-safe: `@` is stripped
   before a `/golive` or cyberspace title lands in a #lounge body (the
   lounge feed's "bodies never contain `@`" contract).
-- `chat_room_test.rs` (late-core) — the stream room follows the account
+- `chat_room_test.rs` (late-core): the stream room follows the account
   through a rename; a reclaimed username does not inherit the old room.
-- `svc_test.rs` — the stream-ban gate on `go_live`: a banned user is refused
+- `svc_test.rs`: the stream-ban gate on `go_live`: a banned user is refused
   with no half-registered stream left behind, an expired row does not block
   (expiry is read-time only), and lifting the ban restores `/golive`.
-- `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`
-  — `/mod ban stream` tears a live stream out of the registry and writes the
+- `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`:
+  `/mod ban stream` tears a live stream out of the registry and writes the
   row; `/mod unban stream` clears it.
 - Stream-owner moderation (§6): `policy_test.rs` pins the `STREAM_OWNER`
   caps and that ownership never widens a moderator's reach;
@@ -342,20 +342,20 @@ Cross-domain touchpoints:
   `voice/svc_test.rs::a_room_banned_user_is_refused_a_voice_ticket` pins
   the microphone half; `chat/state_internal_test.rs` covers the
   `/ban @user [duration] [reason]` parse (duration slot vs reason).
-- `api_test.rs::stream_endpoints_serve_the_watch_and_publish_flow` — the
+- `api_test.rs::stream_endpoints_serve_the_watch_and_publish_flow`: the
   whole HTTP flow end to end against a real registry + DB, including the
   404s for dead capability ids and the watch grant's identity contract:
   the token's `sub` is `viewer-{watcher_id}`, a retry with the same watcher
   id reuses it, a different watcher is a different participant, and a
   missing or off-shape watcher id is a 400 (asserted by decoding the JWT,
   since the identity is what LiveKit dedupes participants by).
-- `late-web/src/pages/live/live_test.rs` — capability-id validation (the
+- `late-web/src/pages/live/live_test.rs`: capability-id validation (the
   proxy-path injection gate), page rendering (audio-on defaults, voices
   toggle, volume, fullscreen pinned; the grant fetch carries the watcher id;
   no "reload to retry" dead end; the go-live page has no browser mic),
   the watcher-id gate on the grant proxy, upstream-status forwarding, and
   the claim cookie exchange.
-- `late-cli/src/voice_test.rs` — the `keep_remote_audio` policy: other
+- `late-cli/src/voice_test.rs`: the `keep_remote_audio` policy: other
   users' mics play; `stream-*` publishers (any source label) and all
   program audio never do.
 - LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh -E
@@ -436,7 +436,7 @@ against the anonymous audience.
 ## 7. Known gaps / follow-ups
 
 - Metrics: no `record_stream_*` telemetry yet (streams started, watcher
-  peaks — the experiment's own metrics, streams started per week, peak
+  peaks: the experiment's own metrics, streams started per week, peak
   concurrent watchers per stream, and chat/voice joins during a stream, are
   currently only readable from logs/registry; the kill condition was nobody
   streaming for a month, shelving the surface and keeping the token plumbing

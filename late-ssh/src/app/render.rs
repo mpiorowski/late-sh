@@ -2063,9 +2063,12 @@ impl App {
                 },
             ),
             Screen::Zen => {
+                // A page too small to draw has no row, so it keeps no
+                // click target either.
                 let (_, row) = crate::app::zen::layout::rice_areas(
                     content_area,
-                    crate::app::statusline::bar::zen_row_shown(&ctx.statusline_components),
+                    crate::app::zen::layout::rice_fits(content_area)
+                        && crate::app::statusline::bar::zen_row_shown(&ctx.statusline_components),
                 );
                 let status_row = row.map(|row| {
                     crate::app::statusline::bar::build_zen_status_row(

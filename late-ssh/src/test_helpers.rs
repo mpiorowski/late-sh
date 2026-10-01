@@ -1067,6 +1067,20 @@ pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
     panic!("timed out waiting for render to contain {needle:?}; last render:\n{last_plain}");
 }
 
+/// Tick until `ready` holds; panics at the timeout. The state counterpart of
+/// [`wait_for_render_contains`], for async state no frame prints.
+pub async fn wait_for_app(app: &mut App, label: &str, ready: impl Fn(&App) -> bool) {
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
+    while Instant::now() < deadline {
+        app.tick();
+        if ready(app) {
+            return;
+        }
+        sleep(Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for {label}");
+}
+
 /// Tick and render until `needle` disappears from the frame; panics at the
 /// timeout if it is still there. The absence counterpart of
 /// [`wait_for_render_contains`], for state that clears asynchronously.

@@ -2,7 +2,8 @@
 
 use crate::paired_clients::PairControlMessage;
 use crate::test_helpers::{
-    make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_render_contains,
+    make_app, make_app_with_paired_client, new_test_db, render_plain, wait_for_app,
+    wait_for_render_contains,
 };
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -256,6 +257,142 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
     assert_eq!(app.screen, Screen::Dashboard);
     assert!(!app.show_lobby_modal, "the modal was never open");
     assert!(app.lobby.glow(), "nothing looked at the lobby");
+}
+
+const STRIP_CLICK_COLS: u16 = 160;
+const STRIP_CLICK_ROWS: u16 = 40;
+
+/// A viewer on Home with a chess match of their own on the live strip, and
+/// the service and opponent to post more matches with. Returns the match on
+/// the strip.
+async fn app_with_a_match_on_the_strip(
+    name: &str,
+) -> (
+    late_core::test_utils::TestDb,
+    crate::app::state::App,
+    crate::app::lobby::daily::svc::DailyService,
+    uuid::Uuid,
+    uuid::Uuid,
+) {
+    use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
+    use crate::app::games::chips::svc::ChipService;
+    use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, &format!("{name}-me")).await;
+    let them = create_test_user(&test_db.db, &format!("{name}-them")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, &format!("{name}-flow-it"));
+    app.resize(STRIP_CLICK_COLS, STRIP_CLICK_ROWS)
+        .expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel::<ActivityEvent>(8);
+    let poster = DailyService::new(
+        test_db.db.clone(),
+        ChipService::new(test_db.db.clone()),
+        ActivityPublisher::new(test_db.db.clone(), activity_tx),
+    );
+    let posted = poster
+        .post_challenge(them.id, DailyGame::Chess)
+        .await
+        .expect("post");
+    app.daily.claim_challenge(posted.id);
+    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    (test_db, app, poster, them.id, posted.id)
+}
+
+/// Click the status line's Live segment on the bottom border.
+fn click_the_live_segment(app: &mut crate::app::state::App) {
+    app.tick();
+    app.reset_render();
+    let mut terminal = vt100::Parser::new(STRIP_CLICK_ROWS, STRIP_CLICK_COLS, 0);
+    terminal.process(&app.render().expect("render"));
+    let screen = terminal.screen().contents();
+    let bottom_row = screen.lines().last().expect("bottom border row");
+    let byte = bottom_row.find("live ").expect("the live segment");
+    let live_col = unicode_width::UnicodeWidthStr::width(&bottom_row[..byte]);
+    // SGR mouse coords are 1-indexed.
+    app.handle_input(format!("\x1b[<0;{};{STRIP_CLICK_ROWS}M", live_col + 1).as_bytes());
+}
+
+/// The status line's Live segment is on every page, the board of the match
+/// it names included. Clicked there it has nothing to open: the board stays
+/// as the player left it, cursor and all, and still closes to the page it
+/// was opened from.
+#[tokio::test]
+async fn clicking_the_live_segment_on_its_own_board_leaves_the_board_alone() {
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app, _poster, _them, _on_strip) =
+        app_with_a_match_on_the_strip("strip-own").await;
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::DailyMatch);
+    wait_for_render_contains(&mut app, "Daily Match").await;
+
+    let cursor = |app: &crate::app::state::App| app.daily.board.as_ref().expect("a board").cursor;
+    let start = cursor(&app);
+    app.handle_input(b"d");
+    let moved = cursor(&app);
+    assert_ne!(moved, start, "d moves the cursor");
+
+    click_the_live_segment(&mut app);
+    assert_eq!(app.screen, Screen::DailyMatch);
+    assert_eq!(cursor(&app), moved, "the board was not opened again");
+
+    app.handle_input(b"q");
+    assert_eq!(app.screen, Screen::Dashboard);
+}
+
+/// Clicked on the board of another match, the Live segment swaps in the
+/// match the strip shows and keeps the first board's way out: closing lands
+/// on the page that board was opened from, never on a board page with no
+/// board.
+#[tokio::test]
+async fn clicking_the_live_segment_on_another_board_keeps_that_boards_way_out() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::lobby::daily::{games::DailyGame, state::BoardEntry};
+
+    let (_test_db, mut app, poster, them, on_strip) =
+        app_with_a_match_on_the_strip("strip-other").await;
+    let other = poster
+        .post_challenge(them, DailyGame::Reversi)
+        .await
+        .expect("post the other match");
+    app.daily.claim_challenge(other.id);
+    wait_for_app(&mut app, "the other match to start", |app| {
+        app.daily.live_item(other.id).is_some()
+    })
+    .await;
+
+    // The other match's board, opened from Home the way the Lobby opens it.
+    // The strip still holds the first match for its minute.
+    let item = app.daily.live_item(other.id).expect("the other match");
+    app.daily
+        .open_board(&item, Screen::Dashboard, BoardEntry::Lobby);
+    app.set_screen(Screen::DailyMatch);
+    wait_for_render_contains(&mut app, "Daily Match").await;
+
+    click_the_live_segment(&mut app);
+    assert_eq!(app.screen, Screen::DailyMatch);
+    assert_eq!(
+        app.daily.board.as_ref().map(|board| board.match_id),
+        Some(on_strip),
+        "the click opens the match on the strip"
+    );
+
+    app.handle_input(b"q");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "closing hands back the page the first board was opened from"
+    );
 }
 
 /// Ctrl+F on a board goes to Zen and closes the board, so the chord back
