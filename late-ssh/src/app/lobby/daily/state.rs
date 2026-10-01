@@ -236,6 +236,10 @@ pub struct DailyBoardState {
     /// asked for here and collected a tick or two later. Several because a
     /// replayed visit is several shots; a fresh shot is a vector of one.
     pub(super) timeline_rx: Option<oneshot::Receiver<Vec<Timeline>>>,
+    /// The blocking task behind the last replay this board asked for. Kept
+    /// after the receiver is dropped, because stopping a replay drops the
+    /// receiver and not the work: see `pool_draft::start_pool_replay`.
+    pub(super) replay_worker: Option<tokio::task::JoinHandle<()>>,
     /// The simulation in flight is a **fresh shot** rather than a replay, so
     /// the board owes the player the pre-shot rack and no word of the result
     /// until it can animate it: the rack drawn, the status line, the last-shot
@@ -1388,6 +1392,7 @@ impl DailyState {
             cue_geometry: Cell::new(None),
             pool_animated: None,
             timeline_rx: None,
+            replay_worker: None,
             pool_shot_pending: false,
             pool_shared: None,
             pool_shared_at: None,

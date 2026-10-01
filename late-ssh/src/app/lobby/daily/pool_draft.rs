@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::app::common::primitives::Banner;
@@ -1155,7 +1156,8 @@ pub(super) fn start_pool_playback(board: &mut DailyBoardState) {
             };
             pool.replaying = false;
             pool.queue.clear();
-            board.timeline_rx = Some(simulate_off_tick(spec, start, strike));
+            let (rx, _worker) = simulate_off_tick(spec, start, strike);
+            board.timeline_rx = Some(rx);
             board.pool_shot_pending = true;
         }
         Some(_) => {}
@@ -1239,19 +1241,18 @@ pub(super) fn pool_is_animating(board: &DailyBoardState) -> bool {
             .is_some_and(|pool| pool.playback.is_some())
 }
 
-/// One shot simulated on a blocking thread, for `poll_pool_timeline` to
-/// collect. The tick path runs no physics.
-fn simulate_off_tick(
-    spec: &'static TableSpec,
-    start: RackState,
-    strike: Strike,
-) -> oneshot::Receiver<Vec<Timeline>> {
+/// What a simulation sent off the tick hands back: where its timelines will
+/// arrive for `poll_pool_timeline`, and the task doing the work.
+type OffTick = (oneshot::Receiver<Vec<Timeline>>, JoinHandle<()>);
+
+/// One shot simulated on a blocking thread. The tick path runs no physics.
+fn simulate_off_tick(spec: &'static TableSpec, start: RackState, strike: Strike) -> OffTick {
     let (tx, rx) = oneshot::channel();
-    tokio::task::spawn_blocking(move || {
+    let worker = tokio::task::spawn_blocking(move || {
         let geom = spec.geometry();
         let _ = tx.send(vec![sim::simulate(spec, &geom, &start, &strike).timeline]);
     });
-    rx
+    (rx, worker)
 }
 
 /// The visit from shot `from` onward, replayed from the opening rack on a
@@ -1259,13 +1260,9 @@ fn simulate_off_tick(
 ///
 /// Every way a history fails to replay ends the same for the board (nothing
 /// plays) and is said here, since nobody upstream will.
-fn replay_off_tick(
-    match_id: Uuid,
-    state: DailyPoolState,
-    from: usize,
-) -> oneshot::Receiver<Vec<Timeline>> {
+fn replay_off_tick(match_id: Uuid, state: DailyPoolState, from: usize) -> OffTick {
     let (tx, rx) = oneshot::channel();
-    tokio::task::spawn_blocking(move || {
+    let worker = tokio::task::spawn_blocking(move || {
         let timelines = match state.replay(from) {
             Ok(timelines) => timelines,
             Err(ReplayError::UnknownTable) => {
@@ -1291,7 +1288,7 @@ fn replay_off_tick(
         };
         let _ = tx.send(timelines);
     });
-    rx
+    (rx, worker)
 }
 
 /// How much of the match a replay shows.
@@ -1313,7 +1310,8 @@ pub(crate) enum ReplaySpan {
 /// simulation does: the tick path runs no physics.
 ///
 /// Pressing it again while a replay is rolling puts the board back, so the key
-/// is its own way out.
+/// is its own way out. A press that would start a replay while the last one's
+/// worker is still running does nothing.
 ///
 /// Open to whoever is looking: both players, a spectator, a finished match.
 /// Nothing here can become a move, and the shot it shows has already been
@@ -1331,7 +1329,18 @@ pub(crate) fn start_pool_replay(board: &mut DailyBoardState, span: ReplaySpan) {
         board.pool_shot_pending = false;
         return;
     }
-    let rx = match span {
+    // Stopping a replay drops its receiver, not its worker, which plays the
+    // match through regardless. Starting another on top of it, on every other
+    // press of a held key, would queue a frame of physics per press pair on
+    // the pool that simulates everybody's real shots. So the key waits.
+    if board
+        .replay_worker
+        .as_ref()
+        .is_some_and(|worker| !worker.is_finished())
+    {
+        return;
+    }
+    let (rx, worker) = match span {
         ReplaySpan::LastShot => {
             let Some((spec, start, strike)) = pool.state.last_shot_sim() else {
                 return;
@@ -1349,6 +1358,7 @@ pub(crate) fn start_pool_replay(board: &mut DailyBoardState, span: ReplaySpan) {
     pool.queue.clear();
     pool.replaying = true;
     board.timeline_rx = Some(rx);
+    board.replay_worker = Some(worker);
     // A replay is asked for, so there is no result to hold back: the board is
     // already showing it.
     board.pool_shot_pending = false;

@@ -836,3 +836,45 @@ async fn a_finish_waits_for_the_shot_still_playing_on_the_board() {
     .await;
     assert_eq!(told, Some((true, false)));
 }
+
+#[tokio::test]
+async fn a_replay_does_not_start_while_the_last_one_is_still_being_worked_out() {
+    // Stopping a replay drops what it was going to show, not the thread
+    // working it out. Started again on every other press, a held key would
+    // queue a whole match of physics per press pair on the pool that
+    // simulates everybody's real shots.
+    let (_test_db, svc, claimed) = pool_match("pool-replay-spam").await;
+    play_pool_shot(&svc, claimed.id, pool_shot(0.3)).await;
+    let (_, viewer) = shooter_and_watcher(&claimed);
+    let mut state = pool_board(&svc, viewer, claimed.id).await;
+
+    // A worker held open, standing in for a long frame still being replayed.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let board = state.board.as_mut().expect("the board is open");
+    board.replay_worker = Some(tokio::task::spawn_blocking(move || {
+        let _ = held.recv();
+    }));
+
+    pool_draft::start_pool_replay(board, ReplaySpan::LastVisit);
+    assert!(
+        !state.pool_is_animating(),
+        "a second replay was started on top of one still running"
+    );
+
+    drop(release);
+    crate::test_helpers::wait_until(
+        || {
+            let done = state
+                .board
+                .as_ref()
+                .and_then(|board| board.replay_worker.as_ref())
+                .is_some_and(|worker| worker.is_finished());
+            std::future::ready(done)
+        },
+        "the earlier worker finishes",
+    )
+    .await;
+    let board = state.board.as_mut().expect("the board is open");
+    pool_draft::start_pool_replay(board, ReplaySpan::LastVisit);
+    assert!(state.pool_is_animating(), "and then the key works again");
+}

@@ -296,10 +296,9 @@ pub fn break_was_legal(outcome: &ShotOutcome) -> bool {
 /// target has already been checked.
 ///
 /// **A rail anywhere in the shot counts**, not only one reached after the cue
-/// ball's first contact. The book rule is the stricter one, and the stricter
-/// one was what shipped — but the shape it caught most often is the cue ball
-/// off a rail and then thinly onto the ball on, which is a clean safety on any
-/// table anybody plays on and was being called a foul here. A rule that is
+/// ball's first contact. The book rule is the stricter one, and the shape it
+/// catches most often is the cue ball off a rail and then thinly onto the ball
+/// on, which is a clean safety on any table anybody plays on. A rule that is
 /// right on paper and wrong on the shots people actually play is the worst
 /// kind to keep, so this is the lenient reading: no rail at all is the foul.
 pub fn stalled(outcome: &ShotOutcome) -> bool {
