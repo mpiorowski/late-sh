@@ -966,9 +966,9 @@ enum ScoreWindow {
 }
 
 /// One query for every score-game board in the window. Monthly unions
-/// `game_score_events` with legacy rows touched this month; all-time reads
-/// only the legacy best-score tables, the tables of record that predate
-/// score events.
+/// `game_score_events` with legacy rows whose best was set this month;
+/// all-time reads only the legacy best-score tables, the tables of record
+/// that predate score events.
 async fn fetch_score_boards(
     client: &Client,
     window: ScoreWindow,

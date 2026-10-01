@@ -18,8 +18,10 @@ use crate::models::profile_award::{
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
 use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
 use crate::models::sudoku::DailyWin as SudokuDailyWin;
+use crate::models::tetris::HighScore as LaterisHighScore;
 use crate::test_utils::{
-    create_test_user, roll_artboard_pieces_back_a_month, roll_crown_reigns_back_a_month, test_db,
+    create_test_user, roll_artboard_pieces_back_a_month, roll_crown_reigns_back_a_month,
+    roll_high_scores_back_a_month, test_db,
 };
 
 #[test]
@@ -330,6 +332,60 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .filter(|award| award.category == LATE_TIME_AWARD_CATEGORY)
         .collect();
     assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
+}
+
+/// Every board settles on the first pass that writes it. A placed player
+/// who beats their own best this month takes that best out of last month's
+/// window, and a later pass (a restart, the 24h fallback) would rank the
+/// month again without them: the conflict key includes the user, so the next
+/// player down would get a fresh medal beside the three already handed out.
+#[tokio::test]
+async fn a_score_board_settles_on_the_first_snapshot_pass() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let mut players = Vec::new();
+    for (name, best) in [
+        ("lateris-first", 400),
+        ("lateris-second", 300),
+        ("lateris-third", 200),
+        ("lateris-fourth", 100),
+    ] {
+        let player = create_test_user(&test_db.db, name).await;
+        LaterisHighScore::update_score_if_higher(&client, player.id, best)
+            .await
+            .expect("best");
+        players.push(player);
+    }
+    roll_high_scores_back_a_month(&client, "tetris_high_scores").await;
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+    // Third place beats their best this month; last month no longer sees it.
+    LaterisHighScore::update_score_if_higher(&client, players[2].id, 500)
+        .await
+        .expect("new best");
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot again");
+
+    let mut placements = Vec::new();
+    for player in &players {
+        let awards = list_profile_awards_for_user(&client, player.id)
+            .await
+            .expect("awards");
+        for award in awards {
+            placements.push((player.username.clone(), award.category, award.rank));
+        }
+    }
+    assert_eq!(
+        placements,
+        vec![
+            (players[0].username.clone(), "tetris".to_string(), 1),
+            (players[1].username.clone(), "tetris".to_string(), 2),
+            (players[2].username.clone(), "tetris".to_string(), 3),
+        ]
+    );
 }
 
 /// The persisted Arcade Wins award must score the same roster as the live

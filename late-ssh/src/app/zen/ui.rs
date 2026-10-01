@@ -801,9 +801,15 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The live strip while something is up; otherwise a narrow "nothing
-/// live" beside the #lounge feed, which takes the larger share, so the
-/// tile is never dead.
+/// The fewest columns the #lounge feed gets beside a live strip: under
+/// this its rows are cut to a word, and the strip keeps the whole tile.
+const LIVE_FEED_MIN_WIDTH: u16 = 30;
+
+/// The live strip, or a faint "nothing live" while nothing is up, beside
+/// the #lounge feed, so the tile is never dead. The strip takes three
+/// fifths of the tile, never less than its full form's width
+/// (`live::ui::MIN_FULL_WIDTH`), and keeps the whole tile when the feed
+/// would get fewer than `LIVE_FEED_MIN_WIDTH` columns; the note takes 30%.
 fn draw_live_tile(
     frame: &mut Frame,
     area: Rect,
@@ -812,13 +818,26 @@ fn draw_live_tile(
     entries: &[ActivityTickerEntry],
     friends: &[ActiveFriend],
 ) {
-    if let Some(strip) = strip {
-        crate::app::live::ui::draw_live_tile(frame, area, strip, hit);
-        return;
-    }
-    let [note, feed] =
-        Layout::horizontal([Constraint::Percentage(30), Constraint::Fill(1)]).areas(area);
-    draw_centered_note(frame, pad_sides(note), &["nothing live"]);
+    let feed = match strip {
+        Some(strip) => {
+            let strip_width = (area.width * 3 / 5).max(crate::app::live::ui::MIN_FULL_WIDTH);
+            if area.width.saturating_sub(strip_width) < 1 + LIVE_FEED_MIN_WIDTH {
+                crate::app::live::ui::draw_live_tile(frame, area, strip, hit);
+                return;
+            }
+            let [strip_area, feed] =
+                Layout::horizontal([Constraint::Length(strip_width), Constraint::Fill(1)])
+                    .areas(area);
+            crate::app::live::ui::draw_live_tile(frame, strip_area, strip, hit);
+            feed
+        }
+        None => {
+            let [note, feed] =
+                Layout::horizontal([Constraint::Percentage(30), Constraint::Fill(1)]).areas(area);
+            draw_centered_note(frame, pad_sides(note), &["nothing live"]);
+            feed
+        }
+    };
     let feed_block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));

@@ -42,7 +42,7 @@ pub(crate) const LIVE_STRIP_HEIGHT: u16 = 1 + PICTURE_ROWS;
 /// The one-row form: the rule label, then what is on.
 pub(crate) const LIVE_STRIP_COMPACT_HEIGHT: u16 = 1;
 /// Narrower than this and the words beside the picture have no room.
-const MIN_FULL_WIDTH: u16 = 56;
+pub(crate) const MIN_FULL_WIDTH: u16 = 56;
 /// Rows the messages keep under the full strip, more than the strip takes
 /// so the chat stays the larger share of a small card; under that the card
 /// takes the one-row form, and under `MIN_COMPACT_HEIGHT` nothing.

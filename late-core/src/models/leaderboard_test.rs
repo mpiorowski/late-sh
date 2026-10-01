@@ -8,12 +8,13 @@ use crate::{
         le_word,
         leaderboard::{
             DailyPuzzle, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
-            OnlineTimeIncrement, RankedEntry, apply_online_time_batch, fetch_leaderboard_data,
+            OnlineTimeIncrement, RankedEntry, ScoreGame, apply_online_time_batch,
+            fetch_leaderboard_data,
         },
         mud_character::MudCharacter,
-        rubiks_cube, sliding_puzzle, sudoku,
+        rubiks_cube, sliding_puzzle, snake, sudoku, tetris, twenty_forty_eight,
     },
-    test_utils::{create_test_user, test_db},
+    test_utils::{create_test_user, roll_high_scores_back_a_month, test_db},
 };
 
 fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
@@ -655,4 +656,66 @@ async fn top_chips_counts_earnings_and_never_spending() {
     );
     // 1,000 stipend + 18,200 credited - 12,300 spent.
     assert_eq!(month.net, 6_900, "the net is every row");
+}
+
+/// A best score belongs to the month it was set in. Playing again without
+/// beating it must not carry the old best onto this month's board: the
+/// monthly window reads the best-score tables by `updated`, so `updated`
+/// may only move when the best does.
+#[tokio::test]
+async fn an_old_best_stays_off_the_monthly_board_when_the_player_plays_again() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let veteran = create_test_user(&test_db.db, "score-veteran").await;
+
+    tetris::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("lateris best");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("2048 best");
+    snake::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("snake best");
+    for table in [
+        "tetris_high_scores",
+        "twenty_forty_eight_high_scores",
+        "snake_high_scores",
+    ] {
+        roll_high_scores_back_a_month(&client, table).await;
+    }
+
+    // This month: a run still in progress, nowhere near the old best.
+    tetris::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("lateris run");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("2048 run");
+    snake::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("snake run");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    for game in [
+        ScoreGame::Lateris,
+        ScoreGame::TwentyFortyEight,
+        ScoreGame::Snake,
+    ] {
+        let board = data.score_board(game).expect("score board");
+        let monthly: Vec<i64> = board
+            .monthly
+            .iter()
+            .filter(|entry| entry.user_id == veteran.id)
+            .map(|entry| entry.value)
+            .collect();
+        assert_eq!(
+            monthly,
+            Vec::<i64>::new(),
+            "{game:?}: last month's best is not this month's score"
+        );
+        assert_eq!(entry_for(&board.all_time, veteran.id).value, 9_000);
+    }
 }

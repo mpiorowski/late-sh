@@ -99,7 +99,7 @@ number of replicas spend one AI call per text.
 | `fight/sim.rs` | The balance harness: a `Player` (a run line, a patch line, a step-down line, and when it starts heeding them, `Heeds`; `CAREFUL`, `RECKLESS`, and `NEGLECTFUL` named) played through the real `Sheet` from a fresh row with seeded dice, `climb` (the day of every level, the gate, the mark, the drops, the first drop and the level that ended it, the boss tries), `median`, `summary`. `sim_test.rs` pins GAME.md's target (three weeks to the first mark careful, four reckless, a level within a week of the first drop for the runner who skipped the armorer) and prints the whole ladder when it misses. Also `odds(sheet, pick, fights)`, one fight played to the end `ODDS_FIGHTS` times on fixed dice through the same machine, and `Threat` (easy, even, risky, grim) over it: the picker's word is the sim's number. Pure. |
 | `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `Picker` (the cursor, and the threat of each pick read from the mirror by `sim::odds` when it opens and when the mirror moves, never per frame), the `Scene` over the street (lines, `over`, `waiting`, `failed` while the last answer was the service not answering, `old_signal` set from the row's quarry when a fight starts or resumes and kept until the scene closes), the `till` line (an answer that lands with no scene open), one action in flight, `step_up` (the picker, or a waiting fight straight back in) / `step_in(pick)` / `pick_up` / `pick_down` / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. Decides nothing. |
 | `fight/input.rs` | Keys while the picker is open (`handle_picker`: `f` the fair fight, `g` the one below, up/down and Enter) and while the scene is open (`handle_event`: `a` attack, `r` run, Enter closes a finished scene); digits, Tab, `q` stay global (`?` is the guide's, taken in `city/input.rs` first), everything else is swallowed. |
-| `fight/ui.rs` | `draw_picker` (the sheet on top, then each offer with its face, numbers, pay, and threat word; the reason instead of offers when the signal is down or the rations are spent), `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`; the bars; the exchange; the keys; dressed a glyph's way or the Old Signal's, `Dress`: the whole area in red, `noise_line` on the empty rows, `tear` on the border, the box leaning a column with the tick while it broadcasts) and `draw_strip` (level, signal, rations, bits, the debt when there is one, the weapon and the armor by name, top-right on the street); `weapon_name` / `armor_name` (`bare hands`, `street clothes` at tier 0) for every readout that names the kit. Pure. |
+| `fight/ui.rs` | `draw_picker` (the sheet on top, then each offer with its face, numbers, pay, and threat word; the reason instead of offers when the signal is down or the rations are spent), `draw_scene` (two portraits facing, each losing cells to static in proportion to its missing signal, `corrupt`, which the profile's runner card shares; the bars; the exchange; the keys; dressed a glyph's way or the Old Signal's, `Dress`: the whole area in red, `noise_line` on the empty rows, `tear` on the border, the box leaning a column with the tick while it broadcasts) and `draw_strip` (level, signal, rations, bits, the debt when there is one, the weapon and the armor by name, top-right on the street); `weapon_name` / `armor_name` (`bare hands`, `street clothes` at tier 0) for every readout that names the kit. Pure. |
 | `tailor/state.rs` | `Draft`, the mirror's editor over one `Look` at the runner's `peak_level`: four `Row`s (hood, eyes, coat, mark), `up` / `down`, `next` / `prev` around the row's unlocked rack (wrapping), `tint` around the unlocked tints (nothing on the mark row: a colored mark is earned), `shuffle` (the join's dice at the peak); `new` snaps a piece or tint the peak has not unlocked onto the rack's first entry, so the walks never meet one they cannot place. Pure. |
 | `tailor/svc.rs` | `TailorService`, the look's writer after the join: `wear_task` runs `DeadchannelRunner::store_look` (one statement, standing runner only, last write wins) and answers `TailorOutcome::{Worn, NoRunner, Failed}` on the session's `mpsc`; the metric, the log line per outcome. The change trigger carries the look to every replica's directory. |
 | `tailor/session.rs` | `TailorSession`: the `draft` while the panel is open, `worn` (what the row wears as far as this session knows), the tailor's `word`, one write in flight (`saving`); `open(runner)` / `close` / `changed` / `wear` / `tick`. Decides nothing. |
@@ -169,10 +169,11 @@ rows for: a one-liner, header plus one body row, shows hood and eyes
 and hands the coat to the first row of a continuation right under it
 (none, or a divider between them, and it goes bare), anything taller
 wears the coat itself, so no message grows a row for its face). The blank separator above a block stays blank, so two faces
-stacked down the wire never touch. The profile modal grows a `runner`
-section under the bio for a standing runner (`ProfileSnapshot.runner`,
-loaded by `ProfileService::do_find_profile` from the row; the face beside
-the level, signal and bits, the kit, the glyphs down), shown only when
+stacked down the wire never touch. The profile modal grows a runner
+card beside the late.fetch grid for a standing runner (`ProfileSnapshot.runner`,
+loaded by `ProfileService::do_find_profile` from the row; the boxed face,
+wounded by the missing signal, beside the level, the signal and exp bars
+and the bits, then the kit and the glyphs down), shown only when
 the viewer is a runner too (`profile_modal::ui::draw`'s
 `viewer_is_runner`, one argument to drop at the public flip;
 `late-ssh/src/app/profile_modal/CONTEXT.md`). Continuations and system lines carry
@@ -660,7 +661,7 @@ says so (`Undercity · f fight · p patch · ? guide`,
   mirror is not rolled at
   midnight by itself: an idle session shows yesterday's bars until the
   next reload (a descent, an action, or a directory edge), the accepted
-  case. The profile's runner section reads the row directly and settles
+  case. The profile's runner card reads the row directly and settles
   the parsed copy for the view (`ProfileService::do_find_profile`,
   nothing written), so it never shows a dead signal after the roll.
 - **The armorer.** The same sheet, the same lock, one more command
@@ -897,7 +898,7 @@ Drained by `haunt::svc::tick`.
   load, so a portrait can be absent for the first seconds after a
   replica boots; a session copies the directory on its next 1 Hz tick.
   The `mark` is painted as the level badge in the #deadchannel author
-  header and the profile's runner section; the clubhouse floor glyph
+  header and the title of the profile's runner card; the clubhouse floor glyph
   is the next slice.
 - Where to look when the ladder seems dead (per person, in the logs, all
   keyed by `user_id` and `username`, the two fields every deadchannel line

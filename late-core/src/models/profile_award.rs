@@ -347,9 +347,10 @@ pub struct AwardSnapshotOutcome {
 /// rows written. One transaction: an award row without its prize would be
 /// a prize lost forever, since the `ON CONFLICT DO NOTHING` re-run never
 /// sees that row again. `RETURNING` on the insert is what keeps a second
-/// replica's pass from paying: it inserts nothing, so it pays nothing. The
-/// gallery arm is settled once per month (see `gallery_best`), because its
-/// input, applause, is the one score that keeps moving after the rollover.
+/// replica's pass from paying: it inserts nothing, so it pays nothing.
+/// Every board is settled by the first pass that writes a row for it (see
+/// the final `NOT EXISTS`), because the inputs keep moving after the
+/// rollover and a later pass would otherwise rank the month again.
 pub async fn snapshot_previous_month_profile_awards(
     client: &mut Client,
 ) -> Result<AwardSnapshotOutcome> {
@@ -447,17 +448,6 @@ pub async fn snapshot_previous_month_profile_awards(
              -- The gallery: each hanger's best piece of the month by
              -- applause (earliest hang breaks a tie between their own),
              -- and only hangers whose best piece cleared the floor.
-             --
-             -- This arm pays chips, so it must run to completion exactly
-             -- once a month. `ArtboardPiece::toggle_applause` closes the
-             -- month at the rollover, but a mod removal (`removed_at`)
-             -- still moves the ranking afterwards, and `ON CONFLICT DO
-             -- NOTHING` alone would let a hanger who climbed into the top
-             -- 3 on a later pass (the 24h fallback, a restart, another
-             -- replica) get a fresh row and a fresh prize. The `NOT
-             -- EXISTS` settles it: once any `artboard` row exists for the
-             -- month every later pass ranks nobody, inserts nothing and
-             -- pays nothing.
              gallery_best AS (
                 SELECT DISTINCT ON (p.user_id)
                        p.user_id,
@@ -473,21 +463,10 @@ pub async fn snapshot_previous_month_profile_awards(
                 WHERE p.period_month = bounds.period_month
                   AND p.removed_at IS NULL
                   AND applause.count >= $3
-                  AND NOT EXISTS (
-                    SELECT 1 FROM profile_awards
-                    WHERE category = 'artboard'
-                      AND period_month = bounds.period_month
-                  )
                 ORDER BY p.user_id, applause.count DESC, p.created ASC
              ),
-             -- Late Time's first place. A segment is attributed to the
-             -- month it began, so last month's totals can still grow for
-             -- one checkpoint (five minutes) past the rollover. Settled
-             -- once like the gallery: without the `NOT EXISTS` a later
-             -- pass (the 24h fallback, a restart) could crown a second
-             -- user who overtook in that spill, and `ON CONFLICT` would
-             -- not stop it because the conflict key includes the user.
-             -- RANK, so an exact-millisecond tie shares first place.
+             -- Late Time's first place. RANK, so an exact-millisecond tie
+             -- shares it.
              late_time_leader AS (
                 SELECT user_id, value, rank
                 FROM (
@@ -497,11 +476,6 @@ pub async fn snapshot_previous_month_profile_awards(
                     FROM user_online_time_monthly online, bounds
                     WHERE online.month_start = bounds.period_month
                       AND online.total_milliseconds > 0
-                      AND NOT EXISTS (
-                        SELECT 1 FROM profile_awards
-                        WHERE category = 'late_time'
-                          AND period_month = bounds.period_month
-                      )
                 ) standings
                 WHERE rank = 1
              ),
@@ -551,10 +525,25 @@ pub async fn snapshot_previous_month_profile_awards(
                        ROW_NUMBER() OVER (ORDER BY value DESC, hung_at ASC) AS rank
                 FROM gallery_best
              )
+             -- A board is settled by the first pass that writes any row for
+             -- it: every later pass (the 24h fallback, a restart, another
+             -- replica) inserts nothing for that board and pays nothing.
+             -- Last month's inputs keep moving after the rollover: a mod
+             -- takes a gallery piece down, connected time spills in for one
+             -- checkpoint, a player beats their best and it leaves the
+             -- window. `ON CONFLICT` alone would not hold the line, because
+             -- the conflict key includes the user: whoever a later ranking
+             -- lifts into the top 3 would get a fresh row, and in the
+             -- gallery a fresh prize.
              SELECT ranked.user_id, ranked.category, bounds.period_month, ranked.rank::int, ranked.value
              FROM ranked
              CROSS JOIN bounds
              WHERE ranked.rank <= $1
+               AND NOT EXISTS (
+                 SELECT 1 FROM profile_awards settled
+                 WHERE settled.category = ranked.category
+                   AND settled.period_month = bounds.period_month
+               )
              ON CONFLICT (user_id, category, period_month)
              DO NOTHING
              RETURNING id, user_id, category, rank"),
