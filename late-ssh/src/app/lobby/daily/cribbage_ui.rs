@@ -554,7 +554,7 @@ fn draw_info_rail(
         )),
         Line::from(Span::styled(
             format!(
-                "hand {} · {} deals",
+                "hand {} · {} dealt",
                 table.hand + 1,
                 who(daily, board, state, table.dealer)
             ),

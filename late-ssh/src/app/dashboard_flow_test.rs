@@ -439,7 +439,11 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
     app.handle_input(b"\x06");
     assert_eq!(app.screen, Screen::Zen, "Ctrl+F on the board opens Zen");
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Dashboard, "the board was opened from Home");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "the board was opened from Home"
+    );
 
     // Opened from Zen's Live tile: Ctrl+F twice comes back to Home, the
     // page Zen was opened over.
