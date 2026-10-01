@@ -85,7 +85,7 @@ async fn the_replay_keys_never_reach_the_resign_key_behind_them() {
     // nothing to do, and nothing is exactly what it has to do: pressed twice,
     // which is how a replay is started and stopped, it used to resign.
     let (_test_db, mut app) = unbroken_rack("pool-keys-replay").await;
-    for key in [b'r', b'r', b'R', b'R'] {
+    for key in *b"rrRR" {
         assert!(
             board_input::handle_key(&mut app, key),
             "the board takes the key"
@@ -112,7 +112,7 @@ async fn only_lowercase_arms_a_stroke_and_shift_x_only_resigns() {
     // Shifted, none of them is a stroke key: a hand that slips onto Shift or
     // leaves Caps Lock on must not re-arm the cue, and `X` must not be one
     // press away from `x`'s job as well as its own.
-    for key in [b'S', b'W', b'X'] {
+    for key in *b"SWX" {
         board_input::handle_key(&mut app, key);
         assert_eq!(
             mode(&app),

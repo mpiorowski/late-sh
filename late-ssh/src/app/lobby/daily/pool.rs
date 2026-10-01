@@ -348,14 +348,11 @@ impl DailyPoolState {
         let mut scratch = self.rewound(spec);
         let mut out = Vec::new();
         for (index, record) in self.shots.iter().enumerate() {
-            match scratch.apply_shot(record.seat, &record.shot) {
-                Ok(_) => {}
-                Err(error) => {
-                    return Err(ReplayError::Refused {
-                        shot: index,
-                        reason: error.to_string(),
-                    });
-                }
+            if let Err(error) = scratch.apply_shot(record.seat, &record.shot) {
+                return Err(ReplayError::Refused {
+                    shot: index,
+                    reason: error.to_string(),
+                });
             }
             if index < from {
                 continue;

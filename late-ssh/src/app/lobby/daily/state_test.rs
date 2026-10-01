@@ -754,7 +754,9 @@ async fn a_shot_that_lands_shows_the_rack_it_was_played_on_until_it_plays() {
     let pool = open_pool(&state).expect("a pool board");
     assert!(board.pool_shot_pending());
     assert!(state.pool_is_animating());
-    let shown = pool.frames_before_shot().expect("the rack before the break");
+    let shown = pool
+        .frames_before_shot()
+        .expect("the rack before the break");
     for ball in &opening.balls {
         let frame = shown
             .iter()
@@ -813,10 +815,7 @@ async fn a_finish_waits_for_the_shot_still_playing_on_the_board() {
     assert!(tick.banner.is_none() && !tick.own_win);
 
     // News that would never be released is released by the clock instead.
-    let held = state
-        .pool_finish_hold
-        .as_ref()
-        .expect("the finish is held");
+    let held = state.pool_finish_hold.as_ref().expect("the finish is held");
     let now = Instant::now();
     assert!(!held.released(state.board.as_ref(), now));
     assert!(held.released(state.board.as_ref(), now + pool_draft::FINISH_HOLD_MAX));
