@@ -193,6 +193,43 @@ impl FeedService {
         );
     }
 
+    /// Acknowledge storage before fetching; a slow/offline feed must not hold
+    /// an editor open after its subscription has been saved.
+    pub(crate) fn add_feed_with_result(
+        &self,
+        user_id: Uuid,
+        url: String,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let service = self.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let url = normalize_feed_url(&url)?;
+                let client = service.db.get().await?;
+                RssFeed::create_for_user(&client, user_id, &url).await
+            }
+            .await;
+            match result {
+                Ok(feed) => {
+                    let _ = tx.send(Ok(()));
+                    service.list_task(user_id);
+                    if let Err(error) = service.fetch_feed(feed).await {
+                        service.publish_event(FeedEvent::FeedFailed {
+                            user_id,
+                            error: error.to_string(),
+                        });
+                    }
+                    service.list_task(user_id);
+                    service.refresh_unread_count_task(user_id);
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error.to_string()));
+                }
+            }
+        });
+        rx
+    }
+
     pub fn delete_feed_task(&self, user_id: Uuid, feed_id: Uuid) {
         let service = self.clone();
         tokio::spawn(

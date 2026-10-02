@@ -3,7 +3,8 @@
 
 use super::state::{TagPickerState, TagPickerTarget};
 use crate::app::directory::editor::state::Field;
-use crate::app::input::{MouseEventKind, ParsedInput};
+use crate::app::input::{MouseButton, MouseEventKind, ParsedInput};
+use crate::app::settings_modal::mouse::Target;
 use crate::app::state::App;
 
 pub(crate) fn open(app: &mut App, target: TagPickerTarget) {
@@ -32,6 +33,29 @@ pub(crate) fn close(app: &mut App) {
 }
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
+    if let ParsedInput::Mouse(mouse) = event {
+        if !app.interaction_mode.mouse_enabled() {
+            return;
+        }
+        let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+            return;
+        };
+        match mouse.kind {
+            MouseEventKind::ScrollUp => app.tag_picker.mouse.scroll(x, y, -3, app.size),
+            MouseEventKind::ScrollDown => app.tag_picker.mouse.scroll(x, y, 3, app.size),
+            MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+                match app.tag_picker.mouse.target(x, y, app.size) {
+                    Some(Target::Close) => close(app),
+                    Some(Target::Pick(index)) => app.tag_picker.click_row(index),
+                    _ => {}
+                }
+                app.tag_picker.mouse.invalidate();
+            }
+            _ => {}
+        }
+        return;
+    }
+    app.tag_picker.mouse.reveal_selection();
     if matches!(event, ParsedInput::Byte(0x1B)) {
         close(app);
         return;
@@ -45,16 +69,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Arrow(b'A') => picker.move_cursor(-1),
         ParsedInput::PageDown => picker.move_cursor(PAGE),
         ParsedInput::PageUp => picker.move_cursor(-PAGE),
-        ParsedInput::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => picker.move_cursor(-3),
-            MouseEventKind::ScrollDown => picker.move_cursor(3),
-            MouseEventKind::Down
-            | MouseEventKind::Up
-            | MouseEventKind::Drag
-            | MouseEventKind::Moved
-            | MouseEventKind::ScrollLeft
-            | MouseEventKind::ScrollRight => {}
-        },
         ParsedInput::Char(ch) => picker.push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() => picker.push(byte as char),
         _ => {}

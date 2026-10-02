@@ -65,6 +65,7 @@ pub(crate) enum Row {
 
 #[derive(Default)]
 pub(crate) struct TagPickerState {
+    pub(crate) mouse: crate::app::settings_modal::mouse::MouseState,
     target: Option<TagPickerTarget>,
     query: String,
     cursor: usize,
@@ -94,6 +95,7 @@ impl TagPickerState {
             }
         }
         self.cursor = self.first_tag_row();
+        self.mouse.reveal_selection();
     }
 
     /// Close and hand back the target with the chosen tags; none when the
@@ -125,6 +127,7 @@ impl TagPickerState {
         self.cursor
     }
 
+    #[cfg(test)]
     pub(crate) fn scroll(&self) -> usize {
         self.scroll
     }
@@ -237,6 +240,13 @@ impl TagPickerState {
 
     /// Space: pick or drop the tag under the cursor. A thirteenth pick is
     /// refused with the notice.
+    pub(crate) fn click_row(&mut self, index: usize) {
+        if matches!(self.rows().get(index), Some(Row::Tag(_))) {
+            self.cursor = index;
+            self.toggle();
+        }
+    }
+
     pub(crate) fn toggle(&mut self) {
         let Some(tag) = self.current() else {
             return;

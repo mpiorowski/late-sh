@@ -12,6 +12,7 @@ use ratatui::{
 
 use super::state::{Row, TagPickerState};
 use crate::app::common::{primitives::hint_line, theme};
+use crate::app::settings_modal::mouse::{Pane, Target};
 
 const POPUP_W: u16 = 64;
 const POPUP_H: u16 = 26;
@@ -20,6 +21,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &TagPickerState) {
     let Some(scope) = state.scope() else {
         return;
     };
+    state.mouse.begin((frame.area().width, frame.area().height));
     let popup = centered(area, POPUP_W.min(area.width), POPUP_H.min(area.height));
     frame.render_widget(Clear, popup);
     let block = Block::default()
@@ -34,6 +36,17 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &TagPickerState) {
         .style(Style::default().bg(theme::BG_CANVAS()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    let done = Rect::new(
+        popup.right().saturating_sub(8).max(popup.x),
+        popup.y,
+        popup.width.min(6),
+        popup.height.min(1),
+    );
+    frame.render_widget(
+        Paragraph::new("[Done]").style(Style::default().fg(theme::AMBER_GLOW())),
+        done,
+    );
+    state.mouse.hit(done, Target::Close);
 
     let [chosen_area, query_area, _, list_area, foot_area] = Layout::vertical([
         Constraint::Length(2),
@@ -78,6 +91,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &TagPickerState) {
         ]),
     };
     frame.render_widget(Paragraph::new(foot), foot_area);
+    state.mouse.finish();
 }
 
 /// `chosen › rust · go · postgres` with the count on the first line's
@@ -121,7 +135,9 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &TagPickerState) {
     let height = area.height as usize;
     state.set_visible_height(height);
     let width = area.width as usize;
-    let scroll = state.scroll().min(rows.len().saturating_sub(1));
+    let scroll = state
+        .mouse
+        .pane(area, Pane::Picker, rows.len(), state.cursor());
     let end = (scroll + height).min(rows.len());
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, row) in rows[scroll..end].iter().enumerate() {
@@ -134,6 +150,10 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &TagPickerState) {
                     .add_modifier(Modifier::BOLD),
             ))),
             Row::Tag(tag) => {
+                state.mouse.hit(
+                    Rect::new(area.x, area.y + idx as u16, area.width, 1),
+                    Target::Pick(at),
+                );
                 let under_cursor = at == state.cursor();
                 let chosen = state.is_chosen(tag);
                 let mark = if chosen { "●" } else { "○" };

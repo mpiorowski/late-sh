@@ -202,11 +202,11 @@ impl RightSidebarMode {
         }
     }
 
-    pub fn cycle(self, _forward: bool) -> Self {
-        match self {
-            Self::On => Self::Off,
-            Self::Off => Self::Auto,
-            Self::Auto => Self::On,
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) | (Self::Auto, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Auto,
+            (Self::Auto, true) | (Self::Off, false) => Self::On,
         }
     }
 }
@@ -371,11 +371,11 @@ impl RoomListMode {
         }
     }
 
-    pub fn cycle(self, _forward: bool) -> Self {
-        match self {
-            Self::On => Self::Off,
-            Self::Off => Self::Auto,
-            Self::Auto => Self::On,
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) | (Self::Auto, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Auto,
+            (Self::Auto, true) | (Self::Off, false) => Self::On,
         }
     }
 }

@@ -315,6 +315,9 @@ impl App {
         changed |= self.le_word_state.poll_word_reload();
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
+        if let Some(destination) = settings_tick.destination {
+            crate::app::settings_modal::input::activate_mouse_target(self, destination);
+        }
         if let Some(b) = settings_tick.banner {
             self.banner = Some(b);
             changed = true;

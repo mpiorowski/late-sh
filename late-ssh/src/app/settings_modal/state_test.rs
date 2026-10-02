@@ -1,5 +1,41 @@
 use super::*;
 
+#[tokio::test]
+async fn clicked_feed_survives_an_older_empty_snapshot_before_list_replacement() {
+    let db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&db.db, "feed-refresh-race").await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), user.id, "feed-refresh-race");
+    let client = db.db.get().await.unwrap();
+    let original = RssFeed::create_for_user(&client, user.id, "https://example.com/original")
+        .await
+        .unwrap();
+    let added = RssFeed::create_for_user(&client, user.id, "https://example.com/added")
+        .await
+        .unwrap();
+    let state = &mut app.settings_modal_state;
+    let (tx, rx) = watch::channel(FeedSnapshot::default());
+    state.feed_snapshot_rx = rx;
+    state.feeds = vec![original.clone()];
+    state.select_mouse_target(Target::Feed(original.id));
+    tx.send(FeedSnapshot {
+        user_id: Some(user.id),
+        ..FeedSnapshot::default()
+    })
+    .unwrap();
+    state.drain_feed_snapshot();
+    assert!(state.feeds.is_empty());
+    // A deferred destination can also arrive while that old empty list is up.
+    state.select_mouse_target(Target::Feed(original.id));
+    tx.send(FeedSnapshot {
+        user_id: Some(user.id),
+        feeds: vec![added, original.clone()],
+        ..FeedSnapshot::default()
+    })
+    .unwrap();
+    state.drain_feed_snapshot();
+    assert_eq!(state.feeds[state.feed_index].id, original.id);
+}
+
 #[test]
 fn normalize_optional_text_trims_and_collapses_blank() {
     assert_eq!(
@@ -141,4 +177,16 @@ fn variant_cycle_wraps_and_recovers_from_an_unset_variant() {
         next_variant(None, StatusComponent::Chips.variants(), true),
         None
     );
+}
+
+#[test]
+fn notification_cycles_keep_order_and_reverse_at_both_ends() {
+    assert_eq!(cycle_cooldown_value(0, false), 240);
+    assert_eq!(cycle_cooldown_value(240, true), 0);
+    assert_eq!(cycle_cooldown_value(5, false), 2);
+    assert_eq!(cycle_cooldown_value(5, true), 10);
+    assert_eq!(cycle_notify_format(None, false), "osc9");
+    assert_eq!(cycle_notify_format(Some("osc9"), true), "both");
+    assert_eq!(cycle_notify_format(Some("osc777"), false), "both");
+    assert_eq!(cycle_notify_format(Some("both"), true), "osc777");
 }

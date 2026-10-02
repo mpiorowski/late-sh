@@ -829,3 +829,24 @@ fn hidden_award_categories_keep_only_real_badges() {
     );
     assert!(extract_hidden_award_categories(&json!({})).is_empty());
 }
+
+#[test]
+fn sidebar_modes_cycle_in_both_directions_and_wrap() {
+    use crate::models::user::{RightSidebarMode, RoomListMode};
+    for mode in [
+        RightSidebarMode::On,
+        RightSidebarMode::Off,
+        RightSidebarMode::Auto,
+    ] {
+        assert_eq!(mode.cycle(true).cycle(false), mode);
+        assert_eq!(mode.cycle(false).cycle(true), mode);
+        assert_eq!(mode.cycle(true).cycle(true).cycle(true), mode);
+    }
+    assert_eq!(RightSidebarMode::On.cycle(false), RightSidebarMode::Auto);
+    for mode in [RoomListMode::On, RoomListMode::Off, RoomListMode::Auto] {
+        assert_eq!(mode.cycle(true).cycle(false), mode);
+        assert_eq!(mode.cycle(false).cycle(true), mode);
+        assert_eq!(mode.cycle(false).cycle(false).cycle(false), mode);
+    }
+    assert_eq!(RoomListMode::On.cycle(false), RoomListMode::Auto);
+}

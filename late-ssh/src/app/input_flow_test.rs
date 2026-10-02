@@ -14,7 +14,7 @@ async fn art_splash_tweak_is_visible_on_a_short_terminal_and_persists_every_mode
         app.handle_input(b"j");
     }
     wait_for_render_contains(&mut app, "Show Gallery Art on Splash").await;
-    assert!(render_plain(&mut app).contains("< SFW >"));
+    assert!(render_plain(&mut app).contains("◂ SFW    ▸"));
     for (key, expected) in [
         (b"\r".as_slice(), ArtSplashMode::Always),
         (b"\x1b[C".as_slice(), ArtSplashMode::Never),
@@ -49,7 +49,7 @@ async fn art_splash_tweak_is_visible_on_a_short_terminal_and_persists_every_mode
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(render_plain(&mut app).contains(&format!("< {} >", expected.label())));
+        assert!(render_plain(&mut app).contains(&format!("◂ {:<6} ▸", expected.label())));
     }
     app.handle_input(b"\x1b");
     wait_for_render_not_contains(&mut app, "Show Gallery Art on Splash").await;
@@ -59,7 +59,7 @@ async fn art_splash_tweak_is_visible_on_a_short_terminal_and_persists_every_mode
     for _ in 0..11 {
         app.handle_input(b"j");
     }
-    wait_for_render_contains(&mut app, "< Never >").await;
+    wait_for_render_contains(&mut app, "◂ Never  ▸").await;
 }
 
 #[tokio::test]
@@ -147,6 +147,99 @@ async fn art_content_dialog_routes_owner_votes_mouse_and_close_keys() {
             .unwrap()
             .owner_marked_nsfw
     );
+
+    voter.handle_input(b"n");
+    wait_for_render_contains(&mut voter, " Content rating ").await;
+    voter.handle_input(b"\x1b[<0;15;1M");
+    assert_eq!(voter.screen, Screen::Dashboard);
+    assert!(voter.dartboard_state.is_none());
+    wait_for_render_contains(&mut voter, " Home ").await;
+    voter.handle_input(b"4");
+    wait_for_render_contains(&mut voter, "GALLERY").await;
+    assert!(
+        voter
+            .dartboard_state
+            .as_ref()
+            .unwrap()
+            .gallery()
+            .rating_dialog
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn artboard_topbar_clicks_leave_framing_and_title_entry() {
+    use crate::app::{artboard::gallery::state::HangFlow, common::primitives::Screen};
+    use late_core::models::user::InteractionMode;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "artboard-topbar-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "artboard-topbar-flow-it");
+
+    for naming in [false, true] {
+        app.handle_input(b"4");
+        wait_for_render_contains(&mut app, "Mode       view").await;
+        if naming {
+            app.handle_input(b"i");
+            app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~");
+            app.handle_input(b"\x1b");
+            wait_for_render_contains(&mut app, "Mode       view").await;
+        }
+        app.begin_artboard_hang();
+        wait_for_render_contains(&mut app, "Frame your work").await;
+        if naming {
+            app.handle_input(b"\x1b[<0;2;2M\x1b[<32;11;5M\x1b[<0;11;5m");
+            wait_for_render_contains(&mut app, "frame 10x4").await;
+            app.handle_input(b"\r");
+            wait_for_render_contains(&mut app, "Hang it in the").await;
+            app.handle_input(b"piece 12");
+            assert!(render_plain(&mut app).contains("piece 12"));
+        }
+        assert_eq!(app.screen, Screen::Artboard);
+
+        app.interaction_mode = InteractionMode::Keyboard;
+        app.handle_input(b"\x1b[<0;15;1M");
+        assert_eq!(app.screen, Screen::Artboard);
+        app.interaction_mode = InteractionMode::Mouse;
+        // Releases, right clicks, gaps and the already-selected number stay put.
+        app.handle_input(b"\x1b[<0;15;1m\x1b[<2;15;1M\x1b[<0;14;1M\x1b[<0;21;1M");
+        assert_eq!(app.screen, Screen::Artboard);
+
+        app.handle_input(b"\x1b[<0;15;1M");
+        assert_eq!(app.screen, Screen::Dashboard, "naming={naming}");
+        assert!(app.dartboard_state.is_none());
+        wait_for_render_contains(&mut app, " Home ").await;
+        app.handle_input(b"4");
+        wait_for_render_contains(&mut app, "Mode       view").await;
+        assert_eq!(
+            app.dartboard_state.as_ref().unwrap().gallery().hang(),
+            &HangFlow::Idle
+        );
+        app.handle_input(b"1");
+    }
+}
+
+#[tokio::test]
+async fn topbar_clicks_precede_active_game_input_and_respect_app_modals() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "game-topbar-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "game-topbar-flow-it");
+    app.set_screen(Screen::Arcade);
+    app.game_selection = crate::app::state::GAME_SELECTION_2048;
+    app.handle_input(b"\r");
+    assert!(app.is_playing_game);
+
+    app.show_help = true;
+    app.handle_input(b"\x1b[<0;15;1M");
+    assert_eq!(app.screen, Screen::Arcade);
+    assert!(app.show_help);
+    app.show_help = false;
+
+    app.handle_input(b"\x1b[<0;15;1M");
+    assert_eq!(app.screen, Screen::Dashboard);
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
