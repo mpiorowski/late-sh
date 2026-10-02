@@ -2511,7 +2511,9 @@ fn draw_invites_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState
         };
         lines.push(Line::from(vec![
             Span::raw("   "),
-            Span::styled(format!("@{:<20}", invited.username), bright),
+            // Padded to a column, with a space that survives a username
+            // longer than the column (they run to 32).
+            Span::styled(format!("@{:<20} ", invited.username), bright),
             Span::styled(invitee_status_label(invited.status), status_style),
         ]));
     }

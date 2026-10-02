@@ -1601,7 +1601,11 @@ fn settings_help_lines() -> Vec<String> {
         "Invites".to_string(),
         "  Settings > Account > Invites shows your own command: ssh invite-<code>@late.sh".to_string(),
         "  A friend who connects with it for the first time is invited by you.".to_string(),
-        "  Once they become an active regular, you get 50,000 chips and they get 10,000.".to_string(),
+        format!(
+            "  Once they become an active regular, you get {} chips and they get {}.",
+            thousands(crate::app::referral::state::INVITER_REWARD_CHIPS),
+            thousands(crate::app::referral::state::INVITEE_BONUS_CHIPS)
+        ),
         "  Joined without the command? Type the code there during your first week.".to_string(),
         "".to_string(),
         "Account linking".to_string(),

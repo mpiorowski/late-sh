@@ -873,6 +873,41 @@ async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     );
 }
 
+/// Usernames run to 32 characters, past the list's name column: a long one
+/// still reads as a name and then its status, not as one run-on word.
+#[tokio::test]
+async fn invites_dialog_keeps_a_long_username_apart_from_its_status() {
+    use late_core::models::referral::{Referral, ReferralSource};
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "invites-dialog-it").await;
+    let invitee = create_test_user(&test_db.db, "an-invitee-with-a-very-long-name").await;
+    assert!(invitee.username.len() > 20);
+    let client = test_db.db.get().await.expect("db client");
+    assert!(
+        Referral::attach(
+            &**client,
+            invitee.id,
+            user.id,
+            ReferralSource::Ssh,
+            crate::app::referral::state::judged_until(invitee.created),
+        )
+        .await
+        .expect("attach")
+    );
+    let mut app = make_app(test_db.db.clone(), user.id, "invites-dialog-flow-it");
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "invites-dialog-it").await;
+    for _ in 0..5 {
+        app.handle_input(b"\t");
+    }
+    // Invites is the first Account row.
+    wait_for_render_contains(&mut app, "Delete Account").await;
+    app.handle_input(b"\r");
+
+    wait_for_render_contains(&mut app, &format!("@{} settling in", invitee.username)).await;
+}
+
 #[tokio::test]
 async fn screen_number_keys_switch_between_pages_including_profiles() {
     let test_db = new_test_db().await;

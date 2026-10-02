@@ -247,14 +247,26 @@ impl Referral {
             .collect())
     }
 
-    /// Every referral waiting on its payout, in the order they qualified.
-    pub async fn list_qualified(client: &impl GenericClient) -> Result<Vec<Uuid>> {
+    /// Every qualified referral whose inviter is under `monthly_cap` paid
+    /// invites this UTC month, in the order they qualified. A row waiting on
+    /// the cap is left out until the month turns, so a sweep does not retry
+    /// it every pass. Only a queue: [`Self::paid_this_month`] under the
+    /// inviter lock is what decides the payout.
+    pub async fn list_payable(
+        client: &impl GenericClient,
+        monthly_cap: i64,
+    ) -> Result<Vec<Uuid>> {
         let rows = client
             .query(
-                "SELECT invitee_id FROM referrals
-                 WHERE status = 'qualified'
-                 ORDER BY qualified_at, invitee_id",
-                &[],
+                "SELECT r.invitee_id FROM referrals r
+                 WHERE r.status = 'qualified'
+                   AND (SELECT COUNT(*) FROM referrals p
+                        WHERE p.inviter_id = r.inviter_id
+                          AND p.status = 'paid'
+                          AND p.paid_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                       ) < $1
+                 ORDER BY r.qualified_at, r.invitee_id",
+                &[&monthly_cap],
             )
             .await?;
         Ok(rows.into_iter().map(|row| row.get("invitee_id")).collect())
@@ -372,7 +384,10 @@ impl NewcomerActivity {
         Ok(updated == 1)
     }
 
-    /// The days of `user_id`'s activity inside `[from, until)`, by UTC day.
+    /// The days of `user_id`'s activity from `from`'s UTC day through
+    /// `until`'s, both included. The window ends mid-day and the table keeps
+    /// whole days, so the last day is in: nothing past `until` is ever
+    /// recorded on it, because the session clock stops reporting there.
     pub async fn days(
         client: &impl GenericClient,
         user_id: Uuid,
@@ -384,7 +399,7 @@ impl NewcomerActivity {
                 "SELECT day, active_minutes FROM newcomer_activity_days
                  WHERE user_id = $1
                    AND day >= ($2::timestamptz AT TIME ZONE 'UTC')::date
-                   AND day < ($3::timestamptz AT TIME ZONE 'UTC')::date
+                   AND day <= ($3::timestamptz AT TIME ZONE 'UTC')::date
                  ORDER BY day",
                 &[&user_id, &from, &until],
             )

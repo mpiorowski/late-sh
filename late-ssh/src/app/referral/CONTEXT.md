@@ -35,7 +35,9 @@ regular the sweeper pays both of them. The payout is announced in #lounge.
 ## The bar
 
 Judged over `[invitee.created, invitee.created + JUDGING_WINDOW_DAYS)` (60
-days). Both must hold:
+days). Activity is stored per UTC day, so the window's last, partial day
+counts: `NewcomerClock` stops reporting at the window's end, which is what
+keeps anything later off it. Both must hold:
 
 - at least `MIN_ACTIVE_DAYS` (14) UTC days with at least
   `MIN_DAY_ACTIVE_MINUTES` (20) active minutes each,
@@ -71,7 +73,9 @@ The sweeper (`REFERRAL_SWEEP_INTERVAL`, 10 min) runs on every replica:
 
 1. **Judge** every `pending` row: `Qualified` marks it qualified, a closed
    window short of the bar expires it, anything else waits.
-2. **Pay** every `qualified` row, oldest qualification first. One transaction:
+2. **Pay** every `qualified` row whose inviter is under the cap this month
+   (`Referral::list_payable`), oldest qualification first. A row waiting on
+   the cap is off the queue until the month turns. One transaction:
    lock the referral row (`FOR UPDATE`), take a per-inviter advisory lock,
    count the inviter's `paid` rows this UTC month, and if under
    `MONTHLY_PAID_CAP` (3) mark it paid and credit both sides. Past the cap the
@@ -105,7 +109,10 @@ successful attach; there is no notify channel and no live refresh, by the
 - `late_ssh_referral_attaches_total{source,outcome}`: every attach, by source
   (`ssh`/`settings`) and outcome (`attached`, each refusal, `failed`).
 - `late_ssh_referral_settlements_total{outcome}`: the sweeper's moves
-  (`qualified`, `expired`, `paid`, `deferred`, `failed`).
+  (`qualified`, `expired`, `paid`, `deferred`, `failed`). `deferred` is a
+  payout stopped by the cap after the row was queued (the inviter's earlier
+  invite filled it in the same sweep, or another replica did): once per row
+  and replica, not once per sweep.
 - `late_ssh_newcomer_minutes_total{result}`: reported minutes (`counted`,
   `already_counted`, `failed`).
 - Spans: `referral.attach`, `referral.load_overview`, `referral.sweep`; sweep
@@ -116,9 +123,15 @@ successful attach; there is no notify channel and no live refresh, by the
 - `state_test.rs`: code parsing, attach checks, the bar's exact thresholds,
   expiry, and the clock driven step by step.
 - `svc_test.rs` (DB): attach once plus every refusal, the monthly cap with both
-  credits and an idempotent re-pay, expiry against an open window.
+  credits, an idempotent re-pay and the capped row leaving the pay queue,
+  recorded minutes carrying an invitee to `qualified`, expiry against an open
+  window.
 - `late-core/src/models/referral_test.rs` (DB): code minting, once-only
-  attach, the per-minute dedupe across sessions.
+  attach, the per-minute dedupe across sessions, the window's last day.
+- `late-ssh/src/ssh_test.rs`: an `invite-<code>` login attaches on the connect
+  that creates the account and on no other.
+- `late-ssh/src/app/input_flow_test.rs`: the Invites dialog list with a
+  username longer than its name column.
 
 ## Known gaps
 
@@ -130,10 +143,46 @@ successful attach; there is no notify channel and no live refresh, by the
   `late_ssh_referral_settlements_total{outcome="paid"}` and the #lounge
   headlines.
 - There is no IP or device check between inviter and invitee.
+- `MONTHLY_PAID_CAP` bounds one inviter, not one person. Every invitee has
+  its own code and its own cap, and the inviter-older rule only needs a few
+  seconds between accounts, so a chain of alts (each inviting the next) can
+  all be created on one day and all qualify 14 days later. Each alt mints
+  60,000 (50,000 to its inviter, 10,000 to itself), with no ceiling on how
+  many.
+- The minted chips can be moved to one account afterwards. Gifts do it
+  directly and a poker table does it by folding every hand to one seat, so a
+  cap on gifts alone would not contain a farm.
+- The sweeper does not look at bans. A banned inviter or invitee is still
+  paid and still named in the #lounge line, and a `qualified` row held back
+  by the cap keeps paying in later months. Deleting the account is what
+  removes its referral rows (cascade); a ban does not.
+- There is no off switch. Payouts start with the process and stop only with
+  a deploy.
 
-## If cheating shows up: engaged days
+The accepted control is the owner reading #lounge: every paid pair is named
+there, after the chips are minted.
 
-Recorded here at the owner's request; not built. The planned tightening is a
+## If cheating shows up
+
+None of this is built. In the order to reach for it:
+
+1. **Delete the farm's accounts.** That cascades their referral rows away,
+   pending and qualified alike, so nothing more pays.
+2. **An off switch.** An `AppFlag` (enum variant, seed row, field; see
+   `app/flags`) that `sweep` reads before the pay step. Judging keeps
+   running, `qualified` rows wait, nothing is lost, and payouts stop without
+   a deploy.
+3. **A site-wide monthly cap on paid invites**, next to the per-inviter one:
+   one more condition in `Referral::list_payable` and one more count in
+   `pay`. It bounds the mint itself (cap x 60,000 a month) however many alts
+   exist and however the chips are moved afterwards. The catch: the queue is
+   oldest-qualified first, so a farm's rows hold real invites back until its
+   accounts are deleted.
+4. **Engaged days**, below, which makes the bar itself harder to script.
+
+### Engaged days
+
+Recorded here at the owner's request. The planned tightening is a
 third requirement, "engaged on 7+ distinct UTC days", where a day counts if
 the invitee did something a person does rather than merely sent input:
 

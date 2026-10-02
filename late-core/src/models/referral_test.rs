@@ -129,3 +129,39 @@ async fn a_minute_counts_once_across_sessions() {
         ]
     );
 }
+
+/// The window ends mid-day, but activity is kept per UTC day: the minutes a
+/// newcomer logged on that final day, before the window closed, still count.
+#[tokio::test]
+async fn the_last_day_of_the_window_counts() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "newcomer-last-day").await;
+    let from = Utc.with_ymd_and_hms(2026, 10, 1, 15, 0, 0).unwrap();
+    let until = from + Duration::days(60);
+
+    for minute in [from, until - Duration::hours(1)] {
+        assert!(
+            NewcomerActivity::record_minute(&**client, user.id, minute)
+                .await
+                .expect("record")
+        );
+    }
+
+    let days = NewcomerActivity::days(&**client, user.id, from, until)
+        .await
+        .expect("days");
+    assert_eq!(
+        days,
+        vec![
+            ActivityDay {
+                day: from.date_naive(),
+                active_minutes: 1,
+            },
+            ActivityDay {
+                day: until.date_naive(),
+                active_minutes: 1,
+            },
+        ]
+    );
+}

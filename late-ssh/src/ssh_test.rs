@@ -229,6 +229,94 @@ fn new_client_key() -> Arc<PrivateKey> {
     )
 }
 
+/// `ssh invite-<code>@late.sh` names the inviter on the connect that creates
+/// the account. The same login from an account that already exists, even one
+/// young enough to still add a code in Settings, names nobody.
+#[tokio::test]
+async fn invite_login_attaches_only_the_connect_that_creates_the_account() {
+    use late_core::models::referral::{InviteCode, Referral};
+    use late_core::models::user::User;
+
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let db_client = test_db.db.get().await.expect("db client");
+    let inviter = late_core::test_utils::create_test_user(&test_db.db, "ssh-inviter").await;
+    let code = InviteCode::ensure(&**db_client, inviter.id)
+        .await
+        .expect("invite code");
+    let invite_login = format!("invite-{code}");
+    let returning = late_core::test_utils::create_test_user(&test_db.db, "ssh-returning").await;
+    let returning_key = new_client_key();
+    late_core::models::user_ssh_key::UserSshKey::ensure(
+        &db_client,
+        returning.id,
+        &returning_key
+            .public_key()
+            .fingerprint(HashAlg::Sha256)
+            .to_string(),
+    )
+    .await
+    .expect("attach key");
+    let new_key = new_client_key();
+    let new_fingerprint = new_key.public_key().fingerprint(HashAlg::Sha256).to_string();
+
+    // The returning account goes first, so by the time the new account's
+    // attach has landed, one for it would have landed too.
+    let mut clients = Vec::new();
+    for key in [returning_key, new_key] {
+        let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+            .await
+            .expect("connect client");
+        assert!(authenticate(&mut client, &invite_login, key).await);
+        clients.push(client);
+    }
+
+    let created = User::find_by_fingerprint(&db_client, &new_fingerprint)
+        .await
+        .expect("user lookup")
+        .expect("new account");
+    wait_until(
+        || {
+            let db = test_db.db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                Referral::inviter_username(&**client, created.id)
+                    .await
+                    .expect("inviter lookup")
+                    .is_some()
+            }
+        },
+        "the new account's invite attached",
+    )
+    .await;
+    assert_eq!(
+        (
+            Referral::inviter_username(&**db_client, created.id)
+                .await
+                .expect("inviter lookup"),
+            Referral::inviter_username(&**db_client, returning.id)
+                .await
+                .expect("inviter lookup"),
+        ),
+        (Some(inviter.username.clone()), None)
+    );
+
+    for client in clients {
+        client
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .expect("disconnect client");
+    }
+    handle.abort();
+}
+
 /// A refused connection never reaches the SSH handshake: the socket is
 /// closed instead of answering with a banner and failing at auth later.
 #[tokio::test]

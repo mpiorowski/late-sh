@@ -4,13 +4,14 @@
 use chrono::{Duration, Utc};
 use late_core::models::{
     chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
-    referral::{Referral, ReferralSource, ReferralStatus},
+    referral::{NewcomerActivity, Referral, ReferralSource, ReferralStatus},
 };
 use late_core::test_utils::create_test_user;
 use uuid::Uuid;
 
 use crate::app::referral::state::{
-    AttachRefusal, INVITEE_BONUS_CHIPS, INVITER_REWARD_CHIPS, MONTHLY_PAID_CAP,
+    AttachRefusal, INVITEE_BONUS_CHIPS, INVITER_REWARD_CHIPS, MIN_ACTIVE_DAYS,
+    MIN_DAY_ACTIVE_MINUTES, MIN_TOTAL_ACTIVE_MINUTES, MONTHLY_PAID_CAP,
 };
 use crate::app::referral::svc::{JudgeTally, PayOutcome, ReferralService};
 use crate::test_helpers::new_test_db;
@@ -124,10 +125,21 @@ async fn payouts_credit_both_sides_once_under_the_monthly_cap() {
         invitees.push(invitee);
     }
 
+    let all_ids: Vec<Uuid> = invitees.iter().map(|invitee| invitee.id).collect();
+    let payable_before = Referral::list_payable(&**client, MONTHLY_PAID_CAP)
+        .await
+        .expect("payable");
+
     let mut outcomes = Vec::new();
     for invitee in &invitees {
         outcomes.push(service.pay(invitee.id).await.expect("pay"));
     }
+    // The fourth is still qualified, but its inviter is at the cap: it is
+    // off the queue until the month turns, not retried every sweep.
+    let payable_after = Referral::list_payable(&**client, MONTHLY_PAID_CAP)
+        .await
+        .expect("payable");
+    assert_eq!((payable_before, payable_after), (all_ids, Vec::new()));
     outcomes.push(service.pay(invitees[0].id).await.expect("pay again"));
 
     let paid = PayOutcome::Paid {
@@ -167,17 +179,14 @@ async fn payouts_credit_both_sides_once_under_the_monthly_cap() {
             ReferralStatus::Qualified,
         ]
     );
-    let reward_refs: Vec<String> = client
-        .query(
-            "SELECT source_ref FROM chip_ledger WHERE user_id = $1 AND reason = $2
-             ORDER BY source_ref",
-            &[&inviter.id, &ChipMove::ReferralReward.reason()],
-        )
+    let mut reward_refs: Vec<String> = UserChips::recent_ledger(&client, inviter.id, 100)
         .await
         .expect("ledger")
         .into_iter()
-        .map(|row| row.get("source_ref"))
+        .filter(|entry| entry.chip_move() == Some(ChipMove::ReferralReward))
+        .map(|entry| entry.source_ref.expect("reward names its invitee"))
         .collect();
+    reward_refs.sort();
     let mut expected_refs: Vec<String> = invitees[..3]
         .iter()
         .map(|invitee| invitee.id.to_string())
@@ -230,5 +239,79 @@ async fn judging_expires_a_closed_window_and_leaves_an_open_one() {
     assert_eq!(
         status_of(&client, inviter.id, &fresh.username).await,
         ReferralStatus::Pending
+    );
+}
+
+/// The one path that mints: an invitee whose recorded minutes clear the bar
+/// moves to `qualified` on the sweep, once, and one short of it keeps
+/// waiting.
+#[tokio::test]
+async fn judging_qualifies_an_invitee_whose_activity_clears_the_bar() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let service = ReferralService::new(test_db.db.clone());
+    let inviter = create_test_user(&test_db.db, "bar-inviter").await;
+    let regular = create_test_user(&test_db.db, "bar-regular").await;
+    let visitor = create_test_user(&test_db.db, "bar-visitor").await;
+    let code = service.overview(inviter.id).await.expect("overview").code;
+    for invitee in [&regular, &visitor] {
+        service
+            .attach(invitee.id, &code, ReferralSource::Ssh)
+            .await
+            .expect("attach")
+            .expect("attached");
+    }
+    // The fewest whole minutes a day that reach the total over the fewest
+    // counting days.
+    let days_needed = MIN_ACTIVE_DAYS as i64;
+    let minutes_per_day = (MIN_TOTAL_ACTIVE_MINUTES + days_needed - 1) / days_needed;
+    assert!(minutes_per_day >= i64::from(MIN_DAY_ACTIVE_MINUTES));
+    for (invitee, days) in [(&regular, days_needed), (&visitor, days_needed - 1)] {
+        for day in 1..=days {
+            let noon = (invitee.created + Duration::days(day))
+                .date_naive()
+                .and_hms_opt(12, 0, 0)
+                .expect("noon")
+                .and_utc();
+            for minute in 0..minutes_per_day {
+                assert!(
+                    NewcomerActivity::record_minute(
+                        &**client,
+                        invitee.id,
+                        noon + Duration::minutes(minute)
+                    )
+                    .await
+                    .expect("record minute")
+                );
+            }
+        }
+    }
+
+    let now = Utc::now();
+    let first = service.judge_pending(now).await.expect("judge");
+    let second = service.judge_pending(now).await.expect("judge again");
+
+    assert_eq!(
+        (first, second),
+        (
+            JudgeTally {
+                qualified: 1,
+                expired: 0,
+            },
+            JudgeTally::default(),
+        )
+    );
+    assert_eq!(
+        (
+            status_of(&client, inviter.id, &regular.username).await,
+            status_of(&client, inviter.id, &visitor.username).await,
+        ),
+        (ReferralStatus::Qualified, ReferralStatus::Pending)
+    );
+    assert_eq!(
+        Referral::list_payable(&**client, MONTHLY_PAID_CAP)
+            .await
+            .expect("payable"),
+        vec![regular.id]
     );
 }

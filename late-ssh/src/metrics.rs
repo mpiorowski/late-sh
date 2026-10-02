@@ -996,7 +996,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_referral_settlements_total")
                 .with_description(
-                    "Referral status moves made by the sweeper, by outcome; each paid one minted the reward and the welcome bonus",
+                    "Referral status moves made by the sweeper, by outcome; each paid one minted the reward and the welcome bonus, and deferred is a payout the monthly cap stopped",
                 )
                 .build()
         })

@@ -90,7 +90,9 @@ pub enum ReferralSettlement {
     Qualified,
     Expired,
     Paid,
-    /// Qualified but the inviter hit this month's cap; retried next sweep.
+    /// Qualified, but the inviter reached this month's cap between the
+    /// sweep listing the row and paying it. It leaves the queue until the
+    /// month turns, so this counts once per row, not once per sweep.
     Deferred,
     Failed,
 }
@@ -300,7 +302,7 @@ impl ReferralService {
     }
 
     /// One sweep: judge every pending referral, then pay every qualified
-    /// one the cap allows. The orchestration layer for both: every failure
+    /// one whose inviter is under the monthly cap. The orchestration layer for both: every failure
     /// is logged and counted here, and nothing below it logs.
     async fn sweep(&self) {
         match self.judge_pending(Utc::now()).await {
@@ -323,7 +325,7 @@ impl ReferralService {
         }
 
         let qualified = match self.db.get().await {
-            Ok(client) => Referral::list_qualified(&**client).await,
+            Ok(client) => Referral::list_payable(&**client, MONTHLY_PAID_CAP).await,
             Err(error) => Err(error.into()),
         };
         let qualified = match qualified {
