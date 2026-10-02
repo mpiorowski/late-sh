@@ -4,9 +4,8 @@ use crate::app::state::App;
 use super::gem::GemKey;
 use super::state::{
     AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, INVITE_CODE_INPUT_MAX_LEN, IrcTokenFocus,
-    LinkAccountEnterCodeFocus,
-    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, StatuslinePane, Tab, TweakRow,
-    USERNAME_MAX_LEN,
+    LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN,
+    StatuslinePane, Tab, TweakRow, USERNAME_MAX_LEN,
 };
 use crate::app::common::textarea_input::{
     EditOutcome, handle_multiline_edit, handle_single_line_edit,

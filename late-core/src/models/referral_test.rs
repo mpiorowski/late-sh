@@ -49,9 +49,15 @@ async fn an_invitee_attaches_once() {
     let until = Utc::now() + Duration::days(60);
 
     assert!(
-        Referral::attach(&**client, invitee.id, inviter.id, ReferralSource::Ssh, until)
-            .await
-            .expect("attach")
+        Referral::attach(
+            &**client,
+            invitee.id,
+            inviter.id,
+            ReferralSource::Ssh,
+            until
+        )
+        .await
+        .expect("attach")
     );
     assert!(
         !Referral::attach(
@@ -95,10 +101,10 @@ async fn a_minute_counts_once_across_sessions() {
     let minute = Utc.with_ymd_and_hms(2026, 10, 2, 12, 30, 5).unwrap();
 
     let first = NewcomerActivity::record_minute(&**client, user.id, minute).await;
-    let same = NewcomerActivity::record_minute(&**client, user.id, minute + Duration::seconds(40))
-        .await;
-    let next = NewcomerActivity::record_minute(&**client, user.id, minute + Duration::minutes(1))
-        .await;
+    let same =
+        NewcomerActivity::record_minute(&**client, user.id, minute + Duration::seconds(40)).await;
+    let next =
+        NewcomerActivity::record_minute(&**client, user.id, minute + Duration::minutes(1)).await;
     let late = NewcomerActivity::record_minute(&**client, user.id, minute).await;
     let next_day =
         NewcomerActivity::record_minute(&**client, user.id, minute + Duration::days(1)).await;

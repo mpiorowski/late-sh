@@ -265,7 +265,10 @@ async fn invite_login_attaches_only_the_connect_that_creates_the_account() {
     .await
     .expect("attach key");
     let new_key = new_client_key();
-    let new_fingerprint = new_key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let new_fingerprint = new_key
+        .public_key()
+        .fingerprint(HashAlg::Sha256)
+        .to_string();
 
     // The returning account goes first, so by the time the new account's
     // attach has landed, one for it would have landed too.

@@ -2423,7 +2423,10 @@ fn draw_invites_dialog(frame: &mut Frame, area: Rect, state: &SettingsModalState
     let bright = Style::default().fg(theme::TEXT_BRIGHT());
     let Some(overview) = dialog.overview() else {
         frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::raw(" "), Span::styled("Loading...", dim)])),
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Loading...", dim),
+            ])),
             layout[0],
         );
         draw_invites_footer(frame, layout[2], dialog.accepts_code());

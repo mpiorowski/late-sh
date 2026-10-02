@@ -856,9 +856,7 @@ async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     }
     // Delete Account is the last row and the cursor clamps there, so one
     // press per row lands on it however many rows sit above it.
-    app.handle_input(
-        &b"j".repeat(crate::app::settings_modal::state::AccountRow::ALL.len()),
-    );
+    app.handle_input(&b"j".repeat(crate::app::settings_modal::state::AccountRow::ALL.len()));
     wait_for_render_contains(&mut app, "Delete Account").await;
 
     app.handle_input(b"\rwrong-name\r");

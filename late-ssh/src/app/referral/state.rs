@@ -7,9 +7,7 @@
 //! numbers below live here and in `CONTEXT.md`, not in any UI copy.
 
 use chrono::{DateTime, Duration, Utc};
-use late_core::models::referral::{
-    ActivityDay, InviteCodeOwner, ReferralStatus, normalize_code,
-};
+use late_core::models::referral::{ActivityDay, InviteCodeOwner, ReferralStatus, normalize_code};
 use uuid::Uuid;
 
 /// What the inviter gets when their invitee becomes a regular.

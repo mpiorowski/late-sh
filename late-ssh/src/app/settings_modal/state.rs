@@ -1560,10 +1560,8 @@ impl SettingsModalState {
         }
         let typed = self.invites.code_input.lines().join("");
         let Some(code) = typed_invite_code(&typed) else {
-            self.invites.message = Some((
-                "That does not look like an invite code.".to_string(),
-                true,
-            ));
+            self.invites.message =
+                Some(("That does not look like an invite code.".to_string(), true));
             return;
         };
         self.invites.pending = true;

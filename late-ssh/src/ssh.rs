@@ -665,8 +665,7 @@ impl russh::server::Handler for ClientHandler {
         // `ssh invite-<code>@late.sh` names an inviter, read once: on the
         // connect that created the account. Any other login name (plain
         // `ssh late.sh` sends the local $USER) is ignored, as it always was.
-        if is_new_user && let Some(code) = crate::app::referral::state::ssh_invite_code(ssh_user)
-        {
+        if is_new_user && let Some(code) = crate::app::referral::state::ssh_invite_code(ssh_user) {
             self.state.referral_service.attach_task(
                 user.id,
                 code,

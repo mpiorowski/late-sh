@@ -252,10 +252,7 @@ impl Referral {
     /// the cap is left out until the month turns, so a sweep does not retry
     /// it every pass. Only a queue: [`Self::paid_this_month`] under the
     /// inviter lock is what decides the payout.
-    pub async fn list_payable(
-        client: &impl GenericClient,
-        monthly_cap: i64,
-    ) -> Result<Vec<Uuid>> {
+    pub async fn list_payable(client: &impl GenericClient, monthly_cap: i64) -> Result<Vec<Uuid>> {
         let rows = client
             .query(
                 "SELECT r.invitee_id FROM referrals r

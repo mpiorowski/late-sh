@@ -20,8 +20,8 @@ use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
-use late_core::models::referral::ReferralSource;
 use crate::pg_listener::Refresh;
+use late_core::models::referral::ReferralSource;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -425,11 +425,9 @@ mod inner {
         VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{
-        NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource,
-    };
-    use crate::app::referral::state::AttachRefusal;
+    use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use crate::app::bonsai::state::BranchAction;
+    use crate::app::referral::state::AttachRefusal;
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -2526,9 +2524,7 @@ mod inner {
         VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{
-        NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource,
-    };
+    use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}

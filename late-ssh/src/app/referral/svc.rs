@@ -18,9 +18,7 @@ use late_core::{
     db::Db,
     models::{
         chips::{ChipMove, UserChips},
-        referral::{
-            InviteCode, InvitedUser, NewcomerActivity, Referral, ReferralSource,
-        },
+        referral::{InviteCode, InvitedUser, NewcomerActivity, Referral, ReferralSource},
         user::User,
     },
 };
@@ -109,7 +107,9 @@ pub enum NewcomerMinuteResult {
 /// One payout attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PayOutcome {
-    Paid { inviter_id: Uuid },
+    Paid {
+        inviter_id: Uuid,
+    },
     Deferred,
     /// Another replica paid it first.
     AlreadySettled,
@@ -273,7 +273,7 @@ impl ReferralService {
         tokio::spawn(async move {
             let result = match db.get().await {
                 Ok(client) => NewcomerActivity::record_minute(&**client, user_id, minute).await,
-                Err(error) => Err(error.into()),
+                Err(error) => Err(error),
             };
             match result {
                 Ok(true) => metrics::record_newcomer_minute(NewcomerMinuteResult::Counted),
@@ -326,7 +326,7 @@ impl ReferralService {
 
         let qualified = match self.db.get().await {
             Ok(client) => Referral::list_payable(&**client, MONTHLY_PAID_CAP).await,
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         };
         let qualified = match qualified {
             Ok(qualified) => qualified,
