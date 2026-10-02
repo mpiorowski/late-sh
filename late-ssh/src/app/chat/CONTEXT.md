@@ -736,8 +736,10 @@ its own domain; only the command and the glyph are chat's.
 One patron buys everyone at the bar a drink. The chips are burned like the
 crown's; what the room gets is a #lounge line and a free drink each.
 The same credit also serves a one-person gift: `@bartender buy @user a drink`
-or another entry on the closed `GIFT_PHRASES` list ("get @user a drink",
-"pour @user a drink", "pour @user one", "drink for @user"), read on the
+or another entry on the closed `GIFT_PHRASES` list (a verb, the name and what
+is bought: "get @user a beer", "send @user a round", "pour @user one"; what is
+bought for whom: "drink for @user", "one for @user"; or whose is on whom:
+"@user's next one is on me"), read on the
 round's rules (any case, opening a clause anywhere in the message, not a
 `?` sentence, not in backticks; see "The trigger is a literal phrase" below) by
 `drink_round::gift_drink_target`, which also refuses a message naming any
@@ -785,8 +787,10 @@ It touches chat twice, which is why it is documented here: the phrase gate
 reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
 
 - **The trigger is a literal phrase.** `ROUND_PHRASES` ("round for everyone",
-  "round for all", "round for the house", ...) matched case-insensitively on
-  word boundaries, so "turn around for all of us" is not an order. No model
+  "drinks for the house", "everyone a drink", "drinks on me", "round's on
+  me", ...) matched case-insensitively on word boundaries, so "turn around
+  for all of us" is not an order. Every entry names the whole house or says
+  "on me"; a bare "a round" is not on the list. No model
   decides this: it is the only bartender action that spends more than one
   drink's worth, the price is the size of the room, so the phrase is the
   confirmation. An order is a statement: `contains_round_request` rejects a
@@ -795,11 +799,15 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   bill. The `?` scan reads the whole message and skips code spans, so
   "round for everyone in `#lounge`?" is a question too. An order also has to
   open its clause (`is_order`, shared with the gift): between the last
-  `, . ! ? ; :` or line break and the phrase there may only be an `@name` and
-  words from the closed `LEAD_INS` list ("a", "and", "another", "please", ...).
-  "it's been a good week, round for the house" and "don't worry, round on me"
-  order; "no round for everyone tonight", "he said round on me" and "I'll buy
-  a round for everyone" spend nothing and the model gives the words to say.
+  `, . ! ? ; :` or line break and the phrase there may only be the
+  bartender's `@name` and entries from the closed `LEAD_INS` list: small
+  talk ("a", "another", "please", "the next"), saying you are about to order
+  ("I'll", "I'd like to", "let's", "can I"), and the verb when the phrase
+  starts at what is bought ("buy", "get", "do", "put"). Nothing negative,
+  past or conditional is on it. "I'll buy a round for everyone", "let's do a
+  round for the house" and "don't worry, round on me" order; "no round for
+  everyone tonight", "he said round on me", "we had drinks for everyone" and
+  "@alice drinks on me" spend nothing and the model gives the words to say.
   (`round_phrase_spans`, the slur guard's view, still protects the words
   wherever they appear.) It also means a round costs no model call.
 - **A settled round answers ahead of the mention ladder**, in both the event

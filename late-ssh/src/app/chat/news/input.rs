@@ -1,4 +1,4 @@
-use crate::app::{common::primitives::Banner, state::App};
+use crate::app::{chat::state::RoomSlot, common::primitives::Banner, state::App};
 
 pub fn handle_composer_input(app: &mut App, byte: u8) {
     match byte {
@@ -63,6 +63,21 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'd' | b'D' => {
             app.chat.news.delete_selected();
+            true
+        }
+        // The live strip's `r`, from the feed: reply in #lounge quoting the
+        // selected story, and take the user there to write it.
+        b'r' | b'R' => {
+            let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id)
+            else {
+                return true;
+            };
+            if app.chat.begin_reply_to_article(article_id)
+                && let Some(lounge_id) = app.chat.lounge_room_id()
+            {
+                app.chat.select_room_slot(RoomSlot::Room(lounge_id));
+                app.sync_visible_chat_room();
+            }
             true
         }
         b'/' => {

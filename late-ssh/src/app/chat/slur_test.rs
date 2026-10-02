@@ -185,7 +185,7 @@ fn an_order_for_a_round_survives_any_amount_of_drink() {
                     "level {level} seed {seed} lost the order: {slurred}"
                 );
                 assert!(
-                    contains_round_request(&slurred),
+                    contains_round_request(&slurred, "bartender"),
                     "level {level} seed {seed} no longer reads as a round: {slurred}"
                 );
             }

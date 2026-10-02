@@ -140,8 +140,8 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `ChipService::buy_drink` (atomic with the `user_drinks` buzz upsert;
   ledger reason `drink_purchase`, source_ref = drink name). Unaffordable or
   chatty mentions charge nothing. A gift phrase naming one person
-  (`@bartender buy @user a drink`, `drink for @user`, the closed
-  `GIFT_PHRASES` list) instead leaves one 200-chip credit on that person's tab, even while they
+  (`@bartender buy @user a drink`, `one for @user`, `@user's next one is on
+  me`, the closed `GIFT_PHRASES` list) instead leaves one 200-chip credit on that person's tab, even while they
   are offline, without pouring the buyer. The recipient claims it on their
   own order; see `app/chat/CONTEXT.md` §9d. The tutorial greeting stays free.
 - Message selection/reactions/scroll do not exist on this screen; Home owns

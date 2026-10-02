@@ -144,30 +144,103 @@ const ROUND_GRANT_LOCK: &str = "drink_round_grant";
 /// Everything a patron can say to buy the house a round, lowercase.
 ///
 /// Every phrase here has to survive `chat/slur.rs` unscrambled, which is why
-/// the list is protected there rather than merely matched loosely here. Keep
-/// them short and unmistakable: this list is a spending authorization, so a
-/// phrase that could turn up in ordinary conversation does not belong on it.
+/// the list is protected there rather than merely matched loosely here. The
+/// list is long so a patron can order the way people do at a bar, but every
+/// entry still names the whole house or says "on me": this list is a spending
+/// authorization, and "a round" alone, which could be for anybody, is not on
+/// it. A verb in front ("buy everyone a drink", "let's do a round for the
+/// house") is a lead-in ([`LEAD_INS`]), not part of the phrase.
 pub const ROUND_PHRASES: &[&str] = &[
     "round for all",
     "round for everyone",
     "round for everybody",
     "round for the house",
     "round for the bar",
+    "round for the whole bar",
+    "round for the room",
+    "drinks for all",
+    "drinks for everyone",
+    "drinks for everybody",
+    "drinks for the house",
+    "drinks for the bar",
+    "drinks for the whole bar",
+    "drinks for the room",
+    "drink for everyone",
+    "drink for everybody",
+    "drink for the house",
+    "drink for the bar",
+    "drink for the whole bar",
+    "round of drinks for everyone",
+    "round of drinks for everybody",
+    "round of drinks for the house",
+    "round of drinks for the bar",
+    "shots for everyone",
+    "shots for everybody",
+    "shots for the house",
+    "beers for everyone",
+    "beers for everybody",
+    "beers for the house",
+    "one for everyone",
+    "one for everybody",
+    "one for the house",
+    "everyone a drink",
+    "everybody a drink",
+    "the house a drink",
+    "the bar a drink",
+    "the whole bar a drink",
+    "everyone a round",
+    "everybody a round",
+    "the house a round",
+    "the bar a round",
+    "the whole bar a round",
     "round on me",
+    "round is on me",
+    "round's on me",
+    "round\u{2019}s on me",
+    "round of drinks on me",
+    "drinks on me",
+    "drinks are on me",
+    "drinks all round",
+    "drinks all around",
 ];
 
-/// Everything a patron can say to put one drink on somebody else's tab, as
-/// the words before and after the `@user` slot, lowercase.
+/// Everything a patron can say to put one drink on somebody else's tab,
+/// lowercase, with `@` standing for the `@user` and `@'s` for `@user's`.
 ///
 /// Same bar as [`ROUND_PHRASES`]: a phrase here is a spending authorization,
-/// so it has to read as an order and nothing else. "get @x one" is not on it
-/// because "I'll get @x one of those" is ordinary talk.
-pub const GIFT_PHRASES: &[(&[&str], &[&str])] = &[
-    (&["buy"], &["a", "drink"]),
-    (&["get"], &["a", "drink"]),
-    (&["pour"], &["a", "drink"]),
-    (&["pour"], &["one"]),
-    (&["drink", "for"], &[]),
+/// so it has to read as an order and nothing else. "get @ one" is not on it
+/// because "I'll get @x one of those" is ordinary talk. Whatever the patron
+/// names (a beer, a shot), what lands on the tab is one drink credit.
+pub const GIFT_PHRASES: &[&str] = &[
+    "buy @ a drink",
+    "buy @ a round",
+    "buy @ a beer",
+    "buy @ a shot",
+    "get @ a drink",
+    "get @ a round",
+    "get @ a beer",
+    "get @ a shot",
+    "pour @ a drink",
+    "pour @ a beer",
+    "pour @ a shot",
+    "pour @ one",
+    "give @ a drink",
+    "give @ a beer",
+    "give @ a shot",
+    "send @ a drink",
+    "send @ a round",
+    "send @ a beer",
+    "send @ a shot",
+    "drink for @",
+    "beer for @",
+    "shot for @",
+    "one for @",
+    "@'s drink on me",
+    "@'s drink is on me",
+    "@'s next drink on me",
+    "@'s next drink is on me",
+    "@'s next one on me",
+    "@'s next one is on me",
 ];
 
 /// Punctuation a phrase's last word may carry. Anything else glued to it
@@ -198,7 +271,7 @@ pub fn gift_drink_target<'a>(text: &'a str, bartender: &str) -> Option<&'a str> 
     let mut target: Option<&str> = None;
     for (offset, segment) in spoken_segments(text) {
         for phrase in gift_phrases(segment) {
-            if !is_order(text, offset + phrase.start, offset + phrase.end) {
+            if !is_order(text, offset + phrase.start, offset + phrase.end, bartender) {
                 continue;
             }
             match target {
@@ -239,7 +312,7 @@ pub fn spending_phrase_spans(text: &str) -> Vec<(usize, usize)> {
     let mut spans = round_phrase_spans(text);
     spans.extend(gift_phrase_spans(text));
     for span in &mut spans {
-        if let Some(start) = lead_in_start(text, span.0) {
+        if let Some(start) = lead_in_start(text, span.0, Address::Anyone) {
             span.0 = start;
         }
     }
@@ -264,7 +337,7 @@ pub enum BarOrder<'a> {
 pub fn bar_order<'a>(text: &'a str, bartender: &str) -> BarOrder<'a> {
     match (
         gift_drink_target(text, bartender),
-        contains_round_request(text),
+        contains_round_request(text, bartender),
     ) {
         (Some(target), false) => BarOrder::Gift(target),
         (None, true) => BarOrder::Round,
@@ -288,8 +361,8 @@ fn gift_phrases(text: &str) -> Vec<GiftPhrase<'_>> {
     }
     let mut found = Vec::new();
     for index in 0..words.len() {
-        for (before, after) in GIFT_PHRASES {
-            if let Some(phrase) = gift_phrase_at(&words[index..], before, after) {
+        for pattern in GIFT_PHRASES {
+            if let Some(phrase) = gift_phrase_at(&words[index..], pattern) {
                 found.push(phrase);
             }
         }
@@ -297,57 +370,48 @@ fn gift_phrases(text: &str) -> Vec<GiftPhrase<'_>> {
     found
 }
 
-/// The [`GIFT_PHRASES`] entry `before @user after` starting at `words[0]`.
-fn gift_phrase_at<'a>(
-    words: &[(usize, &'a str)],
-    before: &[&str],
-    after: &[&str],
-) -> Option<GiftPhrase<'a>> {
-    let slot = before.len();
-    let last = slot + after.len();
-    if words.len() <= last {
+/// The [`GIFT_PHRASES`] entry `pattern` starting at `words[0]`.
+fn gift_phrase_at<'a>(words: &[(usize, &'a str)], pattern: &str) -> Option<GiftPhrase<'a>> {
+    let expected: Vec<&str> = pattern.split(' ').collect();
+    if words.len() < expected.len() {
         return None;
     }
-    for (offset, expected) in before.iter().enumerate() {
-        if !words[offset].1.eq_ignore_ascii_case(expected) {
-            return None;
-        }
-    }
-    let (slot_start, slot_word) = words[slot];
-    let handle = handle_at(slot_word, 0)?;
-    let handle_end = slot_start + 1 + handle.len();
-    let end = match after.split_last() {
-        None => {
-            let rest = &slot_word[1 + handle.len()..];
-            if !rest
-                .chars()
-                .all(|ch| GIFT_TRAILING_PUNCTUATION.contains(&ch))
-            {
-                return None;
+    let last = expected.len() - 1;
+    let mut handle = None;
+    let mut end = 0;
+    for (index, expected) in expected.into_iter().enumerate() {
+        let (start, word) = words[index];
+        let core = match index == last {
+            true => word.trim_end_matches(GIFT_TRAILING_PUNCTUATION),
+            false => word,
+        };
+        match expected {
+            "@" => {
+                let name = handle_at(core, 0)?;
+                if core.len() != 1 + name.len() {
+                    return None;
+                }
+                handle = Some(name);
             }
-            handle_end
-        }
-        Some((last_expected, middle)) => {
-            if slot_word.len() != 1 + handle.len() {
-                return None;
+            "@'s" => {
+                let name = handle_at(core, 0)?;
+                if !matches!(&core[1 + name.len()..], "'s" | "\u{2019}s") {
+                    return None;
+                }
+                handle = Some(name);
             }
-            for (offset, expected) in middle.iter().enumerate() {
-                if !words[slot + 1 + offset].1.eq_ignore_ascii_case(expected) {
+            literal => {
+                if !core.eq_ignore_ascii_case(literal) {
                     return None;
                 }
             }
-            let (last_start, last_word) = words[last];
-            let core = last_word.trim_end_matches(GIFT_TRAILING_PUNCTUATION);
-            if !core.eq_ignore_ascii_case(last_expected) {
-                return None;
-            }
-            last_start + core.len()
         }
-    };
+        end = start + core.len();
+    }
     Some(GiftPhrase {
         start: words[0].0,
         end,
-        handle,
+        handle: handle.expect("every gift phrase has an @ slot"),
     })
 }
 
@@ -421,11 +485,11 @@ pub fn round_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 /// without saying them. Segments alternate outside/inside starting outside,
 /// so an unbalanced backtick makes the rest of the message not an order,
 /// which is the safe way to be wrong about money.
-pub fn contains_round_request(text: &str) -> bool {
+pub fn contains_round_request(text: &str, bartender: &str) -> bool {
     spoken_segments(text).any(|(offset, segment)| {
         round_phrase_spans(segment)
             .into_iter()
-            .any(|(start, end)| is_order(text, offset + start, offset + end))
+            .any(|(start, end)| is_order(text, offset + start, offset + end, bartender))
     })
 }
 
@@ -444,10 +508,11 @@ fn spoken_segments(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 /// Whether the phrase at `[start, end)` of the whole message is said as an
-/// order: it opens its clause and its sentence is not a question. The one
-/// rule both lists are read on.
-fn is_order(text: &str, start: usize, end: usize) -> bool {
-    !sentence_ends_in_question(text, end) && lead_in_start(text, start).is_some()
+/// order to `bartender`: it opens its clause and its sentence is not a
+/// question. The one rule both lists are read on.
+fn is_order(text: &str, start: usize, end: usize, bartender: &str) -> bool {
+    !sentence_ends_in_question(text, end)
+        && lead_in_start(text, start, Address::Only(bartender)).is_some()
 }
 
 /// Whether the sentence a phrase ending at `end` belongs to closes with a
@@ -468,25 +533,102 @@ fn sentence_ends_in_question(text: &str, end: usize) -> bool {
     false
 }
 
-/// Words that may stand between the start of a clause and an order, lowercase.
+/// What may stand between the start of a clause and an order: lowercase, the
+/// apostrophe dropped ("I'll" reads as "ill"), several words where only the
+/// run of them is a lead-in ("i want to" is one; "i" and "want" are not).
 /// Anything else there makes the phrase part of a longer sentence ("don't buy
 /// @x a drink", "I already got a drink for @x"), which is talk about a drink
-/// and not an order for one. `hic` is `chat/slur.rs`'s hiccup, which may land
-/// right before a wasted patron's order.
+/// and not an order for one, so nothing negative, past or conditional belongs
+/// here.
 const LEAD_INS: &[&str] = &[
-    "a", "an", "another", "and", "then", "also", "now", "so", "please", "ok", "okay", "hic",
+    // Small talk on the way to the order.
+    "a",
+    "an",
+    "another",
+    "one more",
+    "the",
+    "this",
+    "next",
+    "and",
+    "then",
+    "also",
+    "now",
+    "so",
+    "just",
+    "please",
+    "ok",
+    "okay",
+    "alright",
+    "yes",
+    "yeah",
+    "yep",
+    "sure",
+    "well",
+    "hey",
+    "yo",
+    "tonight",
+    "bartender",
+    "barkeep",
+    // `chat/slur.rs`'s hiccup, which may land right before a wasted patron's
+    // order.
+    "hic",
+    // Saying you are about to order.
+    "ill",
+    "i will",
+    "id like to",
+    "i would like to",
+    "i want to",
+    "i wanna",
+    "im gonna",
+    "i am gonna",
+    "im going to",
+    "i am going to",
+    "let me",
+    "lemme",
+    "lets",
+    "let us",
+    "can i",
+    "could i",
+    "may i",
+    "can you",
+    "could you",
+    "go ahead and",
+    // The verb, when the phrase starts at what is being bought ("buy everyone
+    // a drink", "put a drink for @x on my tab").
+    "buy",
+    "get",
+    "pour",
+    "give",
+    "send",
+    "do",
+    "have",
+    "put",
+    "make it",
+    "make that",
+    "us",
 ];
 
 /// Where a clause ends: "don't worry, round on me" is an order.
 const CLAUSE_BREAKS: &[char] = &[',', '.', '!', '?', ';', ':', '\n'];
 
+/// Whose `@name` may sit in front of an order.
+#[derive(Clone, Copy)]
+enum Address<'a> {
+    /// The bartender's, and nobody else's: "@alice drinks on me" is about
+    /// alice, not a round for the house.
+    Only(&'a str),
+    /// Anybody's. The slur guard's view, which does not know who is behind
+    /// the bar and is better off protecting too much.
+    Anyone,
+}
+
 /// Where the lead-in of a phrase starting at `start` begins, when the phrase
-/// opens its clause: every word between the last [`CLAUSE_BREAKS`] character
-/// outside a code span and the phrase is an `@name` (who is being spoken to)
-/// or one of [`LEAD_INS`]. `None` is a phrase further into a sentence, or one
+/// opens its clause: what stands between the last [`CLAUSE_BREAKS`] character
+/// outside a code span and the phrase is nothing but the `@name` being spoken
+/// to and [`LEAD_INS`]. `None` is a phrase further into a sentence, or one
 /// with a code span in the way. Erring toward `None` is the safe way to be
 /// wrong about money; the bartender answers with the words to say.
-fn lead_in_start(text: &str, start: usize) -> Option<usize> {
+fn lead_in_start(text: &str, start: usize, address: Address<'_>) -> Option<usize> {
     let mut clause_start = 0;
     let mut in_code = false;
     for (index, ch) in text[..start].char_indices() {
@@ -497,20 +639,50 @@ fn lead_in_start(text: &str, start: usize) -> Option<usize> {
         }
     }
     let lead_in = &text[clause_start..start];
-    if lead_in.contains('`') || !lead_in.split_whitespace().all(is_lead_in) {
+    if lead_in.contains('`') {
         return None;
     }
-    Some(start - lead_in.trim_start().len())
+    let mut words: Vec<String> = Vec::new();
+    for word in lead_in.split_whitespace() {
+        match (handle_at(word, 0), address) {
+            (Some(_), Address::Anyone) => {}
+            (Some(name), Address::Only(spoken_to)) => {
+                if !name.eq_ignore_ascii_case(spoken_to) {
+                    return None;
+                }
+            }
+            (None, _) => {
+                let bare: String = word
+                    .chars()
+                    .filter(|ch| !matches!(ch, '\'' | '\u{2019}'))
+                    .collect();
+                let bare = bare.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+                if !bare.is_empty() {
+                    words.push(bare.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    match is_lead_in(&words) {
+        true => Some(start - lead_in.trim_start().len()),
+        false => None,
+    }
 }
 
-fn is_lead_in(word: &str) -> bool {
-    if word.starts_with('@') {
+/// Whether `words` is a run of [`LEAD_INS`] entries and nothing else.
+fn is_lead_in(words: &[String]) -> bool {
+    if words.is_empty() {
         return true;
     }
-    let bare = word
-        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
-        .to_ascii_lowercase();
-    bare.is_empty() || LEAD_INS.contains(&bare.as_str())
+    LEAD_INS.iter().any(|entry| {
+        let entry: Vec<&str> = entry.split(' ').collect();
+        words.len() >= entry.len()
+            && entry
+                .iter()
+                .zip(words)
+                .all(|(expected, word)| *expected == word.as_str())
+            && is_lead_in(&words[entry.len()..])
+    })
 }
 
 /// Whether `[start, end)` sits on word boundaries rather than inside a longer

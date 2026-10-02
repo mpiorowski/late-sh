@@ -21,6 +21,14 @@ fn a_gift_phrase_opening_its_clause_names_its_recipient() {
         "@bartender get @alice a drink please",
         "@bartender pour @alice one!",
         "@bartender ok then, please get @alice a drink",
+        "@bartender can you buy a drink for @alice",
+        "@bartender I'll buy @alice a beer",
+        "@bartender let me get @alice a shot",
+        "@bartender I'd like to send @alice a round",
+        "@bartender one for @alice please",
+        "@bartender put a drink for @alice on my tab",
+        "@bartender @alice's next one is on me",
+        "hey @bartender, @alice\u{2019}s drink is on me.",
         "@bartender buy @alice a drink. what do I owe you?",
         "@bartender buy @alice a drink `what?` now",
     ] {
@@ -76,7 +84,8 @@ fn a_phrase_inside_a_longer_sentence_spends_nothing() {
         "@bartender I already got a drink for @alice earlier",
         "@bartender I told him to get @alice a drink",
         "@bartender thanks, that drink for @alice made her night",
-        "@bartender can you buy a drink for @alice",
+        "@bartender I would buy @alice a drink if I could",
+        "@bartender @alice's drink was on me",
         "@bartender `a` then buy @alice a drink",
     ] {
         assert_eq!(gift_drink_target(message, "bartender"), None, "{message}");
@@ -86,8 +95,11 @@ fn a_phrase_inside_a_longer_sentence_spends_nothing() {
         "@bartender I am not saying round on me",
         "@bartender don\u{2019}t make it a round for the house",
         "@bartender he said round on me",
+        "@bartender we had drinks for everyone last night",
+        "@bartender @alice drinks on me",
+        "@bartender I'll buy a round",
     ] {
-        assert!(!contains_round_request(message), "{message}");
+        assert!(!contains_round_request(message, "bartender"), "{message}");
     }
 
     assert_eq!(
@@ -98,9 +110,13 @@ fn a_phrase_inside_a_longer_sentence_spends_nothing() {
         gift_drink_target("@bartender no. drink for @alice", "bartender"),
         Some("alice")
     );
-    assert!(contains_round_request("@bartender why not, round on me"));
     assert!(contains_round_request(
-        "@bartender and another round for the bar"
+        "@bartender why not, round on me",
+        "bartender"
+    ));
+    assert!(contains_round_request(
+        "@bartender and another round for the bar",
+        "bartender"
     ));
 }
 
@@ -161,26 +177,56 @@ fn spending_spans_cover_gift_phrases_too() {
 fn only_a_deliberate_phrase_orders_a_round() {
     for phrase in ROUND_PHRASES {
         assert!(
-            contains_round_request(&format!("@bartender {phrase} please")),
+            contains_round_request(&format!("@bartender {phrase} please"), "bartender"),
             "{phrase} should order a round"
         );
     }
 
-    assert!(contains_round_request("@bartender A ROUND FOR EVERYONE!"));
     assert!(contains_round_request(
-        "@bartender it's been a good week, round for the house"
+        "@bartender A ROUND FOR EVERYONE!",
+        "bartender"
     ));
+    assert!(contains_round_request(
+        "@bartender it's been a good week, round for the house",
+        "bartender"
+    ));
+
+    // The way people order at a bar: a verb or a few words of intent in front
+    // of the phrase are a lead-in, not a longer sentence.
+    for message in [
+        "@bartender I'll buy a round for everyone",
+        "@bartender let's do a round for the house",
+        "@bartender buy everyone a drink",
+        "@bartender the next round's on me",
+        "@bartender can I get drinks for the whole bar",
+        "hey @bartender, drinks on me tonight",
+    ] {
+        assert!(contains_round_request(message, "bartender"), "{message}");
+    }
 
     // "around" ends in "round", and a bar full of people saying "turn around"
     // must never be charged for it.
     assert!(!contains_round_request(
-        "@bartender turn around for all of us"
+        "@bartender turn around for all of us",
+        "bartender"
     ));
-    assert!(!contains_round_request("@bartender grounds for everyone"));
+    assert!(!contains_round_request(
+        "@bartender grounds for everyone",
+        "bartender"
+    ));
     // Near misses that are not on the list stay off it.
-    assert!(!contains_round_request("@bartender a round for me"));
-    assert!(!contains_round_request("@bartender rounds for everyone"));
-    assert!(!contains_round_request("@bartender what's on tap"));
+    assert!(!contains_round_request(
+        "@bartender a round for me",
+        "bartender"
+    ));
+    assert!(!contains_round_request(
+        "@bartender rounds for everyone",
+        "bartender"
+    ));
+    assert!(!contains_round_request(
+        "@bartender what's on tap",
+        "bartender"
+    ));
 }
 
 /// The guide teaches the exact words, so asking what they cost is the next
@@ -189,26 +235,35 @@ fn only_a_deliberate_phrase_orders_a_round() {
 #[test]
 fn asking_about_a_round_is_not_ordering_one() {
     assert!(!contains_round_request(
-        "@bartender how much is a round for everyone?"
+        "@bartender how much is a round for everyone?",
+        "bartender"
     ));
     assert!(!contains_round_request(
-        "@bartender round for everyone in `#lounge`?"
+        "@bartender round for everyone in `#lounge`?",
+        "bartender"
     ));
     assert!(!contains_round_request(
-        "@bartender is there a round for the house tonight?"
+        "@bartender is there a round for the house tonight?",
+        "bartender"
     ));
-    assert!(!contains_round_request("@bartender round on me?"));
+    assert!(!contains_round_request(
+        "@bartender round on me?",
+        "bartender"
+    ));
     // Quoting the words in a code span is talking about them, not saying them.
     assert!(!contains_round_request(
-        "@bartender what happens if I say `round for everyone`"
+        "@bartender what happens if I say `round for everyone`",
+        "bartender"
     ));
     // The question has to be the phrase's own sentence. An order followed by
     // a question is still an order, and so is one on its own line.
     assert!(contains_round_request(
-        "@bartender round for everyone. what do I owe you?"
+        "@bartender round for everyone. what do I owe you?",
+        "bartender"
     ));
     assert!(contains_round_request(
-        "@bartender round for everyone\nwhat do I owe you?"
+        "@bartender round for everyone\nwhat do I owe you?",
+        "bartender"
     ));
     // The slur guard keeps protecting the words either way: a drunk question
     // must not scramble into a drunk order.
