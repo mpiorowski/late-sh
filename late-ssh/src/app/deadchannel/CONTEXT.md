@@ -893,7 +893,7 @@ Drained by `haunt::svc::tick`.
   contact armed` for every session that can fire stage 1, with `chosen`
   and `whisper_armed`; then one line per hit, whisper, breakthrough, invitation, bio
   screen, and runner. How many the gate turns away, and on which leg, is
-  `late_ssh_first_contact_gate_total{verdict, audience}` (one count per
+  `late_ssh_first_contact_gate_total{verdict}` (one count per
   connect, not per person); bio screens by outcome are
   `late_ssh_first_contact_bio_screens_total`; delivered beats are
   `late_ssh_first_contact_beats_total`. The street's wire is

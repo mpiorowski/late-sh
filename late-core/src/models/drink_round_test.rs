@@ -1,8 +1,8 @@
 use crate::{
     models::drink_round::{
-        Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_DRINK_POINTS,
-        ROUND_PHRASES, ROUND_PRICE_PER_PATRON, contains_round_request, gift_drink_target,
-        round_phrase_spans, spending_phrase_spans,
+        Bar, BarOrder, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS,
+        ROUND_DRINK_POINTS, ROUND_PHRASES, ROUND_PRICE_PER_PATRON, bar_order,
+        contains_round_request, gift_drink_target, round_phrase_spans, spending_phrase_spans,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -56,6 +56,70 @@ fn a_gift_is_refused_when_it_is_not_plainly_one_order() {
     ] {
         assert_eq!(gift_drink_target(message, "bartender"), None, "{message}");
     }
+}
+
+/// An order somebody said not to place is not an order: a negation in the
+/// phrase's own clause refuses it, for the gift and the round alike. A
+/// negation in an earlier clause is ordinary talk and leaves the order alone.
+#[test]
+fn a_negated_order_spends_nothing() {
+    for message in [
+        "@bartender don't buy @alice a drink",
+        "@bartender DONT buy @alice a drink",
+        "@bartender do not get @alice a drink, she is wasted",
+        "@bartender I never said pour @alice one",
+        "@bartender no drink for @alice tonight",
+    ] {
+        assert_eq!(gift_drink_target(message, "bartender"), None, "{message}");
+    }
+    for message in [
+        "@bartender no round for everyone tonight",
+        "@bartender I am not saying round on me",
+        "@bartender don\u{2019}t make it a round for the house",
+    ] {
+        assert!(!contains_round_request(message), "{message}");
+    }
+
+    assert_eq!(
+        gift_drink_target("@bartender don't worry, buy @alice a drink", "bartender"),
+        Some("alice")
+    );
+    assert_eq!(
+        gift_drink_target("@bartender no. drink for @alice", "bartender"),
+        Some("alice")
+    );
+    assert!(contains_round_request("@bartender why not, round on me"));
+}
+
+/// A message places one order at most. A gift and a round together are two,
+/// so the bar rings up neither and the bartender gets the message as talk; an
+/// order the other list refused (a question, a negation) does not count.
+#[test]
+fn a_message_places_one_order_or_none() {
+    let orders: Vec<_> = [
+        "@bartender pour @alice one",
+        "@bartender round for everyone",
+        "@bartender round for everyone and pour @alice one",
+        "@bartender buy @alice a drink. round on me",
+        "@bartender round on me, don't buy @alice a drink",
+        "@bartender buy @alice a drink. is there a round for the house?",
+        "@bartender what's on tap",
+    ]
+    .into_iter()
+    .map(|message| bar_order(message, "bartender"))
+    .collect();
+    assert_eq!(
+        orders,
+        vec![
+            BarOrder::Gift("alice"),
+            BarOrder::Round,
+            BarOrder::Talk,
+            BarOrder::Talk,
+            BarOrder::Round,
+            BarOrder::Gift("alice"),
+            BarOrder::Talk,
+        ]
+    );
 }
 
 /// The slur guard's view covers the gift phrase from its first word to its

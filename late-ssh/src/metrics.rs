@@ -449,6 +449,7 @@ mod inner {
 
     use crate::app::activity::event::GameFamily;
 
+    use super::HomeRoom;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
@@ -465,7 +466,6 @@ mod inner {
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands,
     };
-    use super::HomeRoom;
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use crate::app::bonsai::state::BranchAction;
@@ -1341,7 +1341,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_first_contact_gate_total")
                 .with_description(
-                    "First-contact eligibility gate evaluations at connect (one per session, not per person), by verdict and audience",
+                    "First-contact eligibility gate evaluations at connect (one per session, not per person), by verdict",
                 )
                 .build()
         })
@@ -1485,16 +1485,15 @@ mod inner {
         );
     }
 
-    /// One gate evaluation at connect. `staff` splits admins and
-    /// moderators (haunted while the fuse is unlit) from everyone else.
-    pub fn record_first_contact_gate(verdict: GateVerdict, staff: bool) {
-        let audience = if staff { "staff" } else { "public" };
+    /// One gate evaluation at connect. Only staff (admins and moderators)
+    /// reach the gate, so the verdict is the whole label set.
+    pub fn record_first_contact_gate(verdict: GateVerdict) {
         first_contact_gate_total().add(
             1,
-            &[
-                KeyValue::new("verdict", first_contact_gate_verdict_label(verdict)),
-                KeyValue::new("audience", audience),
-            ],
+            &[KeyValue::new(
+                "verdict",
+                first_contact_gate_verdict_label(verdict),
+            )],
         );
     }
 
@@ -2620,7 +2619,7 @@ mod inner {
     pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
     pub fn record_runner_door(_door: RunnerDoor) {}
     pub fn record_first_contact_bio_screen(_outcome: BioScreenOutcome) {}
-    pub fn record_first_contact_gate(_verdict: GateVerdict, _staff: bool) {}
+    pub fn record_first_contact_gate(_verdict: GateVerdict) {}
     pub fn record_render(_reason: RenderReason) {}
     pub fn record_render_skipped_clean() {}
     pub fn add_ssh_session(_delta: i64) {}

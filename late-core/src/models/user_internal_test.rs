@@ -300,7 +300,23 @@ fn sanitize_username_input_replaces_spaces_and_invalid_chars() {
     assert_eq!(sanitize_username_input("alice!!!bob"), "alice_bob");
     assert_eq!(sanitize_username_input("@alice"), "alice");
     assert_eq!(sanitize_username_input("a@b"), "ab");
-    assert_eq!(sanitize_username_input("...alice..."), "...alice...");
+}
+
+/// A handle never ends in a dot: "thanks @alice." has to read as alice and
+/// a full stop, so the dot is dropped wherever it ends up last, truncation
+/// included. Dots anywhere else stay.
+#[test]
+fn sanitize_username_input_refuses_a_trailing_dot() {
+    assert_eq!(sanitize_username_input("alice."), "alice");
+    assert_eq!(sanitize_username_input("...alice..."), "...alice");
+    assert_eq!(sanitize_username_input("j.doe"), "j.doe");
+    assert_eq!(sanitize_username_input("alice_."), "alice");
+    assert_eq!(sanitize_username_input("..."), "user");
+    let cut_on_a_dot = format!("{}.tail", "a".repeat(USERNAME_MAX_LEN - 1));
+    assert_eq!(
+        sanitize_username_input(&cut_on_a_dot),
+        "a".repeat(USERNAME_MAX_LEN - 1)
+    );
 }
 
 #[test]

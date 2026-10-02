@@ -3926,7 +3926,7 @@ impl ChatState {
             return None;
         }
 
-        // `/paper` opens The Late Edition for anyone; the switches after it
+        // `/paper` opens The Late Edition for anyone; the press commands after it
         // are admin-only and say so, unlike `/haunt`, which hides.
         if let Some(parsed) = crate::app::paper::state::parse_paper_command(&body) {
             self.clear_composer_after_submit();

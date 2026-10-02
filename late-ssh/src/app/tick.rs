@@ -7,8 +7,8 @@ use super::state::{
 };
 use crate::app::activity::event::ActivityKind;
 use crate::app::common::primitives::Screen;
-use crate::app::directory::state::Shelf;
 use crate::app::common::theme;
+use crate::app::directory::state::Shelf;
 use crate::app::files::inline_image::InlineImageRenderSettings;
 use crate::metrics::Place;
 use crate::session::SessionMessage;
@@ -1468,9 +1468,9 @@ impl App {
                 false => Place::Whole,
             },
             Screen::HouseTable => match self.house.client() {
-                Some(client) => Place::Game(
-                    crate::app::lobby::house::registry::activity_game_for(client.table()),
-                ),
+                Some(client) => Place::Game(crate::app::lobby::house::registry::activity_game_for(
+                    client.table(),
+                )),
                 None => Place::Whole,
             },
             Screen::Profiles => match self.directory_state.shelf() {

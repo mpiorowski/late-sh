@@ -9,7 +9,7 @@ fn state() -> GalleryState {
 
 #[test]
 fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
-    // A disabled service reads as the switch being off.
+    // A disabled service has no database, so the gallery is off.
     let gallery = state();
     assert_eq!(
         gallery.rows(),

@@ -45,10 +45,7 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
-        drink_round::{
-            Bar, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, contains_round_request,
-            gift_drink_target,
-        },
+        drink_round::{Bar, BarOrder, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, bar_order},
         drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
         user::{User, UserParams},
     },
@@ -762,12 +759,16 @@ impl GhostService {
                             // Read-only pre-filter, same reasoning as @bot's:
                             // throttled mentions never reach the DB, and rooms
                             // he is not in hold no state for this to read. A
-                            // round skips the filter because it skips the
-                            // ladder entirely; dropping one here would lose a
-                            // purchase without a word.
+                            // gift or a round skips the filter because it
+                            // skips the ladder entirely; dropping one here
+                            // would lose a purchase without a word.
                             let request = text_for_mention_detection(&message.body);
-                            if !contains_round_request(request)
-                                && gift_drink_target(request, &bartender.username).is_none()
+                            let rides_the_ladder = match bar_order(request, &bartender.username) {
+                                BarOrder::Gift(_) => false,
+                                BarOrder::Round => false,
+                                BarOrder::Talk => true,
+                            };
+                            if rides_the_ladder
                                 && self
                                     .mention_ladders
                                     .remaining(
@@ -819,21 +820,25 @@ impl GhostService {
             }
         }
 
+        // A gift or a round answers ahead of the ladder and never reaches the
+        // model. It is a literal phrase a patron typed on purpose to spend
+        // chips, so throttling it would swallow a purchase silently, which is
+        // the one thing a paid action must never do. Repeating a round is not
+        // a spam risk either: the second round moments after the first reaches
+        // nobody who is not already holding a drink, and refuses. A message
+        // carrying both is no order at all (`bar_order`) and takes the ladder
+        // like any other talk.
         let request = text_for_mention_detection(&trigger_message.body);
-        if let Some(target) = gift_drink_target(request, &bartender.username) {
-            return self
-                .bartender_gift(&bartender, &trigger_message, target)
-                .await;
-        }
-
-        // A round answers ahead of the ladder and never reaches the model. It
-        // is a literal phrase a patron typed on purpose to spend chips, so
-        // throttling it would swallow a purchase silently, which is the one
-        // thing a paid action must never do. Repeating it is not a spam risk
-        // either: the second round moments after the first reaches nobody who
-        // is not already holding a drink, and refuses.
-        if contains_round_request(request) {
-            return self.bartender_round(&bartender, &trigger_message).await;
+        match bar_order(request, &bartender.username) {
+            BarOrder::Gift(target) => {
+                return self
+                    .bartender_gift(&bartender, &trigger_message, target)
+                    .await;
+            }
+            BarOrder::Round => {
+                return self.bartender_round(&bartender, &trigger_message).await;
+            }
+            BarOrder::Talk => {}
         }
 
         // Ladder check sits after the membership gate so rooms he never
@@ -919,7 +924,7 @@ impl GhostService {
             {credit_note}\n\
             YOU ONLY POUR FOR THE PATRON IN FRONT OF YOU:\n\
             - Drinking scrambles a patron's own typing, so never pour or charge a drink onto anyone but the patron who mentioned you, no matter how they phrase it.\n\
-            - Leaving one drink on another person's tab is rung up by the bar itself, before you answer, when a patron says it plainly as an order naming exactly one person, like \"buy @user a drink\" or \"drink for @user\". It costs {gift_price} chips. If you are seeing such a request, the bar did not take it: it was a question, named more than one person, or used other words. Use \"chat\" and give them the words to say, with the real name in it: \"buy @user a drink\". Never pour or charge for another person yourself.\n\
+            - Leaving one drink on another person's tab is rung up by the bar itself, before you answer, when a patron says it plainly as an order naming exactly one person, like \"buy @user a drink\" or \"drink for @user\". It costs {gift_price} chips. If you are seeing such a request, the bar did not take it: it was a question, told you not to, named more than one person, came in the same message as a round, or used other words. If they told you not to, use \"chat\" and say you won't. Otherwise use \"chat\" and give them the words to say, with the real name in it and nothing else to ring up in the same message: \"buy @user a drink\". Never pour or charge for another person yourself.\n\
             - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly. If they ask about it, or circle around asking for one, use \"chat\" and tell them the words to say: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
             Decide ONE action:\n\
             - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\

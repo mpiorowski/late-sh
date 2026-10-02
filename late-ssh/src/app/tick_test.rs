@@ -381,7 +381,10 @@ async fn attention_follows_the_profiles_shelf() {
     app.directory_state.set_shelf(Shelf::Jobs);
     app.last_one_hz_index = None;
     app.tick();
-    assert_eq!(app.attention_spot, Some((Screen::Profiles, Place::JobsShelf)));
+    assert_eq!(
+        app.attention_spot,
+        Some((Screen::Profiles, Place::JobsShelf))
+    );
 
     app.set_screen(Screen::Arcade);
     assert_eq!(app.attention_place(), Place::Whole, "the lobby is no board");

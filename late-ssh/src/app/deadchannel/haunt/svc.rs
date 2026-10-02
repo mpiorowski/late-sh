@@ -63,7 +63,7 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     // every leg's number, and the verdict counted so the thresholds can be
     // tuned against how many people each one turns away.
     let verdict = gate.verdict();
-    metrics::record_first_contact_gate(verdict, is_staff);
+    metrics::record_first_contact_gate(verdict);
     tracing::info!(
         user_id = %user.id,
         username = %user.username,

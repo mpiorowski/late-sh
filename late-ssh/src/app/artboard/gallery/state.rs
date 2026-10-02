@@ -109,7 +109,7 @@ pub enum RailRow {
 
 impl RailRow {
     /// The rail, top to bottom. The gallery rows and the hang row only
-    /// exist while the switch is on; the archives close the rail.
+    /// exist while the gallery has a database; the archives close the rail.
     pub fn rows(gallery_enabled: bool) -> Vec<Self> {
         let mut rows = vec![Self::Board];
         if gallery_enabled {

@@ -19,6 +19,21 @@ fn personal_gift_survives_drunk_typing() {
     }
 }
 
+/// A refusal is a spending instruction too: the negation that keeps chips
+/// where they are has to survive the scramble, or a wasted "never" becomes a
+/// purchase.
+#[test]
+fn a_negated_order_stays_negated_when_drunk() {
+    let gift = "@bartender never buy @alice a drink";
+    let round = "@bartender cannot afford a round for everyone tonight";
+    for seed in 1..=200 {
+        let slurred = slur(gift, DRUNK_MAX_LEVEL, seed);
+        assert_eq!(gift_drink_target(&slurred, "bartender"), None, "{slurred}");
+        let slurred = slur(round, DRUNK_MAX_LEVEL, seed);
+        assert!(!contains_round_request(&slurred), "{slurred}");
+    }
+}
+
 /// A few dozen ordinary chat words, long enough that per-word odds average out.
 const CORPUS: &str = "the deploy went through but the migration is still pending on staging \
     and nobody wants to touch it before the release window closes tomorrow morning \

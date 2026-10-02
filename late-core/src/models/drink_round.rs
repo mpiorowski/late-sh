@@ -14,10 +14,12 @@
 //!
 //! **A personal gift is a phrase too.** [`GIFT_PHRASES`] is the closed list
 //! of ways to put one drink on somebody else's tab, matched on the round's
-//! rules (a statement, outside backticks), and [`gift_drink_target`] accepts
-//! it only when the message names exactly one recipient. `chat/slur.rs` reads
-//! both lists through [`spending_phrase_spans`] so a drunk patron's spending
-//! instruction arrives intact.
+//! rules (a statement, not negated, outside backticks), and
+//! [`gift_drink_target`] accepts it only when the message names exactly one
+//! recipient. `chat/slur.rs` reads both lists through
+//! [`spending_phrase_spans`] so a drunk patron's spending instruction arrives
+//! intact. A message is one order at most: [`bar_order`] reads both lists
+//! once, and a gift and a round in the same message ring up neither.
 //!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
 //! actually granted, burned whole; a personal gift is one credit at
@@ -185,16 +187,17 @@ struct GiftPhrase<'a> {
 ///
 /// Looser than the old whole-message form, on the round's rules: a
 /// [`GIFT_PHRASES`] entry anywhere in the message, any case, as long as its
-/// sentence does not run on to a `?` and it is not inside backticks. "drink
-/// for @mossy, she earned it" is an order; "can you buy @mossy a drink?" gets
-/// an answer. On top of that the message must name exactly one patron besides
+/// sentence does not run on to a `?`, its clause carries no negation and it is
+/// not inside backticks. "drink for @mossy, she earned it" is an order; "can
+/// you buy @mossy a drink?" gets an answer, and so does "don't buy @mossy a
+/// drink". On top of that the message must name exactly one patron besides
 /// `bartender`: a second handle anywhere ("buy @alice a drink for @bob") makes
 /// who pays for whom a guess, and a guess does not move chips.
 pub fn gift_drink_target<'a>(text: &'a str, bartender: &str) -> Option<&'a str> {
     let mut target: Option<&str> = None;
     for segment in text.split('`').step_by(2) {
         for phrase in gift_phrases(segment) {
-            if sentence_ends_in_question(segment, phrase.end) {
+            if !is_order(segment, phrase.start, phrase.end) {
                 continue;
             }
             match target {
@@ -226,14 +229,47 @@ fn gift_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 /// Every byte range in `text` a drunk patron's typing must leave alone: the
-/// round phrases and the gift phrases, in the order they appear. The one list
-/// `chat/slur.rs` protects, built from the same matchers the bartender reads,
-/// so the two cannot drift apart.
+/// round phrases, the gift phrases, and the negation that refuses one of them
+/// (a scrambled "never" would turn a refusal into a purchase), in the order
+/// they appear. The one list `chat/slur.rs` protects, built from the same
+/// matchers the bartender reads, so the two cannot drift apart.
 pub fn spending_phrase_spans(text: &str) -> Vec<(usize, usize)> {
     let mut spans = round_phrase_spans(text);
     spans.extend(gift_phrase_spans(text));
+    let negations: Vec<(usize, usize)> = spans
+        .iter()
+        .filter_map(|(start, _)| negation_before(text, *start))
+        .collect();
+    spans.extend(negations);
     spans.sort_unstable();
+    spans.dedup();
     spans
+}
+
+/// What a message to the bartender asks the bar to ring up by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarOrder<'a> {
+    /// One drink on this patron's tab ([`gift_drink_target`]).
+    Gift(&'a str),
+    /// A round for the house ([`contains_round_request`]).
+    Round,
+    /// Nothing: the message goes to the bartender as conversation.
+    Talk,
+}
+
+/// The one order a message places. A gift and a round in the same message are
+/// two orders, and which one the patron meant to pay for is a guess, so
+/// neither is rung up and the bartender answers instead.
+pub fn bar_order<'a>(text: &'a str, bartender: &str) -> BarOrder<'a> {
+    match (
+        gift_drink_target(text, bartender),
+        contains_round_request(text),
+    ) {
+        (Some(target), false) => BarOrder::Gift(target),
+        (None, true) => BarOrder::Round,
+        (Some(_), true) => BarOrder::Talk,
+        (None, false) => BarOrder::Talk,
+    }
 }
 
 /// Every [`GIFT_PHRASES`] hit in `text`, word by word on whitespace. Only the
@@ -329,9 +365,9 @@ fn mentioned_handles(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The handle after the `@` at byte `at`, without trailing dots: a sentence
-/// that ends on a name ("a drink for @mossy.") ends with a full stop, not a
-/// longer username.
+/// The handle after the `@` at byte `at`, without trailing dots: a username
+/// never ends in one (`sanitize_username_input`), so a sentence that ends on
+/// a name ("a drink for @mossy.") ends with a full stop.
 fn handle_at(text: &str, at: usize) -> Option<&str> {
     let rest = text[at..].strip_prefix('@')?;
     let len = rest
@@ -379,7 +415,8 @@ pub fn round_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 /// Stricter than [`round_phrase_spans`], which is the slur guard's view and
 /// protects the phrase wherever it turns up. An order is a statement, so the
 /// sentence the phrase sits in must not run on to a `?`: "how much is a round
-/// for everyone?" gets an answer, not a bill. Text inside backticks is never
+/// for everyone?" gets an answer, not a bill. Neither does a clause that
+/// negates it ("no round for everyone tonight"). Text inside backticks is never
 /// an order either, since a code span is how a patron quotes the words
 /// without saying them. Segments alternate outside/inside starting outside,
 /// so an unbalanced backtick makes the rest of the message not an order,
@@ -388,8 +425,15 @@ pub fn contains_round_request(text: &str) -> bool {
     text.split('`').step_by(2).any(|segment| {
         round_phrase_spans(segment)
             .into_iter()
-            .any(|(_, end)| !sentence_ends_in_question(segment, end))
+            .any(|(start, end)| is_order(segment, start, end))
     })
+}
+
+/// Whether the phrase at `[start, end)` is said as an order: its sentence is
+/// not a question and its clause does not negate it. The one rule both lists
+/// are read on.
+fn is_order(text: &str, start: usize, end: usize) -> bool {
+    !sentence_ends_in_question(text, end) && negation_before(text, start).is_none()
 }
 
 /// Whether the sentence a phrase ending at `end` belongs to closes with a
@@ -403,6 +447,47 @@ fn sentence_ends_in_question(text: &str, end: usize) -> bool {
         Some('?') => true,
         Some(_) | None => false,
     }
+}
+
+/// Words that turn an order into its opposite, lowercase with the apostrophe
+/// dropped ("don't" reads as "dont").
+const NEGATIONS: &[&str] = &[
+    "no", "not", "never", "cannot", "dont", "wont", "cant", "didnt", "doesnt", "shouldnt",
+    "wouldnt", "couldnt",
+];
+
+/// Where a clause ends. A negation only reaches a phrase in its own clause:
+/// "don't worry, round on me" is an order.
+const CLAUSE_BREAKS: &[char] = &[',', '.', '!', '?', ';', ':', '\n'];
+
+/// The byte range of the [`NEGATIONS`] word that refuses a phrase starting at
+/// `start`: the first one between the start of the phrase's clause and the
+/// phrase. Erring toward a refusal is the safe way to be wrong about money;
+/// the bartender answers with the words to say.
+fn negation_before(text: &str, start: usize) -> Option<(usize, usize)> {
+    let clause_start = match text[..start].rfind(CLAUSE_BREAKS) {
+        Some(index) => index + 1,
+        None => 0,
+    };
+    let mut offset = clause_start;
+    for piece in text[clause_start..start].split_inclusive(char::is_whitespace) {
+        let word = piece.trim_end();
+        if is_negation(word) {
+            return Some((offset, offset + word.len()));
+        }
+        offset += piece.len();
+    }
+    None
+}
+
+fn is_negation(word: &str) -> bool {
+    let bare: String = word
+        .chars()
+        .filter(|ch| !matches!(ch, '\'' | '\u{2019}'))
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    let bare = bare.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+    NEGATIONS.contains(&bare)
 }
 
 /// Whether `[start, end)` sits on word boundaries rather than inside a longer

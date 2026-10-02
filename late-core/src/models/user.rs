@@ -2353,8 +2353,12 @@ pub fn sanitize_username_input(username: &str) -> String {
         return "user".to_string();
     }
 
+    // A trailing dot goes with the trailing underscores: "thanks @alice."
+    // must read as alice and a full stop, never as a longer handle.
     let truncated = truncate_to_boundary(normalized, USERNAME_MAX_LEN);
-    let truncated = truncated.trim_matches('_');
+    let truncated = truncated
+        .trim_start_matches('_')
+        .trim_end_matches(['_', '.']);
     if truncated.is_empty() {
         "user".to_string()
     } else {
