@@ -360,3 +360,29 @@ async fn going_away_and_coming_back_ride_the_one_hz_edge() {
     assert!(app.away_user_ids.is_empty());
     assert!(app.chat_ctx_epoch > epoch);
 }
+
+/// The 1Hz edge names the place in front of the user and moves the visit
+/// spot only when the screen or the place inside it changed: the Jobs
+/// shelf is its own place on Profiles, a second edge on it is no new visit.
+#[tokio::test]
+async fn attention_follows_the_profiles_shelf() {
+    use crate::app::directory::state::Shelf;
+    use crate::metrics::Place;
+
+    let (_test_db, mut app) = chat_compose_app("tick-place").await;
+    app.set_screen(Screen::Profiles);
+    app.last_one_hz_index = None;
+    app.tick();
+    assert_eq!(
+        app.attention_spot,
+        Some((Screen::Profiles, Place::PeopleShelf))
+    );
+
+    app.directory_state.set_shelf(Shelf::Jobs);
+    app.last_one_hz_index = None;
+    app.tick();
+    assert_eq!(app.attention_spot, Some((Screen::Profiles, Place::JobsShelf)));
+
+    app.set_screen(Screen::Arcade);
+    assert_eq!(app.attention_place(), Place::Whole, "the lobby is no board");
+}

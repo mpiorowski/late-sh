@@ -772,6 +772,30 @@ fn make_room(
     )
 }
 
+/// Home's attention label is read off the room's kind and visibility; a
+/// kind it does not name lands on `OtherRoom` rather than a room label.
+#[test]
+fn home_room_kind_names_every_listed_kind() {
+    let kinds = [
+        ("lounge", "public", HomeRoom::Lounge),
+        ("language", "public", HomeRoom::Language),
+        ("topic", "public", HomeRoom::PublicTopic),
+        ("topic", "private", HomeRoom::PrivateTopic),
+        ("dm", "dm", HomeRoom::Dm),
+        ("deadchannel", "private", HomeRoom::Deadchannel),
+        ("game", "public", HomeRoom::OtherRoom),
+    ];
+    let named: Vec<_> = kinds
+        .iter()
+        .map(|(kind, visibility, _)| {
+            let (room, _) = make_room(Uuid::from_u128(40), kind, visibility, false, None);
+            home_room_kind(&room)
+        })
+        .collect();
+    let expected: Vec<_> = kinds.iter().map(|(_, _, home)| *home).collect();
+    assert_eq!(named, expected);
+}
+
 #[test]
 fn the_nightcap_room_is_never_a_list_room() {
     // Permanent, public, auto-joined: every other predicate would list it.

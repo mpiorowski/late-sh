@@ -42,6 +42,7 @@ use crate::app::common::{
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
+use crate::metrics::HomeRoom;
 use crate::moderation::{
     command::{RoomModAction, ServerUserAction, parse_optional_duration},
     event::ModerationEvent,
@@ -746,6 +747,20 @@ pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     }
 
     room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
+}
+
+/// The kind of room for the Home attention metric, read off `kind` and
+/// `visibility`. A kind this match does not name is `OtherRoom`.
+pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
+    match (room.kind.as_str(), room.visibility.as_str()) {
+        ("lounge", _) => HomeRoom::Lounge,
+        ("language", _) => HomeRoom::Language,
+        ("topic", "public") => HomeRoom::PublicTopic,
+        ("topic", "private") => HomeRoom::PrivateTopic,
+        ("dm", _) => HomeRoom::Dm,
+        (late_core::models::chat_room::DEADCHANNEL_KIND, _) => HomeRoom::Deadchannel,
+        _ => HomeRoom::OtherRoom,
+    }
 }
 
 /// The haunted channel (`app/deadchannel`, GAME.md): joined by invitation
@@ -3069,6 +3084,27 @@ impl ChatState {
     /// The room slot currently selected, if any.
     fn current_slot(&self) -> Option<RoomSlot> {
         current_slot_from_state(self.selected_slot_state())
+    }
+
+    /// What Home shows, for the attention metric. None while nothing is
+    /// selected or the selected room has not loaded.
+    pub(crate) fn home_room(&self) -> Option<HomeRoom> {
+        match self.current_slot() {
+            None => None,
+            Some(RoomSlot::Room(room_id)) => self.room_by_id(room_id).map(home_room_kind),
+            Some(RoomSlot::Feeds) => Some(HomeRoom::Feeds),
+            Some(RoomSlot::News) => Some(HomeRoom::News),
+            Some(
+                RoomSlot::Cyberspace
+                | RoomSlot::CyberspaceNotifications
+                | RoomSlot::CyberspaceMail(_)
+                | RoomSlot::CyberspaceRoom(_),
+            ) => Some(HomeRoom::Cyberspace),
+            Some(RoomSlot::Notifications) => Some(HomeRoom::Notifications),
+            Some(RoomSlot::Discover) => Some(HomeRoom::Discover),
+            Some(RoomSlot::Showcase) => Some(HomeRoom::Showcase),
+            Some(RoomSlot::Work) => Some(HomeRoom::Work),
+        }
     }
 
     /// Drop the rail scroll once the selection has left the slot it was

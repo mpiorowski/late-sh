@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 18,
+  "version": 19,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -1512,7 +1512,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1526,7 +1527,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1557,7 +1559,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1571,7 +1574,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1602,7 +1606,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1616,7 +1621,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1647,7 +1653,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1661,7 +1668,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1692,7 +1700,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1706,7 +1715,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1718,7 +1728,7 @@
     },
     {
       "type": "bargauge",
-      "title": "Active Time by Arcade Game",
+      "title": "Active Time by Game",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1726,8 +1736,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (game) (increase(late_ssh_attention_seconds_total{screen=\"arcade\",game!=\"none\",presence=\"active\"}[$__range]))",
-          "legendFormat": "{{game}}",
+          "expr": "sum by (place) (increase(late_ssh_attention_seconds_total{screen=~\"arcade|house_table\",place!=\"none\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{place}}",
           "instant": true
         }
       ],
@@ -1737,7 +1747,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1751,7 +1762,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1759,7 +1771,7 @@
         "x": 12,
         "y": 144
       },
-      "description": "Active session time with an Arcade board open, by game (dailies and score runs)."
+      "description": "Active session time with a game open, by game: Arcade boards (dailies and score runs) and House Table games (poker, blackjack, asterion, tron, ssnake). Door games are screens of their own, in Active Time by Screen."
     },
     {
       "type": "timeseries",
@@ -1820,7 +1832,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1834,7 +1847,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
@@ -1845,6 +1859,221 @@
       "description": "Wins outside the Arcade dailies. Lateania is left out: its GameWon fires per mob kill (family=lateania), which would drown the rest."
     },
     {
+      "type": "bargauge",
+      "title": "Visits by Place",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (screen, place) (increase(late_ssh_place_visits_total[$__range])))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 160
+      },
+      "description": "Arrivals on each screen (and place inside it: Home room kind, Arcade board or House Table game, Profiles shelf, Artboard canvas or gallery) over the range, top 15. Sampled on the 1Hz edge, so a place passed through in under a second is not a visit."
+    },
+    {
+      "type": "bargauge",
+      "title": "Active Time per Visit",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (screen, place) (increase(late_ssh_attention_seconds_total{presence=\"active\"}[$__range])) / (sum by (screen, place) (increase(late_ssh_place_visits_total[$__range])) >= 5))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 160
+      },
+      "description": "Active seconds over arrivals, per screen and place, for places with at least 5 visits in the range. How long a stop lasts once someone is there."
+    },
+    {
+      "type": "bargauge",
+      "title": "Jobs & Artboard Split",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen, place) (increase(late_ssh_attention_seconds_total{screen=~\"profiles|artboard\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 160
+      },
+      "description": "Active time on the two shelves of Profiles (people, jobs) and the two halves of the Artboard (canvas, gallery). The Jobs number is the reach the nightly press pays for."
+    },
+    {
+      "type": "bargauge",
+      "title": "Home by Room",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (place) (increase(late_ssh_attention_seconds_total{screen=\"dashboard\",place!=\"none\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 168
+      },
+      "description": "Active time on Home by what the chat pane shows: #lounge (the Home card), a kind of room (language, public or private topic, DM, deadchannel), or a rail entry (feeds, news, cyberspace, notifications, discover, showcase, work)."
+    },
+    {
+      "type": "bargauge",
+      "title": "Home Visits by Room",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (place) (increase(late_ssh_place_visits_total{screen=\"dashboard\",place!=\"none\"}[$__range]))",
+          "legendFormat": "{{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 168
+      },
+      "description": "Arrivals on each Home room kind or rail entry over the range. Switching between two rooms of the same kind is no new arrival."
+    },
+    {
       "type": "row",
       "title": "Rendering",
       "collapsed": false,
@@ -1852,7 +2081,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 160
+        "y": 176
       },
       "panels": []
     },
@@ -1892,7 +2121,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 161
+        "y": 177
       }
     },
     {
@@ -1928,7 +2157,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 161
+        "y": 177
       }
     },
     {
@@ -1962,7 +2191,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 169
+        "y": 185
       }
     },
     {
@@ -2001,7 +2230,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 169
+        "y": 185
       }
     },
     {
@@ -2017,7 +2246,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 177
+        "y": 193
       }
     },
     {
@@ -2052,7 +2281,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 178
+        "y": 194
       }
     },
     {
@@ -2091,7 +2320,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 178
+        "y": 194
       }
     },
     {
@@ -2141,7 +2370,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 178
+        "y": 194
       }
     },
     {
@@ -2157,7 +2386,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 186
+        "y": 202
       }
     },
     {
@@ -2214,7 +2443,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 187
+        "y": 203
       }
     },
     {
@@ -2301,7 +2530,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 187
+        "y": 203
       }
     },
     {
@@ -2358,7 +2587,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 187
+        "y": 203
       }
     },
     {
@@ -2374,7 +2603,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 195
+        "y": 211
       }
     },
     {
@@ -2431,7 +2660,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 196
+        "y": 212
       }
     },
     {
@@ -2488,7 +2717,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 196
+        "y": 212
       }
     },
     {
@@ -2545,7 +2774,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 196
+        "y": 212
       }
     },
     {
@@ -2598,7 +2827,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 204
+        "y": 220
       }
     },
     {
@@ -2735,7 +2964,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 212
+        "y": 228
       }
     },
     {
@@ -2821,7 +3050,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 221
+        "y": 237
       }
     },
     {
@@ -2853,7 +3082,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 231
+        "y": 247
       }
     },
     {
@@ -2910,7 +3139,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 243
+        "y": 259
       }
     },
     {
@@ -2973,7 +3202,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 243
+        "y": 259
       }
     },
     {
@@ -3030,7 +3259,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 243
+        "y": 259
       }
     }
   ]

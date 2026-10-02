@@ -43,7 +43,7 @@ The directory page (`app/directory`) owns the shelf strip and the `Space`/`w`/`i
 
 ## Telemetry
 
-`record_jobs_fetch(JobSource, JobsFetchResult)` per source per run and per skipped item (`item_skipped`), `record_jobs_read(JobsReadResult)` per posting (queued / active / dropped / dead / failed), `record_jobs_press(JobsPressResult)` per check that reached a claim (ran / lost / failed), `record_jobs_released(count)`, `record_jobs_post(JobsPostResult)` per shelf write (posted / retracted / at_cap / failed). Failures log through `late_core::error_span!` (`jobs_fetch_failed`, `jobs_fetch_item_failed`, `jobs_read_failed`, `jobs_claim_failed`, `jobs_press_failed`, `jobs_press_on_demand_failed`, `jobs_post_failed`, `jobs_retract_failed`).
+`record_jobs_fetch(JobSource, JobsFetchResult)` per source per run and per skipped item (`item_skipped`), `record_jobs_read(JobsReadResult)` per posting (queued / active / dropped / dead / failed), `record_jobs_press(JobsPressResult)` per check that reached a claim (ran / lost / failed), `record_jobs_released(count)`, `record_jobs_post(JobsPostResult)` per shelf write (posted / retracted / at_cap / failed). Reach is on the session side: time on the shelf and arrivals on it are `late_ssh_attention_seconds_total` and `late_ssh_place_visits_total` with `screen="profiles", place="jobs"` (`tick.rs::attention_place`). Failures log through `late_core::error_span!` (`jobs_fetch_failed`, `jobs_fetch_item_failed`, `jobs_read_failed`, `jobs_claim_failed`, `jobs_press_failed`, `jobs_press_on_demand_failed`, `jobs_post_failed`, `jobs_retract_failed`).
 
 ## Tests
 

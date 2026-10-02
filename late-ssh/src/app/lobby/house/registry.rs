@@ -469,7 +469,7 @@ impl HouseTableRegistry {
     }
 }
 
-fn activity_game_for(table: HouseTable) -> ActivityGame {
+pub(crate) fn activity_game_for(table: HouseTable) -> ActivityGame {
     match table {
         HouseTable::Poker => ActivityGame::Poker,
         HouseTable::Blackjack => ActivityGame::Blackjack,

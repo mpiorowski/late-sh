@@ -333,6 +333,49 @@ pub enum Presence {
     Idle,
 }
 
+/// Where inside a screen a session's attention landed. Most screens are one
+/// place (`Whole`); Home splits by what the chat pane shows, the Arcade and
+/// the House Table by open game, Profiles by shelf, the Artboard by what
+/// fills the board area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// A one-place screen, the Arcade lobby, the House Table with no table
+    /// open, a Home room not loaded yet, or an Artboard not yet joined.
+    Whole,
+    Home(HomeRoom),
+    /// The open Arcade board or House Table game.
+    Game(ActivityGame),
+    PeopleShelf,
+    JobsShelf,
+    ArtboardCanvas,
+    /// The gallery pane (a section's list or one piece) over the board.
+    ArtboardGallery,
+}
+
+/// What fills Home: one kind of chat room or a synthetic rail entry. A kind,
+/// never a room id, so the label set stays closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeRoom {
+    /// #lounge, drawn as the Home card.
+    Lounge,
+    Language,
+    PublicTopic,
+    PrivateTopic,
+    Dm,
+    Deadchannel,
+    /// A room whose kind has no name here yet.
+    OtherRoom,
+    Feeds,
+    News,
+    /// Any cyberspace entry: the feed, its notifications, a pinned room or
+    /// C-Mail conversation.
+    Cyberspace,
+    Notifications,
+    Discover,
+    Showcase,
+    Work,
+}
+
 /// How one attempt of a notify-driven re-read (`pg_listener::read_until_ok`)
 /// ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,12 +459,13 @@ mod inner {
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
         RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands,
     };
+    use super::HomeRoom;
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use crate::app::bonsai::state::BranchAction;
@@ -1200,7 +1244,7 @@ mod inner {
             meter()
                 .f64_counter("late_ssh_attention_seconds_total")
                 .with_description(
-                    "Session seconds spent per screen (and Arcade game), split by recent input",
+                    "Session seconds spent per screen and place inside it, split by recent input",
                 )
                 .with_unit("s")
                 .build()
@@ -1729,22 +1773,66 @@ mod inner {
         }
     }
 
-    pub fn record_attention(
-        screen: Screen,
-        arcade_game: Option<ActivityGame>,
-        presence: Presence,
-        seconds: f64,
-    ) {
-        let game = match arcade_game {
-            Some(game) => game_label(game),
-            None => "none",
-        };
+    fn home_room_label(room: HomeRoom) -> &'static str {
+        match room {
+            HomeRoom::Lounge => "lounge",
+            HomeRoom::Language => "language",
+            HomeRoom::PublicTopic => "topic_public",
+            HomeRoom::PrivateTopic => "topic_private",
+            HomeRoom::Dm => "dm",
+            HomeRoom::Deadchannel => "deadchannel",
+            HomeRoom::OtherRoom => "other_room",
+            HomeRoom::Feeds => "feeds",
+            HomeRoom::News => "news",
+            HomeRoom::Cyberspace => "cyberspace",
+            HomeRoom::Notifications => "notifications",
+            HomeRoom::Discover => "discover",
+            HomeRoom::Showcase => "showcase",
+            HomeRoom::Work => "work",
+        }
+    }
+
+    fn place_label(place: Place) -> &'static str {
+        match place {
+            Place::Whole => "none",
+            Place::Home(room) => home_room_label(room),
+            Place::Game(game) => game_label(game),
+            Place::PeopleShelf => "people",
+            Place::JobsShelf => "jobs",
+            Place::ArtboardCanvas => "canvas",
+            Place::ArtboardGallery => "gallery",
+        }
+    }
+
+    pub fn record_attention(screen: Screen, place: Place, presence: Presence, seconds: f64) {
         attention_seconds_total().add(
             seconds,
             &[
                 KeyValue::new("screen", screen_label(screen)),
-                KeyValue::new("game", game),
+                KeyValue::new("place", place_label(place)),
                 KeyValue::new("presence", presence_label(presence)),
+            ],
+        );
+    }
+
+    fn place_visits_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_place_visits_total")
+                .with_description(
+                    "Arrivals on a screen (and place inside it), sampled on the 1Hz attention edge",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_place_visit(screen: Screen, place: Place) {
+        place_visits_total().add(
+            1,
+            &[
+                KeyValue::new("screen", screen_label(screen)),
+                KeyValue::new("place", place_label(place)),
             ],
         );
     }
@@ -2513,7 +2601,7 @@ mod inner {
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
         NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
         Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
         RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
@@ -2561,13 +2649,8 @@ mod inner {
         _finish: ArcadeFinish,
     ) {
     }
-    pub fn record_attention(
-        _screen: Screen,
-        _arcade_game: Option<ActivityGame>,
-        _presence: Presence,
-        _seconds: f64,
-    ) {
-    }
+    pub fn record_attention(_screen: Screen, _place: Place, _presence: Presence, _seconds: f64) {}
+    pub fn record_place_visit(_screen: Screen, _place: Place) {}
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}

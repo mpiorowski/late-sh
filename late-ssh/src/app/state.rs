@@ -481,6 +481,9 @@ pub struct App {
     /// Where the attention metric last counted up to; the 1Hz edge adds
     /// the seconds since then to the screen in front of the user.
     pub(crate) attention_mark: Instant,
+    /// The screen and place the last 1Hz edge saw; a different one there
+    /// counts as a visit. None until the first edge, so landing counts too.
+    pub(crate) attention_spot: Option<(Screen, crate::metrics::Place)>,
     pub(crate) splash_hint: String,
     pub(crate) show_quit_confirm: bool,
     pub(crate) show_help: bool,
@@ -1457,6 +1460,7 @@ impl App {
             last_input_at: Instant::now(),
             last_one_hz_index: None,
             attention_mark: Instant::now(),
+            attention_spot: None,
             splash_hint,
             show_quit_confirm: false,
             show_help: false,
