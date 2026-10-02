@@ -354,8 +354,8 @@ Chat badges and flags are rentals too, but they ride the chat label query rather
 
 **Personal bartender gifts:** `@bartender buy @user a drink` (or another
 entry on the closed `GIFT_PHRASES` list, read on the round's statement rules
-and refused when a second handle is named, the clause negates it, or the same
-message also orders a round) is an AI-independent purchase for one named
+and refused when a second handle is named, the phrase does not open its
+clause, or the same message also orders a round) is an AI-independent purchase for one named
 human, online or offline.
 `ChipService::buy_drink_for` charges 200 chips (`GIFT_DRINK_PRICE`, twice a
 round's head) as `ChipMove::DrinkGift` and grants one `drink_credits` row in

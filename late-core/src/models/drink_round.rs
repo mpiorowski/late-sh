@@ -14,7 +14,7 @@
 //!
 //! **A personal gift is a phrase too.** [`GIFT_PHRASES`] is the closed list
 //! of ways to put one drink on somebody else's tab, matched on the round's
-//! rules (a statement, not negated, outside backticks), and
+//! rules (a statement that opens its clause, outside backticks), and
 //! [`gift_drink_target`] accepts it only when the message names exactly one
 //! recipient. `chat/slur.rs` reads both lists through
 //! [`spending_phrase_spans`] so a drunk patron's spending instruction arrives
@@ -185,19 +185,20 @@ struct GiftPhrase<'a> {
 /// The one patron a message puts a drink on the buyer's tab for, when it is an
 /// order. The caller removes a composer's reply quote before checking it.
 ///
-/// Looser than the old whole-message form, on the round's rules: a
-/// [`GIFT_PHRASES`] entry anywhere in the message, any case, as long as its
-/// sentence does not run on to a `?`, its clause carries no negation and it is
+/// Looser than the old whole-message form, on the round's rules
+/// ([`is_order`]): a [`GIFT_PHRASES`] entry in any case that opens a clause of
+/// the message, as long as its sentence does not run on to a `?` and it is
 /// not inside backticks. "drink for @mossy, she earned it" is an order; "can
-/// you buy @mossy a drink?" gets an answer, and so does "don't buy @mossy a
-/// drink". On top of that the message must name exactly one patron besides
+/// you buy @mossy a drink?" gets an answer, and so do "don't buy @mossy a
+/// drink" and "I already got a drink for @mossy". On top of that the message
+/// must name exactly one patron besides
 /// `bartender`: a second handle anywhere ("buy @alice a drink for @bob") makes
 /// who pays for whom a guess, and a guess does not move chips.
 pub fn gift_drink_target<'a>(text: &'a str, bartender: &str) -> Option<&'a str> {
     let mut target: Option<&str> = None;
-    for segment in text.split('`').step_by(2) {
+    for (offset, segment) in spoken_segments(text) {
         for phrase in gift_phrases(segment) {
-            if !is_order(segment, phrase.start, phrase.end) {
+            if !is_order(text, offset + phrase.start, offset + phrase.end) {
                 continue;
             }
             match target {
@@ -229,20 +230,20 @@ fn gift_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 /// Every byte range in `text` a drunk patron's typing must leave alone: the
-/// round phrases, the gift phrases, and the negation that refuses one of them
-/// (a scrambled "never" would turn a refusal into a purchase), in the order
-/// they appear. The one list `chat/slur.rs` protects, built from the same
-/// matchers the bartender reads, so the two cannot drift apart.
+/// round phrases and the gift phrases, each widened back over the lead-in it
+/// opens its clause with (a scrambled "please" would stop the phrase being an
+/// order), in the order they appear. The one list `chat/slur.rs` protects,
+/// built from the same matchers the bartender reads, so the two cannot drift
+/// apart.
 pub fn spending_phrase_spans(text: &str) -> Vec<(usize, usize)> {
     let mut spans = round_phrase_spans(text);
     spans.extend(gift_phrase_spans(text));
-    let negations: Vec<(usize, usize)> = spans
-        .iter()
-        .filter_map(|(start, _)| negation_before(text, *start))
-        .collect();
-    spans.extend(negations);
+    for span in &mut spans {
+        if let Some(start) = lead_in_start(text, span.0) {
+            span.0 = start;
+        }
+    }
     spans.sort_unstable();
-    spans.dedup();
     spans
 }
 
@@ -413,81 +414,103 @@ pub fn round_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 /// Whether the patron asked for a round. The bartender's gate.
 ///
 /// Stricter than [`round_phrase_spans`], which is the slur guard's view and
-/// protects the phrase wherever it turns up. An order is a statement, so the
-/// sentence the phrase sits in must not run on to a `?`: "how much is a round
-/// for everyone?" gets an answer, not a bill. Neither does a clause that
-/// negates it ("no round for everyone tonight"). Text inside backticks is never
-/// an order either, since a code span is how a patron quotes the words
+/// protects the phrase wherever it turns up. An order is said as one
+/// ([`is_order`]): "how much is a round for everyone?" gets an answer, not a
+/// bill, and so does "no round for everyone tonight". Text inside backticks is
+/// never an order either, since a code span is how a patron quotes the words
 /// without saying them. Segments alternate outside/inside starting outside,
 /// so an unbalanced backtick makes the rest of the message not an order,
 /// which is the safe way to be wrong about money.
 pub fn contains_round_request(text: &str) -> bool {
-    text.split('`').step_by(2).any(|segment| {
+    spoken_segments(text).any(|(offset, segment)| {
         round_phrase_spans(segment)
             .into_iter()
-            .any(|(start, end)| is_order(segment, start, end))
+            .any(|(start, end)| is_order(text, offset + start, offset + end))
     })
 }
 
-/// Whether the phrase at `[start, end)` is said as an order: its sentence is
-/// not a question and its clause does not negate it. The one rule both lists
-/// are read on.
+/// The stretches of `text` outside backticks, each with its byte offset in
+/// `text`. Phrases are looked for in these; what surrounds a phrase is read
+/// from the whole message at that offset.
+fn spoken_segments(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut next = 0;
+    text.split('`')
+        .map(move |segment| {
+            let offset = next;
+            next += segment.len() + 1;
+            (offset, segment)
+        })
+        .step_by(2)
+}
+
+/// Whether the phrase at `[start, end)` of the whole message is said as an
+/// order: it opens its clause and its sentence is not a question. The one
+/// rule both lists are read on.
 fn is_order(text: &str, start: usize, end: usize) -> bool {
-    !sentence_ends_in_question(text, end) && negation_before(text, start).is_none()
+    !sentence_ends_in_question(text, end) && lead_in_start(text, start).is_some()
 }
 
 /// Whether the sentence a phrase ending at `end` belongs to closes with a
 /// question mark. The first terminator after the phrase decides; a line break
-/// or the end of the text counts as a full stop.
+/// or the end of the text counts as a full stop. Code spans are skipped, so
+/// "round for everyone in `#lounge`?" is still a question and a `?` quoted in
+/// backticks is not one.
 fn sentence_ends_in_question(text: &str, end: usize) -> bool {
-    match text[end..]
-        .chars()
-        .find(|ch| matches!(ch, '.' | '!' | '?' | '\n'))
-    {
-        Some('?') => true,
-        Some(_) | None => false,
+    let mut in_code = false;
+    for ch in text[end..].chars() {
+        match ch {
+            '`' => in_code = !in_code,
+            '?' if !in_code => return true,
+            '.' | '!' | '\n' if !in_code => return false,
+            _ => {}
+        }
     }
+    false
 }
 
-/// Words that turn an order into its opposite, lowercase with the apostrophe
-/// dropped ("don't" reads as "dont").
-const NEGATIONS: &[&str] = &[
-    "no", "not", "never", "cannot", "dont", "wont", "cant", "didnt", "doesnt", "shouldnt",
-    "wouldnt", "couldnt",
+/// Words that may stand between the start of a clause and an order, lowercase.
+/// Anything else there makes the phrase part of a longer sentence ("don't buy
+/// @x a drink", "I already got a drink for @x"), which is talk about a drink
+/// and not an order for one. `hic` is `chat/slur.rs`'s hiccup, which may land
+/// right before a wasted patron's order.
+const LEAD_INS: &[&str] = &[
+    "a", "an", "another", "and", "then", "also", "now", "so", "please", "ok", "okay", "hic",
 ];
 
-/// Where a clause ends. A negation only reaches a phrase in its own clause:
-/// "don't worry, round on me" is an order.
+/// Where a clause ends: "don't worry, round on me" is an order.
 const CLAUSE_BREAKS: &[char] = &[',', '.', '!', '?', ';', ':', '\n'];
 
-/// The byte range of the [`NEGATIONS`] word that refuses a phrase starting at
-/// `start`: the first one between the start of the phrase's clause and the
-/// phrase. Erring toward a refusal is the safe way to be wrong about money;
-/// the bartender answers with the words to say.
-fn negation_before(text: &str, start: usize) -> Option<(usize, usize)> {
-    let clause_start = match text[..start].rfind(CLAUSE_BREAKS) {
-        Some(index) => index + 1,
-        None => 0,
-    };
-    let mut offset = clause_start;
-    for piece in text[clause_start..start].split_inclusive(char::is_whitespace) {
-        let word = piece.trim_end();
-        if is_negation(word) {
-            return Some((offset, offset + word.len()));
+/// Where the lead-in of a phrase starting at `start` begins, when the phrase
+/// opens its clause: every word between the last [`CLAUSE_BREAKS`] character
+/// outside a code span and the phrase is an `@name` (who is being spoken to)
+/// or one of [`LEAD_INS`]. `None` is a phrase further into a sentence, or one
+/// with a code span in the way. Erring toward `None` is the safe way to be
+/// wrong about money; the bartender answers with the words to say.
+fn lead_in_start(text: &str, start: usize) -> Option<usize> {
+    let mut clause_start = 0;
+    let mut in_code = false;
+    for (index, ch) in text[..start].char_indices() {
+        match ch {
+            '`' => in_code = !in_code,
+            ch if !in_code && CLAUSE_BREAKS.contains(&ch) => clause_start = index + ch.len_utf8(),
+            _ => {}
         }
-        offset += piece.len();
     }
-    None
+    let lead_in = &text[clause_start..start];
+    if lead_in.contains('`') || !lead_in.split_whitespace().all(is_lead_in) {
+        return None;
+    }
+    Some(start - lead_in.trim_start().len())
 }
 
-fn is_negation(word: &str) -> bool {
-    let bare: String = word
-        .chars()
-        .filter(|ch| !matches!(ch, '\'' | '\u{2019}'))
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect();
-    let bare = bare.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
-    NEGATIONS.contains(&bare)
+fn is_lead_in(word: &str) -> bool {
+    if word.starts_with('@') {
+        return true;
+    }
+    let bare = word
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+        .to_ascii_lowercase();
+    bare.is_empty() || LEAD_INS.contains(&bare.as_str())
 }
 
 /// Whether `[start, end)` sits on word boundaries rather than inside a longer

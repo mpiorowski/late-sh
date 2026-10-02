@@ -738,8 +738,8 @@ crown's; what the room gets is a #lounge line and a free drink each.
 The same credit also serves a one-person gift: `@bartender buy @user a drink`
 or another entry on the closed `GIFT_PHRASES` list ("get @user a drink",
 "pour @user a drink", "pour @user one", "drink for @user"), read on the
-round's rules (anywhere in the message, any case, not a `?` sentence, not
-negated in its own clause, not in backticks) by
+round's rules (any case, opening a clause anywhere in the message, not a
+`?` sentence, not in backticks; see "The trigger is a literal phrase" below) by
 `drink_round::gift_drink_target`, which also refuses a message naming any
 second handle besides the bartender's, so the recipient is never a guess. A
 message places one order at most: `drink_round::bar_order` reads both lists
@@ -792,11 +792,16 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   confirmation. An order is a statement: `contains_round_request` rejects a
   phrase whose sentence runs on to a `?` and never looks inside backticks, so
   "how much is a round for everyone?" is a question the model answers, not a
-  bill. It also rejects a phrase negated in its own clause (a closed
-  `NEGATIONS` list, a clause ending at `, . ! ? ; :` or a line break): "no
-  round for everyone tonight" spends nothing, "don't worry, round on me"
-  does. (`round_phrase_spans`, the slur guard's view, still protects the
-  words wherever they appear.) It also means a round costs no model call.
+  bill. The `?` scan reads the whole message and skips code spans, so
+  "round for everyone in `#lounge`?" is a question too. An order also has to
+  open its clause (`is_order`, shared with the gift): between the last
+  `, . ! ? ; :` or line break and the phrase there may only be an `@name` and
+  words from the closed `LEAD_INS` list ("a", "and", "another", "please", ...).
+  "it's been a good week, round for the house" and "don't worry, round on me"
+  order; "no round for everyone tonight", "he said round on me" and "I'll buy
+  a round for everyone" spend nothing and the model gives the words to say.
+  (`round_phrase_spans`, the slur guard's view, still protects the words
+  wherever they appear.) It also means a round costs no model call.
 - **A settled round answers ahead of the mention ladder**, in both the event
   loop's pre-filter and the reply, because throttling a paid action would
   swallow a purchase in silence. A refusal is free, so it steps the ladder
@@ -806,9 +811,11 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   (§14 Drunk Text), so a wasted patron's order would otherwise reach the
   matcher as "ronud for eevryone" and the feature would break for exactly the
   people most likely to use it. `slur_segment` passes any token overlapping a
-  `spending_phrase_spans` range (the round phrases, the gift phrases, and a
-  negation that refuses one, so a scrambled "never" cannot become a purchase)
-  through untouched, and `with_hiccup` will not drop a `*hic*` inside one.
+  `spending_phrase_spans` range (the round phrases and the gift phrases,
+  each widened back over the lead-in words it opens its clause with, so a
+  scrambled "please" cannot stop an order being one) through untouched, and
+  `with_hiccup` will not drop a `*hic*` inside one; a hiccup right before the
+  lead-in is itself on `LEAD_INS`.
   The guard and the matchers read the same lists in `drink_round.rs`, so they
   cannot drift apart. The words around the order
   still take their beating.

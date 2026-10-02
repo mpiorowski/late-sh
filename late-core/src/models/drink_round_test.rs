@@ -8,10 +8,10 @@ use crate::{
 };
 
 /// A gift moves chips for somebody else, so it reads like the round: any
-/// phrase on the list, anywhere in the message, as a statement, naming one
-/// person.
+/// phrase on the list, opening a clause anywhere in the message, as a
+/// statement, naming one person.
 #[test]
-fn a_gift_phrase_anywhere_names_its_recipient() {
+fn a_gift_phrase_opening_its_clause_names_its_recipient() {
     for message in [
         "@bartender buy @alice a drink",
         "  @BARTENDER BUY @alice A DRINK  ",
@@ -20,8 +20,9 @@ fn a_gift_phrase_anywhere_names_its_recipient() {
         "@bartender drink for @alice, she earned it",
         "@bartender get @alice a drink please",
         "@bartender pour @alice one!",
-        "@bartender can you buy a drink for @alice",
+        "@bartender ok then, please get @alice a drink",
         "@bartender buy @alice a drink. what do I owe you?",
+        "@bartender buy @alice a drink `what?` now",
     ] {
         assert_eq!(
             gift_drink_target(message, "bartender"),
@@ -42,6 +43,7 @@ fn a_gift_is_refused_when_it_is_not_plainly_one_order() {
     for message in [
         "@bartender can you buy @alice a drink?",
         "@bartender drink for @alice?",
+        "@bartender buy @alice a drink with `chips`?",
         "@bartender what if I say `buy @alice a drink`",
         "@bartender buy @alice! a drink",
         "@bartender buy @alice two drinks",
@@ -58,17 +60,24 @@ fn a_gift_is_refused_when_it_is_not_plainly_one_order() {
     }
 }
 
-/// An order somebody said not to place is not an order: a negation in the
-/// phrase's own clause refuses it, for the gift and the round alike. A
-/// negation in an earlier clause is ordinary talk and leaves the order alone.
+/// An order opens its clause: after the bartender's name and a few lead-in
+/// words at most. The same phrase further into a sentence is somebody talking
+/// about a drink (reporting one, refusing one, thanking for one) and spends
+/// nothing, for the gift and the round alike. A clause break before the phrase
+/// starts the count again.
 #[test]
-fn a_negated_order_spends_nothing() {
+fn a_phrase_inside_a_longer_sentence_spends_nothing() {
     for message in [
         "@bartender don't buy @alice a drink",
         "@bartender DONT buy @alice a drink",
         "@bartender do not get @alice a drink, she is wasted",
         "@bartender I never said pour @alice one",
         "@bartender no drink for @alice tonight",
+        "@bartender I already got a drink for @alice earlier",
+        "@bartender I told him to get @alice a drink",
+        "@bartender thanks, that drink for @alice made her night",
+        "@bartender can you buy a drink for @alice",
+        "@bartender `a` then buy @alice a drink",
     ] {
         assert_eq!(gift_drink_target(message, "bartender"), None, "{message}");
     }
@@ -76,6 +85,7 @@ fn a_negated_order_spends_nothing() {
         "@bartender no round for everyone tonight",
         "@bartender I am not saying round on me",
         "@bartender don\u{2019}t make it a round for the house",
+        "@bartender he said round on me",
     ] {
         assert!(!contains_round_request(message), "{message}");
     }
@@ -89,17 +99,21 @@ fn a_negated_order_spends_nothing() {
         Some("alice")
     );
     assert!(contains_round_request("@bartender why not, round on me"));
+    assert!(contains_round_request(
+        "@bartender and another round for the bar"
+    ));
 }
 
 /// A message places one order at most. A gift and a round together are two,
-/// so the bar rings up neither and the bartender gets the message as talk; an
-/// order the other list refused (a question, a negation) does not count.
+/// so the bar rings up neither and the bartender gets the message as talk; a
+/// phrase the other list refused (a question, one inside a longer sentence)
+/// does not count.
 #[test]
 fn a_message_places_one_order_or_none() {
     let orders: Vec<_> = [
         "@bartender pour @alice one",
         "@bartender round for everyone",
-        "@bartender round for everyone and pour @alice one",
+        "@bartender round for everyone, and pour @alice one",
         "@bartender buy @alice a drink. round on me",
         "@bartender round on me, don't buy @alice a drink",
         "@bartender buy @alice a drink. is there a round for the house?",
@@ -123,15 +137,20 @@ fn a_message_places_one_order_or_none() {
 }
 
 /// The slur guard's view covers the gift phrase from its first word to its
-/// last, in the original text's byte offsets, questions included.
+/// last, in the original text's byte offsets, questions included, and the
+/// lead-in words an order rides in on: a scrambled "and a" would stop the
+/// phrase opening its clause. A phrase that opens nothing is covered alone.
 #[test]
 fn spending_spans_cover_gift_phrases_too() {
-    let text = "ok. Drink For @alice, and a ROUND FOR ALL?";
+    let text = "ok. Drink For @alice, and a ROUND FOR ALL? he said round on me";
     let covered: Vec<&str> = spending_phrase_spans(text)
         .into_iter()
         .map(|(start, end)| &text[start..end])
         .collect();
-    assert_eq!(covered, vec!["Drink For @alice", "ROUND FOR ALL"]);
+    assert_eq!(
+        covered,
+        vec!["Drink For @alice", "and a ROUND FOR ALL", "round on me"]
+    );
 }
 
 /// The phrase is a spending authorization, so what does and does not count as
@@ -171,6 +190,9 @@ fn only_a_deliberate_phrase_orders_a_round() {
 fn asking_about_a_round_is_not_ordering_one() {
     assert!(!contains_round_request(
         "@bartender how much is a round for everyone?"
+    ));
+    assert!(!contains_round_request(
+        "@bartender round for everyone in `#lounge`?"
     ));
     assert!(!contains_round_request(
         "@bartender is there a round for the house tonight?"
