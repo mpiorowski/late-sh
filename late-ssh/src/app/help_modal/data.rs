@@ -545,11 +545,22 @@ fn chips_help_lines() -> Vec<String> {
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
         "".to_string(),
+        "13. Inviting friends".to_string(),
+        "  Settings (Ctrl+O) > Account > Invites shows your own command: ssh invite-<code>@late.sh".to_string(),
+        "  A friend who joins with it is yours. Joined without it? Type the code there in your first week.".to_string(),
+        format!(
+            "  Once your friend becomes an active regular here, you get {} chips and they get a {} chip welcome bonus.",
+            thousands(crate::app::referral::state::INVITER_REWARD_CHIPS),
+            thousands(crate::app::referral::state::INVITEE_BONUS_CHIPS)
+        ),
+        "  The payout is announced in #lounge, naming you both.".to_string(),
+        "  Invite rewards do not count toward Top Chips.".to_string(),
+        "".to_string(),
         "What does not pay chips".to_string(),
         "  Chatting, showcases, profiles, voice, and the Artboard pay nothing. Sharing a link to News does pay, and so does queueing music; see 7 and 8 above.".to_string(),
         "  Monthly leaderboard awards are prestige only; the door feats above are the exception,".to_string(),
         "  and those pay again every time their gate reopens.".to_string(),
-        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, sharing news, and bringing music.".to_string(),
+        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, sharing news, bringing music, and inviting friends who stay.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
         "  The Shop (/shop) for badge, flag, title and name-effect rentals, the Bonsai Decay Shield, the pet companion, the Aquarium, and the Aquarium Shield that minds the tank while you are away.".to_string(),
@@ -564,7 +575,7 @@ fn chips_help_lines() -> Vec<String> {
         "  The crown (/crown take), which burns the whole price.".to_string(),
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
-        "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, the starting chips, and every kind of spending stay off it.".to_string(),
+        "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, invite rewards, the starting chips, and every kind of spending stay off it.".to_string(),
     ]
 }
 

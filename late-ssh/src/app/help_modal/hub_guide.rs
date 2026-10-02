@@ -77,7 +77,7 @@ fn chip_sections() -> Vec<GuideSection> {
             title: "Top Chips",
             body: vec![
                 "Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received.".to_string(),
-                "Poker and Blackjack money, gifts, and the starting chips stay off it."
+                "Poker and Blackjack money, gifts, invite rewards, and the starting chips stay off it."
                     .to_string(),
                 "Spending never lowers your rank: drinks, rounds, gilds, the crown, pot tickets, the Shop."
                     .to_string(),
