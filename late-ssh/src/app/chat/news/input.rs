@@ -68,8 +68,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         // The live strip's `r`, from the feed: reply in #lounge quoting the
         // selected story, and take the user there to write it.
         b'r' | b'R' => {
-            let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id)
-            else {
+            let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id) else {
                 return true;
             };
             if app.chat.begin_reply_to_article(article_id)
