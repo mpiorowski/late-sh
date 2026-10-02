@@ -349,7 +349,7 @@ User commands:
 - `/roll [NdM ...]` rolls dice into the current room; bare `/roll` defaults to `d20`, caps are 100 dice per group and 1000 sides.
 - `/search [query]` opens the Ctrl+/ modal in message-search mode, pre-filled with `?query`. Parsed in `submit_composer`, drained via `take_requested_message_search` in `handle_post_submit_requests` (the modal is App-owned).
 - `/summary` asks the AI for a catch-up of the visible public room, from when you last left the app on this device (24h when the device has no mark), or exactly the window you type (`/summary 6h`, `/summary 90m`, up to 48h); see §14 Summary. `/history` opens the scroll-back modal, at the first message you missed when this session has an AFK line for the room; see §14 History Modal.
-- `/paper` opens The Late Edition, @graybeard's daily paper (`app/paper`, App-owned modal); `/paper on|off`, `/paper outside on|off`, `/paper print|preview|reset` are admin-only and banner for anyone else. Parsed in `submit_composer` into `requested_paper`, drained by `paper::svc::tick`.
+- `/paper` opens The Late Edition, @graybeard's daily paper (`app/paper`, App-owned modal); `/paper print|preview|reset` are admin-only and banner for anyone else. Parsed in `submit_composer` into `requested_paper`, drained by `paper::svc::tick`.
 - `/voice` joins the enabled voice channel for the active room; `/mute` toggles paired-CLI mic mute.
 - `/ultimate` opens owned Ultimate Spells.
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
@@ -377,7 +377,7 @@ User commands:
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.
 
 Admin commands:
-- `/haunt [on|off|live on|live off|glitch|name|replay|invite|reset]` controls the
+- `/haunt [arm|glitch|name|replay|invite|reset|welcome]` controls the
   first-contact haunting. Parsed in `submit_composer` **only when
   `is_admin`** (enum + parser live in `deadchannel/haunt/state.rs`): for
   everyone else, moderators included even though the ladder now runs
@@ -449,7 +449,6 @@ retains its usual colors, and help colors follow the active theme at render time
   user names omit `@`, and column widths use Ratatui's display measurements.
 - `artboard safety [admin] <nsfw|sfw|none> <piece-id-prefix> [reason...]` (staff; moderator tier by default even for admins, explicit `admin` selects admin tier; one mark per account and piece, replacing previous mark/tier; `none` clears only the selected tier; own art allowed)
 - `artboard safety none <piece-id-prefix> by <@user|user-id> [reason...]` (admin only; removes that actor's stored mark at either tier, another admin's included)
-- `artboard gallery <on|off>` (admin; the `artboard_gallery_enabled` switch)
 - `room-voice <#room> <on|off>`
 - `kick <server|voice|stream|#room> @name [reason...]`
 - `ban <server|#room|art|audio|stream> @name [duration] [reason...]`
@@ -737,8 +736,13 @@ its own domain; only the command and the glyph are chat's.
 One patron buys everyone at the bar a drink. The chips are burned like the
 crown's; what the room gets is a #lounge line and a free drink each.
 The same credit also serves a one-person gift: `@bartender buy @user a drink`
-is an exact, whole-message instruction (`drink_round::gift_drink_target`,
-protected from drunk-text slurring) resolved against the account username.
+or another entry on the closed `GIFT_PHRASES` list ("get @user a drink",
+"pour @user a drink", "pour @user one", "drink for @user"), read on the
+round's rules (anywhere in the message, any case, not a `?` sentence, not in
+backticks) by `drink_round::gift_drink_target`, which also refuses a message
+naming any second handle besides the bartender's, so the recipient is never
+a guess. The handle is resolved against the account username, trailing dots
+dropped as sentence punctuation.
 It costs 200 chips (`GIFT_DRINK_PRICE`, twice a round's head, since the one
 person it is aimed at will drink it), pours the recipient the same 400 points
 a round does, works for offline humans, shares the 24h expiry and
@@ -795,9 +799,10 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   (§14 Drunk Text), so a wasted patron's order would otherwise reach the
   matcher as "ronud for eevryone" and the feature would break for exactly the
   people most likely to use it. `slur_segment` passes any token overlapping a
-  `round_phrase_spans` range through untouched, and `with_hiccup` will not
-  drop a `*hic*` inside one. Both the guard and the matcher read the one list
-  in `drink_round.rs`, so they cannot drift apart. The words around the order
+  `spending_phrase_spans` range (the round phrases and the gift phrases)
+  through untouched, and `with_hiccup` will not drop a `*hic*` inside one.
+  The guard and the matchers read the same lists in `drink_round.rs`, so they
+  cannot drift apart. The words around the order
   still take their beating.
 - **Price** 100 (`ROUND_PRICE_PER_PATRON`) for every credit that actually
   landed, never for the heads counted: the grant's own `RETURNING` is what

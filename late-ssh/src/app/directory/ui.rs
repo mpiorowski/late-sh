@@ -569,7 +569,6 @@ fn draw_person_detail(
     if entry.user_id == view.current_user_id
         && let Some(item) = entry.work
         && wants_matches(item.profile.status)
-        && view.jobs.enabled()
         && view.jobs.loaded
     {
         let found = matches(&view.jobs.items, own_tags, FOR_YOU_LIMIT);

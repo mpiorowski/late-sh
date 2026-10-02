@@ -94,13 +94,12 @@ fn fixture() -> Fixture {
 }
 
 /// A shelf state over a pool that is never opened: the page draws the
-/// People shelf here and only asks the jobs state whether it is on.
+/// People shelf here and never reads the jobs shelf.
 fn jobs_state_for_tests() -> crate::app::jobs::state::JobsState {
     let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy pool");
     crate::app::jobs::state::JobsState::new(crate::app::jobs::svc::JobsService::new(
         db,
         crate::app::ai::svc::AiService::new(false, None),
-        crate::test_helpers::test_app_flags_rx(),
     ))
 }
 

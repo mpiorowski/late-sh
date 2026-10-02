@@ -12,9 +12,12 @@
 //! different lists, the feature breaks for exactly the people most likely to
 //! use it, so there is one list.
 //!
-//! **A personal gift is exact too.** [`gift_drink_target`] recognizes one
-//! named recipient and one credit; `chat/slur.rs` also reads it so a drunk
-//! patron's spending instruction arrives intact.
+//! **A personal gift is a phrase too.** [`GIFT_PHRASES`] is the closed list
+//! of ways to put one drink on somebody else's tab, matched on the round's
+//! rules (a statement, outside backticks), and [`gift_drink_target`] accepts
+//! it only when the message names exactly one recipient. `chat/slur.rs` reads
+//! both lists through [`spending_phrase_spans`] so a drunk patron's spending
+//! instruction arrives intact.
 //!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
 //! actually granted, burned whole; a personal gift is one credit at
@@ -151,31 +154,199 @@ pub const ROUND_PHRASES: &[&str] = &[
     "round on me",
 ];
 
-/// Exact spending instruction for a single-person tab. The caller removes a
-/// composer's reply quote before checking it. Questions, code and extra words
-/// do not authorize a debit.
-pub fn gift_drink_target(text: &str) -> Option<&str> {
-    if text.contains('\n') || text.contains('\r') {
+/// Everything a patron can say to put one drink on somebody else's tab, as
+/// the words before and after the `@user` slot, lowercase.
+///
+/// Same bar as [`ROUND_PHRASES`]: a phrase here is a spending authorization,
+/// so it has to read as an order and nothing else. "get @x one" is not on it
+/// because "I'll get @x one of those" is ordinary talk.
+pub const GIFT_PHRASES: &[(&[&str], &[&str])] = &[
+    (&["buy"], &["a", "drink"]),
+    (&["get"], &["a", "drink"]),
+    (&["pour"], &["a", "drink"]),
+    (&["pour"], &["one"]),
+    (&["drink", "for"], &[]),
+];
+
+/// Punctuation a phrase's last word may carry. Anything else glued to it
+/// ("drink!!1", "drink:)") is not the phrase.
+const GIFT_TRAILING_PUNCTUATION: &[char] = &['.', ',', '!', '?', ';', ':'];
+
+/// One [`GIFT_PHRASES`] hit: the byte range of the phrase in the text it was
+/// found in, and the recipient's handle without the `@`.
+struct GiftPhrase<'a> {
+    start: usize,
+    end: usize,
+    handle: &'a str,
+}
+
+/// The one patron a message puts a drink on the buyer's tab for, when it is an
+/// order. The caller removes a composer's reply quote before checking it.
+///
+/// Looser than the old whole-message form, on the round's rules: a
+/// [`GIFT_PHRASES`] entry anywhere in the message, any case, as long as its
+/// sentence does not run on to a `?` and it is not inside backticks. "drink
+/// for @mossy, she earned it" is an order; "can you buy @mossy a drink?" gets
+/// an answer. On top of that the message must name exactly one patron besides
+/// `bartender`: a second handle anywhere ("buy @alice a drink for @bob") makes
+/// who pays for whom a guess, and a guess does not move chips.
+pub fn gift_drink_target<'a>(text: &'a str, bartender: &str) -> Option<&'a str> {
+    let mut target: Option<&str> = None;
+    for segment in text.split('`').step_by(2) {
+        for phrase in gift_phrases(segment) {
+            if sentence_ends_in_question(segment, phrase.end) {
+                continue;
+            }
+            match target {
+                None => target = Some(phrase.handle),
+                Some(known) if known.eq_ignore_ascii_case(phrase.handle) => {}
+                Some(_) => return None,
+            }
+        }
+    }
+    let target = target?;
+    let names_only_target = mentioned_handles(text)
+        .into_iter()
+        .filter(|handle| !handle.eq_ignore_ascii_case(bartender))
+        .all(|handle| handle.eq_ignore_ascii_case(target));
+    match names_only_target {
+        true => Some(target),
+        false => None,
+    }
+}
+
+/// Byte ranges in `text` covered by a [`GIFT_PHRASES`] entry, questions
+/// included, so `chat/slur.rs` keeps a drunk question from scrambling into
+/// something else.
+fn gift_phrase_spans(text: &str) -> Vec<(usize, usize)> {
+    gift_phrases(text)
+        .into_iter()
+        .map(|phrase| (phrase.start, phrase.end))
+        .collect()
+}
+
+/// Every byte range in `text` a drunk patron's typing must leave alone: the
+/// round phrases and the gift phrases, in the order they appear. The one list
+/// `chat/slur.rs` protects, built from the same matchers the bartender reads,
+/// so the two cannot drift apart.
+pub fn spending_phrase_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = round_phrase_spans(text);
+    spans.extend(gift_phrase_spans(text));
+    spans.sort_unstable();
+    spans
+}
+
+/// Every [`GIFT_PHRASES`] hit in `text`, word by word on whitespace. Only the
+/// phrase's last word may carry trailing punctuation, so "buy @alice! a
+/// drink" is not the phrase.
+fn gift_phrases(text: &str) -> Vec<GiftPhrase<'_>> {
+    let mut words: Vec<(usize, &str)> = Vec::new();
+    let mut offset = 0;
+    for piece in text.split_inclusive(char::is_whitespace) {
+        let word = piece.trim_end();
+        if !word.is_empty() {
+            words.push((offset, word));
+        }
+        offset += piece.len();
+    }
+    let mut found = Vec::new();
+    for index in 0..words.len() {
+        for (before, after) in GIFT_PHRASES {
+            if let Some(phrase) = gift_phrase_at(&words[index..], before, after) {
+                found.push(phrase);
+            }
+        }
+    }
+    found
+}
+
+/// The [`GIFT_PHRASES`] entry `before @user after` starting at `words[0]`.
+fn gift_phrase_at<'a>(
+    words: &[(usize, &'a str)],
+    before: &[&str],
+    after: &[&str],
+) -> Option<GiftPhrase<'a>> {
+    let slot = before.len();
+    let last = slot + after.len();
+    if words.len() <= last {
         return None;
     }
-    let mut words = text.split_whitespace();
-    if !words.next()?.eq_ignore_ascii_case("@bartender")
-        || !words.next()?.eq_ignore_ascii_case("buy")
-    {
-        return None;
+    for (offset, expected) in before.iter().enumerate() {
+        if !words[offset].1.eq_ignore_ascii_case(expected) {
+            return None;
+        }
     }
-    let target = words.next()?.strip_prefix('@')?;
-    if target.is_empty()
-        || !target
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        || !words.next()?.eq_ignore_ascii_case("a")
-        || !words.next()?.eq_ignore_ascii_case("drink")
-        || words.next().is_some()
-    {
-        return None;
+    let (slot_start, slot_word) = words[slot];
+    let handle = handle_at(slot_word, 0)?;
+    let handle_end = slot_start + 1 + handle.len();
+    let end = match after.split_last() {
+        None => {
+            let rest = &slot_word[1 + handle.len()..];
+            if !rest
+                .chars()
+                .all(|ch| GIFT_TRAILING_PUNCTUATION.contains(&ch))
+            {
+                return None;
+            }
+            handle_end
+        }
+        Some((last_expected, middle)) => {
+            if slot_word.len() != 1 + handle.len() {
+                return None;
+            }
+            for (offset, expected) in middle.iter().enumerate() {
+                if !words[slot + 1 + offset].1.eq_ignore_ascii_case(expected) {
+                    return None;
+                }
+            }
+            let (last_start, last_word) = words[last];
+            let core = last_word.trim_end_matches(GIFT_TRAILING_PUNCTUATION);
+            if !core.eq_ignore_ascii_case(last_expected) {
+                return None;
+            }
+            last_start + core.len()
+        }
+    };
+    Some(GiftPhrase {
+        start: words[0].0,
+        end,
+        handle,
+    })
+}
+
+/// Every `@handle` in `text`, code spans included: a stray name anywhere is
+/// enough to make a gift's recipient ambiguous.
+fn mentioned_handles(text: &str) -> Vec<&str> {
+    text.char_indices()
+        .filter(|(index, ch)| {
+            *ch == '@'
+                && text[..*index]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|before| !is_handle_char(before))
+        })
+        .filter_map(|(index, _)| handle_at(text, index))
+        .collect()
+}
+
+/// The handle after the `@` at byte `at`, without trailing dots: a sentence
+/// that ends on a name ("a drink for @mossy.") ends with a full stop, not a
+/// longer username.
+fn handle_at(text: &str, at: usize) -> Option<&str> {
+    let rest = text[at..].strip_prefix('@')?;
+    let len = rest
+        .find(|ch: char| !is_handle_char(ch))
+        .unwrap_or(rest.len());
+    let handle = rest[..len].trim_end_matches('.');
+    match handle.is_empty() {
+        true => None,
+        false => Some(handle),
     }
-    Some(target)
+}
+
+/// What a username may be made of (`User::next_available_username`).
+fn is_handle_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')
 }
 
 /// Byte ranges in `text` covered by a [`ROUND_PHRASES`] entry, in the order

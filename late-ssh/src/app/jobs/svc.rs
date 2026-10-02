@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
 use late_core::db::Db;
-use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::job_posting::{
     FetchedPosting, JobPosting, JobPressRun, JobRead, JobSource, JobStatus, NewPosting,
     PressCounts, RemoteKind, Retract, Settle, Upsert,
@@ -31,7 +30,7 @@ use late_core::models::job_posting::{
 use late_core::models::moderation_audit_log::ModerationAuditLog;
 use late_core::telemetry::TracedExt;
 use late_core::vocab;
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{broadcast, watch};
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -39,7 +38,7 @@ use super::sources::{
     self, HN_SUBMISSIONS_TO_CHECK, HN_WHOISHIRING_URL, JOBICY_API_URL, JOBICY_COUNT, JOBICY_TAGS,
     WWR_RSS_URL,
 };
-use super::state::{JobsCommand, JobsState, PendingFlagWrite};
+use super::state::JobsCommand;
 use crate::app::ai::svc::{AI_MODEL, AiService};
 use crate::app::common::primitives::{Banner, Screen};
 use crate::app::directory::state::Shelf;
@@ -171,8 +170,6 @@ pub enum PostOutcome {
     },
     /// `JOBS_POSTS_PER_USER` live already.
     AtCap,
-    /// The kill switch is off.
-    Unavailable,
     Failed,
 }
 
@@ -193,7 +190,7 @@ pub enum PressOutcome {
         day: NaiveDate,
         count: usize,
     },
-    /// The kill switch is off, or AI is unconfigured here.
+    /// AI is unconfigured here.
     Unavailable,
     Failed,
 }
@@ -262,7 +259,6 @@ impl PressTally {
 pub struct JobsService {
     db: Db,
     ai: AiService,
-    flags_rx: watch::Receiver<Option<AppFlags>>,
     http: reqwest::Client,
     snapshot_tx: watch::Sender<JobsSnapshot>,
     snapshot_rx: watch::Receiver<JobsSnapshot>,
@@ -312,7 +308,7 @@ pub(crate) enum Link {
 }
 
 impl JobsService {
-    pub fn new(db: Db, ai: AiService, flags_rx: watch::Receiver<Option<AppFlags>>) -> Self {
+    pub fn new(db: Db, ai: AiService) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(JobsSnapshot::default());
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAP);
         let http = reqwest::Client::builder()
@@ -323,7 +319,6 @@ impl JobsService {
         Self {
             db,
             ai,
-            flags_rx,
             http,
             snapshot_tx,
             snapshot_rx,
@@ -337,15 +332,6 @@ impl JobsService {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<JobsEvent> {
         self.event_tx.subscribe()
-    }
-
-    /// The kill switch as last published. `None` (not loaded yet) reads
-    /// as off, the same way `app/flags` documents it.
-    pub fn enabled(&self) -> bool {
-        self.flags_rx
-            .borrow()
-            .as_ref()
-            .is_some_and(|flags| flags.jobs_enabled)
     }
 
     /// The press: every replica runs it, the row claim decides who
@@ -384,7 +370,7 @@ impl JobsService {
     /// whether this replica ran the press. `finished_for` memoizes a day
     /// this replica saw finished, so the steady state costs no query.
     pub async fn check_press(&self, finished_for: &mut Option<NaiveDate>) -> bool {
-        if !self.enabled() || !self.ai.is_enabled() {
+        if !self.ai.is_enabled() {
             return false;
         }
         let day = press_due_day(Utc::now());
@@ -693,11 +679,8 @@ impl JobsService {
 
     /// A row that just went active joins this replica's snapshot at once,
     /// in the order `list_active` reads; the other replicas pick it up at
-    /// their next refresh. The kill switch keeps the shelf empty.
+    /// their next refresh.
     fn shelve(&self, row: JobPosting) {
-        if !self.enabled() {
-            return;
-        }
         self.snapshot_tx.send_modify(|snapshot| {
             snapshot.items.retain(|item| item.id != row.id);
             snapshot.items.push(row);
@@ -804,16 +787,10 @@ impl JobsService {
         Ok((old + unlisted) as usize)
     }
 
-    /// Re-read the active rows into this replica's snapshot. The kill
-    /// switch empties it, so an off shelf is off on every replica within
-    /// a refresh.
+    /// Re-read the active rows into this replica's snapshot.
     pub async fn refresh_snapshot(&self) -> anyhow::Result<usize> {
-        let items = if self.enabled() {
-            let client = self.db.get().await?;
-            JobPosting::list_active(&client, JOBS_SHELF_LIMIT).await?
-        } else {
-            Vec::new()
-        };
+        let client = self.db.get().await?;
+        let items = JobPosting::list_active(&client, JOBS_SHELF_LIMIT).await?;
         let count = items.len();
         let _ = self.snapshot_tx.send(JobsSnapshot {
             items,
@@ -871,9 +848,6 @@ impl JobsService {
     /// The one place a shelf write becomes a row, a metric, and a log
     /// line: the cap, the insert, this replica's snapshot.
     async fn post(&self, posting: &NewPosting) -> PostOutcome {
-        if !self.enabled() {
-            return PostOutcome::Unavailable;
-        }
         let day = Utc::now().date_naive();
         let written = async {
             let client = self.db.get().await?;
@@ -976,9 +950,6 @@ impl JobsService {
     /// reads only, so the slice is never released twice. `/jobs release`
     /// releases a slice on top of whatever the day did, on purpose.
     async fn press_on_demand(&self, job: PressJob) -> PressOutcome {
-        if !self.enabled() {
-            return PressOutcome::Unavailable;
-        }
         let day = press_due_day(Utc::now());
         let outcome = match job {
             // Only the read needs the model; a release is a row update.
@@ -1150,7 +1121,6 @@ pub(crate) fn tick(app: &mut App) -> bool {
     }
     changed |= drain_events(app);
     changed |= tick_commands(app);
-    changed |= tick_flag_writes(app);
     changed
 }
 
@@ -1175,9 +1145,7 @@ fn drain_events(app: &mut App) -> bool {
                         "Released {count} more HN posting{} for {day}",
                         if count == 1 { "" } else { "s" }
                     )),
-                    PressOutcome::Unavailable => {
-                        Banner::error("Job press stopped, or AI is not configured here")
-                    }
+                    PressOutcome::Unavailable => Banner::error("AI is not configured here"),
                     PressOutcome::Failed => Banner::error("The job press jammed; see the logs"),
                 });
             }
@@ -1197,9 +1165,6 @@ fn drain_events(app: &mut App) -> bool {
                         app.jobs.post.settle(Some(
                             "three live postings per person; take one down first (d on the shelf)",
                         ));
-                    }
-                    PostOutcome::Unavailable => {
-                        app.jobs.post.settle(Some("the job press is stopped"));
                     }
                     PostOutcome::Failed => {
                         app.jobs
@@ -1255,80 +1220,6 @@ fn tick_commands(app: &mut App) -> bool {
                 .service
                 .request_press(app.user_id, PressJob::Release);
         }
-        JobsCommand::On => set_flag(app, AppFlag::JobsEnabled, true, "Job press running"),
-        JobsCommand::Off => set_flag(
-            app,
-            AppFlag::JobsEnabled,
-            false,
-            "Job press stopped; the shelf empties on the next refresh",
-        ),
     }
     true
-}
-
-fn set_flag(app: &mut App, flag: AppFlag, enabled: bool, done: &'static str) {
-    match &app.app_flags {
-        Some(service) => {
-            let rx = service.set_task(flag, enabled);
-            app.jobs.pending_flag_writes.push(PendingFlagWrite {
-                flag,
-                enabled,
-                done,
-                rx,
-            });
-        }
-        None => {
-            app.banner = Some(Banner::error("No flag service on this session"));
-        }
-    }
-}
-
-/// Answer the admin once the row write settles, same shape as the
-/// paper's flag writes.
-fn tick_flag_writes(app: &mut App) -> bool {
-    let mut answered = Vec::new();
-    app.jobs
-        .pending_flag_writes
-        .retain_mut(|pending| match pending.rx.try_recv() {
-            Ok(outcome) => {
-                answered.push((pending.flag, pending.enabled, pending.done, outcome));
-                false
-            }
-            Err(oneshot::error::TryRecvError::Empty) => true,
-            Err(oneshot::error::TryRecvError::Closed) => {
-                answered.push((
-                    pending.flag,
-                    pending.enabled,
-                    pending.done,
-                    Err(anyhow::anyhow!("flag write task dropped its sender")),
-                ));
-                false
-            }
-        });
-    let mut changed = false;
-    for (flag, enabled, done, outcome) in answered {
-        match outcome {
-            Ok(()) => {
-                tracing::info!(user_id = %app.user_id, key = flag.key(), enabled, "jobs flag set");
-                app.banner = Some(Banner::success(done));
-            }
-            Err(error) => {
-                tracing::error!(user_id = %app.user_id, key = flag.key(), enabled, error = ?error, "failed to set jobs flag");
-                app.banner = Some(Banner::error(&format!(
-                    "Flag {} not written: {error}",
-                    flag.key()
-                )));
-            }
-        }
-        changed = true;
-    }
-    changed
-}
-
-impl JobsState {
-    /// Whether the shelf is on at all: the kill switch as this replica
-    /// last heard it.
-    pub(crate) fn enabled(&self) -> bool {
-        self.service.enabled()
-    }
 }

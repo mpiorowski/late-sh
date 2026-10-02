@@ -1,13 +1,21 @@
 use super::*;
 
-use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request};
+use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request, gift_drink_target};
 use late_core::models::drinks::DRUNK_MAX_LEVEL;
 
+/// The gift phrase can sit inside a sentence now, so the guard is a span, not
+/// the whole line: the words around it still slur, the order never does.
 #[test]
 fn personal_gift_survives_drunk_typing() {
-    let order = "@bartender buy @alice a drink";
+    let order = "@bartender pour @alice a drink";
+    let body = format!("{CORPUS} {order}");
     for seed in 1..=100 {
-        assert_eq!(slur(order, 4, seed), order);
+        let slurred = slur(&body, DRUNK_MAX_LEVEL, seed);
+        assert_eq!(
+            gift_drink_target(&slurred, "bartender"),
+            Some("alice"),
+            "{slurred}"
+        );
     }
 }
 

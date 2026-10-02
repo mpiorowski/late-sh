@@ -1067,7 +1067,7 @@ pub struct ChatState {
     requested_crown: Option<CrownCommand>,
     requested_pot: Option<PotCommand>,
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
-    /// (which owns the whisper and the kill switch).
+    /// (which owns the whisper).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
@@ -3896,7 +3896,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /paper, or /paper on|off|outside on|outside off|print|preview|reset",
+                    "Usage: /paper, or /paper print|preview|reset",
                 ));
             };
             if command.admin_only() && !self.is_admin {
@@ -3912,7 +3912,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /jobs, /jobs post, or /jobs pull|release|on|off",
+                    "Usage: /jobs, /jobs post, or /jobs pull|release",
                 ));
             };
             if command.admin_only() && !self.is_admin {
@@ -3931,7 +3931,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /haunt, or /haunt on|off|live on|live off|glitch|name|replay|invite|reset|welcome",
+                    "Usage: /haunt, or /haunt arm|glitch|name|replay|invite|reset|welcome",
                 ));
             };
             self.requested_haunt = Some(command);

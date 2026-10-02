@@ -379,12 +379,6 @@ pub struct SessionConfig {
     pub(crate) first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks,
     /// The first-contact eligibility gate as evaluated at bootstrap.
     pub(crate) first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate,
-    /// Process-wide switches (`app/flags`), read at arming and on every
-    /// haunting tick so flipping the kill switch off drops live theater.
-    pub app_flags_rx: tokio::sync::watch::Receiver<Option<late_core::models::app_flag::AppFlags>>,
-    /// The flag service, for `/haunt on|off|live`. `None` on headless/test
-    /// paths, which turns those commands into a banner.
-    pub app_flags: Option<crate::app::flags::svc::AppFlagService>,
     /// Every runner's look (`app/deadchannel/runner`), copied on the ~1s
     /// tick edge into `App::runner_looks` for the #deadchannel portraits.
     pub(crate) runner_looks_rx:
@@ -680,11 +674,9 @@ pub struct App {
     pub(crate) artboard_banned: bool,
     pub(crate) artboard_ban_expires_at: Option<DateTime<Utc>>,
     /// First contact, the haunting (`app/deadchannel/haunt`): every
-    /// stage's machine and the flags that gate them, in one slot.
+    /// stage's machine and what armed them, in one slot.
     /// `haunt::svc` owns all reads and writes.
     pub(crate) haunt: crate::app::deadchannel::haunt::state::HauntState,
-    /// Process-wide switches, for the `/haunt` flag commands.
-    pub(crate) app_flags: Option<crate::app::flags::svc::AppFlagService>,
 
     /// Chat
     pub(crate) chat: chat::state::ChatState,
@@ -1440,7 +1432,6 @@ impl App {
         };
         let haunt = crate::app::deadchannel::haunt::svc::arm(
             config.permissions.can_moderate(),
-            config.app_flags_rx.clone(),
             config.user_id,
             &config.username,
             config.first_contact,
@@ -1613,7 +1604,6 @@ impl App {
             artboard_banned: config.artboard_banned,
             artboard_ban_expires_at: config.artboard_ban_expires_at,
             haunt,
-            app_flags: config.app_flags.clone(),
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,

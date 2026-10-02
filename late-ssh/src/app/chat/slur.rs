@@ -12,12 +12,12 @@
 //! rather than as damage.
 //!
 //! Spending instructions are never touched at any level: the phrases in
-//! [`round_phrase_spans`] that buy the house a round, and the exact
-//! [`gift_drink_target`] form for one named patron. The bartender matches
-//! these literally, so slurring them would silently lose an order. The
-//! matchers live in `late_core::models::drink_round` and are shared here.
+//! [`spending_phrase_spans`] that buy the house a round or put one drink on
+//! a named patron's tab. The bartender matches these literally, so slurring
+//! them would silently lose an order. The matchers live in
+//! `late_core::models::drink_round` and are shared here.
 
-use late_core::models::drink_round::{gift_drink_target, round_phrase_spans};
+use late_core::models::drink_round::spending_phrase_spans;
 
 /// Shortest word that can take a typo. Below this there is no interior left
 /// once the first and last characters are off limits.
@@ -125,10 +125,6 @@ pub(crate) fn slur(body: &str, level: u8, seed: u64) -> String {
 /// inside a span. An unbalanced backtick therefore protects the rest of the
 /// line, which is the safe way to be wrong.
 fn slur_line(line: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
-    // A targeted gift is a whole-line spending instruction. Leave it intact.
-    if gift_drink_target(line).is_some() {
-        return line.to_string();
-    }
     let mut out = String::with_capacity(line.len());
     for (index, segment) in line.split('`').enumerate() {
         if index > 0 {
@@ -143,7 +139,7 @@ fn slur_line(line: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
 }
 
 fn slur_segment(segment: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
-    let protected = round_phrase_spans(segment);
+    let protected = spending_phrase_spans(segment);
     let mut out = String::with_capacity(segment.len());
     let mut offset = 0;
     // Inclusive split keeps each token's trailing whitespace attached, so
@@ -272,14 +268,11 @@ fn slurred(chars: &[char], rng: &mut SlurRng) -> Option<String> {
 
 /// Drop a single `*hic*` between two words. It only ever widens a gap, so no
 /// token is split, but the gap itself still has to be fair game: gaps inside a
-/// code span, inside a round phrase (a hiccup mid-order would break the match
+/// code span, inside a spending phrase (a hiccup mid-order would break the match
 /// the same way a scramble would), or in the quoted line before `from` are off
 /// limits. With nothing eligible the hiccup goes on the end.
 fn with_hiccup(text: &str, from: usize, rng: &mut SlurRng) -> String {
-    if gift_drink_target(text[from..].trim()).is_some() {
-        return text.to_string();
-    }
-    let protected = round_phrase_spans(text);
+    let protected = spending_phrase_spans(text);
     let mut gaps = Vec::new();
     let mut in_code = false;
     for (index, c) in text.char_indices() {

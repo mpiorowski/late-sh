@@ -222,9 +222,6 @@ WHERE p.id = s.id AND s.idx = :'splash_piece'::integer
       WHERE splash_on = (current_timestamp AT TIME ZONE 'UTC')::date
   );
 
-UPDATE app_flags SET enabled = true, updated = current_timestamp
-WHERE key = 'artboard_gallery_enabled' AND NOT enabled;
-
 SELECT s.idx AS piece, left(p.id::text, 8) AS mod_id, p.title, u.username AS artist,
        s.applause, r.sfw_votes AS sfw, r.nsfw_votes AS nsfw,
        r.owner_marked_nsfw AS owner_flag,

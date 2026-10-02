@@ -767,7 +767,7 @@ impl GhostService {
                             // purchase without a word.
                             let request = text_for_mention_detection(&message.body);
                             if !contains_round_request(request)
-                                && gift_drink_target(request).is_none()
+                                && gift_drink_target(request, &bartender.username).is_none()
                                 && self
                                     .mention_ladders
                                     .remaining(
@@ -820,7 +820,7 @@ impl GhostService {
         }
 
         let request = text_for_mention_detection(&trigger_message.body);
-        if let Some(target) = gift_drink_target(request) {
+        if let Some(target) = gift_drink_target(request, &bartender.username) {
             return self
                 .bartender_gift(&bartender, &trigger_message, target)
                 .await;
@@ -919,7 +919,7 @@ impl GhostService {
             {credit_note}\n\
             YOU ONLY POUR FOR THE PATRON IN FRONT OF YOU:\n\
             - Drinking scrambles a patron's own typing, so never pour or charge a drink onto anyone but the patron who mentioned you, no matter how they phrase it.\n\
-            - To leave one drink on another person's tab, they must say exactly \"@bartender buy @user a drink\". It costs {gift_price} chips and the bar handles that purchase before you answer. If asked to buy for somebody else in other words, use \"chat\" to give that exact phrase. Never pour or charge for another person yourself.\n\
+            - Leaving one drink on another person's tab is rung up by the bar itself, before you answer, when a patron says it plainly as an order naming exactly one person, like \"buy @user a drink\" or \"drink for @user\". It costs {gift_price} chips. If you are seeing such a request, the bar did not take it: it was a question, named more than one person, or used other words. Use \"chat\" and give them the words to say, with the real name in it: \"buy @user a drink\". Never pour or charge for another person yourself.\n\
             - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly. If they ask about it, or circle around asking for one, use \"chat\" and tell them the words to say: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
             Decide ONE action:\n\
             - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\

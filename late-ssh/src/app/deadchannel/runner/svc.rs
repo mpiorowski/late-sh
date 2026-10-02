@@ -1,7 +1,6 @@
 //! The runner directory: every standing runner's look and level, served
 //! from Postgres to every replica (root CONTEXT.md, multi-replica rule).
-//! Same shape as `app/flags/svc.rs`: the process listener
-//! (`crate::pg_listener`) routes `deadchannel_runner_changed` here and the
+//! The process listener (`crate::pg_listener`) routes `deadchannel_runner_changed` here and the
 //! whole directory is re-read on any change (look, standing, or level, per
 //! the migration 202 trigger); sessions hold a `watch` receiver, copy it on
 //! the tick edge, and paint portraits and level badges from the owned copy.

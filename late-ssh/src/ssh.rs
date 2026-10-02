@@ -1087,8 +1087,6 @@ impl russh::server::Handler for ClientHandler {
                 &user.settings,
             ),
             first_contact_gate,
-            app_flags_rx: self.state.app_flags.subscribe(),
-            app_flags: Some(self.state.app_flags.clone()),
             runner_looks_rx: self.state.runner_looks.subscribe(),
             presence: self.state.presence.clone(),
             zen_layout: late_core::models::user::extract_zen_layout(&user.settings),

@@ -303,16 +303,15 @@ place at all: scarcity of place is the fiction's spine, same as the
 
 Status (2026-09-02): all four stages and the eligibility gate exist in
 this directory, `late-ssh/src/app/deadchannel/` (see `CONTEXT.md` beside this file), built
-for several replicas (switches as `app_flags` rows, every cap and stamp
-a conditional claim on the user row). Stage 1 is universal behind the
-`haunt_live` fuse (`/haunt live on`), unlit, so nothing fires for
-non-staff users yet (staff: admins and moderators, the mods meeting it
-cold as the first playtest); stages 2-4 sit behind connected time, touched
+for several replicas (every cap and stamp a conditional claim on the
+user row). Stage 1 is staff only, a rule in code rather than a switch,
+so nothing fires for non-staff users yet (staff: admins and moderators,
+the mods meeting it cold as the first playtest); stages 2-4 sit behind connected time, touched
 settings, and an AI-screened bio with placeholder thresholds (7 days of
 online time, 2 keys, 100 characters; the length is only the floor under
 which no screen is spent, the AI screen does the judging). Copy, the
 voice's name, and the thresholds still face design review before the
-fuse is lit.
+haunting leaves staff.
 
 - **The game is never announced; it arrives.** Onboarding as haunting: the
   bridge fiction says the city is behind the screen and chat is the leak,
@@ -336,8 +335,8 @@ fuse is lit.
      see that?" gets "no?" back, which is deniability and gossip in one
      move), rare (order of once per hours-long session, at most once or
      twice a day per user), render-layer only (the one DB touch is the
-     per-user burst counter), behind the kill-switch and staff-scoped
-     until the fuse is lit. Ladder count (tuned 2026-09-01): **three
+     per-user burst counter), staff-scoped until the haunting is opened
+     up in code. Ladder count (tuned 2026-09-01): **three
      bursts total per person**, persisted; the third quiets the clock
      for good and opens stage 2, and the quiet is itself part of the
      escalation. Whether unchosen users keep an unbounded ambient clock
@@ -399,8 +398,8 @@ fuse is lit.
      per person**, the third arming the door; the two doors sit a day
      apart and the DM comes the day after the second, so for a person
      who connects daily the full ladder is one week),
-     render-layer only, no DB beyond the per-user arming counter,
-     kill-switch. Later variety (your name
+     render-layer only, no DB beyond the per-user arming counter.
+     Later variety (your name
      in the sidebar, the composer placeholder) rides the same
      machinery. Thematic payoff: when the stage-3 whisper says the
      static knows your name, it is describing what already happened.
@@ -507,7 +506,7 @@ fuse is lit.
     the failure mode. No fake errors, no fake disconnects, nothing
     resembling a real terminal failure. Static and corruption are
     obviously *voiced*, never mechanical.
-  - **Admin kill-switch from day one**, and a ready answer for the
+  - **Staff only until opened up in code**, and a ready answer for the
     inevitable "I found a display bug" report.
 - **First contact is a nonrenewable resource.** It works exactly once per
   person. Two timing rules: never burn it on real users while it is

@@ -14,7 +14,7 @@ use super::svc::{
 use crate::app::ai::svc::AiService;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, new_test_db, render_plain,
-    test_app_flags_rx, wait_for_render_contains, wait_for_render_not_contains,
+    wait_for_render_contains, wait_for_render_not_contains,
 };
 use late_core::models::paper::PaperEdition;
 
@@ -137,41 +137,19 @@ async fn post_announcement(db: &late_core::db::Db, author: uuid::Uuid, body: &st
 }
 
 #[tokio::test]
-async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_pop_once() {
+async fn the_newsstand_answers_empty_and_ready_and_claims_the_login_pop_once() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "paper-reader").await;
 
-    // Presses stopped: the paper is unavailable whatever the rows say.
-    let (_stopped_tx, stopped_rx) =
-        tokio::sync::watch::channel(Some(late_core::models::app_flag::AppFlags {
-            haunt_enabled: true,
-            haunt_live: false,
-            paper_enabled: false,
-            paper_outside_enabled: false,
-            artboard_gallery_enabled: true,
-            jobs_enabled: true,
-        }));
-    let dark = PaperService::new(test_db.db.clone(), AiService::new(false, None), stopped_rx);
-    let mut dark_rx = dark.subscribe();
-    dark.request(user.id, PaperTrigger::Command);
+    // Nothing printed: empty, and no login claim spent. Reading needs no
+    // AI: the rows are the paper. Printing does.
+    let service = PaperService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut rx = service.subscribe();
+    service.request_print(user.id, PrintJob::Today);
     assert!(matches!(
-        wait_open(&mut dark_rx).await.2,
-        PaperOutcome::Unavailable
-    ));
-    dark.request_print(user.id, PrintJob::Today);
-    assert!(matches!(
-        wait_press(&mut dark_rx).await,
+        wait_press(&mut rx).await,
         PressOutcome::Unavailable
     ));
-
-    // Presses running but nothing printed: empty, and no login claim
-    // spent. Reading needs no AI: the rows are the paper.
-    let service = PaperService::new(
-        test_db.db.clone(),
-        AiService::new(false, None),
-        test_app_flags_rx(),
-    );
-    let mut rx = service.subscribe();
     service.request(user.id, PaperTrigger::Login);
     let (_, trigger, outcome) = wait_open(&mut rx).await;
     assert_eq!(trigger, PaperTrigger::Login);
@@ -383,7 +361,7 @@ async fn the_login_pop_opens_once_after_the_splash_and_esc_closes_it() {
 }
 
 #[tokio::test]
-async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_stop_the_presses() {
+async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_run_the_press() {
     let (test_db, mut app) = chat_compose_app("paper-cmd").await;
     seed_lounge_page(&test_db.db, "- the lounge talked about lunch").await;
 
@@ -393,7 +371,7 @@ async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_stop_the_presses
     wait_for_render_not_contains(&mut app, "The Late Edition").await;
 
     app.handle_input(b"i");
-    app.handle_input(b"/paper off\r");
+    app.handle_input(b"/paper print\r");
     wait_for_render_contains(&mut app, "Only admins can touch the presses").await;
 }
 

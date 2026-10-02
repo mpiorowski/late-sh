@@ -6,18 +6,17 @@
 //! root files keep one routing line each.
 
 use late_core::db::Db;
-use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::deadchannel_name_hit::NameHitSignal;
 use late_core::models::user::{FirstContactBioVerdict, FirstContactHitClaim, User};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use tracing::{Instrument, info_span};
 
 use super::state::{
     ActiveHit, BIO_RESCREEN_AFTER_HOURS, BioStanding, Breakthrough, BreakthroughPhase,
     BreakthroughRoll, BreakthroughTick, ClockGlitch, FirstContactGate, FirstContactMarks,
     GLITCH_TOTAL_CAP, GlitchTick, HauntCommand, HauntState, HitStage, InvitationClaim,
-    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, PendingFlagWrite, WHISPER_GAP_HOURS,
-    WHISPER_TOTAL_CAP, WhisperState, WhisperTick, bio_hash, glitch_caps, name_caps,
+    NAME_TOTAL_CAP, NameFlicker, NameRoll, PendingClaim, WHISPER_GAP_HOURS, WHISPER_TOTAL_CAP,
+    WhisperState, WhisperTick, bio_hash, glitch_caps, name_caps,
 };
 use crate::app::ai::screen::{BioScreen, screen_bio};
 use crate::app::ai::svc::AiService;
@@ -35,25 +34,11 @@ use crate::state::State;
 /// for the next session: filling your bio tonight means the static can
 /// find you tomorrow (GAME.md).
 ///
-/// The flags come first, and they are the same pair `arm` reads: with
-/// `haunt_enabled` off, or the `haunt_live` fuse unlit for a non-staff user,
-/// nobody can be haunted this session, so the connect path spends
-/// nothing on them: no online-time round trip, no paid bio screen. With
-/// the flags unread (`None`) the gate is shut, like every other stage.
+/// Staff only, by decision in code, the same rule `arm` applies: anyone
+/// else cannot be haunted, so the connect path spends nothing on them: no
+/// online-time round trip, no paid bio screen.
 pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -> FirstContactGate {
-    let snapshot: Option<AppFlags> = *state.app_flags.subscribe().borrow();
-    let armable =
-        snapshot.is_some_and(|flags| flags.haunt_enabled && (is_staff || flags.haunt_live));
-    if !armable {
-        // Staff are haunted while the fuse is unlit, so a shut gate for
-        // one of them means haunting is off (or the flags are unread) and
-        // is the line to look for when the ladder seems dead. For everyone
-        // else an unlit fuse is the normal state of the world.
-        if is_staff {
-            tracing::info!(user_id = %user.id, username = %user.username, is_staff, "first contact gate shut: haunting off or flags unread");
-        } else {
-            tracing::debug!(user_id = %user.id, username = %user.username, is_staff, "first contact gate shut: fuse unlit");
-        }
+    if !is_staff {
         return FirstContactGate::closed();
     }
     let online_milliseconds = async {
@@ -103,11 +88,10 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
 }
 
 /// Build the session's haunting slot. Stage 1 arms for staff (admins and
-/// moderators, `Permissions::can_moderate`) always and
-/// for everyone once the `haunt_live` fuse is lit; stages 2-4 arm behind
-/// the gate, or for anyone whose funnel already has a stage-2 hit
-/// (eligibility gates entering, never continuing). First contact is a
-/// nonrenewable resource: with the flags unread (`None`) nothing arms.
+/// moderators, `Permissions::can_moderate`) and nobody else, by decision
+/// in code; stages 2-4 arm behind the gate, or for any staff member whose
+/// funnel already has a stage-2 hit (eligibility gates entering, never
+/// continuing).
 /// The chain order is the spec: three clock bursts open stage 2, the
 /// third name hit arms the stage-3 whisper (it fires on the next fresh
 /// connect, then once more on a later day), and a day after the last
@@ -117,22 +101,18 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
 /// two people side by side, roll differently.
 pub(crate) fn arm(
     is_staff: bool,
-    flags: watch::Receiver<Option<AppFlags>>,
     user_id: uuid::Uuid,
     username: &str,
     marks: FirstContactMarks,
     gate: FirstContactGate,
 ) -> HauntState {
-    let snapshot: Option<AppFlags> = *flags.borrow();
-    let enabled = snapshot.is_some_and(|flags| flags.haunt_enabled);
-    let live = snapshot.is_some_and(|flags| flags.haunt_live);
-    let stage1 = enabled && (is_staff || live);
+    let stage1 = is_staff;
     let chosen = stage1 && (gate.passes() || marks.name_hits > 0);
     let whisper_armed =
         chosen && marks.name_hits >= NAME_TOTAL_CAP && marks.whisper_due(chrono::Utc::now());
     // What this session can fire, for whom. Stage 1 off is the quiet
-    // default for everyone while the fuse is unlit, so only an armed
-    // session is worth a line.
+    // default for everyone who is not staff, so only an armed session is
+    // worth a line.
     if stage1 {
         tracing::info!(
             user_id = %user_id,
@@ -157,9 +137,7 @@ pub(crate) fn arm(
         gate,
         stage1,
         chosen,
-        flags,
         pending_claims: Vec::new(),
-        pending_flag_writes: Vec::new(),
     }
 }
 
@@ -174,7 +152,6 @@ fn session_seed(user_id: uuid::Uuid) -> u64 {
 pub(crate) fn tick(app: &mut App) -> bool {
     let mut changed = false;
     changed |= tick_claims(app);
-    changed |= tick_flag_writes(app);
     if app.show_splash {
         changed |= tick_splash_door(app);
     }
@@ -268,60 +245,15 @@ fn tick_claims(app: &mut App) -> bool {
     changed
 }
 
-/// Drain answered `/haunt on|off|live` writes into the banner. The row is
-/// the truth: "off" is only said once the row says off, and a failed
-/// write is said out loud, since the admin who flipped the kill switch
-/// is the one person who must not be told a comforting lie.
-fn tick_flag_writes(app: &mut App) -> bool {
-    let mut answered = Vec::new();
-    app.haunt
-        .pending_flag_writes
-        .retain_mut(|pending| match pending.rx.try_recv() {
-            Ok(outcome) => {
-                answered.push((pending.flag, pending.enabled, pending.done, outcome));
-                false
-            }
-            Err(oneshot::error::TryRecvError::Empty) => true,
-            Err(oneshot::error::TryRecvError::Closed) => {
-                answered.push((
-                    pending.flag,
-                    pending.enabled,
-                    pending.done,
-                    Err(anyhow::anyhow!("flag write task dropped its sender")),
-                ));
-                false
-            }
-        });
-    let mut changed = false;
-    for (flag, enabled, done, outcome) in answered {
-        match outcome {
-            Ok(()) => {
-                tracing::info!(user_id = %app.user_id, username = %app.username, key = flag.key(), enabled, "haunt flag set");
-                app.banner = Some(Banner::success(done));
-            }
-            Err(error) => {
-                tracing::error!(user_id = %app.user_id, username = %app.username, key = flag.key(), enabled, error = ?error, "failed to set haunt flag");
-                app.banner = Some(Banner::error(&format!(
-                    "Flag {} not written: {error}",
-                    flag.key()
-                )));
-            }
-        }
-        changed = true;
-    }
-    changed
-}
-
-/// Drive the armed whisper for one splash tick. Release (natural, hard
-/// cap, or kill switch) closes the splash here and claims one capped
+/// Drive the armed whisper for one splash tick. Release (natural or hard
+/// cap) closes the splash here and claims one capped
 /// delivery only on a delivered line; the last stamp is also what starts
 /// the invitation clock.
 fn tick_splash_door(app: &mut App) -> bool {
-    let enabled = app.haunt.enabled();
     let Some(whisper) = app.haunt.whisper.as_mut() else {
         return false;
     };
-    match whisper.tick(app.splash_ticks, enabled) {
+    match whisper.tick(app.splash_ticks) {
         WhisperTick::Holding => {}
         WhisperTick::Released { delivered } => {
             app.haunt.whisper = None;
@@ -358,10 +290,9 @@ fn tick_clock_glitch(app: &mut App) -> bool {
     if app.haunt.clock_glitch.is_none() {
         return false;
     }
-    let enabled = app.haunt.enabled();
     let clock_visible = !app.show_splash && app.right_sidebar_visible();
     let glitch = app.haunt.clock_glitch.as_mut().expect("checked above");
-    match glitch.tick(app.marquee_tick, enabled, clock_visible) {
+    match glitch.tick(app.marquee_tick, clock_visible) {
         GlitchTick::Due => {
             let rx = app
                 .profile_state
@@ -404,9 +335,8 @@ fn tick_clock_glitch(app: &mut App) -> bool {
 /// stage-3 whisper at its third hit.
 fn tick_name_flicker(app: &mut App) -> bool {
     // Drained even while unarmed, so a stale echo id never waits around
-    // for a later `/haunt on`.
+    // for a later `/haunt arm`.
     let landed = app.chat.take_own_message_landed();
-    let enabled = app.haunt.enabled();
     let stage_open = app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP;
     let Some(flicker) = app.haunt.name_flicker.as_mut() else {
         return false;
@@ -416,7 +346,7 @@ fn tick_name_flicker(app: &mut App) -> bool {
     let Some((message_id, room_id)) = landed else {
         return changed;
     };
-    match flicker.note_own_message(message_id, app.marquee_tick, enabled, stage_open) {
+    match flicker.note_own_message(message_id, app.marquee_tick, stage_open) {
         NameRoll::Miss => {}
         NameRoll::Claim => {
             let rx = app.profile_state.service().claim_first_contact_name_hit(
@@ -480,16 +410,15 @@ fn publish_name_hit(app: &App, message_id: uuid::Uuid, room_id: uuid::Uuid) {
 /// rode the wire.
 fn tick_witness(app: &mut App) -> bool {
     // Drained even outside the audience, so a stale beat never waits
-    // around for a later `/haunt on`.
+    // around for a later `/haunt arm`.
     let landed = app.chat.take_witnessed_hit_landed();
     let changed = ActiveHit::tick(&mut app.haunt.witness, app.marquee_tick);
     let Some((message_id, seed)) = landed else {
         return changed;
     };
-    // The audience is exactly stage 1's: the kill switch keeps other
-    // people's hauntings off this screen too, and while the fuse is unlit
-    // staff are haunted where only staff can see it.
-    if !(app.haunt.enabled() && app.haunt.stage1) {
+    // The audience is exactly stage 1's: staff are haunted where only
+    // staff can see it.
+    if !app.haunt.stage1 {
         return changed;
     }
     // This session's own hit coming back off the wire: its own machine is
@@ -527,7 +456,6 @@ fn tick_witness(app: &mut App) -> bool {
 fn tick_breakthrough(app: &mut App) -> bool {
     // Drained even while unarmed, like the landing echo.
     let sent_here = app.chat.take_own_send_succeeded();
-    let enabled = app.haunt.enabled();
     let due = app.haunt.marks.breakthrough_due(chrono::Utc::now());
     let answer = match app.haunt.pending_invitation.as_mut() {
         None => None,
@@ -567,14 +495,14 @@ fn tick_breakthrough(app: &mut App) -> bool {
             breakthrough.claim_failed();
         }
     }
-    match breakthrough.tick(app.marquee_tick, enabled) {
+    match breakthrough.tick(app.marquee_tick) {
         BreakthroughTick::Idle => {}
         BreakthroughTick::Playing | BreakthroughTick::Ended => changed = true,
     }
     if !sent_here {
         return changed;
     }
-    match breakthrough.note_own_send(enabled, due) {
+    match breakthrough.note_own_send(due) {
         BreakthroughRoll::Wait => {}
         BreakthroughRoll::Claim => {
             app.haunt.pending_invitation =
@@ -700,26 +628,6 @@ fn bio_standing_label(standing: BioStanding) -> &'static str {
     }
 }
 
-/// Ask for a process-wide switch to flip, or explain why this session
-/// cannot. The banner comes on the tick the row answers
-/// (`tick_flag_writes`), not now.
-fn set_flag(app: &mut App, flag: AppFlag, enabled: bool, done: &'static str) {
-    match &app.app_flags {
-        Some(service) => {
-            let rx = service.set_task(flag, enabled);
-            app.haunt.pending_flag_writes.push(PendingFlagWrite {
-                flag,
-                enabled,
-                done,
-                rx,
-            });
-        }
-        None => {
-            app.banner = Some(Banner::error("No flag service on this session"));
-        }
-    }
-}
-
 /// Drain the `/haunt` admin command. The composer only records it for
 /// admins, so everything here trusts the caller.
 fn tick_commands(app: &mut App) -> bool {
@@ -787,9 +695,7 @@ fn tick_commands(app: &mut App) -> bool {
                 None => "no runner sheet".to_string(),
             };
             app.banner = Some(Banner::info(&format!(
-                "Haunt {} · live {} · stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite} · {sheet}",
-                on_off(app.haunt.enabled()),
-                on_off(app.haunt.live()),
+                "Haunt stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite} · {sheet}",
                 on_off(app.haunt.stage1),
                 on_off(app.haunt.chosen),
                 gate.active_hours,
@@ -800,12 +706,11 @@ fn tick_commands(app: &mut App) -> bool {
                 app.haunt.marks.name_hits
             )));
         }
-        HauntCommand::On => {
-            set_flag(app, AppFlag::HauntEnabled, true, "Haunt on (every replica)");
-            // A session that connected while the switch was off, or that
-            // the gate passed over, armed nothing; turning the haunt on
-            // arms the repeatable machines so the flip is testable without
-            // reconnecting or a passing bio.
+        HauntCommand::Arm => {
+            // A session the gate passed over armed nothing past stage 1;
+            // this arms the repeatable machines so a beat is testable
+            // without reconnecting or a passing bio.
+            app.banner = Some(Banner::success("Haunt armed for this session"));
             app.haunt.stage1 = true;
             app.haunt.chosen = true;
             if app.haunt.clock_glitch.is_none() {
@@ -825,31 +730,9 @@ fn tick_commands(app: &mut App) -> bool {
                 app.haunt.breakthrough = Some(Breakthrough::for_user(app.user_id));
             }
         }
-        HauntCommand::Off => {
-            // A live whisper drops on its own next splash tick and the
-            // schedulers stop firing: every machine reads this switch, on
-            // every replica once the notify lands.
-            set_flag(
-                app,
-                AppFlag::HauntEnabled,
-                false,
-                "Haunt off (every replica)",
-            );
-        }
-        HauntCommand::LiveOn => {
-            set_flag(
-                app,
-                AppFlag::HauntLive,
-                true,
-                "Fuse lit: stage 1 for everyone from their next connect",
-            );
-        }
-        HauntCommand::LiveOff => {
-            set_flag(app, AppFlag::HauntLive, false, "Fuse out: staff only");
-        }
         HauntCommand::Glitch => match app.haunt.clock_glitch.as_mut() {
             None => {
-                app.banner = Some(Banner::error("Glitch is not armed - /haunt on first"));
+                app.banner = Some(Banner::error("Glitch is not armed - /haunt arm first"));
             }
             Some(glitch) => {
                 glitch.fire_now(app.marquee_tick);
@@ -858,7 +741,9 @@ fn tick_commands(app: &mut App) -> bool {
         },
         HauntCommand::Name => match app.haunt.name_flicker.as_mut() {
             None => {
-                app.banner = Some(Banner::error("Name flicker is not armed - /haunt on first"));
+                app.banner = Some(Banner::error(
+                    "Name flicker is not armed - /haunt arm first",
+                ));
             }
             Some(flicker) => {
                 flicker.force_next();
@@ -878,7 +763,9 @@ fn tick_commands(app: &mut App) -> bool {
                 ));
             }
             (None, None) => {
-                app.banner = Some(Banner::error("Breakthrough is not armed - /haunt on first"));
+                app.banner = Some(Banner::error(
+                    "Breakthrough is not armed - /haunt arm first",
+                ));
             }
             (None, Some(breakthrough)) => {
                 breakthrough.force_next();

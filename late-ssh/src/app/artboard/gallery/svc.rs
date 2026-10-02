@@ -24,7 +24,6 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use dartboard_core::Canvas;
 use late_core::db::Db;
-use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
     TakeDownOutcome,
@@ -218,7 +217,6 @@ pub enum GalleryResult {
 #[derive(Clone)]
 pub struct GalleryService {
     db: Option<Db>,
-    flags_rx: watch::Receiver<Option<AppFlags>>,
     splash_tx: Arc<watch::Sender<Option<SplashPiece>>>,
     splash_rx: watch::Receiver<Option<SplashPiece>>,
 }
@@ -242,47 +240,36 @@ pub enum ContentRatingOutcome {
 }
 
 impl GalleryService {
-    pub fn new(db: Db, flags_rx: watch::Receiver<Option<AppFlags>>) -> Self {
+    pub fn new(db: Db) -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
         Self {
             db: Some(db),
-            flags_rx,
             splash_tx: Arc::new(splash_tx),
             splash_rx,
         }
     }
 
-    /// No database and no switches: every listing is empty, nothing hangs.
+    /// No database: every listing is empty, nothing hangs.
     pub fn disabled() -> Self {
-        let (_flags_tx, flags_rx) = watch::channel(None);
         let (splash_tx, splash_rx) = watch::channel(None);
         Self {
             db: None,
-            flags_rx,
             splash_tx: Arc::new(splash_tx),
             splash_rx,
         }
     }
 
-    /// The kill switch, as this replica last read it. Nothing loaded yet
-    /// reads as off, like every `app_flags` switch.
+    /// Whether this service has a database behind it. A
+    /// [`GalleryService::disabled`] one (tests, a DB-less boot) hides the
+    /// gallery.
     pub fn is_enabled(&self) -> bool {
         self.db.is_some()
-            && self
-                .flags_rx
-                .borrow()
-                .is_some_and(|flags| flags.artboard_gallery_enabled)
     }
 
     /// The day's piece over the door, as this replica last read it.
-    /// Every login shows it for the whole UTC day; `None` (switch off, no
-    /// database, empty queue) is the coffee cup. The switch is checked
-    /// here too, so flipping it off takes the piece off new logins at
-    /// once rather than at the next hourly refresh.
+    /// Every login shows it for the whole UTC day; `None` (no database,
+    /// empty queue) is the coffee cup.
     pub fn splash_piece(&self) -> Option<SplashPiece> {
-        if !self.is_enabled() {
-            return None;
-        }
         self.splash_rx.borrow().clone()
     }
 
@@ -456,19 +443,11 @@ impl GalleryService {
     }
 
     /// Read (and, on the first pass of the day, assign) `day`'s piece
-    /// into the watch. The kill switch covers this read too: while the
-    /// gallery is off the splash goes back to the coffee cup on the next
-    /// refresh, so a piece that has to come down fast is off the
-    /// highest-traffic surface within the hour without waiting for
-    /// `/mod artboard remove`, and no day is assigned while it is off.
+    /// into the watch. `Off` is a service with no database.
     pub async fn refresh_splash(&self, day: NaiveDate) -> Result<SplashRefresh> {
         let Some(db) = self.db.as_ref() else {
             return Ok(SplashRefresh::Off);
         };
-        if !self.is_enabled() {
-            let _ = self.splash_tx.send(None);
-            return Ok(SplashRefresh::Off);
-        }
         let client = db.get().await?;
         let piece = match ArtboardPiece::splash_for_day(&client, day).await? {
             Some(piece) => Some(SplashPiece::decode(day, piece)?),
@@ -565,10 +544,6 @@ impl GalleryService {
         framed: FramedPiece,
         tx: mpsc::UnboundedSender<GalleryResult>,
     ) {
-        if !self.is_enabled() {
-            let _ = tx.send(GalleryResult::HangRefused(HangRefusal::Disabled));
-            return;
-        }
         let Some(db) = self.db.clone() else {
             let _ = tx.send(GalleryResult::HangRefused(HangRefusal::Disabled));
             return;
@@ -648,9 +623,6 @@ impl GalleryService {
         let Some(db) = self.db.clone() else {
             return;
         };
-        if !self.is_enabled() {
-            return;
-        }
         tokio::spawn(async move {
             let result = async {
                 let client = db.get().await?;
@@ -698,9 +670,6 @@ impl GalleryService {
         let Some(db) = self.db.clone() else {
             return;
         };
-        if !self.is_enabled() {
-            return;
-        }
         tokio::spawn(async move {
             let result = async {
                 let client = db.get().await?;
@@ -741,9 +710,7 @@ impl GalleryService {
 }
 
 /// One content-rating round trip in one transaction: the write in `action`
-/// when there is one, then the summary it left. A write reads the switch
-/// from the database, not the watch, so it cannot land on a gallery another
-/// replica just closed.
+/// when there is one, then the summary it left.
 async fn rate_content(
     db: &Db,
     piece_id: Uuid,
@@ -754,36 +721,26 @@ async fn rate_content(
     let transaction = client.transaction().await?;
     match action {
         None => {}
-        Some(action) => {
-            if !AppFlags::read(&transaction, AppFlag::ArtboardGalleryEnabled).await? {
-                return Ok(ContentRatingOutcome::Closed);
-            }
-            match action {
-                ContentRatingAction::Vote(rating) => {
-                    match ArtboardPieceRating::set_vote(&transaction, piece_id, viewer_id, rating)
-                        .await?
-                    {
-                        VoteOutcome::Saved => {}
-                        VoteOutcome::OwnPiece => return Ok(ContentRatingOutcome::OwnPiece),
-                        VoteOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
-                    }
-                }
-                ContentRatingAction::OwnerFlag(nsfw) => {
-                    match ArtboardPieceRating::set_owner_flag(
-                        &transaction,
-                        piece_id,
-                        viewer_id,
-                        nsfw,
-                    )
+        Some(action) => match action {
+            ContentRatingAction::Vote(rating) => {
+                match ArtboardPieceRating::set_vote(&transaction, piece_id, viewer_id, rating)
                     .await?
-                    {
-                        OwnerFlagOutcome::Saved => {}
-                        OwnerFlagOutcome::NotYours => return Ok(ContentRatingOutcome::NotYours),
-                        OwnerFlagOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
-                    }
+                {
+                    VoteOutcome::Saved => {}
+                    VoteOutcome::OwnPiece => return Ok(ContentRatingOutcome::OwnPiece),
+                    VoteOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
                 }
             }
-        }
+            ContentRatingAction::OwnerFlag(nsfw) => {
+                match ArtboardPieceRating::set_owner_flag(&transaction, piece_id, viewer_id, nsfw)
+                    .await?
+                {
+                    OwnerFlagOutcome::Saved => {}
+                    OwnerFlagOutcome::NotYours => return Ok(ContentRatingOutcome::NotYours),
+                    OwnerFlagOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
+                }
+            }
+        },
     }
     match ArtboardPieceRating::read(&transaction, piece_id, viewer_id).await? {
         Some(summary) => {

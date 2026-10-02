@@ -533,15 +533,7 @@ fn parses_artboard_gallery_commands() {
     assert!(parse_mod_command("artboard remove 0192").is_err());
     assert!(parse_mod_command("artboard remove notanid1 reason").is_err());
     assert!(parse_mod_command("artboard remove").is_err());
-    assert_eq!(
-        parse_mod_command("artboard gallery off").unwrap(),
-        ModCommand::ArtboardGallery { enabled: false }
-    );
-    assert_eq!(
-        parse_mod_command("artboard gallery on").unwrap(),
-        ModCommand::ArtboardGallery { enabled: true }
-    );
-    assert!(parse_mod_command("artboard gallery maybe").is_err());
+    assert!(parse_mod_command("artboard gallery off").is_err());
     assert_eq!(
         parse_mod_command("artboard feature 0192ABCD-1234").unwrap(),
         ModCommand::ArtboardFeaturePiece {
@@ -683,8 +675,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ArtboardFeaturePiece { .. }
         | ModCommand::ArtboardMark { .. }
         | ModCommand::ArtboardUnmarkBy { .. }
-        | ModCommand::ArtboardSafetyView { .. }
-        | ModCommand::ArtboardGallery { .. } => {
+        | ModCommand::ArtboardSafetyView { .. } => {
             panic!("command does not have a primary username: {command:?}")
         }
     }

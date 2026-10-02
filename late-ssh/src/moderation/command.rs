@@ -89,10 +89,6 @@ pub(crate) enum ModCommand {
     ArtboardFeaturePiece {
         id_prefix: String,
     },
-    /// The gallery's kill switch (`app_flags.artboard_gallery_enabled`).
-    ArtboardGallery {
-        enabled: bool,
-    },
     ArtboardMark {
         id_prefix: String,
         admin: bool,
@@ -806,7 +802,7 @@ fn required_slow_scope(value: &str, usage: &str) -> Result<SlowScope> {
 }
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: artboard <restore|curate|remove|feature|gallery|safety> ...";
+    const USAGE: &str = "usage: artboard <restore|curate|remove|feature|safety> ...";
     let Some(first) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -815,7 +811,6 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
         "curate" => parse_artboard_curate_mod_command(&parts[1..]),
         "remove" => parse_artboard_remove_mod_command(&parts[1..]),
         "feature" => parse_artboard_feature_mod_command(&parts[1..]),
-        "gallery" => parse_artboard_gallery_mod_command(&parts[1..]),
         "safety" => parse_artboard_safety_mod_command(&parts[1..]),
         _ => anyhow::bail!(USAGE),
     }
@@ -900,15 +895,6 @@ fn piece_id_prefix(value: Option<&str>, usage: &str) -> Result<String> {
         anyhow::bail!(usage.to_string());
     }
     Ok(id_prefix.to_ascii_lowercase())
-}
-
-fn parse_artboard_gallery_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: artboard gallery <on|off>";
-    match parts {
-        ["on"] => Ok(ModCommand::ArtboardGallery { enabled: true }),
-        ["off"] => Ok(ModCommand::ArtboardGallery { enabled: false }),
-        _ => anyhow::bail!(USAGE),
-    }
 }
 
 fn required_room_target(value: &str, usage: &str) -> Result<String> {
@@ -1152,7 +1138,6 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard restore [YYYY-MM-DD] [reason...]",
             "artboard remove  <piece-id-prefix> [reason...]",
             "artboard feature <piece-id-prefix>",
-            "artboard gallery <on|off>",
             "artboard safety help          - view help for art nsfw/sfw commands",
             "======== Bans, kicks, etc. =========================================",
             "kick   <server|voice|stream|#room> @name [reason...]",
@@ -1358,12 +1343,11 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard remove <piece-id-prefix> [reason...]",
             "artboard feature <piece-id-prefix>",
             "artboard safety help          - view help for art nsfw/sfw commands",
-            "artboard gallery <on|off>",
             "Curates live or daily Artboard snapshots, restores live Artboard from daily snapshots,",
             "takes a gallery piece down (copied work, etc.), pins a piece as today's Sliding Puzzle",
-            "art, classifies gallery art with safety, or flips the gallery's switch (admin).",
+            "art, or classifies gallery art with safety.",
             "Subtopics: help artboard curate, help artboard restore, help artboard remove,",
-            "help artboard feature, artboard safety help, help artboard gallery.",
+            "help artboard feature, artboard safety help.",
         ],
         "artboard safety" => &[
             "artboard safety view [@user|piece-id-prefix]",

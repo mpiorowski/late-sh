@@ -4,11 +4,10 @@
 
 use std::cell::Cell;
 
-use late_core::models::app_flag::AppFlag;
 use late_core::models::job_posting::{JobPosting, RemoteKind};
 use late_core::models::work_profile::{WorkProfile, WorkStatus};
 use late_core::vocab;
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::{broadcast, watch};
 
 use super::post::PostForm;
 use super::svc::{JobsEvent, JobsService, JobsSnapshot};
@@ -33,17 +32,8 @@ pub(crate) struct JobsState {
     /// Under the stacked layout the detail pane opens over the list.
     detail_open: bool,
     narrow: Cell<bool>,
-    pub(super) pending_flag_writes: Vec<PendingFlagWrite>,
     /// The post form, open over the page from `n` or `/jobs post`.
     pub(crate) post: PostForm,
-}
-
-/// An admin's flag write in flight, answered with a banner in tick.
-pub(super) struct PendingFlagWrite {
-    pub flag: AppFlag,
-    pub enabled: bool,
-    pub done: &'static str,
-    pub rx: oneshot::Receiver<anyhow::Result<()>>,
 }
 
 impl JobsState {
@@ -60,7 +50,6 @@ impl JobsState {
             selected: 0,
             detail_open: false,
             narrow: Cell::new(false),
-            pending_flag_writes: Vec::new(),
             post: PostForm::default(),
         }
     }
@@ -134,10 +123,6 @@ pub(crate) enum JobsCommand {
     /// `/jobs release`: release a slice of the HN queue now, on top of
     /// whatever the day already released.
     Release,
-    /// `/jobs on`: the press runs (the kill switch row).
-    On,
-    /// `/jobs off`: no press, an empty shelf that says so, no NEW WORK.
-    Off,
     /// `/jobs post`: the shelf with the post form open.
     Post,
 }
@@ -146,7 +131,7 @@ impl JobsCommand {
     pub(crate) fn admin_only(self) -> bool {
         match self {
             Self::Open | Self::Post => false,
-            Self::Pull | Self::Release | Self::On | Self::Off => true,
+            Self::Pull | Self::Release => true,
         }
     }
 }
@@ -162,8 +147,6 @@ pub(crate) fn parse_jobs_command(body: &str) -> Option<Option<JobsCommand>> {
         [] => Some(JobsCommand::Open),
         ["pull"] => Some(JobsCommand::Pull),
         ["release"] => Some(JobsCommand::Release),
-        ["on"] => Some(JobsCommand::On),
-        ["off"] => Some(JobsCommand::Off),
         ["post"] => Some(JobsCommand::Post),
         _ => None,
     })

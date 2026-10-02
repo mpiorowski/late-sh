@@ -87,8 +87,6 @@ pub enum PaperOpenResult {
     Empty,
     /// This account's login pop for the edition was already claimed.
     AlreadyShown,
-    /// The paper's kill switch is off, or AI is unconfigured here.
-    Unavailable,
     Failed,
 }
 
@@ -1608,7 +1606,6 @@ mod inner {
 
     fn refresh_label(refresh: Refresh) -> &'static str {
         match refresh {
-            Refresh::AppFlags => "app_flags",
             Refresh::RunnerLooks => "runner_looks",
             Refresh::CrownHolder => "crown_holder",
             Refresh::DailyMatches => "daily_matches",
@@ -2157,7 +2154,6 @@ mod inner {
             PaperOpenResult::Command => "command",
             PaperOpenResult::Empty => "empty",
             PaperOpenResult::AlreadyShown => "already_shown",
-            PaperOpenResult::Unavailable => "unavailable",
             PaperOpenResult::Failed => "failed",
         }
     }

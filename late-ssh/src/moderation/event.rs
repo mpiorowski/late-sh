@@ -75,10 +75,6 @@ pub enum ModerationEvent {
         title: String,
         reason: String,
     },
-    ArtboardGallerySwitched {
-        actor_user_id: Uuid,
-        enabled: bool,
-    },
     AudioAction {
         actor_user_id: Uuid,
         target_user_id: Uuid,

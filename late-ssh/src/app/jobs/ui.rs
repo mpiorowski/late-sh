@@ -67,15 +67,6 @@ pub(crate) fn hints(view: &JobsShelfView<'_>) -> &'static [(&'static str, &'stat
 }
 
 pub(crate) fn draw_jobs_shelf(frame: &mut Frame, area: Rect, view: &JobsShelfView<'_>) {
-    if !view.jobs.enabled() {
-        draw_notice(
-            frame,
-            area,
-            "The job press is stopped.",
-            &["An admin turns it back on with /jobs on."],
-        );
-        return;
-    }
     let visible = view.jobs.visible(view.viewer_tags);
     let selected = view.jobs.selected().min(visible.len().saturating_sub(1));
     if visible.is_empty() {
@@ -423,7 +414,7 @@ fn display_link(url: &str) -> String {
 
 /// The strip count: how many rows the shelf has for this viewer.
 pub(crate) fn shelf_count(jobs: &JobsState, viewer_tags: &[String]) -> Option<usize> {
-    if !jobs.loaded || !jobs.enabled() {
+    if !jobs.loaded {
         return None;
     }
     Some(jobs.visible(viewer_tags).len())

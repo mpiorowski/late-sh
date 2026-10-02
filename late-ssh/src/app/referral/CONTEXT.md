@@ -168,8 +168,9 @@ None of this is built. In the order to reach for it:
 
 1. **Delete the farm's accounts.** That cascades their referral rows away,
    pending and qualified alike, so nothing more pays.
-2. **An off switch.** An `AppFlag` (enum variant, seed row, field; see
-   `app/flags`) that `sweep` reads before the pay step. Judging keeps
+2. **An off switch.** A row that `sweep` reads before the pay step (a
+   process-wide switch is a row, root CONTEXT.md §0; there is no switch
+   table today, so this brings one back). Judging keeps
    running, `qualified` rows wait, nothing is lost, and payouts stop without
    a deploy.
 3. **A site-wide monthly cap on paid invites**, next to the per-inviter one:

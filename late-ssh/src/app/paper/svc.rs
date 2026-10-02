@@ -18,18 +18,12 @@
 //! with the column's rules laid on top: the facts come from the transcript
 //! and nowhere else, one jab per line is the ration, and for the column
 //! (unlike chat) he does name who drove a thread.
-//!
-//! Two switches (`app_flags`), both seeded on: `paper_enabled` stops the
-//! presses and turns `/paper` into a banner, `paper_outside_enabled` drops
-//! the grounded "Outside" page. Both are rows, flipped with `/paper on|off`
-//! and `/paper outside on|off` by admins.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
-use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
@@ -40,14 +34,14 @@ use late_core::models::paper::{
 };
 use late_core::models::user::{User, extract_langs};
 use late_core::models::work_profile::WorkProfile;
-use tokio::sync::{broadcast, oneshot, watch};
+use tokio::sync::broadcast;
 use tokio_postgres::Client;
 use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
     PAPER_ANNOUNCEMENTS_LIMIT, PaperAnnouncement, PaperCommand, PaperLayout, PaperModal,
-    PaperState, PaperWork, PendingFlagWrite,
+    PaperState, PaperWork,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
@@ -162,7 +156,7 @@ pub enum PressOutcome {
     },
     /// Today's rows are gone and the caller's login stamp is off.
     Reset,
-    /// The kill switch is off, or AI is unconfigured here.
+    /// AI is unconfigured here.
     Unavailable,
     Failed,
 }
@@ -204,7 +198,7 @@ impl PrintTally {
 pub struct PaperIssue {
     pub edition: PaperEdition,
     pub announcements: Vec<PaperAnnouncement>,
-    /// NEW WORK for this reader; `None` while the job feed is off.
+    /// NEW WORK for this reader; `None` only on a preview.
     pub work: Option<PaperWork>,
 }
 
@@ -214,8 +208,6 @@ pub enum PaperOutcome {
     /// Nothing printed for today's edition yet, and no announcement
     /// either.
     Empty,
-    /// The kill switch is off.
-    Unavailable,
     Failed,
 }
 
@@ -223,7 +215,6 @@ pub enum PaperOutcome {
 pub struct PaperService {
     db: Db,
     ai: AiService,
-    flags_rx: watch::Receiver<Option<AppFlags>>,
     event_tx: broadcast::Sender<PaperEvent>,
 }
 
@@ -236,31 +227,13 @@ enum Print {
 }
 
 impl PaperService {
-    pub fn new(db: Db, ai: AiService, flags_rx: watch::Receiver<Option<AppFlags>>) -> Self {
+    pub fn new(db: Db, ai: AiService) -> Self {
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAP);
-        Self {
-            db,
-            ai,
-            flags_rx,
-            event_tx,
-        }
+        Self { db, ai, event_tx }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<PaperEvent> {
         self.event_tx.subscribe()
-    }
-
-    /// The switches as last published. `None` (not loaded yet) reads as
-    /// off, the same way `app/flags` documents it.
-    fn flags(&self) -> AppFlags {
-        self.flags_rx.borrow().unwrap_or(AppFlags {
-            haunt_enabled: false,
-            haunt_live: false,
-            paper_enabled: false,
-            paper_outside_enabled: false,
-            artboard_gallery_enabled: false,
-            jobs_enabled: false,
-        })
     }
 
     /// The press: every replica runs it, the row claims decide who pays.
@@ -281,14 +254,12 @@ impl PaperService {
     /// dropped here; the metrics and logs inside `print_edition` are the
     /// record.
     pub async fn sweep(&self) {
-        let flags = self.flags();
-        if !flags.paper_enabled || !self.ai.is_enabled() {
+        if !self.ai.is_enabled() {
             return;
         }
         let edition = edition_for(Utc::now());
         let (floor, ceiling) = edition_window(edition);
-        self.print_edition(edition, floor, ceiling, flags.paper_outside_enabled)
-            .await;
+        self.print_edition(edition, floor, ceiling).await;
     }
 
     /// Print everything `edition` still lacks over `[floor, ceiling)`:
@@ -299,7 +270,6 @@ impl PaperService {
         edition: NaiveDate,
         floor: DateTime<Utc>,
         ceiling: DateTime<Utc>,
-        with_outside: bool,
     ) -> PrintTally {
         let stale_before = Utc::now() - PAPER_STALE_CLAIM;
         let mut tally = PrintTally::default();
@@ -327,7 +297,7 @@ impl PaperService {
             note_room_print(&mut tally, edition, &candidate, &printed);
         }
 
-        for section in sections_to_print(with_outside) {
+        for section in SECTIONS_TO_PRINT {
             // Settled sections (the steady state for the rest of the day)
             // are skipped without a tally line or a metric: `Lost` is for
             // a claim another replica holds right now, nothing else.
@@ -357,7 +327,6 @@ impl PaperService {
         edition: NaiveDate,
         floor: DateTime<Utc>,
         ceiling: DateTime<Utc>,
-        with_outside: bool,
     ) -> (PaperEdition, PrintTally) {
         let stale_before = Utc::now() - PAPER_STALE_CLAIM;
         let mut tally = PrintTally::default();
@@ -386,7 +355,7 @@ impl PaperService {
             rooms.push(page);
         }
 
-        for section in sections_to_print(with_outside) {
+        for section in SECTIONS_TO_PRINT {
             let written = match section {
                 PaperSectionKind::Reading => self.write_reading_page(floor, ceiling).await,
                 PaperSectionKind::Outside => self.write_outside_page(edition).await,
@@ -719,14 +688,13 @@ impl PaperService {
         );
     }
 
-    /// The press on demand (`/paper print|preview`). Same switches as the
+    /// The press on demand (`/paper print|preview`). Same AI gate as the
     /// sweeper; the tally comes back as a [`PressOutcome`] for a banner.
     pub fn request_print(&self, user_id: Uuid, job: PrintJob) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                let flags = service.flags();
-                let outcome = if !flags.paper_enabled || !service.ai.is_enabled() {
+                let outcome = if !service.ai.is_enabled() {
                     PressOutcome::Unavailable
                 } else {
                     let now = Utc::now();
@@ -734,9 +702,7 @@ impl PaperService {
                         PrintJob::Today => {
                             let edition = edition_for(now);
                             let (floor, ceiling) = edition_window(edition);
-                            let tally = service
-                                .print_edition(edition, floor, ceiling, flags.paper_outside_enabled)
-                                .await;
+                            let tally = service.print_edition(edition, floor, ceiling).await;
                             PressOutcome::Printed { edition, tally }
                         }
                         PrintJob::Preview => {
@@ -747,7 +713,6 @@ impl PaperService {
                                     today + chrono::Duration::days(1),
                                     today_start,
                                     now,
-                                    flags.paper_outside_enabled,
                                 )
                                 .await;
                             match service.preview_announcements(today_start, now).await {
@@ -817,14 +782,10 @@ impl PaperService {
         Ok(())
     }
 
-    /// The single match listing every way an open request can end. Only
-    /// the kill switch gates a read: opening the paper spends no model
-    /// call, so an AI-less deployment can still show whatever was printed.
+    /// The single match listing every way an open request can end. Nothing
+    /// gates a read: opening the paper spends no model call, so an AI-less
+    /// deployment can still show whatever was printed.
     async fn resolve_open(&self, user_id: Uuid, trigger: PaperTrigger) -> Option<PaperOutcome> {
-        if !self.flags().paper_enabled {
-            metrics::record_paper_open(PaperOpenResult::Unavailable);
-            return Some(PaperOutcome::Unavailable);
-        }
         match self.open(user_id, trigger).await {
             Ok(Opened::Ready(issue)) => {
                 metrics::record_paper_open(match trigger {
@@ -866,14 +827,9 @@ impl PaperService {
         }
         // NEW WORK is the paper's one per-reader read: yesterday's
         // released postings (rows already, printed once for everyone by
-        // the job press), picked against this reader's card. The job
-        // feed's kill switch drops the section.
+        // the job press), picked against this reader's card.
         let covered = today.pred_opt().unwrap_or(today);
-        let work = if !self.flags().jobs_enabled {
-            None
-        } else {
-            Some(read_work(&client, user_id, covered).await?)
-        };
+        let work = Some(read_work(&client, user_id, covered).await?);
         let issue = PaperIssue {
             edition,
             announcements,
@@ -951,13 +907,8 @@ async fn read_announcements(
 }
 
 /// The sections an edition prints, in page order.
-fn sections_to_print(with_outside: bool) -> Vec<PaperSectionKind> {
-    let mut sections = vec![PaperSectionKind::Reading];
-    if with_outside {
-        sections.push(PaperSectionKind::Outside);
-    }
-    sections
-}
+const SECTIONS_TO_PRINT: [PaperSectionKind; 2] =
+    [PaperSectionKind::Reading, PaperSectionKind::Outside];
 
 /// The one place a room print's outcome becomes a tally line, a metric,
 /// and a log line, for the sweeper and the preview alike.
@@ -1232,7 +1183,6 @@ pub(crate) fn tick(app: &mut App) -> bool {
 
     changed |= drain_events(app);
     changed |= tick_commands(app);
-    changed |= tick_flag_writes(app);
     changed
 }
 
@@ -1292,9 +1242,7 @@ fn drain_events(app: &mut App) -> bool {
                     PressOutcome::Reset => Banner::success(
                         "Paper reset: today's rows dropped, your login pop is re-armed for your next session",
                     ),
-                    PressOutcome::Unavailable => {
-                        Banner::error("Presses stopped, or AI is not configured here")
-                    }
+                    PressOutcome::Unavailable => Banner::error("AI is not configured here"),
                     PressOutcome::Failed => Banner::error("The press jammed; see the logs"),
                 });
             }
@@ -1316,7 +1264,7 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
                 app.paper.modal = Some(modal);
             }
         }
-        (PaperTrigger::Login, PaperOutcome::Empty | PaperOutcome::Unavailable) => {
+        (PaperTrigger::Login, PaperOutcome::Empty) => {
             // Nothing to pop; the account's claim was not spent
             // (`resolve_open` claims only when there is a print).
         }
@@ -1325,10 +1273,6 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
             app.banner = Some(Banner::info(
                 "Nothing printed yet today. Graybeard is still at the press.",
             ));
-        }
-        (PaperTrigger::Command, PaperOutcome::Unavailable) => {
-            app.paper.modal = None;
-            app.banner = Some(Banner::error("The presses are stopped"));
         }
         (_, PaperOutcome::Failed) => {
             app.paper.modal = None;
@@ -1363,7 +1307,7 @@ fn edition_modal(app: &App, issue: &PaperIssue) -> PaperModal {
 }
 
 /// Drain `/paper` from the composer. The open is for everyone; the
-/// switches reach here only from admins (the composer refuses them for
+/// press commands reach here only from admins (the composer refuses them for
 /// anyone else with a banner).
 fn tick_commands(app: &mut App) -> bool {
     let Some(command) = app.chat.take_requested_paper() else {
@@ -1376,17 +1320,6 @@ fn tick_commands(app: &mut App) -> bool {
             app.paper
                 .service
                 .request(app.user_id, PaperTrigger::Command);
-        }
-        PaperCommand::On => set_flag(app, AppFlag::PaperEnabled, true, "Presses running"),
-        PaperCommand::Off => set_flag(app, AppFlag::PaperEnabled, false, "Presses stopped"),
-        PaperCommand::OutsideOn => set_flag(
-            app,
-            AppFlag::PaperOutsideEnabled,
-            true,
-            "Outside page on, from the next print",
-        ),
-        PaperCommand::OutsideOff => {
-            set_flag(app, AppFlag::PaperOutsideEnabled, false, "Outside page off")
         }
         PaperCommand::Print => {
             app.banner = Some(Banner::info("Printing today's edition…"));
@@ -1407,65 +1340,6 @@ fn tick_commands(app: &mut App) -> bool {
     true
 }
 
-fn set_flag(app: &mut App, flag: AppFlag, enabled: bool, done: &'static str) {
-    match &app.app_flags {
-        Some(service) => {
-            let rx = service.set_task(flag, enabled);
-            app.paper.pending_flag_writes.push(PendingFlagWrite {
-                flag,
-                enabled,
-                done,
-                rx,
-            });
-        }
-        None => {
-            app.banner = Some(Banner::error("No flag service on this session"));
-        }
-    }
-}
-
-/// Answer the admin once the row write settles, same shape as the
-/// haunt's flag writes.
-fn tick_flag_writes(app: &mut App) -> bool {
-    let mut answered = Vec::new();
-    app.paper
-        .pending_flag_writes
-        .retain_mut(|pending| match pending.rx.try_recv() {
-            Ok(outcome) => {
-                answered.push((pending.flag, pending.enabled, pending.done, outcome));
-                false
-            }
-            Err(oneshot::error::TryRecvError::Empty) => true,
-            Err(oneshot::error::TryRecvError::Closed) => {
-                answered.push((
-                    pending.flag,
-                    pending.enabled,
-                    pending.done,
-                    Err(anyhow::anyhow!("flag write task dropped its sender")),
-                ));
-                false
-            }
-        });
-    let mut changed = false;
-    for (flag, enabled, done, outcome) in answered {
-        match outcome {
-            Ok(()) => {
-                tracing::info!(user_id = %app.user_id, key = flag.key(), enabled, "paper flag set");
-                app.banner = Some(Banner::success(done));
-            }
-            Err(error) => {
-                tracing::error!(user_id = %app.user_id, key = flag.key(), enabled, error = ?error, "failed to set paper flag");
-                app.banner = Some(Banner::error(&format!(
-                    "Flag {} not written: {error}",
-                    flag.key()
-                )));
-            }
-        }
-        changed = true;
-    }
-    changed
-}
-
 impl PaperState {
     /// Built at session start. The login pop is armed for every reader
     /// with the tweak on, newcomers included; `tick` holds it until the
@@ -1479,7 +1353,6 @@ impl PaperState {
             login_pop_pending: pop_at_login,
             awaiting: None,
             pending_modal: None,
-            pending_flag_writes: Vec::new(),
         }
     }
 }

@@ -1,4 +1,3 @@
-use late_core::models::app_flag::AppFlags;
 use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
 use late_core::test_utils::create_test_user;
 use serde_json::json;
@@ -7,7 +6,7 @@ use uuid::Uuid;
 use super::{
     ContentRatingAction, ContentRatingOutcome, GalleryResult, GalleryService, SplashRefresh,
 };
-use crate::test_helpers::{new_test_db, test_app_flags_rx};
+use crate::test_helpers::new_test_db;
 use late_core::models::artboard_piece_rating::{ArtContentRating, ArtboardPieceRating};
 use late_core::models::user::ArtSplashMode;
 
@@ -51,7 +50,7 @@ async fn today_piece(db: &late_core::db::Db, service: &GalleryService, owner: Uu
 #[tokio::test]
 async fn splash_uses_fresh_ratings_removal_day_and_fuse_without_refreshing_canvas() {
     let test_db = new_test_db().await;
-    let service = GalleryService::new(test_db.db.clone(), test_app_flags_rx());
+    let service = GalleryService::new(test_db.db.clone());
     let owner = create_test_user(&test_db.db, "splash-owner").await;
     let voters = [
         create_test_user(&test_db.db, "splash-voter-a").await,
@@ -120,27 +119,6 @@ async fn splash_uses_fresh_ratings_removal_day_and_fuse_without_refreshing_canva
     );
     client
         .execute(
-            "UPDATE app_flags SET enabled = false WHERE key = 'artboard_gallery_enabled'",
-            &[],
-        )
-        .await
-        .unwrap();
-    assert!(service.is_enabled(), "watch intentionally lags database");
-    assert!(
-        service
-            .splash_piece_for_mode(ArtSplashMode::Always)
-            .await
-            .is_none()
-    );
-    client
-        .execute(
-            "UPDATE app_flags SET enabled = true WHERE key = 'artboard_gallery_enabled'",
-            &[],
-        )
-        .await
-        .unwrap();
-    client
-        .execute(
             "UPDATE artboard_pieces SET removed_at = CURRENT_TIMESTAMP WHERE id = $1",
             &[&piece],
         )
@@ -168,7 +146,7 @@ async fn splash_uses_fresh_ratings_removal_day_and_fuse_without_refreshing_canva
 async fn failed_fresh_splash_check_falls_back_to_the_cup() {
     let test_db = new_test_db().await;
     let owner = create_test_user(&test_db.db, "splash-failure-owner").await;
-    let service = GalleryService::new(test_db.db.clone(), test_app_flags_rx());
+    let service = GalleryService::new(test_db.db.clone());
     today_piece(&test_db.db, &service, owner.id).await;
     test_db
         .db
@@ -188,11 +166,11 @@ async fn failed_fresh_splash_check_falls_back_to_the_cup() {
 }
 
 #[tokio::test]
-async fn rating_task_refuses_self_votes_foreign_flags_and_a_closed_gallery_without_changing_it() {
+async fn rating_task_refuses_self_votes_foreign_flags_and_a_dbless_gallery_without_changing_it() {
     let test_db = new_test_db().await;
     let owner = create_test_user(&test_db.db, "rating-owner").await;
     let viewer = create_test_user(&test_db.db, "rating-viewer").await;
-    let service = GalleryService::new(test_db.db.clone(), test_app_flags_rx());
+    let service = GalleryService::new(test_db.db.clone());
     let piece = today_piece(&test_db.db, &service, owner.id).await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     service.content_rating_task(
@@ -238,14 +216,7 @@ async fn rating_task_refuses_self_votes_foreign_flags_and_a_closed_gallery_witho
         } if summary.owner_marked_nsfw
     ));
     let client = test_db.db.get().await.unwrap();
-    client
-        .execute(
-            "UPDATE app_flags SET enabled = false WHERE key = 'artboard_gallery_enabled'",
-            &[],
-        )
-        .await
-        .unwrap();
-    service.content_rating_task(
+    GalleryService::disabled().content_rating_task(
         piece,
         viewer.id,
         3,
@@ -268,8 +239,8 @@ async fn rating_task_refuses_self_votes_foreign_flags_and_a_closed_gallery_witho
 }
 
 /// The refresh publishes the day's piece into the watch and every login
-/// that day shows it; an empty day, and the switch off, publish nothing
-/// and every login is the cup.
+/// that day shows it; an empty day, and a service with no database,
+/// publish nothing and every login is the cup.
 #[tokio::test]
 async fn the_refresh_publishes_todays_piece_for_every_login_that_day() {
     let test_db = new_test_db().await;
@@ -278,7 +249,7 @@ async fn the_refresh_publishes_todays_piece_for_every_login_that_day() {
     let today = chrono::Utc::now().date_naive();
     let tomorrow = today + chrono::Duration::days(1);
 
-    let service = GalleryService::new(test_db.db.clone(), test_app_flags_rx());
+    let service = GalleryService::new(test_db.db.clone());
 
     // Nothing hung before today: the watch is empty and the door is the cup.
     assert_eq!(
@@ -313,17 +284,8 @@ async fn the_refresh_publishes_todays_piece_for_every_login_that_day() {
     assert_eq!(service.splash_piece(), Some(published.clone()));
     assert_eq!(service.splash_piece(), Some(published));
 
-    // The switch off empties the watch on the next refresh: every login
-    // is the cup.
-    let (_flags_tx, flags_rx) = tokio::sync::watch::channel(Some(AppFlags {
-        haunt_enabled: true,
-        haunt_live: false,
-        paper_enabled: true,
-        paper_outside_enabled: false,
-        artboard_gallery_enabled: false,
-        jobs_enabled: false,
-    }));
-    let off = GalleryService::new(test_db.db.clone(), flags_rx);
+    // No database: the refresh is off and every login is the cup.
+    let off = GalleryService::disabled();
     assert_eq!(
         off.refresh_splash(tomorrow).await.expect("refresh"),
         SplashRefresh::Off
@@ -334,7 +296,7 @@ async fn the_refresh_publishes_todays_piece_for_every_login_that_day() {
 #[tokio::test]
 async fn first_login_after_midnight_shows_the_new_days_piece() {
     let test_db = new_test_db().await;
-    let service = GalleryService::new(test_db.db.clone(), test_app_flags_rx());
+    let service = GalleryService::new(test_db.db.clone());
     let owner = create_test_user(&test_db.db, "midnight-owner").await;
     let client = test_db.db.get().await.unwrap();
     let mut pieces = Vec::new();
@@ -377,7 +339,7 @@ async fn a_failed_rating_request_shows_fixed_copy_not_the_database_error() {
     let test_db = new_test_db().await;
     let owner = create_test_user(&test_db.db, "rating-failure-owner").await;
     let viewer = create_test_user(&test_db.db, "rating-failure-viewer").await;
-    let service = GalleryService::new(test_db.db.clone(), test_app_flags_rx());
+    let service = GalleryService::new(test_db.db.clone());
     let piece = today_piece(&test_db.db, &service, owner.id).await;
     test_db
         .db

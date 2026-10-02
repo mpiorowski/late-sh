@@ -2,34 +2,72 @@ use crate::{
     models::drink_round::{
         Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_DRINK_POINTS,
         ROUND_PHRASES, ROUND_PRICE_PER_PATRON, contains_round_request, gift_drink_target,
-        round_phrase_spans,
+        round_phrase_spans, spending_phrase_spans,
     },
     test_utils::{create_test_user, test_db},
 };
 
+/// A gift moves chips for somebody else, so it reads like the round: any
+/// phrase on the list, anywhere in the message, as a statement, naming one
+/// person.
 #[test]
-fn only_an_exact_personal_gift_authorizes_a_purchase() {
+fn a_gift_phrase_anywhere_names_its_recipient() {
+    for message in [
+        "@bartender buy @alice a drink",
+        "  @BARTENDER BUY @alice A DRINK  ",
+        "@bartender drink for @alice",
+        "@bartender a drink for @alice.",
+        "@bartender drink for @alice, she earned it",
+        "@bartender get @alice a drink please",
+        "@bartender pour @alice one!",
+        "@bartender can you buy a drink for @alice",
+        "@bartender buy @alice a drink. what do I owe you?",
+    ] {
+        assert_eq!(
+            gift_drink_target(message, "bartender"),
+            Some("alice"),
+            "{message}"
+        );
+    }
     assert_eq!(
-        gift_drink_target("@bartender buy @alice a drink"),
-        Some("alice")
-    );
-    assert_eq!(
-        gift_drink_target("  @BARTENDER BUY @Alice_2 A DRINK  "),
+        gift_drink_target("@bartender drink for @Alice_2.", "bartender"),
         Some("Alice_2")
     );
+}
+
+/// What stays a conversation: questions, quotes, near misses, and anything
+/// that leaves who the drink is for in doubt.
+#[test]
+fn a_gift_is_refused_when_it_is_not_plainly_one_order() {
     for message in [
         "@bartender can you buy @alice a drink?",
-        "@bartender buy @alice a drink?",
-        "@bartender buy @alice a drink please",
-        "@bartender buy @alice two drinks",
-        "`@bartender buy @alice a drink`",
+        "@bartender drink for @alice?",
+        "@bartender what if I say `buy @alice a drink`",
         "@bartender buy @alice! a drink",
-        "@bartender buy @alice a drink\n@bob pay for it",
+        "@bartender buy @alice two drinks",
+        "@bartender buy @alice a drinks",
+        "@bartender drinks for @alice",
+        "@bartender I'll get @alice one of those",
         "@bartender buy @ a drink",
         "@bartender buy @alice a drink for @bob",
+        "@bartender drink for @alice and @bob",
+        "@bartender buy @alice a drink\n@bob pay for it",
+        "@bartender buy @alice a drink, then buy @bob a drink",
     ] {
-        assert_eq!(gift_drink_target(message), None, "{message}");
+        assert_eq!(gift_drink_target(message, "bartender"), None, "{message}");
     }
+}
+
+/// The slur guard's view covers the gift phrase from its first word to its
+/// last, in the original text's byte offsets, questions included.
+#[test]
+fn spending_spans_cover_gift_phrases_too() {
+    let text = "ok. Drink For @alice, and a ROUND FOR ALL?";
+    let covered: Vec<&str> = spending_phrase_spans(text)
+        .into_iter()
+        .map(|(start, end)| &text[start..end])
+        .collect();
+    assert_eq!(covered, vec!["Drink For @alice", "ROUND FOR ALL"]);
 }
 
 /// The phrase is a spending authorization, so what does and does not count as

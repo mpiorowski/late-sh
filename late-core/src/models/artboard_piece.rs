@@ -34,7 +34,6 @@ use serde_json::Value;
 use tokio_postgres::{Row, error::SqlState};
 use uuid::Uuid;
 
-use super::app_flag::AppFlag;
 use super::artboard_piece_rating::ContentRatingSummary;
 
 /// Fewest non-blank glyphs a frame may hold. A smiley is not a piece.
@@ -413,10 +412,7 @@ impl ArtboardPiece {
     /// but keeps its stamp, and the claim refuses any day a row (removed
     /// or not) already holds, so a removal after the day was assigned
     /// leaves the day without a piece (the cup); nothing is promoted into
-    /// the gap. The gallery's
-    /// kill switch (`artboard_gallery_enabled`) is in both statements, so
-    /// a day the gallery was off assigns nothing and burns no piece.
-    /// `None` is an empty queue or the switch off.
+    /// the gap. `None` is an empty queue.
     pub async fn splash_for_day(
         client: &impl GenericClient,
         day: NaiveDate,
@@ -436,9 +432,8 @@ impl ArtboardPiece {
                     ORDER BY p.created ASC
                     LIMIT 1
                  )
-                 AND NOT EXISTS (SELECT 1 FROM artboard_pieces WHERE splash_on = $1)
-                 AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
-                &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
+                 AND NOT EXISTS (SELECT 1 FROM artboard_pieces WHERE splash_on = $1)",
+                &[&day],
             )
             .await;
         match claimed {
@@ -471,10 +466,9 @@ impl ArtboardPiece {
             .query_opt(
                 &format!(
                     "{PIECE_VIEW_SQL}
-                     WHERE p.splash_on = $2
-                       AND EXISTS (SELECT 1 FROM app_flags WHERE key = $3 AND enabled)"
+                     WHERE p.splash_on = $2"
                 ),
-                &[&Uuid::nil(), &day, &AppFlag::ArtboardGalleryEnabled.key()],
+                &[&Uuid::nil(), &day],
             )
             .await?;
         Ok(row.map(Self::from))
@@ -489,10 +483,8 @@ impl ArtboardPiece {
     /// The claim is one `UPDATE` racing on the partial unique index over
     /// `featured_on` (migration 188): the loser's stamp is refused and it
     /// reads the winner's row back. A piece taken down leaves the index, so
-    /// a removal frees the day for the next in line. The gallery's kill
-    /// switch (`artboard_gallery_enabled`) is in both statements, the way
-    /// the splash wall obeys it. `None` is an empty backlog or the
-    /// switch off.
+    /// a removal frees the day for the next in line. `None` is an empty
+    /// backlog.
     pub async fn feature_for_day(
         client: &impl GenericClient,
         day: NaiveDate,
@@ -512,9 +504,8 @@ impl ArtboardPiece {
                     ORDER BY (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) DESC,
                              p.created ASC
                     LIMIT 1
-                 )
-                 AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
-                &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
+                 )",
+                &[&day],
             )
             .await;
         match claimed {
@@ -561,10 +552,9 @@ impl ArtboardPiece {
             .query_opt(
                 &format!(
                     "{PIECE_VIEW_SQL}
-                     WHERE p.featured_on = $2
-                       AND EXISTS (SELECT 1 FROM app_flags WHERE key = $3 AND enabled)"
+                     WHERE p.featured_on = $2"
                 ),
-                &[&Uuid::nil(), &day, &AppFlag::ArtboardGalleryEnabled.key()],
+                &[&Uuid::nil(), &day],
             )
             .await?;
         Ok(row.map(Self::from))

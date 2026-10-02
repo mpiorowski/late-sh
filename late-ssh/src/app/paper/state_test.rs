@@ -209,22 +209,6 @@ fn paper_commands_parse_and_everything_else_falls_through() {
         Some(Some(PaperCommand::Open))
     );
     assert_eq!(
-        parse_paper_command("/paper on"),
-        Some(Some(PaperCommand::On))
-    );
-    assert_eq!(
-        parse_paper_command("/paper off"),
-        Some(Some(PaperCommand::Off))
-    );
-    assert_eq!(
-        parse_paper_command("/paper outside on"),
-        Some(Some(PaperCommand::OutsideOn))
-    );
-    assert_eq!(
-        parse_paper_command("/paper outside off"),
-        Some(Some(PaperCommand::OutsideOff))
-    );
-    assert_eq!(
         parse_paper_command("/paper print"),
         Some(Some(PaperCommand::Print))
     );
@@ -238,12 +222,13 @@ fn paper_commands_parse_and_everything_else_falls_through() {
     );
     // Junk after the command is a usage banner, not a chat line.
     assert_eq!(parse_paper_command("/paper yesterday"), Some(None));
+    assert_eq!(parse_paper_command("/paper off"), Some(None));
     // Not the command at all: posts as text.
     assert_eq!(parse_paper_command("/papers"), None);
     assert_eq!(parse_paper_command("paper"), None);
 
     assert!(!PaperCommand::Open.admin_only());
-    assert!(PaperCommand::Off.admin_only());
+    assert!(PaperCommand::Print.admin_only());
     assert!(PaperCommand::Preview.admin_only());
 }
 

@@ -6,8 +6,6 @@ use deadpool_postgres::GenericClient;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
-use super::app_flag::AppFlag;
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ArtContentRating {
     #[default]
@@ -224,8 +222,8 @@ impl ArtboardPieceRating {
         Self::read_for_day(client, piece_id, viewer_id, None).await
     }
 
-    /// Login reads metadata only, checking the day, removal and gallery fuse
-    /// in the same statement as the classification. The canvas stays cached.
+    /// Login reads metadata only, checking the day and removal in the same
+    /// statement as the classification. The canvas stays cached.
     pub async fn read_for_day(
         client: &impl GenericClient,
         piece_id: Uuid,
@@ -238,14 +236,8 @@ impl ArtboardPieceRating {
                           WHERE piece_id = p.id AND user_id = $2) AS viewer_content_vote
              FROM artboard_pieces p JOIN artboard_piece_content_ratings r ON r.piece_id = p.id
              WHERE p.id = $1 AND p.removed_at IS NULL
-               AND ($3::date IS NULL OR (p.splash_on = $3 AND EXISTS (
-                    SELECT 1 FROM app_flags WHERE key = $4 AND enabled)))",
-                &[
-                    &piece_id,
-                    &viewer_id,
-                    &day,
-                    &AppFlag::ArtboardGalleryEnabled.key(),
-                ],
+               AND ($3::date IS NULL OR p.splash_on = $3)",
+                &[&piece_id, &viewer_id, &day],
             )
             .await?;
         Ok(row.as_ref().map(ContentRatingSummary::from_row))

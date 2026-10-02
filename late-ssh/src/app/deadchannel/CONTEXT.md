@@ -14,10 +14,11 @@
   lockers, the bits machine, the step off the ledge; §3c) and the
   tailor in `tailor/` (the mirror as the look's editor, the look's writer
   after the join; §3b). Built for
-  several replicas (root CONTEXT.md, multi-replica rule); gated behind
-  the `haunt_live` fuse, unlit, so only staff (admins and moderators)
-  are haunted today, and only they can finish the ladder and join.
-- Status: Active, staff only until `/haunt live on`
+  several replicas (root CONTEXT.md, multi-replica rule); staff only
+  (admins and moderators) by decision in code (`haunt::svc::arm` and
+  `bootstrap_gate`), so only staff are haunted, and only they can finish
+  the ladder and join.
+- Status: Active, staff only
 - Parent context: `../../../../CONTEXT.md`; design sources live in this
   directory: `GAME.md` (the game: thesis, first contact, the runner) and
   `DIGEST.md` (the feed budget and the welcome-back paper)
@@ -43,9 +44,9 @@ day-scale gaps (whisper gap, invitation delay) are 20 hours rather than
 
 Who is haunted (GAME.md, "the eligibility gate is a whisper campaign"):
 **stage 1 is universal, stages 2-4 need the gate.** Stage 1 arms for
-staff (admins and moderators) always and for everyone once the `haunt_live` fuse is lit (an
-`app_flags` row, `/haunt live on|off`; unlit today, so nothing fires for
-real users while copy and thresholds await design review). Stages 2-4
+staff (admins and moderators) and nobody else, a rule in code rather than
+a switch, so nothing fires for real users while copy and thresholds await
+design review; opening it up is a code change. Stages 2-4
 arm when the gate passes: at least `ACTIVE_MIN_HOURS` (8) of lifetime
 connected time (`user_online_time.total_milliseconds`, the
 online-time leaderboard's table, one primary-key read at bootstrap;
@@ -66,8 +67,7 @@ record arms stages 2-4 whatever the bio later becomes. All three
 thresholds are placeholders pending design review.
 
 **Replica rule.** Nothing in this domain is a process-local source of
-truth. The switches are rows served through one `watch` per replica
-(`app/flags`). The daily and lifetime caps are enforced by conditional
+truth. The daily and lifetime caps are enforced by conditional
 claims on the user row (`User::claim_first_contact_glitch_burst`,
 `claim_first_contact_name_hit`): a machine decides *when to ask*, holds
 its schedule, and the beat shows on the tick the claim comes back won.
@@ -86,7 +86,7 @@ number of replicas spend one AI call per text.
 | `runner/state.rs` | The look: `PIECES` (the closed table, one five-cell row per piece, `Slot` hood/eyes/coat, each with the `level` that unlocks it: three per slot at 1, 4, 7, 10, 13; no earned or legendary pieces, every piece is reachable by level), `Tint` (the closed palette of seven, each with its unlock `level`, white alone at 15; gold deliberately absent), `UNLOCK_LEVELS`, `unlocked_pieces` / `unlocked_tints` / `next_unlock` (the level gate), `Look` + `Worn` (typed, table references), `Look::random(level, rng)` (the join's dice at 1, the tailor's shuffle at the runner's level), `Look::to_json` / `Look::parse` (the JSON contract on the runner row; unknown codes are a `LookError`, never a blank), `PORTRAIT_WIDTH` / `PORTRAIT_HEIGHT`. No I/O. `state_test` asserts every row is five single-width cells and pins the unlock ladder whole. |
 | `runner/ui.rs` | `portrait_spans`: the look as three styled spans, one per worn piece in its tint; `badge_text` (the mark and the level, `▚7`, with the marks behind the Signal's glyph once there are any, `▚3╬2`) and `level_color` (the newest tint the level unlocked: static to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15) for the wire's author header and the profile; `tint_color` maps the palette onto the theme (cyan and magenta fixed, the theme has neither). Pure. |
 | `runner/data.rs` | `welcome`: the voice's welcome for a runner whose row was just created, one message, one paragraph per line (the runner mentioned by name, the story so far, `0` twice as the way down, `/leave` and `/join #deadchannel`). Names no key on the street: those are the guide's. Placeholder copy at feed-template standards. Pure. |
-| `runner/svc.rs` | `RunnerLookService`: the process-shared runner directory (`watch<Arc<HashMap<Uuid, RunnerEntry>>>`, an entry being the look, level, peak level, and marks of a standing runner), seeded and refreshed from `deadchannel_runners` (`list_standing`) on the `deadchannel_runner_changed` LISTEN, the `app/flags` shape. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
+| `runner/svc.rs` | `RunnerLookService`: the process-shared runner directory (`watch<Arc<HashMap<Uuid, RunnerEntry>>>`, an entry being the look, level, peak level, and marks of a standing runner), seeded and refreshed from `deadchannel_runners` (`list_standing`) on the `deadchannel_runner_changed` LISTEN, re-read whole on any change. A look that fails to parse is logged and skipped. `fixed_looks_rx` for test apps. |
 | `street/state.rs` | Pure: `street_view`, the street derived from presence records (one `StreetRunner` per user: the latest mover's cell, present if any session is looking), and `StreetPresence`, the `App` slot: `descend` (on the street until the session ends), `sync` (the stand this session publishes; the move stamp moves only on a move), `leave`, and the derived `view` the renderer reads (`set_records` says whether it moved). Stands off this map are dropped here. The wire is `app/presence`. |
 | `city/map.rs` | **Generated** by `scripts/gen_city_map.py --write` (never hand-edited): the 232x52 `MAP` literal, the `SOLID` collision bitmap, `SPAWN`, every zone (`SIGNS`, `BANNERS`, `CART_SIGNS`, `AWNINGS`, `WINDOWS`, `VENTS`, `PUDDLES`, `LAMPS`, `DROP_LIGHTS`, `SCREEN_FACE`, `WIRE`, ...), the closed `Neon` palette, `Landmark` + `nearest_landmark` (reach zones), `walkable`, `grid`/`char_at`. |
 | `city/state.rs` | Per-session view state: the runner's cell, the animation clock, the open panel, the cursor on the armorer's wall (`picked_tier`, `pick_up` / `pick_down`), the ledge and the lean out over it (`arm_reset` / `disarm_reset` / `reset_armed`, only while looking over, cleared by every way back), the pinned street line. `walk`, `run`, `nearby`, `Landmark::on_enter` (`Enter::Panel` for shops, `Enter::Line` for carts, `Enter::Fight` at the screen, `Enter::Leave` for the wire). Pure. |
@@ -137,7 +137,7 @@ view structs into the rows cache key (unchanged: the row builder corrupts
 whichever message id it is handed, so witnessing cost the chat renderer
 nothing), and `ChatService::send_first_contact_invitation_task` (answers
 the claim on a oneshot, then sends the DM after a delay). Outside the domain:
-`app/flags/svc.rs` (the switches), `app/ai/screen.rs::screen_bio` (the
+`app/ai/screen.rs::screen_bio` (the
 bio verdict), `ProfileService`'s first-contact tasks (the row claims),
 `late-core`'s `models/deadchannel_name_hit.rs` (the wire's channel,
 payload, and parse), and `metrics::record_first_contact_beat` /
@@ -196,8 +196,8 @@ no face; every other room renders exactly as before.
    answer re-dices and mirrors the row's count, a failed one defers a
    few minutes. At `GLITCH_TOTAL_CAP` (3) the clock goes quiet for good
    and stage 2 opens (the quiet is part of the escalation). Chrome,
-   never content; timezone label untouched. Universal: armed for every
-   session the fuse allows, gate or no gate.
+   never content; timezone label untouched. Armed for every staff
+   session, gate or no gate.
 2. **Name flicker (personal, witnessed).** Only once stage 1 has spent its share
    (glitch hits at the cap): on the landing echo of this session's own
    send (the one moment of guaranteed attention), a 1-in-3 roll may
@@ -234,9 +234,7 @@ no face; every other room renders exactly as before.
    person being haunted declines their own copy off the wire by
    recognising their live hit (a second device of theirs holds no live
    hit and witnesses it normally), and the audience is exactly stage 1's:
-   a beat is only painted while the kill switch is on, and while the fuse
-   is unlit only staff are in the audience, so nothing of the haunting
-   reaches a real user before `/haunt live on`.
+   only staff are in it, so nothing of the haunting reaches a real user.
 3. **Whisper (the held door).** Plays `WHISPER_TOTAL_CAP` (2) times per
    person, at least `WHISPER_GAP_HOURS` (20) apart, each from its own
    line pool: the first door says the static noticed you, the second
@@ -259,7 +257,7 @@ no face; every other room renders exactly as before.
    both played leave one mark and the same evening never counts twice;
    the loser is logged, the one race the claim-on-delivery shape
    accepts, because claiming at arming would burn a whisper on every
-   dropped SSH session). A kill-switch drop or lost session leaves the
+   dropped SSH session). A hard-cap drop or lost session leaves the
    mark unspent.
 4. **Breakthrough, then the invitation (the whole game is opt-in).**
    `INVITE_DELAY_HOURS` (20) after the second delivered whisper the
@@ -280,8 +278,8 @@ no face; every other room renders exactly as before.
    door's static, heavier and pulsing quicker, over the whole frame and
    every modal, `BREAKTHROUGH_LINE` typing in a gap torn out of the middle,
    about seven seconds, every key swallowed ahead of door passthrough and
-   the parser, the kill switch cuts it. Known gap to close before the fuse
-   is lit: the claim is stamped `dm_delay` before the DM sends, so a
+   the parser. Known gap to close before the haunting leaves staff: the
+   claim is stamped `dm_delay` before the DM sends, so a
    replica stopping in that window leaves a stamp with no DM, and nothing
    repairs it but `/haunt reset` by hand. The DM comes from the game's first voice - `afterglow`
    (GAME.md reserved the name for something inside the world), a
@@ -339,8 +337,7 @@ till; every other counter is a catalog with its till shut.
   on the undercity comes back up. Runners only (`App::is_runner`: an
   entry in `App.runner_looks` for this user, so a `deadchannel_runners` row
   without a leave stamp; the app-wide gate for everything under the
-  clubhouse, not an `app_flags` switch, which are process-wide, not per
-  user); anyone else stays on the clubhouse. The gate guards the descent,
+  clubhouse, per user); anyone else stays on the clubhouse. The gate guards the descent,
   so the standing there is guarded on the 1 Hz edge in `tick.rs`: when the
   directory changes and this user is no longer in it, a session on
   `Screen::City` is walked back up to the clubhouse. That is the only
@@ -704,7 +701,7 @@ says so (`Undercity · f fight · p patch · ? guide`,
   runner in), the tailor's bought rack (chips, seasonal stock) and earned
   pieces.
 
-## 4. Persistence (`users.settings`, late-core `User`; `app_flags`; `deadchannel_runners`)
+## 4. Persistence (`users.settings`, late-core `User`; `deadchannel_runners`)
 
 - `deadchannel_runners` (migration 172, model
   `late-core/src/models/deadchannel_runner.rs`): one row per user
@@ -774,9 +771,6 @@ says so (`Undercity · f fight · p patch · ? guide`,
   `set_first_contact_bio_verdict` lands `passed`/`failed` only while
   that hash is still on record. Not a chain mark: `/haunt reset` leaves
   it alone (rewrite the bio to re-screen).
-- `app_flags` rows `haunt_enabled` (kill switch) and `haunt_live`
-  (fuse), migration 171, model `late-core/src/models/app_flag.rs`,
-  served by `app/flags/svc.rs`.
 - `first_contact_invited_at` (RFC3339): stage-4 claim, written only by
   `claim_first_contact_invitation` (conditional on absence), taken back
   by `release_first_contact_invitation` when the send after a won claim
@@ -809,20 +803,15 @@ not exist. Admin-only on purpose while the ladder runs for staff: a
 moderator who could type `/haunt` would know what the glitches were.
 Drained by `haunt::svc::tick`.
 
-- `/haunt` - status: kill switch, fuse, whether stage 1 and the chosen
+- `/haunt` - status: whether stage 1 and the chosen
   stages armed for this session, the gate's three legs (active hours,
   touched settings, bio length and standing), glitch schedule, glitch
   and name hit counters against their caps, the witness (whether a beat
   of somebody else's is on this screen), door, whisper, and the
   breakthrough or invite.
-- `/haunt on` / `/haunt off` - the kill switch, an `app_flags` row: the
-  flip lands on every replica through the `app_flag_changed` notify and
-  survives a restart. `on` also forces this session chosen and arms the
-  repeatable machines, so the flip (and the gate) is testable without
-  reconnecting or a passing bio; `off` drops a live whisper mid-scene.
-- `/haunt live on` / `/haunt live off` - the fuse (`haunt_live`): lit,
-  stage 1 arms for every connecting user, not only staff, and the gate
-  decides who goes further. Takes effect from each user's next connect.
+- `/haunt arm` - forces this session chosen and arms the repeatable
+  machines, so a beat (and the gate) is testable without reconnecting or
+  a passing bio. Session only; nothing is written.
 - `/haunt glitch` - fire a clock burst on a ~7s fuse (the banner covers
   the clock for ~5s), bypassing schedule and caps.
 - `/haunt name` - force the next own send to flicker. Skips the row's
@@ -837,10 +826,6 @@ Drained by `haunt::svc::tick`.
 
 ## 6. Gotchas
 
-- The flags `watch` carries `None` until the listener's first load, and
-  `None` reads as off everywhere: a session connecting in that window
-  arms nothing, and an armed whisper would drop unspent. Fail closed on
-  purpose; test apps get a pre-seeded receiver (`test_app_flags_rx`).
 - A hit shows one tick after the claim wins, not on the tick the dice
   landed (one DB round trip). For the flicker that is still on the
   landing echo's ~800ms hold; the glitch never had a moment to miss.
@@ -902,10 +887,9 @@ Drained by `haunt::svc::tick`.
   is the next slice.
 - Where to look when the ladder seems dead (per person, in the logs, all
   keyed by `user_id` and `username`, the two fields every deadchannel line
-  carries): `first contact gate evaluated` at every connect
-  once the fuse is lit (for staff, always) with each leg's number, the
-  bio standing, and the `GateVerdict`; `first contact gate shut` when
-  haunting is off (info for staff, debug for everyone else); `first
+  carries): `first contact gate evaluated` at every staff connect
+  with each leg's number, the bio standing, and the `GateVerdict`
+  (nobody else gets a line: the gate is shut before any read); `first
   contact armed` for every session that can fire stage 1, with `chosen`
   and `whisper_armed`; then one line per hit, whisper, breakthrough, invitation, bio
   screen, and runner. How many the gate turns away, and on which leg, is

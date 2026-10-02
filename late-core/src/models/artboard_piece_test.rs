@@ -329,12 +329,9 @@ async fn listing_counts_answer_without_listing() {
 /// The splash wall: every piece hung takes one UTC day over the door, in
 /// hang order, the day after it was hung at the earliest. Two replicas
 /// refreshing at once agree on the day's piece; a removal after the day
-/// was assigned leaves the day empty, nothing moves up; the gallery's
-/// switch turns the wall off.
+/// was assigned leaves the day empty, nothing moves up.
 #[tokio::test]
 async fn the_splash_wall_shows_each_piece_one_day_in_hang_order() {
-    use crate::models::app_flag::{AppFlag, AppFlags};
-
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let other = test_db.db.get().await.expect("db client");
@@ -429,27 +426,14 @@ async fn the_splash_wall_shows_each_piece_one_day_in_hang_order() {
             .expect("claim")
             .is_none()
     );
-
-    // The gallery's switch turns the wall off with everything else.
-    AppFlags::set(&client, AppFlag::ArtboardGalleryEnabled, false)
-        .await
-        .expect("switch off");
-    assert!(
-        ArtboardPiece::splash_for_day(&client, day(2))
-            .await
-            .expect("claim")
-            .is_none()
-    );
 }
 
 /// The puzzle's daily art: yesterday's most applauded piece, claimed once
 /// for the day however many sessions ask, then the rest of the backlog one
 /// piece a day. A piece hung today waits for tomorrow; a removal frees the
-/// day for the next in line; the gallery's switch turns the art off.
+/// day for the next in line.
 #[tokio::test]
 async fn puzzle_art_claims_the_most_applauded_backlog_piece_once_per_day() {
-    use crate::models::app_flag::{AppFlag, AppFlags};
-
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let other = test_db.db.get().await.expect("db client");
@@ -560,17 +544,6 @@ async fn puzzle_art_claims_the_most_applauded_backlog_piece_once_per_day() {
             .expect("pin")
             .is_none(),
         "a piece that is down cannot be pinned"
-    );
-
-    // The gallery's switch turns the puzzle's art off with everything else.
-    AppFlags::set(&client, AppFlag::ArtboardGalleryEnabled, false)
-        .await
-        .expect("switch off");
-    assert!(
-        ArtboardPiece::feature_for_day(&client, day(1))
-            .await
-            .expect("claim")
-            .is_none()
     );
 }
 

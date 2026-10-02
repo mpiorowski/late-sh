@@ -5,7 +5,7 @@ use super::*;
 fn hold_through(state: &mut WhisperState, from: usize, to: usize) {
     for tick in from..=to {
         assert_eq!(
-            state.tick(tick, true),
+            state.tick(tick),
             WhisperTick::Holding,
             "expected the door held at tick {tick}"
         );
@@ -54,7 +54,7 @@ fn the_door_plays_on_its_own_clock_and_releases_delivered() {
     let typed_done = VOICE_TICK + line_len;
     hold_through(&mut state, VOICE_TICK + 1, typed_done + LINGER_TICKS - 1);
     assert_eq!(
-        state.tick(typed_done + LINGER_TICKS, true),
+        state.tick(typed_done + LINGER_TICKS),
         WhisperTick::Released { delivered: true }
     );
     assert_eq!(
@@ -114,27 +114,12 @@ fn the_second_door_speaks_from_its_own_pool_and_the_marks_space_the_two_apart() 
 }
 
 #[test]
-fn kill_switch_drops_the_scene_unspent() {
-    let mut state = WhisperState::with_seed(1, 0);
-    hold_through(&mut state, 1, VOICE_TICK + 4);
-    assert_eq!(
-        state.tick(VOICE_TICK + 5, false),
-        WhisperTick::Released { delivered: false }
-    );
-    // Released stays released, whatever comes later.
-    assert_eq!(
-        state.tick(VOICE_TICK + 6, true),
-        WhisperTick::Released { delivered: false }
-    );
-}
-
-#[test]
 fn hard_cap_opens_the_door() {
     // A machine that somehow never advanced still releases at the cap,
     // undelivered because the line never finished.
     let mut state = WhisperState::with_seed(2, 0);
     assert_eq!(
-        state.tick(HARD_CAP_TICKS, true),
+        state.tick(HARD_CAP_TICKS),
         WhisperTick::Released { delivered: false }
     );
 }
@@ -168,30 +153,17 @@ fn breakthrough_claims_on_a_due_send_then_plays_its_scene_and_heals() {
     let mut breakthrough = Breakthrough::with_seed(9);
     let len = BREAKTHROUGH_LINE.chars().count();
 
-    // Not due, or the kill switch off: sends pass untouched.
-    assert_eq!(
-        breakthrough.note_own_send(true, false),
-        BreakthroughRoll::Wait
-    );
-    assert_eq!(
-        breakthrough.note_own_send(false, true),
-        BreakthroughRoll::Wait
-    );
+    // Not due: sends pass untouched.
+    assert_eq!(breakthrough.note_own_send(false), BreakthroughRoll::Wait);
     // Due: one claim, and no second ask while it is out.
-    assert_eq!(
-        breakthrough.note_own_send(true, true),
-        BreakthroughRoll::Claim
-    );
-    assert_eq!(
-        breakthrough.note_own_send(true, true),
-        BreakthroughRoll::Wait
-    );
-    assert_eq!(breakthrough.tick(100, true), BreakthroughTick::Idle);
+    assert_eq!(breakthrough.note_own_send(true), BreakthroughRoll::Claim);
+    assert_eq!(breakthrough.note_own_send(true), BreakthroughRoll::Wait);
+    assert_eq!(breakthrough.tick(100), BreakthroughTick::Idle);
     assert_eq!(breakthrough.typed_chars(100), None);
 
     // Won at tick 100: static alone first, then the line types itself.
     breakthrough.start(100);
-    assert_eq!(breakthrough.tick(100, true), BreakthroughTick::Playing);
+    assert_eq!(breakthrough.tick(100), BreakthroughTick::Playing);
     assert_eq!(breakthrough.surge_progress(100), Some(0.0));
     assert_eq!(
         breakthrough.typed_chars(100 + BREAKTHROUGH_VOICE_TICK - 1),
@@ -202,16 +174,13 @@ fn breakthrough_claims_on_a_due_send_then_plays_its_scene_and_heals() {
         Some((5, true))
     );
     // A send mid-scene asks for nothing.
-    assert_eq!(
-        breakthrough.note_own_send(true, true),
-        BreakthroughRoll::Wait
-    );
+    assert_eq!(breakthrough.note_own_send(true), BreakthroughRoll::Wait);
 
     // The whole line holds, then the screen heals.
     let end = 100 + BREAKTHROUGH_VOICE_TICK + len + BREAKTHROUGH_LINGER_TICKS;
     assert_eq!(breakthrough.typed_chars(end - 1), Some((len, false)));
-    assert_eq!(breakthrough.tick(end - 1, true), BreakthroughTick::Playing);
-    assert_eq!(breakthrough.tick(end, true), BreakthroughTick::Ended);
+    assert_eq!(breakthrough.tick(end - 1), BreakthroughTick::Playing);
+    assert_eq!(breakthrough.tick(end), BreakthroughTick::Ended);
     assert_eq!(
         breakthrough,
         Breakthrough {
@@ -225,34 +194,21 @@ fn breakthrough_claims_on_a_due_send_then_plays_its_scene_and_heals() {
 }
 
 #[test]
-fn breakthrough_force_a_failed_ask_and_the_kill_switch() {
+fn breakthrough_force_and_a_failed_ask() {
     let mut breakthrough = Breakthrough::with_seed(1);
 
     // `/haunt invite`: the next send claims without the delay, once.
     breakthrough.force_next();
-    assert_eq!(
-        breakthrough.note_own_send(true, false),
-        BreakthroughRoll::Claim
-    );
+    assert_eq!(breakthrough.note_own_send(false), BreakthroughRoll::Claim);
     // The ask failed: nothing plays, and no send asks again this session,
     // due or not, so a broken voice is not re-queried on every send.
     breakthrough.claim_failed();
-    assert_eq!(
-        breakthrough.note_own_send(true, true),
-        BreakthroughRoll::Wait
-    );
+    assert_eq!(breakthrough.note_own_send(true), BreakthroughRoll::Wait);
     // `/haunt invite` re-opens it.
     breakthrough.force_next();
-    assert_eq!(
-        breakthrough.note_own_send(true, false),
-        BreakthroughRoll::Claim
-    );
+    assert_eq!(breakthrough.note_own_send(false), BreakthroughRoll::Claim);
     // A claim taken by another device settles back to waiting.
     breakthrough.claim_taken();
-    assert_eq!(breakthrough.phase(), BreakthroughPhase::Idle);
-    // The kill switch cuts a live scene.
-    breakthrough.start(10);
-    assert_eq!(breakthrough.tick(11, false), BreakthroughTick::Ended);
     assert_eq!(
         breakthrough,
         Breakthrough {
@@ -270,19 +226,19 @@ fn glitch_asks_when_due_then_starts_on_a_won_claim_and_heals() {
     let due = glitch.next_at;
     assert!((GLITCH_FIRST_MIN_TICKS..GLITCH_FIRST_MAX_TICKS).contains(&due));
 
-    assert_eq!(glitch.tick(due - 1, true, true), GlitchTick::Idle);
-    assert_eq!(glitch.tick(due, true, true), GlitchTick::Due);
+    assert_eq!(glitch.tick(due - 1, true), GlitchTick::Idle);
+    assert_eq!(glitch.tick(due, true), GlitchTick::Due);
     // The schedule holds while the row decides: no second ask, no frame.
-    assert_eq!(glitch.tick(due + 1, true, true), GlitchTick::Idle);
+    assert_eq!(glitch.tick(due + 1, true), GlitchTick::Idle);
     assert_eq!(glitch.corruption(due + 1), None);
 
     glitch.start(due + 2, 1);
     let seed = glitch.corruption(due + 2);
     assert!(seed.is_some());
-    assert_eq!(glitch.tick(due + 3, true, true), GlitchTick::Idle);
+    assert_eq!(glitch.tick(due + 3, true), GlitchTick::Idle);
     assert_eq!(glitch.corruption(due + 2 + GLITCH_HOLD_TICKS - 1), seed);
     assert_eq!(
-        glitch.tick(due + 2 + GLITCH_HOLD_TICKS, true, true),
+        glitch.tick(due + 2 + GLITCH_HOLD_TICKS, true),
         GlitchTick::Ended
     );
     assert_eq!(glitch.corruption(due + 2 + GLITCH_HOLD_TICKS), None);
@@ -293,24 +249,19 @@ fn glitch_asks_when_due_then_starts_on_a_won_claim_and_heals() {
 }
 
 #[test]
-fn glitch_defers_hidden_reschedules_disabled_and_obeys_the_row() {
+fn glitch_defers_hidden_and_obeys_the_row() {
     let mut glitch = ClockGlitch::new(7, 0, 0);
 
     // Due while the clock is off screen: a short defer, never spent unseen.
     let due = glitch.next_at;
-    assert_eq!(glitch.tick(due, true, false), GlitchTick::Idle);
+    assert_eq!(glitch.tick(due, false), GlitchTick::Idle);
     let defer = glitch.next_at - due;
     assert!((GLITCH_DEFER_MIN_TICKS..GLITCH_DEFER_MAX_TICKS).contains(&defer));
-
-    // Due while the kill switch is off: a full re-dice.
-    let due = glitch.next_at;
-    assert_eq!(glitch.tick(due, false, true), GlitchTick::Idle);
-    assert!((glitch.next_at - due) >= GLITCH_GAP_MIN_TICKS);
 
     // The row says capped for today: nothing shows, a full re-dice, and
     // the mirror takes the row's count.
     let due = glitch.next_at;
-    assert_eq!(glitch.tick(due, true, true), GlitchTick::Due);
+    assert_eq!(glitch.tick(due, true), GlitchTick::Due);
     glitch.claim_capped(due + 1, 2);
     assert_eq!(glitch.corruption(due + 1), None);
     assert_eq!(glitch.total_hits(), 2);
@@ -318,18 +269,18 @@ fn glitch_defers_hidden_reschedules_disabled_and_obeys_the_row() {
 
     // The row could not be asked: a short defer, then ask again.
     let due = glitch.next_at;
-    assert_eq!(glitch.tick(due, true, true), GlitchTick::Due);
+    assert_eq!(glitch.tick(due, true), GlitchTick::Due);
     glitch.claim_failed(due + 1);
     let defer = glitch.next_at - (due + 1);
     assert!((GLITCH_DEFER_MIN_TICKS..GLITCH_DEFER_MAX_TICKS).contains(&defer));
     let due = glitch.next_at;
-    assert_eq!(glitch.tick(due, true, true), GlitchTick::Due);
+    assert_eq!(glitch.tick(due, true), GlitchTick::Due);
 
     // A capped answer at the lifetime share quiets the clock for good.
     glitch.claim_capped(due + 1, GLITCH_TOTAL_CAP);
     let due = glitch.next_at;
     assert_eq!(
-        glitch.tick(due + GLITCH_GAP_MAX_TICKS, true, true),
+        glitch.tick(due + GLITCH_GAP_MAX_TICKS, true),
         GlitchTick::Idle
     );
 }
@@ -340,19 +291,19 @@ fn forced_glitch_waits_out_the_banner_then_bypasses_the_caps_and_the_quiet() {
     // The natural schedule never asks again, however due it comes.
     let due = glitch.next_at;
     for tick in [due, due + 1, due + GLITCH_GAP_MAX_TICKS] {
-        assert_eq!(glitch.tick(tick, true, true), GlitchTick::Idle);
+        assert_eq!(glitch.tick(tick, true), GlitchTick::Idle);
     }
 
     glitch.fire_now(due);
     let forced = due + GLITCH_FORCE_DELAY_TICKS;
     // The fuse burns past the banner; nothing shows early, even hidden.
-    assert_eq!(glitch.tick(forced - 1, true, false), GlitchTick::Idle);
+    assert_eq!(glitch.tick(forced - 1, false), GlitchTick::Idle);
     assert_eq!(glitch.corruption(forced - 1), None);
     // Then it bursts at once, no claim, and heals like any burst.
-    assert_eq!(glitch.tick(forced, true, true), GlitchTick::Started);
+    assert_eq!(glitch.tick(forced, true), GlitchTick::Started);
     assert!(glitch.corruption(forced).is_some());
     assert_eq!(
-        glitch.tick(forced + GLITCH_HOLD_TICKS, true, true),
+        glitch.tick(forced + GLITCH_HOLD_TICKS, true),
         GlitchTick::Ended
     );
     // A forced burst still counts toward the ladder.
@@ -365,21 +316,20 @@ fn name_flicker_waits_for_the_clock_stage() {
     // sends land; the admin force hook ignores the gate.
     let mut flicker = NameFlicker::new(5, 0);
     assert!(
-        (0..2_000).all(
-            |tick| flicker.note_own_message(Uuid::now_v7(), tick, true, false) == NameRoll::Miss
-        ),
+        (0..2_000)
+            .all(|tick| flicker.note_own_message(Uuid::now_v7(), tick, false) == NameRoll::Miss),
         "a closed stage must never roll"
     );
     flicker.force_next();
     assert_eq!(
-        flicker.note_own_message(Uuid::now_v7(), 100, true, false),
+        flicker.note_own_message(Uuid::now_v7(), 100, false),
         NameRoll::Forced
     );
 }
 
 fn roll_until_claim(flicker: &mut NameFlicker) -> usize {
     (0..2_000)
-        .find(|tick| flicker.note_own_message(Uuid::now_v7(), *tick, true, true) == NameRoll::Claim)
+        .find(|tick| flicker.note_own_message(Uuid::now_v7(), *tick, true) == NameRoll::Claim)
         .expect("a 1-in-3 roll should land within 2000 sends")
 }
 
@@ -389,13 +339,10 @@ fn name_flicker_rolls_claims_and_forces() {
     // At the lifetime cap nothing rolls, but the force hook shows at once
     // and heals on schedule.
     let mut flicker = NameFlicker::new(9, NAME_TOTAL_CAP);
-    assert_eq!(
-        flicker.note_own_message(message, 100, true, true),
-        NameRoll::Miss
-    );
+    assert_eq!(flicker.note_own_message(message, 100, true), NameRoll::Miss);
     flicker.force_next();
     assert_eq!(
-        flicker.note_own_message(message, 100, true, true),
+        flicker.note_own_message(message, 100, true),
         NameRoll::Forced
     );
     let (hit_id, first_seed) = flicker.corruption(100).expect("the hit shows");
@@ -424,23 +371,14 @@ fn name_flicker_rolls_claims_and_forces() {
     assert!(!flicker.tick(100 + NAME_HOLD_TICKS + 1));
     assert_eq!(flicker.total_hits(), NAME_TOTAL_CAP + 1);
 
-    // The kill switch swallows even a forced hit.
-    let mut flicker = NameFlicker::new(9, 0);
-    flicker.force_next();
-    assert_eq!(
-        flicker.note_own_message(message, 100, false, true),
-        NameRoll::Miss
-    );
-
     // A natural roll asks the row and shows nothing until it answers;
     // while the claim is out no other send rolls.
     let mut flicker = NameFlicker::new(5, 0);
     let hit_at = roll_until_claim(&mut flicker);
     assert_eq!(flicker.corruption(hit_at), None);
     assert!(
-        (0..2_000).all(
-            |tick| flicker.note_own_message(Uuid::now_v7(), tick, true, true) == NameRoll::Miss
-        ),
+        (0..2_000)
+            .all(|tick| flicker.note_own_message(Uuid::now_v7(), tick, true) == NameRoll::Miss),
         "no roll while a claim is out"
     );
     flicker.start(message, hit_at + 2, 1);
@@ -458,9 +396,8 @@ fn name_flicker_rolls_claims_and_forces() {
     assert_eq!(flicker.corruption(claim_at), None);
     assert_eq!(flicker.total_hits(), NAME_TOTAL_CAP);
     assert!(
-        (0..2_000).all(
-            |tick| flicker.note_own_message(Uuid::now_v7(), tick, true, true) == NameRoll::Miss
-        ),
+        (0..2_000)
+            .all(|tick| flicker.note_own_message(Uuid::now_v7(), tick, true) == NameRoll::Miss),
         "the lifetime cap must hold"
     );
 
@@ -604,7 +541,7 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
     );
     assert_eq!(gate.bio, BioStanding::Unscreened);
 
-    // The gate bootstrap hands back when the fuse is unlit: no leg holds,
+    // The gate bootstrap hands back for anyone who is not staff: no leg holds,
     // and nothing is worth the paid screen.
     let closed = FirstContactGate::closed();
     assert_eq!(
@@ -621,25 +558,21 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
 }
 
 #[test]
-fn haunt_commands_parse_the_fuse_words() {
+fn haunt_commands_parse_and_the_switches_are_gone() {
     assert_eq!(
         parse_haunt_command("/haunt"),
         Some(Some(HauntCommand::Status))
     );
     assert_eq!(
-        parse_haunt_command("/haunt live on"),
-        Some(Some(HauntCommand::LiveOn))
-    );
-    assert_eq!(
-        parse_haunt_command("/haunt  live   off "),
-        Some(Some(HauntCommand::LiveOff))
+        parse_haunt_command("/haunt  arm "),
+        Some(Some(HauntCommand::Arm))
     );
     assert_eq!(
         parse_haunt_command("/haunt welcome"),
         Some(Some(HauntCommand::Welcome))
     );
-    assert_eq!(parse_haunt_command("/haunt live"), Some(None));
-    assert_eq!(parse_haunt_command("/haunt on off"), Some(None));
+    assert_eq!(parse_haunt_command("/haunt on"), Some(None));
+    assert_eq!(parse_haunt_command("/haunt live on"), Some(None));
     assert_eq!(parse_haunt_command("/haunted"), None);
 }
 
@@ -652,7 +585,7 @@ fn a_witness_paints_the_same_corruption_the_haunted_does() {
     let mut flicker = NameFlicker::new(9, 0);
     flicker.force_next();
     assert_eq!(
-        flicker.note_own_message(message, 100, true, true),
+        flicker.note_own_message(message, 100, true),
         NameRoll::Forced
     );
     let (_, seed) = flicker.live_hit().expect("the hit is showing");

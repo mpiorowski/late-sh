@@ -180,10 +180,6 @@ pub struct State {
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
-    /// Process-wide switches (`app_flags` rows: the first-contact kill
-    /// switch and fuse), served to every replica over Postgres. See
-    /// `app/flags` and the multi-replica rule in the root CONTEXT.md.
-    pub app_flags: crate::app::flags::svc::AppFlagService,
     /// Every runner's look (`deadchannel_runners` rows), served to every
     /// replica over Postgres so the #deadchannel portraits agree everywhere.
     /// See `app/deadchannel/runner`.

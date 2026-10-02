@@ -565,8 +565,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             &user.settings,
         ),
         first_contact_gate,
-        app_flags_rx: state.app_flags.subscribe(),
-        app_flags: Some(state.app_flags.clone()),
         runner_looks_rx: state.runner_looks.subscribe(),
         presence: state.presence.clone(),
         zen_layout: late_core::models::user::extract_zen_layout(&user.settings),

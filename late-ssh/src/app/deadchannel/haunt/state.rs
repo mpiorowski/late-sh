@@ -12,19 +12,17 @@
 //! once the invitation is due, the next own send tears the whole screen
 //! with the same static while a line says the voice got through, and the
 //! DM follows. Pure state machines: no I/O, no clock reads. `App` owns
-//! arming, the switches, and the persistence.
+//! arming and the persistence.
 //!
 //! Replica rule (root CONTEXT.md): nothing here is a source of truth. The
 //! lifetime and daily caps are enforced by conditional claims on the user
 //! row; the machines only decide *when to ask* and hold their schedule
-//! while the row answers. The switches are `app_flags` rows read through a
-//! process-shared `watch`. Stage 1 fires for staff always and for
-//! everyone once the `haunt_live` fuse is lit; stages 2-4 need the gate.
+//! while the row answers. Stage 1 fires for staff (admins and moderators)
+//! and nobody else, by decision in code; stages 2-4 need the gate on top.
 
 use chrono::{DateTime, Utc};
-use late_core::models::app_flag::{AppFlag, AppFlags};
 use late_core::models::user::{FirstContactBioVerdict, FirstContactHitCaps, FirstContactHitClaim};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 /// The game's first voice (stage 4): the character whose plea invites the
@@ -32,7 +30,7 @@ use uuid::Uuid;
 /// (dedicated DB user, fixed fingerprint, @bartender's shape). The name
 /// comes from GAME.md's own note that "afterglow" was reserved for naming
 /// something inside the world; copy and name still face design review
-/// before the fuse is lit for real users.
+/// before the haunting reaches anyone but staff.
 pub(crate) const VOICE_USERNAME: &str = "afterglow";
 pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
 
@@ -243,7 +241,7 @@ impl FirstContactGate {
     }
 
     /// Nothing passes, and nothing is worth screening: what bootstrap
-    /// returns when the fuse is unlit, and what test apps use so no stage
+    /// returns for anyone who is not staff, and what test apps use so no stage
     /// past 1 can arm unless a test arms one on purpose.
     pub(crate) fn closed() -> Self {
         Self {
@@ -353,8 +351,8 @@ impl FirstContactMarks {
     }
 }
 
-/// The haunting's one slot on `App`: every stage's machine and the flags
-/// that gate them. The root owns the field; everything that reads or
+/// The haunting's one slot on `App`: every stage's machine and what armed
+/// them. The root owns the field; everything that reads or
 /// writes it goes through `svc.rs` (orchestration) or `ui.rs` (draw).
 pub(crate) struct HauntState {
     /// Stage 3: the armed splash whisper. `Some` only while the splash is
@@ -382,38 +380,20 @@ pub(crate) struct HauntState {
     /// The eligibility gate as evaluated at bootstrap (for `/haunt` status
     /// and the arming decision).
     pub(crate) gate: FirstContactGate,
-    /// Stage 1 armed for this session: staff always, everyone once the
-    /// `haunt_live` fuse is lit. Evaluated once at arming.
+    /// Stage 1 armed for this session: staff only. Evaluated once at
+    /// arming.
     pub(crate) stage1: bool,
     /// Stages 2-4 armed: stage 1 plus the gate, or a funnel already entered
-    /// (eligibility gates entering, never continuing). `/haunt on` forces
+    /// (eligibility gates entering, never continuing). `/haunt arm` forces
     /// it for the session.
     pub(crate) chosen: bool,
-    /// Process-wide switches (`app/flags`), one `watch` shared by every
-    /// session on this replica and kept in step across replicas by the
-    /// `app_flag_changed` notify. `None` until the first load: off.
-    pub(crate) flags: watch::Receiver<Option<AppFlags>>,
     /// Capped hit claims in flight (at most one per machine). The machine
     /// that asked holds its schedule until the row answers; `svc::tick`
     /// drains these.
     pub(crate) pending_claims: Vec<PendingClaim>,
-    /// `/haunt on|off|live` writes in flight. The banner waits for the
-    /// row's answer, so an admin flipping the kill switch is told what
-    /// actually happened; `svc::tick` drains these.
-    pub(crate) pending_flag_writes: Vec<PendingFlagWrite>,
 }
 
 impl HauntState {
-    /// The kill switch. `None` (flags never loaded) reads as off.
-    pub(crate) fn enabled(&self) -> bool {
-        (*self.flags.borrow()).is_some_and(|flags| flags.haunt_enabled)
-    }
-
-    /// The fuse: stage 1 for everyone, not only staff.
-    pub(crate) fn live(&self) -> bool {
-        (*self.flags.borrow()).is_some_and(|flags| flags.haunt_live)
-    }
-
     /// Whether the splash may not self-expire this tick: an armed whisper
     /// owns the release.
     pub(crate) fn holds_splash_door(&self) -> bool {
@@ -454,32 +434,17 @@ pub(crate) struct PendingClaim {
     pub(crate) rx: oneshot::Receiver<anyhow::Result<FirstContactHitClaim>>,
 }
 
-/// One `app_flags` write out on the row, with the banner to show once it
-/// lands.
-pub(crate) struct PendingFlagWrite {
-    pub(crate) flag: AppFlag,
-    pub(crate) enabled: bool,
-    pub(crate) done: &'static str,
-    pub(crate) rx: oneshot::Receiver<anyhow::Result<()>>,
-}
-
 /// The `/haunt` admin controls, recorded by the composer and drained by
 /// `svc::tick`. Deliberately absent from help and autocomplete, and only
 /// ever parsed for admins: for everyone else the line posts as plain
 /// text, exactly as if the command did not exist.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HauntCommand {
-    /// `/haunt`: switches, gate, marks, door and glitch state.
+    /// `/haunt`: gate, marks, door and glitch state.
     Status,
-    /// `/haunt on`: re-enable the haunting everywhere (the kill switch row).
-    On,
-    /// `/haunt off`: the kill switch; a live whisper drops mid-scene and
-    /// the schedulers stop firing, on every replica.
-    Off,
-    /// `/haunt live on`: light the fuse; stage 1 fires for everyone.
-    LiveOn,
-    /// `/haunt live off`: back to staff only.
-    LiveOff,
+    /// `/haunt arm`: arm every repeatable machine for this session, past
+    /// the gate, so a beat can be tested without a passing bio.
+    Arm,
     /// `/haunt glitch`: fire a clock-glitch burst right now.
     Glitch,
     /// `/haunt name`: force the next own send to flicker.
@@ -507,10 +472,7 @@ pub(crate) fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
     let words: Vec<&str> = rest.split_whitespace().collect();
     Some(match words.as_slice() {
         [] => Some(HauntCommand::Status),
-        ["on"] => Some(HauntCommand::On),
-        ["off"] => Some(HauntCommand::Off),
-        ["live", "on"] => Some(HauntCommand::LiveOn),
-        ["live", "off"] => Some(HauntCommand::LiveOff),
+        ["arm"] => Some(HauntCommand::Arm),
         ["glitch"] => Some(HauntCommand::Glitch),
         ["name"] => Some(HauntCommand::Name),
         ["replay"] => Some(HauntCommand::Replay),
@@ -574,8 +536,8 @@ pub(crate) enum WhisperPhase {
     Typing { from_tick: usize },
     /// The line is fully typed; it holds until `until_tick` so it lands.
     Linger { until_tick: usize },
-    /// The door opened. `delivered` is false when the kill switch or the
-    /// hard cap cut the scene before the line finished: the once-ever
+    /// The door opened. `delivered` is false when the hard cap cut the
+    /// scene before the line finished: the once-ever
     /// mark is only spent on a whisper that was actually read.
     Released { delivered: bool },
 }
@@ -615,15 +577,10 @@ impl WhisperState {
         }
     }
 
-    /// Advance one splash tick. `enabled` is the live kill switch: turning
-    /// it off drops the theater mid-scene without spending the mark.
-    pub(crate) fn tick(&mut self, tick: usize, enabled: bool) -> WhisperTick {
+    /// Advance one splash tick.
+    pub(crate) fn tick(&mut self, tick: usize) -> WhisperTick {
         if let WhisperPhase::Released { delivered } = self.phase {
             return WhisperTick::Released { delivered };
-        }
-        if !enabled {
-            self.phase = WhisperPhase::Released { delivered: false };
-            return WhisperTick::Released { delivered: false };
         }
         if tick >= HARD_CAP_TICKS {
             let delivered = matches!(self.phase, WhisperPhase::Linger { .. });
@@ -730,7 +687,8 @@ pub(crate) const GLITCH_DAILY_CAP: u32 = 2;
 /// The ladder's share of clock bursts (the persisted counter): once this
 /// many have been seen, the clock goes quiet and stage 2 opens. The quiet
 /// is part of the escalation; whether unchosen users keep an unbounded
-/// ambient clock is a fuse-time question (GAME.md).
+/// ambient clock is a question for when the haunting leaves staff
+/// (GAME.md).
 pub(crate) const GLITCH_TOTAL_CAP: u32 = 3;
 /// Fuse on a forced burst: the `/haunt glitch` banner covers the sidebar
 /// clock for ~5s, so the burst waits it out.
@@ -782,7 +740,7 @@ impl ClockGlitch {
 
     /// Advance one world tick. `clock_visible` is whether the sidebar
     /// clock is actually on screen; a burst never spends itself unseen.
-    pub(crate) fn tick(&mut self, tick: usize, enabled: bool, clock_visible: bool) -> GlitchTick {
+    pub(crate) fn tick(&mut self, tick: usize, clock_visible: bool) -> GlitchTick {
         if let Some(since) = self.active_since {
             if tick.saturating_sub(since) >= GLITCH_HOLD_TICKS {
                 self.active_since = None;
@@ -813,11 +771,6 @@ impl ClockGlitch {
             return GlitchTick::Idle;
         }
         if tick < self.next_at {
-            return GlitchTick::Idle;
-        }
-        if !enabled {
-            // The kill switch re-dices the full gap.
-            self.next_at = tick + self.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
             return GlitchTick::Idle;
         }
         if !clock_visible {
@@ -1038,10 +991,9 @@ impl NameFlicker {
         &mut self,
         message_id: Uuid,
         tick: usize,
-        enabled: bool,
         stage_open: bool,
     ) -> NameRoll {
-        if self.active.is_some() || self.claiming.is_some() || !enabled {
+        if self.active.is_some() || self.claiming.is_some() {
             return NameRoll::Miss;
         }
         if std::mem::take(&mut self.force_next) {
@@ -1165,7 +1117,7 @@ pub(crate) enum BreakthroughRoll {
 pub(crate) enum BreakthroughTick {
     Idle,
     Playing,
-    /// The scene just ended (naturally or by the kill switch).
+    /// The scene just ended.
     Ended,
 }
 
@@ -1193,8 +1145,8 @@ impl Breakthrough {
 
     /// A send this session submitted just succeeded. `due` is
     /// [`FirstContactMarks::breakthrough_due`] right now.
-    pub(crate) fn note_own_send(&mut self, enabled: bool, due: bool) -> BreakthroughRoll {
-        if self.phase != BreakthroughPhase::Idle || !enabled {
+    pub(crate) fn note_own_send(&mut self, due: bool) -> BreakthroughRoll {
+        if self.phase != BreakthroughPhase::Idle {
             return BreakthroughRoll::Wait;
         }
         let forced = std::mem::take(&mut self.force_next);
@@ -1224,13 +1176,12 @@ impl Breakthrough {
         self.phase = BreakthroughPhase::Failed;
     }
 
-    /// Advance one world tick. `enabled` is the live kill switch: turning
-    /// it off cuts the scene (the DM, already claimed, still sends).
-    pub(crate) fn tick(&mut self, tick: usize, enabled: bool) -> BreakthroughTick {
+    /// Advance one world tick.
+    pub(crate) fn tick(&mut self, tick: usize) -> BreakthroughTick {
         let BreakthroughPhase::Playing { since } = self.phase else {
             return BreakthroughTick::Idle;
         };
-        if !enabled || tick.saturating_sub(since) >= Self::scene_ticks() {
+        if tick.saturating_sub(since) >= Self::scene_ticks() {
             self.phase = BreakthroughPhase::Idle;
             return BreakthroughTick::Ended;
         }

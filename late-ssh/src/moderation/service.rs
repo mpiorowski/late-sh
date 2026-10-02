@@ -4,7 +4,6 @@ use dartboard_core::Canvas;
 use late_core::{
     db::Db,
     models::{
-        app_flag::{AppFlag, AppFlags},
         artboard::{Snapshot as ArtboardSnapshot, SnapshotSummary as ArtboardSnapshotSummary},
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
         artboard_piece::{ArtboardPiece, PieceLookup},
@@ -292,10 +291,6 @@ impl ModerationService {
             }
             ModCommand::ArtboardFeaturePiece { id_prefix } => {
                 self.artboard_feature_piece(actor_user_id, permissions, id_prefix)
-                    .await
-            }
-            ModCommand::ArtboardGallery { enabled } => {
-                self.artboard_gallery_switch(actor_user_id, permissions, enabled)
                     .await
             }
             ModCommand::ArtboardMark {
@@ -1890,44 +1885,6 @@ impl ModerationService {
             "gallery piece {piece_id} (\"{}\") is today's Sliding Puzzle art; reopen the board from the lobby to see it",
             featured.title
         )])
-    }
-
-    /// The gallery's kill switch. A row flip, so every replica follows
-    /// (`app_flags` trigger); the rail on each session hides the gallery on
-    /// its next tick.
-    async fn artboard_gallery_switch(
-        &self,
-        actor_user_id: Uuid,
-        permissions: Permissions,
-        enabled: bool,
-    ) -> Result<Vec<String>> {
-        ensure_admin(permissions)?;
-        let mut client = self.db.get().await?;
-        let tx = client.transaction().await?;
-        AppFlags::set(&tx, AppFlag::ArtboardGalleryEnabled, enabled).await?;
-        ModerationAuditLog::record(
-            &tx,
-            actor_user_id,
-            "artboard_gallery_switch",
-            "artboard_piece",
-            None,
-            json!({ "enabled": enabled }),
-        )
-        .await?;
-        tx.commit().await?;
-
-        let _ = self
-            .event_tx
-            .send(ModerationEvent::ArtboardGallerySwitched {
-                actor_user_id,
-                enabled,
-            });
-
-        Ok(vec![if enabled {
-            "artboard gallery on".to_string()
-        } else {
-            "artboard gallery off: nothing hangs or applauds until it is back".to_string()
-        }])
     }
 
     async fn artboard_curate(

@@ -46,9 +46,6 @@ ON CONFLICT (edition, section) DO UPDATE SET
     claimed_at = current_timestamp,
     generated_at = EXCLUDED.generated_at;
 
-UPDATE app_flags SET enabled = true, updated = current_timestamp
-WHERE key = 'paper_enabled' AND NOT enabled;
-
 COMMIT;
 
 SELECT edition, section, status, length(text) AS characters
