@@ -19,6 +19,8 @@ use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
+use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
+use late_core::models::referral::ReferralSource;
 use crate::pg_listener::Refresh;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -423,6 +425,10 @@ mod inner {
         VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use super::{
+        NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource,
+    };
+    use crate::app::referral::state::AttachRefusal;
     use crate::app::bonsai::state::BranchAction;
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -932,6 +938,77 @@ mod inner {
                 .u64_counter("late_ssh_award_announcements_total")
                 .with_description(
                     "The monthly award roll in #lounge, by outcome; a month with no posted roll is a rollover nobody heard about",
+                )
+                .build()
+        })
+    }
+
+    fn referral_source_label(source: ReferralSource) -> &'static str {
+        match source {
+            ReferralSource::Ssh => "ssh",
+            ReferralSource::Settings => "settings",
+        }
+    }
+
+    fn referral_attach_label(outcome: ReferralAttachOutcome) -> &'static str {
+        match outcome {
+            ReferralAttachOutcome::Attached => "attached",
+            ReferralAttachOutcome::Refused(AttachRefusal::UnknownCode) => "unknown_code",
+            ReferralAttachOutcome::Refused(AttachRefusal::OwnCode) => "own_code",
+            ReferralAttachOutcome::Refused(AttachRefusal::WindowClosed) => "window_closed",
+            ReferralAttachOutcome::Refused(AttachRefusal::InviterNewer) => "inviter_newer",
+            ReferralAttachOutcome::Refused(AttachRefusal::AlreadyInvited) => "already_invited",
+            ReferralAttachOutcome::Failed => "failed",
+        }
+    }
+
+    fn referral_settlement_label(settlement: ReferralSettlement) -> &'static str {
+        match settlement {
+            ReferralSettlement::Qualified => "qualified",
+            ReferralSettlement::Expired => "expired",
+            ReferralSettlement::Paid => "paid",
+            ReferralSettlement::Deferred => "deferred",
+            ReferralSettlement::Failed => "failed",
+        }
+    }
+
+    fn newcomer_minute_label(result: NewcomerMinuteResult) -> &'static str {
+        match result {
+            NewcomerMinuteResult::Counted => "counted",
+            NewcomerMinuteResult::AlreadyCounted => "already_counted",
+            NewcomerMinuteResult::Failed => "failed",
+        }
+    }
+
+    fn referral_attaches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_referral_attaches_total")
+                .with_description("Invite codes offered by new accounts, by source and outcome")
+                .build()
+        })
+    }
+
+    fn referral_settlements_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_referral_settlements_total")
+                .with_description(
+                    "Referral status moves made by the sweeper, by outcome; each paid one minted the reward and the welcome bonus",
+                )
+                .build()
+        })
+    }
+
+    fn newcomer_minutes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_newcomer_minutes_total")
+                .with_description(
+                    "Active minutes reported by young accounts' sessions, by result; already_counted is a second session typing in the same minute",
                 )
                 .build()
         })
@@ -1963,6 +2040,30 @@ mod inner {
         pot_reminders_total().add(1, &[KeyValue::new("outcome", pot_reminder_label(outcome))]);
     }
 
+    pub fn record_referral_attach(source: ReferralSource, outcome: ReferralAttachOutcome) {
+        referral_attaches_total().add(
+            1,
+            &[
+                KeyValue::new("source", referral_source_label(source)),
+                KeyValue::new("outcome", referral_attach_label(outcome)),
+            ],
+        );
+    }
+
+    pub fn record_referral_settlement(settlement: ReferralSettlement) {
+        referral_settlements_total().add(
+            1,
+            &[KeyValue::new(
+                "outcome",
+                referral_settlement_label(settlement),
+            )],
+        );
+    }
+
+    pub fn record_newcomer_minute(result: NewcomerMinuteResult) {
+        newcomer_minutes_total().add(1, &[KeyValue::new("result", newcomer_minute_label(result))]);
+    }
+
     /// The award loop's roll arm. Only claims that happened or errored count;
     /// a pass whose month was already announced is silence, not an outcome.
     pub fn record_award_announcement(outcome: AwardAnnouncementOutcome) {
@@ -2425,6 +2526,9 @@ mod inner {
         VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use super::{
+        NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource,
+    };
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
@@ -2497,6 +2601,9 @@ mod inner {
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_pot_reminder(_outcome: PotReminderOutcome) {}
+    pub fn record_referral_attach(_source: ReferralSource, _outcome: ReferralAttachOutcome) {}
+    pub fn record_referral_settlement(_settlement: ReferralSettlement) {}
+    pub fn record_newcomer_minute(_result: NewcomerMinuteResult) {}
     pub fn record_award_announcement(_outcome: AwardAnnouncementOutcome) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}

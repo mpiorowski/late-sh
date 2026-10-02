@@ -188,6 +188,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // throttling each other.
         ActivityKind::PotDrawn { pot_id, .. } => format!("pot-drawn:{pot_id}"),
         ActivityKind::PotClosing { pot_id, .. } => format!("pot-closing:{pot_id}"),
+        // Keyed on the invitee: the referral pays once per invitee, so the
+        // key only has to keep two invites paid in one sweep from throttling
+        // each other.
+        ActivityKind::ReferralRewarded { invitee, .. } => format!("referral:{invitee}"),
         // Keyed on the title so two distinct entries inside the window both
         // announce, while a retried publish of the same entry collapses.
         ActivityKind::CyberspacePosted { title } => {

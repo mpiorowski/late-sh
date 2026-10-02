@@ -254,6 +254,29 @@ impl ActivityPublisher {
         });
     }
 
+    /// An invite paid out. Both names are resolved here, after the payout
+    /// committed, like every other line.
+    pub fn referral_rewarded_task(
+        &self,
+        inviter_id: Uuid,
+        invitee_id: Uuid,
+        inviter_chips: i64,
+        invitee_chips: i64,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let inviter = publisher.username_for(inviter_id).await;
+            let invitee = publisher.username_for(invitee_id).await;
+            let _ = publisher.tx.send(ActivityEvent::referral_rewarded(
+                inviter_id,
+                inviter,
+                invitee,
+                inviter_chips,
+                invitee_chips,
+            ));
+        });
+    }
+
     /// No username to resolve: the reminder is the pot's own line.
     pub fn pot_closing(
         &self,

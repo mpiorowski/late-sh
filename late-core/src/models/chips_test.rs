@@ -182,7 +182,9 @@ fn constants() {
 #[test]
 fn earning_exclusions_and_reason_uniqueness() {
     // Top Chips ranks what a player earned: every credit except the two
-    // house tables, gifts, and the starting stipend (decided 2026-09-07). Spending is a debit and a debit never counts,
+    // house tables, gifts, the starting stipend (decided 2026-09-07), and
+    // the two referral payouts, one of which would decide a month's board.
+    // Spending is a debit and a debit never counts,
     // so buying a beer or a pot ticket cannot cost anyone their place.
     assert_eq!(
         ChipMove::excluded_earning_reasons(),
@@ -205,6 +207,8 @@ fn earning_exclusions_and_reason_uniqueness() {
             "drink_purchase",
             "shop_purchase",
             "ssnake_arena_lost",
+            "referral_reward",
+            "referral_welcome",
         ]
     );
     // The board is earnings-only: nothing that leaves a balance may count,

@@ -80,6 +80,14 @@ pub enum LedgerDetail {
     Sku(String),
     Link(String),
     StreakDay(String),
+    /// The invitee a referral reward was paid for.
+    Invited {
+        username: String,
+    },
+    /// The inviter behind a referral welcome bonus.
+    InvitedBy {
+        username: String,
+    },
 }
 
 /// A ledger row and its resolved detail, if the ref meant anything.
@@ -120,6 +128,9 @@ enum Side {
 enum Pointer {
     /// The other user of a gift.
     Counterparty(Side),
+    /// The other user of a referral: the invitee on the reward, the inviter
+    /// on the welcome bonus.
+    Referral(Side),
     /// A `chat_message_gilds` row (or, for old rows, the gilded message).
     Gild(Side),
     /// A `game_payout_claims` row.
@@ -165,6 +176,8 @@ const fn pointer(mv: ChipMove) -> Pointer {
         ChipMove::RoundPurchase => Pointer::Round,
         ChipMove::DrinkGift => Pointer::GiftRound,
         ChipMove::SongQueued => Pointer::Video,
+        ChipMove::ReferralReward => Pointer::Referral(Side::To),
+        ChipMove::ReferralWelcome => Pointer::Referral(Side::From),
         ChipMove::DailyPuzzleWin
         | ChipMove::AsterionEscape
         | ChipMove::DailyChessWin
@@ -215,7 +228,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
 /// The ids the ledger points at, bucketed by the table they live in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LedgerRefs {
-    /// User ids: the other side of each gift.
+    /// User ids: the other side of each gift or referral.
     pub counterparties: Vec<Uuid>,
     /// Gild refs: gild row ids, or message ids on old rows.
     pub gilds: Vec<Uuid>,
@@ -256,7 +269,7 @@ pub fn refs(entries: &[ChipLedgerEntry]) -> LedgerRefs {
             continue;
         };
         match pointer {
-            Pointer::Counterparty(_) => refs.counterparties.push(id),
+            Pointer::Counterparty(_) | Pointer::Referral(_) => refs.counterparties.push(id),
             Pointer::Gild(_) => refs.gilds.push(id),
             Pointer::PayoutClaim => refs.payouts.push(id),
             Pointer::Reign => refs.reigns.push(id),
@@ -316,6 +329,14 @@ fn detail(entry: &ChipLedgerEntry, sources: &LedgerSources) -> Option<LedgerDeta
             match side {
                 Side::To => Some(LedgerDetail::GiftTo { username }),
                 Side::From => Some(LedgerDetail::GiftFrom { username }),
+            }
+        }
+        Pointer::Referral(side) => {
+            let other: Uuid = source_ref.parse().ok()?;
+            let username = username(other)?;
+            match side {
+                Side::To => Some(LedgerDetail::Invited { username }),
+                Side::From => Some(LedgerDetail::InvitedBy { username }),
             }
         }
         Pointer::Gild(side) => {

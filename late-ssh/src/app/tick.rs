@@ -69,6 +69,10 @@ impl App {
         if one_hz {
             self.flush_zen_layout();
             self.record_attention();
+            if let Some(minute) = self.newcomer_clock.take_minute() {
+                self.referral_service
+                    .record_minute_task(self.user_id, minute);
+            }
         }
         // Shared animation frame edges, both divisors of the one wall
         // clock. Half (132ms, ~7.5fps): pet, bonsai sway, clubhouse

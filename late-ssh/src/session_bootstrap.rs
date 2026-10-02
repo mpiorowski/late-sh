@@ -574,6 +574,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         flair_directory: Some(state.flair_directory.clone()),
         crown_service: Some(state.crown_service.clone()),
         pot_service: Some(state.pot_service.clone()),
+        referral_service: state.referral_service.clone(),
+        newcomer_clock: crate::app::referral::state::NewcomerClock::new(
+            user.created,
+            chrono::Utc::now(),
+        ),
         activity_feed_rx,
         user_id,
         permissions,

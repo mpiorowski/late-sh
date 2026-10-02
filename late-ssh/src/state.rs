@@ -169,6 +169,7 @@ pub struct State {
     pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
     pub crown_service: crate::app::crown::svc::CrownService,
     pub pot_service: crate::app::pot::svc::PotService,
+    pub referral_service: crate::app::referral::svc::ReferralService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:

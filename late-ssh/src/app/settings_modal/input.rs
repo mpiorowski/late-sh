@@ -3,7 +3,8 @@ use crate::app::state::App;
 
 use super::gem::GemKey;
 use super::state::{
-    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus,
+    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, INVITE_CODE_INPUT_MAX_LEN, IrcTokenFocus,
+    LinkAccountEnterCodeFocus,
     LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, StatuslinePane, Tab, TweakRow,
     USERNAME_MAX_LEN,
 };
@@ -13,6 +14,11 @@ use crate::app::common::textarea_input::{
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
+    if app.settings_modal_state.invites_dialog().open() {
+        handle_invites_dialog_input(app, event);
+        return;
+    }
+
     if app.settings_modal_state.link_account_dialog().open() {
         handle_link_account_dialog_input(app, event);
         return;
@@ -306,6 +312,7 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_account_row(-1),
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
             match app.settings_modal_state.selected_account_row() {
+                AccountRow::Invites => app.settings_modal_state.open_invites_dialog(),
                 AccountRow::LinkAccounts => app.settings_modal_state.open_link_account_dialog(),
                 AccountRow::IrcToken => app.settings_modal_state.open_irc_token_dialog(),
                 AccountRow::DeleteAccount => app.settings_modal_state.open_delete_account_dialog(),
@@ -657,6 +664,36 @@ fn handle_delete_account_dialog_input(app: &mut App, event: ParsedInput) {
             state.delete_account_push(byte as char)
         }
         _ => {}
+    }
+}
+
+/// Esc always closes. While an answer is pending nothing else does anything;
+/// without the code field (an inviter already named, or past the first
+/// week) Enter closes too; with it, every key edits the field and Enter
+/// submits.
+fn handle_invites_dialog_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    if matches!(event, ParsedInput::Byte(0x1B)) {
+        state.close_invites_dialog();
+        return;
+    }
+    if state.invites_dialog().pending() {
+        return;
+    }
+    if !state.invites_dialog().accepts_code() {
+        if matches!(event, ParsedInput::Byte(b'\r')) {
+            state.close_invites_dialog();
+        }
+        return;
+    }
+    match handle_single_line_edit(
+        state.invites_code_input_mut(),
+        &event,
+        INVITE_CODE_INPUT_MAX_LEN,
+    ) {
+        EditOutcome::Submit => state.submit_invite_code(),
+        EditOutcome::Cancel => state.close_invites_dialog(),
+        EditOutcome::Handled | EditOutcome::Ignored => {}
     }
 }
 

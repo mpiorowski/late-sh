@@ -419,6 +419,11 @@ pub struct SessionConfig {
     /// an app without one; the panel then renders dashes and the commands
     /// say so.
     pub pot_service: Option<crate::app::pot::svc::PotService>,
+    /// Invites: the Settings dialog and newcomer minutes.
+    pub referral_service: crate::app::referral::svc::ReferralService,
+    /// Turns this session's input into active minutes while the account is
+    /// young. Built from the account's creation time; inert in test apps.
+    pub newcomer_clock: crate::app::referral::state::NewcomerClock,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub permissions: Permissions,
@@ -617,6 +622,8 @@ pub struct App {
         Option<watch::Receiver<Option<crate::app::crown::svc::CrownHolder>>>,
     pub(super) crown_events_rx: Option<broadcast::Receiver<crate::app::crown::svc::CrownEvent>>,
     pub(super) pot_service: Option<crate::app::pot::svc::PotService>,
+    pub(super) referral_service: crate::app::referral::svc::ReferralService,
+    pub(super) newcomer_clock: crate::app::referral::state::NewcomerClock,
     /// The process-shared pot, read on the ~1s edge into `pot_view` so no
     /// render ever queries for it.
     pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
@@ -1409,6 +1416,7 @@ impl App {
         let mut settings_modal_state = settings_modal::state::SettingsModalState::new(
             config.profile_service.clone(),
             config.feed_service.clone(),
+            config.referral_service.clone(),
             config.user_id,
         );
         let device_rails = config.key_layout;
@@ -1568,6 +1576,8 @@ impl App {
                 .as_ref()
                 .map(crate::app::pot::svc::PotService::subscribe_events),
             pot_service: config.pot_service,
+            referral_service: config.referral_service.clone(),
+            newcomer_clock: config.newcomer_clock,
             pot_view: crate::app::pot::state::PotView::default(),
             active_users: active_users.clone(),
             username_directory: config.username_directory,
@@ -2606,6 +2616,7 @@ impl App {
     pub fn handle_input(&mut self, data: &[u8]) {
         if !data.is_empty() {
             self.last_input_at = Instant::now();
+            self.newcomer_clock.note_input(chrono::Utc::now());
         }
         // First contact's breakthrough (`app/deadchannel/haunt`): while it
         // plays, every key is swallowed here, before a running door game or

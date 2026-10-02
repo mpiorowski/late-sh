@@ -146,6 +146,15 @@ pub enum ActivityKind {
         ticket_price: i64,
         draws_in_secs: i64,
     },
+    /// Someone this user invited became a regular, and both of them were
+    /// paid for it. The event belongs to the inviter; `invitee` is the
+    /// friend they brought. Once per invitee forever (the referral row is
+    /// the claim), so it cannot repeat.
+    ReferralRewarded {
+        invitee: String,
+        inviter_chips: i64,
+        invitee_chips: i64,
+    },
     /// A linked user published an entry on cyberspace.online from late.sh.
     /// Announces our user's own action, never cyberspace content.
     CyberspacePosted {
@@ -218,6 +227,7 @@ impl ActivityKind {
             | Self::RoundBought { .. }
             | Self::PotDrawn { .. }
             | Self::PotClosing { .. }
+            | Self::ReferralRewarded { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
             | Self::WatchingStream { .. } => ActivityCategory::Session,
@@ -769,6 +779,31 @@ impl ActivityEvent {
                 payout,
                 winner_tickets,
                 total_tickets,
+            },
+            action,
+        )
+    }
+
+    /// An invite paid out. Told from the inviter's side, with the friend's
+    /// name and what the inviter got; the welcome bonus rides the headline.
+    pub fn referral_rewarded(
+        inviter_id: Uuid,
+        inviter: impl Into<String>,
+        invitee: String,
+        inviter_chips: i64,
+        invitee_chips: i64,
+    ) -> Self {
+        let action = format!(
+            "earned {} chips for inviting {invitee}, now a regular",
+            crate::app::common::primitives::thousands(inviter_chips)
+        );
+        Self::new(
+            Some(inviter_id),
+            inviter,
+            ActivityKind::ReferralRewarded {
+                invitee,
+                inviter_chips,
+                invitee_chips,
             },
             action,
         )

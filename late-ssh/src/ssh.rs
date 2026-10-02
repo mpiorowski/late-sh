@@ -594,10 +594,10 @@ impl russh::server::Handler for ClientHandler {
         Ok(Some(AUTH_SETUP_BANNER.to_string()))
     }
 
-    #[tracing::instrument(skip(self, _user, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
+    #[tracing::instrument(skip(self, ssh_user, key), fields(peer = ?self.peer_addr, transport = ?self.transport_peer_addr))]
     async fn auth_publickey(
         &mut self,
-        _user: &str,
+        ssh_user: &str,
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         tracing::debug!("public key auth accepted");
@@ -662,6 +662,17 @@ impl russh::server::Handler for ClientHandler {
             }
         };
         self.is_new_user = is_new_user;
+        // `ssh invite-<code>@late.sh` names an inviter, read once: on the
+        // connect that created the account. Any other login name (plain
+        // `ssh late.sh` sends the local $USER) is ignored, as it always was.
+        if is_new_user && let Some(code) = crate::app::referral::state::ssh_invite_code(ssh_user)
+        {
+            self.state.referral_service.attach_task(
+                user.id,
+                code,
+                late_core::models::referral::ReferralSource::Ssh,
+            );
+        }
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();
 
@@ -1089,6 +1100,11 @@ impl russh::server::Handler for ClientHandler {
             flair_directory: Some(self.state.flair_directory.clone()),
             crown_service: Some(self.state.crown_service.clone()),
             pot_service: Some(self.state.pot_service.clone()),
+            referral_service: self.state.referral_service.clone(),
+            newcomer_clock: crate::app::referral::state::NewcomerClock::new(
+                user.created,
+                chrono::Utc::now(),
+            ),
             activity_feed_rx: self.activity_feed_rx.take(),
             user_id,
             permissions,

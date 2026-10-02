@@ -396,6 +396,12 @@ async fn main() -> anyhow::Result<()> {
     let _pot_notify_task = pot_service
         .start_notify_worker(pg_listener.subscribe(late_ssh::app::pot::svc::PotService::CHANNELS));
     let _pot_sweeper_task = pot_service.start_sweeper_task();
+    // Invites: every replica sweeps; guarded status moves and a per-inviter
+    // lock keep each payout single and the monthly cap exact. See
+    // `app/referral/CONTEXT.md`.
+    let referral_service = late_ssh::app::referral::svc::ReferralService::new(db.clone())
+        .with_activity(activity_publisher.clone());
+    let _referral_sweeper_task = referral_service.start_sweeper_task();
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
         .clone()
@@ -511,6 +517,7 @@ async fn main() -> anyhow::Result<()> {
         flair_directory: flair_directory.clone(),
         crown_service: crown_service.clone(),
         pot_service: pot_service.clone(),
+        referral_service: referral_service.clone(),
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),

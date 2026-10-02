@@ -36,6 +36,7 @@ pub mod presence;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;
+pub mod referral;
 mod render;
 pub(crate) mod room_info_modal;
 pub(crate) mod room_search_modal;

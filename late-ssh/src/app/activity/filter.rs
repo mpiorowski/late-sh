@@ -137,6 +137,9 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // The other pot line: an hour before the draw, once per pot,
         // so anyone who meant to buy in still can.
         ActivityKind::PotClosing { .. } => true,
+        // A friend who stuck around: once per invitee forever, and the line
+        // is the feature's whole advertisement.
+        ActivityKind::ReferralRewarded { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").
@@ -224,6 +227,18 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 thousands(*total_tickets)
             ))
         }
+        // Both people are named so both get a notification: the inviter for
+        // the payout, the friend for the welcome bonus and the welcome.
+        ActivityKind::ReferralRewarded {
+            invitee,
+            inviter_chips,
+            invitee_chips,
+        } => Some(format!(
+            "\u{1F91D} @{} earned {} chips for inviting @{invitee}, who is a regular now. @{invitee} gets a {} chip welcome bonus.",
+            event.username,
+            thousands(*inviter_chips),
+            thousands(*invitee_chips)
+        )),
         // The last call, worded like `/pot` itself so the command to buy in
         // is right there. No `@`: nobody is being told anything personally.
         ActivityKind::PotClosing {

@@ -84,6 +84,8 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::LateaniaSunderingDeepDefeat => "lateania: sundering deep",
         ChipMove::LateaniaKaethyrAscendantDefeat => "lateania: kaethyr",
         ChipMove::OldSignalSlain => "old signal",
+        ChipMove::ReferralReward => "invite reward",
+        ChipMove::ReferralWelcome => "welcome bonus",
     }
 }
 
@@ -114,6 +116,8 @@ pub(crate) fn detail(detail: &LedgerDetail) -> String {
         LedgerDetail::Sku(sku) => sku.clone(),
         LedgerDetail::Link(url) => url.clone(),
         LedgerDetail::StreakDay(day) => format!("streak day {day}"),
+        LedgerDetail::Invited { username } => format!("for @{username}"),
+        LedgerDetail::InvitedBy { username } => format!("from @{username}"),
     }
 }
 

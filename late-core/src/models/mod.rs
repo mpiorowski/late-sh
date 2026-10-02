@@ -139,6 +139,9 @@ pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
 pub mod quest;
+pub mod referral;
+#[cfg(test)]
+mod referral_test;
 pub mod rental;
 pub mod reward;
 #[cfg(test)]

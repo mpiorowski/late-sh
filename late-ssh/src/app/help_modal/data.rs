@@ -1549,7 +1549,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Statusline        arrange the bottom status bar and customize its components"
             .to_string(),
-        "  Account           link SSH keys across accounts, reset/revoke your IRC access token, or delete your account"
+        "  Account           invite friends, link SSH keys across accounts, reset/revoke your IRC access token, or delete your account"
             .to_string(),
         "  RSS               private RSS/Atom subscriptions".to_string(),
         "".to_string(),
@@ -1566,6 +1566,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Statusline: bottom status bar components, their order, and display options".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
+        "  who invited you, in your first week".to_string(),
         "".to_string(),
         "How to open it".to_string(),
         "  on login, the settings modal opens automatically".to_string(),
@@ -1582,8 +1583,15 @@ fn settings_help_lines() -> Vec<String> {
         "  Custom sidebar: Enter on Custom opens the three-page checklist".to_string(),
         "  Statusline: Space toggles a component; Enter opens its options"
             .to_string(),
-        "  Account: Enter opens Link Accounts or Delete Account".to_string(),
+        "  Account: Enter opens Invites, Link Accounts, IRC access token, or Delete Account"
+            .to_string(),
         "  ? opens this guide; Esc / q closes".to_string(),
+        "".to_string(),
+        "Invites".to_string(),
+        "  Settings > Account > Invites shows your own command: ssh invite-<code>@late.sh".to_string(),
+        "  A friend who connects with it for the first time is invited by you.".to_string(),
+        "  Once they become an active regular, you get 50,000 chips and they get 10,000.".to_string(),
+        "  Joined without the command? Type the code there during your first week.".to_string(),
         "".to_string(),
         "Account linking".to_string(),
         "  Use Settings > Account > Link Accounts when two SSH keys created separate late.sh accounts.".to_string(),

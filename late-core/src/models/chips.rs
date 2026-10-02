@@ -235,6 +235,14 @@ chip_moves!(
     /// days per account, through the same two-gate grant as the door
     /// milestones. `source_ref` is the `game_payout_claims` row id.
     OldSignalSlain,
+    /// The inviter's side of a referral that turned into a regular, paid
+    /// once per invitee when the sweeper settles the `referrals` row
+    /// (`late-ssh/src/app/referral`). Minted rather than moved. `source_ref`
+    /// is the invitee's user id, which is also the referral's key.
+    ReferralReward,
+    /// The invitee's welcome bonus, paid in the same transaction as
+    /// [`ChipMove::ReferralReward`]. `source_ref` is the inviter's user id.
+    ReferralWelcome,
 );
 
 /// Which way a move touches the balance, and under what guard.
@@ -315,6 +323,8 @@ impl ChipMove {
             Self::LateaniaSunderingDeepDefeat => "lateania_sundering_deep_defeat",
             Self::LateaniaKaethyrAscendantDefeat => "lateania_kaethyr_ascendant_defeat",
             Self::OldSignalSlain => "old_signal_slain",
+            Self::ReferralReward => "referral_reward",
+            Self::ReferralWelcome => "referral_welcome",
         }
     }
 
@@ -326,6 +336,7 @@ impl ChipMove {
             Self::PokerBet | Self::PokerPayout => "poker_hands",
             Self::FloorRestore => "house_rounds",
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
+            Self::ReferralReward | Self::ReferralWelcome => "referrals",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
             Self::BonsaiWatered => "bonsai_trees",
             Self::PetFed | Self::PetPetted => "pet_companions",
@@ -422,7 +433,9 @@ impl ChipMove {
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
             | Self::LateaniaKaethyrAscendantDefeat
-            | Self::OldSignalSlain => ChipDirection::Credit,
+            | Self::OldSignalSlain
+            | Self::ReferralReward
+            | Self::ReferralWelcome => ChipDirection::Credit,
             Self::BlackjackBet | Self::PokerBet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
@@ -447,7 +460,9 @@ impl ChipMove {
     /// the two house tables, because a table can fold every hand to one
     /// seat and walk it up the board; gifts, because a group can funnel
     /// chips into one player at no cost to the board; and the starting
-    /// stipend, which everyone gets once. Gilds received stay in: a gild
+    /// stipend, which everyone gets once. Referral payouts stay out too:
+    /// one is worth a month of anything else, so a single invite would
+    /// decide the board. Gilds received stay in: a gild
     /// burns a third on the way, so it cannot funnel for free, and it is
     /// paid for a message other people rated. The pot stays in: the house
     /// mints it. Admin grants never reach the ledger at all
@@ -471,7 +486,9 @@ impl ChipMove {
             | Self::DrinkGift
             | Self::DrinkPurchase
             | Self::ShopPurchase
-            | Self::SsnakeArenaLost => false,
+            | Self::SsnakeArenaLost
+            | Self::ReferralReward
+            | Self::ReferralWelcome => false,
             Self::BonsaiWatered
             | Self::PetFed
             | Self::AquariumFed

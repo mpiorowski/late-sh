@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 use crate::app::common::theme;
 use crate::app::profile::svc::{IrcTokenStatus, ProfileEvent, ProfileService};
+use crate::app::referral::state::typed_invite_code;
+use crate::app::referral::svc::{InviteOverview, ReferralEvent, ReferralService};
 use crate::app::{
     chat::feeds::svc::{FeedEvent, FeedService, FeedSnapshot},
     common::primitives::Banner,
@@ -33,6 +35,8 @@ const LINK_CODE_MAX_LEN: usize = 16;
 const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 pub(crate) const SYSTEM_FIELD_MAX_LEN: usize = 48;
 pub(crate) const FEED_URL_MAX_LEN: usize = 2000;
+/// Room for a whole pasted `ssh invite-<code>@late.sh` and some slack.
+pub(crate) const INVITE_CODE_INPUT_MAX_LEN: usize = 40;
 pub(crate) const BIO_MAX_LEN: usize = 1000;
 pub(crate) const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
 pub(crate) const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
@@ -90,13 +94,15 @@ impl Row {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccountRow {
+    Invites,
     LinkAccounts,
     IrcToken,
     DeleteAccount,
 }
 
 impl AccountRow {
-    pub(crate) const ALL: [AccountRow; 3] = [
+    pub(crate) const ALL: [AccountRow; 4] = [
+        AccountRow::Invites,
         AccountRow::LinkAccounts,
         AccountRow::IrcToken,
         AccountRow::DeleteAccount,
@@ -395,6 +401,60 @@ impl IrcTokenDialogState {
     }
 }
 
+/// Settings > Account > Invites: this account's invite command, the people
+/// it invited, and (in the account's first week, with no inviter yet) a
+/// field to name one. Read on open; there is no live refresh.
+pub(crate) struct InvitesDialogState {
+    open: bool,
+    /// `None` while loading.
+    overview: Option<InviteOverview>,
+    code_input: TextArea<'static>,
+    pending: bool,
+    /// The last answer, and whether it is a refusal.
+    message: Option<(String, bool)>,
+}
+
+impl InvitesDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            overview: None,
+            code_input: new_short_textarea(true),
+            pending: false,
+            message: None,
+        }
+    }
+
+    pub(crate) fn open(&self) -> bool {
+        self.open
+    }
+
+    pub(crate) fn overview(&self) -> Option<&InviteOverview> {
+        self.overview.as_ref()
+    }
+
+    pub(crate) fn code_input(&self) -> &TextArea<'static> {
+        &self.code_input
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        self.pending
+    }
+
+    /// Whether the code field is showing and takes keys.
+    pub(crate) fn accepts_code(&self) -> bool {
+        self.overview
+            .as_ref()
+            .is_some_and(|overview| overview.can_attach)
+    }
+
+    pub(crate) fn message(&self) -> Option<(&str, bool)> {
+        self.message
+            .as_ref()
+            .map(|(text, is_error)| (text.as_str(), *is_error))
+    }
+}
+
 pub(crate) struct LinkAccountDialogState {
     open: bool,
     step: LinkAccountStep,
@@ -543,6 +603,9 @@ pub(crate) struct SettingsModalState {
     feed_snapshot_rx: watch::Receiver<FeedSnapshot>,
     feed_event_rx: broadcast::Receiver<FeedEvent>,
     profile_event_rx: broadcast::Receiver<ProfileEvent>,
+    referral_service: ReferralService,
+    referral_event_rx: broadcast::Receiver<ReferralEvent>,
+    invites: InvitesDialogState,
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
@@ -566,11 +629,13 @@ impl SettingsModalState {
     pub(crate) fn new(
         profile_service: ProfileService,
         feed_service: FeedService,
+        referral_service: ReferralService,
         user_id: Uuid,
     ) -> Self {
         let feed_snapshot_rx = feed_service.subscribe_snapshot();
         let feed_event_rx = feed_service.subscribe_events();
         let profile_event_rx = profile_service.subscribe_events();
+        let referral_event_rx = referral_service.subscribe_events();
         feed_service.list_task(user_id);
         Self {
             profile_service,
@@ -615,6 +680,9 @@ impl SettingsModalState {
             feed_snapshot_rx,
             feed_event_rx,
             profile_event_rx,
+            referral_service,
+            referral_event_rx,
+            invites: InvitesDialogState::new(),
             gem: GemState::new(),
             tab_rects: Cell::new([None; Tab::ALL.len()]),
             body_area: Cell::new(Rect::new(0, 0, 0, 0)),
@@ -684,6 +752,7 @@ impl SettingsModalState {
         self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
         self.irc_token = IrcTokenDialogState::new();
+        self.invites = InvitesDialogState::new();
         self.right_sidebar_components_open = false;
         self.right_sidebar_components_index = 0;
         self.statusline_index = 0;
@@ -700,8 +769,10 @@ impl SettingsModalState {
         // banner.
         let changed = self.feed_snapshot_rx.has_changed().unwrap_or(false)
             || !self.feed_event_rx.is_empty()
-            || !self.profile_event_rx.is_empty();
+            || !self.profile_event_rx.is_empty()
+            || !self.referral_event_rx.is_empty();
         self.drain_feed_snapshot();
+        self.drain_referral_events();
         let mut banner = self.drain_profile_events();
         if let Some(feed_banner) = self.drain_feed_events() {
             banner = Some(feed_banner);
@@ -1459,6 +1530,87 @@ impl SettingsModalState {
 
     pub(crate) fn delete_account_text(&self) -> String {
         self.delete_account.input.lines().join("")
+    }
+
+    pub(crate) fn invites_dialog(&self) -> &InvitesDialogState {
+        &self.invites
+    }
+
+    pub(crate) fn open_invites_dialog(&mut self) {
+        self.invites = InvitesDialogState::new();
+        self.invites.open = true;
+        // overview stays `None` (loading) until the service replies.
+        self.referral_service.load_overview_task(self.user_id);
+    }
+
+    pub(crate) fn close_invites_dialog(&mut self) {
+        self.invites = InvitesDialogState::new();
+    }
+
+    pub(crate) fn invites_code_input_mut(&mut self) -> &mut TextArea<'static> {
+        self.invites.message = None;
+        &mut self.invites.code_input
+    }
+
+    /// Enter in the code field. A shape that cannot be a code is refused
+    /// here, without a round trip.
+    pub(crate) fn submit_invite_code(&mut self) {
+        if self.invites.pending || !self.invites.accepts_code() {
+            return;
+        }
+        let typed = self.invites.code_input.lines().join("");
+        let Some(code) = typed_invite_code(&typed) else {
+            self.invites.message = Some((
+                "That does not look like an invite code.".to_string(),
+                true,
+            ));
+            return;
+        };
+        self.invites.pending = true;
+        self.invites.message = Some(("Checking the code...".to_string(), false));
+        self.referral_service.attach_task(
+            self.user_id,
+            code,
+            late_core::models::referral::ReferralSource::Settings,
+        );
+    }
+
+    fn drain_referral_events(&mut self) {
+        loop {
+            match self.referral_event_rx.try_recv() {
+                Ok(ReferralEvent::Overview { user_id, overview }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.overview = Some(overview);
+                    }
+                }
+                Ok(ReferralEvent::Attached { user_id, inviter }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.pending = false;
+                        self.invites.code_input = new_short_textarea(true);
+                        self.invites.message = Some((format!("Invited by @{inviter}."), false));
+                        self.referral_service.load_overview_task(self.user_id);
+                    }
+                }
+                Ok(ReferralEvent::Refused { user_id, refusal }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.pending = false;
+                        self.invites.message = Some((refusal.message().to_string(), true));
+                    }
+                }
+                Ok(ReferralEvent::Failed { user_id, message }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.pending = false;
+                        self.invites.message = Some((message, true));
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    tracing::error!(%e, "failed to receive settings referral event");
+                    break;
+                }
+            }
+        }
     }
 
     pub(crate) fn irc_token_dialog(&self) -> &IrcTokenDialogState {
