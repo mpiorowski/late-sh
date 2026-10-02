@@ -43,7 +43,7 @@ A window onto what the room is doing right now, for discovery, living where the 
 
 Zen also has a Live tile (`TileKind::Live`) the user places like any other. It shows the same strip, from the same per-session `LiveState`, beside the #lounge activity feed: while something is up the strip takes three fifths of the tile (never under `MIN_FULL_WIDTH`, 56) and the feed the rest, unless the feed would get fewer than 30 columns, when the strip keeps the whole tile; while nothing is up it splits 30/70, a faint `nothing live` beside the feed, since a tile is always on the page.
 
-It is also where News shares land: a share posts nothing into the #lounge chat (`../chat/CONTEXT.md` §11 News), so the strip is how the room sees a link, and `r` is how it answers one.
+It is also where News shares land: a share posts nothing into the #lounge chat (`../chat/CONTEXT.md` §11 News), so the strip is how the room sees a link, and `r` is how it answers one (`r` on a story in the News room starts the same reply, `../chat/CONTEXT.md` §11 News).
 
 ## 2. File map
 
