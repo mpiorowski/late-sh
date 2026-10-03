@@ -283,16 +283,16 @@ fn pair_help_lines(listen_url: &str) -> Vec<String> {
         "                           cargo build --release --bin late".to_string(),
         "".to_string(),
         "What `late` unlocks".to_string(),
-        "  audio       Icecast playback and visualizer on your machine".to_string(),
+        "  audio       radio playback and visualizer on your machine".to_string(),
         "  youtube     embedded webview hosts the shared queue locally".to_string(),
         "  clipboard   /paste-image reads your OS clipboard image into chat".to_string(),
         "  voice       talk in voice rooms with your mic (linux + windows; plain SSH only shows status)".to_string(),
         "  desktop     now playing shows in your desktop media widget (linux)".to_string(),
-        "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
+        "  controls    m mute, +/- volume, v+x source, v+r stations, v+v Music Booth".to_string(),
         "".to_string(),
         "Listen without the CLI".to_string(),
         "  Open the link below on any device, or scan the QR.".to_string(),
-        "  It plays the house streams, Nightride, and the community YouTube".to_string(),
+        "  It plays every radio station and the community YouTube".to_string(),
         "  queue in a plain browser tab. No pairing, no session, nothing to".to_string(),
         "  install, so it works from a phone or a locked-down laptop.".to_string(),
         "  Listening only: chat, games and the rest stay in the terminal.".to_string(),
@@ -706,7 +706,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Polls",
         "  /poll              create a 10/20/30-minute poll in the selected Home room",
         "  va / vb / vc       vote while a poll is visible",
-        "  v1 / v2 / v3       select music streams/stations",
+        "  v1 .. v4           tune to a pinned radio station",
         "  limit              one active poll per room",
         "  author             the strip names who started the poll, when it fits",
         "",
@@ -1327,9 +1327,10 @@ fn overview_lines() -> Vec<String> {
         "  m                 mute paired client",
         "  + / -             paired client volume",
         "  v then v          open the Music Booth (submit + queue + votes)",
-        "  v then x          cycle audio source: Icecast → YouTube → Radio",
+        "  v then x          switch audio source: Radio ⇄ YouTube",
         "  v then s          skip-vote the current YouTube track",
-        "  v then 1..5       select stream/station in the active source",
+        "  v then 1..4       tune to a pinned station (radio active)",
+        "  v then r          open Stations: every radio, live now-playing, pin to v1..v4",
         "  w, m, + / - and the v music prefix are off on the Artboard: that page",
         "  spends those letters itself (v applauds; m opens gallery moderation for staff)",
         "",
@@ -1404,8 +1405,7 @@ fn architecture_lines() -> Vec<String> {
         "  services publish watch snapshots and broadcast events into SSH sessions",
         "",
         "Audio stack",
-        "  Icecast has chill and classical house streams",
-        "  Radio has Nightride guest stations",
+        "  Radio is a station catalogue: Nightride guest stations plus the lofi and classical house streams",
         "  Liquidsoap manages the house playlists",
         "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
@@ -1526,7 +1526,7 @@ fn zen_help_lines() -> Vec<String> {
         "Tiles",
         "  w                 open Bonsai Care, as on every page",
         "  a                 feed the tank (free, once a day, +100 chips)",
-        "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
+        "  m  - =  v x  v1-4 mute, volume, audio source, and station, as everywhere",
         "  click             pet the pet; it reads the rest of your session itself",
         "  o                 with a live tile on the page, open what the #lounge live strip shows",
         "  Enter / click     on the live tile, the same",
@@ -1998,19 +1998,18 @@ fn bonsai_help_lines() -> Vec<String> {
 const MUSIC_PAIR_TEXT: &str = "\
 Music controls
 
-late.sh has three music sources:
+late.sh has two music sources:
 
-  Icecast    24/7 house radio with chill and classical streams.
+  Radio      a station catalogue: Nightride guest stations (chillsynth, nightride, datawave, spacesynth, ambient) and the late.sh house streams (lofi, classical). More stations arrive as they are cleared.
   YouTube    a shared queue everyone can submit links to.
-  Radio      direct Nightride guest stations.
 
-Your paired client plays the selected source. Use v then 1..5 to select a stream or station inside the active source.
+Your paired client plays the selected source. Pin up to four stations behind v1..v4 and open Stations (v then r) to browse the whole catalogue with live now-playing.
 
 Plain stream, no pairing:
   vlc https://late.sh/stream
   mpv https://late.sh/stream
 
-Direct stream playback is Icecast only. Pair the CLI or browser for source switching, mute/volume keys, visualizer sync, or the shared YouTube queue.
+Direct stream playback is the house streams only. Pair the CLI for source switching, stations, mute/volume keys, visualizer sync, or the shared YouTube queue.
 
 No sound from the paired CLI on Linux?
   The CLI plays audio through ALSA. On a PipeWire system with no ALSA compatibility layer, it finds no output device.
@@ -2019,7 +2018,7 @@ No sound from the paired CLI on Linux?
 Now playing on your desktop (Linux)
   The paired CLI publishes the current track over MPRIS, the D-Bus standard your desktop already uses for media players.
   GNOME's top bar, KDE's tray, lock screens, and panel applets pick it up on their own. There is nothing to switch on: it appears once `late` is running and paired.
-  Every source reports title and artist. YouTube tracks add duration, the video thumbnail, and a watch link; Icecast adds track length.
+  Every source reports title and artist. YouTube tracks add duration, the video thumbnail, and a watch link; house stations add track length.
   Play/pause from the widget, or your keyboard's media keys, mutes and unmutes the paired client, the same as pressing m here. The volume slider works too.
   The controls travel through the server to every paired player, so they cover all sources, YouTube included, and this terminal always agrees with the widget.
   Machines with no session bus (headless boxes, containers, some WSL setups) simply get nothing. Audio and everything else carry on as normal.
@@ -2029,12 +2028,13 @@ Global keys (work anywhere)
   m                 mute paired client
   + / -             volume up / down
 
-Select stream or station
-  Icecast active: v then 1 / 2 selects chill / classical
-  Radio active:   v then 1..5 selects Chillsynth / Nightride / Datawave / Spacesynth / Ambient
+Tune a station
+  v then 1..4       tune to the station pinned in that slot (radio active)
+  v then r          open Stations: ↑↓ move, Enter listen, 1-4 pin to a slot, 0 unpin, / filter, Esc close
+                    every row shows what that station is playing right now, so you can check before you switch
 
 Swap which source you hear
-  v then x          cycle your paired client through Icecast → YouTube → Radio. Your choice is saved per-user, so a refresh keeps it.
+  v then x          switch your paired client between Radio and YouTube. Your choice is saved per-user, so a refresh keeps it.
 
 Music Booth (v then v)
 

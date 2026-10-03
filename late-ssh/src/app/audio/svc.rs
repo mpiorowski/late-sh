@@ -15,7 +15,7 @@ use late_core::{
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, IcecastStream, RadioStation, User},
+        user::{AudioSource, RadioSlots, RadioStation, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -736,9 +736,9 @@ impl AudioService {
         User::audio_source(&client, user_id).await
     }
 
-    pub async fn read_icecast_stream(&self, user_id: Uuid) -> Result<IcecastStream> {
+    pub async fn read_radio_slots(&self, user_id: Uuid) -> Result<RadioSlots> {
         let client = self.db.get().await?;
-        User::icecast_stream(&client, user_id).await
+        User::radio_slots(&client, user_id).await
     }
 
     pub async fn read_radio_station(&self, user_id: Uuid) -> Result<RadioStation> {
@@ -746,12 +746,11 @@ impl AudioService {
         User::radio_station(&client, user_id).await
     }
 
-    pub async fn persist_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) -> Result<()> {
+    /// Pinned slots are a keymap, not a playback choice: nothing is pushed
+    /// to paired clients.
+    pub async fn persist_radio_slots(&self, user_id: Uuid, slots: RadioSlots) -> Result<()> {
         let client = self.db.get().await?;
-        User::set_icecast_stream(&client, user_id, stream).await?;
-        drop(client);
-        self.paired_clients.set_icecast_stream(user_id, stream);
-        Ok(())
+        User::set_radio_slots(&client, user_id, slots).await
     }
 
     pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
@@ -768,15 +767,10 @@ impl AudioService {
         active_audio_source_counts(&self.active_users).0
     }
 
-    /// Count of active users whose persisted audio source is Icecast.
-    pub fn icecast_source_count(&self) -> usize {
-        active_audio_source_counts(&self.active_users).1
-    }
-
-    /// Count of active users whose persisted audio source is the direct
-    /// radio preset (the default for users who never picked one).
+    /// Count of active users whose persisted audio source is radio (the
+    /// default for users who never picked one).
     pub fn radio_source_count(&self) -> usize {
-        active_audio_source_counts(&self.active_users).2
+        active_audio_source_counts(&self.active_users).1
     }
 
     fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
@@ -806,19 +800,19 @@ impl AudioService {
         });
     }
 
-    pub fn persist_icecast_stream_task(&self, user_id: Uuid, stream: IcecastStream) {
+    pub fn persist_radio_slots_task(&self, user_id: Uuid, slots: RadioSlots) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.persist_icecast_stream(user_id, stream).await {
+            if let Err(err) = service.persist_radio_slots(user_id, slots).await {
                 late_core::error_span!(
-                    "icecast_stream_persist_failed",
+                    "radio_slots_persist_failed",
                     error = ?err,
                     user_id = %user_id,
-                    "failed to persist icecast stream preference"
+                    "failed to persist radio slots"
                 );
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,
-                    message: "Failed to save stream preference".to_string(),
+                    message: "Failed to save radio slots".to_string(),
                 });
             }
         });
@@ -2131,17 +2125,16 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize, usize) {
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
     let active_users = active_users.lock_recover();
-    let (mut youtube, mut icecast, mut radio) = (0, 0, 0);
+    let (mut youtube, mut radio) = (0, 0);
     for user in active_users.values() {
         match user.audio_source {
             AudioSource::Youtube => youtube += 1,
-            AudioSource::Icecast => icecast += 1,
             AudioSource::Radio => radio += 1,
         }
     }
-    (youtube, icecast, radio)
+    (youtube, radio)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {

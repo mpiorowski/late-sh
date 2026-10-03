@@ -1,6 +1,6 @@
 use late_core::{
     audio::VizFrame,
-    models::user::{AudioSource, IcecastStream, RadioStation},
+    models::user::{AudioSource, RadioSlots, RadioStation},
 };
 use std::time::Instant;
 use tokio::sync::{broadcast, watch};
@@ -97,10 +97,6 @@ impl AudioState {
         self.service.youtube_source_count()
     }
 
-    pub fn icecast_source_count(&self) -> usize {
-        self.service.icecast_source_count()
-    }
-
     pub fn radio_source_count(&self) -> usize {
         self.service.radio_source_count()
     }
@@ -170,9 +166,8 @@ impl AudioState {
         self.service.persist_audio_source_task(self.user_id, source);
     }
 
-    pub fn persist_icecast_stream(&self, stream: IcecastStream) {
-        self.service
-            .persist_icecast_stream_task(self.user_id, stream);
+    pub fn persist_radio_slots(&self, slots: RadioSlots) {
+        self.service.persist_radio_slots_task(self.user_id, slots);
     }
 
     pub fn persist_radio_station(&self, station: RadioStation) {

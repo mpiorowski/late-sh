@@ -1,7 +1,9 @@
 # Radio: two sources, a station catalogue, and user-pinned slots
 
-Design doc. Proposal only: nothing here is built yet. `late-ssh/src/app/audio/CONTEXT.md`
-records what exists today; this file records where the music widget is going and why.
+Design doc. Steps 1-3 of §10 are built on `mateu/music` (catalogue, two-source rail,
+slots, Stations modal); step 4 (Plaza / Code Radio adapters, listen-page grouping) is open.
+`late-ssh/src/app/audio/CONTEXT.md` records what exists; this file records the why and
+what is still to come.
 
 ## 1. Goal
 
@@ -229,24 +231,23 @@ reach any of the station hosts, so every URL above is from secondary sources):
 
 Each step ships on its own and leaves the product working:
 
-1. **Catalogue**: `Station` table, `StationKey`, house mounts as stations, read-side
+1. ✅ **Catalogue**: `Station` table, `StationKey`, house mounts as stations, read-side
    `icecast` migration, `radio_slots` setting + defaults. Rail and keys unchanged (radio
    detail keeps listing the first five catalogue rows). Tests: catalogue strictness,
    migration mapping, slot defaults.
-2. **Two sources + compact rail**: drop the icecast tab, `v+x` toggles, new 15-row stage,
+2. ✅ **Two sources + compact rail**: drop the icecast tab, `v+x` toggles, new 15-row stage,
    slot rows `v1`..`v4`, per-provider attribution row. Update the sidebar tests and the
    Pair guide text.
-3. **Stations modal** (`v+r`): list, live metadata, listen, pin/unpin, filter.
+3. ✅ **Stations modal** (`v+r`): list, live metadata, listen, pin/unpin, filter.
 4. **Adapters**: Plaza and Code Radio pollers behind `enabled`, listen page grouping,
    MPRIS covered by the unified map.
 5. **Docs**: `audio/CONTEXT.md` §6, §12, "Nightride direct-radio source" → "Station
    catalogue"; `MUSIC.md` external stations note; delete this file's "proposal" framing
    once built, or delete the file.
 
-## 11. Open decisions
+## 11. Decisions taken (revisit if they feel wrong in use)
 
-- **Slot count**: 4 (proposed) or 5 (keeps today's `v5` muscle memory, costs one row).
-- **House progress bar**: dropped from the rail in this layout; keep only if missed.
-- **Who may listen off-slot**: everyone (proposed). An alternative is "slots are the only
-  way to select", which makes the modal a pure pinning tool; rejected because it makes
-  trying a new station a two-step chore.
+- **Slot count**: 4 (`RADIO_SLOTS`); five costs one rail row and nothing else.
+- **House progress bar**: dropped from the rail; the slot rows need the space.
+- **Off-slot listening**: allowed from the modal; the rule row names the station.
+- **Footer**: `v+r tune  v+x source` on radio (both groups fit a 21-column rail).

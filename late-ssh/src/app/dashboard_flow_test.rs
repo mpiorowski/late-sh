@@ -489,7 +489,7 @@ async fn o_on_a_booth_track_tunes_in_then_opens_the_booth() {
     app.resize(160, 40)
         .expect("resize to a card the full strip fits");
     wait_for_render_contains(&mut app, "lounge").await;
-    app.set_paired_playback_source(AudioSource::Icecast);
+    app.set_paired_playback_source(AudioSource::Radio);
 
     app.audio
         .service()
@@ -538,7 +538,7 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
     app.resize(160, 40)
         .expect("resize to a card the full strip fits");
     wait_for_render_contains(&mut app, "lounge").await;
-    app.set_paired_playback_source(AudioSource::Icecast);
+    app.set_paired_playback_source(AudioSource::Radio);
 
     app.audio
         .service()
@@ -571,7 +571,7 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
     app.handle_input(b"o");
     assert_eq!(
         app.paired_source,
-        AudioSource::Icecast,
+        AudioSource::Radio,
         "nothing to tune in to"
     );
     assert!(!app.booth_modal_state.is_open());

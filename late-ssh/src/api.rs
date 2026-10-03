@@ -178,7 +178,7 @@ struct PublicAir {
     /// directly. Icecast mounts are served through late-web's own `/stream`
     /// proxy, so that URL belongs to late-web, not here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream_url: Option<&'static str>,
+    stream_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -333,12 +333,13 @@ async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> 
     // The Nightride feed carries more stations than late.sh offers; the
     // strict lookup drops the rest rather than listing a station with no way
     // to play it.
+    let public_stream_base_url = format!("{}/stream", state.config.web_url.trim_end_matches('/'));
     let stations = state
         .radio_meta_rx
         .borrow()
         .iter()
         .filter_map(|(station, meta)| {
-            let stream_url = stations::radio_station_url_by_key(station)?;
+            let stream_url = stations::station_stream_url_by_key(&public_stream_base_url, station)?;
             Some((
                 station.clone(),
                 PublicAir {
@@ -703,11 +704,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
-    let icecast_stream = state
-        .audio_service
-        .read_icecast_stream(user_id)
-        .await
-        .unwrap_or_default();
     let radio_station = state
         .audio_service
         .read_radio_station(user_id)
@@ -748,7 +744,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
     };
     state
         .paired_client_registry
-        .set_stream_preferences(user_id, icecast_stream, radio_station);
+        .set_stream_preferences(user_id, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
@@ -758,7 +754,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
     let stream_selection = crate::app::audio::stations::resolve_stream_selection(
         &public_stream_base_url,
         audio_source,
-        icecast_stream,
         radio_station,
     );
 

@@ -590,8 +590,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
         initial_interaction_mode: late_core::models::user::extract_interaction_mode(&user.settings),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
-        initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
+        initial_radio_slots: late_core::models::user::extract_radio_slots(&user.settings),
         is_draining: state.is_draining.clone(),
     }
 }

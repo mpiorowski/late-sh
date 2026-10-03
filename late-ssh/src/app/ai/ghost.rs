@@ -355,7 +355,7 @@ impl GhostService {
             ActiveUser {
                 username: bot.username.clone(),
                 fingerprint: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
+                audio_source: late_core::models::user::AudioSource::Radio,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),

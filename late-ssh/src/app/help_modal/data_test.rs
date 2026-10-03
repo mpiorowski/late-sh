@@ -215,7 +215,7 @@ fn chat_guide_lists_user_facing_slash_commands() {
 
 #[test]
 fn music_guide_defers_pairing_setup_to_pair_tab() {
-    assert!(MUSIC_PAIR_TEXT.contains("three music sources"));
+    assert!(MUSIC_PAIR_TEXT.contains("two music sources"));
     assert!(MUSIC_PAIR_TEXT.contains("active YouTube-source users"));
     assert!(!MUSIC_PAIR_TEXT.contains("two audio surfaces"));
     assert!(!MUSIC_PAIR_TEXT.contains("paired users agree"));

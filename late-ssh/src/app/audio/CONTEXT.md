@@ -286,8 +286,8 @@ Mechanics:
   sent on pair-WS connect, on persisted `v+x` source changes, and when CLI
   presence changes for a token.
 - CLI stores `source_is_icecast` as the native-output gate; despite the legacy
-  name it is true for direct stream sources (`icecast`, `radio`) and false for
-  `youtube`. Output emits silence when the gate is false without touching the
+  name it is true for direct stream sources (`radio`, and the retired
+  `icecast`) and false for `youtube`. Output emits silence when the gate is false without touching the
   user `muted` flag.
 - CLI retargets the decoder thread on source changes. `icecast` restores the
   configured `LATE_AUDIO_BASE_URL`; `radio` uses the server-sent station URL

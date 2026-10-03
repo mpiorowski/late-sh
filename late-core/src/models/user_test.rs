@@ -829,3 +829,47 @@ fn hidden_award_categories_keep_only_real_badges() {
     );
     assert!(extract_hidden_award_categories(&json!({})).is_empty());
 }
+
+#[test]
+fn retired_icecast_source_reads_as_radio_on_its_house_mount() {
+    use crate::models::user::{
+        AudioSource, extract_audio_source, extract_radio_slots, extract_radio_station,
+    };
+    let settings = json!({ "audio_source": "icecast", "icecast_stream": "classical" });
+    assert_eq!(extract_audio_source(&settings), AudioSource::Radio);
+    assert_eq!(extract_radio_station(&settings).as_str(), "classical");
+    // The migrated station stays reachable from a slot key.
+    assert_eq!(
+        extract_radio_slots(&settings).position_of(extract_radio_station(&settings)),
+        Some(3)
+    );
+    // An icecast user who never picked a mount was on chill (now lofi).
+    let settings = json!({ "audio_source": "icecast" });
+    assert_eq!(extract_radio_station(&settings).label(), "lofi");
+    assert_eq!(
+        extract_radio_slots(&settings).get(0).map(|s| s.as_str()),
+        Some("chill")
+    );
+}
+
+#[test]
+fn radio_settings_read_the_station_and_pinned_slots() {
+    use crate::models::user::{extract_radio_slots, extract_radio_station};
+    let settings = json!({
+        "audio_source": "radio",
+        "radio_station": "rektify",
+        "radio_slots": ["spacesynth", null, "rektify", "nope"]
+    });
+    assert_eq!(extract_radio_station(&settings).as_str(), "rektify");
+    let slots = extract_radio_slots(&settings);
+    assert_eq!(slots.get(0).map(|s| s.as_str()), Some("spacesynth"));
+    assert_eq!(slots.get(1), None);
+    assert_eq!(slots.get(2).map(|s| s.as_str()), Some("rektify"));
+    assert_eq!(slots.get(3), None);
+    // No slots saved: defaults, with the current station in slot 1.
+    let settings = json!({ "radio_station": "spacesynth" });
+    assert_eq!(
+        extract_radio_slots(&settings).get(0).map(|s| s.as_str()),
+        Some("spacesynth")
+    );
+}

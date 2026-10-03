@@ -60,24 +60,27 @@ fn empty_queue() -> QueueSnapshot {
     }
 }
 
+fn station(key: &str) -> RadioStation {
+    RadioStation::from_key(key).expect("an enabled catalogue station")
+}
+
 fn stage_lines_with(
     source: AudioSource,
-    selected_stream: IcecastStream,
     selected_station: RadioStation,
+    radio_slots: RadioSlots,
+    radio_now_playing: Option<&str>,
 ) -> Vec<Line<'static>> {
     let queue = empty_queue();
     music_stage_lines(
         21,
         &MusicStageProps {
-            now_playing: None,
             paired_client: None,
             queue: &queue,
             source,
-            selected_stream,
             selected_station,
-            radio_now_playing: None,
+            radio_slots,
+            radio_now_playing,
             youtube_source_count: 3,
-            icecast_source_count: 9,
             radio_source_count: 1,
             marquee_tick: 0,
         },
@@ -85,14 +88,10 @@ fn stage_lines_with(
 }
 
 fn stage_lines(source: AudioSource) -> Vec<Line<'static>> {
-    stage_lines_with(source, IcecastStream::Chill, RadioStation::Chillsynth)
+    stage_lines_with(source, station("chillsynth"), RadioSlots::default(), None)
 }
 
-const ALL_SOURCES: [AudioSource; 3] = [
-    AudioSource::Youtube,
-    AudioSource::Icecast,
-    AudioSource::Radio,
-];
+const ALL_SOURCES: [AudioSource; 2] = [AudioSource::Youtube, AudioSource::Radio];
 
 #[test]
 fn music_stage_chrome_rows_never_move() {
@@ -100,22 +99,34 @@ fn music_stage_chrome_rows_never_move() {
         let lines = stage_lines(source);
         let texts: Vec<String> = lines.iter().map(line_text).collect();
         assert_eq!(texts.len(), MUSIC_DOCK_HEIGHT as usize, "{source:?}");
-        assert!(texts[2].starts_with("▌ radio"), "{source:?}");
-        assert!(texts[4].starts_with("▌ youtube"), "{source:?}");
-        assert!(texts[6].starts_with("▌ icecast"), "{source:?}");
-        assert!(texts[8].starts_with("── "), "{source:?}");
-        assert!(texts[8].contains(source_label(source)), "{source:?}");
-        assert!(texts[15].contains("v+x source"), "{source:?}");
+        assert!(texts[0].starts_with("vol"), "{source:?}");
+        assert!(texts[1].starts_with("▌ radio"), "{source:?}");
+        assert!(texts[3].starts_with("▌ youtube"), "{source:?}");
+        assert!(texts[5].starts_with("── "), "{source:?}");
+        assert!(texts[11].contains("v+x source"), "{source:?}");
     }
+}
+
+#[test]
+fn the_rule_names_the_current_station_or_youtube() {
+    let texts: Vec<String> = stage_lines(AudioSource::Radio)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(texts[5].contains("chillsynth"), "{}", texts[5]);
+    let texts: Vec<String> = stage_lines(AudioSource::Youtube)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(texts[5].contains("youtube"), "{}", texts[5]);
 }
 
 #[test]
 fn music_stage_dock_rows_always_show_now_playing() {
     for source in ALL_SOURCES {
         let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
-        assert_eq!(texts[3], "chillsynth", "{source:?}");
-        assert_eq!(texts[5], "fallback stream", "{source:?}");
-        assert_eq!(texts[7], "no signal", "{source:?}");
+        assert_eq!(texts[2], "chillsynth", "{source:?}");
+        assert_eq!(texts[4], "fallback stream", "{source:?}");
     }
 }
 
@@ -123,73 +134,79 @@ fn music_stage_dock_rows_always_show_now_playing() {
 fn music_stage_dock_rows_keep_listener_counts() {
     for source in ALL_SOURCES {
         let texts: Vec<String> = stage_lines(source).iter().map(line_text).collect();
-        assert!(texts[2].trim_end().ends_with('1'), "{source:?}");
-        assert!(texts[4].trim_end().ends_with('3'), "{source:?}");
-        assert!(texts[6].trim_end().ends_with('9'), "{source:?}");
+        assert!(texts[1].trim_end().ends_with('1'), "{source:?}");
+        assert!(texts[3].trim_end().ends_with('3'), "{source:?}");
     }
 }
 
 #[test]
-fn icecast_selector_rows_mark_selected_stream() {
-    let texts: Vec<String> = stage_lines_with(
-        AudioSource::Icecast,
-        IcecastStream::Classical,
-        RadioStation::Chillsynth,
-    )
-    .iter()
-    .map(line_text)
-    .collect();
-    // Detail rows 9..14: progress/blank, chill, classical, padding.
-    assert!(texts[10].starts_with("○ chill"));
-    assert!(texts[10].trim_end().ends_with("v1"));
-    assert!(texts[11].starts_with("● classical"));
-    assert!(texts[11].trim_end().ends_with("v2"));
-}
-
-#[test]
-fn radio_selector_rows_mark_selected_station() {
+fn radio_slot_rows_mark_the_current_station_and_credit_its_provider() {
     let texts: Vec<String> = stage_lines_with(
         AudioSource::Radio,
-        IcecastStream::Chill,
-        RadioStation::Datawave,
+        station("datawave"),
+        RadioSlots::default(),
+        None,
     )
     .iter()
     .map(line_text)
     .collect();
-    // Detail rows 9..14: five selectors then the attribution row.
-    assert!(texts[9].starts_with("○ chillsynth"));
-    assert!(texts[10].starts_with("○ nightride"));
-    assert!(texts[11].starts_with("● datawave"));
-    assert!(texts[11].trim_end().ends_with("v3"));
-    assert!(texts[12].starts_with("○ spacesynth"));
-    assert!(texts[13].starts_with("○ ambient"));
-    assert!(texts[13].trim_end().ends_with("v5"));
-    assert!(texts[14].contains("nightride.fm"));
-    // The selected station also names the radio dock row.
-    assert_eq!(texts[3], "datawave");
+    // Detail rows 6..10: four slot rows then the attribution row.
+    assert!(texts[6].starts_with("○ chillsynth"));
+    assert!(texts[6].trim_end().ends_with("v1"));
+    assert!(texts[7].starts_with("○ nightride"));
+    assert!(texts[8].starts_with("● datawave"));
+    assert!(texts[8].trim_end().ends_with("v3"));
+    assert!(texts[9].starts_with("○ classical"));
+    assert!(texts[9].trim_end().ends_with("v4"));
+    assert!(texts[10].contains("nightride.fm"));
+    assert!(texts[11].contains("v+r tune"));
+    // The current station also names the radio dock row.
+    assert_eq!(texts[2], "datawave");
 }
 
 #[test]
-fn radio_dock_row_prefers_sse_metadata() {
-    let queue = empty_queue();
-    let lines = music_stage_lines(
-        21,
-        &MusicStageProps {
-            now_playing: None,
-            paired_client: None,
-            queue: &queue,
-            source: AudioSource::Youtube,
-            selected_stream: IcecastStream::Chill,
-            selected_station: RadioStation::Chillsynth,
-            radio_now_playing: Some("An Artist - A Track"),
-            youtube_source_count: 3,
-            icecast_source_count: 9,
-            radio_source_count: 1,
-            marquee_tick: 0,
-        },
+fn an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider() {
+    let mut slots = RadioSlots::default();
+    slots.unpin(3);
+    let texts: Vec<String> = stage_lines_with(AudioSource::Radio, station("chill"), slots, None)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        texts[6..10].iter().all(|row| row.starts_with("○ ")),
+        "{texts:?}"
     );
-    let texts: Vec<String> = lines.iter().map(line_text).collect();
-    assert_eq!(texts[3], "An Artist - A Track");
+    assert!(texts[9].starts_with("○ pin via v+r"), "{}", texts[9]);
+    assert!(texts[9].trim_end().ends_with("v4"));
+    assert!(
+        texts[5].contains("lofi"),
+        "the rule still names it: {}",
+        texts[5]
+    );
+    assert!(texts[10].contains("late.sh house"), "{}", texts[10]);
+}
+
+#[test]
+fn radio_dock_row_prefers_live_metadata() {
+    let texts: Vec<String> = stage_lines_with(
+        AudioSource::Youtube,
+        station("chillsynth"),
+        RadioSlots::default(),
+        Some("An Artist - A Track"),
+    )
+    .iter()
+    .map(line_text)
+    .collect();
+    assert_eq!(texts[2], "An Artist - A Track");
+}
+
+#[test]
+fn the_footer_names_the_active_source_action() {
+    let texts: Vec<String> = stage_lines(AudioSource::Youtube)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(texts[11].contains("v+v queue"), "{}", texts[11]);
 }
 
 fn on(component: RightSidebarComponent) -> RightSidebarComponentSetting {

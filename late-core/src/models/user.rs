@@ -18,10 +18,10 @@ use super::statusline::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioSource {
-    Icecast,
     Youtube,
-    /// Nightride FM direct streams. The default for users who never picked
-    /// a source, so fresh `late` sessions land on the radio.
+    /// Direct station streams from the radio catalogue (`crate::radio`).
+    /// The default for users who never picked a source, so fresh `late`
+    /// sessions land on the radio.
     #[default]
     Radio,
 }
@@ -29,16 +29,16 @@ pub enum AudioSource {
 impl AudioSource {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Icecast => "icecast",
             Self::Youtube => "youtube",
             Self::Radio => "radio",
         }
     }
 
+    /// `icecast` is the retired house-stream source; its users now listen
+    /// to the same mounts as radio stations (see `extract_radio_station`).
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
-            "icecast" => Self::Icecast,
             _ => Self::Radio,
         }
     }
@@ -90,66 +90,7 @@ impl InteractionMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum IcecastStream {
-    #[default]
-    Chill,
-    Classical,
-}
-
-impl IcecastStream {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Chill => "chill",
-            Self::Classical => "classical",
-        }
-    }
-
-    pub fn from_settings_str(value: &str) -> Self {
-        match value {
-            "classical" => Self::Classical,
-            _ => Self::Chill,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RadioStation {
-    #[default]
-    Chillsynth,
-    Nightride,
-    Datawave,
-    Spacesynth,
-    Ambient,
-}
-
-impl RadioStation {
-    /// Settings/persistence key, also used to look up live now-playing
-    /// metadata in the Nightride `/meta` feed. The feed keys stations by
-    /// their stream filename, so `Ambient` must key on `"rektify"` (its
-    /// `rektify.mp3` stream) even though its display label is `"ambient"`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Chillsynth => "chillsynth",
-            Self::Nightride => "nightride",
-            Self::Datawave => "datawave",
-            Self::Spacesynth => "spacesynth",
-            Self::Ambient => "rektify",
-        }
-    }
-
-    pub fn from_settings_str(value: &str) -> Self {
-        match value {
-            "nightride" => Self::Nightride,
-            "datawave" => Self::Datawave,
-            "spacesynth" => Self::Spacesynth,
-            "rektify" => Self::Ambient,
-            _ => Self::Chillsynth,
-        }
-    }
-}
+pub use crate::radio::{RadioSlots, RadioStation};
 
 crate::model! {
     table = "users";
@@ -515,8 +456,11 @@ const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const INTERACTION_MODE_KEY: &str = "interaction_mode";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
+/// Retired source's stream choice; read only to migrate it into
+/// `radio_station` for users who never picked a station since.
 const ICECAST_STREAM_KEY: &str = "icecast_stream";
 const RADIO_STATION_KEY: &str = "radio_station";
+const RADIO_SLOTS_KEY: &str = "radio_slots";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
@@ -989,9 +933,9 @@ impl User {
         Ok(extract_audio_source(&settings))
     }
 
-    pub async fn icecast_stream(client: &Client, user_id: Uuid) -> Result<IcecastStream> {
+    pub async fn radio_slots(client: &Client, user_id: Uuid) -> Result<RadioSlots> {
         let settings = Self::settings_for_user(client, user_id).await?;
-        Ok(extract_icecast_stream(&settings))
+        Ok(extract_radio_slots(&settings))
     }
 
     pub async fn radio_station(client: &Client, user_id: Uuid) -> Result<RadioStation> {
@@ -1419,19 +1363,16 @@ impl User {
         Ok(())
     }
 
-    pub async fn set_icecast_stream(
-        client: &Client,
-        user_id: Uuid,
-        stream: IcecastStream,
-    ) -> Result<()> {
-        let value = stream.as_str();
+    /// Atomically merge the pinned station slots into `settings`.
+    pub async fn set_radio_slots(client: &Client, user_id: Uuid, slots: RadioSlots) -> Result<()> {
+        let value = slots.to_json();
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
                      updated = current_timestamp
                  WHERE id = $3",
-                &[&ICECAST_STREAM_KEY, &value, &user_id],
+                &[&RADIO_SLOTS_KEY, &value, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1749,20 +1690,33 @@ pub fn extract_audio_source(settings: &Value) -> AudioSource {
         .unwrap_or_default()
 }
 
-pub fn extract_icecast_stream(settings: &Value) -> IcecastStream {
-    settings
-        .get(ICECAST_STREAM_KEY)
-        .and_then(Value::as_str)
-        .map(IcecastStream::from_settings_str)
-        .unwrap_or_default()
+/// The station the user is tuned to. A user whose saved source is the
+/// retired `icecast` keeps listening to the mount they had chosen: house
+/// mounts are catalogue stations keyed by mount name, so the old
+/// `icecast_stream` value is already a station key.
+pub fn extract_radio_station(settings: &Value) -> RadioStation {
+    let legacy_icecast = settings.get(AUDIO_SOURCE_KEY).and_then(Value::as_str) == Some("icecast");
+    let key = if legacy_icecast {
+        settings
+            .get(ICECAST_STREAM_KEY)
+            .and_then(Value::as_str)
+            .unwrap_or("chill")
+    } else {
+        settings
+            .get(RADIO_STATION_KEY)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    };
+    RadioStation::from_settings_str(key)
 }
 
-pub fn extract_radio_station(settings: &Value) -> RadioStation {
+/// The user's pinned slots, or the defaults built around their current
+/// station when they never pinned anything.
+pub fn extract_radio_slots(settings: &Value) -> RadioSlots {
     settings
-        .get(RADIO_STATION_KEY)
-        .and_then(Value::as_str)
-        .map(RadioStation::from_settings_str)
-        .unwrap_or_default()
+        .get(RADIO_SLOTS_KEY)
+        .and_then(RadioSlots::from_json)
+        .unwrap_or_else(|| RadioSlots::defaults_for(extract_radio_station(settings)))
 }
 
 pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {

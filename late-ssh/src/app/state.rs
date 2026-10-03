@@ -441,11 +441,11 @@ pub struct SessionConfig {
     /// if they've never chosen one - which triggers the first-run prompt.
     pub initial_interaction_mode: Option<late_core::models::user::InteractionMode>,
     /// Initial audio source for the paired client, loaded from
-    /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
+    /// `users.settings.audio_source` (default `Radio`). v+x mutates this and
     /// persists the new value.
     pub initial_audio_source: late_core::models::user::AudioSource,
-    pub initial_icecast_stream: late_core::models::user::IcecastStream,
     pub initial_radio_station: late_core::models::user::RadioStation,
+    pub initial_radio_slots: late_core::models::user::RadioSlots,
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -709,8 +709,10 @@ pub struct App {
     /// webview helper. On pair-up the current value is replayed so a
     /// reconnect lands in the right mode.
     pub(crate) paired_source: late_core::models::user::AudioSource,
-    pub(crate) selected_icecast_stream: late_core::models::user::IcecastStream,
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
+    /// Pinned stations behind `v1`..`v4` (`users.settings.radio_slots`).
+    pub(crate) radio_slots: late_core::models::user::RadioSlots,
+    pub(crate) stations_modal_state: crate::app::audio::stations_modal::state::StationsModalState,
 
     /// How this session is driven (keyboard / mouse / hybrid). Gates whether the
     /// mouse is live; editable in settings.
@@ -1646,8 +1648,10 @@ impl App {
             tag_picker: super::tag_picker::state::TagPickerState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_source: config.initial_audio_source,
-            selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
+            radio_slots: config.initial_radio_slots,
+            stations_modal_state:
+                crate::app::audio::stations_modal::state::StationsModalState::default(),
             interaction_mode: config.initial_interaction_mode.unwrap_or_default(),
             music_prefix_armed: false,
             room_section_prefix_armed: false,
@@ -3131,11 +3135,9 @@ impl App {
     /// stops its webview helper for YouTube.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
-        // Dock order in the sidebar music stage: radio → youtube → icecast.
         let next = match self.paired_source {
             AudioSource::Radio => AudioSource::Youtube,
-            AudioSource::Youtube => AudioSource::Icecast,
-            AudioSource::Icecast => AudioSource::Radio,
+            AudioSource::Youtube => AudioSource::Radio,
         };
         self.set_paired_playback_source(next);
         next
@@ -3153,14 +3155,35 @@ impl App {
         self.audio.persist_audio_source(source);
     }
 
-    pub fn select_icecast_stream(&mut self, stream: late_core::models::user::IcecastStream) {
-        self.selected_icecast_stream = stream;
-        self.audio.persist_icecast_stream(stream);
-    }
-
     pub fn select_radio_station(&mut self, station: late_core::models::user::RadioStation) {
         self.selected_radio_station = station;
         self.audio.persist_radio_station(station);
+    }
+
+    /// Pin `station` behind `v{index+1}`, vacating any slot it held.
+    pub fn pin_radio_slot(&mut self, index: usize, station: late_core::models::user::RadioStation) {
+        self.radio_slots.pin(index, station);
+        self.audio.persist_radio_slots(self.radio_slots);
+    }
+
+    pub fn unpin_radio_slot(&mut self, index: usize) {
+        self.radio_slots.unpin(index);
+        self.audio.persist_radio_slots(self.radio_slots);
+    }
+
+    /// `Artist - Title` for `station` from its provider's feed, or `None`
+    /// while that feed has nothing (the caller shows the label).
+    pub(crate) fn station_now_playing(
+        &self,
+        station: late_core::models::user::RadioStation,
+    ) -> Option<String> {
+        let radio_meta = self.radio_meta_rx.as_ref().map(|rx| rx.borrow().clone());
+        let house = self.now_playing_rx.as_ref().map(|rx| rx.borrow().clone());
+        crate::app::audio::stations::station_now_playing(
+            station,
+            radio_meta.as_ref().unwrap_or(&Default::default()),
+            house.as_ref().unwrap_or(&Default::default()),
+        )
     }
 
     pub(crate) fn request_paired_clipboard_image_upload(

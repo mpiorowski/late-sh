@@ -1,103 +1,72 @@
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+//! Stream resolution and now-playing lookup for the radio catalogue
+//! (`late_core::radio`). The catalogue itself lives in late-core so the
+//! settings parser can validate station keys; this module is where the
+//! server turns a station into a URL a client can open and a track line
+//! the rail can show.
+
+use std::collections::HashMap;
+
+use late_core::models::user::{AudioSource, RadioStation};
+use late_core::radio::Provider;
+
+use super::radio_meta::svc::ArtistTitle;
+use late_core::api_types::NowPlaying;
 
 pub struct StreamSelection {
     pub url: String,
     pub station: &'static str,
 }
 
+/// What a paired client should open for `source`. `house_base_url` is the
+/// Icecast base house stations resolve against; third-party stations carry
+/// their own absolute URL and are never proxied through late.sh.
 pub fn resolve_stream_selection(
-    icecast_base_url: &str,
+    house_base_url: &str,
     source: AudioSource,
-    icecast_stream: IcecastStream,
-    radio_station: RadioStation,
+    station: RadioStation,
 ) -> Option<StreamSelection> {
     match source {
-        AudioSource::Icecast => Some(StreamSelection {
-            url: icecast_stream_url(icecast_base_url, icecast_stream),
-            station: icecast_stream.as_str(),
-        }),
         AudioSource::Radio => Some(StreamSelection {
-            url: radio_station_url(radio_station).to_string(),
-            station: radio_station.as_str(),
+            url: station.stream_url(house_base_url),
+            station: station.as_str(),
         }),
         AudioSource::Youtube => None,
     }
 }
 
-fn icecast_stream_url(base_url: &str, stream: IcecastStream) -> String {
-    let base = base_url.trim_end_matches('/');
-    match stream {
-        IcecastStream::Chill => format!("{base}/chill"),
-        IcecastStream::Classical => format!("{base}/classical"),
+/// Public stream URL for a station key, or `None` for a key late.sh does
+/// not offer. The Nightride `/meta` feed carries more stations than the
+/// catalogue (darksynth, horrorsynth, ebsm), so this must stay strict:
+/// `RadioStation::from_settings_str` defaults unknown input to Chillsynth,
+/// which here would hand out the wrong stream.
+pub fn station_stream_url_by_key(public_house_base_url: &str, key: &str) -> Option<String> {
+    RadioStation::from_key(key).map(|station| station.stream_url(public_house_base_url))
+}
+
+/// `Artist - Title` for `station` from whichever feed its provider has:
+/// the Nightride SSE map or the house Icecast now-playing map. `None`
+/// while that feed has nothing for it, so the caller shows the label.
+pub fn station_now_playing(
+    station: RadioStation,
+    radio_meta: &HashMap<String, ArtistTitle>,
+    house: &HashMap<String, NowPlaying>,
+) -> Option<String> {
+    match station.provider() {
+        Provider::House => house.get(station.as_str()).map(house_track_text),
+        Provider::Nightride | Provider::Plaza | Provider::CodeRadio => radio_meta
+            .get(station.as_str())
+            .map(|meta| format!("{} - {}", meta.artist, meta.title)),
     }
 }
 
-// The .mp3 URLs, not the .m4a ones the site advertises: .m4a is a 302 to
-// .mp3 anyway, and the CLI decoder only aligns MP3 streams, so going
-// direct removes the dependency on that redirect.
-fn radio_station_url(station: RadioStation) -> &'static str {
-    match station {
-        RadioStation::Chillsynth => "https://stream.nightride.fm/chillsynth.mp3",
-        RadioStation::Nightride => "https://stream.nightride.fm/nightride.mp3",
-        RadioStation::Datawave => "https://stream.nightride.fm/datawave.mp3",
-        RadioStation::Spacesynth => "https://stream.nightride.fm/spacesynth.mp3",
-        RadioStation::Ambient => "https://stream.nightride.fm/rektify.mp3",
-    }
-}
-
-/// Public stream URL for a Nightride station keyed the way the `/meta` feed
-/// keys it, or None for a station late.sh does not offer. The feed carries
-/// more stations than we surface (darksynth, horrorsynth, ebsm), so this must
-/// stay strict: `RadioStation::from_settings_str` defaults unknown input to
-/// Chillsynth, which here would hand out the wrong stream.
-pub fn radio_station_url_by_key(key: &str) -> Option<&'static str> {
-    let station = match key {
-        "chillsynth" => RadioStation::Chillsynth,
-        "nightride" => RadioStation::Nightride,
-        "datawave" => RadioStation::Datawave,
-        "spacesynth" => RadioStation::Spacesynth,
-        "rektify" => RadioStation::Ambient,
-        _ => return None,
-    };
-    Some(radio_station_url(station))
-}
-
-/// Display labels for selector rows and selection banners. Settings keys
-/// (`as_str`) and display labels currently coincide, but they are separate
-/// concerns: renaming a label must not migrate persisted settings.
-pub fn icecast_stream_display_name(stream: IcecastStream) -> &'static str {
-    match stream {
-        IcecastStream::Chill => "chill",
-        IcecastStream::Classical => "classical",
-    }
-}
-
-pub fn radio_station_display_name(station: RadioStation) -> &'static str {
-    match station {
-        RadioStation::Chillsynth => "chillsynth",
-        RadioStation::Nightride => "nightride",
-        RadioStation::Datawave => "datawave",
-        RadioStation::Spacesynth => "spacesynth",
-        RadioStation::Ambient => "ambient",
-    }
-}
-
-pub fn icecast_stream_by_index(index: u8) -> Option<IcecastStream> {
-    match index {
-        1 => Some(IcecastStream::Chill),
-        2 => Some(IcecastStream::Classical),
-        _ => None,
-    }
-}
-
-pub fn radio_station_by_index(index: u8) -> Option<RadioStation> {
-    match index {
-        1 => Some(RadioStation::Chillsynth),
-        2 => Some(RadioStation::Nightride),
-        3 => Some(RadioStation::Datawave),
-        4 => Some(RadioStation::Spacesynth),
-        5 => Some(RadioStation::Ambient),
-        _ => None,
+/// Combined `Artist - Title` row for a house now-playing track; bare title
+/// when the tag has no artist.
+pub fn house_track_text(now: &NowPlaying) -> String {
+    match now.track.artist.as_deref() {
+        Some(artist) if !artist.trim().is_empty() => {
+            format!("{} - {}", artist.trim(), now.track.title)
+        }
+        _ => now.track.title.clone(),
     }
 }
 
@@ -106,20 +75,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn radio_station_url_by_key_is_strict_about_unknown_stations() {
+    fn station_stream_url_by_key_is_strict_about_unknown_stations() {
         assert_eq!(
-            radio_station_url_by_key("chillsynth"),
+            station_stream_url_by_key("https://late.sh/stream", "chillsynth").as_deref(),
             Some("https://stream.nightride.fm/chillsynth.mp3")
         );
         // The `ambient` label persists and keys as `rektify`.
         assert_eq!(
-            radio_station_url_by_key("rektify"),
+            station_stream_url_by_key("https://late.sh/stream", "rektify").as_deref(),
             Some("https://stream.nightride.fm/rektify.mp3")
+        );
+        // House mounts resolve against the public base.
+        assert_eq!(
+            station_stream_url_by_key("https://late.sh/stream", "classical").as_deref(),
+            Some("https://late.sh/stream/classical")
         );
         // Stations the /meta feed carries but late.sh does not offer must
         // drop out, not silently resolve to the Chillsynth default.
-        assert_eq!(radio_station_url_by_key("darksynth"), None);
-        assert_eq!(radio_station_url_by_key("ambient"), None);
-        assert_eq!(radio_station_url_by_key(""), None);
+        assert_eq!(
+            station_stream_url_by_key("https://late.sh/stream", "darksynth"),
+            None
+        );
+        assert_eq!(
+            station_stream_url_by_key("https://late.sh/stream", "ambient"),
+            None
+        );
+        assert_eq!(
+            station_stream_url_by_key("https://late.sh/stream", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn station_now_playing_reads_the_provider_feed() {
+        let mut radio_meta = HashMap::new();
+        radio_meta.insert(
+            "datawave".to_string(),
+            ArtistTitle {
+                artist: "Com Truise".to_string(),
+                title: "Flightwave".to_string(),
+            },
+        );
+        let mut house = HashMap::new();
+        house.insert(
+            "classical".to_string(),
+            NowPlaying::new(late_core::api_types::Track {
+                artist: Some("Kimiko Ishizaka".to_string()),
+                title: "Prelude No. 1".to_string(),
+                duration_seconds: None,
+            }),
+        );
+        let datawave = RadioStation::from_key("datawave").unwrap();
+        let classical = RadioStation::from_key("classical").unwrap();
+        let chill = RadioStation::from_key("chill").unwrap();
+        assert_eq!(
+            station_now_playing(datawave, &radio_meta, &house).as_deref(),
+            Some("Com Truise - Flightwave")
+        );
+        assert_eq!(
+            station_now_playing(classical, &radio_meta, &house).as_deref(),
+            Some("Kimiko Ishizaka - Prelude No. 1")
+        );
+        // A house station never reads the Nightride map, and vice versa.
+        assert_eq!(station_now_playing(chill, &radio_meta, &house), None);
     }
 }

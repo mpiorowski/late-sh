@@ -14,6 +14,7 @@ pub mod model;
 pub mod model_test;
 pub mod models;
 pub mod nonogram;
+pub mod radio;
 pub mod rate_limit;
 #[cfg(test)]
 mod rate_limit_test;

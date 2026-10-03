@@ -188,33 +188,21 @@ fn the_care_bar_is_always_fourteen_dots() {
 
 #[test]
 fn the_player_names_the_station_for_the_streams_that_have_one() {
-    use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+    use late_core::models::user::{AudioSource, RadioStation};
 
+    let datawave = RadioStation::from_key("datawave").unwrap();
+    let classical = RadioStation::from_key("classical").unwrap();
     assert_eq!(
-        station_text(
-            AudioSource::Radio,
-            RadioStation::Datawave,
-            IcecastStream::Chill
-        ),
+        station_text(AudioSource::Radio, datawave),
         "radio · datawave"
     );
+    // House mounts are stations like any other.
     assert_eq!(
-        station_text(
-            AudioSource::Icecast,
-            RadioStation::Datawave,
-            IcecastStream::Classical
-        ),
-        "icecast · classical"
+        station_text(AudioSource::Radio, classical),
+        "radio · classical"
     );
     // YouTube plays the queue, not a station: one word.
-    assert_eq!(
-        station_text(
-            AudioSource::Youtube,
-            RadioStation::Datawave,
-            IcecastStream::Classical
-        ),
-        "youtube"
-    );
+    assert_eq!(station_text(AudioSource::Youtube, datawave), "youtube");
 }
 
 #[test]

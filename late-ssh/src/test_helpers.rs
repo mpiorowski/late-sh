@@ -702,8 +702,8 @@ fn make_app_with_chat_service_and_permissions(
         initial_theme_id: "contrast".to_string(),
         initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
-        initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
+        initial_radio_slots: late_core::models::user::RadioSlots::default(),
     })
     .expect("app");
     let landed = app.screen;
@@ -954,8 +954,8 @@ pub fn make_app_with_paired_client(
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
+        initial_radio_slots: late_core::models::user::RadioSlots::default(),
         initial_theme_id: "contrast".to_string(),
         initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
