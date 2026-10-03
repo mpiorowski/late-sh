@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use late_core::radio::Provider;
 use late_core::{
     MutexRecover,
     db::Db,
@@ -18,7 +19,6 @@ use late_core::{
         user::{AudioSource, RadioSlots, RadioStation, User},
     },
 };
-use late_core::radio::Provider;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
@@ -455,10 +455,8 @@ impl AudioService {
                     let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
                 }
                 // A house track change moves the station map too.
-                let stations = pair_radio_tracks(
-                    &radio_meta_rx.borrow_and_update(),
-                    &now_playing_rx.borrow(),
-                );
+                let stations =
+                    pair_radio_tracks(&radio_meta_rx.borrow_and_update(), &now_playing_rx.borrow());
                 if stations != last_stations {
                     last_stations = stations.clone();
                     let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
@@ -845,12 +843,7 @@ impl AudioService {
         });
     }
 
-    pub fn persist_radio_slot_task(
-        &self,
-        user_id: Uuid,
-        index: usize,
-        slot: Option<RadioStation>,
-    ) {
+    pub fn persist_radio_slot_task(&self, user_id: Uuid, index: usize, slot: Option<RadioStation>) {
         let service = self.clone();
         tokio::spawn(async move {
             if let Err(err) = service.persist_radio_slot(user_id, index, slot).await {

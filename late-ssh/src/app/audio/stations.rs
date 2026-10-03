@@ -50,12 +50,14 @@ pub fn station_now_playing(
         | Provider::CodeRadio
         | Provider::RadioParadise
         | Provider::Fip
-        | Provider::RadioSwiss => radio_meta
-            .get(station.as_str())
-            .map(|meta| match meta.artist.is_empty() {
-                true => meta.title.clone(),
-                false => format!("{} - {}", meta.artist, meta.title),
-            }),
+        | Provider::RadioSwiss => {
+            radio_meta
+                .get(station.as_str())
+                .map(|meta| match meta.artist.is_empty() {
+                    true => meta.title.clone(),
+                    false => format!("{} - {}", meta.artist, meta.title),
+                })
+        }
     }
 }
 

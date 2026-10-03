@@ -70,9 +70,7 @@ fn the_pinned_row_names_every_slot_and_marks_empty_ones() {
     let text = line_text(&pinned_line(slots));
     assert_eq!(
         text.split_whitespace().collect::<Vec<_>>(),
-        vec![
-            "pinned", "v1", "ambient", "v2", "—", "v3", "lofi"
-        ]
+        vec!["pinned", "v1", "ambient", "v2", "—", "v3", "lofi"]
     );
 }
 
@@ -126,5 +124,8 @@ fn the_list_groups_stations_under_one_heading_per_section() {
             "fip jazz"
         ]
     );
-    assert_eq!(selected_line, 8, "the cursor follows swiss jazz past the headings");
+    assert_eq!(
+        selected_line, 8,
+        "the cursor follows swiss jazz past the headings"
+    );
 }

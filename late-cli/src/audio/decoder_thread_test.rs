@@ -42,8 +42,9 @@ fn spawn_fake_stream() -> FakeStream {
             thread::spawn(move || {
                 let mut request = [0u8; 1024];
                 let _ = socket.read(&mut request);
-                let _ = socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nConnection: close\r\n\r\n");
+                let _ = socket.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nConnection: close\r\n\r\n",
+                );
                 let frame = silent_mp3_frame();
                 // Writing fails once the client hangs up.
                 while socket.write_all(&frame).is_ok() {
@@ -173,7 +174,9 @@ fn leaving_the_native_source_closes_the_stream() {
         open.load(Ordering::SeqCst) == 0
     });
 
-    harness.native_source_selected.store(true, Ordering::Relaxed);
+    harness
+        .native_source_selected
+        .store(true, Ordering::Relaxed);
     wait_until("returning to radio reopened the stream", || {
         open.load(Ordering::SeqCst) == 1
     });

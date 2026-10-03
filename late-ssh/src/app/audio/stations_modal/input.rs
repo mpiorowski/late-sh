@@ -1,11 +1,7 @@
 use late_core::models::user::AudioSource;
 use late_core::radio::RADIO_SLOTS;
 
-use crate::app::{
-    common::primitives::Banner,
-    input::ParsedInput,
-    state::App,
-};
+use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {

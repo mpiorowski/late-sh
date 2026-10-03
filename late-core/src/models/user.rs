@@ -1736,10 +1736,10 @@ pub fn extract_radio_station(settings: &Value) -> RadioStation {
 /// anything. The defaults do not depend on the current station, so a slot
 /// never moves because the user retuned.
 pub fn extract_radio_slots(settings: &Value) -> RadioSlots {
-    match settings.get(RADIO_SLOTS_KEY).and_then(RadioSlots::from_json) {
-        Some(slots) => slots,
-        None => RadioSlots::default(),
-    }
+    settings
+        .get(RADIO_SLOTS_KEY)
+        .and_then(RadioSlots::from_json)
+        .unwrap_or_default()
 }
 
 pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {

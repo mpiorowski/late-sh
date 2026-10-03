@@ -469,8 +469,8 @@ mod inner {
         VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{PollOutcome, PolledFeed};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
+    use super::{PollOutcome, PolledFeed};
     use crate::app::bonsai::state::BranchAction;
     use crate::app::referral::state::AttachRefusal;
 
@@ -2643,8 +2643,8 @@ mod inner {
         VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
-    use super::{PollOutcome, PolledFeed};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
+    use super::{PollOutcome, PolledFeed};
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}

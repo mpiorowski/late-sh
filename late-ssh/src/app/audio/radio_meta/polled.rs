@@ -140,8 +140,9 @@ impl PolledFeed {
                     .now_playing
                     .song
             }
-            Self::ParadiseMellow => serde_json::from_str::<Song>(body)
-                .context("parsing radio paradise now-playing")?,
+            Self::ParadiseMellow => {
+                serde_json::from_str::<Song>(body).context("parsing radio paradise now-playing")?
+            }
             Self::FipJazz => {
                 let now = serde_json::from_str::<RadioFranceLive>(body)
                     .context("parsing fip live metadata")?

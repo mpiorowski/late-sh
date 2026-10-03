@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Context;
-use late_core::shutdown::CancellationToken;
 use late_core::models::user::RadioStation;
+use late_core::shutdown::CancellationToken;
 use tokio::sync::watch;
 
 use super::polled::PolledFeed;
@@ -101,7 +101,10 @@ async fn run_poll_loop(
 ) {
     let key = feed.station_key();
     if RadioStation::from_key(key).is_none() {
-        tracing::info!(station = key, "station disabled; radio meta poller not started");
+        tracing::info!(
+            station = key,
+            "station disabled; radio meta poller not started"
+        );
         return;
     }
     let client = reqwest::Client::builder()

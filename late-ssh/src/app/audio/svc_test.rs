@@ -197,7 +197,10 @@ fn pair_radio_tracks_adds_the_house_mounts_to_the_radio_meta() {
         })
     };
     let now_playing = HashMap::from([
-        ("classical".to_string(), mount(Some("A pianist"), "Nocturne")),
+        (
+            "classical".to_string(),
+            mount(Some("A pianist"), "Nocturne"),
+        ),
         ("chill".to_string(), mount(None, "untitled loop")),
         // Not a catalogue station: never offered to the client.
         ("staging".to_string(), mount(None, "test tone")),

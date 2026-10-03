@@ -379,8 +379,7 @@ impl<'de> Deserialize<'de> for RadioStation {
 pub struct RadioSlots([Option<RadioStation>; RADIO_SLOTS]);
 
 impl RadioSlots {
-    const DEFAULT_KEYS: [&'static str; RADIO_SLOTS] =
-        ["chillsynth", "nightride", "datawave"];
+    const DEFAULT_KEYS: [&'static str; RADIO_SLOTS] = ["chillsynth", "nightride", "datawave"];
 
     pub fn empty() -> Self {
         Self([None; RADIO_SLOTS])
