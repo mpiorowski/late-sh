@@ -550,16 +550,19 @@ impl App {
             .collect();
         self.zen_chat_rows_caches
             .resize_with(zen_chat_rooms.len(), Default::default);
-        // The house now-playing entry for the USER'S SELECTED station when
-        // it is a house mount (the clubhouse and nightcap pages show it);
-        // a third-party station has no Icecast entry. Both watches are
-        // marked seen here so the tick's `has_changed` repaint gate rests.
+        // The house jukebox for the clubhouse and nightcap pages: the
+        // USER'S SELECTED station when it is a house mount, else the house
+        // `chill` mount (the jukebox never goes quiet because someone is
+        // tuned to Nightride). Both watches are marked seen here so the
+        // tick's `has_changed` repaint gate rests.
         let selected_radio_station = self.selected_radio_station;
         let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
             let map = rx.borrow_and_update();
-            (selected_radio_station.provider() == late_core::radio::Provider::House)
-                .then(|| map.get(selected_radio_station.as_str()).cloned())
-                .flatten()
+            let mount = match selected_radio_station.provider() {
+                late_core::radio::Provider::House => selected_radio_station.as_str(),
+                _ => "chill",
+            };
+            map.get(mount).cloned()
         });
         if let Some(rx) = self.radio_meta_rx.as_mut() {
             rx.borrow_and_update();
