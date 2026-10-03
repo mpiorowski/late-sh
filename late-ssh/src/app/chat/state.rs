@@ -4181,19 +4181,37 @@ impl ChatState {
         if let Some(rest) = body.trim().strip_prefix("/brb")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
+            let message = rest.trim();
+            let chat_body = if message.is_empty() {
+                "🌙 brb".to_string()
+            } else {
+                format!("🌙 brb — {message}")
+            };
+            // Resolve the room before clearing the composer. A command can be
+            // submitted from a view where the composer snapshot is gone while
+            // the visible or selected room is still the correct destination.
+            let Some(room_id) = self.upload_target_room_id() else {
+                self.clear_composer_after_submit();
+                return Some(Banner::error("No chat room selected"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: chat_body,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
             self.clear_composer_after_submit();
             // `/brb` goes away now instead of after the idle threshold, and
-            // the next key comes back. Trailing text is told why rather than
-            // "unknown".
-            match rest.trim() {
-                "" => {
-                    self.requested_brb = true;
-                    return None;
-                }
-                _ => {
-                    return Some(Banner::error("/brb takes no message"));
-                }
-            }
+            // the next key comes back. The optional text is included in the
+            // room announcement above.
+            self.requested_brb = true;
+            return None;
         }
 
         if let Some((kind, text)) = parse_report_command(&body) {

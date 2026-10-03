@@ -2824,12 +2824,13 @@ fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("/challenge @alice"), None);
 }
 
-/// `/brb` sends the session away now instead of after the idle threshold.
+/// `/brb` announces the break and sends this session away immediately.
 #[tokio::test]
 async fn brb_requests_going_away() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "brb_bare").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    state.set_visible_room_id(Some(Uuid::new_v4()));
 
     state.composer.insert_str("/brb");
     assert!(
@@ -2841,20 +2842,22 @@ async fn brb_requests_going_away() {
     assert!(!state.take_requested_brb(), "the request is taken once");
 }
 
-/// The `/brb <message>` habit gets a usage banner, not "Unknown command:
-/// /brb" for a command the guide lists.
+/// `/brb <reason>` includes the reason in its announcement and still marks
+/// the current session away.
 #[tokio::test]
-async fn brb_with_a_message_explains_instead_of_calling_it_unknown() {
+async fn brb_with_a_reason_requests_going_away() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "brb_message").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    state.set_visible_room_id(Some(Uuid::new_v4()));
 
     state.composer.insert_str("/brb back in 5");
-    let banner = state
-        .submit_composer(false, ComposerCommands::Enabled)
-        .expect("banner");
-    assert_eq!(banner.message, "/brb takes no message");
-    assert!(!state.take_requested_brb(), "nothing is requested");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+    assert!(state.take_requested_brb());
 }
 
 #[test]
