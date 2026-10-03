@@ -28,6 +28,8 @@ const POLL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollOutcome {
     Updated,
+    /// The provider answered, with no track on air.
+    NoTrack,
     Failed,
 }
 
@@ -109,9 +111,16 @@ async fn run_poll_loop(
     let mut delay = POLL_INTERVAL;
     loop {
         match poll_once(&client, feed).await {
-            Ok(track) => {
+            Ok(Some(track)) => {
                 metrics::record_radio_meta_poll(feed, PollOutcome::Updated);
                 tx.send_if_modified(|map| apply_track(map, key, track));
+                delay = POLL_INTERVAL;
+            }
+            Ok(None) => {
+                metrics::record_radio_meta_poll(feed, PollOutcome::NoTrack);
+                // The feed is healthy, so keep the pace: the next track
+                // should show within one interval of starting.
+                tx.send_if_modified(|map| map.remove(key).is_some());
                 delay = POLL_INTERVAL;
             }
             Err(err) => {
@@ -130,7 +139,10 @@ async fn run_poll_loop(
     tracing::info!(station = key, "radio meta poller shutting down");
 }
 
-async fn poll_once(client: &reqwest::Client, feed: PolledFeed) -> anyhow::Result<ArtistTitle> {
+async fn poll_once(
+    client: &reqwest::Client,
+    feed: PolledFeed,
+) -> anyhow::Result<Option<ArtistTitle>> {
     let body = client
         .get(feed.url())
         .send()

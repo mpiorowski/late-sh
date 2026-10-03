@@ -710,7 +710,7 @@ pub struct App {
     /// reconnect lands in the right mode.
     pub(crate) paired_source: late_core::models::user::AudioSource,
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
-    /// Pinned stations behind `v1`..`v4` (`users.settings.radio_slots`).
+    /// Pinned stations behind `v1`..`v3` (`users.settings.radio_slots`).
     pub(crate) radio_slots: late_core::models::user::RadioSlots,
     pub(crate) stations_modal_state: crate::app::audio::stations_modal::state::StationsModalState,
 
@@ -3177,12 +3177,13 @@ impl App {
         &self,
         station: late_core::models::user::RadioStation,
     ) -> Option<String> {
-        let radio_meta = self.radio_meta_rx.as_ref().map(|rx| rx.borrow().clone());
-        let house = self.now_playing_rx.as_ref().map(|rx| rx.borrow().clone());
+        let radio_meta = self.radio_meta_rx.as_ref().map(|rx| rx.borrow());
+        let house = self.now_playing_rx.as_ref().map(|rx| rx.borrow());
+        let (no_radio_meta, no_house) = (HashMap::new(), HashMap::new());
         crate::app::audio::stations::station_now_playing(
             station,
-            radio_meta.as_ref().unwrap_or(&Default::default()),
-            house.as_ref().unwrap_or(&Default::default()),
+            radio_meta.as_deref().unwrap_or(&no_radio_meta),
+            house.as_deref().unwrap_or(&no_house),
         )
     }
 

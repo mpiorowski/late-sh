@@ -1829,7 +1829,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                     Line::from(Span::styled(now, Style::default().fg(theme::AMBER_GLOW()))),
                     Line::from(Span::styled("v v music booth · v x switch source", text)),
                     Line::from(Span::styled(
-                        "v s skip vote · v 1-4 pinned station · v r stations",
+                        "v s skip vote · v 1-3 pinned station · v r stations",
                         text,
                     )),
                     Line::from(Span::styled("m mute · +/- volume · Enter opens booth", dim)),

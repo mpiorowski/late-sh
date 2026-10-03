@@ -844,12 +844,55 @@ fn retired_icecast_source_reads_as_radio_on_its_house_mount() {
         extract_radio_slots(&settings).position_of(extract_radio_station(&settings)),
         Some(0)
     );
+    // A `radio_station` left over from before they moved to icecast does
+    // not pull them off their mount.
+    let settings = json!({
+        "audio_source": "icecast",
+        "icecast_stream": "classical",
+        "radio_station": "datawave"
+    });
+    assert_eq!(extract_radio_station(&settings).as_str(), "classical");
     // An icecast user who never picked a mount was on chill (now lofi).
     let settings = json!({ "audio_source": "icecast" });
     assert_eq!(extract_radio_station(&settings).label(), "lofi");
     assert_eq!(
         extract_radio_slots(&settings).get(0).map(|s| s.as_str()),
         Some("chill")
+    );
+}
+
+#[tokio::test]
+async fn picking_a_station_sticks_for_a_retired_icecast_user() {
+    use crate::models::user::{AudioSource, RadioStation};
+    let (client, _test_db) = setup_db().await;
+
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-icecast-pick".to_string(),
+            username: "icecast_pick_user".to_string(),
+            settings: json!({"audio_source": "icecast", "icecast_stream": "classical"}),
+        },
+    )
+    .await
+    .expect("failed to create user");
+
+    let nightride = RadioStation::from_key("nightride").expect("nightride station");
+    User::set_radio_station(&client, user.id, nightride)
+        .await
+        .expect("set radio station");
+
+    assert_eq!(
+        User::radio_station(&client, user.id)
+            .await
+            .expect("radio station"),
+        nightride
+    );
+    assert_eq!(
+        User::audio_source(&client, user.id)
+            .await
+            .expect("audio source"),
+        AudioSource::Radio
     );
 }
 

@@ -1,5 +1,4 @@
 use late_core::models::user::AudioSource;
-use late_core::radio::RADIO_SLOTS;
 
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
@@ -13,13 +12,7 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
     }
 
     match byte {
-        b'1'..=b'9' => {
-            let index = (byte - b'1') as usize;
-            if index >= RADIO_SLOTS {
-                return false;
-            }
-            select_slot(app, index)
-        }
+        b'1'..=b'9' => select_slot(app, (byte - b'1') as usize),
         b'r' | b'R' => {
             app.stations_modal_state.open(app.selected_radio_station);
             true
@@ -47,7 +40,8 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
 
 /// `v1`..`v3`: tune to the station pinned in that slot. Only meaningful
 /// while radio is the active source; on YouTube the key is swallowed so a
-/// stray digit never lands in the composer. An empty slot is a no-op.
+/// stray digit never lands in the composer. An empty slot, or a digit past
+/// the last slot, is a no-op for the same reason.
 fn select_slot(app: &mut App, index: usize) -> bool {
     if app.paired_source != AudioSource::Radio {
         return true;

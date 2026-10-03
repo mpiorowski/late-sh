@@ -558,9 +558,15 @@ impl App {
         let selected_radio_station = self.selected_radio_station;
         let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
             let map = rx.borrow_and_update();
+            use late_core::radio::Provider;
             let mount = match selected_radio_station.provider() {
-                late_core::radio::Provider::House => selected_radio_station.as_str(),
-                _ => "chill",
+                Provider::House => selected_radio_station.as_str(),
+                Provider::Nightride
+                | Provider::Plaza
+                | Provider::CodeRadio
+                | Provider::RadioParadise
+                | Provider::Fip
+                | Provider::RadioSwiss => "chill",
             };
             map.get(mount).cloned()
         });

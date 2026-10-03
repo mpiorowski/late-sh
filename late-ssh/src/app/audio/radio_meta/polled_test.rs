@@ -6,10 +6,10 @@ fn plaza_status_yields_the_current_song() {
     let body = r#"{"song":{"id":"bd35","artist":"GOLDIE GOLDIE","album":"PHANTASY","title":"Perfect","length":201,"position":43},"listeners":139,"updated_at":1791022399}"#;
     assert_eq!(
         PolledFeed::Plaza.parse(body).unwrap(),
-        ArtistTitle {
+        Some(ArtistTitle {
             artist: "GOLDIE GOLDIE".to_string(),
             title: "Perfect".to_string(),
-        }
+        })
     );
 }
 
@@ -18,10 +18,10 @@ fn code_radio_now_playing_yields_the_current_song() {
     let body = r#"{"station":{"id":1,"name":"freeCodeCamp.org Code Radio"},"now_playing":{"sh_id":395798,"duration":208,"song":{"id":"b9e5","text":"City Girl - Palette","artist":"City Girl","title":"Palette","album":"Neon Impasse"},"elapsed":156,"remaining":52}}"#;
     assert_eq!(
         PolledFeed::CodeRadio.parse(body).unwrap(),
-        ArtistTitle {
+        Some(ArtistTitle {
             artist: "City Girl".to_string(),
             title: "Palette".to_string(),
-        }
+        })
     );
 }
 
@@ -30,10 +30,10 @@ fn radio_paradise_now_playing_yields_the_current_song() {
     let body = r#"{"time":64,"artist":"Patrick Watson","title":"A Mermaid in Lisbon","album":"Better in the Shade","year":"2022","cover":"https:\/\/img.radioparadise.com\/covers\/l\/1.jpg"}"#;
     assert_eq!(
         PolledFeed::ParadiseMellow.parse(body).unwrap(),
-        ArtistTitle {
+        Some(ArtistTitle {
             artist: "Patrick Watson".to_string(),
             title: "A Mermaid in Lisbon".to_string(),
-        }
+        })
     );
 }
 
@@ -42,19 +42,19 @@ fn fip_live_metadata_yields_the_current_song() {
     let body = r#"{"prev":[],"now":{"firstLine":"Invisible Thread","firstLineSongUuid":"5cc1","secondLine":"Shai Maestro Trio","secondLineSongUuid":"5cc1","thirdLine":"Jazz","songUuid":"5cc1","cover":"04fe","startTime":1791026761,"endTime":1791027040},"next":[],"delayToRefresh":120000}"#;
     assert_eq!(
         PolledFeed::FipJazz.parse(body).unwrap(),
-        ArtistTitle {
+        Some(ArtistTitle {
             artist: "Shai Maestro Trio".to_string(),
             title: "Invisible Thread".to_string(),
-        }
+        })
     );
 }
 
 /// Between songs the same fields carry the programme name and its blurb;
-/// that must not be shown as an artist credit.
+/// that must not be shown as an artist credit, and it is not a failed poll.
 #[test]
 fn fip_programme_metadata_is_not_a_song() {
     let body = r#"{"now":{"firstLine":"Le direct","secondLine":"Bebop, afro jazz, salsa, bossa, blues","thirdLine":"Jazz","songUuid":null,"cover":"2de5","startTime":null,"endTime":null}}"#;
-    assert!(PolledFeed::FipJazz.parse(body).is_err());
+    assert_eq!(PolledFeed::FipJazz.parse(body).unwrap(), None);
 }
 
 #[test]
@@ -63,10 +63,10 @@ fn radio_swiss_current_yields_the_current_song() {
     for feed in [PolledFeed::SwissJazz, PolledFeed::SwissClassic] {
         assert_eq!(
             feed.parse(body).unwrap(),
-            ArtistTitle {
+            Some(ArtistTitle {
                 artist: "Trio Angeluci".to_string(),
                 title: "Mimoso".to_string(),
-            }
+            })
         );
     }
 }
@@ -78,10 +78,10 @@ fn a_track_without_an_artist_keeps_its_title() {
     let body = r#"{"now_playing":{"song":{"text":" - night 7","artist":"","title":"night 7","album":"25 Nights for Nujabes"}}}"#;
     assert_eq!(
         PolledFeed::CodeRadio.parse(body).unwrap(),
-        ArtistTitle {
+        Some(ArtistTitle {
             artist: String::new(),
             title: "night 7".to_string(),
-        }
+        })
     );
 }
 

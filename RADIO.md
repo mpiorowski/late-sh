@@ -68,12 +68,14 @@ pub struct Station {
 | `audio_source`   | `radio` \| `youtube` \| `icecast`  | `radio` \| `youtube`; `icecast` reads as `radio`         |
 | `radio_station`  | one of five Nightride keys         | any enabled catalogue key                                |
 | `icecast_stream` | `chill` \| `classical`             | read once for migration, then ignored                    |
-| `radio_slots`    | (new)                              | JSON array of up to 4 unique catalogue keys              |
+| `radio_slots`    | (new)                              | JSON array of up to 3 unique catalogue keys              |
 
 Read-side migration, no SQL migration: `extract_audio_source` maps `icecast` → `Radio`, and
 when it does, `extract_radio_station` returns the mapped house key (`chill` → `lofi`,
-`classical` → `classical`) instead of `radio_station`. The next persist writes the new
-shape. Nobody loses what they were listening to.
+`classical` → `classical`) instead of `radio_station`, which may be a stale pick from
+before they moved to icecast. `User::set_radio_station` rewrites a saved `icecast` source
+to `radio` in the same UPDATE, so the first station they pick sticks. Nobody loses what
+they were listening to.
 
 Slot defaults when `radio_slots` is absent: `[chillsynth, nightride, datawave]`,
 with the user's current `radio_station` swapped into slot 1 if it is not already present

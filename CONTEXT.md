@@ -1297,7 +1297,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Mark the selected tip to fork on the next growth wave |
 | `c` | Bonsai modal | Copy the share snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
-| `v` then `1`-`4` | Home | Play the radio station pinned in that slot (no-op while YouTube is the source). |
+| `v` then `1`-`3` | Home | Play the radio station pinned in that slot (no-op while YouTube is the source). |
 | `v` then `r` | Home | Open the Stations modal (browse the catalogue, listen, pin to a slot). |
 | `v` then `v` | Home | Open the Music Booth (submit + queue votes + recently played history). |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |

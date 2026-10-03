@@ -122,10 +122,12 @@ impl PolledFeed {
         }
     }
 
-    /// The current track out of one response body. A payload without a
-    /// title is an error and the caller shows the station label. The artist
-    /// may be empty: some tracks are tagged with a title only.
-    pub fn parse(self, body: &str) -> anyhow::Result<ArtistTitle> {
+    /// The current track out of one response body, or `None` while the
+    /// provider reports that no track is on air (FIP between songs). A
+    /// payload without a title is an error. Either way the caller shows the
+    /// station label. The artist may be empty: some tracks are tagged with
+    /// a title only.
+    pub fn parse(self, body: &str) -> anyhow::Result<Option<ArtistTitle>> {
         let song = match self {
             Self::Plaza => {
                 serde_json::from_str::<PlazaStatus>(body)
@@ -149,7 +151,7 @@ impl PolledFeed {
                         artist: now.second_line,
                         title: now.first_line,
                     },
-                    None => anyhow::bail!("fip is between songs"),
+                    None => return Ok(None),
                 }
             }
             Self::SwissJazz | Self::SwissClassic => {
@@ -166,10 +168,10 @@ impl PolledFeed {
         if title.is_empty() {
             anyhow::bail!("now-playing payload has no title");
         }
-        Ok(ArtistTitle {
+        Ok(Some(ArtistTitle {
             artist: artist.to_string(),
             title: title.to_string(),
-        })
+        }))
     }
 }
 

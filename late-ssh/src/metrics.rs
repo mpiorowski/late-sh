@@ -2026,6 +2026,7 @@ mod inner {
         };
         let outcome = match outcome {
             PollOutcome::Updated => "updated",
+            PollOutcome::NoTrack => "no_track",
             PollOutcome::Failed => "failed",
         };
         radio_meta_polls_total().add(

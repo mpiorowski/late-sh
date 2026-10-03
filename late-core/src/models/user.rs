@@ -456,6 +456,9 @@ const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const INTERACTION_MODE_KEY: &str = "interaction_mode";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
+/// The `audio_source` value of the retired house-stream source. Never
+/// written; `set_radio_station` replaces it with `radio`.
+const RETIRED_ICECAST_SOURCE: &str = "icecast";
 /// Retired source's stream choice; read only to migrate it into
 /// `radio_station` for users who never picked a station since.
 const ICECAST_STREAM_KEY: &str = "icecast_stream";
@@ -1387,13 +1390,29 @@ impl User {
         station: RadioStation,
     ) -> Result<()> {
         let value = station.as_str();
+        // A user still saved on the retired `icecast` source reads their
+        // station from `icecast_stream` (see `extract_radio_station`), so
+        // the pick only sticks if the same write moves them to `radio`.
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                 SET settings = settings
+                         || jsonb_build_object($1::text, $2::text)
+                         || CASE
+                                WHEN settings->>$4::text = $5::text
+                                THEN jsonb_build_object($4::text, $6::text)
+                                ELSE '{}'::jsonb
+                            END,
                      updated = current_timestamp
                  WHERE id = $3",
-                &[&RADIO_STATION_KEY, &value, &user_id],
+                &[
+                    &RADIO_STATION_KEY,
+                    &value,
+                    &user_id,
+                    &AUDIO_SOURCE_KEY,
+                    &RETIRED_ICECAST_SOURCE,
+                    &AudioSource::Radio.as_str(),
+                ],
             )
             .await?;
         if updated == 0 {
@@ -1695,7 +1714,8 @@ pub fn extract_audio_source(settings: &Value) -> AudioSource {
 /// mounts are catalogue stations keyed by mount name, so the old
 /// `icecast_stream` value is already a station key.
 pub fn extract_radio_station(settings: &Value) -> RadioStation {
-    let legacy_icecast = settings.get(AUDIO_SOURCE_KEY).and_then(Value::as_str) == Some("icecast");
+    let legacy_icecast =
+        settings.get(AUDIO_SOURCE_KEY).and_then(Value::as_str) == Some(RETIRED_ICECAST_SOURCE);
     let key = if legacy_icecast {
         settings
             .get(ICECAST_STREAM_KEY)

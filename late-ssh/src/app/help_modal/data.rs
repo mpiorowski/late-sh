@@ -1329,7 +1329,7 @@ fn overview_lines() -> Vec<String> {
         "  v then v          open the Music Booth (submit + queue + votes)",
         "  v then x          switch audio source: Radio ⇄ YouTube",
         "  v then s          skip-vote the current YouTube track",
-        "  v then 1..4       tune to a pinned station (radio active)",
+        "  v then 1..3       tune to a pinned station (radio active)",
         "  v then r          open Stations: every radio, live now-playing, pin to v1..v3",
         "  w, m, + / - and the v music prefix are off on the Artboard: that page",
         "  spends those letters itself (v applauds; m opens gallery moderation for staff)",
@@ -2029,7 +2029,7 @@ Global keys (work anywhere)
   + / -             volume up / down
 
 Tune a station
-  v then 1..4       tune to the station pinned in that slot (radio active)
+  v then 1..3       tune to the station pinned in that slot (radio active)
   v then r          open Stations: ↑↓ move, Enter listen, 1-3 pin to a slot, 0 unpin, Esc close
                     every row shows what that station is playing right now, so you can check before you switch
 
