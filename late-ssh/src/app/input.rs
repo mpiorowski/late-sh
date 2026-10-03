@@ -2141,10 +2141,6 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if app.stations_modal_state.is_open() {
-        if app.stations_modal_state.filter_active() {
-            app.stations_modal_state.cancel_filter();
-            return;
-        }
         app.stations_modal_state.close();
         return;
     }

@@ -43,7 +43,7 @@ pub(crate) fn draw(
     state: &StationsModalState,
     view: &StationsView<'_>,
 ) {
-    let wanted_height = CHROME_ROWS + view.rows.len().max(1) as u16;
+    let wanted_height = CHROME_ROWS + list_lines(view, None, 0).0.len().max(1) as u16;
     let popup = centered_rect(
         area,
         MODAL_WIDTH.min(area.width),
@@ -72,7 +72,7 @@ pub(crate) fn draw(
         Constraint::Length(1), // breathing
         Constraint::Length(1), // pinned slots
         Constraint::Length(1), // breathing
-        Constraint::Length(1), // list heading / filter
+        Constraint::Length(1), // list heading
         Constraint::Length(1), // breathing
         Constraint::Min(1),    // list
         Constraint::Length(1), // breathing
@@ -82,15 +82,9 @@ pub(crate) fn draw(
     .split(inner);
 
     frame.render_widget(Paragraph::new(pinned_line(view.slots)), layout[1]);
-    frame.render_widget(
-        Paragraph::new(heading_line(state.filter_query(), state.filter_active())),
-        layout[3],
-    );
+    frame.render_widget(Paragraph::new(heading_line()), layout[3]);
     draw_list(frame, layout[5], state, view);
-    frame.render_widget(
-        Paragraph::new(footer_line(state.filter_active())),
-        layout[7],
-    );
+    frame.render_widget(Paragraph::new(footer_line()), layout[7]);
 }
 
 /// `  pinned   v1 chillsynth   v2 nightride   v3 —   v4 classical`
@@ -124,60 +118,65 @@ fn pinned_line(slots: RadioSlots) -> Line<'static> {
     Line::from(spans)
 }
 
-fn heading_line(query: &str, filter_active: bool) -> Line<'static> {
+fn heading_line() -> Line<'static> {
     let dim = Style::default().fg(theme::BORDER());
-    let accent = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
-    if query.is_empty() && !filter_active {
-        return Line::from(vec![
-            Span::styled("  ── ", dim),
-            Span::styled("All stations", accent),
-            Span::styled(" ──", dim),
-        ]);
-    }
-    let mut spans = vec![
+    Line::from(vec![
         Span::styled("  ── ", dim),
-        Span::styled("Filter ", accent),
-        Span::styled("/", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(query.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
-    ];
-    if filter_active {
-        spans.push(Span::styled("▏", Style::default().fg(theme::AMBER_GLOW())));
-    }
-    spans.push(Span::styled(" ──", dim));
-    Line::from(spans)
+        Span::styled(
+            "All stations",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ──", dim),
+    ])
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, state: &StationsModalState, view: &StationsView<'_>) {
     if area.height == 0 {
         return;
     }
-    if view.rows.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "    no station matches",
-                Style::default().fg(theme::TEXT_FAINT()),
-            ))),
-            area,
-        );
-        return;
-    }
     let height = area.height as usize;
+    let (lines, selected_line) = list_lines(view, Some(state.selected()), area.width as usize);
     // Keep the cursor in view: scroll so the selected row is inside the window.
-    let first = state
-        .selected()
+    let first = selected_line
         .saturating_sub(height.saturating_sub(1))
-        .min(view.rows.len().saturating_sub(height));
-    let lines: Vec<Line<'static>> = view
-        .rows
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(height)
-        .map(|(index, row)| station_line(row, view, index == state.selected(), area.width as usize))
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
+        .min(lines.len().saturating_sub(height));
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(first).take(height).collect();
+    frame.render_widget(Paragraph::new(visible), area);
+}
+
+/// The list as painted: station rows under a heading per section, with a blank
+/// line between groups. Also returns which line holds the `selected` row.
+fn list_lines(
+    view: &StationsView<'_>,
+    selected: Option<usize>,
+    width: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let mut lines = Vec::new();
+    let mut selected_line = 0;
+    let mut previous = None;
+    for (index, row) in view.rows.iter().enumerate() {
+        let section = row.station.section();
+        if previous != Some(section) {
+            if previous.is_some() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  {}", section.label()),
+                Style::default()
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            previous = Some(section);
+        }
+        let highlighted = selected == Some(index);
+        if highlighted {
+            selected_line = lines.len();
+        }
+        lines.push(station_line(row, view, highlighted, width));
+    }
+    (lines, selected_line)
 }
 
 /// `▸ ● chillsynth   nightride     Artist - Title                    v1`
@@ -251,20 +250,9 @@ fn station_line(
     ])
 }
 
-fn footer_line(filter_active: bool) -> Line<'static> {
+fn footer_line() -> Line<'static> {
     let key = Style::default().fg(theme::AMBER_DIM());
     let label = Style::default().fg(theme::TEXT_DIM());
-    if filter_active {
-        return Line::from(vec![
-            Span::raw("  "),
-            Span::styled("type", key),
-            Span::styled(" to filter  ", label),
-            Span::styled("↵", key),
-            Span::styled(" keep  ", label),
-            Span::styled("Esc", key),
-            Span::styled(" clear", label),
-        ]);
-    }
     Line::from(vec![
         Span::raw("  "),
         Span::styled("↑↓", key),
@@ -275,8 +263,6 @@ fn footer_line(filter_active: bool) -> Line<'static> {
         Span::styled(" pin  ", label),
         Span::styled("0", key),
         Span::styled(" unpin  ", label),
-        Span::styled("/", key),
-        Span::styled(" filter  ", label),
         Span::styled("Esc", key),
         Span::styled(" close", label),
     ])

@@ -80,6 +80,28 @@ impl Provider {
     }
 }
 
+/// The group the Stations modal lists a station under: Nightride's
+/// network first as its own section, the rest by what they play. Catalogue
+/// rows of one section sit together, in the order the variants are declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Section {
+    Nightride,
+    Chill,
+    Jazz,
+    Classical,
+}
+
+impl Section {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nightride => "nightride",
+            Self::Chill => "chill",
+            Self::Jazz => "jazz",
+            Self::Classical => "classical",
+        }
+    }
+}
+
 /// Where a station's audio comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StationStream {
@@ -100,7 +122,8 @@ pub struct Station {
     pub label: &'static str,
     pub provider: Provider,
     pub stream: StationStream,
-    pub tags: &'static [&'static str],
+    /// The group the Stations modal lists this station under.
+    pub section: Section,
     /// A disabled row exists in code only; see the module docs.
     pub enabled: bool,
 }
@@ -116,7 +139,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "chillsynth",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/chillsynth.mp3"),
-        tags: &["synthwave", "chill"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -124,7 +147,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "nightride",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/nightride.mp3"),
-        tags: &["synthwave"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -132,7 +155,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "datawave",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/datawave.mp3"),
-        tags: &["synthwave", "electronic"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -140,7 +163,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "spacesynth",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/spacesynth.mp3"),
-        tags: &["synthwave", "space"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -148,7 +171,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "ambient",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/rektify.mp3"),
-        tags: &["ambient"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -156,7 +179,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "darksynth",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/darksynth.mp3"),
-        tags: &["synthwave", "dark"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -164,7 +187,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "horrorsynth",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/horrorsynth.mp3"),
-        tags: &["synthwave", "horror"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -172,23 +195,7 @@ pub const CATALOGUE: &[Station] = &[
         label: "ebsm",
         provider: Provider::Nightride,
         stream: StationStream::Direct("https://stream.nightride.fm/ebsm.mp3"),
-        tags: &["ebm", "industrial"],
-        enabled: true,
-    },
-    Station {
-        key: "classical",
-        label: "classical",
-        provider: Provider::House,
-        stream: StationStream::HouseMount("classical"),
-        tags: &["classical", "calm"],
-        enabled: true,
-    },
-    Station {
-        key: "chill",
-        label: "lofi",
-        provider: Provider::House,
-        stream: StationStream::HouseMount("chill"),
-        tags: &["lofi", "chill"],
+        section: Section::Nightride,
         enabled: true,
     },
     Station {
@@ -198,7 +205,7 @@ pub const CATALOGUE: &[Station] = &[
         // The `#.mp3` fragment never reaches Plaza. It is there for the CLI,
         // which appends `/stream` to any URL without an audio extension.
         stream: StationStream::Direct("https://radio.plaza.one/mp3#.mp3"),
-        tags: &["vaporwave", "chill"],
+        section: Section::Chill,
         enabled: true,
     },
     Station {
@@ -208,7 +215,7 @@ pub const CATALOGUE: &[Station] = &[
         stream: StationStream::Direct(
             "https://coderadio-admin-v2.freecodecamp.org/listen/coderadio/radio.mp3",
         ),
-        tags: &["lofi", "coding"],
+        section: Section::Chill,
         enabled: true,
     },
     Station {
@@ -217,15 +224,15 @@ pub const CATALOGUE: &[Station] = &[
         provider: Provider::RadioParadise,
         // `#.mp3` for the CLI, as on the Plaza row.
         stream: StationStream::Direct("https://stream.radioparadise.com/mellow-192#.mp3"),
-        tags: &["chill", "eclectic"],
+        section: Section::Chill,
         enabled: true,
     },
     Station {
-        key: "fipjazz",
-        label: "fip jazz",
-        provider: Provider::Fip,
-        stream: StationStream::Direct("https://icecast.radiofrance.fr/fipjazz-midfi.mp3"),
-        tags: &["jazz"],
+        key: "chill",
+        label: "lofi",
+        provider: Provider::House,
+        stream: StationStream::HouseMount("chill"),
+        section: Section::Chill,
         enabled: true,
     },
     // `#.mp3` for the CLI, as on the Plaza row. This path redirects to an
@@ -236,7 +243,15 @@ pub const CATALOGUE: &[Station] = &[
         label: "swiss jazz",
         provider: Provider::RadioSwiss,
         stream: StationStream::Direct("https://stream.srg-ssr.ch/srgssr/rsj/mp3/128#.mp3"),
-        tags: &["jazz"],
+        section: Section::Jazz,
+        enabled: true,
+    },
+    Station {
+        key: "fipjazz",
+        label: "fip jazz",
+        provider: Provider::Fip,
+        stream: StationStream::Direct("https://icecast.radiofrance.fr/fipjazz-midfi.mp3"),
+        section: Section::Jazz,
         enabled: true,
     },
     Station {
@@ -244,7 +259,15 @@ pub const CATALOGUE: &[Station] = &[
         label: "swiss classic",
         provider: Provider::RadioSwiss,
         stream: StationStream::Direct("https://stream.srg-ssr.ch/srgssr/rsc_de/mp3/128#.mp3"),
-        tags: &["classical", "calm"],
+        section: Section::Classical,
+        enabled: true,
+    },
+    Station {
+        key: "classical",
+        label: "classical",
+        provider: Provider::House,
+        stream: StationStream::HouseMount("classical"),
+        section: Section::Classical,
         enabled: true,
     },
 ];
@@ -272,7 +295,7 @@ impl RadioStation {
         Self::from_key(value).unwrap_or_default()
     }
 
-    /// Every enabled station in catalogue order.
+    /// Every enabled station in catalogue order, which is grouped by section.
     pub fn enabled() -> impl Iterator<Item = Self> {
         CATALOGUE.iter().filter(|station| station.enabled).map(Self)
     }
@@ -290,12 +313,12 @@ impl RadioStation {
         self.0.provider
     }
 
-    pub fn stream(self) -> StationStream {
-        self.0.stream
+    pub fn section(self) -> Section {
+        self.0.section
     }
 
-    pub fn tags(self) -> &'static [&'static str] {
-        self.0.tags
+    pub fn stream(self) -> StationStream {
+        self.0.stream
     }
 
     /// The URL a client opens for this station. `house_base_url` is the

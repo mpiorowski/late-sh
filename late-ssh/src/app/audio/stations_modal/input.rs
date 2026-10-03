@@ -3,20 +3,11 @@ use late_core::radio::RADIO_SLOTS;
 
 use crate::app::{
     common::primitives::Banner,
-    input::{ParsedInput, sanitize_paste_markers},
+    input::ParsedInput,
     state::App,
 };
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
-    app.stations_modal_state.clamp();
-
-    // While the `/` filter is capturing, it owns every key (Esc and Enter
-    // end the capture rather than close the modal).
-    if app.stations_modal_state.filter_active() {
-        handle_filter_input(app, event);
-        return;
-    }
-
     match event {
         ParsedInput::Byte(0x1B) => app.stations_modal_state.close(),
         ParsedInput::Arrow(b'A') | ParsedInput::Byte(0x0B) => {
@@ -28,9 +19,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::PageUp => app.stations_modal_state.move_selection(-8),
         ParsedInput::PageDown => app.stations_modal_state.move_selection(8),
         ParsedInput::Byte(b'\r') => listen_to_selected(app),
-        ParsedInput::Char('/') | ParsedInput::Char('?') => {
-            app.stations_modal_state.start_filter();
-        }
         ParsedInput::Char('0') => unpin_selected(app),
         ParsedInput::Char(digit @ '1'..='9') => {
             let index = digit as usize - '1' as usize;
@@ -86,31 +74,6 @@ fn unpin_selected(app: &mut App) {
         sentence_case(station.label()),
         index + 1
     )));
-}
-
-fn handle_filter_input(app: &mut App, event: ParsedInput) {
-    match event {
-        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
-            app.stations_modal_state.apply_filter();
-        }
-        ParsedInput::Byte(0x1B) => app.stations_modal_state.cancel_filter(),
-        ParsedInput::Byte(0x7F) | ParsedInput::Byte(0x08) => {
-            app.stations_modal_state.backspace_filter();
-        }
-        // Ctrl+W clears the whole query.
-        ParsedInput::Byte(0x17) => app.stations_modal_state.clear_filter(),
-        ParsedInput::Paste(bytes) => {
-            let raw = String::from_utf8_lossy(&bytes);
-            for ch in sanitize_paste_markers(&raw).chars() {
-                app.stations_modal_state.push_filter(ch);
-            }
-        }
-        ParsedInput::Char(ch) => app.stations_modal_state.push_filter(ch),
-        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
-            app.stations_modal_state.push_filter(byte as char);
-        }
-        _ => {}
-    }
 }
 
 /// Banners keep sentence case ("Station: Classical"); rows keep the

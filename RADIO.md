@@ -39,8 +39,8 @@ pub struct Station {
     pub key: &'static str,        // settings + meta key, stable forever ("rektify" stays "rektify")
     pub label: &'static str,      // lowercase rail label ("ambient")
     pub provider: Provider,       // Nightride | House | Plaza | CodeRadio ...
+    pub section: Section,         // Nightride | Chill | Jazz | Classical: the modal's grouping
     pub stream_url: StreamUrl,    // Absolute(&'static str) | HouseMount(&'static str)
-    pub tags: &'static [&'static str], // "synthwave", "lofi", "classical", "vaporwave", "coding"
     pub enabled: bool,            // false = present in code, hidden everywhere until verified
 }
 ```
@@ -150,7 +150,7 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 │   ○ plaza        plaza.one     Macintosh Plus - リサフランク420    │
 │   ○ code radio   freecodecamp  Trebles and Blues - Dusk            │
 │                                                                   │
-│ ↑↓ move   Enter listen   1-4 pin to slot   0 unpin   / filter   Esc │
+│ ↑↓ move   Enter listen   1-4 pin to slot   0 unpin   Esc           │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -163,7 +163,12 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 - `1`..`4` = pin the highlighted station into that slot (replaces what was there, de-dupes
   if the station already sits in another slot). `0` = unpin. Persists `radio_slots`.
   The rail re-renders from the same setting, so pinning is visible behind the modal.
-- `/` filter by label/provider/tag, mirroring the booth History filter.
+- No filter: the catalogue is short enough to scan, and the sections do the narrowing.
+- The list is grouped by section (`late_core::radio::Section`: nightride first as its own
+  section, then chill, jazz, classical), one faint heading per group with a blank line
+  between groups. The catalogue itself is ordered by section, guests before house within
+  a group; the headings are not selectable
+  and the cursor skips them.
 - Why no separate "preview then revert": the paired CLI is the only audible surface, so a
   preview is a station change by another name. A revert-on-Esc state machine would add a
   second source of truth for "what is the CLI playing" (see §19 of the audio context for
@@ -269,7 +274,7 @@ Each step ships on its own and leaves the product working:
 2. ✅ **Two sources + compact rail**: drop the icecast tab, `v+x` toggles, new 15-row stage,
    slot rows `v1`..`v4`, per-provider attribution row. Update the sidebar tests and the
    Pair guide text.
-3. ✅ **Stations modal** (`v+r`): list, live metadata, listen, pin/unpin, filter.
+3. ✅ **Stations modal** (`v+r`): list, live metadata, listen, pin/unpin.
 4. ✅ **Adapters**: Plaza and Code Radio pollers behind `enabled`, listen page grouping,
    MPRIS covered by the unified map.
 5. **Docs**: `audio/CONTEXT.md` §6, §12, "Nightride direct-radio source" → "Station

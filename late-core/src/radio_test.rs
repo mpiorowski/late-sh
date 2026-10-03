@@ -106,3 +106,13 @@ fn slots_round_trip_through_json_and_tolerate_bad_rows() {
     );
     assert_eq!(RadioSlots::from_json(&serde_json::json!("chill")), None);
 }
+
+/// The Stations modal prints a heading whenever the section changes between
+/// neighbouring rows, so a section split across the catalogue would repeat it.
+#[test]
+fn the_catalogue_is_grouped_by_section_in_declaration_order() {
+    let sections: Vec<Section> = CATALOGUE.iter().map(|station| station.section).collect();
+    let mut sorted = sections.clone();
+    sorted.sort();
+    assert_eq!(sections, sorted);
+}

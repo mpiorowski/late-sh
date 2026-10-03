@@ -83,3 +83,48 @@ fn long_tracks_are_truncated_with_an_ellipsis_to_the_budget() {
     assert_eq!(truncate_to_width("abc", 1), "…");
     assert_eq!(truncate_to_width("abc", 0), "");
 }
+
+#[test]
+fn the_list_groups_stations_under_one_heading_per_section() {
+    let rows: Vec<StationRow> = ["chillsynth", "ebsm", "plaza", "swissjazz", "fipjazz"]
+        .into_iter()
+        .map(|station| StationRow {
+            station: key(station),
+            now_playing: None,
+        })
+        .collect();
+    let view = StationsView {
+        rows: &rows,
+        current: key("chillsynth"),
+        slots: RadioSlots::empty(),
+        source: AudioSource::Radio,
+    };
+    let (lines, selected_line) = list_lines(&view, Some(3), 72);
+    let first_words: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line_text(line)
+                .trim_start_matches(['▸', '●', '○', ' '])
+                .split("  ")
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        first_words,
+        vec![
+            "nightride",
+            "chillsynth",
+            "ebsm",
+            "",
+            "chill",
+            "plaza",
+            "",
+            "jazz",
+            "swiss jazz",
+            "fip jazz"
+        ]
+    );
+    assert_eq!(selected_line, 8, "the cursor follows swiss jazz past the headings");
+}
