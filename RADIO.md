@@ -65,22 +65,25 @@ pub struct Station {
 
 | Key              | Today                              | After                                                    |
 |------------------|------------------------------------|----------------------------------------------------------|
-| `audio_source`   | `radio` \| `youtube` \| `icecast`  | `radio` \| `youtube`; `icecast` reads as `radio`         |
+| `audio_source`   | `radio` \| `youtube` \| `icecast`  | `radio` \| `youtube`; migration 220 rewrites `icecast`   |
 | `radio_station`  | one of five Nightride keys         | any enabled catalogue key                                |
-| `icecast_stream` | `chill` \| `classical`             | read once for migration, then ignored                    |
+| `icecast_stream` | `chill` \| `classical`             | read by migration 220, then left in place and ignored    |
 | `radio_slots`    | (new)                              | JSON array of up to 3 unique catalogue keys              |
 
-Read-side migration, no SQL migration: `extract_audio_source` maps `icecast` → `Radio`, and
-when it does, `extract_radio_station` returns the mapped house key (`chill` → `lofi`,
-`classical` → `classical`) instead of `radio_station`, which may be a stale pick from
-before they moved to icecast. `User::set_radio_station` rewrites a saved `icecast` source
-to `radio` in the same UPDATE, so the first station they pick sticks. Nobody loses what
-they were listening to.
+SQL migration `220_retire_icecast_audio_source.sql`, no read-side conversion: every
+`audio_source: icecast` user becomes `radio` with `radio_station` set to the mount they had
+(`chill` → `lofi`, `classical` → `classical`), overwriting any Nightride pick left over
+from before they moved to icecast. Nobody loses what they were listening to. A pod still
+draining on the previous build can write `icecast` again after the migration ran; that
+user reads as `radio` on whatever `radio_station` holds.
 
-Slot defaults when `radio_slots` is absent: `[chillsynth, nightride, datawave]`,
-with the user's current `radio_station` swapped into slot 1 if it is not already present
-(an `ambient` listener keeps `v1` = ambient). Default source stays `radio` / `chillsynth`
-for new users, as today.
+Slot defaults when `radio_slots` is absent: `[chillsynth, nightride, datawave]`, fixed,
+so a slot never moves because the user retuned. The same migration saves explicit slots
+for anyone tuned outside those three (their station in slot 1: an `ambient` listener keeps
+`v1` = ambient). Default source stays `radio` / `chillsynth` for new users, as today.
+
+A pin or unpin writes one slot (`User::set_radio_slot`) against the stored array, not the
+session's copy of all three, so two sessions pinning different slots both land.
 
 `RADIO_SLOTS = 3` is a constant; each extra slot costs one rail row. A fourth key saved
 under the earlier four-slot shape is ignored on read.
@@ -265,7 +268,7 @@ were enabled ahead of the unchecked items, which are still owed:
 
 Each step ships on its own and leaves the product working:
 
-1. ✅ **Catalogue**: `Station` table, `StationKey`, house mounts as stations, read-side
+1. ✅ **Catalogue**: `Station` table, `StationKey`, house mounts as stations, the
    `icecast` migration, `radio_slots` setting + defaults. Rail and keys unchanged (radio
    detail keeps listing the first five catalogue rows). Tests: catalogue strictness,
    migration mapping, slot defaults.

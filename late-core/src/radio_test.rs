@@ -60,15 +60,11 @@ fn key(key: &str) -> RadioStation {
 }
 
 #[test]
-fn default_slots_keep_the_current_station_reachable() {
-    let slots = RadioSlots::defaults_for(key("datawave"));
+fn default_slots_are_the_three_house_picks() {
+    let slots = RadioSlots::default();
     assert_eq!(slots.get(0), Some(key("chillsynth")));
-    assert_eq!(slots.get(2), Some(key("datawave")));
-    // A current station outside the defaults takes slot 1.
-    let slots = RadioSlots::defaults_for(key("rektify"));
-    assert_eq!(slots.get(0), Some(key("rektify")));
     assert_eq!(slots.get(1), Some(key("nightride")));
-    assert_eq!(slots.position_of(key("chillsynth")), None);
+    assert_eq!(slots.get(2), Some(key("datawave")));
 }
 
 #[test]

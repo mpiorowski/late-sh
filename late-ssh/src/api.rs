@@ -813,7 +813,10 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
             mounts: crate::app::audio::svc::now_playing_tracks(&state.now_playing_rx.borrow()),
         },
         crate::app::audio::svc::AudioWsMessage::RadioMetaUpdate {
-            stations: state.radio_meta_rx.borrow().clone(),
+            stations: crate::app::audio::svc::pair_radio_tracks(
+                &state.radio_meta_rx.borrow(),
+                &state.now_playing_rx.borrow(),
+            ),
         },
     ];
     for msg in meta_catch_up {

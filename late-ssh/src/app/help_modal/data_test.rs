@@ -213,6 +213,21 @@ fn chat_guide_lists_user_facing_slash_commands() {
     );
 }
 
+/// The guide names the last slot key; a change to `RADIO_SLOTS` has to
+/// change the copy with it.
+#[test]
+fn music_guide_names_every_pinned_slot_key() {
+    let last = late_core::radio::RADIO_SLOTS;
+    assert!(MUSIC_PAIR_TEXT.contains(&format!("v then 1..{last} ")));
+    assert!(MUSIC_PAIR_TEXT.contains(&format!("behind v1..v{last} ")));
+    assert!(
+        overview_lines()
+            .iter()
+            .any(|line| line.contains(&format!("v then 1..{last} ")))
+    );
+    assert!(!MUSIC_PAIR_TEXT.contains(&format!("1..{}", last + 1)));
+}
+
 #[test]
 fn music_guide_defers_pairing_setup_to_pair_tab() {
     assert!(MUSIC_PAIR_TEXT.contains("two music sources"));

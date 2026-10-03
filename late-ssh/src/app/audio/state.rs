@@ -1,6 +1,6 @@
 use late_core::{
     audio::VizFrame,
-    models::user::{AudioSource, RadioSlots, RadioStation},
+    models::user::{AudioSource, RadioStation},
 };
 use std::time::Instant;
 use tokio::sync::{broadcast, watch};
@@ -166,8 +166,9 @@ impl AudioState {
         self.service.persist_audio_source_task(self.user_id, source);
     }
 
-    pub fn persist_radio_slots(&self, slots: RadioSlots) {
-        self.service.persist_radio_slots_task(self.user_id, slots);
+    pub fn persist_radio_slot(&self, index: usize, slot: Option<RadioStation>) {
+        self.service
+            .persist_radio_slot_task(self.user_id, index, slot);
     }
 
     pub fn persist_radio_station(&self, station: RadioStation) {

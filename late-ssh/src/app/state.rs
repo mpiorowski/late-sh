@@ -3163,12 +3163,12 @@ impl App {
     /// Pin `station` behind `v{index+1}`, vacating any slot it held.
     pub fn pin_radio_slot(&mut self, index: usize, station: late_core::models::user::RadioStation) {
         self.radio_slots.pin(index, station);
-        self.audio.persist_radio_slots(self.radio_slots);
+        self.audio.persist_radio_slot(index, Some(station));
     }
 
     pub fn unpin_radio_slot(&mut self, index: usize) {
         self.radio_slots.unpin(index);
-        self.audio.persist_radio_slots(self.radio_slots);
+        self.audio.persist_radio_slot(index, None);
     }
 
     /// `Artist - Title` for `station` from its provider's feed, or `None`

@@ -187,6 +187,7 @@ impl AudioRuntime {
             Arc::clone(&stop),
             ready_tx,
             prebuffer_samples(profile, output_sample_rate, source_spec.channels),
+            decoder_thread::BOOT_GRACE,
         );
         spawn_playback_analyzer_thread(
             played_rx,

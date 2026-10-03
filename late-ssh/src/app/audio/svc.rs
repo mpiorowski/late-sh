@@ -18,6 +18,7 @@ use late_core::{
         user::{AudioSource, RadioSlots, RadioStation, User},
     },
 };
+use late_core::radio::Provider;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
@@ -118,8 +119,9 @@ pub enum AudioWsMessage {
     NowPlayingUpdate {
         mounts: HashMap<String, late_core::api_types::Track>,
     },
-    /// Nightride live metadata per station name. Empty map while the SSE
-    /// feed is down (clients fall back to station display names).
+    /// Live track per radio station key ([`pair_radio_tracks`]): the
+    /// third-party feeds plus the house mounts. A station is absent while
+    /// its feed has nothing (clients fall back to station display names).
     RadioMetaUpdate {
         stations: HashMap<String, super::radio_meta::svc::ArtistTitle>,
     },
@@ -140,6 +142,39 @@ pub fn now_playing_tracks(
     map.iter()
         .map(|(mount, np)| (mount.clone(), np.track.clone()))
         .collect()
+}
+
+/// The station map a paired client reads its radio track from: the
+/// third-party metadata plus the house mounts, which are radio stations to
+/// the client. A house track with no artist tag carries an empty artist.
+pub fn pair_radio_tracks(
+    radio_meta: &HashMap<String, super::radio_meta::svc::ArtistTitle>,
+    now_playing: &HashMap<String, late_core::api_types::NowPlaying>,
+) -> HashMap<String, super::radio_meta::svc::ArtistTitle> {
+    let mut stations = radio_meta.clone();
+    for (mount, np) in now_playing {
+        let Some(station) = RadioStation::from_key(mount) else {
+            continue;
+        };
+        match station.provider() {
+            Provider::House => {
+                stations.insert(
+                    mount.clone(),
+                    super::radio_meta::svc::ArtistTitle {
+                        artist: np.track.artist.clone().unwrap_or_default(),
+                        title: np.track.title.clone(),
+                    },
+                );
+            }
+            Provider::Nightride
+            | Provider::Plaza
+            | Provider::CodeRadio
+            | Provider::RadioParadise
+            | Provider::Fip
+            | Provider::RadioSwiss => {}
+        }
+    }
+    stations
 }
 
 #[derive(Debug, Clone)]
@@ -398,7 +433,8 @@ impl AudioService {
             // Seed without broadcasting: clients connecting later get the
             // current values from the on-connect catch-up burst.
             let mut last_mounts = now_playing_tracks(&now_playing_rx.borrow());
-            let mut last_stations = radio_meta_rx.borrow().clone();
+            let mut last_stations =
+                pair_radio_tracks(&radio_meta_rx.borrow(), &now_playing_rx.borrow());
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
@@ -406,22 +442,26 @@ impl AudioService {
                         if changed.is_err() {
                             break;
                         }
-                        let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
-                        if mounts != last_mounts {
-                            last_mounts = mounts.clone();
-                            let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
-                        }
                     }
                     changed = radio_meta_rx.changed() => {
                         if changed.is_err() {
                             break;
                         }
-                        let stations = radio_meta_rx.borrow_and_update().clone();
-                        if stations != last_stations {
-                            last_stations = stations.clone();
-                            let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
-                        }
                     }
+                }
+                let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
+                if mounts != last_mounts {
+                    last_mounts = mounts.clone();
+                    let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
+                }
+                // A house track change moves the station map too.
+                let stations = pair_radio_tracks(
+                    &radio_meta_rx.borrow_and_update(),
+                    &now_playing_rx.borrow(),
+                );
+                if stations != last_stations {
+                    last_stations = stations.clone();
+                    let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
                 }
             }
         })
@@ -747,10 +787,15 @@ impl AudioService {
     }
 
     /// Pinned slots are a keymap, not a playback choice: nothing is pushed
-    /// to paired clients.
-    pub async fn persist_radio_slots(&self, user_id: Uuid, slots: RadioSlots) -> Result<()> {
+    /// to paired clients. `slot` is the slot's new content (`None` unpins).
+    pub async fn persist_radio_slot(
+        &self,
+        user_id: Uuid,
+        index: usize,
+        slot: Option<RadioStation>,
+    ) -> Result<()> {
         let client = self.db.get().await?;
-        User::set_radio_slots(&client, user_id, slots).await
+        User::set_radio_slot(&client, user_id, index, slot).await
     }
 
     pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
@@ -800,15 +845,21 @@ impl AudioService {
         });
     }
 
-    pub fn persist_radio_slots_task(&self, user_id: Uuid, slots: RadioSlots) {
+    pub fn persist_radio_slot_task(
+        &self,
+        user_id: Uuid,
+        index: usize,
+        slot: Option<RadioStation>,
+    ) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.persist_radio_slots(user_id, slots).await {
+            if let Err(err) = service.persist_radio_slot(user_id, index, slot).await {
                 late_core::error_span!(
-                    "radio_slots_persist_failed",
+                    "radio_slot_persist_failed",
                     error = ?err,
                     user_id = %user_id,
-                    "failed to persist radio slots"
+                    index,
+                    "failed to persist radio slot"
                 );
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,

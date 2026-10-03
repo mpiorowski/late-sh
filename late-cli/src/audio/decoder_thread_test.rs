@@ -3,7 +3,6 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     sync::atomic::AtomicUsize,
-    time::Instant,
 };
 
 use ringbuf::{
@@ -73,6 +72,8 @@ struct Harness {
     stream: FakeStream,
     muted: Arc<AtomicBool>,
     native_source_selected: Arc<AtomicBool>,
+    /// Samples the stand-in output callback has taken off the queue.
+    drained: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
 }
 
@@ -84,8 +85,9 @@ impl Drop for Harness {
 
 /// Runs the decoder thread against a fake stream, with a thread standing in
 /// for the output callback (it drains the queue, as the callback does even
-/// while silenced).
-fn start_decoder(muted: bool) -> Harness {
+/// while silenced). `boot_grace` is how long the decoder ignores silence
+/// after launch.
+fn start_decoder(muted: bool, boot_grace: Duration) -> Harness {
     let stream = spawn_fake_stream();
     let spec = AudioSpec {
         sample_rate: 44_100,
@@ -110,13 +112,17 @@ fn start_decoder(muted: bool) -> Harness {
         Arc::clone(&stop),
         ready_tx,
         0,
+        boot_grace,
     );
     ready_rx.recv().unwrap().unwrap();
 
-    let drain_stop = Arc::clone(&stop);
+    let drained = Arc::new(AtomicUsize::new(0));
+    let (drain_stop, drain_count) = (Arc::clone(&stop), Arc::clone(&drained));
     thread::spawn(move || {
         while !drain_stop.load(Ordering::Relaxed) {
-            while queue_rx.try_pop().is_some() {}
+            while queue_rx.try_pop().is_some() {
+                drain_count.fetch_add(1, Ordering::Relaxed);
+            }
             thread::sleep(Duration::from_millis(1));
         }
     });
@@ -125,13 +131,14 @@ fn start_decoder(muted: bool) -> Harness {
         stream,
         muted,
         native_source_selected,
+        drained,
         stop,
     }
 }
 
 #[test]
 fn muting_closes_the_stream_and_unmuting_reopens_it() {
-    let harness = start_decoder(false);
+    let harness = start_decoder(false, Duration::ZERO);
     let open = &harness.stream.open;
     wait_until("the stream is open", || open.load(Ordering::SeqCst) == 1);
 
@@ -154,7 +161,7 @@ fn muting_closes_the_stream_and_unmuting_reopens_it() {
 
 #[test]
 fn leaving_the_native_source_closes_the_stream() {
-    let harness = start_decoder(false);
+    let harness = start_decoder(false, Duration::ZERO);
     let open = &harness.stream.open;
     wait_until("the stream is open", || open.load(Ordering::SeqCst) == 1);
 
@@ -170,4 +177,26 @@ fn leaving_the_native_source_closes_the_stream() {
     wait_until("returning to radio reopened the stream", || {
         open.load(Ordering::SeqCst) == 1
     });
+}
+
+/// The CLI boots muted as a placeholder and the server unmutes it a moment
+/// later. That placeholder must not close the stream startup just opened.
+#[test]
+fn the_boot_mute_placeholder_keeps_the_startup_stream() {
+    let harness = start_decoder(true, WAIT * 6);
+    let drained = &harness.drained;
+    wait_until("startup audio is flowing while boot-muted", || {
+        drained.load(Ordering::Relaxed) > 0
+    });
+
+    harness.muted.store(false, Ordering::Relaxed);
+    let before = drained.load(Ordering::Relaxed);
+    wait_until("audio keeps flowing after the unmute", || {
+        drained.load(Ordering::Relaxed) > before + 44_100
+    });
+    assert_eq!(
+        harness.stream.accepted.load(Ordering::SeqCst),
+        1,
+        "the startup connection is the only one"
+    );
 }

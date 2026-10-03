@@ -34,8 +34,8 @@ impl AudioSource {
         }
     }
 
-    /// `icecast` is the retired house-stream source; its users now listen
-    /// to the same mounts as radio stations (see `extract_radio_station`).
+    /// `icecast` is the retired house-stream source; migration 220 moved
+    /// its users to `radio` on the mount they had.
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
@@ -90,7 +90,7 @@ impl InteractionMode {
     }
 }
 
-pub use crate::radio::{RadioSlots, RadioStation};
+pub use crate::radio::{RADIO_SLOTS, RadioSlots, RadioStation};
 
 crate::model! {
     table = "users";
@@ -456,12 +456,6 @@ const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const INTERACTION_MODE_KEY: &str = "interaction_mode";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
-/// The `audio_source` value of the retired house-stream source. Never
-/// written; `set_radio_station` replaces it with `radio`.
-const RETIRED_ICECAST_SOURCE: &str = "icecast";
-/// Retired source's stream choice; read only to migrate it into
-/// `radio_station` for users who never picked a station since.
-const ICECAST_STREAM_KEY: &str = "icecast_stream";
 const RADIO_STATION_KEY: &str = "radio_station";
 const RADIO_SLOTS_KEY: &str = "radio_slots";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
@@ -1366,16 +1360,53 @@ impl User {
         Ok(())
     }
 
-    /// Atomically merge the pinned station slots into `settings`.
-    pub async fn set_radio_slots(client: &Client, user_id: Uuid, slots: RadioSlots) -> Result<()> {
-        let value = slots.to_json();
+    /// Write one pinned slot: `Some(station)` pins it there and vacates any
+    /// other slot it held, `None` empties the slot. One statement against
+    /// the stored slots (the defaults when none are saved), never a whole
+    /// array from session memory, so two sessions pinning different slots
+    /// both land.
+    pub async fn set_radio_slot(
+        client: &Client,
+        user_id: Uuid,
+        index: usize,
+        slot: Option<RadioStation>,
+    ) -> Result<()> {
+        if index >= RADIO_SLOTS {
+            bail!("radio slot {index} is out of range");
+        }
+        let position = index as i32 + 1;
+        let value = match slot {
+            Some(station) => Value::String(station.as_str().to_string()),
+            None => Value::Null,
+        };
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                 SET settings = settings || jsonb_build_object($1::text, (
+                         SELECT jsonb_agg(
+                                    CASE
+                                        WHEN n = $4::int THEN $5::jsonb
+                                        WHEN stored.slots -> (n - 1) = $5::jsonb THEN 'null'::jsonb
+                                        ELSE coalesce(stored.slots -> (n - 1), 'null'::jsonb)
+                                    END
+                                    ORDER BY n)
+                         FROM generate_series(1, $6::int) AS n,
+                              (SELECT CASE
+                                          WHEN jsonb_typeof(settings -> $1::text) = 'array'
+                                          THEN settings -> $1::text
+                                          ELSE $2::jsonb
+                                      END AS slots) AS stored
+                     )),
                      updated = current_timestamp
                  WHERE id = $3",
-                &[&RADIO_SLOTS_KEY, &value, &user_id],
+                &[
+                    &RADIO_SLOTS_KEY,
+                    &RadioSlots::default().to_json(),
+                    &user_id,
+                    &position,
+                    &value,
+                    &(RADIO_SLOTS as i32),
+                ],
             )
             .await?;
         if updated == 0 {
@@ -1390,29 +1421,13 @@ impl User {
         station: RadioStation,
     ) -> Result<()> {
         let value = station.as_str();
-        // A user still saved on the retired `icecast` source reads their
-        // station from `icecast_stream` (see `extract_radio_station`), so
-        // the pick only sticks if the same write moves them to `radio`.
         let updated = client
             .execute(
                 "UPDATE users
-                 SET settings = settings
-                         || jsonb_build_object($1::text, $2::text)
-                         || CASE
-                                WHEN settings->>$4::text = $5::text
-                                THEN jsonb_build_object($4::text, $6::text)
-                                ELSE '{}'::jsonb
-                            END,
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
                      updated = current_timestamp
                  WHERE id = $3",
-                &[
-                    &RADIO_STATION_KEY,
-                    &value,
-                    &user_id,
-                    &AUDIO_SOURCE_KEY,
-                    &RETIRED_ICECAST_SOURCE,
-                    &AudioSource::Radio.as_str(),
-                ],
+                &[&RADIO_STATION_KEY, &value, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -1709,34 +1724,22 @@ pub fn extract_audio_source(settings: &Value) -> AudioSource {
         .unwrap_or_default()
 }
 
-/// The station the user is tuned to. A user whose saved source is the
-/// retired `icecast` keeps listening to the mount they had chosen: house
-/// mounts are catalogue stations keyed by mount name, so the old
-/// `icecast_stream` value is already a station key.
 pub fn extract_radio_station(settings: &Value) -> RadioStation {
-    let legacy_icecast =
-        settings.get(AUDIO_SOURCE_KEY).and_then(Value::as_str) == Some(RETIRED_ICECAST_SOURCE);
-    let key = if legacy_icecast {
-        settings
-            .get(ICECAST_STREAM_KEY)
-            .and_then(Value::as_str)
-            .unwrap_or("chill")
-    } else {
-        settings
-            .get(RADIO_STATION_KEY)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    };
-    RadioStation::from_settings_str(key)
+    settings
+        .get(RADIO_STATION_KEY)
+        .and_then(Value::as_str)
+        .map(RadioStation::from_settings_str)
+        .unwrap_or_default()
 }
 
-/// The user's pinned slots, or the defaults built around their current
-/// station when they never pinned anything.
+/// The user's pinned slots, or the defaults when they never pinned
+/// anything. The defaults do not depend on the current station, so a slot
+/// never moves because the user retuned.
 pub fn extract_radio_slots(settings: &Value) -> RadioSlots {
-    settings
-        .get(RADIO_SLOTS_KEY)
-        .and_then(RadioSlots::from_json)
-        .unwrap_or_else(|| RadioSlots::defaults_for(extract_radio_station(settings)))
+    match settings.get(RADIO_SLOTS_KEY).and_then(RadioSlots::from_json) {
+        Some(slots) => slots,
+        None => RadioSlots::default(),
+    }
 }
 
 pub fn extract_notify_kinds(settings: &Value) -> Vec<String> {

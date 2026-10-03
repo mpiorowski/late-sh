@@ -382,17 +382,6 @@ impl RadioSlots {
     const DEFAULT_KEYS: [&'static str; RADIO_SLOTS] =
         ["chillsynth", "nightride", "datawave"];
 
-    /// The slots a user gets before pinning anything. The station they are
-    /// already tuned to takes slot 1 when it is not among the defaults, so a
-    /// migration never leaves someone's current station without a key.
-    pub fn defaults_for(current: RadioStation) -> Self {
-        let mut slots = Self(Self::DEFAULT_KEYS.map(RadioStation::from_key));
-        if slots.position_of(current).is_none() {
-            slots.0[0] = Some(current);
-        }
-        slots
-    }
-
     pub fn empty() -> Self {
         Self([None; RADIO_SLOTS])
     }
@@ -461,9 +450,10 @@ impl RadioSlots {
     }
 }
 
+/// The slots a user gets before pinning anything.
 impl Default for RadioSlots {
     fn default() -> Self {
-        Self::defaults_for(RadioStation::default())
+        Self(Self::DEFAULT_KEYS.map(RadioStation::from_key))
     }
 }
 
