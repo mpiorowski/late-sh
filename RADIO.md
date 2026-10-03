@@ -1,7 +1,8 @@
 # Radio: two sources, a station catalogue, and user-pinned slots
 
-Design doc. Steps 1-3 of §10 are built on `mateu/music` (catalogue, two-source rail,
-slots, Stations modal); step 4 (Plaza / Code Radio adapters, listen-page grouping) is open.
+Design doc. Steps 1-4 of §10 are built on `mateu/music` (catalogue, two-source rail,
+slots, Stations modal, Plaza / Code Radio adapters, listen-page grouping). Plaza and
+Code Radio are enabled; the open items of the §9 checklist are still owed.
 `late-ssh/src/app/audio/CONTEXT.md` records what exists; this file records the why and
 what is still to come.
 
@@ -51,9 +52,10 @@ pub struct Station {
   `icecast_stream_url` does today, so the house streams stay Liquidsoap-served and
   third-party streams stay direct-to-client (the "never proxy" rule is unchanged).
 - Launch catalogue: `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify`
-  (ambient), `classical` (house), `lofi` (house `chill` mount, relabelled). Plaza and
-  Code Radio are added as `enabled: false` rows until the verification checklist in §8
-  passes, then flipped on in a one-line commit.
+  (ambient), `classical` (house), `lofi` (house `chill` mount, relabelled), `plaza`,
+  `coderadio`, plus Nightride's `darksynth`, `horrorsynth`, `ebsm`, Radio Paradise's `mellow`, FIP's `fipjazz`, and Radio Swiss's `swissjazz` and
+  `swissclassic`. A new station ships as an `enabled: false` row until the verification
+  checklist in §9 passes, then is flipped on in a one-line commit.
 - `RadioStation` becomes a `StationKey(String)` newtype validated against the catalogue;
   `from_settings_str` falls back to `chillsynth` as today. `radio_station_url_by_key`
   stays strict (unknown or disabled key → `None`) so `/api/listen` never lists a station
@@ -132,7 +134,7 @@ Banner copy stays sentence case: `Station: Classical`.
 ## 7. Stations modal (`v` then `r`)
 
 Follows the booth modal conventions (`centered_rect`, `theme` colours, footer keybinds,
-`Esc` closes). Width 72, height = rows + chrome, clamped to the terminal.
+`Esc` closes). Width 80 with two blank columns inside each border, height = rows + chrome, clamped to the terminal.
 
 ```
 ┌ stations ───────────────────────────────────────────────────────┐
@@ -182,9 +184,14 @@ keyed by catalogue key:
 | House     | `NowPlayingService` per-mount map (exists)                    | mirror into the map       |
 | Plaza     | `https://api.plaza.one/status` JSON, poll ~15s                | `song.artist`, `song.title` |
 | CodeRadio | AzuraCast `…/api/nowplaying/coderadio` JSON, poll ~15s        | `now_playing.song.artist/title` |
+| RadioParadise | `api.radioparadise.com/api/now_playing?chan=1` JSON, poll ~15s | `artist`, `title`       |
+| RadioSwiss | `api.radioswissjazz.ch/api/v1/rsj/en/current`, `api.radioswissclassic.ch/api/v1/rsc/en/current`, poll ~15s | `channel.playingnow.current.metadata.artist/title` |
+| Fip       | `api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, poll ~15s | `now.secondLine` (artist), `now.firstLine` (title) |
 
 Rules carried over: metadata only, never audio; an adapter that fails clears only its own
-keys (so the UI falls back to labels, never stale titles); backoff 1s → 60s. Consumers
+keys (so the UI falls back to labels, never stale titles); Nightride reconnects with
+backoff 1s → 60s, a failing poller slows from 15s to 60s. A poller does not start while
+its catalogue row is disabled. Consumers
 (`app/render.rs`, `radio_meta_update` on the pair WS → CLI MPRIS, `GET /api/radio-meta`,
 `GET /api/listen`) keep reading one map, so the web listen page and MPRIS pick up new
 stations for free. The listen page groups stations by provider with each provider's link.
@@ -209,21 +216,45 @@ the way Nightride is (direct stream, third-party player allowed, attribution). O
    widely integrated in third-party players (Volumio, moOde, Music Assistant). Chill rather
    than lofi; add if a third slot of "calm" is wanted.
 
+4. **Radio Paradise Mellow Mix** (`radioparadise.com`). Enabled as `mellow`: stream
+   `stream.radioparadise.com/mellow-192` (192k MP3), now-playing
+   `api.radioparadise.com/api/now_playing?chan=1`. No written third-party-player terms
+   were found; the courtesy email is still owed. The Main Mix is `mp3-192` / `chan=0`.
+5. **FIP Jazz** (Radio France). Enabled as `fipjazz`: stream
+   `icecast.radiofrance.fr/fipjazz-midfi.mp3` (128k MP3), now-playing from the live
+   metadata endpoint Radio France's own web player polls (not a documented API, so it
+   may change without notice). No permission asked yet. Also probed on 2026-10-03, not
+   added: WQXR and Venice Classic Radio answer over HTTPS with CORS.
+6. **Radio Swiss Jazz / Radio Swiss Classic** (SRG SSR). Enabled as `swissjazz` and
+   `swissclassic`: streams `stream.srg-ssr.ch/srgssr/rsj/mp3/128` and `…/rsc_de/mp3/128`
+   (128k MP3; the shorter `/m/rsj/mp3_128` form redirects to plain `http://` and must not
+   be used). Now-playing from the endpoints their own sites poll, undocumented. No
+   permission asked yet.
+7. (Candidate, nothing built) **KEXP** (`kexp-mp3-128.streamguys1.com/kexp128.mp3`;
+   `api.kexp.org/v2/plays/?limit=1`). Answered with `audio/mpeg` and browser CORS on
+   2026-10-03. No written third-party-player terms were found; ask first.
+
 Explicitly **out**:
 
-- **SomaFM** (Groove Salad, Drone Zone): the obvious ask, but their Terms of Service say
-  they cannot grant permission for third-party clients or website embedding, even
-  non-commercial. Do not add.
+- **SomaFM** (Groove Salad, Drone Zone): asked by email and declined. Their royalty rates
+  jump steeply past a listener threshold, so they do not want more listeners. Do not add.
+- **Ship FM** (`shipfm.online`): offered by the station itself (stream
+  `https://stream.shipfm.online/radio.mp3`, now-playing `https://shipfm.online/api/nowplaying`
+  with `artist` / `track`), but on 2026-10-03 the stream host timed out and the API answered
+  Cloudflare 522 on every probe. Revisit when it is back up.
 - **Lofi Girl, Chillhop, lofi.cafe**: YouTube live streams only, no audio stream. They
   belong in the YouTube fallback / queue, not the radio catalogue.
 
-Verification checklist before flipping any `enabled: false` row on (this sandbox could not
-reach any of the station hosts, so every URL above is from secondary sources):
+Verification checklist before flipping an `enabled: false` row on. Plaza and Code Radio
+were enabled ahead of the unchecked items, which are still owed:
 
-- [ ] `curl -I` the stream URL: 200, `audio/mpeg`, `Access-Control-Allow-Origin: *` (the
-      web listen page plays direct).
-- [ ] CLI decoder plays it (`resolve_stream_url` already keeps absolute `.mp3` URLs).
-- [ ] Now-playing endpoint returns artist/title; adapter parses it.
+- [x] `curl` the stream URL: both answer `audio/mpeg` (128k) and echo the request
+      `Origin` in `Access-Control-Allow-Origin` (the web listen page plays direct).
+- [ ] CLI decoder plays it. `resolve_stream_url` appends `/stream` to any URL without an
+      audio extension, which would break Plaza's `/mp3` path on every CLI already
+      installed, so the catalogue row carries a `#.mp3` fragment (never sent to Plaza).
+      Not yet listened to through a paired CLI.
+- [x] Now-playing endpoint returns artist/title; adapter parses it (`radio_meta/polled.rs`).
 - [ ] Terms / FAQ read, courtesy email sent, attribution line agreed.
 - [ ] Row added to `MUSIC.md`'s external-stations note and the Pair guide.
 
@@ -239,7 +270,7 @@ Each step ships on its own and leaves the product working:
    slot rows `v1`..`v4`, per-provider attribution row. Update the sidebar tests and the
    Pair guide text.
 3. ✅ **Stations modal** (`v+r`): list, live metadata, listen, pin/unpin, filter.
-4. **Adapters**: Plaza and Code Radio pollers behind `enabled`, listen page grouping,
+4. ✅ **Adapters**: Plaza and Code Radio pollers behind `enabled`, listen page grouping,
    MPRIS covered by the unified map.
 5. **Docs**: `audio/CONTEXT.md` §6, §12, "Nightride direct-radio source" → "Station
    catalogue"; `MUSIC.md` external stations note; delete this file's "proposal" framing

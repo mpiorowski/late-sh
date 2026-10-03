@@ -622,10 +622,10 @@ late-sh/
 **SSH API (late-ssh, port 4000):**
 - `GET /api/health` - DB health check
 - `GET /api/now-playing?mount={chill|classical}` → `NowPlayingResponse { current_track, listeners_count, started_at_ts }` (`mount` defaults to `chill`)
-- `GET /api/radio-meta` → `{ "<station>": { artist, title }, ... }` - live Nightride station metadata; empty map while the SSE feed is down
+- `GET /api/radio-meta` → `{ "<station>": { artist, title }, ... }` - live third-party station metadata (Nightride SSE plus enabled polled providers); a station is absent while its feed is down
 - `GET /api/status` → `StatusResponse { online, message, version }`
 - `GET /api/ws/pair?token={token}` - WebSocket upgrade for paired CLI and webview-helper control plus helper player reports
-- `GET /api/listen` - public, unauthenticated, memory-only snapshot of both Icecast mounts, the Nightride stations, and the YouTube queue; backs late-web's `/listen` page
+- `GET /api/listen` - public, unauthenticated, memory-only snapshot of both Icecast mounts, the guest radio stations, and the YouTube queue; backs late-web's `/listen` page
 - `GET /api/stream/publish/{token}`, `POST /api/stream/publish/{token}/state`, `GET /api/stream/watch/{id}`, `GET /api/stream/watch/{id}/grant`, `POST /api/stream/watch/{id}/heartbeat` - "watch me" stream capability routes (registry-memory only, capability id in the URL is the whole auth), proxied by late-web's `/golive/{token}` and `/live/{id}` pages; see `late-ssh/src/app/stream/CONTEXT.md`
 
 **WS payloads (client → server):**
@@ -1297,7 +1297,8 @@ Content invariants worth preserving when editing `data.rs`:
 | `s` | Bonsai modal | Mark the selected tip to fork on the next growth wave |
 | `c` | Bonsai modal | Copy the share snippet to clipboard |
 | `?` | Bonsai modal | Open help modal on the Bonsai section |
-| `v` then `1`-`5` | Home | Select within the active audio source: Icecast streams chill / classical (`1`/`2`), Radio stations Chillsynth / Nightride / Datawave / Spacesynth / Ambient (`1`-`5`). |
+| `v` then `1`-`4` | Home | Play the radio station pinned in that slot (no-op while YouTube is the source). |
+| `v` then `r` | Home | Open the Stations modal (browse the catalogue, listen, pin to a slot). |
 | `v` then `v` | Home | Open the Music Booth (submit + queue votes + recently played history). |
 | Home chat keys | Home | See `late-ssh/src/app/chat/CONTEXT.md`. |
 | `Enter` | Arcade lobby | Launch selected game |

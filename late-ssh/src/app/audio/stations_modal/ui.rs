@@ -1,7 +1,7 @@
 use late_core::models::user::{AudioSource, RadioSlots, RadioStation};
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -12,11 +12,15 @@ use crate::app::common::theme;
 
 use super::state::StationsModalState;
 
-const MODAL_WIDTH: u16 = 76;
+const MODAL_WIDTH: u16 = 80;
+/// Blank columns between the border and the content on each side, so the
+/// cursor and the slot keys do not sit on the frame.
+const SIDE_PADDING: u16 = 2;
 /// Rows the chrome takes around the list: border (2), breathing (1),
-/// pinned row (1), breathing (1), list heading (1), breathing (1), footer (1).
-const CHROME_ROWS: u16 = 8;
-const LABEL_COLUMN: usize = 12;
+/// pinned row (1), breathing (1), list heading (1), breathing (1),
+/// breathing (1), footer (1), breathing (1).
+const CHROME_ROWS: u16 = 10;
+const LABEL_COLUMN: usize = 15;
 const PROVIDER_COLUMN: usize = 13;
 
 /// One catalogue row as the modal paints it.
@@ -56,10 +60,10 @@ pub(crate) fn draw(
         )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
+    let inner = block.inner(popup).inner(Margin::new(SIDE_PADDING, 0));
     frame.render_widget(block, popup);
 
-    if inner.height < 6 || inner.width < 40 {
+    if inner.height < 8 || inner.width < 40 {
         frame.render_widget(Paragraph::new("Terminal too small"), inner);
         return;
     }
@@ -71,7 +75,9 @@ pub(crate) fn draw(
         Constraint::Length(1), // list heading / filter
         Constraint::Length(1), // breathing
         Constraint::Min(1),    // list
+        Constraint::Length(1), // breathing
         Constraint::Length(1), // footer
+        Constraint::Length(1), // breathing
     ])
     .split(inner);
 
@@ -83,7 +89,7 @@ pub(crate) fn draw(
     draw_list(frame, layout[5], state, view);
     frame.render_widget(
         Paragraph::new(footer_line(state.filter_active())),
-        layout[6],
+        layout[7],
     );
 }
 

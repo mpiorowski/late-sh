@@ -13,6 +13,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
+use late_core::models::user::RadioStation;
 use late_core::models::user_ssh_key::{KeyAudio, UserSshKey};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{
@@ -31,7 +32,6 @@ use uuid::Uuid;
 use crate::{
     app::audio::{
         client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode},
-        stations,
         svc::{AudioMode, PlayerStateReport, QueueItemView},
     },
     app::voice::svc::VoiceClientState,
@@ -169,16 +169,26 @@ impl From<QueueItemView> for PublicTrack {
     }
 }
 
-/// What is currently on air for one Icecast mount or one Nightride station.
+/// What is currently on air for one house Icecast mount. The audio is
+/// served through late-web's own `/stream` proxy, so that URL belongs to
+/// late-web, not here.
 #[derive(Serialize)]
 struct PublicAir {
     artist: Option<String>,
     title: String,
-    /// Present for Nightride stations, whose audio the client fetches
-    /// directly. Icecast mounts are served through late-web's own `/stream`
-    /// proxy, so that URL belongs to late-web, not here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_url: Option<String>,
+}
+
+/// One third-party catalogue station on air: the track, the provider's own
+/// stream URL (the client fetches that audio directly), and the credit the
+/// page owes the provider.
+#[derive(Serialize)]
+struct PublicStation {
+    label: &'static str,
+    artist: String,
+    title: String,
+    stream_url: String,
+    provider: &'static str,
+    provider_url: &'static str,
 }
 
 #[derive(Serialize)]
@@ -196,8 +206,8 @@ struct ListenResponse {
     audio_mode: AudioMode,
     /// Icecast mounts, keyed by mount name (`chill`, `classical`).
     streams: BTreeMap<String, PublicAir>,
-    /// Nightride stations, keyed by station name.
-    stations: BTreeMap<String, PublicAir>,
+    /// Third-party stations with live metadata, keyed by catalogue key.
+    stations: BTreeMap<String, PublicStation>,
     youtube: PublicYoutube,
 }
 
@@ -299,9 +309,9 @@ async fn get_now_playing(
     })
 }
 
-/// Live Nightride station metadata as `station name -> { artist, title }`.
-/// Empty map while the SSE feed is down; consumers fall back to station
-/// display names.
+/// Live third-party station metadata as `station key -> { artist, title }`.
+/// A station is absent while its provider's feed is down; consumers fall
+/// back to station display names.
 async fn get_radio_meta(
     AxumState(state): AxumState<State>,
 ) -> Json<std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>> {
@@ -324,7 +334,6 @@ async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> 
                 PublicAir {
                     artist: np.track.artist.clone(),
                     title: np.track.title.clone(),
-                    stream_url: None,
                 },
             )
         })
@@ -338,14 +347,18 @@ async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> 
         .radio_meta_rx
         .borrow()
         .iter()
-        .filter_map(|(station, meta)| {
-            let stream_url = stations::station_stream_url_by_key(&public_stream_base_url, station)?;
+        .filter_map(|(key, meta)| {
+            let station = RadioStation::from_key(key)?;
+            let provider = station.provider();
             Some((
-                station.clone(),
-                PublicAir {
-                    artist: Some(meta.artist.clone()),
+                key.clone(),
+                PublicStation {
+                    label: station.label(),
+                    artist: meta.artist.clone(),
                     title: meta.title.clone(),
-                    stream_url: Some(stream_url),
+                    stream_url: station.stream_url(&public_stream_base_url),
+                    provider: provider.label(),
+                    provider_url: provider.home_url(),
                 },
             ))
         })

@@ -7,7 +7,7 @@ fn catalogue_keys_are_unique_and_the_default_is_enabled() {
     keys.dedup();
     assert_eq!(keys.len(), CATALOGUE.len(), "duplicate station key");
     assert_eq!(RadioStation::default().as_str(), "chillsynth");
-    assert!(RadioStation::enabled().count() >= 7);
+    assert_eq!(RadioStation::enabled().count(), 16);
 }
 
 #[test]
@@ -20,13 +20,11 @@ fn station_lookup_is_strict_about_unknown_and_disabled_keys() {
     assert_eq!(RadioStation::from_key("ambient"), None);
     assert_eq!(RadioStation::from_key("lofi"), None);
     // Stations the Nightride feed carries but late.sh does not offer.
-    assert_eq!(RadioStation::from_key("darksynth"), None);
-    // Disabled rows are invisible until verified.
-    assert_eq!(RadioStation::from_key("plaza"), None);
+    assert_eq!(RadioStation::from_key("rekt"), None);
     assert_eq!(RadioStation::from_key(""), None);
     // Settings parsing falls back instead of failing.
     assert_eq!(
-        RadioStation::from_settings_str("plaza"),
+        RadioStation::from_settings_str("rekt"),
         RadioStation::default()
     );
 }
@@ -103,7 +101,7 @@ fn slots_round_trip_through_json_and_tolerate_bad_rows() {
         serde_json::json!(["classical", null, "rektify", null])
     );
     assert_eq!(
-        RadioSlots::from_json(&serde_json::json!(["plaza", "nope"])).unwrap(),
+        RadioSlots::from_json(&serde_json::json!(["rekt", "nope"])).unwrap(),
         RadioSlots::empty()
     );
     assert_eq!(RadioSlots::from_json(&serde_json::json!("chill")), None);

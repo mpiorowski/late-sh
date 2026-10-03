@@ -34,17 +34,8 @@ pub fn resolve_stream_selection(
     }
 }
 
-/// Public stream URL for a station key, or `None` for a key late.sh does
-/// not offer. The Nightride `/meta` feed carries more stations than the
-/// catalogue (darksynth, horrorsynth, ebsm), so this must stay strict:
-/// `RadioStation::from_settings_str` defaults unknown input to Chillsynth,
-/// which here would hand out the wrong stream.
-pub fn station_stream_url_by_key(public_house_base_url: &str, key: &str) -> Option<String> {
-    RadioStation::from_key(key).map(|station| station.stream_url(public_house_base_url))
-}
-
 /// `Artist - Title` for `station` from whichever feed its provider has:
-/// the Nightride SSE map or the house Icecast now-playing map. `None`
+/// the third-party radio-meta map or the house Icecast now-playing map. `None`
 /// while that feed has nothing for it, so the caller shows the label.
 pub fn station_now_playing(
     station: RadioStation,
@@ -53,7 +44,12 @@ pub fn station_now_playing(
 ) -> Option<String> {
     match station.provider() {
         Provider::House => house.get(station.as_str()).map(house_track_text),
-        Provider::Nightride | Provider::Plaza | Provider::CodeRadio => radio_meta
+        Provider::Nightride
+        | Provider::Plaza
+        | Provider::CodeRadio
+        | Provider::RadioParadise
+        | Provider::Fip
+        | Provider::RadioSwiss => radio_meta
             .get(station.as_str())
             .map(|meta| format!("{} - {}", meta.artist, meta.title)),
     }
@@ -73,38 +69,6 @@ pub fn house_track_text(now: &NowPlaying) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn station_stream_url_by_key_is_strict_about_unknown_stations() {
-        assert_eq!(
-            station_stream_url_by_key("https://late.sh/stream", "chillsynth").as_deref(),
-            Some("https://stream.nightride.fm/chillsynth.mp3")
-        );
-        // The `ambient` label persists and keys as `rektify`.
-        assert_eq!(
-            station_stream_url_by_key("https://late.sh/stream", "rektify").as_deref(),
-            Some("https://stream.nightride.fm/rektify.mp3")
-        );
-        // House mounts resolve against the public base.
-        assert_eq!(
-            station_stream_url_by_key("https://late.sh/stream", "classical").as_deref(),
-            Some("https://late.sh/stream/classical")
-        );
-        // Stations the /meta feed carries but late.sh does not offer must
-        // drop out, not silently resolve to the Chillsynth default.
-        assert_eq!(
-            station_stream_url_by_key("https://late.sh/stream", "darksynth"),
-            None
-        );
-        assert_eq!(
-            station_stream_url_by_key("https://late.sh/stream", "ambient"),
-            None
-        );
-        assert_eq!(
-            station_stream_url_by_key("https://late.sh/stream", ""),
-            None
-        );
-    }
 
     #[test]
     fn station_now_playing_reads_the_provider_feed() {

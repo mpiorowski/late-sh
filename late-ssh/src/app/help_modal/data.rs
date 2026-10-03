@@ -1405,7 +1405,7 @@ fn architecture_lines() -> Vec<String> {
         "  services publish watch snapshots and broadcast events into SSH sessions",
         "",
         "Audio stack",
-        "  Radio is a station catalogue: Nightride guest stations plus the lofi and classical house streams",
+        "  Radio is a station catalogue: Nightride, Nightwave Plaza, Code Radio, Radio Paradise, FIP and Radio Swiss guest stations plus the lofi and classical house streams",
         "  Liquidsoap manages the house playlists",
         "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
@@ -2000,7 +2000,7 @@ Music controls
 
 late.sh has two music sources:
 
-  Radio      a station catalogue: Nightride guest stations (chillsynth, nightride, datawave, spacesynth, ambient) and the late.sh house streams (lofi, classical). More stations arrive as they are cleared.
+  Radio      a station catalogue: Nightride guest stations (chillsynth, nightride, datawave, spacesynth, ambient, darksynth, horrorsynth, ebsm), Nightwave Plaza (plaza), freeCodeCamp Code Radio (code radio), Radio Paradise (mellow), FIP (fip jazz), Radio Swiss (swiss jazz, swiss classic) and the late.sh house streams (lofi, classical). More stations arrive as they are cleared.
   YouTube    a shared queue everyone can submit links to.
 
 Your paired client plays the selected source. Pin up to four stations behind v1..v4 and open Stations (v then r) to browse the whole catalogue with live now-playing.

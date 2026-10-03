@@ -180,6 +180,7 @@ impl AudioRuntime {
             Arc::clone(&stream_flushed_generation),
             Arc::clone(&source_is_icecast),
             Arc::clone(&native_source_selected),
+            Arc::clone(&muted),
             queue_tx,
             source_spec,
             output_sample_rate,

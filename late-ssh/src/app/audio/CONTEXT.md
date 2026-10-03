@@ -54,7 +54,8 @@ late-ssh/src/app/audio/
 │   └── svc.rs              # NowPlayingService: 10s Icecast poll, watch<HashMap<mount, NowPlaying>>
 └── radio_meta/
     ├── mod.rs
-    └── svc.rs              # RadioMetaService: Nightride SSE metadata, watch<HashMap<station, ArtistTitle>>
+    ├── polled.rs           # PolledFeed (Plaza, CodeRadio, ParadiseMellow, FipJazz, SwissJazz, SwissClassic): endpoint URL, catalogue key, payload parser
+    └── svc.rs              # RadioMetaService: Nightride SSE loop + one poll loop per PolledFeed, watch<HashMap<station, ArtistTitle>>
 ```
 
 Cross-crate touchpoints:
@@ -83,7 +84,7 @@ Cross-crate touchpoints:
 - `youtube.rs` is pure URL/HTTP — no DB, no channels, no service state.
 - `viz.rs` is pure render + signal smoothing. Lives in this domain because the data source (Icecast) is audio.
 - `now_playing/svc.rs` is independent of `AudioService` — separate channel, separate task, only shares a directory.
-- `radio_meta/svc.rs` is likewise independent: its own watch channel and its own SSE task, started once in `main.rs` next to the now-playing poller. It only fetches Nightride metadata; it never proxies Nightride audio.
+- `radio_meta/svc.rs` is likewise independent: its own watch channel and one task (the Nightride SSE loop joined with the polled-feed loops), started once in `main.rs` next to the now-playing poller. It only fetches third-party metadata; it never proxies third-party audio.
 - Liquidsoap no longer has a telnet control path in this crate; house streams are always-on mounts.
 
 Keep `mod.rs` declaration-only — no `pub use` re-exports.
@@ -242,7 +243,7 @@ YouTube item without entering the switching/playback path.
 - `source_changed { audio_mode: "icecast" | "youtube" }`
 - `queue_update { current, queue, sequence }`
 - `now_playing_update { mounts: { "<mount>": Track } }` — full per-mount icecast now-playing snapshot, pushed by `AudioService::start_meta_forward_task` whenever any mount's track changes; also sent once in the connect catch-up burst.
-- `radio_meta_update { stations: { "<station>": { artist, title } } }` — full Nightride metadata snapshot, pushed on change (deduped, since the radio-meta watch ticks on every SSE event); empty map while the feed is down. Also in the catch-up burst. CLIs and the webview helper ignore both events.
+- `radio_meta_update { stations: { "<station>": { artist, title } } }` — full third-party station metadata snapshot (Nightride plus any enabled polled station), pushed on change (deduped, since the radio-meta watch ticks on every SSE event); a station is absent while its feed is down. Also in the catch-up burst. CLIs and the webview helper ignore both events.
 
 ### Server → client `PairControlMessage` (`paired_clients.rs:22-30`)
 - `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`.
@@ -388,23 +389,25 @@ TUI sees, and it holds no per-user server state at all.
 - **`/api/listen` is memory-only.** It reads `AudioService::current_snapshot()`
   (the `snapshot_tx` watch, not the DB-backed `snapshot()`), the now-playing
   watch, and the radio-meta watch. Polling it costs no DB work. Its response
-  types (`PublicTrack`, `PublicAir`) are deliberately separate from
+  types (`PublicTrack`, `PublicAir`, `PublicStation`) are deliberately separate from
   `QueueItemView`/`QueueSnapshot` so internal fields (`submitter_id`, vote
   score, unskippable, the 200-row history, skip progress) cannot leak into a
   published contract; `api_test.rs` asserts those names never appear in the
   body.
 - **Strict station filtering.** The Nightride `/meta` feed carries stations
-  late.sh does not offer (darksynth, horrorsynth, ebsm).
-  `stations::radio_station_url_by_key` returns None for those and they are
-  dropped from the response, rather than resolving to the Chillsynth default
-  the way `RadioStation::from_settings_str` would.
+  late.sh does not offer (rekt, rektory).
+  `RadioStation::from_key` returns None for those (and for disabled
+  catalogue rows) and they are dropped from the response, rather than
+  resolving to the Chillsynth default the way
+  `RadioStation::from_settings_str` would.
 - **One audible surface.** Picking any source on the page stops the others.
-  Icecast mounts play through late-web's `/stream/{mount}` proxy, Nightride
+  Icecast mounts play through late-web's `/stream/{mount}` proxy, guest
   stations from the `stream_url` in the response, YouTube through the official
   IFrame player. The IFrame API script is only fetched once someone actually
   picks YouTube.
-- **Source order is a product rule.** Nightride first, then the community
-  queue, then house radio last. Our own playlist is the fallback option, not
+- **Source order is a product rule.** Guest stations first (one section per
+  provider, built by the page from each station's `provider` and
+  `provider_url`), then the community queue, then house radio last. Our own playlist is the fallback option, not
   the headline. `listen_test.rs` asserts the ordering.
 - **Joining mid-track.** The page seeks in using `started_at_ms` rather than
   restarting the current song. That is the same one-shot-seek idea the webview
@@ -412,8 +415,8 @@ TUI sees, and it holds no per-user server state at all.
   seek each listener plays its own timeline.
 - **Attribution is load-bearing, not decoration.** Nightride's approval is
   conditioned on visible artist credit, and the house tracks are CC-BY. The
-  page shows `artist - title` for both, a `via nightride.fm` link, a link to
-  `MUSIC.md`, and `queued by <user>` for YouTube.
+  page shows `artist - title` for both, a `streamed directly from` link to
+  each guest provider, a link to `MUSIC.md`, and `queued by <user>` for YouTube.
 
 ---
 
@@ -606,7 +609,8 @@ Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a backgro
 - One `tokio::spawn` SSE loop per process, started in `main.rs` next to the now-playing poller, shut down via the shared `CancellationToken`.
 - Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
 - `parse_meta_line` skips records with an empty station/artist/title; valid records merge into the `watch<HashMap<String, ArtistTitle>>` via `send_modify` (merge, not replace, so a partial event doesn't blank other stations).
-- Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the map is cleared (`send_replace(HashMap::new())`) so the UI falls back to station display names instead of showing stale tracks.
+- Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the Nightride keys are cleared (`clear_nightride`, which keeps polled stations) so the UI falls back to station display names instead of showing stale tracks.
+- Polled providers (`radio_meta/polled.rs::PolledFeed`): Plaza (`https://api.plaza.one/status`, `song.artist`/`song.title`), Code Radio (AzuraCast `/api/nowplaying/coderadio`, `now_playing.song.artist`/`title`), Radio Paradise Mellow (`https://api.radioparadise.com/api/now_playing?chan=1`, `artist`/`title`) and FIP Jazz (`https://api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, `now.secondLine` as artist and `now.firstLine` as title; a `now` with a null `songUuid` is the programme blurb between songs and is treated as no track). Radio Swiss Jazz and Classic use the endpoint their sites poll (`https://api.radioswissjazz.ch/api/v1/rsj/en/current`, `https://api.radioswissclassic.ch/api/v1/rsc/en/current`; `channel.playingnow.current.metadata.artist`/`title`, where Classic's `artist` is the composer). `run_poll_loop` fetches every 15s and writes the track under the feed's catalogue key; a failed poll removes only that key and doubles the delay up to 60s. A loop does not start while its catalogue row is `enabled: false`, so a disabled station sends its provider nothing. Each poll counts into `late_ssh_radio_meta_polls_total{feed, outcome}` (`metrics::record_radio_meta_poll`).
 - Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the webview helper); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
 
 Stream URL notes:

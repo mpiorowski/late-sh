@@ -42,7 +42,8 @@ fn the_cursor_wraps_and_the_filter_narrows_by_label_provider_and_tag() {
     for ch in "synthwave".chars() {
         state.push_filter(ch);
     }
-    assert_eq!(state.stations().len(), 4, "tag matches");
+    // chillsynth, nightride, datawave, spacesynth, darksynth, horrorsynth.
+    assert_eq!(state.stations().len(), 6, "tag matches");
 
     state.cancel_filter();
     assert_eq!(state.filter_query(), "");

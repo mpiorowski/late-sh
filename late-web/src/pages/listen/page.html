@@ -20,27 +20,30 @@
         </p>
     </div>
 
-    <!-- nightride -->
-    <section class="mb-8">
-        <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">nightride fm</h2>
-        <template x-for="(info, station) in stations" :key="station">
-            <button type="button" @click="playStation(station, info.stream_url)"
-                class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 mb-2 transition-colors"
-                :class="playing === 'station:' + station ? 'border-green-500 bg-gray-900' : ''">
-                <div class="flex items-baseline justify-between gap-3">
-                    <span class="text-green-400" x-text="stationLabel(station)"></span>
-                    <span class="text-xs text-gray-500"
-                        x-text="playing === 'station:' + station ? 'playing' : 'play'"></span>
-                </div>
-                <div class="text-xs text-gray-400 mt-1 truncate" x-text="air(info)"></div>
-            </button>
-        </template>
-        <p class="text-xs text-gray-500 mt-2">
-            streamed directly from
-            <a href="https://nightride.fm" rel="noopener"
-                class="text-green-400 hover:text-green-300 underline underline-offset-2">nightride.fm</a>
-        </p>
-    </section>
+    <!-- guest stations, one section per provider -->
+    <template x-for="group in stationGroups()" :key="group.provider">
+        <section class="mb-8">
+            <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3" x-text="group.provider"></h2>
+            <template x-for="entry in group.stations" :key="entry.key">
+                <button type="button" @click="playStation(entry.key, entry.info.stream_url)"
+                    class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 mb-2 transition-colors"
+                    :class="playing === 'station:' + entry.key ? 'border-green-500 bg-gray-900' : ''">
+                    <div class="flex items-baseline justify-between gap-3">
+                        <span class="text-green-400" x-text="entry.info.label"></span>
+                        <span class="text-xs text-gray-500"
+                            x-text="playing === 'station:' + entry.key ? 'playing' : 'play'"></span>
+                    </div>
+                    <div class="text-xs text-gray-400 mt-1 truncate" x-text="air(entry.info)"></div>
+                </button>
+            </template>
+            <p class="text-xs text-gray-500 mt-2">
+                streamed directly from
+                <a :href="group.url" rel="noopener"
+                    class="text-green-400 hover:text-green-300 underline underline-offset-2"
+                    x-text="group.link"></a>
+            </p>
+        </section>
+    </template>
 
     <!-- community queue -->
     <section class="mb-8">
@@ -115,7 +118,6 @@
 
 <script>
     const LISTEN_POLL_MS = 10000;
-    const STATION_LABELS = { rektify: 'ambient' };
 
     function listen() {
         return {
@@ -156,8 +158,24 @@
                 return info.artist ? info.artist + ' - ' + info.title : info.title;
             },
 
-            stationLabel(station) {
-                return STATION_LABELS[station] || station;
+            // Stations arrive keyed alphabetically; group them under their
+            // provider so each provider gets its own heading and credit link.
+            stationGroups() {
+                const groups = [];
+                for (const [key, info] of Object.entries(this.stations)) {
+                    let group = groups.find((g) => g.provider === info.provider);
+                    if (!group) {
+                        group = {
+                            provider: info.provider,
+                            url: info.provider_url,
+                            link: info.provider_url.replace(/^https?:\/\//, ''),
+                            stations: [],
+                        };
+                        groups.push(group);
+                    }
+                    group.stations.push({ key, info });
+                }
+                return groups;
             },
 
             youtubeLine() {

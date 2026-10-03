@@ -30,6 +30,13 @@ pub enum Provider {
     Plaza,
     /// freeCodeCamp Code Radio, lofi for coders.
     CodeRadio,
+    /// Radio Paradise, listener-supported eclectic radio.
+    RadioParadise,
+    /// FIP, Radio France's music station and its genre webradios.
+    Fip,
+    /// Radio Swiss Jazz and Radio Swiss Classic, run by the Swiss public
+    /// broadcaster SRG SSR.
+    RadioSwiss,
 }
 
 impl Provider {
@@ -40,6 +47,9 @@ impl Provider {
             Self::House => "late.sh",
             Self::Plaza => "plaza.one",
             Self::CodeRadio => "freecodecamp",
+            Self::RadioParadise => "paradise",
+            Self::Fip => "fip",
+            Self::RadioSwiss => "radio swiss",
         }
     }
 
@@ -51,6 +61,9 @@ impl Provider {
             Self::House => "late.sh house · cc music",
             Self::Plaza => "plaza.one · live",
             Self::CodeRadio => "freecodecamp.org · code radio",
+            Self::RadioParadise => "radioparadise.com · live",
+            Self::Fip => "fip · radio france",
+            Self::RadioSwiss => "radio swiss · srg ssr",
         }
     }
 
@@ -60,6 +73,9 @@ impl Provider {
             Self::House => "https://late.sh/listen",
             Self::Plaza => "https://plaza.one",
             Self::CodeRadio => "https://coderadio.freecodecamp.org",
+            Self::RadioParadise => "https://radioparadise.com",
+            Self::Fip => "https://www.radiofrance.fr/fip",
+            Self::RadioSwiss => "https://www.srgssr.ch",
         }
     }
 }
@@ -136,6 +152,30 @@ pub const CATALOGUE: &[Station] = &[
         enabled: true,
     },
     Station {
+        key: "darksynth",
+        label: "darksynth",
+        provider: Provider::Nightride,
+        stream: StationStream::Direct("https://stream.nightride.fm/darksynth.mp3"),
+        tags: &["synthwave", "dark"],
+        enabled: true,
+    },
+    Station {
+        key: "horrorsynth",
+        label: "horrorsynth",
+        provider: Provider::Nightride,
+        stream: StationStream::Direct("https://stream.nightride.fm/horrorsynth.mp3"),
+        tags: &["synthwave", "horror"],
+        enabled: true,
+    },
+    Station {
+        key: "ebsm",
+        label: "ebsm",
+        provider: Provider::Nightride,
+        stream: StationStream::Direct("https://stream.nightride.fm/ebsm.mp3"),
+        tags: &["ebm", "industrial"],
+        enabled: true,
+    },
+    Station {
         key: "classical",
         label: "classical",
         provider: Provider::House,
@@ -151,15 +191,15 @@ pub const CATALOGUE: &[Station] = &[
         tags: &["lofi", "chill"],
         enabled: true,
     },
-    // Unverified from the sandbox that wrote them (stream reachability,
-    // CORS, terms, attribution): see RADIO.md §9 before flipping on.
     Station {
         key: "plaza",
         label: "plaza",
         provider: Provider::Plaza,
-        stream: StationStream::Direct("https://radio.plaza.one/mp3"),
+        // The `#.mp3` fragment never reaches Plaza. It is there for the CLI,
+        // which appends `/stream` to any URL without an audio extension.
+        stream: StationStream::Direct("https://radio.plaza.one/mp3#.mp3"),
         tags: &["vaporwave", "chill"],
-        enabled: false,
+        enabled: true,
     },
     Station {
         key: "coderadio",
@@ -169,7 +209,43 @@ pub const CATALOGUE: &[Station] = &[
             "https://coderadio-admin-v2.freecodecamp.org/listen/coderadio/radio.mp3",
         ),
         tags: &["lofi", "coding"],
-        enabled: false,
+        enabled: true,
+    },
+    Station {
+        key: "mellow",
+        label: "mellow",
+        provider: Provider::RadioParadise,
+        // `#.mp3` for the CLI, as on the Plaza row.
+        stream: StationStream::Direct("https://stream.radioparadise.com/mellow-192#.mp3"),
+        tags: &["chill", "eclectic"],
+        enabled: true,
+    },
+    Station {
+        key: "fipjazz",
+        label: "fip jazz",
+        provider: Provider::Fip,
+        stream: StationStream::Direct("https://icecast.radiofrance.fr/fipjazz-midfi.mp3"),
+        tags: &["jazz"],
+        enabled: true,
+    },
+    // `#.mp3` for the CLI, as on the Plaza row. This path redirects to an
+    // HTTPS node; the shorter `/m/rsj/mp3_128` one redirects to plain HTTP,
+    // which the listen page cannot play.
+    Station {
+        key: "swissjazz",
+        label: "swiss jazz",
+        provider: Provider::RadioSwiss,
+        stream: StationStream::Direct("https://stream.srg-ssr.ch/srgssr/rsj/mp3/128#.mp3"),
+        tags: &["jazz"],
+        enabled: true,
+    },
+    Station {
+        key: "swissclassic",
+        label: "swiss classic",
+        provider: Provider::RadioSwiss,
+        stream: StationStream::Direct("https://stream.srg-ssr.ch/srgssr/rsc_de/mp3/128#.mp3"),
+        tags: &["classical", "calm"],
+        enabled: true,
     },
 ];
 
