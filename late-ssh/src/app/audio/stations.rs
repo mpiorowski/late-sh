@@ -36,7 +36,8 @@ pub fn resolve_stream_selection(
 
 /// `Artist - Title` for `station` from whichever feed its provider has:
 /// the third-party radio-meta map or the house Icecast now-playing map. `None`
-/// while that feed has nothing for it, so the caller shows the label.
+/// while that feed has nothing for it, so the caller shows the label. A
+/// track with no artist is its bare title.
 pub fn station_now_playing(
     station: RadioStation,
     radio_meta: &HashMap<String, ArtistTitle>,
@@ -51,7 +52,10 @@ pub fn station_now_playing(
         | Provider::Fip
         | Provider::RadioSwiss => radio_meta
             .get(station.as_str())
-            .map(|meta| format!("{} - {}", meta.artist, meta.title)),
+            .map(|meta| match meta.artist.is_empty() {
+                true => meta.title.clone(),
+                false => format!("{} - {}", meta.artist, meta.title),
+            }),
     }
 }
 
@@ -99,6 +103,19 @@ mod tests {
         assert_eq!(
             station_now_playing(classical, &radio_meta, &house).as_deref(),
             Some("Kimiko Ishizaka - Prelude No. 1")
+        );
+        // A track tagged with a title only shows the title alone.
+        radio_meta.insert(
+            "coderadio".to_string(),
+            ArtistTitle {
+                artist: String::new(),
+                title: "night 7".to_string(),
+            },
+        );
+        let coderadio = RadioStation::from_key("coderadio").unwrap();
+        assert_eq!(
+            station_now_playing(coderadio, &radio_meta, &house).as_deref(),
+            Some("night 7")
         );
         // A house station never reads the Nightride map, and vice versa.
         assert_eq!(station_now_playing(chill, &radio_meta, &house), None);

@@ -21,7 +21,6 @@ use crate::app::pet::ui::{Neighbours, PetView, WatchSide, draw_pet_box};
 use late_core::models::user::{
     AudioSource, RadioSlots, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
-use late_core::radio::RADIO_SLOTS;
 
 // The pinned core block above the panel list: online count + clock on the
 // first row, connected friends (an away one marked 💤) on the second. Both
@@ -35,18 +34,19 @@ const RULE_HEIGHT: u16 = 1;
 // unpaired session gets a pointer to the guide instead. The band scales
 // to whatever height it's given; the stage pins 3.
 const MUSIC_VIZ_HEIGHT: u16 = 3;
-// Dock + detail portion of the stage: volume row (1) + two dock entries
-// (title + now-playing, 4) + labeled rule (1) + detail area (5) + keybind
-// footer (1). Constant for BOTH active sources — chrome must not move
-// between states; `music_stage_chrome_rows_never_move` locks this in tests.
-const MUSIC_DOCK_HEIGHT: u16 = 12;
-// Full music stage: the wave strip on top of the dock + detail area.
+// Dock portion of the stage: volume row (1) + the two sources as an
+// accordion (9) + keybind footer (1). Constant for BOTH active sources, so
+// the panels below never shift; `music_stage_height_is_constant` locks this
+// in tests. On radio: title + track + station rule + `RADIO_SLOTS` slot rows
+// + attribution, then the youtube title + track. On youtube: the radio
+// title alone, then the youtube title + track + `MUSIC_YOUTUBE_DETAIL_HEIGHT`
+// detail rows.
+const MUSIC_DOCK_HEIGHT: u16 = 11;
+// Full music stage: the wave strip on top of the dock.
 const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
-// Detail area under the labeled rule: the active source's controls, padded
-// to exactly this many rows. Sized for radio (`RADIO_SLOTS` slot rows + the
-// current station's attribution row).
-const MUSIC_DETAIL_HEIGHT: u16 = RADIO_SLOTS as u16 + 1;
-const MUSIC_QUEUE_HEIGHT: u16 = 2;
+const MUSIC_QUEUE_HEIGHT: u16 = 3;
+// YouTube detail rows: progress, skip meter, `next` header, the queue rows.
+const MUSIC_YOUTUBE_DETAIL_HEIGHT: u16 = 3 + MUSIC_QUEUE_HEIGHT;
 /// The bonsai preview block plus its footer row.
 const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
 /// The pet's three-row box, nothing else: no name or mood row.
@@ -82,17 +82,17 @@ pub(crate) struct SidebarProps<'a> {
     pub radio_source_count: usize,
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, cycled by v+x). Picks which source
-    /// owns the music stage's detail area; the dock rows stay constant.
+    /// the music stage expands.
     pub paired_source: AudioSource,
     /// Per-user radio station selection (`users.settings.radio_station`):
     /// a slot key while Radio is active, or any catalogue station from the
     /// stations modal.
     pub selected_radio_station: RadioStation,
     /// The user's pinned stations (`users.settings.radio_slots`), the
-    /// radio detail rows behind `v1`..`v4`.
+    /// radio detail rows behind `v1`..`v3`.
     pub radio_slots: RadioSlots,
     /// Live `Artist - Title` for the selected station from its provider's
-    /// feed; the dock row falls back to the station label while absent.
+    /// feed; the radio track row falls back to the station label while absent.
     pub radio_now_playing: Option<&'a str>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::lobby::daily::state::DailyState,
@@ -499,7 +499,8 @@ pub(crate) struct SidebarMarqueeInputs<'a> {
 /// therefore scrolling. The render gate treats that as continuous animation;
 /// hold phases are not modeled (tightening pass material). Must stay in sync
 /// with the rows the draw path feeds through `marquee_text`: the friends
-/// row, the two music dock track rows, and the youtube queue detail rows.
+/// row, the youtube track row, and per source the radio track row or the
+/// youtube queue detail rows.
 pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bool {
     use crate::app::common::marquee::marquee_scrolls;
 
@@ -516,12 +517,15 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
     if !music_visible {
         return false;
     }
-    if marquee_scrolls(
-        inputs
-            .radio_now_playing
-            .unwrap_or(inputs.selected_station.label()),
-        MARQUEE_RAIL_MIN,
-    ) {
+    // The radio track row renders only while radio is the source.
+    if inputs.source == AudioSource::Radio
+        && marquee_scrolls(
+            inputs
+                .radio_now_playing
+                .unwrap_or(inputs.selected_station.label()),
+            MARQUEE_RAIL_MIN,
+        )
+    {
         return true;
     }
     let Some(queue) = inputs.queue else {
@@ -597,28 +601,32 @@ struct MusicStageProps<'a> {
     marquee_tick: usize,
 }
 
-/// Music stage: a small equalizer strip pinned on top, then the fixed dock
-/// and fixed detail area. Rows 0-2 the eq band (borderless, moving only
-/// while a client is paired and unmuted: the client's live spectrum when it
-/// sends one, the ambient band otherwise), row 3 volume, rows 4-7 a
-/// two-source dock in order radio → youtube (title bar + now-playing line
-/// per source; radio leads because it is the default source for new
-/// users), row 8 a labeled rule naming the current station (or youtube),
-/// rows 9-13 the active source's controls padded to a constant height,
-/// row 14 the keybind footer.
+/// Music stage: a small equalizer strip pinned on top, then the dock.
+/// Rows 0-2 the eq band (borderless, moving only while a client is paired
+/// and unmuted: the client's live spectrum when it sends one, the ambient
+/// band otherwise), then volume, the two sources as an accordion in the
+/// fixed order radio → youtube (radio leads because it is the default
+/// source for new users), and the keybind footer.
 ///
-/// Two product rules (user requirements):
-/// - Every source ALWAYS shows its now-playing line, even when inactive.
-///   No submitted YouTube track renders "fallback stream", never "queue
-///   empty" — the fallback is the steady state, not a placeholder.
-/// - Chrome must not move between states: the stage is a constant
-///   `MUSIC_STAGE_HEIGHT` tall and headers/rule/footer sit on the same
-///   rows for both sources.
+/// Each source's rows sit directly under its own title bar:
+/// - On radio: `radio` title, the current station's track, a rule naming
+///   the station, the pinned slot rows, the attribution, then `youtube`
+///   with its track as a peek at what the booth is playing.
+/// - On youtube: `radio` collapses to its title bar (listener count only),
+///   then `youtube`, its track, and the queue detail.
+///
+/// Product rules (user requirements):
+/// - Both title bars always show their listener count.
+/// - The YouTube track is always visible, also from radio. The radio track
+///   shows only while radio is the source. No submitted YouTube track
+///   renders "fallback stream", never "queue empty": the fallback is the
+///   steady state, not a placeholder.
+/// - The stage is a constant `MUSIC_STAGE_HEIGHT` tall for both sources.
 ///
 /// The active source follows the saved preference alone, not whether a
 /// client is currently paired — the sidebar reflects it from the first
 /// frame, before the browser has finished pairing. `v+x` toggles between
-/// the two sources, so the amber `▌` accent hops between the dock entries.
+/// the two sources, so the amber `▌` accent hops between the title bars.
 fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>, eq_state: EqState) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -644,12 +652,26 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         Some(&props.radio_source_count.to_string()),
         source == AudioSource::Radio,
     ));
-    lines.push(dock_track_line(
-        width,
-        Some(props.radio_now_playing.unwrap_or(station_label)),
-        source == AudioSource::Radio,
-        props.marquee_tick,
-    ));
+    match source {
+        AudioSource::Radio => {
+            lines.push(dock_track_line(
+                width,
+                Some(props.radio_now_playing.unwrap_or(station_label)),
+                true,
+                props.marquee_tick,
+            ));
+            // The rule names the current station, which may be off-slot
+            // (picked from the stations modal).
+            lines.push(labeled_rule_line(width, station_label));
+            lines.extend(radio_detail_lines(
+                width,
+                props.selected_station,
+                props.radio_slots,
+            ));
+        }
+        AudioSource::Youtube => {}
+    }
+
     lines.push(stage_title_line(
         width,
         "youtube",
@@ -662,23 +684,15 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
         source == AudioSource::Youtube,
         props.marquee_tick,
     ));
-
-    // The rule names what is playing: the current station (which may be
-    // off-slot, picked from the stations modal) or youtube.
-    let rule_label = match source {
-        AudioSource::Radio => station_label,
-        AudioSource::Youtube => "youtube",
-    };
-    lines.push(labeled_rule_line(width, rule_label));
-
-    let mut detail = match source {
-        AudioSource::Youtube => youtube_detail_lines(width, props.queue, props.marquee_tick),
-        AudioSource::Radio => radio_detail_lines(width, props.selected_station, props.radio_slots),
-    };
-    detail.truncate(MUSIC_DETAIL_HEIGHT as usize);
-    let missing = MUSIC_DETAIL_HEIGHT as usize - detail.len();
-    pad_blank_lines(&mut detail, missing as u16);
-    lines.extend(detail);
+    match source {
+        AudioSource::Youtube => {
+            let mut detail = youtube_detail_lines(width, props.queue, props.marquee_tick);
+            let missing = MUSIC_YOUTUBE_DETAIL_HEIGHT as usize - detail.len();
+            pad_blank_lines(&mut detail, missing as u16);
+            lines.extend(detail);
+        }
+        AudioSource::Radio => {}
+    }
 
     // The footer names the active source's own action first; `v+x` is on
     // both so the row never loses the way across. Labels stay short enough
@@ -716,8 +730,8 @@ fn dock_track_line(width: u16, track: Option<&str>, active: bool, tick: usize) -
     }
 }
 
-/// Labeled rule between dock and detail area: dim dashes around the active
-/// source's name so the controls below read as belonging to it.
+/// Labeled rule above the radio slot rows: dim dashes around the current
+/// station's name.
 fn labeled_rule_line(width: u16, label: &str) -> Line<'static> {
     let used = 3 + label.chars().count() + 1;
     let trail = (width as usize).saturating_sub(used).max(1);
@@ -865,12 +879,12 @@ fn keybind_row_line(width: u16, groups: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// YouTube detail rows (≤ 5; caller pads): progress/elapsed, skip meter or
+/// YouTube detail rows (≤ `MUSIC_YOUTUBE_DETAIL_HEIGHT`; caller pads): progress/elapsed, skip meter or
 /// blank, `next ⌄`, then up to `MUSIC_QUEUE_HEIGHT` queue rows or
 /// `· fallback next`. With nothing submitted, the fallback-stream hints.
 fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<Line<'static>> {
     let width = width as usize;
-    let mut lines = Vec::with_capacity(MUSIC_DETAIL_HEIGHT as usize);
+    let mut lines = Vec::with_capacity(MUSIC_YOUTUBE_DETAIL_HEIGHT as usize);
 
     if let Some(current) = &queue.current {
         let elapsed_secs = current
@@ -945,8 +959,8 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<L
     lines
 }
 
-/// Radio detail rows (exactly `MUSIC_DETAIL_HEIGHT`): one row per pinned
-/// slot (`v1`..`v4`, `●` on the current station, an empty slot points at
+/// Radio detail rows (exactly `RADIO_SLOTS + 1`): one row per pinned
+/// slot (`v1`..`v3`, `●` on the current station, an empty slot points at
 /// the stations modal), then the current station's provider credit (the
 /// visible attribution Nightride asked for). A current station that is not
 /// pinned lights no slot row; the rule above still names it.

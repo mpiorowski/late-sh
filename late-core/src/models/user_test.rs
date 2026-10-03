@@ -838,10 +838,11 @@ fn retired_icecast_source_reads_as_radio_on_its_house_mount() {
     let settings = json!({ "audio_source": "icecast", "icecast_stream": "classical" });
     assert_eq!(extract_audio_source(&settings), AudioSource::Radio);
     assert_eq!(extract_radio_station(&settings).as_str(), "classical");
-    // The migrated station stays reachable from a slot key.
+    // The migrated station stays reachable from a slot key: it is not
+    // among the defaults, so it takes slot 1.
     assert_eq!(
         extract_radio_slots(&settings).position_of(extract_radio_station(&settings)),
-        Some(3)
+        Some(0)
     );
     // An icecast user who never picked a mount was on chill (now lofi).
     let settings = json!({ "audio_source": "icecast" });

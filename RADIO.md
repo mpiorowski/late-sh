@@ -12,11 +12,11 @@ what is still to come.
   source disappears as a user-facing concept; the house mounts become radio stations.
 - `radio` is backed by a **station catalogue** (server-side, code-defined) that can grow
   without touching the UI: Nightride today, Nightwave Plaza, Code Radio and others later.
-- Users **pin up to four stations** from the catalogue into slots `v1`..`v4` for fast
+- Users **pin up to three stations** from the catalogue into slots `v1`..`v3` for fast
   access, and browse / listen to the full catalogue from a modal (`v` then `r`).
-- The widget gets **shorter** (19 rows to 15 on the rail) without breaking the three
-  product rules the current stage locks in (every source shows now-playing, chrome never
-  moves, the stage never claims audio the session cannot produce).
+- The widget gets **shorter** (19 rows to 14 on the rail): the stage keeps a constant
+  height, always shows both listener counts and the YouTube track, and never claims audio
+  the session cannot produce.
 
 ## 2. What exists today (for contrast)
 
@@ -75,48 +75,43 @@ when it does, `extract_radio_station` returns the mapped house key (`chill` → 
 `classical` → `classical`) instead of `radio_station`. The next persist writes the new
 shape. Nobody loses what they were listening to.
 
-Slot defaults when `radio_slots` is absent: `[chillsynth, nightride, datawave, classical]`,
+Slot defaults when `radio_slots` is absent: `[chillsynth, nightride, datawave]`,
 with the user's current `radio_station` swapped into slot 1 if it is not already present
 (an `ambient` listener keeps `v1` = ambient). Default source stays `radio` / `chillsynth`
 for new users, as today.
 
-`RADIO_SLOTS = 4` is a constant. Four is the proposal (it is what fits a short detail area
-and what the request suggested); bumping to five costs one rail row and nothing else.
+`RADIO_SLOTS = 3` is a constant; each extra slot costs one rail row. A fourth key saved
+under the earlier four-slot shape is ignored on read.
 
 ## 5. Rail widget (24 columns wide)
 
+The two sources are an accordion in the fixed order radio → youtube: each source's rows
+sit directly under its own title bar, and the dock is 11 rows for both.
+
 ```
- ▁▂▃▅▂▁▂▃▅▂▁▂▃▅▂▁▂▃▅▂▁   eq strip, 3 rows (unchanged)
- vol  ▰▰▰▰▰▰▱▱▱▱  60%     0  volume (unchanged)
- radio ──────────── 12    1  active tab: amber bold + listener count
- Artist - Title           2  now playing of the CURRENT station (bright)
- youtube ─────────  5     3  inactive tab: italic faint
- Channel - Title          4  youtube now playing (dim)
- ── chillsynth ───────    5  rule names the current station (or youtube)
- ● chillsynth      v1     6
- ○ nightride       v2     7  slot rows: ● = current, ○ = pinned
- ○ datawave        v3     8
- ○ classical       v4     9
- nightride.fm · live     10  attribution of the CURRENT station's provider
- v+v queue v+x src v+r   11  footer
+ on radio                       on youtube
+ vol  ▰▰▰▰▰▰▱▱▱▱  60%      0   vol  ▰▰▰▰▰▰▱▱▱▱  60%
+ ▌ radio ────────── 12     1   ▌ radio ────────── 12
+ Artist - Title            2   ▌ youtube ────────  5
+ ── plaza ───────────      3   Channel - Title
+ ● plaza           v1      4   39:59 ────●─── 53:43
+ ○ nightride       v2      5   skip ○○ 0/2 v+s
+ ○ datawave        v3      6   next ⌄
+ plaza.one · live          7   1  Queued track
+ ▌ youtube ────────  5     8   2  Queued track
+ Channel - Title           9   3  Queued track
+ v+r tune  v+x source     10   v+v queue  v+x source
 ```
 
-- 3 + 12 = **15 rows** (today 19). Rows 0-5 and 10-11 are fixed chrome for both sources;
-  rows 6-10 are the detail area (`MUSIC_DETAIL_HEIGHT` goes from 6 to 5).
-- YouTube detail in 5 rows: progress/elapsed, skip meter, `next ⌄`, two queue rows
-  (`MUSIC_QUEUE_HEIGHT` 3 → 2). The booth modal still has the full queue.
-- The `m mute  -= vol` hint row is dropped; `m`, `-`, `=` are already in the global keys
-  of the guide and the footer keeps the three music chords.
+- 3 (eq strip) + 11 = **14 rows**.
+- Both title bars always carry their listener count.
+- The YouTube track is always visible: from radio it is the peek that answers "is the booth
+  playing something good". The radio track shows only while radio is the source; on YouTube
+  radio collapses to its title bar.
 - Current station off-slot (picked from the modal, not pinned): no `●` lights up, the rule
-  on row 5 still names it, row 2 still shows its track. Nothing moves.
-- Row 2 falls back to the station label when metadata is absent, as the radio dock row does
-  today; house stations get `Artist - Title` from the Liquidsoap now-playing map, so the
-  classical/lofi progress bar moves from the detail area to nowhere: the slot rows need the
-  space. (Keep it only if the user misses it; it never existed for Nightride.)
-- Tab counts: `radio` tag = radio + legacy icecast preferences, `youtube` tag unchanged.
-- Tests to update: `music_stage_chrome_rows_never_move` (two sources), dock tests (rows
-  2/4), `radio_selector_rows_mark_selected_station` → slot rows, plus a new
-  `off_slot_station_lights_no_slot_row`.
+  on row 3 still names it, row 2 still shows its track.
+- Row 2 falls back to the station label when metadata is absent.
+- House stations have no progress bar on the rail: the slot rows need the space.
 
 ## 6. Keys
 
@@ -138,19 +133,20 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 
 ```
 ┌ stations ───────────────────────────────────────────────────────┐
-│ pinned   v1 chillsynth   v2 nightride   v3 datawave   v4 classical │
+│ pinned   v1 chillsynth   v2 nightride   v3 datawave                │
 │                                                                   │
+│   nightride                                                       │
 │ ▸ ● chillsynth   nightride     FM-84 - Running in the Night   v1  │
 │   ○ nightride    nightride     The Midnight - Sunset           v2  │
 │   ○ datawave     nightride     Com Truise - Flightwave         v3  │
 │   ○ spacesynth   nightride     Dynatron - Pulse Power              │
 │   ○ ambient      nightride     Stellardrone - Billions              │
-│   ○ classical    late.sh       Kimiko Ishizaka - Prelude No. 1 v4  │
+│   ○ classical    late.sh       Kimiko Ishizaka - Prelude No. 1     │
 │   ○ lofi         late.sh       HoliznaCC0 - Autumn                 │
 │   ○ plaza        plaza.one     Macintosh Plus - リサフランク420    │
 │   ○ code radio   freecodecamp  Trebles and Blues - Dusk            │
 │                                                                   │
-│ ↑↓ move   Enter listen   1-4 pin to slot   0 unpin   Esc           │
+│ ↑↓ move   Enter listen   1-3 pin to slot   0 unpin   Esc           │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -271,8 +267,8 @@ Each step ships on its own and leaves the product working:
    `icecast` migration, `radio_slots` setting + defaults. Rail and keys unchanged (radio
    detail keeps listing the first five catalogue rows). Tests: catalogue strictness,
    migration mapping, slot defaults.
-2. ✅ **Two sources + compact rail**: drop the icecast tab, `v+x` toggles, new 15-row stage,
-   slot rows `v1`..`v4`, per-provider attribution row. Update the sidebar tests and the
+2. ✅ **Two sources + compact rail**: drop the icecast tab, `v+x` toggles, new accordion stage,
+   slot rows `v1`..`v3`, per-provider attribution row. Update the sidebar tests and the
    Pair guide text.
 3. ✅ **Stations modal** (`v+r`): list, live metadata, listen, pin/unpin.
 4. ✅ **Adapters**: Plaza and Code Radio pollers behind `enabled`, listen page grouping,
@@ -283,7 +279,7 @@ Each step ships on its own and leaves the product working:
 
 ## 11. Decisions taken (revisit if they feel wrong in use)
 
-- **Slot count**: 4 (`RADIO_SLOTS`); five costs one rail row and nothing else.
+- **Slot count**: 3 (`RADIO_SLOTS`); each extra slot costs one rail row.
 - **House progress bar**: dropped from the rail; the slot rows need the space.
 - **Off-slot listening**: allowed from the modal; the rule row names the station.
 - **Footer**: `v+r tune  v+x source` on radio (both groups fit a 21-column rail).

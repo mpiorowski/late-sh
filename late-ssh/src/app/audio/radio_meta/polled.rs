@@ -122,9 +122,9 @@ impl PolledFeed {
         }
     }
 
-    /// The current track out of one response body. A payload without both
-    /// an artist and a title is an error: the caller shows the station
-    /// label rather than half a credit.
+    /// The current track out of one response body. A payload without a
+    /// title is an error and the caller shows the station label. The artist
+    /// may be empty: some tracks are tagged with a title only.
     pub fn parse(self, body: &str) -> anyhow::Result<ArtistTitle> {
         let song = match self {
             Self::Plaza => {
@@ -163,8 +163,8 @@ impl PolledFeed {
         };
         let artist = song.artist.trim();
         let title = song.title.trim();
-        if artist.is_empty() || title.is_empty() {
-            anyhow::bail!("now-playing payload has no artist or title");
+        if title.is_empty() {
+            anyhow::bail!("now-playing payload has no title");
         }
         Ok(ArtistTitle {
             artist: artist.to_string(),

@@ -66,12 +66,12 @@ fn the_current_station_is_lit_only_while_radio_is_the_source() {
 fn the_pinned_row_names_every_slot_and_marks_empty_ones() {
     let mut slots = RadioSlots::empty();
     slots.pin(0, key("rektify"));
-    slots.pin(3, key("chill"));
+    slots.pin(2, key("chill"));
     let text = line_text(&pinned_line(slots));
     assert_eq!(
         text.split_whitespace().collect::<Vec<_>>(),
         vec![
-            "pinned", "v1", "ambient", "v2", "—", "v3", "—", "v4", "lofi"
+            "pinned", "v1", "ambient", "v2", "—", "v3", "lofi"
         ]
     );
 }

@@ -17,9 +17,8 @@ const MODAL_WIDTH: u16 = 80;
 /// cursor and the slot keys do not sit on the frame.
 const SIDE_PADDING: u16 = 2;
 /// Rows the chrome takes around the list: border (2), breathing (1),
-/// pinned row (1), breathing (1), list heading (1), breathing (1),
-/// breathing (1), footer (1), breathing (1).
-const CHROME_ROWS: u16 = 10;
+/// pinned row (1), breathing (1), breathing (1), footer (1), breathing (1).
+const CHROME_ROWS: u16 = 8;
 const LABEL_COLUMN: usize = 15;
 const PROVIDER_COLUMN: usize = 13;
 
@@ -63,7 +62,7 @@ pub(crate) fn draw(
     let inner = block.inner(popup).inner(Margin::new(SIDE_PADDING, 0));
     frame.render_widget(block, popup);
 
-    if inner.height < 8 || inner.width < 40 {
+    if inner.height < 6 || inner.width < 40 {
         frame.render_widget(Paragraph::new("Terminal too small"), inner);
         return;
     }
@@ -71,8 +70,6 @@ pub(crate) fn draw(
     let layout = Layout::vertical([
         Constraint::Length(1), // breathing
         Constraint::Length(1), // pinned slots
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // list heading
         Constraint::Length(1), // breathing
         Constraint::Min(1),    // list
         Constraint::Length(1), // breathing
@@ -82,12 +79,11 @@ pub(crate) fn draw(
     .split(inner);
 
     frame.render_widget(Paragraph::new(pinned_line(view.slots)), layout[1]);
-    frame.render_widget(Paragraph::new(heading_line()), layout[3]);
-    draw_list(frame, layout[5], state, view);
-    frame.render_widget(Paragraph::new(footer_line()), layout[7]);
+    draw_list(frame, layout[3], state, view);
+    frame.render_widget(Paragraph::new(footer_line()), layout[5]);
 }
 
-/// `  pinned   v1 chillsynth   v2 nightride   v3 —   v4 classical`
+/// `  pinned   v1 chillsynth   v2 —   v3 datawave`
 fn pinned_line(slots: RadioSlots) -> Line<'static> {
     let mut spans = vec![Span::styled(
         "  pinned   ",
@@ -116,20 +112,6 @@ fn pinned_line(slots: RadioSlots) -> Line<'static> {
         spans.push(Span::raw("   "));
     }
     Line::from(spans)
-}
-
-fn heading_line() -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER());
-    Line::from(vec![
-        Span::styled("  ── ", dim),
-        Span::styled(
-            "All stations",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ──", dim),
-    ])
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, state: &StationsModalState, view: &StationsView<'_>) {
@@ -259,7 +241,7 @@ fn footer_line() -> Line<'static> {
         Span::styled(" move  ", label),
         Span::styled("↵", key),
         Span::styled(" listen  ", label),
-        Span::styled("1-4", key),
+        Span::styled("1-3", key),
         Span::styled(" pin  ", label),
         Span::styled("0", key),
         Span::styled(" unpin  ", label),

@@ -706,7 +706,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Polls",
         "  /poll              create a 10/20/30-minute poll in the selected Home room",
         "  va / vb / vc       vote while a poll is visible",
-        "  v1 .. v4           tune to a pinned radio station",
+        "  v1 .. v3           tune to a pinned radio station",
         "  limit              one active poll per room",
         "  author             the strip names who started the poll, when it fits",
         "",
@@ -1330,7 +1330,7 @@ fn overview_lines() -> Vec<String> {
         "  v then x          switch audio source: Radio ⇄ YouTube",
         "  v then s          skip-vote the current YouTube track",
         "  v then 1..4       tune to a pinned station (radio active)",
-        "  v then r          open Stations: every radio, live now-playing, pin to v1..v4",
+        "  v then r          open Stations: every radio, live now-playing, pin to v1..v3",
         "  w, m, + / - and the v music prefix are off on the Artboard: that page",
         "  spends those letters itself (v applauds; m opens gallery moderation for staff)",
         "",
@@ -1526,7 +1526,7 @@ fn zen_help_lines() -> Vec<String> {
         "Tiles",
         "  w                 open Bonsai Care, as on every page",
         "  a                 feed the tank (free, once a day, +100 chips)",
-        "  m  - =  v x  v1-4 mute, volume, audio source, and station, as everywhere",
+        "  m  - =  v x  v1-3 mute, volume, audio source, and station, as everywhere",
         "  click             pet the pet; it reads the rest of your session itself",
         "  o                 with a live tile on the page, open what the #lounge live strip shows",
         "  Enter / click     on the live tile, the same",
@@ -2003,7 +2003,7 @@ late.sh has two music sources:
   Radio      a station catalogue: Nightride guest stations (chillsynth, nightride, datawave, spacesynth, ambient, darksynth, horrorsynth, ebsm), Nightwave Plaza (plaza), freeCodeCamp Code Radio (code radio), Radio Paradise (mellow), FIP (fip jazz), Radio Swiss (swiss jazz, swiss classic) and the late.sh house streams (lofi, classical). More stations arrive as they are cleared.
   YouTube    a shared queue everyone can submit links to.
 
-Your paired client plays the selected source. Pin up to four stations behind v1..v4 and open Stations (v then r) to browse the whole catalogue with live now-playing.
+Your paired client plays the selected source. Pin up to three stations behind v1..v3 and open Stations (v then r) to browse the whole catalogue with live now-playing.
 
 Plain stream, no pairing:
   vlc https://late.sh/stream
@@ -2030,7 +2030,7 @@ Global keys (work anywhere)
 
 Tune a station
   v then 1..4       tune to the station pinned in that slot (radio active)
-  v then r          open Stations: ↑↓ move, Enter listen, 1-4 pin to a slot, 0 unpin, Esc close
+  v then r          open Stations: ↑↓ move, Enter listen, 1-3 pin to a slot, 0 unpin, Esc close
                     every row shows what that station is playing right now, so you can check before you switch
 
 Swap which source you hear

@@ -71,13 +71,22 @@ fn radio_swiss_current_yields_the_current_song() {
     }
 }
 
+/// Code Radio plays tracks tagged with a title only; that is still a track,
+/// not a dead feed.
 #[test]
-fn a_payload_without_a_full_credit_is_an_error() {
-    assert!(
-        PolledFeed::Plaza
-            .parse(r#"{"song":{"artist":"  ","title":"Perfect"}}"#)
-            .is_err()
+fn a_track_without_an_artist_keeps_its_title() {
+    let body = r#"{"now_playing":{"song":{"text":" - night 7","artist":"","title":"night 7","album":"25 Nights for Nujabes"}}}"#;
+    assert_eq!(
+        PolledFeed::CodeRadio.parse(body).unwrap(),
+        ArtistTitle {
+            artist: String::new(),
+            title: "night 7".to_string(),
+        }
     );
+}
+
+#[test]
+fn a_payload_without_a_title_is_an_error() {
     assert!(
         PolledFeed::CodeRadio
             .parse(r#"{"now_playing":{"song":{"artist":"City Girl"}}}"#)

@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 /// Pinned stations per user, reachable as `v1`..`v{RADIO_SLOTS}`.
-pub const RADIO_SLOTS: usize = 4;
+pub const RADIO_SLOTS: usize = 3;
 
 /// Who runs a station. Carries the visible credit the rail shows for the
 /// current station and which metadata adapter feeds its now-playing row.
@@ -380,7 +380,7 @@ pub struct RadioSlots([Option<RadioStation>; RADIO_SLOTS]);
 
 impl RadioSlots {
     const DEFAULT_KEYS: [&'static str; RADIO_SLOTS] =
-        ["chillsynth", "nightride", "datawave", "classical"];
+        ["chillsynth", "nightride", "datawave"];
 
     /// The slots a user gets before pinning anything. The station they are
     /// already tuned to takes slot 1 when it is not among the defaults, so a

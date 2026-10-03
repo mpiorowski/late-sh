@@ -63,7 +63,7 @@ fn key(key: &str) -> RadioStation {
 fn default_slots_keep_the_current_station_reachable() {
     let slots = RadioSlots::defaults_for(key("datawave"));
     assert_eq!(slots.get(0), Some(key("chillsynth")));
-    assert_eq!(slots.get(3), Some(key("classical")));
+    assert_eq!(slots.get(2), Some(key("datawave")));
     // A current station outside the defaults takes slot 1.
     let slots = RadioSlots::defaults_for(key("rektify"));
     assert_eq!(slots.get(0), Some(key("rektify")));
@@ -90,15 +90,14 @@ fn pinning_moves_a_station_between_slots_and_unpinning_empties_one() {
 
 #[test]
 fn slots_round_trip_through_json_and_tolerate_bad_rows() {
-    let value = serde_json::json!(["classical", null, "rektify", "classical", "extra"]);
+    let value = serde_json::json!(["classical", "classical", "rektify", "extra"]);
     let slots = RadioSlots::from_json(&value).unwrap();
     assert_eq!(slots.get(0), Some(key("classical")));
-    assert_eq!(slots.get(1), None);
+    assert_eq!(slots.get(1), None, "a repeated key keeps its first slot");
     assert_eq!(slots.get(2), Some(key("rektify")));
-    assert_eq!(slots.get(3), None, "a repeated key keeps its first slot");
     assert_eq!(
         slots.to_json(),
-        serde_json::json!(["classical", null, "rektify", null])
+        serde_json::json!(["classical", null, "rektify"])
     );
     assert_eq!(
         RadioSlots::from_json(&serde_json::json!(["rekt", "nope"])).unwrap(),
