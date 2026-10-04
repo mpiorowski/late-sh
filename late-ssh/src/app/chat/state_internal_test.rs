@@ -2824,40 +2824,85 @@ fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("/challenge @alice"), None);
 }
 
-/// `/brb` announces the break and sends this session away immediately.
-#[tokio::test]
-async fn brb_requests_going_away() {
-    let test_db = crate::test_helpers::new_test_db().await;
-    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_bare").await;
-    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
-    state.set_visible_room_id(Some(Uuid::new_v4()));
+/// Submits `command` from the composer of a joined public room and returns
+/// the body the room received, with the state left for away assertions.
+async fn submit_brb_in_room(username: &str, command: &str) -> (ChatState, String) {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
 
-    state.composer.insert_str("/brb");
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, username).await;
+    let room = ChatRoom::get_or_create_public_room(&client, &format!("{username}-room"))
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join room");
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let mut events = state.service.subscribe_events();
+
+    state.start_composing_in_room(room.id);
+    state.composer.insert_str(command);
     assert!(
         state
             .submit_composer(false, ComposerCommands::Enabled)
             .is_none()
     );
+
+    let body = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match events.recv().await.expect("chat event") {
+                ChatEvent::MessageCreated { message, .. } if message.room_id == room.id => {
+                    return message.body;
+                }
+                ChatEvent::SendFailed { message, .. } => panic!("brb send failed: {message}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("brb message timeout");
+    (state, body)
+}
+
+/// `/brb` announces the break in the composer's room and sends this session
+/// away immediately.
+#[tokio::test]
+async fn brb_posts_to_the_room_and_requests_going_away() {
+    let (mut state, body) = submit_brb_in_room("brb_bare", "/brb").await;
+
+    assert_eq!(body, "🌙 brb");
     assert!(state.take_requested_brb());
     assert!(!state.take_requested_brb(), "the request is taken once");
 }
 
-/// `/brb <reason>` includes the reason in its announcement and still marks
-/// the current session away.
+/// `/brb <reason>` carries the reason into the announcement and still marks
+/// the session away.
 #[tokio::test]
-async fn brb_with_a_reason_requests_going_away() {
+async fn brb_with_a_reason_posts_it_and_requests_going_away() {
+    let (mut state, body) = submit_brb_in_room("brb_message", "/brb back in 5").await;
+
+    assert_eq!(body, "🌙 brb: back in 5");
+    assert!(state.take_requested_brb());
+}
+
+/// Without a composer room `/brb` refuses instead of posting into a stale
+/// visible or selected room, and does not go away.
+#[tokio::test]
+async fn brb_without_a_composer_room_is_refused() {
     let test_db = crate::test_helpers::new_test_db().await;
-    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_message").await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_roomless").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
     state.set_visible_room_id(Some(Uuid::new_v4()));
 
-    state.composer.insert_str("/brb back in 5");
-    assert!(
-        state
-            .submit_composer(false, ComposerCommands::Enabled)
-            .is_none()
-    );
-    assert!(state.take_requested_brb());
+    state.composer.insert_str("/brb");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
+
+    assert_eq!(banner.message, "Use /brb from inside a room");
+    assert!(!state.take_requested_brb(), "nothing is requested");
 }
 
 #[test]

@@ -4181,18 +4181,17 @@ impl ChatState {
         if let Some(rest) = body.trim().strip_prefix("/brb")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let message = rest.trim();
-            let chat_body = if message.is_empty() {
-                "🌙 brb".to_string()
-            } else {
-                format!("🌙 brb — {message}")
+            let chat_body = match rest.trim() {
+                "" => "🌙 brb".to_string(),
+                reason => format!("🌙 brb: {reason}"),
             };
-            // Resolve the room before clearing the composer. A command can be
-            // submitted from a view where the composer snapshot is gone while
-            // the visible or selected room is still the correct destination.
-            let Some(room_id) = self.upload_target_room_id() else {
-                self.clear_composer_after_submit();
-                return Some(Banner::error("No chat room selected"));
+            // Snapshot the composer's room before `clear_composer_after_submit`
+            // wipes it. Only the composer's room, like `/me`: a stale visible
+            // or selected room would post the announcement somewhere unseen.
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Use /brb from inside a room"));
             };
             let request_id = Uuid::now_v7();
             self.service
@@ -4206,10 +4205,8 @@ impl ChatState {
                     is_admin: self.is_admin,
                 });
             self.pending_send_notices.push_back(request_id);
-            self.clear_composer_after_submit();
             // `/brb` goes away now instead of after the idle threshold, and
-            // the next key comes back. The optional text is included in the
-            // room announcement above.
+            // the next key comes back.
             self.requested_brb = true;
             return None;
         }

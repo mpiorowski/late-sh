@@ -103,7 +103,7 @@ const COMMANDS: &[Command] = &[
     global("aquarium", "feed the tank (/aquarium feed, free, daily)"),
     global("ban", "ban from your room (/ban @user [7d] [reason])"),
     global("binds", "open the chat guide (same as ?)"),
-    global("brb", "show as away now, until your next key"),
+    global("brb", "post brb, go away (/brb [reason])"),
     global("bug", "report a bug to #bugs (/bug <what broke>)"),
     global("chips", "chip ledger (/chips @user; bare = you)"),
     global("coffee", "post coffee cup"),
