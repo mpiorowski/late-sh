@@ -300,8 +300,7 @@ impl ChipService {
                 total,
             }));
         };
-        let drinks =
-            UserDrinks::record_comped_pour(&tx, buyer_id, bar, bar.drink_points()).await?;
+        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, bar, bar.drink_points()).await?;
         tx.commit().await.context("committing the round")?;
 
         Ok(RoundPurchase {

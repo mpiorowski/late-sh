@@ -179,17 +179,18 @@ fn draw_tab_board(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
         )));
     }
     for (idx, regular) in tab.iter().enumerate() {
-        let drinks = if regular.drinks == 1 { "drink" } else { "drinks" };
+        let drinks = if regular.drinks == 1 {
+            "drink"
+        } else {
+            "drinks"
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("{} ", idx + 1), faint),
             Span::styled(
                 regular.username.clone(),
                 Style::default().fg(theme::TEXT_BRIGHT()),
             ),
-            Span::styled(
-                format!("  {} {drinks}", thousands(regular.drinks)),
-                dim,
-            ),
+            Span::styled(format!("  {} {drinks}", thousands(regular.drinks)), dim),
         ]));
     }
     frame.render_widget(Paragraph::new(lines), area);
