@@ -75,3 +75,32 @@ fn the_wire_is_within_reach_at_the_spawn() {
     // Open asphalt, nothing within reach.
     assert_eq!(nearest_landmark(OPEN.0, OPEN.1), None);
 }
+
+/// A shop that is not open yet has its name on the wall and nothing lit:
+/// no neon sign over the same cells, and no neon on the building. The
+/// shops that do something keep theirs.
+#[test]
+fn a_closed_shop_is_spelled_but_never_lit() {
+    assert!(!DARK_SIGNS.is_empty());
+    for dark in DARK_SIGNS {
+        assert!(
+            !SIGNS
+                .iter()
+                .any(|sign| sign.zone.contains(dark.x0, dark.y0)),
+            "a dark sign is also lit at {dark:?}"
+        );
+        let building = BUILDINGS
+            .iter()
+            .find(|building| building.zone.contains(dark.x0, dark.y0))
+            .expect("a dark sign is on a building");
+        assert!(building.color.is_none(), "a closed shop burns at {dark:?}");
+    }
+    for landmark in [Landmark::Armorer, Landmark::Bits, Landmark::Blades] {
+        let reach = landmark.reach();
+        let building = BUILDINGS
+            .iter()
+            .find(|building| building.zone.contains(reach.x0, reach.y0))
+            .expect("the counter is inside a building");
+        assert!(building.color.is_some(), "{landmark:?} is in a lit shop");
+    }
+}

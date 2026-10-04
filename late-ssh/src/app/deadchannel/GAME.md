@@ -727,7 +727,7 @@ Weapon and armor, tiers 1 to 15, one shared `COST_LADDER` at
 `PRICE_PERCENT` (108 bits at tier 1 to 23,287 at tier 15), power equals
 tier, 75% trade-in on the piece you hand back. Bought at the city's
 armorer with bits, any tier the purse reaches: the price is what keeps
-the kit on the level ("The crystal pass"). The blade cart sells the
+the kit on the level ("The crystal pass"). The blade shop sells the
 next tier up for crystals.
 Chips never touch gear: this is the hard economy line made concrete. In
 LoGD the tier is the item and the name is pure fiction, so the rename is
@@ -1337,11 +1337,21 @@ fight, spent on things gold could not buy. Both answers are in:
   the reason to walk into the bar. The prepared runner's move is to
   save one for the Old Signal (two tries in five dry, a little better
   than even with a glass).
-- **The blade cart takes the other wallet.** The next tier up from what
+- **The blade shop takes the other wallet.** The next tier up from what
   a slot carries, for three crystals and no bits. The standing sink:
   three crystals is a few days' luck, and what they buy grows with the
   climb, so the choice between a glass tonight and a piece later is a
   real one.
+- **Shops are the game, the street is flavor.** A runner could not tell
+  a shop that mattered from a painted wall: every sign burned alike, the
+  loan lived in a machine at the far end, and crystal gear on a cart.
+  Now everything that spends or earns is inside a lit shop (the bits
+  machine moved into LOANS, the cart became BLADES where the pawn shop
+  was), and a shop with nothing in it yet has its sign dark (INK, which
+  was CLINIC and read as a second patch, BATHS, BANDS, SLEEP, SHRINE,
+  MARKET, TEK, VIDS, AERIAL). They get lit one at a time, and a sign
+  coming on is news. Stalls and carts stay as flavor and, later, small
+  bonuses.
 - **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
   forest fights) and hired swords (a second attacker). More fights a day
   breaks the ten-minute ritual, and a companion is a second combat

@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::deadchannel::city::data;
 
 #[test]
 fn walking_stops_at_the_railing_and_moves_on_the_street() {
@@ -136,4 +137,31 @@ fn leaning_out_only_happens_at_the_ledge_and_never_outlives_it() {
         !state.reset_armed(),
         "stepping back and looking again starts leaned in"
     );
+}
+
+/// Every shop that is not open yet is wired the same way: within reach
+/// of its door, Enter gets the one closed line, never a panel and never
+/// silence.
+#[test]
+fn every_closed_shop_answers_enter_with_the_same_line() {
+    for landmark in [
+        Landmark::Ink,
+        Landmark::Baths,
+        Landmark::Sleep,
+        Landmark::Shrine,
+        Landmark::Market,
+        Landmark::Tek,
+        Landmark::Vids,
+        Landmark::Aerial,
+    ] {
+        assert_eq!(landmark.on_enter(), Enter::Line(landmark));
+        assert_eq!(data::lines(landmark), data::CLOSED_LINES, "{landmark:?}");
+        assert_eq!(data::pitch(landmark), data::CLOSED_PITCH, "{landmark:?}");
+        let door = landmark.reach();
+        assert_eq!(
+            map::nearest_landmark(door.x0, door.y0 + 1),
+            Some(landmark),
+            "{landmark:?} from the street in front of its door"
+        );
+    }
 }

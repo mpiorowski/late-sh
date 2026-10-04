@@ -4,7 +4,7 @@
 //! open patch from anywhere on the street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
 //! `Command::Outfit`), the lockers `d` and `w`, the bits machine `b` and
-//! `r`, Dead Air `s`, `d`, and `t` (a glass each), the blade cart `w` and
+//! `r`, Dead Air `s`, `d`, and `t` (a glass each), the blade shop `w` and
 //! `a`, the ledge `r` twice to step off; the tailor's hands every key to
 //! `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
@@ -12,8 +12,9 @@
 //! down here: the street has its own). While the fight picker or scene is
 //! open every key goes to `fight/input.rs`. Returns `false` for anything it
 //! does not own so global keys (page digits, Tab, `q`) keep working. While a panel is open, or the
-//! runner is looking over the ledge, the walk keys are swallowed so the
-//! runner does not wander under the box. A lone Esc never arrives here:
+//! runner is looking over the ledge, every other typed key is swallowed:
+//! the walk keys, so the runner does not wander under the box, and the
+//! letters a global would spend (`w`, `m`, `v`). A lone Esc never arrives here:
 //! the root flushes it to `dispatch_escape`, which calls
 //! `State::dismiss` for this screen.
 
@@ -98,8 +99,8 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 /// A panel, or the ledge view, takes Enter to close, and eats the walk
 /// keys. At the armorer the up and down keys walk the wall instead, `w`
-/// buys the picked weapon and `a` the picked armor. Everything else
-/// (digits, Tab, `q`) falls through to the globals.
+/// buys the picked weapon and `a` the picked armor. Digits, Tab, and `q`
+/// fall through to the globals; any other typed key is eaten.
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     if app.city.panel() == Some(Landmark::Tailor) {
         return crate::app::deadchannel::tailor::input::handle_event(app, event);
@@ -211,6 +212,12 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
             app.city.dismiss();
             true
         }
+        // Typed keys arrive as `Char`. Digits and `q` stay global; every
+        // other one is the panel's, owned or not, so a letter a global
+        // spends (`w` Bonsai Care, `m` the mute) does nothing over a shop.
+        // Tab and the control chords are bytes and fall through.
+        ParsedInput::Char('0'..='9' | 'q' | 'Q') => false,
+        ParsedInput::Char(_) => true,
         _ => walk_delta(event).is_some() || run_delta(event).is_some(),
     }
 }

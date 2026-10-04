@@ -536,7 +536,7 @@ pub fn drink_edge(level: i32) -> i32 {
 /// roll: a fifth of [`SIGNAL_PER_LEVEL`].
 pub const DRINK_SIGNAL_PER_LEVEL: i32 = 2;
 
-/// What the blade cart asks for the next tier up from the one a slot
+/// What the blade shop asks for the next tier up from the one a slot
 /// carries, in crystals and nothing else.
 pub const CART_CRYSTALS: i32 = 3;
 

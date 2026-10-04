@@ -129,7 +129,7 @@ pub const SECTIONS: &[Section] = &[
                 "`p` heals to full from anywhere for half a bit a point, times your level. patch before a fight, not after a drop.",
             ),
             Block::Rule(
-                "two steps a day a *bright* glyph waits in the static: `b` takes it. it is harder, pays double bits, and always leaves a *crystal*. a crystal buys a glass at dead air, and three buy the next piece up at the blade cart, no bits asked.",
+                "two steps a day a *bright* glyph waits in the static: `b` takes it. it is harder, pays double bits, and always leaves a *crystal*. a crystal buys a glass at dead air, and three buy the next piece up at the blade shop, no bits asked.",
             ),
             Block::Rule(
                 "at *level 15* with the exp to leave it, the next step into the static meets *the Old Signal*: *240* signal, *36* attack, *22* defense, and no bits.",
@@ -400,7 +400,7 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
-        title: "the blade cart",
+        title: "the blade shop",
         neon: Neon::Red,
         blocks: &[
             Block::Keys(&[
@@ -414,7 +414,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "the next tier up from what you carry, for *three crystals* and no bits. the armorer sells the same piece for bits, and the cart shows you what the wall asks. nothing is made past the top of the wall.",
+                "the next tier up from what you carry, for *three crystals* and no bits. the armorer sells the same piece for bits, and the panel shows you what the wall asks. nothing is made past the top of the wall.",
             ),
         ],
     },
@@ -483,6 +483,9 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Cyan,
         blocks: &[
             Block::Rule("the bands and the board are catalogs. nothing is for sale in them yet."),
+            Block::Rule(
+                "a shop with its sign lit does something. a shop with its sign dark is *not open yet*, and says so at the door.",
+            ),
             Block::Rule(
                 "the noodle cart, the umbrella stall, the reader, and the stairs talk when you press `enter`. the railing over the drop shows the lower city until `enter`.",
             ),

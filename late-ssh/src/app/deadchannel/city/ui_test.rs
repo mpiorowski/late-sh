@@ -248,7 +248,7 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
     );
 }
 
-/// The blade cart prices the next tier up in each slot in crystals, and
+/// The blade shop prices the next tier up in each slot in crystals, and
 /// says what the wall would ask for it.
 #[test]
 fn the_blade_cart_prices_the_next_tier_up_in_crystals() {
@@ -262,7 +262,7 @@ fn the_blade_cart_prices_the_next_tier_up_in_crystals() {
     sheet.armor_tier = 15;
     sheet.crystals = 3;
     let screen = render_with_sheet(&state, &sheet, None);
-    assert!(screen.contains(" the blade cart "), "{screen}");
+    assert!(screen.contains(" the blade shop "), "{screen}");
     assert!(
         screen.contains("crystals 3      weapon tire iron"),
         "{screen}"

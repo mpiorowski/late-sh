@@ -3,7 +3,7 @@
 Parent: `../CONTEXT.md` §3c (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The crystal pass". This
 file is the contract of what keeps the daily loop from being one key held
-down: crystals, the bright glyph, Dead Air, and the blade cart. How
+down: crystals, the bright glyph, Dead Air, and the blade shop. How
 they are measured and tuned is `BALANCE.md`. Everything here is a command
 or a rule on the same sheet under the same row lock (`fight/state.rs`,
 `fight/svc.rs`); nothing has a writer of its own.
@@ -23,7 +23,7 @@ or a rule on the same sheet under the same row lock (`fight/state.rs`,
   the ledge do, and a runner holding only crystals has something to lose
   at the ledge.
 - Shown on the picker's budget row, on the strip when there are any, and
-  at the bar and the cart.
+  at the bar and the blade shop.
 
 ## The bright glyph
 
@@ -71,19 +71,19 @@ or a rule on the same sheet under the same row lock (`fight/state.rs`,
   level and spells the refusal ahead of the keys; the answer is the
   `till` line; no news.
 
-## The blade cart
+## The blade shop
 
 `Command::Cart { slot }`: the next tier up from what the slot carries
 (`Sheet::cart_tier`), for `CART_CRYSTALS` (3) crystals and no bits.
 
-- The armorer sells the same piece for bits; the cart is the other
+- The armorer sells the same piece for bits; this is the other
   wallet. The panel prints what the wall asks beside the crystal price,
   so the trade is in front of the runner.
 - One tier a visit, each slot on its own ladder. The carried piece is
   not traded in: it is replaced.
 - Refusals: `PastTheWall` when the slot holds tier 15 (nothing is made
   past the top of the wall), `ShortCrystals`.
-- Enter at the cart opens its panel (`city/ui.rs::cart_lines`, `w` and
+- Enter inside opens its panel (`city/ui.rs::cart_lines`, `w` and
   `a`); the answer is the `till` line; no news.
 
 ## Measured

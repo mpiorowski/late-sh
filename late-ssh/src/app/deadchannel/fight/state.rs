@@ -47,7 +47,7 @@
 //! the one thing bits cannot buy; two steps of every day have a bright
 //! glyph waiting behind them, harder, double pay, and always carrying
 //! one; Dead Air pours a glass for a crystal that lasts until the roll;
-//! the blade cart sells the next tier up for crystals alone.
+//! the blade shop sells the next tier up for crystals alone.
 //!
 //! Every number a balance pass turns comes in through `data::Rules`:
 //! `apply` plays the live `RULES`, `apply_under` any candidate set, which
@@ -304,7 +304,7 @@ pub enum Command {
     Drink {
         drink: Drink,
     },
-    /// The blade cart's piece for `slot`: the next tier up from the one
+    /// The blade shop's piece for `slot`: the next tier up from the one
     /// carried, for `data::CART_CRYSTALS` and no bits.
     Cart {
         slot: Slot,
@@ -352,7 +352,7 @@ pub enum Refusal {
     ShortCrystals {
         by: i32,
     },
-    /// The blade cart for a slot already at the wall's last tier:
+    /// The blade shop for a slot already at the wall's last tier:
     /// nothing is made past it.
     PastTheWall,
 }
@@ -427,7 +427,7 @@ pub enum Applied {
     Drank {
         drink: Drink,
     },
-    /// A piece off the blade cart, for `crystals`.
+    /// A piece off the blade shop, for `crystals`.
     Carted {
         slot: Slot,
         tier: i32,
@@ -624,7 +624,7 @@ impl Sheet {
         }
     }
 
-    /// The tier the blade cart holds for `slot`: the next one up from
+    /// The tier the blade shop holds for `slot`: the next one up from
     /// what it carries, `None` at the top, where nothing is made past the
     /// wall.
     pub fn cart_tier(&self, slot: Slot) -> Option<i32> {
@@ -1088,7 +1088,7 @@ impl Sheet {
         }
     }
 
-    /// The blade cart: what the armorer won't sell for bits. The next
+    /// The blade shop: what the armorer won't sell for bits. The next
     /// tier up from the one the slot carries, for crystals alone; the
     /// piece handed back buys nothing.
     fn cart(&mut self, rules: &Rules, slot: Slot) -> Outcome {
@@ -1118,7 +1118,7 @@ impl Sheet {
                 crystals,
             },
             lines: vec![format!(
-                "the {name} comes out from under the cart. no receipt, no bits. {crystals} crystals."
+                "the {name} comes off the rack. no receipt, no bits. {crystals} crystals."
             )],
         }
     }

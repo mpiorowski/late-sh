@@ -45,7 +45,7 @@ pub struct Player {
     /// The glass bought before a step in whenever a crystal covers it and
     /// none is poured yet; `None` never drinks.
     pub drinks: Option<Drink>,
-    /// Buys the blade cart's piece, the weaker slot first, whenever the
+    /// Buys the blade shop's piece, the weaker slot first, whenever the
     /// crystals cover it.
     pub carts: bool,
     /// What the runner holds back from the armorer.
@@ -116,7 +116,7 @@ pub const NEGLECTFUL: Player = Player {
 };
 
 /// The careful runner who also plays the crystal pass: takes the bright
-/// glyph when it reads even or better, buys the blade cart's pieces, and
+/// glyph when it reads even or better, buys the blade shop's pieces, and
 /// drinks static on ice with what is left. What the crystals are worth,
 /// measured against [`CAREFUL`].
 pub const KEEN: Player = Player {

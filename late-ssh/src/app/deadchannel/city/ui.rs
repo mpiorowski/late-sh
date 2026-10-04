@@ -398,6 +398,14 @@ fn landmark_neon(landmark: Landmark) -> Neon {
         Landmark::Blades => Neon::Red,
         Landmark::Reader => Neon::Magenta,
         Landmark::Stairs => Neon::Red,
+        Landmark::Ink
+        | Landmark::Baths
+        | Landmark::Sleep
+        | Landmark::Shrine
+        | Landmark::Market
+        | Landmark::Tek
+        | Landmark::Vids
+        | Landmark::Aerial => Neon::White,
         Landmark::Wire => Neon::Amber,
         Landmark::Ledge => Neon::White,
     }
@@ -889,6 +897,10 @@ fn surface(ch: char, x: u16, y: u16) -> Surface {
         return emissive(FRAME);
     }
     if (x, y) == map::DEAD_LETTER {
+        return lit_surface(scale(WALL, 0.6));
+    }
+    // A shop that is not open yet: its name is on the wall, unlit.
+    if map::DARK_SIGNS.iter().any(|sign| sign.contains(x, y)) {
         return lit_surface(scale(WALL, 0.6));
     }
     if let Some(neon) = sign_at(x, y) {
@@ -1719,7 +1731,15 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
         | Landmark::Reader
         | Landmark::Stairs
         | Landmark::Wire
-        | Landmark::Ledge => {}
+        | Landmark::Ledge
+        | Landmark::Ink
+        | Landmark::Baths
+        | Landmark::Sleep
+        | Landmark::Shrine
+        | Landmark::Market
+        | Landmark::Tek
+        | Landmark::Vids
+        | Landmark::Aerial => {}
     }
     lines
 }
@@ -2211,7 +2231,7 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     lines
 }
 
-/// The blade cart: what the armorer won't sell for bits. The next tier
+/// The blade shop: what the armorer won't sell for bits. The next tier
 /// up in each slot, priced in crystals alone, red where short, and the
 /// vendor's last word.
 fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {

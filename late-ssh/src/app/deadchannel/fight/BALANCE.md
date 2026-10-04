@@ -36,7 +36,9 @@ Change a band here and there together, and only with a design decision.
 
 `sim_test.rs` holds the two pace windows and the lock (the neglectful
 runner gains a level within a week of its first drop) on their own, so a
-change to a curve fails fast and prints the whole ladder.
+change to a curve fails fast and prints the whole ladder. It also holds
+one seeded `KEEN` climb whole (`one_keen_climb_holds_still`): a change
+that moves the climb inside every band still shows up there as a diff.
 `arena_test.rs::the_live_rules_miss_no_target` holds every band.
 
 ## 2. The knobs: `data::Rules`
@@ -57,7 +59,7 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `crystal_drop_one_in` | 12 | crystals from plain kills |
 | `bright_signal_percent`, `bright_edge_percent` | 135, 115 | how hard the bright glyph is |
 | `bright_bits_times` | 2 | what it pays |
-| `cart_crystals` | 3 | the blade cart's price |
+| `cart_crystals` | 3 | the blade shop's price |
 
 Not in `Rules`, and why: the creature table, the exp ladder, and the
 gear ladder are LoGD's curves (retune the percent over them first); the
@@ -69,7 +71,7 @@ the constant was read, and set it in `RULES`.
 
 **`sim.rs`: a player and a climb.** A `Player` is a way of playing: when
 it runs, when it patches, when it steps down, when it starts heeding
-(`Heeds`), whether it takes the bright glyph, drinks, shops the cart,
+(`Heeds`), whether it takes the bright glyph, drinks, shops for blades,
 and how it holds its purse (`Purse::SpendAll`, or `Purse::KeepAPatch`:
 never buy gear with the bits the next patch needs). `climb(player, seed,
 max_days, &mut Bench)` plays it from a fresh row through the real
@@ -84,7 +86,7 @@ picker's threat reads, shared across a batch (`Bench::live()`,
 | `CAREFUL` | runs under 40%, patches every point, keeps a patch in the purse |
 | `RECKLESS` | runs under 15%, patches at half, spends it all |
 | `NEGLECTFUL` | no armorer and no picker until the first drop, careful after |
-| `KEEN` | careful, plus the bright glyph when it reads even, static on ice, the cart |
+| `KEEN` | careful, plus the bright glyph when it reads even, static on ice, the blade shop |
 
 **`arena.rs` (test-only): four instruments, smallest to largest.**
 
@@ -205,10 +207,10 @@ Known, measured, and left for a pass of their own:
 - **The first day runs fast.** Levels 1 to 3 fall on day one for every
   player. The exp ladder's first rungs are LoGD's; a `Rules` field for
   the early rungs would let a sweep slow them.
-- **The cart's worth grows with the tier.** Three crystals buy 108 bits
+- **The blade shop's worth grows with the tier.** Three crystals buy 108 bits
   of gear at tier 1 and over 20,000 at tier 15. `KEEN` buys as soon as
   it holds three; a hoarder who saves every crystal for the last tiers
-  is the player to add before trusting the cart's price.
+  is the player to add before trusting its price.
 - **The purse rule is the careful runner's edge.** `Purse::KeepAPatch`
   is most of why careful beats reckless at high prices. A player between
   the two (spends all, patches every point) would say how much.
