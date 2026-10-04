@@ -421,7 +421,10 @@ async fn a_mark_earned_again_after_the_nuke_pays_again() {
 
     let first = kill_the_old_signal(&svc, &client, user_id).await;
     assert_eq!(first.applied, Applied::Slain { marks: 1 });
-    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 40_000
+    );
 
     client
         .execute("SELECT deadchannel_nuke_runners()", &[])

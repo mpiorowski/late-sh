@@ -24,7 +24,7 @@ to the doors.
 
 ## Source Map
 
-- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, Late Time, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, Late Time, Top Drinkers, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`, `MonthlyYearly`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, process-local online-time accumulator/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
@@ -44,12 +44,13 @@ to the doors.
 only while at least one session is subscribed, publishing it through a
 `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse:
 the old refresh pass was 13% of all DB execution time at 30s (SCALE.md
-DB Cost Ranking). Today the pass is **fourteen queries**: each board family is
+DB Cost Ranking). Today the pass is **fifteen queries**: each board family is
 one union query ranked with `PARTITION BY game`; the Lateania boards add two
 (both O(players) over `mud_characters`) and the roguelike-door boards two
 (one query per window over `door_runs`/`door_milestones`, all three families
-ranked `PARTITION BY (family, game)`), and Late Time adds one query over its
-indexed all-time and current-month O(users) rollups. Do not make it hot again
+ranked `PARTITION BY (family, game)`), Late Time adds one query over its
+indexed all-time and current-month O(users) rollups, and Top Drinkers one
+over the current year of `drink_pours` (indexed on `created`). Do not make it hot again
 without re-reading that ranking.
 
 Two rules keep the coarse cadence from reading as a broken screen:
@@ -103,6 +104,7 @@ rosters).
 - `Top Chips` (monthly sum over `chip_ledger` of the moves whose `ChipMove::counts_as_earnings` is true, exclusions derived from `ChipMove::excluded_earning_reasons()`: only credits count, and of those the house tables (bets, payouts, floor restores), gifts, the starting stipend, the two referral payouts and every monthly prize (the gallery's `ArtboardPrize`, and any month-end prize added later) are out, so a colluding table cannot fold one seat to the top, nobody can be funnelled up, nobody is on the board for signing up, and no single invite or month-end win decides the board; gilds received, the pot, the bonsai drip, Super Snake winnings and every game prize count as they land; no debit ever counts, so spending cannot lower a place or push a player off the board; admin `/grant` chips never reach the ledger; the rule and its reasoning live on `counts_as_earnings` in `late-core/src/models/chips.rs`) and `Arcade Wins` are bespoke monthly-only boards. Arcade Wins weights come from `Difficulty::points` (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5; Sliding Puzzle uses all three tiers, Le Word fixed Easy, Rubik's fixed Medium), the same enum whose `chips()` carries the daily-win payout tiers, so points and payouts cannot drift apart. Unknown difficulty keys score 0, never a default.
 - `Late Time` is a bespoke paired board over the current-month and all-time online-time rollups. It ranks exact milliseconds and renders the largest two useful units. Last month's first place gets the rankless `LATE` badge (see Monthly profile awards); no chips are attached.
 - The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short). Experience keeps accruing at the level cap, so past 100 the value keeps counting **paragon levels**, one per 75k xp beyond the cap's threshold (the summit's own per-level price), rendered `lvl 100 +37`; the curve numbers are restated in `leaderboard.rs` (`LATEANIA_LEVEL_CAP`, `LATEANIA_XP_AT_LEVEL_CAP`, `LATEANIA_XP_PER_PARAGON_LEVEL`) and pinned to the game's `xp_for_level` by `lateania/classes_test.rs`, so a rebalance that forgets them fails there. `lateania_pvp` ranks the blob's lifetime `pvp_kills` (rivals slain in the Wildbound Waste); characters with no kills stay off it. A reset character leaves both boards; the page shows one "right now" window (`Standings::Snapshot`).
+- `Top Drinkers` is a bespoke monthly + yearly board (`Standings::MonthlyYearly`, the one board with a yearly window) over `drink_pours`, the per-drink log written by `UserDrinks::record_pour` in the same statement as the buzz (`late-core/src/models/drinks.rs`): the sum of each drink's buzz points in the UTC month and the UTC year. What counts is the drink taken, never the chips: a paid drink, a round credit cashed and the round buyer's own drink all count their points (a tavern round's 400, a Nightcap round's 100), buying for others counts nothing, and the newcomer's welcome pour is never logged. Points are the drink's full worth before the `MAX_DRUNK_POINTS` cap. No award, no chips.
 - The Le Word win-streak board was deliberately dropped (the gaps-and-islands query was the most expensive in the pass).
 
 Monthly windows use UTC calendar months. No refresh query scans full history.
@@ -206,7 +208,7 @@ their header comments, and this section is where they now lead.
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
-(Top Chips, Arcade Wins, Late Time), then the Games group (the Lateania boards,
+(Top Chips, Arcade Wins, Late Time, Top Drinkers), then the Games group (the Lateania boards,
 then each door's board triple), Daily Wins, and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Chips. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row

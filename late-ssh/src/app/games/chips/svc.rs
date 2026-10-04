@@ -214,12 +214,13 @@ impl ChipService {
         Ok(())
     }
 
-    /// Charge a bartender drink (floor-guarded) and record the buzz in one
-    /// transaction, so a crash can't charge without pouring. Returns None
+    /// Charge a drink poured at `bar` (floor-guarded) and record the buzz in
+    /// one transaction, so a crash can't charge without pouring. Returns None
     /// when the user can't cover the drink and keep the chip floor.
     pub async fn buy_drink(
         &self,
         user_id: Uuid,
+        bar: Bar,
         price: i64,
         drink: &str,
     ) -> anyhow::Result<Option<DrinkPurchase>> {
@@ -230,7 +231,7 @@ impl ChipService {
         else {
             return Ok(None);
         };
-        let drinks = UserDrinks::record_purchase(&tx, user_id, price).await?;
+        let drinks = UserDrinks::record_purchase(&tx, user_id, bar, price).await?;
         tx.commit().await?;
         Ok(Some(DrinkPurchase {
             balance: chips.balance,
@@ -299,7 +300,8 @@ impl ChipService {
                 total,
             }));
         };
-        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, bar.drink_points()).await?;
+        let drinks =
+            UserDrinks::record_comped_pour(&tx, buyer_id, bar, bar.drink_points()).await?;
         tx.commit().await.context("committing the round")?;
 
         Ok(RoundPurchase {
@@ -382,15 +384,20 @@ impl ChipService {
     /// record the buzz the bar that bought it pours ([`Bar::drink_points`]),
     /// with no chip debit anywhere. One transaction, so the credit cannot be
     /// spent without the drink landing. `None` means there was nothing to
-    /// spend, and the caller charges for the pour as usual.
-    pub async fn cash_round_drink(&self, user_id: Uuid) -> anyhow::Result<Option<CompedDrink>> {
+    /// spend, and the caller charges for the pour as usual. `bar` is where
+    /// the patron is drinking it, which may not be the bar that sold it.
+    pub async fn cash_round_drink(
+        &self,
+        user_id: Uuid,
+        bar: Bar,
+    ) -> anyhow::Result<Option<CompedDrink>> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
         let Some(credit) = DrinkCredit::cash(&tx, user_id).await? else {
             return Ok(None);
         };
         let drinks =
-            UserDrinks::record_comped_pour(&tx, user_id, credit.bar.drink_points()).await?;
+            UserDrinks::record_comped_pour(&tx, user_id, bar, credit.bar.drink_points()).await?;
         tx.commit().await?;
         Ok(Some(CompedDrink {
             round_id: credit.round_id,

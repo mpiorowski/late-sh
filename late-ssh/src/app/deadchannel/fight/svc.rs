@@ -180,13 +180,7 @@ impl FightService {
     /// key, which the unique gate makes safe to repeat. A settle that fails
     /// after a paid grant is the one double call the gate absorbs: the
     /// retry is refused and settles then.
-    async fn pay_mark(
-        &self,
-        user_id: Uuid,
-        runner_id: Uuid,
-        generation: i32,
-        mark: i32,
-    ) -> String {
+    async fn pay_mark(&self, user_id: Uuid, runner_id: Uuid, generation: i32, mark: i32) -> String {
         let event_key = format!("{runner_id}:{generation}:{mark}");
         let grant = self
             .chips

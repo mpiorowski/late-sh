@@ -713,8 +713,8 @@ pub struct DrinkRound {
     /// outlive them.
     pub buyer_user_id: Option<Uuid>,
     pub price_per_patron: i64,
-    /// Where it was bought: what the tab board counts and what a credit off
-    /// it pours ([`Bar::drink_points`]).
+    /// Where it was bought: what a credit off it pours
+    /// ([`Bar::drink_points`]).
     pub bar: Bar,
     pub created: DateTime<Utc>,
 }

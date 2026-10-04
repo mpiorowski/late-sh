@@ -23,7 +23,7 @@ fn wheel_selection_stops_at_ends_and_only_board_changes_reset_scroll() {
     assert_eq!(state.selected_index(), state.boards().len() - 1);
 }
 
-/// The page list is roster-derived: the three bespoke boards lead, then the
+/// The page list is roster-derived: the four bespoke boards lead, then the
 /// game boards (the Lateania boards, then each door's board triple), then
 /// every daily puzzle, then every score game. A roster addition in late-core
 /// must grow this list without any page change.
@@ -33,19 +33,20 @@ fn board_list_follows_the_rosters() {
     assert_eq!(boards[0], Board::TopChips);
     assert_eq!(boards[1], Board::ArcadeWins);
     assert_eq!(boards[2], Board::TimeOnline);
-    assert_eq!(boards[3], Board::LateaniaAdventurers);
-    assert_eq!(boards[4], Board::LateaniaPvp);
-    assert_eq!(boards[5], Board::DoorWins(DoorGame::ALL[0]));
-    assert_eq!(boards[6], Board::DoorDepth(DoorGame::ALL[0]));
-    assert_eq!(boards[7], Board::DoorScore(DoorGame::ALL[0]));
+    assert_eq!(boards[3], Board::TopDrinkers);
+    assert_eq!(boards[4], Board::LateaniaAdventurers);
+    assert_eq!(boards[5], Board::LateaniaPvp);
+    assert_eq!(boards[6], Board::DoorWins(DoorGame::ALL[0]));
+    assert_eq!(boards[7], Board::DoorDepth(DoorGame::ALL[0]));
+    assert_eq!(boards[8], Board::DoorScore(DoorGame::ALL[0]));
     let door_boards = 3 * DoorGame::ALL.len();
     assert_eq!(
         boards.len(),
-        5 + door_boards + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
+        6 + door_boards + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
     );
-    assert_eq!(boards[5 + door_boards], Board::Daily(DailyPuzzle::ALL[0]));
+    assert_eq!(boards[6 + door_boards], Board::Daily(DailyPuzzle::ALL[0]));
     assert_eq!(
-        boards[5 + door_boards + DailyPuzzle::ALL.len()],
+        boards[6 + door_boards + DailyPuzzle::ALL.len()],
         Board::Score(ScoreGame::ALL[0])
     );
     assert_eq!(
@@ -53,6 +54,19 @@ fn board_list_follows_the_rosters() {
         Some(&Board::BadgeGuide),
         "guide trails every board"
     );
+}
+
+/// Top Drinkers races by month and by year, never all time.
+#[test]
+fn top_drinkers_shows_monthly_and_yearly_buzz() {
+    let board = Board::TopDrinkers;
+    assert_eq!(board.title(), "Top Drinkers");
+    assert_eq!(board.format_value(12_400), "12,400 buzz");
+    let data = LeaderboardData::default();
+    assert!(matches!(
+        board.standings(&data),
+        Standings::MonthlyYearly { .. }
+    ));
 }
 
 #[test]

@@ -193,7 +193,19 @@ pub struct Ledger {
 /// batch. One bench per set of rules: the memo is only true under its own.
 pub struct Bench {
     pub rules: Rules,
-    threats: HashMap<(Pick, i32, i32, i32, i32, Option<Drink>), Threat>,
+    threats: HashMap<ThreatKey, Threat>,
+}
+
+/// Everything a pick's threat reads off the sheet, so the memo is only
+/// reused when none of it moved.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ThreatKey {
+    pick: Pick,
+    level: i32,
+    weapon_tier: i32,
+    armor_tier: i32,
+    marks: i32,
+    drink: Option<Drink>,
 }
 
 impl Bench {
@@ -211,14 +223,14 @@ impl Bench {
     }
 
     fn threat(&mut self, pick: Pick, sheet: &Sheet) -> Threat {
-        let key = (
+        let key = ThreatKey {
             pick,
-            sheet.level,
-            sheet.weapon_tier,
-            sheet.armor_tier,
-            sheet.marks,
-            sheet.drink,
-        );
+            level: sheet.level,
+            weapon_tier: sheet.weapon_tier,
+            armor_tier: sheet.armor_tier,
+            marks: sheet.marks,
+            drink: sheet.drink,
+        };
         let rules = self.rules;
         *self
             .threats

@@ -217,12 +217,13 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   newest article's title, and the newest piece hanging on the Artboard.
   Never posted, never spoken. `State::tv_pick` is the clock; `ui.rs`
   assembles the captions it has and asks for one.
-- **The tab board.** This bar's three biggest round buyers, all time, by
-  chips (`UserChips::top_round_buyers(Bar::Nightcap, ..)`). The ledger row
-  does not say which bar took the order, so the round it is keyed on does:
-  the query joins `drink_rounds` on `source_ref` and counts only what was
-  sold here. A tavern round reaches everyone online, so at the same price a
-  head it costs an order of magnitude more and would own the board forever.
+- **The tab board.** The three patrons who ordered the most drinks at this
+  bar, all time (`UserDrinks::top_regulars(Bar::Nightcap, ..)` over
+  `drink_pours`). Every drink counts one whatever it cost: a house beer, a
+  top shelf, a credit cashed here, and the round buyer's own drink. Buying
+  a round counts one drink for the buyer, not one per stool; the stools
+  that drink it count their own. The buzz poured only breaks a tie.
+  Drinks taken in the tavern never reach it.
 - **Carved into the bar.** Each stool has one line in the wood
   (`nightcap_carvings`, migration 190, `late_core::models::nightcap_carving`),
   written by whoever sits there with `c`, one trimmed line of at most 60
@@ -257,8 +258,9 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 - `chat/state_internal_test.rs` pins that the room is never a list room;
   `late-core` `chat_room_test.rs` pins `ensure_nightcap` as idempotent,
   auto-joined, and seating accounts older than the room;
-  `nightcap_carving_test.rs`, `chips_test.rs` (the tab board counts one
-  bar's rounds and ranks them by chips), `drink_round_test.rs` (a credit
+  `nightcap_carving_test.rs`, `drinks_test.rs` (the tab board counts
+  drinks taken at one bar, cheap or dear, and the pour log behind the
+  leaderboard), `drink_round_test.rs` (a credit
   pours what the bar that bought it pours, and the open count the menu
   prints) and `artboard_piece_test.rs` (the newest piece) cover the wall's
   reads and the round's rails.

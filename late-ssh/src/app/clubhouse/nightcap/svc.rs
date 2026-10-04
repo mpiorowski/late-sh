@@ -20,8 +20,8 @@ use uuid::Uuid;
 use late_core::db::Db;
 use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::article::Article;
-use late_core::models::chips::UserChips;
 use late_core::models::drink_round::{Bar, ROUND_PRICE_PER_PATRON};
+use late_core::models::drinks::UserDrinks;
 use late_core::models::nightcap_carving::Carving;
 use late_core::shutdown::CancellationToken;
 
@@ -90,7 +90,7 @@ impl NightcapHouse {
             .next()
             .map(|article| article.title);
         let newest_piece = ArtboardPiece::newest_hung(&client).await?;
-        let tab = UserChips::top_round_buyers(&client, Bar::Nightcap, TAB_BOARD_SIZE).await?;
+        let tab = UserDrinks::top_regulars(&client, Bar::Nightcap, TAB_BOARD_SIZE).await?;
         let mut carvings: [Option<Carving>; super::stools::SEAT_COUNT] =
             std::array::from_fn(|_| None);
         for carving in Carving::list(&client).await? {
@@ -259,7 +259,7 @@ async fn order_drink(
     // for the house measure it bought (`Drink::on_the_round`): a priced
     // pick is debited as ordered and the credit stays banked.
     let credit = if drink.on_the_round() {
-        chip_service.cash_round_drink(user_id).await
+        chip_service.cash_round_drink(user_id, Bar::Nightcap).await
     } else {
         Ok(None)
     };
@@ -298,7 +298,7 @@ async fn order_drink(
     }
 
     match chip_service
-        .buy_drink(user_id, drink.price(), drink.name())
+        .buy_drink(user_id, Bar::Nightcap, drink.price(), drink.name())
         .await
     {
         Ok(Some(purchase)) => {

@@ -659,10 +659,7 @@ impl Sheet {
         if let Some(had) = self.drink {
             return Some((
                 Refusal::GlassPoured,
-                format!(
-                    "one glass a day. you still have the {} in you.",
-                    had.name()
-                ),
+                format!("one glass a day. you still have the {} in you.", had.name()),
             ));
         }
         if DRINK_CRYSTALS > self.crystals {

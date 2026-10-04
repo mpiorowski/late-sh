@@ -12,6 +12,9 @@ use super::door_run::DoorRunResult;
 /// timestamptz twin is `chips::MONTH_TS_FILTER`, shared with the profile's
 /// "earned this month" figure.
 const MONTH_DATE_FILTER: &str = "date_trunc('month', now() AT TIME ZONE 'UTC')::date";
+/// Start of the current UTC calendar year, the timestamptz twin of
+/// `chips::MONTH_TS_FILTER` for the boards with a yearly window.
+const YEAR_TS_FILTER: &str = "date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// Rows kept per board. Deep enough that the page can show an around-you
 /// tail for almost everyone; RANK ties can push slightly past it.
 const BOARD_DEPTH: i64 = 500;
@@ -246,6 +249,14 @@ pub struct BoardWindows {
     pub all_time: Vec<RankedEntry>,
 }
 
+/// The current UTC month and the current UTC year of one board (Top
+/// Drinkers), for a race that resets rather than one kept forever.
+#[derive(Clone, Default)]
+pub struct MonthYearWindows {
+    pub monthly: Vec<RankedEntry>,
+    pub yearly: Vec<RankedEntry>,
+}
+
 /// One UTC-month slice of a connected-time checkpoint. A batch can carry more
 /// than one month when it checkpoints sessions spanning a month boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,6 +291,9 @@ pub struct LeaderboardData {
     pub monthly_chip_earners: Vec<RankedEntry>,
     pub arcade_champions: Vec<RankedEntry>,
     pub online_time: BoardWindows,
+    /// Buzz points from every drink taken (`drink_pours`), whatever bar
+    /// poured it and whoever paid.
+    pub top_drinkers: MonthYearWindows,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
     pub door_boards: HashMap<DoorGame, DoorBoards>,
@@ -318,6 +332,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_chip_earners,
         arcade_champions,
         online_time,
+        top_drinkers,
         daily_monthly,
         daily_all_time,
         score_monthly,
@@ -333,6 +348,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_monthly_chip_earners(client, BOARD_DEPTH),
         fetch_arcade_champions(client, BOARD_DEPTH),
         fetch_online_time(client, BOARD_DEPTH),
+        fetch_top_drinkers(client, BOARD_DEPTH),
         fetch_daily_win_boards(client, DailyWindow::Monthly),
         fetch_daily_win_boards(client, DailyWindow::AllTime),
         fetch_score_boards(client, ScoreWindow::Monthly),
@@ -397,6 +413,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_chip_earners,
         arcade_champions,
         online_time,
+        top_drinkers,
         daily_boards,
         score_boards,
         door_boards,
@@ -790,6 +807,67 @@ async fn fetch_online_time(client: &Client, limit: i64) -> Result<BoardWindows> 
             "monthly" => windows.monthly.push(entry),
             "all_time" => windows.all_time.push(entry),
             other => unreachable!("online time window {other} not produced by this query"),
+        }
+    }
+    Ok(windows)
+}
+
+/// Top Drinkers: the buzz points of every drink taken this UTC month and
+/// this UTC year. A drink counts what it poured, never what it cost, so a
+/// round's free drink counts like a paid one and paying for others counts
+/// nothing; the welcome pour is never logged.
+async fn fetch_top_drinkers(client: &Client, limit: i64) -> Result<MonthYearWindows> {
+    let rows = client
+        .query(
+            &format!(
+                "WITH totals AS (
+                    SELECT 'monthly'::text AS period,
+                           user_id,
+                           SUM(points)::bigint AS value
+                    FROM drink_pours
+                    WHERE created >= {MONTH_TS_FILTER}
+                    GROUP BY user_id
+                    UNION ALL
+                    SELECT 'yearly'::text AS period,
+                           user_id,
+                           SUM(points)::bigint AS value
+                    FROM drink_pours
+                    WHERE created >= {YEAR_TS_FILTER}
+                    GROUP BY user_id
+                ),
+                ranked AS (
+                    SELECT totals.period,
+                           u.username,
+                           totals.user_id,
+                           totals.value,
+                           RANK() OVER (
+                               PARTITION BY totals.period ORDER BY totals.value DESC
+                           ) AS rank
+                    FROM totals
+                    JOIN users u ON u.id = totals.user_id
+                )
+                SELECT period, username, user_id, value, rank
+                FROM ranked
+                WHERE rank <= $1
+                ORDER BY period ASC, rank ASC, username ASC"
+            ),
+            &[&limit],
+        )
+        .await?;
+
+    let mut windows = MonthYearWindows::default();
+    for row in rows {
+        let entry = RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("value"),
+            note: None,
+        };
+        match row.get::<_, &str>("period") {
+            "monthly" => windows.monthly.push(entry),
+            "yearly" => windows.yearly.push(entry),
+            other => unreachable!("top drinkers window {other} not produced by this query"),
         }
     }
     Ok(windows)
