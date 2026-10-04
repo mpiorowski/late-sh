@@ -12,9 +12,9 @@ use crate::models::profile_award::{
     GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
-    NETHACK_ASCENSION_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, award_badge, award_category_label,
-    claim_previous_month_award_announcement, find_profile_awards_by_ids, format_score_value,
-    is_milestone_award, is_rankless_award, list_profile_awards_for_user,
+    NETHACK_ASCENSION_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, award_badge,
+    award_category_label, claim_previous_month_award_announcement, find_profile_awards_by_ids,
+    format_score_value, is_milestone_award, is_rankless_award, list_profile_awards_for_user,
     snapshot_previous_month_profile_awards, top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;

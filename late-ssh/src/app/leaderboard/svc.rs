@@ -13,9 +13,8 @@ use late_core::models::leaderboard::{
 use late_core::models::profile_award::{
     AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
     LATE_TIME_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, all_award_categories,
-    award_category_label,
-    claim_previous_month_award_announcement, format_score_value, gallery_prize_chips,
-    is_milestone_award, snapshot_previous_month_profile_awards,
+    award_category_label, claim_previous_month_award_announcement, format_score_value,
+    gallery_prize_chips, is_milestone_award, snapshot_previous_month_profile_awards,
 };
 use late_core::models::user::User;
 use tokio::sync::{Notify, watch};
