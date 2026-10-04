@@ -1035,6 +1035,8 @@ fn arcade_help_lines() -> Vec<String> {
         "            No rank digit: the crown has one holder.",
         "  [LATE]    Late Time, to whoever spent the most time online that month.",
         "            First place only, so no rank digit either.",
+        "  [DRNK]    Top Drinkers, to whoever took the most buzz from drinks that month.",
+        "            First place only, no rank digit, no chips.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",
         "            3 applause to count, and the one ranked badge that pays: 40,000 / 15,000 / 10,000 chips.",
         "  The door badges are one-off feats, shown with no rank digit. The badge lands the first",

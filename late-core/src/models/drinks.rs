@@ -9,7 +9,8 @@
 //! Every drink a patron takes also leaves a `drink_pours` row (who, which
 //! bar, how many points), written by the same statement as the buzz upsert
 //! in [`UserDrinks::record_pour`], the one gate every taken drink goes
-//! through. The Top Drinkers board and the Nightcap's tab board read it.
+//! through. The Top Drinkers board, its monthly `DRNK` award and the
+//! Nightcap's tab board read it.
 
 use std::collections::HashMap;
 

@@ -106,6 +106,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "Late Time",
             "most time online last month, first place only (Late Time board)",
         ),
+        (
+            "DRNK",
+            "Top Drinkers",
+            "most buzz from drinks taken last month, first place only, no chips (Top Drinkers board)",
+        ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
     }

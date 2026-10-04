@@ -4,9 +4,10 @@
 -- as the user_drinks upsert, so the two cannot disagree. The newcomer's
 -- welcome pour is not a drink anybody took and is not logged.
 --
--- Two readers. The Leaderboards page's Top Drinkers board sums `points`
--- per user over the UTC month and the UTC year. The Nightcap's tab board
--- counts the drinks poured at the Nightcap per user, all time.
+-- Three readers. The Leaderboards page's Top Drinkers board sums `points`
+-- per user over the UTC month and the UTC year, and the monthly award
+-- snapshot gives last month's first place the DRNK badge. The Nightcap's
+-- tab board counts the drinks poured at the Nightcap per user, all time.
 --
 -- `points` is the buzz the drink was worth, before the user_drinks cap: a
 -- drink taken while already wasted still counts what it poured.
