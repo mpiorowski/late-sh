@@ -407,6 +407,40 @@ async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
     );
 }
 
+/// The nuke (migration 222) puts the marks back to none and keeps the row.
+/// A runner paid for mark 1 before it who earns mark 1 again, past the
+/// month, is paid again: the payout's key carries the row's reset
+/// generation, so the old claim does not answer for the new mark.
+#[tokio::test]
+async fn a_mark_earned_again_after_the_nuke_pays_again() {
+    use late_core::models::chips::{INITIAL_CHIP_BALANCE, UserChips};
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-nuke-mark").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user_id).await.expect("a wallet");
+
+    let first = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(first.applied, Applied::Slain { marks: 1 });
+    assert_eq!(balance(&client, user_id).await, INITIAL_CHIP_BALANCE + 40_000);
+
+    client
+        .execute("SELECT deadchannel_nuke_runners()", &[])
+        .await
+        .expect("the nuke");
+    age_payout_claims(&test_db.db, user_id, 31).await;
+
+    let again = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(again.applied, Applied::Slain { marks: 1 });
+    assert_eq!(
+        again.lines.last().map(String::as_str),
+        Some("the house pays 40,000 chips for the broadcast.")
+    );
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 2 * 40_000
+    );
+}
+
 /// The grant erroring after the kill's commit: the mark and the badge land,
 /// the scene says the till is jammed, and the row keeps the debt. The next
 /// command on the row pays it, once; the one after finds nothing owed.

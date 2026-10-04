@@ -72,6 +72,7 @@ pub struct FightService {
 /// happened.
 struct Acted {
     runner_id: Uuid,
+    generation: i32,
     sheet: Sheet,
     outcome: Outcome,
 }
@@ -80,6 +81,7 @@ struct Acted {
 /// sheet as settled.
 struct Reloaded {
     runner_id: Uuid,
+    generation: i32,
     sheet: Sheet,
 }
 
@@ -104,6 +106,7 @@ impl FightService {
                 let outcome = match svc.act(user_id, command).await {
                     Ok(Some(Acted {
                         runner_id,
+                        generation,
                         sheet,
                         mut outcome,
                     })) => {
@@ -114,7 +117,7 @@ impl FightService {
                         // earlier grant failed to settle. Either way the
                         // line lands under this answer.
                         if let Some(mark) = sheet.unpaid_mark {
-                            outcome.lines.push(svc.pay_mark(user_id, runner_id, mark).await);
+                            outcome.lines.push(svc.pay_mark(user_id, runner_id, generation, mark).await);
                         }
                         if let Applied::Slain { marks } = outcome.applied {
                             svc.grant_old_signal_badge(user_id, marks).await;
@@ -157,6 +160,7 @@ impl FightService {
         tx.commit().await?;
         Ok(Some(Acted {
             runner_id: row.id,
+            generation: row.reset_generation,
             sheet,
             outcome,
         }))
@@ -164,7 +168,9 @@ impl FightService {
 
     /// The mark's chips, after the kill's commit, on the door milestones'
     /// two gates (`DEADCHANNEL_OLD_SIGNAL_REWARD_KEY`): once per mark, keyed
-    /// `<runner row id>:<mark>`, and at most once every 30 days per account.
+    /// `<runner row id>:<generation>:<mark>` (the row's `reset_generation`,
+    /// so a mark earned again after a nuke claims under a key of its own),
+    /// and at most once every 30 days per account.
     /// Returns the line the scene prints under the answer.
     ///
     /// The row owes the mark (`unpaid_mark`, migration 210) until the grant
@@ -174,8 +180,14 @@ impl FightService {
     /// key, which the unique gate makes safe to repeat. A settle that fails
     /// after a paid grant is the one double call the gate absorbs: the
     /// retry is refused and settles then.
-    async fn pay_mark(&self, user_id: Uuid, runner_id: Uuid, mark: i32) -> String {
-        let event_key = format!("{runner_id}:{mark}");
+    async fn pay_mark(
+        &self,
+        user_id: Uuid,
+        runner_id: Uuid,
+        generation: i32,
+        mark: i32,
+    ) -> String {
+        let event_key = format!("{runner_id}:{generation}:{mark}");
         let grant = self
             .chips
             .credit_run_cooldown_reward_template(
@@ -375,9 +387,13 @@ impl FightService {
         tokio::spawn(
             async move {
                 match svc.reload(user_id).await {
-                    Ok(Some(Reloaded { runner_id, sheet })) => {
+                    Ok(Some(Reloaded {
+                        runner_id,
+                        generation,
+                        sheet,
+                    })) => {
                         if let Some(mark) = sheet.unpaid_mark {
-                            let line = svc.pay_mark(user_id, runner_id, mark).await;
+                            let line = svc.pay_mark(user_id, runner_id, generation, mark).await;
                             tracing::info!(mark, line = %line, "old signal mark settled on reload");
                         }
                         let _ = reply.send(FightOutcome::Reloaded { sheet });
@@ -411,6 +427,7 @@ impl FightService {
         tx.commit().await?;
         Ok(Some(Reloaded {
             runner_id: row.id,
+            generation: row.reset_generation,
             sheet,
         }))
     }

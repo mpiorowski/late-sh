@@ -243,7 +243,7 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
     let poured = render_with_sheet(&state, &sheet, None);
     assert!(poured.contains("in you dead air, neat"), "{poured}");
     assert!(
-        poured.contains("one glass a day. come back after the roll."),
+        poured.contains("one glass a day. you still have the dead air, neat in you."),
         "{poured}"
     );
 }

@@ -855,6 +855,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         debt: 0,
         crystals: 2,
         drink: Some("dead_air_neat".to_string()),
+        reset_generation: 0,
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []

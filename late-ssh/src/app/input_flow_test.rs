@@ -5812,7 +5812,7 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     );
 
     app.handle_input(b"w");
-    wait_for_render_contains(&mut app, "comes out from under the cart").await;
+    wait_for_render_contains(&mut app, "comes off the rack").await;
     let carted = row().await;
     assert_eq!(carted.weapon_tier, 1, "`w` is the weapon off the cart");
     assert_eq!(carted.armor_tier, 0);

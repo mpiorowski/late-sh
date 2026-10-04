@@ -258,6 +258,15 @@ pub enum Slot {
     Armor,
 }
 
+/// Why a step in would start nothing ([`Sheet::shut`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shut {
+    /// The signal is down until the roll.
+    SignalDown,
+    /// The day's rations are spent.
+    NoRations,
+}
+
 /// Which glyph a step in goes looking for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pick {
@@ -615,13 +624,55 @@ impl Sheet {
     /// Why a step in would start nothing, read off the sheet as it
     /// stands: the signal down, or the rations spent. `None` with a fight
     /// waiting (that step in resumes it) and when the static is open.
-    pub fn shut(&self) -> Option<Refusal> {
+    pub fn shut(&self) -> Option<Shut> {
         match (self.fight.is_some(), self.is_down(), self.rations_left <= 0) {
             (true, _, _) => None,
-            (false, true, _) => Some(Refusal::SignalDown),
-            (false, false, true) => Some(Refusal::NoRations),
+            (false, true, _) => Some(Shut::SignalDown),
+            (false, false, true) => Some(Shut::NoRations),
             (false, false, false) => None,
         }
+    }
+
+    /// Why the bartender would not pour, and the line he says it with:
+    /// the one order and the one wording, for `Command::Drink` and for the
+    /// panel that spells the refusal out ahead of the keys. `None` when a
+    /// glass would be poured.
+    pub fn glass_refused(&self) -> Option<(Refusal, String)> {
+        if self.is_down() {
+            return Some((
+                Refusal::SignalDown,
+                "your signal is down. the bartender does not pour for static.".to_string(),
+            ));
+        }
+        if self.fight.is_some() {
+            return Some((
+                Refusal::FightWaiting,
+                "not with a glyph waiting on you. the glass can wait.".to_string(),
+            ));
+        }
+        if self.rations_left <= 0 {
+            return Some((
+                Refusal::NoRations,
+                "you are spent for today. it would wear off before you used it.".to_string(),
+            ));
+        }
+        if let Some(had) = self.drink {
+            return Some((
+                Refusal::GlassPoured,
+                format!(
+                    "one glass a day. you still have the {} in you.",
+                    had.name()
+                ),
+            ));
+        }
+        if DRINK_CRYSTALS > self.crystals {
+            let by = DRINK_CRYSTALS - self.crystals;
+            return Some((
+                Refusal::ShortCrystals { by },
+                "a glass is a crystal, and you have none.".to_string(),
+            ));
+        }
+        None
     }
 
     /// The tier the blade shop holds for `slot`: the next one up from
@@ -1127,39 +1178,10 @@ impl Sheet {
     /// roll. Not with the signal down, not with a glyph waiting, and not
     /// for a runner spent for the day: no fight is left to use it in.
     fn drink(&mut self, drink: Drink) -> Outcome {
-        if self.is_down() {
+        if let Some((refusal, line)) = self.glass_refused() {
             return Outcome {
-                applied: Applied::Refused(Refusal::SignalDown),
-                lines: vec![
-                    "your signal is down. the bartender does not pour for static.".to_string(),
-                ],
-            };
-        }
-        if self.fight.is_some() {
-            return fight_waiting("not with a glyph waiting on you. the glass can wait.");
-        }
-        if self.rations_left <= 0 {
-            return Outcome {
-                applied: Applied::Refused(Refusal::NoRations),
-                lines: vec![
-                    "you are spent for today. it would wear off before you used it.".to_string(),
-                ],
-            };
-        }
-        if let Some(had) = self.drink {
-            return Outcome {
-                applied: Applied::Refused(Refusal::GlassPoured),
-                lines: vec![format!(
-                    "one glass a day. you still have the {} in you.",
-                    had.name()
-                )],
-            };
-        }
-        if DRINK_CRYSTALS > self.crystals {
-            let by = DRINK_CRYSTALS - self.crystals;
-            return Outcome {
-                applied: Applied::Refused(Refusal::ShortCrystals { by }),
-                lines: vec!["a glass is a crystal, and you have none.".to_string()],
+                applied: Applied::Refused(refusal),
+                lines: vec![line],
             };
         }
         self.crystals -= DRINK_CRYSTALS;
@@ -1194,8 +1216,10 @@ impl Sheet {
                 lines: Vec::new(),
             };
         }
-        if let Some(refusal) = self.shut() {
-            return refused(refusal);
+        match self.shut() {
+            Some(Shut::SignalDown) => return refused(Refusal::SignalDown),
+            Some(Shut::NoRations) => return refused(Refusal::NoRations),
+            None => {}
         }
         let mut fight = match (pick, self.signal_hears()) {
             (Pick::Fair, true) => Fight::new(Quarry::OldSignal, OLD_SIGNAL_TIER),

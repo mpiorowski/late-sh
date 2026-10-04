@@ -28,7 +28,9 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // the row retries it. `stash` (the locker) and `debt` (the bits machine)
 // are migration 214, whole bits, never negative. `crystals` (the rare
 // currency) and `drink` (today's glass at the bar, a code the app parses,
-// cleared by the day roll) are migration 221.
+// cleared by the day roll) are migration 221. `reset_generation` (migration
+// 223) counts the nukes the row has been through; only the nuke writes it,
+// and the Old Signal's payout key carries it.
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -54,7 +56,8 @@ crate::model! {
         pub stash: i64,
         pub debt: i64,
         pub crystals: i32,
-        pub drink: Option<String>;
+        pub drink: Option<String>,
+        pub reset_generation: i32;
 
         @data
         pub user_id: Uuid,

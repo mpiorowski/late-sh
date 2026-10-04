@@ -353,6 +353,15 @@ pub const PRICE_PERCENT: i64 = 225;
 /// percentage of a bit.
 pub const PATCH_PERCENT: i64 = 50;
 
+/// [`PATCH_PERCENT`] as the panel says it, so the copy moves with the knob.
+pub fn patch_rate() -> String {
+    match PATCH_PERCENT {
+        50 => "half a bit".to_string(),
+        100 => "a bit".to_string(),
+        percent => format!("{percent}% of a bit"),
+    }
+}
+
 /// Every number a balance pass turns, in one value, so the sim and the
 /// arena can play the same machine under a candidate set and compare it
 /// with the live one in a single run (`fight/BALANCE.md`). The live game

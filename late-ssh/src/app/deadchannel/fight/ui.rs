@@ -33,7 +33,7 @@ use ratatui::{
 use super::data::{self, FOES, FoeKind, FoeTier, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY};
 use super::session::{Picker, Scene};
 use super::sim::Threat;
-use super::state::{Fight, Pick, Quarry, Refusal, Sheet, Slot};
+use super::state::{Fight, Pick, Quarry, Sheet, Shut, Slot};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, tint_rgb,
@@ -686,13 +686,10 @@ fn offer_lines(offer: &Offer, cursor: Pick) -> Vec<Line<'static>> {
 /// refuse a step in with; `None` while the static is open.
 fn shut_reason(sheet: &Sheet) -> Option<&'static str> {
     match sheet.shut() {
-        Some(Refusal::SignalDown) => {
+        Some(Shut::SignalDown) => {
             Some("your signal is down. nothing in there can see you until tomorrow.")
         }
-        Some(Refusal::NoRations) => Some("you are spent for today. the static will keep."),
-        Some(other) => {
-            unreachable!("a step in is shut by the signal or the rations, not {other:?}")
-        }
+        Some(Shut::NoRations) => Some("you are spent for today. the static will keep."),
         None => None,
     }
 }

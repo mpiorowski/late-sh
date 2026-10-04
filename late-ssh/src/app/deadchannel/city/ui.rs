@@ -38,7 +38,7 @@ use ratatui::{
 
 use crate::app::deadchannel::fight::data::{
     CART_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT, LOAN_FEE_PERCENT,
-    LOCKER_FEE_PERCENT, TRADE_IN_PERCENT, drink_edge,
+    LOCKER_FEE_PERCENT, TRADE_IN_PERCENT, drink_edge, patch_rate,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{
@@ -1861,7 +1861,10 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ]));
     }
     lines.push(Line::from(Span::styled(
-        "half a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+        format!(
+            "{} a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+            patch_rate()
+        ),
         dim_text,
     )));
     if let Some(till) = view.till {
@@ -2169,20 +2172,8 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ),
     ]));
     lines.push(Line::default());
-    // Why the bartender would not pour, in the order the row checks.
-    let refusal = if sheet.is_down() {
-        Some("your signal is down. the bartender does not pour for static.")
-    } else if sheet.fight.is_some() {
-        Some("not with a glyph waiting on you. the glass can wait.")
-    } else if sheet.rations_left <= 0 {
-        Some("you are spent for today. it would wear off before you used it.")
-    } else if sheet.drink.is_some() {
-        Some("one glass a day. come back after the roll.")
-    } else if sheet.crystals < DRINK_CRYSTALS {
-        Some("a glass is a crystal, and you have none.")
-    } else {
-        None
-    };
+    // Why the bartender would not pour, in the row's own order and words.
+    let refusal = sheet.glass_refused().map(|(_, line)| line);
     let edge = drink_edge(sheet.level);
     for drink in Drink::MENU {
         let (label, does) = match drink {
