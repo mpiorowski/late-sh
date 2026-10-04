@@ -78,7 +78,7 @@ fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
     let snapshot = booth();
     let view_of = |n: u128, source| view(&snapshot, Uuid::from_u128(n), source, None).unwrap();
 
-    let playing = view_of(1, AudioSource::Icecast);
+    let playing = view_of(1, AudioSource::Radio);
     assert_eq!(
         words(&playing),
         vec![
@@ -116,7 +116,7 @@ fn the_words_say_what_the_track_is_who_brought_it_and_where_it_stands() {
 #[test]
 fn the_picture_is_the_thumbnail_once_it_has_loaded() {
     let snapshot = booth();
-    let mut track = view(&snapshot, Uuid::from_u128(1), AudioSource::Icecast, None).unwrap();
+    let mut track = view(&snapshot, Uuid::from_u128(1), AudioSource::Radio, None).unwrap();
 
     let drawn: Vec<String> = body(usize::from(WIDTH), &track)
         .picture
@@ -179,7 +179,7 @@ fn the_picture_is_the_thumbnail_once_it_has_loaded() {
 #[test]
 fn the_compact_line_names_who_queued_what() {
     let snapshot = booth();
-    let track = view(&snapshot, Uuid::from_u128(2), AudioSource::Icecast, None).unwrap();
+    let track = view(&snapshot, Uuid::from_u128(2), AudioSource::Radio, None).unwrap();
     let text: String = compact_spans(40, &track)
         .iter()
         .map(|span| span.content.as_ref())

@@ -1827,8 +1827,11 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                 interactive,
                 vec![
                     Line::from(Span::styled(now, Style::default().fg(theme::AMBER_GLOW()))),
-                    Line::from(Span::styled("v v music booth · v x cycle source", text)),
-                    Line::from(Span::styled("v s skip vote · v 1-4 pick a station", text)),
+                    Line::from(Span::styled("v v music booth · v x switch source", text)),
+                    Line::from(Span::styled(
+                        "v s skip vote · v 1-3 pinned station · v r stations",
+                        text,
+                    )),
                     Line::from(Span::styled("m mute · +/- volume · Enter opens booth", dim)),
                     Line::from(Span::styled("[?] full guide, opens on the Pair tab", dim)),
                 ],

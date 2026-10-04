@@ -164,36 +164,33 @@ fn draw_tv(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
     );
 }
 
-/// The tab board: who has bought the house the most rounds, all time.
+/// The tab board: who has ordered the most drinks here, all time.
 fn draw_tab_board(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    let mut lines = vec![Line::from(Span::styled("the tab · rounds bought", faint))];
+    let mut lines = vec![Line::from(Span::styled("the tab · drinks ordered", faint))];
     let tab = &view.state.wall().tab;
     if tab.is_empty() {
         lines.push(Line::from(Span::styled(
-            "nobody has bought the stools a round yet.",
+            "nobody has ordered a drink here yet.",
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
         )));
     }
-    for (idx, buyer) in tab.iter().enumerate() {
-        let rounds = if buyer.rounds == 1 { "round" } else { "rounds" };
+    for (idx, regular) in tab.iter().enumerate() {
+        let drinks = if regular.drinks == 1 {
+            "drink"
+        } else {
+            "drinks"
+        };
         lines.push(Line::from(vec![
             Span::styled(format!("{} ", idx + 1), faint),
             Span::styled(
-                buyer.username.clone(),
+                regular.username.clone(),
                 Style::default().fg(theme::TEXT_BRIGHT()),
             ),
-            Span::styled(
-                format!(
-                    "  {} {rounds}  {} chips",
-                    buyer.rounds,
-                    thousands(buyer.chips)
-                ),
-                dim,
-            ),
+            Span::styled(format!("  {} {drinks}", thousands(regular.drinks)), dim),
         ]));
     }
     frame.render_widget(Paragraph::new(lines), area);

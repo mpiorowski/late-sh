@@ -6,8 +6,10 @@
 //!
 //! Before it, the picker (`handle_picker`): `f` steps in against the glyph
 //! of your level, `g` against the one below (its neighbour on the keys),
-//! up and down move the cursor and Enter takes it. Esc closes it from the
-//! root, the same way.
+//! `b` against the bright one on a step one waits behind, up and down
+//! move the cursor and Enter takes it. With nothing on offer (spent, or
+//! the signal down) any of those closes the picker instead. Esc closes it
+//! from the root, the same way.
 
 use crate::app::input::ParsedInput;
 use crate::app::state::App;
@@ -15,30 +17,28 @@ use crate::app::state::App;
 use super::state::{Command, Pick};
 
 /// Keys while the picker is open. The row decides what a step in meets;
-/// the picker only keeps `g` from asking for a glyph under the flicker.
+/// `FightSession::choose` only keeps a key from asking for a pick the
+/// picker is not showing.
 pub fn handle_picker(app: &mut App, event: &ParsedInput) -> bool {
     let Some(picker) = &app.fight.picker else {
         return false;
     };
     let cursor = picker.cursor;
-    let below = app
-        .fight
-        .sheet
-        .as_ref()
-        .is_some_and(|sheet| sheet.level > 1);
     match event {
         ParsedInput::Byte(b'f') | ParsedInput::Char('f') => {
-            app.fight.step_in(Pick::Fair);
+            app.fight.choose(Pick::Fair);
             true
         }
         ParsedInput::Byte(b'g') | ParsedInput::Char('g') => {
-            if below {
-                app.fight.step_in(Pick::Lower);
-            }
+            app.fight.choose(Pick::Lower);
+            true
+        }
+        ParsedInput::Byte(b'b') | ParsedInput::Char('b') => {
+            app.fight.choose(Pick::Bright);
             true
         }
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
-            app.fight.step_in(cursor);
+            app.fight.choose(cursor);
             true
         }
         ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {

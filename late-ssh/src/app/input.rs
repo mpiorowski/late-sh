@@ -876,6 +876,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.stations_modal_state.is_open() {
+        crate::app::audio::stations_modal::input::handle_input(app, event);
+        return;
+    }
+
     if app.chat.has_news_modal() {
         handle_news_modal_input(app, &event);
         return;
@@ -2133,6 +2138,10 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         app.booth_modal_state.close();
+        return;
+    }
+    if app.stations_modal_state.is_open() {
+        app.stations_modal_state.close();
         return;
     }
     if app.paper.modal_visible() {

@@ -67,10 +67,10 @@ fn the_runner_and_the_wire_popover_render_at_the_spawn() {
 #[test]
 fn a_shop_panel_lists_its_catalog() {
     let mut state = State::new();
-    state.open_panel(Landmark::Bar);
+    state.open_panel(Landmark::Board);
     let screen = render(&state, 120, 40);
-    assert!(screen.contains("dead air"), "{screen}");
-    assert!(screen.contains("the signal is warm in here."), "{screen}");
+    assert!(screen.contains("the board"), "{screen}");
+    assert!(screen.contains("standing orders"), "{screen}");
 }
 
 #[test]
@@ -89,7 +89,8 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
         uuid::Uuid::nil(),
         chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
     );
-    sheet.bits = 300;
+    sheet.level = 3;
+    sheet.bits = 1300;
     sheet.weapon_tier = 2;
     state.pick_down();
     state.pick_down();
@@ -107,7 +108,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                     sheet: Some(&sheet),
                     scene: None,
                     picker: None,
-                    till: Some("the armorer hands over the box cutter. 225 bits."),
+                    till: Some("the armorer hands over the box cutter. 506 bits."),
                     tailor: tailor_ui::MirrorView {
                         draft: None,
                         word: None,
@@ -131,7 +132,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
         }
         screen.push('\n');
     }
-    assert!(screen.contains("on hand 300 bits"), "{screen}");
+    assert!(screen.contains("on hand 1300 bits"), "{screen}");
     assert!(screen.contains("weapon box cutter"), "{screen}");
     assert!(screen.contains("armor street clothes"), "{screen}");
     assert!(
@@ -139,16 +140,140 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
         "the cursor on tier 3\n{screen}"
     );
     assert!(screen.contains("the last broadcast"), "{screen}");
-    assert!(screen.contains("10350"), "{screen}");
-    // Tier 3 weapon: 585 less 75% of 225. Tier 3 armor off street clothes: 585.
-    assert!(screen.contains("[w] tire iron for 417 bits"), "{screen}");
+    assert!(screen.contains("23287"), "{screen}");
+    // Tier 3 weapon: 1316 less 75% of 506 (379). Tier 3 armor off street clothes: 1316.
+    assert!(screen.contains("[w] tire iron for 937 bits"), "{screen}");
     assert!(
-        screen.contains("[a] padded jacket for 585 bits"),
+        screen.contains("[a] padded jacket for 1316 bits"),
         "{screen}"
     );
     assert!(
-        screen.contains("the armorer hands over the box cutter. 225 bits."),
+        screen.contains("the armorer hands over the box cutter. 506 bits."),
         "the till line\n{screen}"
+    );
+}
+
+/// The city with `state` over it, `sheet` as the mirror, and `till` as the
+/// counter's last word, on a 120 by 40 terminal.
+fn render_with_sheet(state: &State, sheet: &Sheet, till: Option<&str>) -> String {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                CityView {
+                    state,
+                    own_username: "mira",
+                    look: None,
+                    sheet: Some(sheet),
+                    scene: None,
+                    picker: None,
+                    till,
+                    tailor: tailor_ui::MirrorView {
+                        draft: None,
+                        word: None,
+                        changed: false,
+                        saving: false,
+                    },
+                    guide: &GuideState::new(),
+                    own_user_id: Uuid::nil(),
+                    street: &StreetView::new(),
+                    runner_looks: &HashMap::new(),
+                    usernames: &UsernameLookup::new(&HashMap::new(), None),
+                },
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    screen
+}
+
+/// Dead Air lists what each glass does at this level, and spells the
+/// refusal the row would give ahead of the keys.
+#[test]
+fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Bar);
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.level = 8;
+    sheet.signal = 80;
+    sheet.crystals = 2;
+    let till = "static on ice. it goes down like a short circuit. +3 attack until the roll.";
+    let screen = render_with_sheet(&state, &sheet, Some(till));
+    assert!(screen.contains(" dead air "), "{screen}");
+    assert!(
+        screen.contains("crystals 2      in you nothing"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[s] static on ice     +3 attack"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[d] dead air, neat    +3 defense"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[t] test pattern      +16 signal, and filled"),
+        "{screen}"
+    );
+    assert!(screen.contains(till), "the bartender's last word\n{screen}");
+
+    sheet.crystals = 0;
+    let dry = render_with_sheet(&state, &sheet, None);
+    assert!(
+        dry.contains("a glass is a crystal, and you have none."),
+        "{dry}"
+    );
+
+    sheet.crystals = 1;
+    sheet.drink = Some(crate::app::deadchannel::fight::state::Drink::DeadAirNeat);
+    let poured = render_with_sheet(&state, &sheet, None);
+    assert!(poured.contains("in you dead air, neat"), "{poured}");
+    assert!(
+        poured.contains("one glass a day. you still have the dead air, neat in you."),
+        "{poured}"
+    );
+}
+
+/// The blade shop prices the next tier up in each slot in crystals, and
+/// says what the wall would ask for it.
+#[test]
+fn the_blade_cart_prices_the_next_tier_up_in_crystals() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Blades);
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.weapon_tier = 3;
+    sheet.armor_tier = 15;
+    sheet.crystals = 3;
+    let screen = render_with_sheet(&state, &sheet, None);
+    assert!(screen.contains(" the blade shop "), "{screen}");
+    assert!(
+        screen.contains("crystals 3      weapon tire iron"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[w] rebar club for 3 crystals   the wall asks"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[a] nothing is made past the top of the wall"),
+        "{screen}"
     );
 }
 
@@ -173,7 +298,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                         sheet,
                         scene: None,
                         picker: None,
-                        till: Some("patch works fast. +18 signal, back to full. 54 bits."),
+                        till: Some("patch works fast. +18 signal, back to full. 27 bits."),
                         tailor: tailor_ui::MirrorView {
                             draft: None,
                             word: None,
@@ -219,9 +344,9 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
         screen.contains("signal 12/30      on hand 100 bits"),
         "{screen}"
     );
-    assert!(screen.contains("[p] patch to full for 54 bits"), "{screen}");
+    assert!(screen.contains("[p] patch to full for 27 bits"), "{screen}");
     assert!(
-        screen.contains("patch works fast. +18 signal, back to full. 54 bits."),
+        screen.contains("patch works fast. +18 signal, back to full. 27 bits."),
         "{screen}"
     );
 

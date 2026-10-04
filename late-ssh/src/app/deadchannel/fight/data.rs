@@ -16,8 +16,11 @@ pub const RATIONS_PER_DAY: i32 = 10;
 pub const SIGNAL_PER_LEVEL: i32 = 10;
 /// Bits a fresh runner holds (`START_GOLD`).
 pub const START_BITS: i64 = 50;
-/// Exp kept when the signal drops (`EXP_KEEP_ON_DEATH`).
-pub const EXP_KEEP_ON_DEATH: f64 = 0.70;
+/// Exp kept when the signal drops (`EXP_KEEP_ON_DEATH`). LoGD keeps 90%;
+/// 65% is what makes a few drops on the way up cost the reckless runner
+/// a week (`sim_test.rs`), with the wall and patch priced as they are
+/// (`BALANCE.md`).
+pub const EXP_KEEP_ON_DEATH: f64 = 0.65;
 /// Levels 1 to 15.
 pub const MAX_LEVEL: i32 = 15;
 /// What the armorer pays for the piece you hand back, as a percentage of
@@ -332,29 +335,142 @@ pub fn title(marks: i32) -> Option<&'static str> {
     }
 }
 
-/// What a glyph pays over LoGD's table, bits and exp alike. LoGD paced a
-/// season; the climb here is three to four weeks to the first mark
-/// (GAME.md, "The daily ration loop"), and `sim_test.rs` holds that
-/// window. Paying more per kill instead of asking less per level keeps
-/// the ladder, the armorer's prices, and the glyphs' numbers LoGD's, and
-/// keeps the bits in step with the exp, so the gear is affordable when
-/// the level needs it. This is the one knob for the pace.
-pub const PAY_SCALE: i64 = 3;
+/// What a glyph pays over LoGD's table, in bits and in exp, as
+/// percentages. LoGD paced a season; the climb here is three to four weeks
+/// to the first mark (GAME.md, "The daily ration loop"), so the exp is
+/// tripled and `sim_test.rs` holds that window. The bits are a separate
+/// knob on purpose: exp sets the pace, bits set how far the purse reaches
+/// at the armorer and at patch (`fight/BALANCE.md`).
+pub const PAY_BITS_PERCENT: i64 = 300;
+pub const PAY_EXP_PERCENT: i64 = 300;
 
-/// The glyph that answers a runner of `level`: one kind and one tier per
-/// level, clamped to the table, its pay scaled by [`PAY_SCALE`].
+/// The armorer's prices as a percentage of the city's ladder
+/// (`city/data.rs::COST_LADDER`, LoGD's). The knob that decides how the kit
+/// tracks the level: `fight/BALANCE.md`, "The kit follows the level".
+pub const PRICE_PERCENT: i64 = 225;
+
+/// What patch charges per missing point of signal, per level, as a
+/// percentage of a bit.
+pub const PATCH_PERCENT: i64 = 50;
+
+/// [`PATCH_PERCENT`] as the panel says it, so the copy moves with the knob.
+pub fn patch_rate() -> String {
+    match PATCH_PERCENT {
+        50 => "half a bit".to_string(),
+        100 => "a bit".to_string(),
+        percent => format!("{percent}% of a bit"),
+    }
+}
+
+/// Every number a balance pass turns, in one value, so the sim and the
+/// arena can play the same machine under a candidate set and compare it
+/// with the live one in a single run (`fight/BALANCE.md`). The live game
+/// plays [`RULES`], built from the constants beside it; nothing in
+/// production builds another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rules {
+    pub pay_bits_percent: i64,
+    pub pay_exp_percent: i64,
+    pub price_percent: i64,
+    pub trade_in_percent: i64,
+    pub patch_percent: i64,
+    pub exp_keep_on_death: f64,
+    pub crystal_drop_one_in: u32,
+    pub bright_signal_percent: i32,
+    pub bright_edge_percent: u32,
+    pub bright_bits_times: i64,
+    pub cart_crystals: i32,
+}
+
+/// The rules the game is played under.
+pub const RULES: Rules = Rules {
+    pay_bits_percent: PAY_BITS_PERCENT,
+    pay_exp_percent: PAY_EXP_PERCENT,
+    price_percent: PRICE_PERCENT,
+    trade_in_percent: TRADE_IN_PERCENT,
+    patch_percent: PATCH_PERCENT,
+    exp_keep_on_death: EXP_KEEP_ON_DEATH,
+    crystal_drop_one_in: CRYSTAL_DROP_ONE_IN,
+    bright_signal_percent: BRIGHT_SIGNAL_PERCENT,
+    bright_edge_percent: BRIGHT_EDGE_PERCENT,
+    bright_bits_times: BRIGHT_BITS_TIMES,
+    cart_crystals: CART_CRYSTALS,
+};
+
+impl Rules {
+    /// The glyph that answers a runner of `level`: one kind and one tier
+    /// per level, clamped to the table, its pay scaled.
+    pub fn foe(&self, level: i32) -> (usize, &'static FoeKind, FoeTier) {
+        let index = (level.clamp(1, MAX_LEVEL) - 1) as usize;
+        let tier = FOE_TIERS[index];
+        (
+            index,
+            &FOES[index],
+            FoeTier {
+                bits: tier.bits * self.pay_bits_percent / 100,
+                exp: tier.exp * self.pay_exp_percent / 100,
+                ..tier
+            },
+        )
+    }
+
+    /// The glyph a level below a runner of `level`, its pay cut to
+    /// [`LOWER_PAY_PERCENT`]. `None` at level 1: there is nothing below
+    /// the flicker.
+    pub fn lower_foe(&self, level: i32) -> Option<(usize, &'static FoeKind, FoeTier)> {
+        match level {
+            i32::MIN..=1 => None,
+            level => {
+                let (index, kind, tier) = self.foe(level - 1);
+                Some((
+                    index,
+                    kind,
+                    FoeTier {
+                        bits: tier.bits * LOWER_PAY_PERCENT / 100,
+                        exp: tier.exp * LOWER_PAY_PERCENT / 100,
+                        ..tier
+                    },
+                ))
+            }
+        }
+    }
+
+    /// The bright glyph that answers a runner of `level`: the kind of the
+    /// level, its tier lifted, its bits multiplied, its exp plain.
+    pub fn bright_foe(&self, level: i32) -> (usize, &'static FoeKind, FoeTier) {
+        let (index, kind, tier) = self.foe(level);
+        (
+            index,
+            kind,
+            FoeTier {
+                signal: tier.signal * self.bright_signal_percent / 100,
+                attack: (tier.attack * self.bright_edge_percent).div_ceil(100),
+                defense: (tier.defense * self.bright_edge_percent).div_ceil(100),
+                bits: tier.bits * self.bright_bits_times,
+                exp: tier.exp,
+            },
+        )
+    }
+
+    /// The price on the armorer's wall for `tier` (1 to 15).
+    pub fn price(&self, tier: i32) -> i64 {
+        i64::from(crate::app::deadchannel::city::data::COST_LADDER[(tier - 1) as usize])
+            * self.price_percent
+            / 100
+    }
+
+    /// What the armorer pays for a carried `tier`; nothing for bare hands.
+    pub fn trade_in(&self, tier: i32) -> i64 {
+        match tier {
+            0 => 0,
+            tier => self.price(tier) * self.trade_in_percent / 100,
+        }
+    }
+}
+
+/// The live glyph of `level` ([`Rules::foe`] under [`RULES`]).
 pub fn foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
-    let index = (level.clamp(1, MAX_LEVEL) - 1) as usize;
-    let tier = FOE_TIERS[index];
-    (
-        index,
-        &FOES[index],
-        FoeTier {
-            bits: tier.bits * PAY_SCALE,
-            exp: tier.exp * PAY_SCALE,
-            ..tier
-        },
-    )
+    RULES.foe(level)
 }
 
 /// What a glyph a level down pays, as a percentage of its own pay, bits
@@ -363,26 +479,75 @@ pub fn foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
 /// so it pays half. Rounded down.
 pub const LOWER_PAY_PERCENT: i64 = 50;
 
-/// The glyph a level below a runner of `level`, its pay cut to
-/// [`LOWER_PAY_PERCENT`]. `None` at level 1: there is nothing below the
-/// flicker.
+/// The live glyph a level below ([`Rules::lower_foe`] under [`RULES`]).
 pub fn lower_foe_for_level(level: i32) -> Option<(usize, &'static FoeKind, FoeTier)> {
-    match level {
-        i32::MIN..=1 => None,
-        level => {
-            let (index, kind, tier) = foe_for_level(level - 1);
-            Some((
-                index,
-                kind,
-                FoeTier {
-                    bits: tier.bits * LOWER_PAY_PERCENT / 100,
-                    exp: tier.exp * LOWER_PAY_PERCENT / 100,
-                    ..tier
-                },
-            ))
-        }
-    }
+    RULES.lower_foe(level)
 }
+
+/// One fair kill in this many leaves a crystal in the static: LoGD's
+/// forest gem, the small chance of something special. A step down never
+/// leaves one (the way out is not a farm), and a bright glyph always does.
+pub const CRYSTAL_DROP_ONE_IN: u32 = 12;
+
+/// Steps of the day that a bright glyph waits behind, out of the day's
+/// [`RATIONS_PER_DAY`]. Two a day: enough that every ritual has a choice
+/// in it, few enough that it is one.
+pub const BRIGHT_STEPS_PER_DAY: usize = 2;
+
+/// What a bright glyph has over the glyph of its level: a third more
+/// signal, 15% more attack and defense (rounded up), and twice the
+/// bits. The exp is the plain glyph's: the bright one is for the crystal
+/// and the purse, and the climb's pace stays the rations' (GAME.md, "The
+/// daily ration loop"). `arena_test.rs` holds how it reads from a kit
+/// level with the runner.
+pub const BRIGHT_SIGNAL_PERCENT: i32 = 135;
+pub const BRIGHT_EDGE_PERCENT: u32 = 115;
+pub const BRIGHT_BITS_TIMES: i64 = 2;
+
+/// The live bright glyph ([`Rules::bright_foe`] under [`RULES`]).
+pub fn bright_foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
+    RULES.bright_foe(level)
+}
+
+/// The steps of `day` (1 is the first ration spent, [`RATIONS_PER_DAY`]
+/// the last) that a bright glyph waits behind. A pure function of the
+/// date, so it is the same two steps for every runner that day (GAME.md,
+/// "The lesson of Le Word": one object for the room to talk about), needs
+/// no column, and cannot be rerolled. Ascending.
+pub fn bright_steps(day: chrono::NaiveDate) -> [i32; BRIGHT_STEPS_PER_DAY] {
+    use chrono::Datelike;
+    let seed = splitmix(day.num_days_from_ce() as u64);
+    let first = (seed % RATIONS_PER_DAY as u64) as i32;
+    // The second lands on one of the other nine steps.
+    let second =
+        (first + 1 + ((seed >> 32) % (RATIONS_PER_DAY as u64 - 1)) as i32) % RATIONS_PER_DAY;
+    [first.min(second) + 1, first.max(second) + 1]
+}
+
+/// SplitMix64's finalizer: one well-mixed word from a small seed.
+fn splitmix(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// What a glass at Dead Air costs, in crystals. One glass a day.
+pub const DRINK_CRYSTALS: i32 = 1;
+
+/// What the day's glass adds to attack (static on ice) or defense (dead
+/// air, neat) at `level`: a point, and one more every four levels.
+pub fn drink_edge(level: i32) -> i32 {
+    1 + level / 4
+}
+
+/// What the test pattern adds to the signal's max per level, until the
+/// roll: a fifth of [`SIGNAL_PER_LEVEL`].
+pub const DRINK_SIGNAL_PER_LEVEL: i32 = 2;
+
+/// What the blade shop asks for the next tier up from the one a slot
+/// carries, in crystals and nothing else.
+pub const CART_CRYSTALS: i32 = 3;
 
 /// The locker's cut of every deposit, a percentage of what goes in,
 /// rounded up so no deposit is free. LoGD's bank takes nothing and pays
@@ -426,6 +591,12 @@ pub const RUN_LINES: [&str; 2] = [
     "you get away. the static closes behind you.",
     "you back out of the picture. it does not follow.",
 ];
+
+/// A crystal left by a kill, under the kill's own line.
+pub const CRYSTAL_LINE: &str = "something is left in the static where it stood. a crystal.";
+
+/// The bright glyph's arrival, under the glyph's own line.
+pub const BRIGHT_LINE: &str = "this one is bright. it burns harder, and it is carrying something.";
 
 /// The lower glyph's arrival, under its own line: the step down is said.
 pub const STEPPED_DOWN_LINE: &str = "you went looking for something smaller. it pays like it.";

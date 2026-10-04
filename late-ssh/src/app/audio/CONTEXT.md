@@ -54,7 +54,8 @@ late-ssh/src/app/audio/
 │   └── svc.rs              # NowPlayingService: 10s Icecast poll, watch<HashMap<mount, NowPlaying>>
 └── radio_meta/
     ├── mod.rs
-    └── svc.rs              # RadioMetaService: Nightride SSE metadata, watch<HashMap<station, ArtistTitle>>
+    ├── polled.rs           # PolledFeed (Plaza, CodeRadio, ParadiseMellow, FipJazz, SwissJazz, SwissClassic): endpoint URL, catalogue key, payload parser
+    └── svc.rs              # RadioMetaService: Nightride SSE loop + one poll loop per PolledFeed, watch<HashMap<station, ArtistTitle>>
 ```
 
 Cross-crate touchpoints:
@@ -83,7 +84,7 @@ Cross-crate touchpoints:
 - `youtube.rs` is pure URL/HTTP — no DB, no channels, no service state.
 - `viz.rs` is pure render + signal smoothing. Lives in this domain because the data source (Icecast) is audio.
 - `now_playing/svc.rs` is independent of `AudioService` — separate channel, separate task, only shares a directory.
-- `radio_meta/svc.rs` is likewise independent: its own watch channel and its own SSE task, started once in `main.rs` next to the now-playing poller. It only fetches Nightride metadata; it never proxies Nightride audio.
+- `radio_meta/svc.rs` is likewise independent: its own watch channel and one task (the Nightride SSE loop joined with the polled-feed loops), started once in `main.rs` next to the now-playing poller. It only fetches third-party metadata; it never proxies third-party audio.
 - Liquidsoap no longer has a telnet control path in this crate; house streams are always-on mounts.
 
 Keep `mod.rs` declaration-only — no `pub use` re-exports.
@@ -242,7 +243,7 @@ YouTube item without entering the switching/playback path.
 - `source_changed { audio_mode: "icecast" | "youtube" }`
 - `queue_update { current, queue, sequence }`
 - `now_playing_update { mounts: { "<mount>": Track } }` — full per-mount icecast now-playing snapshot, pushed by `AudioService::start_meta_forward_task` whenever any mount's track changes; also sent once in the connect catch-up burst.
-- `radio_meta_update { stations: { "<station>": { artist, title } } }` — full Nightride metadata snapshot, pushed on change (deduped, since the radio-meta watch ticks on every SSE event); empty map while the feed is down. Also in the catch-up burst. CLIs and the webview helper ignore both events.
+- `radio_meta_update { stations: { "<station>": { artist, title } } }` — full radio station metadata snapshot (`svc::pair_radio_tracks`: Nightride, any enabled polled station, and the house mounts, which are radio stations to the client; a house track with no artist tag carries an empty artist), pushed on change (deduped, since the radio-meta watch ticks on every SSE event); a station is absent while its feed is down. House mounts are in this map so CLIs that only read radio tracks from it show the house track in MPRIS. Also in the catch-up burst. CLIs and the webview helper ignore both events.
 
 ### Server → client `PairControlMessage` (`paired_clients.rs:22-30`)
 - `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`.
@@ -286,8 +287,8 @@ Mechanics:
   sent on pair-WS connect, on persisted `v+x` source changes, and when CLI
   presence changes for a token.
 - CLI stores `source_is_icecast` as the native-output gate; despite the legacy
-  name it is true for direct stream sources (`icecast`, `radio`) and false for
-  `youtube`. Output emits silence when the gate is false without touching the
+  name it is true for direct stream sources (`radio`, and the retired
+  `icecast`) and false for `youtube`. Output emits silence when the gate is false without touching the
   user `muted` flag.
 - CLI retargets the decoder thread on source changes. `icecast` restores the
   configured `LATE_AUDIO_BASE_URL`; `radio` uses the server-sent station URL
@@ -388,23 +389,25 @@ TUI sees, and it holds no per-user server state at all.
 - **`/api/listen` is memory-only.** It reads `AudioService::current_snapshot()`
   (the `snapshot_tx` watch, not the DB-backed `snapshot()`), the now-playing
   watch, and the radio-meta watch. Polling it costs no DB work. Its response
-  types (`PublicTrack`, `PublicAir`) are deliberately separate from
+  types (`PublicTrack`, `PublicAir`, `PublicStation`) are deliberately separate from
   `QueueItemView`/`QueueSnapshot` so internal fields (`submitter_id`, vote
   score, unskippable, the 200-row history, skip progress) cannot leak into a
   published contract; `api_test.rs` asserts those names never appear in the
   body.
 - **Strict station filtering.** The Nightride `/meta` feed carries stations
-  late.sh does not offer (darksynth, horrorsynth, ebsm).
-  `stations::radio_station_url_by_key` returns None for those and they are
-  dropped from the response, rather than resolving to the Chillsynth default
-  the way `RadioStation::from_settings_str` would.
+  late.sh does not offer (rekt, rektory).
+  `RadioStation::from_key` returns None for those (and for disabled
+  catalogue rows) and they are dropped from the response, rather than
+  resolving to the Chillsynth default the way
+  `RadioStation::from_settings_str` would.
 - **One audible surface.** Picking any source on the page stops the others.
-  Icecast mounts play through late-web's `/stream/{mount}` proxy, Nightride
+  Icecast mounts play through late-web's `/stream/{mount}` proxy, guest
   stations from the `stream_url` in the response, YouTube through the official
   IFrame player. The IFrame API script is only fetched once someone actually
   picks YouTube.
-- **Source order is a product rule.** Nightride first, then the community
-  queue, then house radio last. Our own playlist is the fallback option, not
+- **Source order is a product rule.** Guest stations first (one section per
+  provider, built by the page from each station's `provider` and
+  `provider_url`), then the community queue, then house radio last. Our own playlist is the fallback option, not
   the headline. `listen_test.rs` asserts the ordering.
 - **Joining mid-track.** The page seeks in using `started_at_ms` rather than
   restarting the current song. That is the same one-shot-seek idea the webview
@@ -412,8 +415,8 @@ TUI sees, and it holds no per-user server state at all.
   seek each listener plays its own timeline.
 - **Attribution is load-bearing, not decoration.** Nightride's approval is
   conditioned on visible artist credit, and the house tracks are CC-BY. The
-  page shows `artist - title` for both, a `via nightride.fm` link, a link to
-  `MUSIC.md`, and `queued by <user>` for YouTube.
+  page shows `artist - title` for both, a `streamed directly from` link to
+  each guest provider, a link to `MUSIC.md`, and `queued by <user>` for YouTube.
 
 ---
 
@@ -500,94 +503,93 @@ and `Ambient` both count as music.
 - Independent of `AudioService` — does not subscribe to its channels.
 - Consumers:
   - `GET /api/now-playing?mount={chill|classical}` (`api.rs`) — `mount` is optional and defaults to `chill`, which keeps late-web's existing param-less fetch working unchanged. Response shape is unchanged.
-  - The sidebar music stage (§12), which looks up the USER'S selected stream (`users.settings.icecast_stream`) in the map — extraction happens in `app/render.rs`, so `sidebar.rs` still receives a plain `Option<&NowPlaying>`. When the selected mount has no entry yet, the dock row shows `no signal` and the detail progress row stays blank.
+  - The sidebar music stage (§12), when the user's selected station is a house mount: `stations::station_now_playing` looks the mount up in the map and `sidebar.rs` receives the preformatted `radio_now_playing` text. When the mount has no entry yet, the track row shows the station label.
   - The pair WS via `AudioService::start_meta_forward_task` (§5): per-mount snapshots are broadcast as `now_playing_update` whenever the watch changes, for paired clients.
 
 ---
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail as a **fixed dock + detail layout**: the stage is always exactly `MUSIC_STAGE_HEIGHT = 16` rows for every active source. Rows 2-7 are a constant three-source dock (title bar + now-playing line per source, fixed order radio → youtube → icecast; radio leads because it is the default source); row 8 is a labeled rule naming the active source; rows 9-14 are the active source's controls padded/truncated to exactly `MUSIC_DETAIL_HEIGHT = 6` rows. `v+x` cycles sources in dock order, so the highlight walks down the dock as the user cycles. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
+Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 11` rows (`MUSIC_STAGE_HEIGHT = 14` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
 
-**Two product rules (user requirements):**
-1. **Every source always shows its now-playing line, even when inactive.** The dock exists so users can see what's on the other sources and judge whether switching is worth it. Never collapse a source to a title-only row. Only controls (progress, skip meter, queue, selectors) belong exclusively to the active detail area.
-2. **Chrome must not move between states.** Title bars, the rule, the detail area, and the footer sit on the same rows for all three sources and all data states. No variable-height accordion; see `feedback_stable_chrome.md` in auto-memory.
-3. **The stage never claims audio the session cannot produce.** With no client paired, the eq strip shows the guide pointer rather than dancing bars, matching the volume row's `—` (§10).
+**Product rules (user requirements):**
+1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
+2. **The YouTube track is always visible, the radio track only while on radio.** A radio listener wants to know whether the booth is playing something worth switching for; a YouTube listener does not care what the radio is playing, so radio collapses to its title bar there.
+3. **The stage height is constant.** Both sources fill exactly 11 dock rows, so the panels below never shift.
+4. **The stage never claims audio the session cannot produce.** With no client paired, the eq strip shows the guide pointer rather than dancing bars, matching the volume row's `—` (§10).
 
-### Layout (rows 0-15)
+### Layout (dock rows 0-10)
 
-| Row(s) | Content |
-|--------|---------|
-| 0      | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%`. Renders `muted` (italic faint) when muted, `—` when no client is paired. |
-| 1      | Volume keybind hints: `m mute  -= vol`. |
-| 2-3    | Radio dock entry: title bar (with source-count tag) + now-playing line for the USER'S selected station. |
-| 4-5    | YouTube dock entry: title bar + now-playing line. |
-| 6-7    | Icecast dock entry: title bar + now-playing line for the USER'S selected stream. |
-| 8      | Labeled rule: `── <active source> ───…` (dim dashes, amber-dim italic label). |
-| 9-14   | Detail area: the active source's rows, truncated/padded to exactly 6. |
-| 15     | Footer keybind hints: `v+v queue  v+x source`. |
+| Row | On radio | On youtube |
+|-----|----------|------------|
+| 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, `—` when no client is paired) | same |
+| 1   | `radio` title bar + count | `radio` title bar + count |
+| 2   | current station's track | `youtube` title bar + count |
+| 3   | rule naming the current station | youtube track |
+| 4-6 | pinned slot rows `v1`..`v3` | progress, skip meter, `next ⌄` |
+| 7   | provider attribution | queue row 1 |
+| 8   | `youtube` title bar + count | queue row 2 |
+| 9   | youtube track (dim) | queue row 3 |
+| 10  | footer `v+r tune  v+x source` | footer `v+v queue  v+x source` |
 
-Dock now-playing rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` bold, inactive sources `TEXT_DIM`; a `None` track renders `no signal` in `TEXT_FAINT`. Track text per source:
-- **youtube** — `youtube_track_text(queue)`: `Channel - Title` for the current item (falls back to `by <submitter> - Title`, then bare title); `fallback stream` when nothing is submitted (the fallback is the steady state, never "queue empty").
-- **icecast** — `icecast_track_text(now)`: `Artist - Title` for the selected stream's entry in the per-mount now-playing map (§11); `no signal` until that mount has an entry.
-- **radio** — live `Artist - Title` for the selected station from the Nightride SSE watch (`radio_now_playing`); falls back to the station display name (`chillsynth` etc.) while metadata is absent.
+Track rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` bold, the youtube peek on radio `TEXT_DIM`. Track text per source:
+- **youtube**: `youtube_track_text(queue)`: `Channel - Title` for the current item (falls back to `by <submitter> - Title`, then bare title); `fallback stream` when nothing is submitted (the fallback is the steady state, never "queue empty").
+- **radio**: live `Artist - Title` (or a bare title) for the selected station from the `RadioMetaService` map (`radio_now_playing`); falls back to the station label while metadata is absent.
 
-Detail areas (only the active source's builder runs; all are clamped to 6 rows by the caller):
-- **YouTube** (`youtube_detail_lines`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 3` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
-- **Icecast** (`icecast_detail_lines`): progress/elapsed for the selected stream (blank row when no signal), then two stream selector rows — `chill v1`, `classical v2`.
-- **Radio** (`radio_detail_lines`, exactly 6): five station selector rows — `chillsynth v1`, `nightride v2`, `datawave v3`, `spacesynth v4`, `ambient v5` — then the `nightride.fm · live` attribution row (`RADIO_ATTRIBUTION`, the visible credit Nightride asked for).
+Detail rows:
+- **YouTube** (`youtube_detail_lines`, padded to `MUSIC_YOUTUBE_DETAIL_HEIGHT = 6`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 3` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
+- **Radio** (`radio_detail_lines`, exactly `RADIO_SLOTS + 1 = 4`): one selector row per pinned slot (`v1`..`v3`; an empty slot reads `pin via v+r`), then the current station's provider attribution (the visible credit Nightride asked for). A station that is not pinned lights no slot row; the rule above still names it.
 
-Selector rows (`selector_row_line`) inherit the deleted vote rows' visual language: `●`/`○` state glyph, lowercase display name, right-aligned `v1`..`v5` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`. Display names come from `stations::icecast_stream_display_name` / `stations::radio_station_display_name`.
+Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, right-aligned `v1`..`v3` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`.
 
 ### Active-source rule
 
-Active source (owner of the rule label + detail area) = `paired_browser_source` (`AudioSource::{Youtube, Icecast, Radio}`). Pure preference-based. Does **not** gate on `is_browser`. The saved preference (loaded from `users.settings.audio_source` via `extract_audio_source` during SSH bootstrap, mirrored in `App.paired_browser_source`) is the source of truth from the first frame. Pairing-completion does not change the visual state — earlier versions waited for the browser to pair before honoring the pref, which read as a startup glitch (sidebar showed Icecast for ~1s then flipped). Don't add the `is_browser` guard back.
+The expanded source = `paired_source` (`AudioSource::{Radio, Youtube}`). Pure preference-based. Does **not** gate on whether a client is paired. The saved preference (loaded from `users.settings.audio_source` during SSH bootstrap, mirrored on `App`) is the source of truth from the first frame; pairing completing does not change the visual state. Don't add a pairing guard back: waiting for the client read as a startup glitch.
 
 The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
 
 ### Title-bar source tags
 
-All three dock title bars show the active users' saved source-preference count in the tag slot — `youtube  ────  5` / `icecast  ────  12` / `radio  ────  1` — so the dock doubles as a "what's everyone tuned to" board. Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts come from `ActiveUsers[*].audio_source` via `AudioService::{youtube,icecast,radio}_source_count()` and ignore whether those users are currently paired/listening.
+Both title bars show the active users' saved source-preference count in the tag slot (`radio  ────  12` / `youtube  ────  5`). Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts come from `ActiveUsers[*].audio_source` via `AudioService::{youtube,radio}_source_count()` and ignore whether those users are currently paired/listening.
 
 ### Fallback-not-empty semantics
 
 The widget treats "no submitted track" and "fallback playing" as the same state. When `queue.current.is_none()`:
-- Title tag still shows the YouTube source count (no separate "loop"/"fallback" badge anymore — the dock row carries that information).
-- The dock row renders `fallback stream`; the detail area renders `YouTube · 24/7` plus a `queue with v+v` hint.
+- Title tag still shows the YouTube source count (no separate "loop"/"fallback" badge anymore — the track row carries that information).
+- The track row renders `fallback stream`; the detail rows render `YouTube · 24/7` plus a `queue with v+v` hint.
 - When a track is playing but queue is otherwise empty, the trailing "next" row says `· fallback next`, not "queue ends".
 
-No copy anywhere reads "queue empty". The user has pushed back on that wording multiple times; in their product framing the fallback is the steady state, not a placeholder. See `feedback_fallback_not_empty.md` in auto-memory.
+No copy anywhere reads "queue empty". The user has pushed back on that wording multiple times; in their product framing the fallback is the steady state, not a placeholder.
 
 ### Data sources
 
-- `queue_snapshot: &QueueSnapshot` — from `AudioState::queue_snapshot()` watch channel.
-- Source/station selection state lives in `users.settings` (`audio_source`, `icecast_stream`, `radio_station`), mirrored on `App` and threaded through `DrawContext` into `SidebarProps` as `paired_browser_source` / `selected_icecast_stream` / `selected_radio_station`.
-- `paired_client: Option<&ClientAudioState>` — for `volume_percent` and `muted` (vol row only).
-- `paired_browser_source: AudioSource` — App's per-user mirror; picks the active detail area.
-- `youtube_source_count` / `icecast_source_count` / `radio_source_count` — counts from active users' cached `audio_source` via `AudioService::{youtube,icecast,radio}_source_count()`. Pair/browser presence is ignored; offline users are excluded.
-- `now_playing: Option<&NowPlaying>` — the selected stream's entry from the per-mount `NowPlayingService` map (§11), looked up in `app/render.rs`. Drives the icecast dock and progress rows.
-- `radio_now_playing: Option<&str>` — preformatted `Artist - Title` for the selected station from the `RadioMetaService` watch (§Nightride), also looked up in `app/render.rs`. Drives the radio dock row.
+- `queue_snapshot: &QueueSnapshot`: from the `AudioState::queue_snapshot()` watch channel.
+- Source/station selection lives in `users.settings` (`audio_source`, `radio_station`, `radio_slots`), mirrored on `App` and threaded through `DrawContext` into `SidebarProps` as `paired_source` / `selected_radio_station` / `radio_slots`.
+- `paired_client: Option<&ClientAudioState>`: for `volume_percent` and `muted` (vol row only).
+- `youtube_source_count` / `radio_source_count`: counts from active users' cached `audio_source`. Pair presence is ignored; offline users are excluded.
+- `radio_now_playing: Option<&str>`: preformatted track text for the selected station from the `RadioMetaService` map or the house now-playing map, looked up in `app/render.rs` via `stations::station_now_playing`.
 
 ### Internal helpers (all in `sidebar.rs`)
 
-- `music_stage_lines(width, props)` — the whole-stage line builder; unit tests assert directly against its output.
-- `stage_title_line(area_w, label, tag, active)` — shared title-bar renderer. Label is always lowercase. Active → amber bold label + amber-dim tag; inactive → italic faint label + tag. No `▶ ` glyph prefix on the tag (color + position read as a state badge; the prefix was eating cells on narrow rails).
-- `dock_track_line(width, track, active)` — the dock now-playing row (bright bold when active, dim when not, `no signal` for `None`).
-- `labeled_rule_line(width, label)` — the row-8 rule with the active source's name inline.
-- `selector_row_line(width, name, key, selected)` — stream/station selector row with right-aligned key hint.
-- `youtube_track_text(queue)` / `icecast_track_text(now)` — combined track-row text for the dock.
-- `volume_row_line` — the vol bar.
-- `keybind_row_line(width, &[(key, label), ...])` — adaptive hint renderer; drops trailing groups when the rail is too narrow rather than mid-word truncating.
-- `youtube_detail_lines` / `icecast_detail_lines` / `radio_detail_lines` — detail-area builders; only the active source's function runs, and the caller clamps the result to `MUSIC_DETAIL_HEIGHT`.
-- `skip_meter_spans(progress)` — includes a trailing `v+s` keybind hint inline.
-- `queue_next_line(idx, item, width)` — number flush at column 0 (no leading indent) to maximize title width.
+- `music_stage_lines(width, props)`: the whole-dock line builder; unit tests assert directly against its output.
+- `stage_title_line(area_w, label, tag, active)`: shared title-bar renderer. Label is always lowercase. Active → amber bold label + amber-dim tag; inactive → italic faint label + tag.
+- `dock_track_line(width, track, active, tick)`: a track row (bright bold when active, dim when not), marquee-scrolled when longer than the rail.
+- `labeled_rule_line(width, label)`: the rule naming the current station.
+- `selector_row_line(width, name, key, selected)`: slot row with right-aligned key hint.
+- `youtube_track_text(queue)`: track-row text for youtube.
+- `volume_row_line`: the vol bar.
+- `keybind_row_line(width, &[(key, label), ...])`: adaptive hint renderer; drops trailing groups when the rail is too narrow rather than mid-word truncating.
+- `youtube_detail_lines` / `radio_detail_lines`: the per-source detail rows.
+- `skip_meter_spans(progress)`: includes a trailing `v+s` keybind hint inline.
+- `queue_next_line(idx, item, width, tick)`: number flush at column 0 (no leading indent) to maximize title width.
+- `sidebar_marquee_scrolling`: tells the render gate whether any marquee row is animating; it must mirror which track rows the current source renders.
 
-Test coverage (inline `#[cfg(test)]`): `music_stage_chrome_rows_never_move` (title/rule/footer rows identical across all three active sources), `music_stage_dock_rows_always_show_now_playing` (rows 3/5/7 carry `fallback stream` / station-or-SSE text / `no signal`), `music_stage_dock_rows_keep_listener_counts`, `icecast_selector_rows_mark_selected_stream`, `radio_selector_rows_mark_selected_station`, and `radio_dock_row_prefers_sse_metadata`.
+Tests (`sidebar_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek`, `on_youtube_radio_collapses_to_its_title_bar`, `both_title_bars_keep_their_listener_counts`, `an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider`, `the_radio_track_row_prefers_live_metadata`.
 
 ### Cross-cuts
 
 - Icecast stream rows are static selection rows; there is no genre-vote row.
-- `v+1`..`v+4` select within the ACTIVE source (`input.rs::handle_music_suffix`): streams chill/classical while Icecast is active, the four Nightride stations while Radio is active. Selection persists to `users.settings.{icecast_stream,radio_station}` and confirms with a sentence-case banner built from the display name ("Stream: Chill", "Station: Datawave").
+- `v+1`..`v+3` tune to the station pinned in that slot while Radio is the source (`input.rs::handle_music_suffix`); on YouTube the digit is swallowed. The choice persists to `users.settings.radio_station` and confirms with a `Station: <label>` banner.
 - `va`/`vb`/`vc` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
 - v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source`, which updates every paired registry entry for the user and broadcasts `PairControlMessage::SetPlaybackSource { source, stream_url, station }`. The preference is meaningful with only a CLI paired: Icecast mode plays the configured late.sh stream, YouTube mode silences native direct-stream output and starts the embedded webview helper on capable CLI builds, and Radio mode retargets direct-stream playback to the selected Nightride station.
 
@@ -606,8 +608,9 @@ Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a backgro
 - One `tokio::spawn` SSE loop per process, started in `main.rs` next to the now-playing poller, shut down via the shared `CancellationToken`.
 - Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
 - `parse_meta_line` skips records with an empty station/artist/title; valid records merge into the `watch<HashMap<String, ArtistTitle>>` via `send_modify` (merge, not replace, so a partial event doesn't blank other stations).
-- Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the map is cleared (`send_replace(HashMap::new())`) so the UI falls back to station display names instead of showing stale tracks.
-- Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the webview helper); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
+- Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the Nightride keys are cleared (`clear_nightride`, which keeps polled stations) so the UI falls back to station display names instead of showing stale tracks.
+- Polled providers (`radio_meta/polled.rs::PolledFeed`): Plaza (`https://api.plaza.one/status`, `song.artist`/`song.title`), Code Radio (AzuraCast `/api/nowplaying/coderadio`, `now_playing.song.artist`/`title`), Radio Paradise Mellow (`https://api.radioparadise.com/api/now_playing?chan=1`, `artist`/`title`) and FIP Jazz (`https://api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, `now.secondLine` as artist and `now.firstLine` as title; a `now` with a null `songUuid` is the programme blurb between songs: `parse` returns `None`, the key is removed, the poll counts as `outcome="no_track"` and the 15s pace is kept). Radio Swiss Jazz and Classic use the endpoint their sites poll (`https://api.radioswissjazz.ch/api/v1/rsj/en/current`, `https://api.radioswissclassic.ch/api/v1/rsc/en/current`; `channel.playingnow.current.metadata.artist`/`title`, where Classic's `artist` is the composer). `run_poll_loop` fetches every 15s and writes the track under the feed's catalogue key; a track needs a title but may have an empty artist (shown as the bare title); a failed poll removes only that key and doubles the delay up to 60s. A loop does not start while its catalogue row is `enabled: false`, so a disabled station sends its provider nothing. Each poll counts into `late_ssh_radio_meta_polls_total{feed, outcome}` (`metrics::record_radio_meta_poll`).
+- Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map, with the house mounts merged in (`svc::pair_radio_tracks`), as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the CLI's MPRIS publisher); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
 
 Stream URL notes:
 - We use the `/<station>.mp3` URLs directly. The site advertises `.m4a` URLs, but those are a 302 to `.mp3` (observed 2026-06-10, re-verified 2026-06-11), and the CLI decoder only aligns MP3 streams; pointing at `.mp3` removes the dependency on that redirect.
@@ -776,7 +779,7 @@ Current v1 opens a small undecorated companion window. Hidden/offscreen mode is 
 
 - Server queue state machine and YouTube `load_video` protocol.
 - `/listen` page behavior.
-- Native Icecast decoder path when `audio_source = icecast`.
+- Native stream decoder path when `audio_source = radio`.
 - External-player shell-outs remain out of scope; do not revive mpv/yt-dlp handoff unless the product/legal posture changes explicitly.
 
 ---

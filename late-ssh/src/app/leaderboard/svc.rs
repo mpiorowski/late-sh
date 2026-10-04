@@ -12,9 +12,9 @@ use late_core::models::leaderboard::{
 };
 use late_core::models::profile_award::{
     AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY, all_award_categories, award_category_label,
-    claim_previous_month_award_announcement, format_score_value, gallery_prize_chips,
-    is_milestone_award, snapshot_previous_month_profile_awards,
+    LATE_TIME_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, all_award_categories,
+    award_category_label, claim_previous_month_award_announcement, format_score_value,
+    gallery_prize_chips, is_milestone_award, snapshot_previous_month_profile_awards,
 };
 use late_core::models::user::User;
 use tokio::sync::{Notify, watch};
@@ -29,7 +29,7 @@ use crate::metrics;
 /// How often the leaderboard is rebuilt from the DB while at least one session
 /// is watching it.
 ///
-/// `fetch_leaderboard_data` is fourteen aggregate queries (several UNION ALL
+/// `fetch_leaderboard_data` is fifteen aggregate queries (several UNION ALL
 /// over every game's win/score tables; the all-time windows read O(players)
 /// sources, the `daily_win_totals` rollup, the legacy best-score tables, and
 /// the one-row-per-player `mud_characters` blobs, so no query scans full
@@ -272,7 +272,7 @@ enum Wake {
 /// `age` is how long ago the last successful refresh published, `None` before
 /// the first one.
 fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> bool {
-    // A refresh nobody is watching is fourteen aggregate queries published to
+    // A refresh nobody is watching is fifteen aggregate queries published to
     // nobody, whatever woke us.
     if !has_subscribers {
         return false;
@@ -370,6 +370,9 @@ fn award_roll_placement(entry: &AwardRollEntry) -> String {
             "\u{1F319} @{name} with {}",
             format_score_value(LATE_TIME_AWARD_CATEGORY, value)
         ),
+        TOP_DRINKERS_AWARD_CATEGORY => {
+            format!("\u{1F37A} @{name} with {} buzz", thousands(value))
+        }
         GALLERY_AWARD_CATEGORY => match gallery_prize_chips(entry.rank) {
             Some(prize) => format!(
                 "{medal} @{name} {} applause (+{} chips)",
@@ -459,7 +462,7 @@ impl LeaderboardService {
 
     /// Whether any session is currently watching the leaderboard. Every SSH
     /// session subscribes at bootstrap, so this is "is anyone connected". A
-    /// refresh with no subscribers is fourteen aggregate queries published to
+    /// refresh with no subscribers is fifteen aggregate queries published to
     /// nobody, so the loop skips it.
     fn has_subscribers(&self) -> bool {
         self.data_tx.receiver_count() > 0

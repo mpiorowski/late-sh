@@ -24,10 +24,9 @@ use super::{
     state::{BorderKind, TileKind, ZenState},
 };
 use late_core::models::aquarium_care::CARE_DAYS;
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::models::user::{AudioSource, RadioStation};
 
 use crate::app::{
-    audio::stations::{icecast_stream_display_name, radio_station_display_name},
     audio::viz::{Dance, EqState, dance_lines, render_eq},
     bonsai::{
         render::{apply_sway, canvas_lines, center_lines},
@@ -699,14 +698,9 @@ fn draw_music_tile(
 
 /// The player's second row: the source, then the station or stream it is
 /// tuned to. YouTube has no station, so it stays one word.
-pub(crate) fn station_text(
-    source: AudioSource,
-    station: RadioStation,
-    stream: IcecastStream,
-) -> String {
+pub(crate) fn station_text(source: AudioSource, station: RadioStation) -> String {
     match source {
-        AudioSource::Radio => format!("radio · {}", radio_station_display_name(station)),
-        AudioSource::Icecast => format!("icecast · {}", icecast_stream_display_name(stream)),
+        AudioSource::Radio => format!("radio · {}", station.label()),
         AudioSource::Youtube => "youtube".to_string(),
     }
 }
@@ -917,7 +911,6 @@ fn audio_source_word(source: AudioSource) -> &'static str {
     match source {
         AudioSource::Youtube => "youtube",
         AudioSource::Radio => "radio",
-        AudioSource::Icecast => "icecast",
     }
 }
 

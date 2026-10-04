@@ -175,3 +175,43 @@ fn test_video(video_id: &str, title: &str) -> YoutubeVideo {
         is_stream: false,
     }
 }
+
+/// House mounts are radio stations to a paired client, so their track rides
+/// the same map as the third-party ones.
+#[test]
+fn pair_radio_tracks_adds_the_house_mounts_to_the_radio_meta() {
+    use crate::app::audio::{radio_meta::svc::ArtistTitle, svc::pair_radio_tracks};
+    use late_core::api_types::{NowPlaying, Track};
+    use std::collections::HashMap;
+
+    let track = |artist: &str, title: &str| ArtistTitle {
+        artist: artist.to_string(),
+        title: title.to_string(),
+    };
+    let radio_meta = HashMap::from([("datawave".to_string(), track("Com Truise", "Flightwave"))]);
+    let mount = |artist: Option<&str>, title: &str| {
+        NowPlaying::new(Track {
+            artist: artist.map(str::to_string),
+            title: title.to_string(),
+            duration_seconds: Some(180),
+        })
+    };
+    let now_playing = HashMap::from([
+        (
+            "classical".to_string(),
+            mount(Some("A pianist"), "Nocturne"),
+        ),
+        ("chill".to_string(), mount(None, "untitled loop")),
+        // Not a catalogue station: never offered to the client.
+        ("staging".to_string(), mount(None, "test tone")),
+    ]);
+
+    assert_eq!(
+        pair_radio_tracks(&radio_meta, &now_playing),
+        HashMap::from([
+            ("datawave".to_string(), track("Com Truise", "Flightwave")),
+            ("classical".to_string(), track("A pianist", "Nocturne")),
+            ("chill".to_string(), track("", "untitled loop")),
+        ])
+    );
+}

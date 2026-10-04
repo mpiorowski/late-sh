@@ -355,7 +355,7 @@ impl GhostService {
             ActiveUser {
                 username: bot.username.clone(),
                 fingerprint: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
+                audio_source: late_core::models::user::AudioSource::Radio,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
@@ -987,7 +987,7 @@ impl GhostService {
             BartenderDecision::PourComped { drink, line } => {
                 match self
                     .chip_service
-                    .cash_round_drink(trigger_message.user_id)
+                    .cash_round_drink(trigger_message.user_id, Bar::Tavern)
                     .await?
                 {
                     Some(comped) => {
@@ -1032,7 +1032,7 @@ impl GhostService {
             BartenderDecision::Pour { drink, price, line } => {
                 match self
                     .chip_service
-                    .buy_drink(trigger_message.user_id, price, &drink)
+                    .buy_drink(trigger_message.user_id, Bar::Tavern, price, &drink)
                     .await?
                 {
                     Some(purchase) => {

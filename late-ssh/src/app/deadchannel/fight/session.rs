@@ -50,6 +50,8 @@ pub struct Picker {
     /// spent, nothing below the flicker) or before the mirror landed.
     pub fair: Option<Threat>,
     pub lower: Option<Threat>,
+    /// `None` on a step no bright glyph waits behind, too.
+    pub bright: Option<Threat>,
 }
 
 pub(crate) struct FightSession {
@@ -117,6 +119,7 @@ impl FightSession {
             cursor: Pick::Fair,
             fair: None,
             lower: None,
+            bright: None,
         });
         self.read_odds();
         self.reload();
@@ -138,20 +141,66 @@ impl FightSession {
         self.request(Command::Start { pick });
     }
 
-    /// The picker's cursor: up to the fair fight, down to the lower one.
-    pub(crate) fn pick_up(&mut self) {
-        if let Some(picker) = &mut self.picker {
-            picker.cursor = Pick::Fair;
+    /// A step-in key on the picker (`f`, `g`, `b`, Enter). When the
+    /// mirror shows nothing on offer (the signal down, the rations spent:
+    /// the picker is showing the reason instead of glyphs) the key closes
+    /// it; a scene opened only to repeat that reason is one Enter too
+    /// many. A pick the picker is not offering is ignored. Otherwise it
+    /// steps in, and the row decides.
+    pub(crate) fn choose(&mut self, pick: Pick) {
+        let shut = self
+            .sheet
+            .as_ref()
+            .is_some_and(|sheet| sheet.shut().is_some());
+        match (shut, self.offers().contains(&pick)) {
+            (true, _) => self.close(),
+            (false, true) => self.step_in(pick),
+            (false, false) => {}
         }
     }
 
-    pub(crate) fn pick_down(&mut self) {
-        let below = self.sheet.as_ref().is_some_and(|sheet| sheet.level > 1);
-        if let Some(picker) = &mut self.picker
-            && below
-        {
-            picker.cursor = Pick::Lower;
+    /// The picks the picker offers, top to bottom, from the mirror: the
+    /// bright glyph on a step one waits behind, the fair fight always,
+    /// the step down above level 1. With no mirror yet, the fair fight
+    /// alone.
+    pub(crate) fn offers(&self) -> Vec<Pick> {
+        let mut offers = Vec::with_capacity(3);
+        if self.sheet.as_ref().is_some_and(Sheet::bright_waits) {
+            offers.push(Pick::Bright);
         }
+        offers.push(Pick::Fair);
+        if self.sheet.as_ref().is_some_and(|sheet| sheet.level > 1) {
+            offers.push(Pick::Lower);
+        }
+        offers
+    }
+
+    /// The picker's cursor, a row up or down the offers; the ends hold.
+    pub(crate) fn pick_up(&mut self) {
+        self.move_cursor(-1);
+    }
+
+    pub(crate) fn pick_down(&mut self) {
+        self.move_cursor(1);
+    }
+
+    fn move_cursor(&mut self, by: isize) {
+        let offers = self.offers();
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        // A cursor on a pick no longer offered (the mirror moved under
+        // it) counts as on the fair fight.
+        let fair = offers
+            .iter()
+            .position(|pick| *pick == Pick::Fair)
+            .expect("the fair fight is always offered");
+        let at = offers
+            .iter()
+            .position(|pick| *pick == picker.cursor)
+            .unwrap_or(fair);
+        let to = at.saturating_add_signed(by).min(offers.len() - 1);
+        picker.cursor = offers[to];
     }
 
     /// Back to the street: the picker, a finished scene, or the page left
@@ -171,11 +220,17 @@ impl FightSession {
         self.picker.is_some()
     }
 
-    /// The picker's threat words from the mirror as it stands.
+    /// The picker's threat words from the mirror as it stands, and the
+    /// cursor back on the fair fight if the mirror moved the pick it was
+    /// on off the offers.
     fn read_odds(&mut self) {
+        let offers = self.offers();
         let Some(picker) = &mut self.picker else {
             return;
         };
+        if !offers.contains(&picker.cursor) {
+            picker.cursor = Pick::Fair;
+        }
         let threat = |pick| {
             self.sheet
                 .as_ref()
@@ -184,6 +239,7 @@ impl FightSession {
         };
         picker.fair = threat(Pick::Fair);
         picker.lower = threat(Pick::Lower);
+        picker.bright = threat(Pick::Bright);
     }
 
     /// Stepping up to the counter again: the last word is not repeated.
@@ -298,7 +354,9 @@ impl FightSession {
             | Applied::Withdrew { .. }
             | Applied::Borrowed { .. }
             | Applied::Repaid { .. }
-            | Applied::Reset => scene.lines.extend(lines),
+            | Applied::Reset
+            | Applied::Drank { .. }
+            | Applied::Carted { .. } => scene.lines.extend(lines),
         }
         if scene.lines.len() > SCENE_KEEP {
             let drop = scene.lines.len() - SCENE_KEEP;

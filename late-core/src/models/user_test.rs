@@ -829,3 +829,162 @@ fn hidden_award_categories_keep_only_real_badges() {
     );
     assert!(extract_hidden_award_categories(&json!({})).is_empty());
 }
+
+/// Seeds users in the pre-migration shape, runs migration 220 over them,
+/// then drives the ordinary writes a listener makes afterwards.
+#[tokio::test]
+async fn migration_220_moves_icecast_users_to_radio_on_their_mount() {
+    use crate::models::user::{AudioSource, RadioSlots, RadioStation};
+    let (client, _test_db) = setup_db().await;
+    let station = |key: &str| RadioStation::from_key(key).expect("catalogue station");
+
+    let mut ids = Vec::new();
+    for (name, settings) in [
+        // On the classical mount, with a Nightride pick left over from
+        // before they moved to icecast.
+        (
+            "mig220_classical",
+            json!({"audio_source": "icecast", "icecast_stream": "classical", "radio_station": "datawave"}),
+        ),
+        // Never picked a mount: was on chill.
+        ("mig220_chill", json!({"audio_source": "icecast"})),
+        // A radio listener tuned outside the default slots.
+        ("mig220_ambient", json!({"radio_station": "rektify"})),
+        // Nothing to migrate.
+        ("mig220_fresh", json!({})),
+    ] {
+        let user = User::create(
+            &client,
+            UserParams {
+                fingerprint: format!("fp-{name}"),
+                username: name.to_string(),
+                settings,
+            },
+        )
+        .await
+        .expect("failed to create user");
+        ids.push(user.id);
+    }
+    let [classical, chill, ambient, fresh] = ids[..] else {
+        panic!("four users");
+    };
+
+    client
+        .batch_execute(include_str!(
+            "../../migrations/220_retire_icecast_audio_source.sql"
+        ))
+        .await
+        .expect("migration 220");
+
+    let source = User::audio_source(&client, classical).await.unwrap();
+    assert_eq!(source, AudioSource::Radio);
+    let tuned = User::radio_station(&client, classical).await.unwrap();
+    assert_eq!(tuned, station("classical"));
+    let slots = User::radio_slots(&client, classical).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("classical")));
+    assert_eq!(slots.get(1), Some(station("nightride")));
+
+    let tuned = User::radio_station(&client, chill).await.unwrap();
+    assert_eq!(tuned.label(), "lofi");
+    let slots = User::radio_slots(&client, chill).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("chill")));
+
+    let slots = User::radio_slots(&client, ambient).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("rektify")));
+
+    let slots = User::radio_slots(&client, fresh).await.unwrap();
+    assert_eq!(slots, RadioSlots::default());
+
+    // Switching source and back keeps the mount.
+    User::set_audio_source(&client, classical, AudioSource::Youtube)
+        .await
+        .unwrap();
+    let tuned = User::radio_station(&client, classical).await.unwrap();
+    assert_eq!(tuned, station("classical"));
+
+    // A station pick sticks, and retuning does not move the slots.
+    User::set_radio_station(&client, classical, station("plaza"))
+        .await
+        .unwrap();
+    let tuned = User::radio_station(&client, classical).await.unwrap();
+    assert_eq!(tuned, station("plaza"));
+    let slots = User::radio_slots(&client, classical).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("classical")));
+}
+
+#[tokio::test]
+async fn set_radio_slot_changes_one_stored_slot() {
+    use crate::models::user::RadioStation;
+    let (client, _test_db) = setup_db().await;
+    let station = |key: &str| RadioStation::from_key(key).expect("catalogue station");
+
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-radio-slot".to_string(),
+            username: "radio_slot_user".to_string(),
+            settings: json!({"theme": "dark"}),
+        },
+    )
+    .await
+    .expect("failed to create user");
+    let slots = || async { User::radio_slots(&client, user.id).await.unwrap() };
+
+    // Nothing saved yet: the write lands on the defaults.
+    User::set_radio_slot(&client, user.id, 2, Some(station("plaza")))
+        .await
+        .unwrap();
+    // A second writer that never saw the first pin does not undo it.
+    User::set_radio_slot(&client, user.id, 0, Some(station("mellow")))
+        .await
+        .unwrap();
+    let stored = slots().await;
+    assert_eq!(stored.get(0), Some(station("mellow")));
+    assert_eq!(stored.get(1), Some(station("nightride")));
+    assert_eq!(stored.get(2), Some(station("plaza")));
+
+    // Pinning a station that already holds a slot moves it.
+    User::set_radio_slot(&client, user.id, 1, Some(station("plaza")))
+        .await
+        .unwrap();
+    let stored = slots().await;
+    assert_eq!(stored.get(1), Some(station("plaza")));
+    assert_eq!(stored.get(2), None);
+
+    User::set_radio_slot(&client, user.id, 0, None)
+        .await
+        .unwrap();
+    let stored = slots().await;
+    assert_eq!(stored.get(0), None);
+    assert_eq!(stored.get(1), Some(station("plaza")));
+
+    assert!(
+        User::set_radio_slot(&client, user.id, 3, None)
+            .await
+            .is_err()
+    );
+    let refreshed = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(refreshed.settings["theme"], json!("dark"));
+}
+
+#[test]
+fn radio_settings_read_the_station_and_pinned_slots() {
+    use crate::models::user::{extract_radio_slots, extract_radio_station};
+    let settings = json!({
+        "audio_source": "radio",
+        "radio_station": "rektify",
+        "radio_slots": ["spacesynth", null, "rektify", "nope"]
+    });
+    assert_eq!(extract_radio_station(&settings).as_str(), "rektify");
+    let slots = extract_radio_slots(&settings);
+    assert_eq!(slots.get(0).map(|s| s.as_str()), Some("spacesynth"));
+    assert_eq!(slots.get(1), None);
+    assert_eq!(slots.get(2).map(|s| s.as_str()), Some("rektify"));
+    assert_eq!(slots.get(3), None);
+    // No slots saved: the defaults, whatever station is current.
+    let settings = json!({ "radio_station": "spacesynth" });
+    assert_eq!(
+        extract_radio_slots(&settings),
+        crate::models::user::RadioSlots::default()
+    );
+}

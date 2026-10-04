@@ -90,7 +90,7 @@ pub(crate) fn view(
 ) -> Option<TrackStripView> {
     let listening = match listening_on {
         AudioSource::Youtube => true,
-        AudioSource::Radio | AudioSource::Icecast => false,
+        AudioSource::Radio => false,
     };
     if let Some(item) = snapshot.current.as_ref().filter(|item| item.id == item_id) {
         return Some(TrackStripView {

@@ -42,6 +42,12 @@ pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
 /// month. First place only, so rankless like the crown (`LATE`, never
 /// `LATE1`). The score is the month's online time in milliseconds.
 pub const LATE_TIME_AWARD_CATEGORY: &str = "late_time";
+/// The Top Drinkers board's monthly winner: whoever took the most buzz
+/// last month (`drink_pours`). First place only and no chips, like Late
+/// Time: buzz is bought with chips and a gifted drink pours more than it
+/// costs, so a ranked ladder or a prize would be worth farming between
+/// friends. An exact tie shares it. The score is the month's buzz points.
+pub const TOP_DRINKERS_AWARD_CATEGORY: &str = "top_drinkers";
 
 /// The chip prize behind each gallery placement. Paid inside the snapshot
 /// transaction, once per award row.
@@ -93,8 +99,11 @@ pub fn is_milestone_award(category: &str) -> bool {
 /// shown only for the month after, like the ranked boards, but a `#1` on the
 /// badge would be noise. The badge legends are tested against this list
 /// alongside [`MILESTONE_AWARD_CATEGORIES`].
-pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 2] =
-    [CROWN_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY];
+pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 3] = [
+    CROWN_AWARD_CATEGORY,
+    LATE_TIME_AWARD_CATEGORY,
+    TOP_DRINKERS_AWARD_CATEGORY,
+];
 
 /// The monthly ranked boards (`AW1`..`ART3`): the snapshot's `ranked` arms.
 pub static RANKED_AWARD_CATEGORIES: [&str; 6] = [
@@ -323,6 +332,7 @@ pub async fn list_profile_awards_for_user(
                         WHEN 'crown' THEN 5
                         WHEN 'artboard' THEN 6
                         WHEN 'late_time' THEN 7
+                        WHEN 'top_drinkers' THEN 8
                         ELSE 99
                       END,
                       awarded_at DESC",
@@ -479,6 +489,21 @@ pub async fn snapshot_previous_month_profile_awards(
                 ) standings
                 WHERE rank = 1
              ),
+             -- Top Drinkers' first place: the month's buzz from every drink
+             -- taken. RANK, so a tie shares it.
+             top_drinker AS (
+                SELECT user_id, value, rank
+                FROM (
+                    SELECT pours.user_id,
+                           SUM(pours.points)::bigint AS value,
+                           RANK() OVER (ORDER BY SUM(pours.points) DESC) AS rank
+                    FROM drink_pours pours, bounds
+                    WHERE pours.created >= bounds.period_start
+                      AND pours.created < bounds.period_end
+                    GROUP BY pours.user_id
+                ) standings
+                WHERE rank = 1
+             ),
              ranked AS (
                 SELECT user_id,
                        'top_chips'::text AS category,
@@ -513,6 +538,13 @@ pub async fn snapshot_previous_month_profile_awards(
                        value,
                        rank
                 FROM late_time_leader
+                UNION ALL
+                -- First place only; `award_badge` prints it bare.
+                SELECT user_id,
+                       'top_drinkers'::text AS category,
+                       value,
+                       rank
+                FROM top_drinker
                 UNION ALL
                 -- ROW_NUMBER, not RANK: this is the one arm that mints
                 -- chips, and RANK would hand every hanger tied at the top
@@ -721,6 +753,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         CROWN_AWARD_CATEGORY => "CRWN",
         GALLERY_AWARD_CATEGORY => "ART",
         LATE_TIME_AWARD_CATEGORY => "LATE",
+        TOP_DRINKERS_AWARD_CATEGORY => "DRNK",
         _ => "LB",
     }
 }
@@ -749,6 +782,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         CROWN_AWARD_CATEGORY => "The Crown",
         GALLERY_AWARD_CATEGORY => "Artboard Gallery",
         LATE_TIME_AWARD_CATEGORY => "Late Time",
+        TOP_DRINKERS_AWARD_CATEGORY => "Top Drinkers",
         _ => "Leaderboard",
     }
 }
@@ -760,6 +794,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         CROWN_AWARD_CATEGORY => 5,
         GALLERY_AWARD_CATEGORY => 6,
         LATE_TIME_AWARD_CATEGORY => 7,
+        TOP_DRINKERS_AWARD_CATEGORY => 8,
         "tetris" => 2,
         "twenty_forty_eight" => 3,
         "snake" => 4,
@@ -820,6 +855,7 @@ pub fn format_score_value(category: &str, value: i64) -> String {
             let minutes = value / 60_000;
             format!("{}h {}m online", minutes / 60, minutes % 60)
         }
+        TOP_DRINKERS_AWARD_CATEGORY => format!("{value} buzz"),
         _ => format!("{value} score"),
     }
 }

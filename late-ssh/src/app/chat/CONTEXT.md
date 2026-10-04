@@ -776,8 +776,10 @@ credit is good at either bar and is worth what its seller wrote.
 | Gift ("@bartender buy @user a drink") | `GIFT_DRINK_PRICE` (200) | 400 | no | `drink_gift`, bar `tavern` |
 | Nightcap round (`r` on the stools) | `ROUND_PRICE_PER_PATRON` (100) a stool | 100 | yes, 100 | `round_purchase`, bar `nightcap` |
 
-The Nightcap tab board filters on both the round reason and its own bar, so
-gifts and tavern rounds never reach it (`clubhouse/nightcap/CONTEXT.md` §5).
+Every drink taken off a round, the buyer's own included, is logged in
+`drink_pours` like any other pour (`UserDrinks::record_pour`), under the bar
+that poured it, not the bar that sold it; buying a round or a gift counts
+nothing for the buyer beyond their own drink.
 
 `late-core/src/models/drink_round.rs` owns both tables (migrations 164 and
 168), the price, the cap, and the phrase list; `GhostService::bartender_round`

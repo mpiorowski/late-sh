@@ -1217,22 +1217,12 @@ impl App {
             != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             && sidebar_visible
         {
-            let selected_icecast_stream = self.selected_icecast_stream;
-            let icecast_now_playing = self
-                .now_playing_rx
-                .as_ref()
-                .and_then(|rx| rx.borrow().get(selected_icecast_stream.as_str()).cloned());
             let selected_radio_station = self.selected_radio_station;
-            let radio_now_playing = self.radio_meta_rx.as_ref().and_then(|rx| {
-                rx.borrow()
-                    .get(selected_radio_station.as_str())
-                    .map(|meta| format!("{} - {}", meta.artist, meta.title))
-            });
+            let radio_now_playing = self.station_now_playing(selected_radio_station);
             let queue = self.audio.queue_snapshot();
             let inputs = crate::app::common::sidebar::SidebarMarqueeInputs {
                 components: &self.profile_state.profile().right_sidebar_components,
                 active_friends: &self.active_friends,
-                icecast_now_playing: icecast_now_playing.as_ref(),
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,
                 source: self.paired_source,

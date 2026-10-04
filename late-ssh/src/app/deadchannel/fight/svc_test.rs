@@ -87,9 +87,20 @@ async fn stepping_in_spends_a_ration_on_the_row() {
 #[tokio::test]
 async fn a_purchase_at_the_armorer_lands_on_the_row() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-outfit").await;
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    let mut sheet = Sheet::from_row(&row).expect("sheet");
+    sheet.day = FightService::today();
+    sheet.bits = 110;
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    // A fresh runner's 50 bits buy the tier 1 weapon (48) and nothing more.
+    // 110 bits buy the tier 1 weapon (108) and nothing more.
     svc.act_task(
         user_id,
         "mira".to_string(),
@@ -107,7 +118,7 @@ async fn a_purchase_at_the_armorer_lands_on_the_row() {
         Applied::Outfitted {
             slot: Slot::Weapon,
             tier: 1,
-            paid: 48
+            paid: 108
         }
     );
     assert_eq!((sheet.weapon_tier, sheet.bits), (1, 2));
@@ -129,7 +140,6 @@ async fn a_purchase_at_the_armorer_lands_on_the_row() {
         "{outcome:?}"
     );
 
-    let client = test_db.db.get().await.expect("db client");
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
@@ -397,6 +407,43 @@ async fn putting_the_old_signal_down_resets_the_row_and_pays_once_a_month() {
     );
 }
 
+/// The nuke (migration 222) puts the marks back to none and keeps the row.
+/// A runner paid for mark 1 before it who earns mark 1 again, past the
+/// month, is paid again: the payout's key carries the row's reset
+/// generation, so the old claim does not answer for the new mark.
+#[tokio::test]
+async fn a_mark_earned_again_after_the_nuke_pays_again() {
+    use late_core::models::chips::{INITIAL_CHIP_BALANCE, UserChips};
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-nuke-mark").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user_id).await.expect("a wallet");
+
+    let first = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(first.applied, Applied::Slain { marks: 1 });
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 40_000
+    );
+
+    client
+        .execute("SELECT deadchannel_nuke_runners()", &[])
+        .await
+        .expect("the nuke");
+    age_payout_claims(&test_db.db, user_id, 31).await;
+
+    let again = kill_the_old_signal(&svc, &client, user_id).await;
+    assert_eq!(again.applied, Applied::Slain { marks: 1 });
+    assert_eq!(
+        again.lines.last().map(String::as_str),
+        Some("the house pays 40,000 chips for the broadcast.")
+    );
+    assert_eq!(
+        balance(&client, user_id).await,
+        INITIAL_CHIP_BALANCE + 2 * 40_000
+    );
+}
+
 /// The grant erroring after the kill's commit: the mark and the badge land,
 /// the scene says the till is jammed, and the row keeps the debt. The next
 /// command on the row pays it, once; the one after finds nothing owed.
@@ -503,4 +550,60 @@ async fn a_jammed_till_owes_the_mark_until_the_next_command_pays_it() {
         .await
         .expect("ledger");
     assert_eq!(paid_rows(ledger), 1, "one ledger row for the healed mark");
+}
+
+/// The crystal pass's two columns go through the row like the rest of the
+/// sheet: a glass poured is on the row with the crystal it cost gone, and
+/// a reload reads both back.
+#[tokio::test]
+async fn a_glass_and_the_crystals_are_stored_on_the_row() {
+    use crate::app::deadchannel::fight::state::Drink;
+
+    let (test_db, user_id, svc) = runner_and_service("fight-svc-glass").await;
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    let mut sheet = Sheet::from_row(&row).expect("sheet");
+    sheet.day = FightService::today();
+    sheet.crystals = 3;
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(
+        user_id,
+        "mira".to_string(),
+        Command::Drink {
+            drink: Drink::DeadAirNeat,
+        },
+        tx.clone(),
+    );
+    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+        panic!("a glass answers with the sheet");
+    };
+    assert_eq!(
+        outcome.applied,
+        Applied::Drank {
+            drink: Drink::DeadAirNeat
+        }
+    );
+    assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::DeadAirNeat)));
+
+    // The row is the witness, and a reload is what another session sees.
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        (row.crystals, row.drink.as_deref()),
+        (2, Some("dead_air_neat"))
+    );
+    svc.reload_task(user_id, tx);
+    let FightOutcome::Reloaded { sheet } = answer(&mut rx).await else {
+        panic!("a reload answers with the sheet");
+    };
+    assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::DeadAirNeat)));
 }

@@ -87,7 +87,7 @@ fn open(app: &mut App, source: LiveSource) -> bool {
                         let submit_enabled = app.audio.booth_submit_enabled();
                         app.booth_modal_state.open(submit_enabled);
                     }
-                    AudioSource::Radio | AudioSource::Icecast => {
+                    AudioSource::Radio => {
                         app.set_paired_playback_source(AudioSource::Youtube);
                         app.banner = Some(Banner::success("Audio source: YouTube"));
                     }

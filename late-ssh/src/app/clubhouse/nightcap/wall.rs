@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use late_core::MutexRecover;
 use late_core::models::artboard_piece::NewestPiece;
-use late_core::models::chips::RoundBuyer;
+use late_core::models::drinks::BarRegular;
 use late_core::models::nightcap_carving::Carving;
 
 use super::stools::SEAT_COUNT;
@@ -23,8 +23,8 @@ pub struct WallSnapshot {
     pub headline: Option<String>,
     /// The newest piece hanging on the Artboard, for the TV.
     pub newest_piece: Option<NewestPiece>,
-    /// The house's biggest round buyers, best first.
-    pub tab: Vec<RoundBuyer>,
+    /// The patrons who ordered the most drinks here, best first.
+    pub tab: Vec<BarRegular>,
     /// What is carved into each stool, by stool index.
     pub carvings: [Option<Carving>; SEAT_COUNT],
 }

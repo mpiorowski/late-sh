@@ -13,6 +13,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
+use late_core::models::user::RadioStation;
 use late_core::models::user_ssh_key::{KeyAudio, UserSshKey};
 use late_core::telemetry::http_telemetry_middleware;
 use late_core::{
@@ -31,7 +32,6 @@ use uuid::Uuid;
 use crate::{
     app::audio::{
         client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode},
-        stations,
         svc::{AudioMode, PlayerStateReport, QueueItemView},
     },
     app::voice::svc::VoiceClientState,
@@ -169,16 +169,26 @@ impl From<QueueItemView> for PublicTrack {
     }
 }
 
-/// What is currently on air for one Icecast mount or one Nightride station.
+/// What is currently on air for one house Icecast mount. The audio is
+/// served through late-web's own `/stream` proxy, so that URL belongs to
+/// late-web, not here.
 #[derive(Serialize)]
 struct PublicAir {
     artist: Option<String>,
     title: String,
-    /// Present for Nightride stations, whose audio the client fetches
-    /// directly. Icecast mounts are served through late-web's own `/stream`
-    /// proxy, so that URL belongs to late-web, not here.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_url: Option<&'static str>,
+}
+
+/// One third-party catalogue station on air: the track, the provider's own
+/// stream URL (the client fetches that audio directly), and the credit the
+/// page owes the provider.
+#[derive(Serialize)]
+struct PublicStation {
+    label: &'static str,
+    artist: String,
+    title: String,
+    stream_url: String,
+    provider: &'static str,
+    provider_url: &'static str,
 }
 
 #[derive(Serialize)]
@@ -196,8 +206,8 @@ struct ListenResponse {
     audio_mode: AudioMode,
     /// Icecast mounts, keyed by mount name (`chill`, `classical`).
     streams: BTreeMap<String, PublicAir>,
-    /// Nightride stations, keyed by station name.
-    stations: BTreeMap<String, PublicAir>,
+    /// Third-party stations with live metadata, keyed by catalogue key.
+    stations: BTreeMap<String, PublicStation>,
     youtube: PublicYoutube,
 }
 
@@ -299,9 +309,9 @@ async fn get_now_playing(
     })
 }
 
-/// Live Nightride station metadata as `station name -> { artist, title }`.
-/// Empty map while the SSE feed is down; consumers fall back to station
-/// display names.
+/// Live third-party station metadata as `station key -> { artist, title }`.
+/// A station is absent while its provider's feed is down; consumers fall
+/// back to station display names.
 async fn get_radio_meta(
     AxumState(state): AxumState<State>,
 ) -> Json<std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>> {
@@ -324,7 +334,6 @@ async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> 
                 PublicAir {
                     artist: np.track.artist.clone(),
                     title: np.track.title.clone(),
-                    stream_url: None,
                 },
             )
         })
@@ -333,18 +342,23 @@ async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> 
     // The Nightride feed carries more stations than late.sh offers; the
     // strict lookup drops the rest rather than listing a station with no way
     // to play it.
+    let public_stream_base_url = format!("{}/stream", state.config.web_url.trim_end_matches('/'));
     let stations = state
         .radio_meta_rx
         .borrow()
         .iter()
-        .filter_map(|(station, meta)| {
-            let stream_url = stations::radio_station_url_by_key(station)?;
+        .filter_map(|(key, meta)| {
+            let station = RadioStation::from_key(key)?;
+            let provider = station.provider();
             Some((
-                station.clone(),
-                PublicAir {
-                    artist: Some(meta.artist.clone()),
+                key.clone(),
+                PublicStation {
+                    label: station.label(),
+                    artist: meta.artist.clone(),
                     title: meta.title.clone(),
-                    stream_url: Some(stream_url),
+                    stream_url: station.stream_url(&public_stream_base_url),
+                    provider: provider.label(),
+                    provider_url: provider.home_url(),
                 },
             ))
         })
@@ -703,11 +717,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
-    let icecast_stream = state
-        .audio_service
-        .read_icecast_stream(user_id)
-        .await
-        .unwrap_or_default();
     let radio_station = state
         .audio_service
         .read_radio_station(user_id)
@@ -748,7 +757,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
     };
     state
         .paired_client_registry
-        .set_stream_preferences(user_id, icecast_stream, radio_station);
+        .set_stream_preferences(user_id, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
@@ -758,7 +767,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
     let stream_selection = crate::app::audio::stations::resolve_stream_selection(
         &public_stream_base_url,
         audio_source,
-        icecast_stream,
         radio_station,
     );
 
@@ -805,7 +813,10 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
             mounts: crate::app::audio::svc::now_playing_tracks(&state.now_playing_rx.borrow()),
         },
         crate::app::audio::svc::AudioWsMessage::RadioMetaUpdate {
-            stations: state.radio_meta_rx.borrow().clone(),
+            stations: crate::app::audio::svc::pair_radio_tracks(
+                &state.radio_meta_rx.borrow(),
+                &state.now_playing_rx.borrow(),
+            ),
         },
     ];
     for msg in meta_catch_up {

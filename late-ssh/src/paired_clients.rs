@@ -1,5 +1,5 @@
 use late_core::MutexRecover;
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::models::user::{AudioSource, RadioStation};
 use late_core::models::user_ssh_key::KeyAudio;
 use serde::Serialize;
 use std::{
@@ -140,7 +140,6 @@ struct PairControlEntry {
     usage_total_recorded: bool,
     user_id: Uuid,
     audio_source: AudioSource,
-    icecast_stream: IcecastStream,
     radio_station: RadioStation,
 }
 
@@ -190,7 +189,6 @@ impl PairedClientRegistry {
             usage_total_recorded: false,
             user_id,
             audio_source,
-            icecast_stream: IcecastStream::default(),
             radio_station: RadioStation::default(),
         });
         Some(registration_id)
@@ -544,37 +542,22 @@ impl PairedClientRegistry {
         }
     }
 
-    pub fn set_stream_preferences(
-        &self,
-        user_id: Uuid,
-        icecast_stream: IcecastStream,
-        radio_station: RadioStation,
-    ) {
+    /// Record the user's station on every entry without pushing anything;
+    /// the connect path sends the initial `SetPlaybackSource` itself.
+    pub fn set_stream_preferences(&self, user_id: Uuid, radio_station: RadioStation) {
         let mut clients = self.clients.lock_recover();
         for entries in clients.values_mut() {
             for entry in entries.iter_mut() {
                 if entry.user_id == user_id {
-                    entry.icecast_stream = icecast_stream;
                     entry.radio_station = radio_station;
                 }
             }
         }
     }
 
-    pub fn set_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) {
-        self.update_stream_choice(user_id, Some(stream), None);
-    }
-
+    /// Update every entry for `user_id` to the new station and push
+    /// `SetPlaybackSource` to each, so a radio listener retunes at once.
     pub fn set_radio_station(&self, user_id: Uuid, station: RadioStation) {
-        self.update_stream_choice(user_id, None, Some(station));
-    }
-
-    fn update_stream_choice(
-        &self,
-        user_id: Uuid,
-        icecast_stream: Option<IcecastStream>,
-        radio_station: Option<RadioStation>,
-    ) {
         let mut targets = Vec::new();
         {
             let mut clients = self.clients.lock_recover();
@@ -583,12 +566,7 @@ impl PairedClientRegistry {
                     if entry.user_id != user_id {
                         continue;
                     }
-                    if let Some(stream) = icecast_stream {
-                        entry.icecast_stream = stream;
-                    }
-                    if let Some(station) = radio_station {
-                        entry.radio_station = station;
-                    }
+                    entry.radio_station = station;
                     targets.push(playback_target(entry, &self.icecast_base_url));
                 }
             }
@@ -611,23 +589,16 @@ fn playback_target(
 ) -> (Sender<PairControlMessage>, PairControlMessage) {
     (
         entry.tx.clone(),
-        playback_message(
-            icecast_base_url,
-            entry.audio_source,
-            entry.icecast_stream,
-            entry.radio_station,
-        ),
+        playback_message(icecast_base_url, entry.audio_source, entry.radio_station),
     )
 }
 
 pub fn playback_message(
     icecast_base_url: &str,
     source: AudioSource,
-    icecast_stream: IcecastStream,
     radio_station: RadioStation,
 ) -> PairControlMessage {
-    let selection =
-        stations::resolve_stream_selection(icecast_base_url, source, icecast_stream, radio_station);
+    let selection = stations::resolve_stream_selection(icecast_base_url, source, radio_station);
     PairControlMessage::SetPlaybackSource {
         source,
         stream_url: selection.as_ref().map(|selection| selection.url.clone()),

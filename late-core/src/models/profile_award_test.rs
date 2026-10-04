@@ -4,15 +4,17 @@ use crate::models::artboard_piece::{ApplauseOutcome, ArtboardPiece, HangOutcome,
 use crate::models::artboard_piece_test::hang_params;
 use crate::models::chips::{ChipMove, Difficulty, UserChips};
 use crate::models::crown::CrownReign;
+use crate::models::drink_round::Bar;
+use crate::models::drinks::UserDrinks;
 use crate::models::leaderboard::{OnlineTimeIncrement, apply_online_time_batch};
 use crate::models::profile_award::{
     AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY,
     GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
-    NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label,
-    claim_previous_month_award_announcement, find_profile_awards_by_ids, format_score_value,
-    is_milestone_award, is_rankless_award, list_profile_awards_for_user,
+    NETHACK_ASCENSION_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, award_badge,
+    award_category_label, claim_previous_month_award_announcement, find_profile_awards_by_ids,
+    format_score_value, is_milestone_award, is_rankless_award, list_profile_awards_for_user,
     snapshot_previous_month_profile_awards, top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
@@ -21,7 +23,7 @@ use crate::models::sudoku::DailyWin as SudokuDailyWin;
 use crate::models::tetris::HighScore as LaterisHighScore;
 use crate::test_utils::{
     create_test_user, roll_artboard_pieces_back_a_month, roll_crown_reigns_back_a_month,
-    roll_high_scores_back_a_month, test_db,
+    roll_drink_pours_back_a_month, roll_high_scores_back_a_month, test_db,
 };
 
 #[test]
@@ -332,6 +334,70 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .filter(|award| award.category == LATE_TIME_AWARD_CATEGORY)
         .collect();
     assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
+}
+
+/// Top Drinkers crowns last month's biggest drinker alone, bare `DRNK`, a
+/// tie at the top shared like Late Time's, and this month's drinks are not
+/// last month's standings.
+#[tokio::test]
+async fn top_drinkers_first_place_gets_the_badge_and_a_tie_shares_it() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let first = create_test_user(&test_db.db, "drnk-first").await;
+    let tied = create_test_user(&test_db.db, "drnk-tied").await;
+    let runner_up = create_test_user(&test_db.db, "drnk-runner-up").await;
+
+    UserDrinks::record_purchase(&client, first.id, Bar::Tavern, 1_000)
+        .await
+        .expect("pour");
+    UserDrinks::record_comped_pour(&client, first.id, Bar::Nightcap, 400)
+        .await
+        .expect("round credit");
+    UserDrinks::record_purchase(&client, tied.id, Bar::Nightcap, 1_000)
+        .await
+        .expect("pour");
+    UserDrinks::record_comped_pour(&client, tied.id, Bar::Tavern, 400)
+        .await
+        .expect("round credit");
+    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 500)
+        .await
+        .expect("pour");
+    roll_drink_pours_back_a_month(&client).await;
+    // This month's binge is not last month's standings.
+    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 1_000)
+        .await
+        .expect("pour this month");
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+
+    for winner in [&first, &tied] {
+        let won: Vec<_> = list_profile_awards_for_user(&client, winner.id)
+            .await
+            .expect("awards")
+            .into_iter()
+            .filter(|award| award.category == TOP_DRINKERS_AWARD_CATEGORY)
+            .collect();
+        assert_eq!(won.len(), 1, "{} shares first place", winner.username);
+        assert_eq!(won[0].rank, 1);
+        assert_eq!(won[0].score_value, 1_400);
+        assert_eq!(won[0].badge(), "DRNK");
+    }
+    let lost: Vec<_> = list_profile_awards_for_user(&client, runner_up.id)
+        .await
+        .expect("awards")
+        .into_iter()
+        .filter(|award| award.category == TOP_DRINKERS_AWARD_CATEGORY)
+        .collect();
+    assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
+
+    assert!(is_rankless_award(TOP_DRINKERS_AWARD_CATEGORY));
+    assert!(!is_milestone_award(TOP_DRINKERS_AWARD_CATEGORY));
+    assert_eq!(
+        format_score_value(TOP_DRINKERS_AWARD_CATEGORY, 1_400),
+        "1400 buzz"
+    );
 }
 
 /// Every board settles on the first pass that writes it. A placed player

@@ -406,6 +406,19 @@ pub async fn roll_crown_reigns_back_a_month(client: &tokio_postgres::Client) {
     );
 }
 
+/// Test-only clock control: move every drink logged so far back one UTC
+/// month, as if those drinks were taken last month.
+pub async fn roll_drink_pours_back_a_month(client: &tokio_postgres::Client) {
+    let updated = client
+        .execute(
+            "UPDATE drink_pours SET created = created - interval '1 month'",
+            &[],
+        )
+        .await
+        .expect("roll drink pours back a month");
+    assert!(updated > 0, "roll_drink_pours_back_a_month matched no pour");
+}
+
 /// Test-only clock control: move every row of a best-score table
 /// (`tetris_high_scores` and its siblings) back one UTC month, as if those
 /// bests were set last month.

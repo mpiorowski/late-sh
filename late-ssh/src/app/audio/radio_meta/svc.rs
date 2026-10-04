@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Context;
+use late_core::models::user::RadioStation;
 use late_core::shutdown::CancellationToken;
 use tokio::sync::watch;
 
-// Metadata fetch only. Nightride audio is never proxied/restreamed through
+use super::polled::PolledFeed;
+use crate::metrics;
+
+// Metadata fetch only. Third-party audio is never proxied/restreamed through
 // late.sh; clients connect directly to the official station stream URLs.
 const NIGHTRIDE_META_URL: &str = "https://nightride.fm/meta";
 const RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
@@ -14,6 +18,20 @@ const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(60);
 // quiet for this long is dead. Without it a half-open connection would
 // show stale artist/title forever and never reconnect.
 const SSE_IDLE_READ_TIMEOUT: Duration = Duration::from_secs(300);
+const POLL_INTERVAL: Duration = Duration::from_secs(15);
+// A failing polled feed is retried more slowly, not faster: the endpoint
+// belongs to someone else.
+const POLL_FAILURE_DELAY_MAX: Duration = Duration::from_secs(60);
+const POLL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How one poll of a [`PolledFeed`] ended, for `metrics::record_radio_meta_poll`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PollOutcome {
+    Updated,
+    /// The provider answered, with no track on air.
+    NoTrack,
+    Failed,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ArtistTitle {
@@ -30,9 +48,11 @@ struct StationRecord {
     title: String,
 }
 
-/// Nightride FM live metadata: one SSE connection to `/meta`, published as
-/// a `station name -> ArtistTitle` watch. Consumers fall back to the
-/// station display name for any station missing from the map (startup,
+/// Live third-party station metadata, published as one `station key ->
+/// ArtistTitle` watch. One adapter per provider writes into it: the
+/// Nightride SSE connection to `/meta`, and a timer poll per [`PolledFeed`].
+/// An adapter that fails clears only its own keys. Consumers fall back to
+/// the station display name for any station missing from the map (startup,
 /// disconnect, gap, parse failure).
 #[derive(Clone)]
 pub struct RadioMetaService {
@@ -58,8 +78,100 @@ impl RadioMetaService {
 
     pub fn start_task(&self, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
         let tx = self.tx.clone();
-        tokio::spawn(run_sse_loop(tx, shutdown))
+        tokio::spawn(async move {
+            tokio::join!(
+                run_sse_loop(tx.clone(), shutdown.clone()),
+                run_poll_loop(PolledFeed::Plaza, tx.clone(), shutdown.clone()),
+                run_poll_loop(PolledFeed::CodeRadio, tx.clone(), shutdown.clone()),
+                run_poll_loop(PolledFeed::ParadiseMellow, tx.clone(), shutdown.clone()),
+                run_poll_loop(PolledFeed::FipJazz, tx.clone(), shutdown.clone()),
+                run_poll_loop(PolledFeed::SwissJazz, tx.clone(), shutdown.clone()),
+                run_poll_loop(PolledFeed::SwissClassic, tx.clone(), shutdown.clone()),
+            );
+        })
     }
+}
+
+/// Polls one feed until shutdown. Never starts for a station the catalogue
+/// has not enabled, so a disabled row costs its provider no requests.
+async fn run_poll_loop(
+    feed: PolledFeed,
+    tx: watch::Sender<HashMap<String, ArtistTitle>>,
+    shutdown: CancellationToken,
+) {
+    let key = feed.station_key();
+    if RadioStation::from_key(key).is_none() {
+        tracing::info!(
+            station = key,
+            "station disabled; radio meta poller not started"
+        );
+        return;
+    }
+    let client = reqwest::Client::builder()
+        .timeout(POLL_REQUEST_TIMEOUT)
+        .build()
+        .expect("building radio meta poll http client");
+    let mut delay = POLL_INTERVAL;
+    loop {
+        match poll_once(&client, feed).await {
+            Ok(Some(track)) => {
+                metrics::record_radio_meta_poll(feed, PollOutcome::Updated);
+                tx.send_if_modified(|map| apply_track(map, key, track));
+                delay = POLL_INTERVAL;
+            }
+            Ok(None) => {
+                metrics::record_radio_meta_poll(feed, PollOutcome::NoTrack);
+                // The feed is healthy, so keep the pace: the next track
+                // should show within one interval of starting.
+                tx.send_if_modified(|map| map.remove(key).is_some());
+                delay = POLL_INTERVAL;
+            }
+            Err(err) => {
+                tracing::warn!(error = ?err, station = key, "radio meta poll failed");
+                metrics::record_radio_meta_poll(feed, PollOutcome::Failed);
+                // A gap, not stale data: consumers fall back to the label.
+                tx.send_if_modified(|map| map.remove(key).is_some());
+                delay = (delay * 2).min(POLL_FAILURE_DELAY_MAX);
+            }
+        }
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(delay) => {}
+        }
+    }
+    tracing::info!(station = key, "radio meta poller shutting down");
+}
+
+async fn poll_once(
+    client: &reqwest::Client,
+    feed: PolledFeed,
+) -> anyhow::Result<Option<ArtistTitle>> {
+    let body = client
+        .get(feed.url())
+        .send()
+        .await
+        .context("requesting radio meta")?
+        .error_for_status()
+        .context("radio meta status")?
+        .text()
+        .await
+        .context("reading radio meta body")?;
+    feed.parse(&body)
+}
+
+/// Stores `track` under `key`; returns whether the map changed, so an
+/// unchanged poll does not wake every watcher.
+fn apply_track(map: &mut HashMap<String, ArtistTitle>, key: &str, track: ArtistTitle) -> bool {
+    if map.get(key) == Some(&track) {
+        return false;
+    }
+    map.insert(key.to_string(), track);
+    true
+}
+
+/// Drops everything the Nightride feed wrote, leaving polled stations.
+fn clear_nightride(map: &mut HashMap<String, ArtistTitle>) {
+    map.retain(|key, _| PolledFeed::ALL.iter().any(|feed| feed.station_key() == key));
 }
 
 async fn run_sse_loop(
@@ -92,7 +204,7 @@ async fn run_sse_loop(
 
         // While disconnected the data is a gap; clear so consumers fall
         // back to station display names instead of stale artist/title.
-        tx.send_replace(HashMap::new());
+        tx.send_modify(clear_nightride);
 
         tokio::select! {
             _ = shutdown.cancelled() => break,

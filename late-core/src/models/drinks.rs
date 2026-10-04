@@ -5,6 +5,12 @@
 //! against elapsed wall-clock time, so a user dries out on their own; the one
 //! write that sobers anyone up early is the Shop's hangover pill
 //! ([`UserDrinks::sober_up_in_tx`]).
+//!
+//! Every drink a patron takes also leaves a `drink_pours` row (who, which
+//! bar, how many points), written by the same statement as the buzz upsert
+//! in [`UserDrinks::record_pour`], the one gate every taken drink goes
+//! through. The Top Drinkers board, its monthly `DRNK` award and the
+//! Nightcap's tab board read it.
 
 use std::collections::HashMap;
 
@@ -13,6 +19,8 @@ use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+use super::drink_round::Bar;
 
 /// Bounds on what the bartender may charge for a single pour.
 pub const DRINK_PRICE_MIN: i64 = 100;
@@ -82,6 +90,14 @@ pub fn drunk_level(effective_points: i64) -> u8 {
         .count() as u8
 }
 
+/// One line of a bar's tab board, from [`UserDrinks::top_regulars`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BarRegular {
+    pub user_id: Uuid,
+    pub username: String,
+    pub drinks: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct UserDrinks {
     pub user_id: Uuid,
@@ -114,13 +130,15 @@ impl UserDrinks {
         drunk_level(self.effective_points(now))
     }
 
-    /// Record a paid drink: `price` chips become both buzz and tab.
+    /// Record a paid drink poured at `bar`: `price` chips become both buzz
+    /// and tab.
     pub async fn record_purchase(
         client: &impl GenericClient,
         user_id: Uuid,
+        bar: Bar,
         price: i64,
     ) -> Result<Self> {
-        Self::record_pour(client, user_id, price, price).await
+        Self::record_pour(client, user_id, bar, price, price).await
     }
 
     /// Record a drink somebody else already paid for: the buzz lands, the tab
@@ -130,28 +148,37 @@ impl UserDrinks {
     /// bartender named the drink, so what the house comps never depends on
     /// what he invented to call it. `lifetime_spent` stays put because the
     /// drinker spent nothing: the chips are on the buyer's ledger row.
+    /// `bar` is where the drink was poured, not the bar that sold the round.
     pub async fn record_comped_pour(
         client: &impl GenericClient,
         user_id: Uuid,
+        bar: Bar,
         points: i64,
     ) -> Result<Self> {
-        Self::record_pour(client, user_id, points, 0).await
+        Self::record_pour(client, user_id, bar, points, 0).await
     }
 
-    /// Decay the stored buzz to now, add `points`, cap it, and bump the
-    /// tallies by `spent`. One statement, so concurrent buys from two
-    /// sessions can't double-count the decay window. Every numeric parameter
-    /// is cast to bigint so Postgres never infers a `LEAST`/`GREATEST`
-    /// argument as text.
+    /// Decay the stored buzz to now, add `points`, cap it, bump the tallies
+    /// by `spent`, and log the drink in `drink_pours` at its full `points`
+    /// (before the cap: a drink taken while wasted still counts what it
+    /// poured). One statement, so concurrent buys from two sessions can't
+    /// double-count the decay window and the log cannot miss a pour. Every
+    /// numeric parameter is cast to bigint so Postgres never infers a
+    /// `LEAST`/`GREATEST` argument as text.
     async fn record_pour(
         client: &impl GenericClient,
         user_id: Uuid,
+        bar: Bar,
         points: i64,
         spent: i64,
     ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO user_drinks
+                "WITH pour AS (
+                    INSERT INTO drink_pours (user_id, bar, points)
+                    VALUES ($1, $6, $2::bigint)
+                 )
+                 INSERT INTO user_drinks
                     (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
                  VALUES ($1, LEAST($2::bigint, $4::bigint), $5::bigint, 1, current_timestamp)
                  ON CONFLICT (user_id) DO UPDATE SET
@@ -174,6 +201,7 @@ impl UserDrinks {
                     &DRUNK_DECAY_PER_HOUR,
                     &MAX_DRUNK_POINTS,
                     &spent,
+                    &bar.as_str(),
                 ],
             )
             .await?;
@@ -181,7 +209,9 @@ impl UserDrinks {
     }
 
     /// Comp the newcomer's welcome round: `points` of buzz with no chips
-    /// charged, insert-only so it lands at most once per user ever. `None`
+    /// charged, insert-only so it lands at most once per user ever. Not a
+    /// drink anybody took, so it leaves no `drink_pours` row and never
+    /// reaches a board. `None`
     /// when a `user_drinks` row already exists (they have drunk before, the
     /// welcome is spent), which lets the caller re-fire safely across
     /// sessions without double-comping.
@@ -230,6 +260,32 @@ impl UserDrinks {
             )
             .await?;
         Ok(())
+    }
+
+    /// The patrons who took the most drinks at one bar, all time: the tab
+    /// board out back. Every drink counts one whatever it cost; the buzz it
+    /// poured only breaks a tie.
+    pub async fn top_regulars(client: &Client, bar: Bar, limit: i64) -> Result<Vec<BarRegular>> {
+        let rows = client
+            .query(
+                "SELECT p.user_id, u.username, count(*) AS drinks
+                 FROM drink_pours p
+                 JOIN users u ON u.id = p.user_id
+                 WHERE p.bar = $1
+                 GROUP BY p.user_id, u.username
+                 ORDER BY drinks DESC, sum(p.points) DESC, u.username ASC
+                 LIMIT $2",
+                &[&bar.as_str(), &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BarRegular {
+                user_id: row.get("user_id"),
+                username: row.get("username"),
+                drinks: row.get("drinks"),
+            })
+            .collect())
     }
 
     pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {

@@ -350,7 +350,7 @@ fn username_presence_lowercases_names_and_reads_away() {
     let user = |username: &str, sessions: Vec<ActiveSession>| ActiveUser {
         username: username.to_string(),
         fingerprint: None,
-        audio_source: late_core::models::user::AudioSource::Icecast,
+        audio_source: late_core::models::user::AudioSource::Radio,
         connection_count: sessions.len().max(1),
         sessions,
         last_login_at: Instant::now(),
@@ -1882,7 +1882,7 @@ fn format_active_user_lines_sorts_and_shows_session_counts() {
             ActiveUser {
                 username: "zoe".to_string(),
                 fingerprint: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
+                audio_source: late_core::models::user::AudioSource::Radio,
                 sessions: Vec::new(),
                 connection_count: 2,
                 last_login_at: std::time::Instant::now(),
@@ -1893,7 +1893,7 @@ fn format_active_user_lines_sorts_and_shows_session_counts() {
             ActiveUser {
                 username: "alice".to_string(),
                 fingerprint: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
+                audio_source: late_core::models::user::AudioSource::Radio,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: std::time::Instant::now(),

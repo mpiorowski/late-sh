@@ -5256,8 +5256,8 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
     wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;
 
-    // Picker rows in label order: the eight monthly rows, then Lateania.
-    app.handle_input(b"jjjjjjjj\r");
+    // Picker rows in label order: the nine monthly rows, then Lateania.
+    app.handle_input(b"jjjjjjjjj\r");
     let db = test_db.db.clone();
     wait_until(
         || {
@@ -5664,4 +5664,200 @@ async fn esc_in_a_fight_is_a_run() {
         frame.contains("[Enter] back to the street") || frame.contains("[a] attack"),
         "expected the scene over (away) or still on (caught); frame={frame:?}"
     );
+}
+
+/// A runner on the street: the row shaped by `shape` on today's day,
+/// the guide already seen (so the street takes the keys), the session
+/// descended through the clubhouse on a `width` by `height` terminal.
+async fn runner_on_the_street(
+    name: &str,
+    width: u16,
+    height: u16,
+    shape: impl FnOnce(&mut crate::app::deadchannel::fight::state::Sheet),
+) -> (late_core::test_utils::TestDb, crate::app::state::App, Uuid) {
+    use crate::app::deadchannel::fight::state::Sheet;
+    use crate::app::deadchannel::fight::svc::FightService;
+    use crate::app::deadchannel::runner::state::Look;
+    use crate::app::deadchannel::runner::svc::RunnerEntry;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, name).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let look = Look::random(1, &mut StdRng::seed_from_u64(7));
+    let (row, _) = DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
+        .await
+        .expect("a runner");
+    DeadchannelRunner::mark_guide_seen(&client, user.id)
+        .await
+        .expect("guide seen");
+    let mut sheet = Sheet::from_row(&row).expect("sheet");
+    sheet.day = FightService::today();
+    shape(&mut sheet);
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+    let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow"));
+    app.resize(width, height).unwrap();
+    app.runner_looks = Arc::new(HashMap::from([(
+        user.id,
+        RunnerEntry {
+            look,
+            level: sheet.level,
+            peak_level: sheet.peak_level,
+            marks: 0,
+        },
+    )]));
+
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Clubhouse ").await;
+    app.handle_input(b"0");
+    wait_for_render_contains(&mut app, " Undercity ").await;
+    (test_db, app, user.id)
+}
+
+/// A spent runner's `f` opens the picker on the reason, and Enter (what
+/// its key row offers) lands back on the street: no scene opens only to
+/// repeat the refusal the picker already showed.
+#[tokio::test]
+async fn enter_on_a_spent_runners_picker_lands_back_on_the_street() {
+    let (_test_db, mut app, _) = runner_on_the_street("undercity-spent-it", 100, 30, |sheet| {
+        sheet.rations_left = 0
+    })
+    .await;
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "you are spent for today. the static will keep.").await;
+    wait_for_render_contains(&mut app, "[Enter] back to the street").await;
+
+    app.handle_input(b"\r");
+    wait_for_render_not_contains(&mut app, "you are spent for today").await;
+    assert_render_not_contains_for(&mut app, " the end of the row ", Duration::from_millis(300))
+        .await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" Undercity "),
+        "expected the street; frame={frame:?}"
+    );
+}
+
+/// At Dead Air each glass key pours onto the row, and at the blade cart
+/// each slot key buys onto the row. A letter the open panel does not own
+/// stays with it instead of reaching a global: `w` (the cart's key, Bonsai
+/// Care everywhere else) at the bar, `m` (the paired client's mute) at
+/// both, as over the picker and the scene.
+#[tokio::test]
+async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
+    use crate::app::deadchannel::city::map::Landmark;
+    use crate::app::deadchannel::fight::state::Drink;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-bar-cart-it", 100, 30, |sheet| sheet.crystals = 4).await;
+    let row = || {
+        let db = test_db.db.clone();
+        async move {
+            let client = db.get().await.expect("db client");
+            DeadchannelRunner::find_by_user(&client, user_id)
+                .await
+                .expect("find")
+                .expect("row")
+        }
+    };
+
+    // Dead Air, as Enter at the bar opens it.
+    app.city.open_panel(Landmark::Bar);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.banner = None;
+    app.handle_input(b"w");
+    app.handle_input(b"m");
+    assert!(!app.show_bonsai_modal, "`w` at the bar is not Bonsai Care");
+    assert!(app.banner.is_none(), "`m` at the bar is not the mute");
+    assert_eq!(app.city.panel(), Some(Landmark::Bar), "the bar stays open");
+
+    app.handle_input(b"s");
+    wait_for_render_contains(&mut app, "static on ice. it goes down like a short circuit").await;
+    let poured = row().await;
+    assert_eq!(poured.drink.as_deref(), Some(Drink::StaticOnIce.code()));
+    assert_eq!(poured.crystals, 3, "a glass is a crystal");
+    assert_eq!(
+        poured.weapon_tier, 0,
+        "the bar's keys buy nothing at the cart"
+    );
+
+    app.handle_input(b"\r");
+    wait_for_render_not_contains(&mut app, " Esc closes ").await;
+
+    // The blade cart, the same way.
+    app.city.open_panel(Landmark::Blades);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"m");
+    assert!(app.banner.is_none(), "`m` at the cart is not the mute");
+    assert_eq!(
+        app.city.panel(),
+        Some(Landmark::Blades),
+        "the cart stays open"
+    );
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, "comes off the rack").await;
+    let carted = row().await;
+    assert_eq!(carted.weapon_tier, 1, "`w` is the weapon off the cart");
+    assert_eq!(carted.armor_tier, 0);
+    assert_eq!(carted.crystals, 0, "three crystals for the piece");
+    assert_eq!(
+        carted.drink.as_deref(),
+        Some(Drink::StaticOnIce.code()),
+        "the glass is untouched"
+    );
+
+    // The page digits still reach the globals from over a panel.
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Home ").await;
+}
+
+/// The picker at its tallest (the bright glyph, the fair fight, and the
+/// step down all on offer) fits a classic 80 by 24 terminal under the
+/// app's frame: every offer's key and the key row are on screen.
+#[tokio::test]
+async fn the_picker_with_all_three_offers_fits_an_80_by_24_terminal() {
+    use crate::app::deadchannel::fight::data::{RATIONS_PER_DAY, bright_steps};
+    use crate::app::deadchannel::fight::svc::FightService;
+
+    let [bright_step, _] = bright_steps(FightService::today());
+    let (_test_db, mut app, _) = runner_on_the_street("undercity-picker-24-it", 80, 24, |sheet| {
+        sheet.level = 2;
+        sheet.peak_level = 2;
+        sheet.signal = 20;
+        sheet.rations_left = RATIONS_PER_DAY - (bright_step - 1);
+    })
+    .await;
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "[b]").await;
+    let frame = render_plain(&mut app);
+    for needle in [
+        "[b]",
+        "[f]",
+        "[g]",
+        "[Enter] step in",
+        "esc back to the street",
+    ] {
+        assert!(
+            frame.contains(needle),
+            "expected {needle:?} on an 80 by 24 picker; frame={frame:?}"
+        );
+    }
 }

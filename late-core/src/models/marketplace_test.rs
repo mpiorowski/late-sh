@@ -2,6 +2,7 @@ use crate::{
     models::{
         aquarium_care::AquariumCare,
         chips::{ChipMove, UserChips},
+        drink_round::Bar,
         drinks::UserDrinks,
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU,
@@ -2139,7 +2140,7 @@ async fn the_hangover_pill_sobers_a_drunk_buyer_and_refuses_a_sober_one() {
     assert_eq!(sober.status, PurchaseStatus::AlreadySober);
     assert_eq!(sober.balance, funded, "a sober buyer is never charged");
 
-    UserDrinks::record_purchase(&client, user.id, 800)
+    UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 800)
         .await
         .expect("drink");
     let drunk = UserDrinks::find(&client, user.id)

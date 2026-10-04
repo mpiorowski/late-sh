@@ -154,3 +154,22 @@ async fn a_failed_action_answers_where_it_was_asked_and_frees_the_guard() {
     );
     assert!(!session.action_in_flight);
 }
+
+#[tokio::test]
+async fn a_step_in_key_on_a_picker_with_nothing_on_offer_closes_it() {
+    let (_test_db, mut session) = session_with_runner("fight-session-spent").await;
+
+    session.step_up();
+    answered(&mut session).await;
+    let mut spent = session.sheet.clone().expect("the mirror landed");
+    spent.rations_left = 0;
+    session.sheet = Some(spent);
+
+    session.choose(Pick::Fair);
+
+    assert!(!session.picker_open(), "the key closes the picker");
+    assert!(
+        !session.scene_open(),
+        "no scene opens only to carry the refusal the picker already showed"
+    );
+}

@@ -12,11 +12,12 @@
 //! broadcasts; once the fight is over, everything holds still.
 //!
 //! Before the scene, the picker: the runner's sheet on top, then the
-//! glyphs on offer, the one of your level and the one below, each with
-//! its face, its numbers, its pay, and the threat word the sim read for
-//! it. The warning LoGD's master gave, before the fight instead of after.
+//! glyphs on offer, the bright one on a step it waits behind, the one of
+//! your level, and the one below, each with its face, its numbers, its
+//! pay, and the threat word the sim read for it. The warning LoGD's master gave, before the fight instead of after.
 //!
-//! Also the sheet strip: level, signal, rations, bits, pinned top-right
+//! Also the sheet strip: level, signal, rations, bits, the crystals and
+//! the day's glass when there are any, pinned top-right
 //! while the runner walks the street, so the ritual's budget is always
 //! in view.
 
@@ -32,7 +33,7 @@ use ratatui::{
 use super::data::{self, FOES, FoeKind, FoeTier, OLD_SIGNAL, OLD_SIGNAL_TIER, RATIONS_PER_DAY};
 use super::session::{Picker, Scene};
 use super::sim::Threat;
-use super::state::{Fight, Pick, Quarry, Sheet, Slot};
+use super::state::{Fight, Pick, Quarry, Sheet, Shut, Slot};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, tint_rgb,
@@ -304,7 +305,7 @@ fn header(sheet: &Sheet, look: Option<&Look>, username: &str, dress: &Dress) -> 
                     Some(level) => Span::styled(format!("lv {level}  "), text),
                     None => Span::styled("", text),
                 },
-                Span::styled(fight.foe().name.to_string(), dress.foe_name),
+                Span::styled(fight.name(), dress.foe_name),
             ],
             {
                 let mut row = vec![Span::styled(
@@ -607,26 +608,37 @@ struct Offer {
     threat: Option<Threat>,
     note: &'static str,
     boss: bool,
+    /// The bright glyph: named so, in amber, and it leaves a crystal.
+    bright: bool,
 }
 
 fn offer_lines(offer: &Offer, cursor: Pick) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
     let key = lit(Neon::Amber);
-    let (face, name) = match offer.boss {
-        true => (glow(Neon::Red), lit(Neon::Red)),
-        false => (glow(Neon::Cyan), lit(Neon::Cyan)),
+    let (face, name) = match (offer.boss, offer.bright) {
+        (true, _) => (glow(Neon::Red), lit(Neon::Red)),
+        (false, true) => (glow(Neon::Amber), lit(Neon::Amber)),
+        (false, false) => (glow(Neon::Cyan), lit(Neon::Cyan)),
     };
     let marker = match offer.pick == cursor {
         true => Span::styled("  ▸ ", key),
         false => Span::styled("    ", text),
     };
-    let pay = match offer.boss {
-        true => "pays nothing on the sheet. a mark, and the climb over".to_string(),
-        false => format!("pays {} bits · {} exp", offer.tier.bits, offer.tier.exp),
+    let pay = match (offer.boss, offer.bright) {
+        (true, _) => "pays nothing on the sheet. a mark, and the climb over".to_string(),
+        (false, true) => format!(
+            "pays {} bits · {} exp · a crystal",
+            offer.tier.bits, offer.tier.exp
+        ),
+        (false, false) => format!("pays {} bits · {} exp", offer.tier.bits, offer.tier.exp),
     };
     let head = {
-        let mut row = vec![Span::styled(offer.kind.name.to_string(), name)];
+        let label = match offer.bright {
+            true => format!("bright {}", offer.kind.name),
+            false => offer.kind.name.to_string(),
+        };
+        let mut row = vec![Span::styled(label, name)];
         if let Some(level) = offer.level {
             row.push(Span::styled(format!("  lv {level}"), text));
         }
@@ -668,6 +680,18 @@ fn offer_lines(offer: &Offer, cursor: Pick) -> Vec<Line<'static>> {
             Line::from(spans)
         })
         .collect()
+}
+
+/// Why the picker has nothing on offer, in the words the row would
+/// refuse a step in with; `None` while the static is open.
+fn shut_reason(sheet: &Sheet) -> Option<&'static str> {
+    match sheet.shut() {
+        Some(Shut::SignalDown) => {
+            Some("your signal is down. nothing in there can see you until tomorrow.")
+        }
+        Some(Shut::NoRations) => Some("you are spent for today. the static will keep."),
+        None => None,
+    }
 }
 
 /// The picker over the street: the sheet, the offers, the keys. Fixed
@@ -741,8 +765,8 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 Span::styled(" ".repeat(2 + PORTRAIT_WIDTH + 3), text),
                 Span::styled(
                     format!(
-                        "rations {}/{RATIONS_PER_DAY} · bits {} · {exp}",
-                        sheet.rations_left, sheet.bits
+                        "rations {}/{RATIONS_PER_DAY} · bits {} · crystals {} · {exp}",
+                        sheet.rations_left, sheet.bits, sheet.crystals
                     ),
                     dim_text,
                 ),
@@ -760,18 +784,31 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             )));
             lines.push(Line::default());
 
-            let closed = match (sheet.is_down(), sheet.rations_left <= 0) {
-                (true, _) => {
-                    Some("your signal is down. nothing in there can see you until tomorrow.")
-                }
-                (false, true) => Some("you are spent for today. the static will keep."),
-                (false, false) => None,
-            };
-            match closed {
+            match shut_reason(sheet) {
                 Some(reason) => {
                     lines.push(Line::from(Span::styled(format!("    {reason}"), text)));
                 }
                 None => {
+                    // Three offers stack without the blank rows between
+                    // them, so the box still fits a short terminal.
+                    let bright = sheet.bright_waits();
+                    if bright {
+                        let (index, kind, tier) = data::bright_foe_for_level(sheet.level);
+                        lines.extend(offer_lines(
+                            &Offer {
+                                key: "b",
+                                pick: Pick::Bright,
+                                kind,
+                                tier,
+                                level: Some(index as i32 + 1),
+                                threat: view.picker.bright,
+                                note: "this step only",
+                                boss: false,
+                                bright: true,
+                            },
+                            view.picker.cursor,
+                        ));
+                    }
                     let fair = match sheet.signal_hears() {
                         true => Offer {
                             key: "f",
@@ -782,6 +819,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                             threat: view.picker.fair,
                             note: "the bottom of the city",
                             boss: true,
+                            bright: false,
                         },
                         false => {
                             let (index, kind, tier) = data::foe_for_level(sheet.level);
@@ -794,12 +832,15 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                                 threat: view.picker.fair,
                                 note: "the glyph of your level",
                                 boss: false,
+                                bright: false,
                             }
                         }
                     };
                     lines.extend(offer_lines(&fair, view.picker.cursor));
                     if let Some((index, kind, tier)) = data::lower_foe_for_level(sheet.level) {
-                        lines.push(Line::default());
+                        if !bright {
+                            lines.push(Line::default());
+                        }
                         lines.extend(offer_lines(
                             &Offer {
                                 key: "g",
@@ -810,6 +851,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                                 threat: view.picker.lower,
                                 note: "a step down, half pay",
                                 boss: false,
+                                bright: false,
                             },
                             view.picker.cursor,
                         ));
@@ -819,13 +861,22 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
         }
     }
     lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled("    [↑↓] ", key),
-        Span::styled("pick", text),
-        Span::styled("   [Enter] ", key),
-        Span::styled("step in", text),
-        Span::styled("   esc back to the street", dim_text),
-    ]));
+    // With nothing on offer the step-in keys close the picker
+    // (`FightSession::choose`), and the key row says so.
+    let shut = view.sheet.is_some_and(|sheet| shut_reason(sheet).is_some());
+    lines.push(Line::from(match shut {
+        true => vec![
+            Span::styled("    [Enter] ", key),
+            Span::styled("back to the street", text),
+        ],
+        false => vec![
+            Span::styled("    [↑↓] ", key),
+            Span::styled("pick", text),
+            Span::styled("   [Enter] ", key),
+            Span::styled("step in", text),
+            Span::styled("   esc back to the street", dim_text),
+        ],
+    }));
     lines.push(Line::default());
 
     let width = (INNER + 2).min(usize::from(area.width).saturating_sub(2)) as u16;
@@ -875,6 +926,14 @@ pub(crate) fn draw_strip(frame: &mut Frame, area: Rect, sheet: &Sheet) {
     if sheet.debt > 0 {
         spans.push(Span::styled("  owed ", dim_text));
         spans.push(Span::styled(sheet.debt.to_string(), dim(Neon::Red)));
+    }
+    if sheet.crystals > 0 {
+        spans.push(Span::styled("  crystals ", dim_text));
+        spans.push(Span::styled(sheet.crystals.to_string(), lit(Neon::Cyan)));
+    }
+    if let Some(drink) = sheet.drink {
+        spans.push(Span::styled("  glass ", dim_text));
+        spans.push(Span::styled(drink.name().to_string(), text));
     }
     spans.push(Span::styled("  weapon ", dim_text));
     spans.push(Span::styled(weapon_name(sheet).to_string(), text));

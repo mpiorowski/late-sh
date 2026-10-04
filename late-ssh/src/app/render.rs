@@ -367,12 +367,16 @@ struct DrawContext<'a> {
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
     booth_submit_enabled: bool,
+    stations_modal_open: bool,
+    stations_modal_state: &'a crate::app::audio::stations_modal::state::StationsModalState,
+    /// Catalogue rows with live now-playing; only filled while the
+    /// stations modal is open.
+    stations_rows: Vec<crate::app::audio::stations_modal::ui::StationRow>,
     youtube_source_count: usize,
-    icecast_source_count: usize,
     radio_source_count: usize,
     paired_source: late_core::models::user::AudioSource,
-    selected_icecast_stream: late_core::models::user::IcecastStream,
     selected_radio_station: late_core::models::user::RadioStation,
+    radio_slots: late_core::models::user::RadioSlots,
     radio_now_playing: Option<&'a str>,
     /// Humans currently connected (bots excluded) plus connected friends,
     /// for the sidebar's pinned presence rows.
@@ -546,20 +550,45 @@ impl App {
             .collect();
         self.zen_chat_rows_caches
             .resize_with(zen_chat_rooms.len(), Default::default);
-        // The icecast rows render the USER'S SELECTED stream's track, not a
-        // global single mount.
-        let selected_icecast_stream = self.selected_icecast_stream;
-        let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
-            rx.borrow_and_update()
-                .get(selected_icecast_stream.as_str())
-                .cloned()
-        });
+        // The house jukebox for the clubhouse and nightcap pages: the
+        // USER'S SELECTED station when it is a house mount, else the house
+        // `chill` mount (the jukebox never goes quiet because someone is
+        // tuned to Nightride). Both watches are marked seen here so the
+        // tick's `has_changed` repaint gate rests.
         let selected_radio_station = self.selected_radio_station;
-        let radio_now_playing: Option<String> = self.radio_meta_rx.as_mut().and_then(|rx| {
-            rx.borrow_and_update()
-                .get(selected_radio_station.as_str())
-                .map(|meta| format!("{} - {}", meta.artist, meta.title))
+        let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
+            let map = rx.borrow_and_update();
+            use late_core::radio::Provider;
+            let mount = match selected_radio_station.provider() {
+                Provider::House => selected_radio_station.as_str(),
+                Provider::Nightride
+                | Provider::Plaza
+                | Provider::CodeRadio
+                | Provider::RadioParadise
+                | Provider::Fip
+                | Provider::RadioSwiss => "chill",
+            };
+            map.get(mount).cloned()
         });
+        if let Some(rx) = self.radio_meta_rx.as_mut() {
+            rx.borrow_and_update();
+        }
+        let radio_now_playing: Option<String> = self.station_now_playing(selected_radio_station);
+        let stations_rows: Vec<crate::app::audio::stations_modal::ui::StationRow> =
+            if self.stations_modal_state.is_open() {
+                self.stations_modal_state
+                    .stations()
+                    .into_iter()
+                    .map(
+                        |station| crate::app::audio::stations_modal::ui::StationRow {
+                            now_playing: self.station_now_playing(station),
+                            station,
+                        },
+                    )
+                    .collect()
+            } else {
+                Vec::new()
+            };
         let paired_client = self.paired_client_state();
         let eq_state =
             crate::app::audio::viz::eq_state(paired_client.as_ref(), self.audio.live_bands());
@@ -705,26 +734,17 @@ impl App {
         };
         let (status_quests_daily, status_quests_weekly) = self.quest_state.open_counts();
         let status_station_name = match self.paired_source {
-            late_core::models::user::AudioSource::Radio => {
-                crate::app::audio::stations::radio_station_display_name(selected_radio_station)
-            }
-            late_core::models::user::AudioSource::Icecast => {
-                crate::app::audio::stations::icecast_stream_display_name(selected_icecast_stream)
-            }
+            late_core::models::user::AudioSource::Radio => selected_radio_station.label(),
             late_core::models::user::AudioSource::Youtube => "youtube",
         };
         let status_youtube_track = match self.paired_source {
             late_core::models::user::AudioSource::Youtube => {
                 crate::app::common::sidebar::youtube_track(&self.audio.queue_snapshot())
             }
-            late_core::models::user::AudioSource::Radio
-            | late_core::models::user::AudioSource::Icecast => None,
+            late_core::models::user::AudioSource::Radio => None,
         };
         let status_station_track = match self.paired_source {
             late_core::models::user::AudioSource::Radio => radio_now_playing.as_deref(),
-            late_core::models::user::AudioSource::Icecast => {
-                now_playing.as_ref().map(|np| np.track.title.as_str())
-            }
             late_core::models::user::AudioSource::Youtube => status_youtube_track.as_deref(),
         };
         let dashboard_view = chat::ui::DashboardChatView {
@@ -1192,7 +1212,6 @@ impl App {
             .collect();
         let zen_track = crate::app::common::sidebar::current_track_text(
             self.paired_source,
-            now_playing.as_ref(),
             &self.audio.queue_snapshot(),
             self.selected_radio_station,
             radio_now_playing.as_deref(),
@@ -1300,6 +1319,7 @@ impl App {
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
         let suppress_new_raster = self.show_settings
@@ -1320,6 +1340,7 @@ impl App {
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
         // No screen places a non-modal persistent raster today; the slot
@@ -1525,12 +1546,14 @@ impl App {
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
                         booth_submit_enabled: self.audio.booth_submit_enabled(),
+                        stations_modal_open: self.stations_modal_state.is_open(),
+                        stations_modal_state: &self.stations_modal_state,
+                        stations_rows,
                         youtube_source_count: self.audio.youtube_source_count(),
-                        icecast_source_count: self.audio.icecast_source_count(),
                         radio_source_count: self.audio.radio_source_count(),
                         paired_source: self.paired_source,
-                        selected_icecast_stream,
                         selected_radio_station,
+                        radio_slots: self.radio_slots,
                         radio_now_playing: radio_now_playing.as_deref(),
                         online_count,
                         marquee_tick: self.marquee_tick,
@@ -2101,7 +2124,6 @@ impl App {
                     station: crate::app::zen::ui::station_text(
                         ctx.paired_source,
                         ctx.selected_radio_station,
-                        ctx.selected_icecast_stream,
                     ),
                     eq_state: ctx.eq_state,
                     clock: ctx.sidebar_clock,
@@ -2169,7 +2191,6 @@ impl App {
                 sidebar_area,
                 &SidebarProps {
                     components: &ctx.right_sidebar_components,
-                    now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
@@ -2187,11 +2208,10 @@ impl App {
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
-                    icecast_source_count: ctx.icecast_source_count,
                     radio_source_count: ctx.radio_source_count,
                     paired_source: ctx.paired_source,
-                    selected_icecast_stream: ctx.selected_icecast_stream,
                     selected_radio_station: ctx.selected_radio_station,
+                    radio_slots: ctx.radio_slots,
                     radio_now_playing: ctx.radio_now_playing,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
@@ -2450,6 +2470,20 @@ impl App {
                 &ctx.booth_snapshot,
                 ctx.booth_submit_enabled,
                 ctx.is_admin || ctx.is_moderator,
+            );
+        }
+
+        if ctx.stations_modal_open {
+            crate::app::audio::stations_modal::ui::draw(
+                frame,
+                inner,
+                ctx.stations_modal_state,
+                &crate::app::audio::stations_modal::ui::StationsView {
+                    rows: &ctx.stations_rows,
+                    current: ctx.selected_radio_station,
+                    slots: ctx.radio_slots,
+                    source: ctx.paired_source,
+                },
             );
         }
 

@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use late_core::radio::Provider;
 use late_core::{
     MutexRecover,
     db::Db,
@@ -15,7 +16,7 @@ use late_core::{
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, IcecastStream, RadioStation, User},
+        user::{AudioSource, RadioSlots, RadioStation, User},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -118,8 +119,9 @@ pub enum AudioWsMessage {
     NowPlayingUpdate {
         mounts: HashMap<String, late_core::api_types::Track>,
     },
-    /// Nightride live metadata per station name. Empty map while the SSE
-    /// feed is down (clients fall back to station display names).
+    /// Live track per radio station key ([`pair_radio_tracks`]): the
+    /// third-party feeds plus the house mounts. A station is absent while
+    /// its feed has nothing (clients fall back to station display names).
     RadioMetaUpdate {
         stations: HashMap<String, super::radio_meta::svc::ArtistTitle>,
     },
@@ -140,6 +142,39 @@ pub fn now_playing_tracks(
     map.iter()
         .map(|(mount, np)| (mount.clone(), np.track.clone()))
         .collect()
+}
+
+/// The station map a paired client reads its radio track from: the
+/// third-party metadata plus the house mounts, which are radio stations to
+/// the client. A house track with no artist tag carries an empty artist.
+pub fn pair_radio_tracks(
+    radio_meta: &HashMap<String, super::radio_meta::svc::ArtistTitle>,
+    now_playing: &HashMap<String, late_core::api_types::NowPlaying>,
+) -> HashMap<String, super::radio_meta::svc::ArtistTitle> {
+    let mut stations = radio_meta.clone();
+    for (mount, np) in now_playing {
+        let Some(station) = RadioStation::from_key(mount) else {
+            continue;
+        };
+        match station.provider() {
+            Provider::House => {
+                stations.insert(
+                    mount.clone(),
+                    super::radio_meta::svc::ArtistTitle {
+                        artist: np.track.artist.clone().unwrap_or_default(),
+                        title: np.track.title.clone(),
+                    },
+                );
+            }
+            Provider::Nightride
+            | Provider::Plaza
+            | Provider::CodeRadio
+            | Provider::RadioParadise
+            | Provider::Fip
+            | Provider::RadioSwiss => {}
+        }
+    }
+    stations
 }
 
 #[derive(Debug, Clone)]
@@ -398,7 +433,8 @@ impl AudioService {
             // Seed without broadcasting: clients connecting later get the
             // current values from the on-connect catch-up burst.
             let mut last_mounts = now_playing_tracks(&now_playing_rx.borrow());
-            let mut last_stations = radio_meta_rx.borrow().clone();
+            let mut last_stations =
+                pair_radio_tracks(&radio_meta_rx.borrow(), &now_playing_rx.borrow());
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
@@ -406,22 +442,24 @@ impl AudioService {
                         if changed.is_err() {
                             break;
                         }
-                        let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
-                        if mounts != last_mounts {
-                            last_mounts = mounts.clone();
-                            let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
-                        }
                     }
                     changed = radio_meta_rx.changed() => {
                         if changed.is_err() {
                             break;
                         }
-                        let stations = radio_meta_rx.borrow_and_update().clone();
-                        if stations != last_stations {
-                            last_stations = stations.clone();
-                            let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
-                        }
                     }
+                }
+                let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
+                if mounts != last_mounts {
+                    last_mounts = mounts.clone();
+                    let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
+                }
+                // A house track change moves the station map too.
+                let stations =
+                    pair_radio_tracks(&radio_meta_rx.borrow_and_update(), &now_playing_rx.borrow());
+                if stations != last_stations {
+                    last_stations = stations.clone();
+                    let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
                 }
             }
         })
@@ -736,9 +774,9 @@ impl AudioService {
         User::audio_source(&client, user_id).await
     }
 
-    pub async fn read_icecast_stream(&self, user_id: Uuid) -> Result<IcecastStream> {
+    pub async fn read_radio_slots(&self, user_id: Uuid) -> Result<RadioSlots> {
         let client = self.db.get().await?;
-        User::icecast_stream(&client, user_id).await
+        User::radio_slots(&client, user_id).await
     }
 
     pub async fn read_radio_station(&self, user_id: Uuid) -> Result<RadioStation> {
@@ -746,12 +784,16 @@ impl AudioService {
         User::radio_station(&client, user_id).await
     }
 
-    pub async fn persist_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) -> Result<()> {
+    /// Pinned slots are a keymap, not a playback choice: nothing is pushed
+    /// to paired clients. `slot` is the slot's new content (`None` unpins).
+    pub async fn persist_radio_slot(
+        &self,
+        user_id: Uuid,
+        index: usize,
+        slot: Option<RadioStation>,
+    ) -> Result<()> {
         let client = self.db.get().await?;
-        User::set_icecast_stream(&client, user_id, stream).await?;
-        drop(client);
-        self.paired_clients.set_icecast_stream(user_id, stream);
-        Ok(())
+        User::set_radio_slot(&client, user_id, index, slot).await
     }
 
     pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
@@ -768,15 +810,10 @@ impl AudioService {
         active_audio_source_counts(&self.active_users).0
     }
 
-    /// Count of active users whose persisted audio source is Icecast.
-    pub fn icecast_source_count(&self) -> usize {
-        active_audio_source_counts(&self.active_users).1
-    }
-
-    /// Count of active users whose persisted audio source is the direct
-    /// radio preset (the default for users who never picked one).
+    /// Count of active users whose persisted audio source is radio (the
+    /// default for users who never picked one).
     pub fn radio_source_count(&self) -> usize {
-        active_audio_source_counts(&self.active_users).2
+        active_audio_source_counts(&self.active_users).1
     }
 
     fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
@@ -806,19 +843,20 @@ impl AudioService {
         });
     }
 
-    pub fn persist_icecast_stream_task(&self, user_id: Uuid, stream: IcecastStream) {
+    pub fn persist_radio_slot_task(&self, user_id: Uuid, index: usize, slot: Option<RadioStation>) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.persist_icecast_stream(user_id, stream).await {
+            if let Err(err) = service.persist_radio_slot(user_id, index, slot).await {
                 late_core::error_span!(
-                    "icecast_stream_persist_failed",
+                    "radio_slot_persist_failed",
                     error = ?err,
                     user_id = %user_id,
-                    "failed to persist icecast stream preference"
+                    index,
+                    "failed to persist radio slot"
                 );
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,
-                    message: "Failed to save stream preference".to_string(),
+                    message: "Failed to save radio slots".to_string(),
                 });
             }
         });
@@ -2131,17 +2169,16 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize, usize) {
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
     let active_users = active_users.lock_recover();
-    let (mut youtube, mut icecast, mut radio) = (0, 0, 0);
+    let (mut youtube, mut radio) = (0, 0);
     for user in active_users.values() {
         match user.audio_source {
             AudioSource::Youtube => youtube += 1,
-            AudioSource::Icecast => icecast += 1,
             AudioSource::Radio => radio += 1,
         }
     }
-    (youtube, icecast, radio)
+    (youtube, radio)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {

@@ -279,7 +279,8 @@ fn placement(username: &str, category: &str, rank: i32, score_value: i64) -> Awa
 
 /// The whole #lounge roll from a fixed month: boards in badge order whatever
 /// order the rows came in, medals in rank order, a shared first place shown
-/// twice, the gallery's prizes, the single-holder awards worded as such, and
+/// twice, the gallery's prizes, the single-holder awards (the crown, Late
+/// Time, Top Drinkers) worded as such, and
 /// a board nobody placed on (Snake) left out.
 #[test]
 fn award_roll_body_reads_as_one_message_per_month() {
@@ -293,6 +294,7 @@ fn award_roll_body_reads_as_one_message_per_month() {
             placement("ada", "artboard", 1, 12),
             placement("pip", "crown", 1, 7_500),
             placement("owl", "late_time", 1, 133_979_000),
+            placement("barfly", "top_drinkers", 1, 12_400),
             placement("bo", "top_chips", 2, 98_000),
             placement("zed", "twenty_forty_eight", 2, 2_048),
             placement("kai", "artboard", 2, 9),
@@ -310,6 +312,7 @@ fn award_roll_body_reads_as_one_message_per_month() {
          The Crown: \u{1F451} @pip took it last for 7,500 chips\n\
          Artboard Gallery: \u{1F947} @ada 12 applause (+40,000 chips) \u{00B7} \u{1F948} @kai 9 applause (+15,000 chips)\n\
          Late Time: \u{1F319} @owl with 37h 12m online\n\
+         Top Drinkers: \u{1F37A} @barfly with 12,400 buzz\n\
          Congrats! Full standings on the Leaderboards page."
     );
 }

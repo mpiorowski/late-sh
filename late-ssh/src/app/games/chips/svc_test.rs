@@ -335,7 +335,7 @@ async fn welcome_pour_never_comps_a_prior_drinker() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "welcome-pour-veteran").await;
     let client = test_db.db.get().await.expect("db client");
-    late_core::models::drinks::UserDrinks::record_purchase(&client, user.id, 200)
+    late_core::models::drinks::UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 200)
         .await
         .expect("paid drink");
     drop(client);
@@ -677,7 +677,7 @@ async fn a_cashed_round_drink_costs_the_drinker_nothing() {
         .expect("the round settles");
 
     let comped = chips
-        .cash_round_drink(patron.id)
+        .cash_round_drink(patron.id, Bar::Tavern)
         .await
         .expect("cashing works")
         .expect("a drink was waiting");
@@ -704,7 +704,7 @@ async fn a_cashed_round_drink_costs_the_drinker_nothing() {
     );
     assert!(
         chips
-            .cash_round_drink(patron.id)
+            .cash_round_drink(patron.id, Bar::Tavern)
             .await
             .expect("second cash")
             .is_none()
@@ -736,7 +736,7 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
     }
 
     let first = chips
-        .cash_round_drink(patron.id)
+        .cash_round_drink(patron.id, Bar::Tavern)
         .await
         .expect("cashing works")
         .expect("a drink was waiting");
@@ -745,7 +745,7 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
     assert_eq!(first.drunk_points, ROUND_DRINK_POINTS);
 
     let second = chips
-        .cash_round_drink(patron.id)
+        .cash_round_drink(patron.id, Bar::Tavern)
         .await
         .expect("cashing works")
         .expect("the second drink was waiting");
@@ -800,7 +800,7 @@ async fn a_personal_gift_only_pours_when_the_recipient_orders() {
     );
 
     let poured = chips
-        .cash_round_drink(recipient.id)
+        .cash_round_drink(recipient.id, Bar::Tavern)
         .await
         .unwrap()
         .expect("recipient redeems");
@@ -834,7 +834,7 @@ async fn personal_gifts_refuse_without_charging_at_the_cap_or_chip_floor() {
     let other = create_test_user(&test_db.db, "gift-floor-recipient").await;
     // A gift may land exactly on the 100-chip floor, never below it.
     chips.buy_drink_for(buyer.id, other.id).await.unwrap();
-    chips.cash_round_drink(other.id).await.unwrap();
+    chips.cash_round_drink(other.id, Bar::Tavern).await.unwrap();
     assert_eq!(balance(&test_db.db, buyer.id).await, 200);
     chips.grant_chips(buyer.id, 100).await.unwrap();
     chips.buy_drink_for(buyer.id, other.id).await.unwrap();

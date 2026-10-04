@@ -14,7 +14,7 @@ use crate::app::common::primitives::thousands;
 
 const EMPTY: &[RankedEntry] = &[];
 
-/// One selectable board on the Leaderboards page. The three bespoke boards
+/// One selectable board on the Leaderboards page. The four bespoke boards
 /// lead, then every game board; the per-game boards come straight off the
 /// late-core rosters, so a game added there appears here without a page
 /// change. `BadgeGuide` trails every ranked board: it carries no standings,
@@ -29,13 +29,14 @@ pub(crate) enum Board {
     TopChips,
     ArcadeWins,
     TimeOnline,
+    TopDrinkers,
     Daily(DailyPuzzle),
     Score(ScoreGame),
     BadgeGuide,
 }
 
 /// What the detail pane shows for one board. Every board answers with
-/// exactly one of these; the renderer matches all four, so a new shape
+/// exactly one of these; the renderer matches every arm, so a new shape
 /// cannot fall through to a wrong heading.
 pub(crate) enum Standings<'a> {
     /// One window of month-scoped standings, headed "this month".
@@ -51,6 +52,12 @@ pub(crate) enum Standings<'a> {
         monthly: &'a [RankedEntry],
         all_time: &'a [RankedEntry],
     },
+    /// Paired monthly and current-year windows, for a race that resets
+    /// every year rather than one kept forever (Top Drinkers).
+    MonthlyYearly {
+        monthly: &'a [RankedEntry],
+        yearly: &'a [RankedEntry],
+    },
 }
 
 impl Board {
@@ -62,6 +69,7 @@ impl Board {
             Self::TopChips,
             Self::ArcadeWins,
             Self::TimeOnline,
+            Self::TopDrinkers,
             Self::LateaniaAdventurers,
             Self::LateaniaPvp,
         ];
@@ -92,6 +100,7 @@ impl Board {
             Self::TopChips => "Top Chips",
             Self::ArcadeWins => "Arcade Wins",
             Self::TimeOnline => "Late Time",
+            Self::TopDrinkers => "Top Drinkers",
             Self::Daily(puzzle) => puzzle.title(),
             Self::Score(game) => game.title(),
             Self::BadgeGuide => "Badge Guide",
@@ -125,6 +134,7 @@ impl Board {
                 Difficulty::Hard.points(),
             ),
             Self::TimeOnline => "total connected time".to_string(),
+            Self::TopDrinkers => "buzz from every drink taken, whoever paid".to_string(),
             Self::Daily(_) => "daily wins".to_string(),
             Self::Score(_) => "best score".to_string(),
             Self::BadgeGuide => "what each three-letter award code means".to_string(),
@@ -146,6 +156,7 @@ impl Board {
             Self::TopChips => format!("{} chips", thousands(value)),
             Self::ArcadeWins => format!("{} pts", thousands(value)),
             Self::TimeOnline => format_online_time(value),
+            Self::TopDrinkers => format!("{} buzz", thousands(value)),
             Self::Daily(_) => format!("{} wins", thousands(value)),
             Self::Score(_) => thousands(value),
             // Unreachable: BadgeGuide has no ranked entries, so nothing ever
@@ -181,6 +192,10 @@ impl Board {
             Self::TimeOnline => Standings::Paired {
                 monthly: &data.online_time.monthly,
                 all_time: &data.online_time.all_time,
+            },
+            Self::TopDrinkers => Standings::MonthlyYearly {
+                monthly: &data.top_drinkers.monthly,
+                yearly: &data.top_drinkers.yearly,
             },
             Self::Daily(puzzle) => {
                 let windows = data.daily_board(puzzle);

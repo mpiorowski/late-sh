@@ -1,3 +1,5 @@
+use late_core::models::user::AudioSource;
+
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 
@@ -10,7 +12,11 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
     }
 
     match byte {
-        b'1' | b'2' | b'3' | b'4' | b'5' => select_active_stream(app, byte - b'0'),
+        b'1'..=b'9' => select_slot(app, (byte - b'1') as usize),
+        b'r' | b'R' => {
+            app.stations_modal_state.open(app.selected_radio_station);
+            true
+        }
         b'v' | b'V' => {
             let submit_enabled = app.audio.booth_submit_enabled();
             app.booth_modal_state.open(submit_enabled);
@@ -21,11 +27,9 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
             true
         }
         b'x' | b'X' => {
-            use late_core::models::user::AudioSource;
             let banner = match app.toggle_paired_playback_source() {
                 AudioSource::Youtube => "Audio source: YouTube",
                 AudioSource::Radio => "Audio source: Radio",
-                AudioSource::Icecast => "Audio source: Icecast",
             };
             app.banner = Some(Banner::success(banner));
             true
@@ -34,44 +38,23 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
     }
 }
 
-fn select_active_stream(app: &mut App, index: u8) -> bool {
-    use late_core::models::user::AudioSource;
-
-    match app.paired_source {
-        AudioSource::Icecast => {
-            let Some(stream) = super::stations::icecast_stream_by_index(index) else {
-                return true;
-            };
-            app.select_icecast_stream(stream);
-            app.banner = Some(Banner::success(&format!(
-                "Stream: {}",
-                sentence_case(super::stations::icecast_stream_display_name(stream))
-            )));
-            true
-        }
-        AudioSource::Radio => {
-            let Some(station) = super::stations::radio_station_by_index(index) else {
-                return true;
-            };
-            app.select_radio_station(station);
-            app.banner = Some(Banner::success(&format!(
-                "Station: {}",
-                sentence_case(super::stations::radio_station_display_name(station))
-            )));
-            true
-        }
-        AudioSource::Youtube => true,
+/// `v1`..`v3`: tune to the station pinned in that slot. Only meaningful
+/// while radio is the active source; on YouTube the key is swallowed so a
+/// stray digit never lands in the composer. An empty slot, or a digit past
+/// the last slot, is a no-op for the same reason.
+fn select_slot(app: &mut App, index: usize) -> bool {
+    if app.paired_source != AudioSource::Radio {
+        return true;
     }
-}
-
-/// Banners keep sentence case ("Stream: Chill"); selector rows in the
-/// sidebar keep the lowercase display name.
-fn sentence_case(name: &str) -> String {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
-    }
+    let Some(station) = app.radio_slots.get(index) else {
+        return true;
+    };
+    app.select_radio_station(station);
+    app.banner = Some(Banner::success(&format!(
+        "Station: {}",
+        super::stations_modal::input::sentence_case(station.label())
+    )));
+    true
 }
 
 fn poll_option_position(byte: u8) -> Option<i32> {

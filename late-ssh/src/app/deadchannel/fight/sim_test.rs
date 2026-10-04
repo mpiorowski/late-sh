@@ -1,4 +1,4 @@
-use super::{CAREFUL, Climb, NEGLECTFUL, Player, RECKLESS, climb, summary};
+use super::{Bench, CAREFUL, Climb, KEEN, Ledger, NEGLECTFUL, Player, RECKLESS, climb, summary};
 
 /// Seeded climbs per player: enough for a stable median, few enough to
 /// stay a unit test.
@@ -14,8 +14,9 @@ const CAREFUL_MARK_DAYS: std::ops::RangeInclusive<u32> = 18..=24;
 const RECKLESS_MARK_DAYS: std::ops::RangeInclusive<u32> = 25..=31;
 
 fn climbs(player: Player) -> Vec<Climb> {
+    let mut bench = Bench::live();
     (0..SEEDS)
-        .map(|seed| climb(player, seed, MAX_DAYS))
+        .map(|seed| climb(player, seed, MAX_DAYS, &mut bench))
         .collect()
 }
 
@@ -92,5 +93,72 @@ fn a_runner_who_skipped_the_armorer_climbs_again_within_a_week_of_the_drop() {
         stuck <= 7,
         "after the first drop the neglectful runner waits {stuck} days for a level\n{}",
         summary(&climbs, MAX_DAYS)
+    );
+}
+
+/// One seeded climb, whole. The bands above hold the medians; this holds
+/// one runner's every day and every bit, so a rule change that shifts the
+/// climb inside a band still shows up, as a diff to read. KEEN touches the
+/// most rules (the bright glyph, the glass, the blade shop, the purse). When it
+/// moves, read which fields moved and why before re-blessing.
+#[test]
+fn one_keen_climb_holds_still() {
+    let climb = climb(KEEN, 7, MAX_DAYS, &mut Bench::live());
+    assert_eq!(
+        climb,
+        Climb {
+            level_on: [
+                None,
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                Some(7),
+                Some(8),
+                Some(9),
+                Some(10),
+                Some(12),
+                Some(13),
+                Some(15),
+            ],
+            heard_on: Some(17),
+            marked_on: Some(17),
+            deaths: 0,
+            first_drop_on: None,
+            recovered_on: None,
+            boss_tries: 1,
+            kit_on: [
+                None,
+                Some((1, 1)),
+                Some((2, 2)),
+                Some((3, 3)),
+                Some((4, 4)),
+                Some((6, 5)),
+                Some((7, 6)),
+                Some((8, 7)),
+                Some((9, 8)),
+                Some((11, 10)),
+                Some((12, 12)),
+                Some((13, 13)),
+                Some((14, 14)),
+                Some((15, 15)),
+                Some((15, 15)),
+                Some((15, 15)),
+            ],
+            ledger: Ledger {
+                earned: 155_886,
+                gear: 79_236,
+                patched: 24_783,
+                dropped: 0,
+                crystals_found: 26,
+                crystals_spent: 26,
+                bright_tries: 30,
+                bright_kills: 16,
+            },
+        }
     );
 }
