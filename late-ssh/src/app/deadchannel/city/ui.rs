@@ -395,7 +395,7 @@ fn landmark_neon(landmark: Landmark) -> Neon {
         Landmark::Bits => Neon::Green,
         Landmark::Noodles => Neon::Amber,
         Landmark::Umbrellas => Neon::Cyan,
-        Landmark::Blades => Neon::Red,
+        Landmark::Blades => Neon::Cyan,
         Landmark::Reader => Neon::Magenta,
         Landmark::Stairs => Neon::Red,
         Landmark::Ink
@@ -403,9 +403,9 @@ fn landmark_neon(landmark: Landmark) -> Neon {
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Tek
+        | Landmark::Coin
         | Landmark::Vids
-        | Landmark::Aerial => Neon::White,
+        | Landmark::Pawn => Neon::White,
         Landmark::Wire => Neon::Amber,
         Landmark::Ledge => Neon::White,
     }
@@ -423,6 +423,9 @@ fn hashed_neon(x: u16, y: u16) -> Neon {
     let h = mix(u64::from(x) * 31 + u64::from(y) * 131);
     NEON_CYCLE[(h % NEON_CYCLE.len() as u64) as usize]
 }
+
+/// How much of its neon a closed shop's sign still shows.
+const DARK_SIGN: f32 = 0.3;
 
 fn sign_at(x: u16, y: u16) -> Option<Neon> {
     map::SIGNS
@@ -899,9 +902,10 @@ fn surface(ch: char, x: u16, y: u16) -> Surface {
     if (x, y) == map::DEAD_LETTER {
         return lit_surface(scale(WALL, 0.6));
     }
-    // A shop that is not open yet: its name is on the wall, unlit.
-    if map::DARK_SIGNS.iter().any(|sign| sign.contains(x, y)) {
-        return lit_surface(scale(WALL, 0.6));
+    // A shop that is not open yet: the tube is there, in its color,
+    // barely on. It throws no light and leaves no reflection.
+    if let Some(sign) = map::DARK_SIGNS.iter().find(|sign| sign.zone.contains(x, y)) {
+        return emissive(scale(neon_rgb(sign.color), DARK_SIGN));
     }
     if let Some(neon) = sign_at(x, y) {
         return emissive(neon_rgb(neon));
@@ -1737,9 +1741,9 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Tek
+        | Landmark::Coin
         | Landmark::Vids
-        | Landmark::Aerial => {}
+        | Landmark::Pawn => {}
     }
     lines
 }

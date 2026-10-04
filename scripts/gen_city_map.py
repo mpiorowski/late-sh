@@ -100,7 +100,7 @@ TITLE = '╡ ▚ STATIC ROW ▞ ╞'
 # The landmark order is the popover priority; map.rs lists it the same way.
 LANDMARKS = ['Armorer', 'Tailor', 'Lockers', 'Bands', 'Bar', 'Screen', 'Repairs',
              'Board', 'Bits', 'Noodles', 'Umbrellas', 'Blades', 'Reader', 'Stairs', 'Wire',
-             'Ledge', 'Ink', 'Baths', 'Sleep', 'Shrine', 'Market', 'Tek', 'Vids', 'Aerial']
+             'Ledge', 'Ink', 'Baths', 'Sleep', 'Shrine', 'Market', 'Coin', 'Vids', 'Pawn']
 
 
 # ====================================================================== tiles
@@ -116,7 +116,7 @@ def layout_tiles():
     rng = random.Random(3)
 
     neon_signs = []   # (zone, color): the shop names in the street-facing walls
-    dark_signs = []   # zone: the names of the shops that are not open yet
+    dark_signs = []   # (zone, color): the names of the shops that are not open yet
     tags = []         # (zone, color): glyph-script graffiti on the walls
     buildings = []    # (zone, color or None): walls take the color
     vents = []        # steam rises off these
@@ -157,7 +157,7 @@ def layout_tiles():
             sx, sy, text = sign
             put(sx, sy, text)
             if closed:
-                dark_signs.append(zone(sx, sy, sx + len(text) - 1, sy))
+                dark_signs.append((zone(sx, sy, sx + len(text) - 1, sy), color))
                 front = [dx for (dx, dy) in doors if dy == sy]
                 reach[closed] = zone(min(front), sy, max(front), sy)
                 dist[closed] = 1
@@ -281,13 +281,12 @@ def layout_tiles():
     alley(19, 21, 5, 16)
     tile(21, 6, 'c')
 
-    room(22, 10, 36, 16, RED, doors=[(33, 16)], windows=[(35, 16), (27, 10)],
-         sign=(24, 16, 'ARMORER'))
-    for gx, g in ((24, ')'), (26, ')'), (28, '/'), (32, '['), (34, '[')):
-        tile(gx, 11, g)
-    put(24, 13, '=' * 11)
-    tile(29, 12, '@')
-    reach['Armorer'] = zone(24, 14, 34, 14); dist['Armorer'] = 0
+    # a market: two counters of food and drink, one seller. Not open yet.
+    room(22, 10, 36, 16, GREEN, doors=[(33, 16)], windows=[(35, 16), (27, 10)],
+         sign=(24, 16, 'MARKET'), closed='Market')
+    put(24, 12, '=%=!=%=')
+    tile(28, 11, '@')
+    vents.append((25, 12))
 
     carve(37, 12, 37, 16); grate(37, 13)
 
@@ -305,12 +304,12 @@ def layout_tiles():
 
     alley(53, 54, 6, 16)
 
-    room(55, 11, 69, 16, CYAN, doors=[(66, 16)], windows=[(68, 16)],
-         sign=(57, 16, 'LOCKERS'))
-    for lx in range(56, 69):
-        tile(lx, 12, '∩'); tile(lx, 14, '∩')
-    reach['Lockers'] = zone(56, 13, 68, 15); dist['Lockers'] = 0
-    L['DEAD_LETTER'] = (61, 16)   # the E
+    # a shrine: an altar, candles, nobody. Not open yet.
+    room(55, 11, 69, 16, AMBER, doors=[(66, 16)], windows=[(68, 16)],
+         sign=(57, 16, 'SHRINE'), closed='Shrine')
+    tile(62, 12, '_')
+    for gx in (59, 61, 63, 65):
+        tile(gx, 13, '°')
 
     # a long alley north to a hidden court: a shrine, a plant, a cat
     carve(70, 8, 71, 16)
@@ -350,14 +349,11 @@ def layout_tiles():
     tag(33, 21, '▞', CYAN)
 
     stall('Umbrellas', 74, 20, '=T=T=', 79, CYAN)
-    # blades: the next tier up, for crystals. The rack, the counter, and
-    # the one who runs it behind it.
-    room(59, 21, 69, 32, RED, doors=[(67, 21)], sign=(61, 21, 'BLADES'))
-    for gx, g in ((61, ')'), (63, ')'), (65, '/'), (67, '[')):
+    # a pawn shop: the shutter down. Not open yet.
+    room(59, 21, 69, 32, RED, doors=[(67, 21)], sign=(61, 21, 'PAWN'), closed='Pawn')
+    for gx, g in ((61, '$'), (63, ')'), (65, '"'), (67, '[')):
         tile(gx, 27, g)
     put(61, 25, '=' * 7)
-    tile(64, 26, '@')
-    reach['Blades'] = zone(60, 24, 68, 24); dist['Blades'] = 0
 
     alley(70, 71, 21, 32, back=False)
     tenement(72, 21, 100, 32, door_y=21, windows_y=21, sleepers=2)
@@ -426,38 +422,37 @@ def layout_tiles():
     grate(230, 6)
     walker(200, 258, 5, '@', 4)
 
-    # loans: an arcade gone to seed, cabinets in rows, two people playing,
-    # and the bits machine in the corner, which is why anyone comes in
-    room(199, 7, 217, 18, GREEN, doors=[(212, 18), (208, 7)], windows=[(215, 18)],
-         sign=(202, 18, 'LOANS'))
+    # the arcade: cabinets in rows, two people playing. Not open yet.
+    room(199, 7, 217, 18, MAGENTA, doors=[(212, 18), (208, 7)], windows=[(215, 18)],
+         sign=(202, 18, 'COIN'), closed='Coin')
     for y in (10, 13):
         for gx in range(201, 216, 3):
             tile(gx, y, '▓')
-    tile(203, 11, '@'); tile(212, 14, '@'); tile(215, 9, '$')
-    L['BITS'] = (215, 9)
-    reach['Bits'] = zone(200, 15, 216, 17); dist['Bits'] = 0
+    tile(203, 11, '@'); tile(212, 14, '@')
 
     carve(218, 14, 218, 18); grate(218, 16)
 
-    # a shrine: an altar, candles, one plant, nobody
-    room(219, 9, 237, 18, AMBER, doors=[(228, 18)], windows=[(221, 18), (235, 18)],
-         sign=(222, 18, 'SHRINE'), closed='Shrine')
-    tile(228, 11, '_')
-    for gx in (225, 227, 229, 231):
-        tile(gx, 12, '°')
-    tile(221, 11, '♣'); tile(235, 11, '♣')
-    tile(228, 15, '@')
+    # blades: the next tier up, for crystals. The rack on the back wall,
+    # the counter, and the one who runs it.
+    room(219, 9, 237, 18, CYAN, doors=[(228, 18)], windows=[(221, 18), (235, 18)],
+         sign=(222, 18, 'BLADES'))
+    for gx, g in ((223, ')'), (225, ')'), (227, '/'), (231, '['), (233, '[')):
+        tile(gx, 11, g)
+    put(223, 13, '=' * 11)
+    tile(228, 12, '@')
+    reach['Blades'] = zone(221, 14, 235, 14); dist['Blades'] = 0
 
     alley(238, 239, 7, 18, back=False)
 
-    # a market hall: counters of food and drink, three sellers, two doors
-    room(240, 9, 259, 18, GREEN, doors=[(244, 18), (255, 18), (250, 9)], windows=[(250, 18)],
-         sign=(242, 18, 'MARKET'), closed='Market')
-    for y in (12, 15):
-        put(242, y, '=%=!=%=')
-        put(251, y, '="=%=!=')
-    tile(245, 11, '@'); tile(254, 11, '@'); tile(245, 14, '@')
-    vents.append((243, 12)); vents.append((253, 15))
+    # the armorer: the biggest room on the street, in the middle of it.
+    # Blades and plate on the back wall, one long counter, two doors.
+    room(240, 9, 259, 18, RED, doors=[(244, 18), (255, 18), (250, 9)],
+         sign=(246, 18, 'ARMORER'))
+    for gx, g in ((242, ')'), (244, ')'), (246, '/'), (248, ')'), (252, '['), (254, '['), (256, '[')):
+        tile(gx, 11, g)
+    put(243, 13, '=' * 14)
+    tile(249, 12, '@')
+    reach['Armorer'] = zone(242, 14, 257, 14); dist['Armorer'] = 0
 
     alley(260, 262, 7, 18, back=False)
     tenement(263, 10, 269, 18, door_y=18, windows_y=18, sleepers=0)
@@ -518,16 +513,14 @@ def layout_tiles():
     tenement(273, 4, 290, 15, door_y=15, windows_y=15, sleepers=3)
     carve(291, 12, 291, 15); grate(291, 13)
 
-    # a chop shop: tools, parts, a man under a lamp
-    room(292, 9, 310, 15, GREEN, doors=[(306, 15)], windows=[(294, 15), (300, 9)],
-         sign=(295, 15, 'TEK'), closed='Tek')
-    for gx, g in ((294, '/'), (296, 'x'), (298, '\\'), (300, 'x')):
-        tile(gx, 10, g)
-    for (x0, y0, x1, y1) in ((303, 10, 308, 11),):
-        for y in range(y0, y1 + 1):
-            put(x0, y, '▪' * (x1 - x0 + 1))
-    put(294, 12, '=' * 9)
-    tile(298, 11, '@'); tile(302, 13, '*'); lamps.append((302, 13))
+    # the lockers: by the stairs up to the wire, the last stop before
+    # the static and the first after it
+    room(292, 9, 310, 15, CYAN, doors=[(306, 15)], windows=[(294, 15), (300, 9)],
+         sign=(295, 15, 'LOCKERS'))
+    for lx in range(293, 310):
+        tile(lx, 10, '∩'); tile(lx, 12, '∩')
+    reach['Lockers'] = zone(293, 13, 309, 14); dist['Lockers'] = 0
+    L['DEAD_LETTER'] = (299, 15)   # the E
 
     alley(311, 313, 6, 15)
 
@@ -543,11 +536,16 @@ def layout_tiles():
     tenement(336, 8, 356, 15, door_y=15, windows_y=15, sleepers=2)
     alley(357, 359, 4, 15)
 
-    # an aerial lot: masts behind a fence, a gate, the hum
-    room(360, 8, 380, 15, GREEN, doors=[(370, 15)], sign=(363, 15, 'AERIAL'), closed='Aerial')
-    for gx in range(362, 380, 4):
-        tile(gx, 10, 'Y'); tile(gx + 2, 13, 'Y')
-    grate(370, 12)
+    # loans: masts on the roof, the bits machine humming in the corner,
+    # nobody behind the counter
+    room(360, 8, 380, 15, GREEN, doors=[(370, 15)], sign=(363, 15, 'LOANS'))
+    for gx in range(362, 376, 4):
+        tile(gx, 10, 'Y')
+    put(362, 12, '=' * 7)
+    tile(378, 10, '$')
+    L['BITS'] = (378, 10)
+    reach['Bits'] = zone(361, 13, 379, 14); dist['Bits'] = 0
+    grate(370, 9)
 
     carve(381, 12, 381, 15); tile(381, 13, 'r')
     tenement(382, 10, 400, 15, door_y=15, windows_y=15)
@@ -896,9 +894,10 @@ pub const SIGNS: &[Sign] = &[
 __SIGNS__
 ];
 
-/// The names of the shops that are not open yet: spelled, never lit.
+/// The names of the shops that are not open yet: the tube is there,
+/// in its color, barely on.
 #[rustfmt::skip]
-pub const DARK_SIGNS: &[Zone] = &[
+pub const DARK_SIGNS: &[Sign] = &[
 __DARK_SIGNS__
 ];
 
@@ -1027,9 +1026,9 @@ pub enum Landmark {
     Sleep,
     Shrine,
     Market,
-    Tek,
+    Coin,
     Vids,
-    Aerial,
+    Pawn,
 }
 
 impl Landmark {
@@ -1056,9 +1055,9 @@ impl Landmark {
         Landmark::Sleep,
         Landmark::Shrine,
         Landmark::Market,
-        Landmark::Tek,
+        Landmark::Coin,
         Landmark::Vids,
-        Landmark::Aerial,
+        Landmark::Pawn,
     ];
 
     /// The cells that put the player within reach: in front of a counter,
@@ -1171,7 +1170,7 @@ def emit(L):
            .replace('__WIRE__', zone_lit(L['WIRE']))
            .replace('__DEAD_LETTER__', pair(L['DEAD_LETTER']))
            .replace('__SIGNS__', sign_lits(L['SIGNS']))
-           .replace('__DARK_SIGNS__', '\n'.join(f'    {zone_lit(z)},' for z in L['DARK_SIGNS']))
+           .replace('__DARK_SIGNS__', sign_lits(L['DARK_SIGNS']))
            .replace('__BANNERS__', sign_lits(L['BANNERS']))
            .replace('__CART_SIGNS__', sign_lits(L['CART_SIGNS']))
            .replace('__BILLBOARDS__', sign_lits(L['BILLBOARDS']))

@@ -60,9 +60,9 @@ impl Landmark {
             | Landmark::Sleep
             | Landmark::Shrine
             | Landmark::Market
-            | Landmark::Tek
+            | Landmark::Coin
             | Landmark::Vids
-            | Landmark::Aerial => Enter::Line(self),
+            | Landmark::Pawn => Enter::Line(self),
             Landmark::Wire => Enter::Leave,
             Landmark::Ledge => Enter::Ledge,
         }

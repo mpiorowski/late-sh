@@ -152,9 +152,9 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Tek
+        | Landmark::Coin
         | Landmark::Vids
-        | Landmark::Aerial => CLOSED_LINES,
+        | Landmark::Pawn => CLOSED_LINES,
         Landmark::Armorer
         | Landmark::Tailor
         | Landmark::Lockers
@@ -192,9 +192,9 @@ pub fn title(landmark: Landmark) -> &'static str {
         Landmark::Sleep => "sleep",
         Landmark::Shrine => "the shrine",
         Landmark::Market => "the market",
-        Landmark::Tek => "tek",
+        Landmark::Coin => "coin",
         Landmark::Vids => "vids",
-        Landmark::Aerial => "aerial",
+        Landmark::Pawn => "the pawn shop",
         Landmark::Wire => "the wire",
         Landmark::Ledge => "the ledge",
     }
@@ -222,9 +222,9 @@ pub fn pitch(landmark: Landmark) -> &'static str {
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
-        | Landmark::Tek
+        | Landmark::Coin
         | Landmark::Vids
-        | Landmark::Aerial => CLOSED_PITCH,
+        | Landmark::Pawn => CLOSED_PITCH,
         Landmark::Wire => "back up to #deadchannel",
         Landmark::Ledge => "the lower city, all the way down",
     }

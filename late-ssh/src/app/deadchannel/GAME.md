@@ -1344,14 +1344,17 @@ fight, spent on things gold could not buy. Both answers are in:
   real one.
 - **Shops are the game, the street is flavor.** A runner could not tell
   a shop that mattered from a painted wall: every sign burned alike, the
-  loan lived in a machine at the far end, and crystal gear on a cart.
-  Now everything that spends or earns is inside a lit shop (the bits
-  machine moved into LOANS, the cart became BLADES where the pawn shop
-  was), and a shop with nothing in it yet has its sign dark (INK, which
-  was CLINIC and read as a second patch, BATHS, BANDS, SLEEP, SHRINE,
-  MARKET, TEK, VIDS, AERIAL). They get lit one at a time, and a sign
-  coming on is news. Stalls and carts stay as flavor and, later, small
-  bonuses.
+  loan lived in a machine at the far end, crystal gear on a cart, and
+  the working shops were bunched at the west end. Now everything that
+  spends or earns is inside a lit shop, placed by how often it is
+  needed: the armorer and the blade shop in the middle, patch and Dead
+  Air beside them, the lockers at the wire stairs, loans toward the
+  screen, the tailor out west. A shop with nothing in it yet keeps its
+  sign barely on, in its own color, so the street still reads as lived
+  in (MARKET, SHRINE, PAWN, INK, which was CLINIC and read as a second
+  patch, BATHS, BANDS, SLEEP, COIN, VIDS), and says "not open yet" at
+  the door. They get lit one at a time, and a sign coming on is news.
+  Stalls and carts stay as flavor and, later, small bonuses.
 - **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
   forest fights) and hired swords (a second attacker). More fights a day
   breaks the ten-minute ritual, and a companion is a second combat

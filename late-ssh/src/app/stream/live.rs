@@ -19,8 +19,9 @@ use crate::app::{
 
 use super::registry::LiveStreamView;
 
-/// Rows of the drawn screen, centred in the picture column's rows.
-const SCREEN_ROWS: usize = 6;
+/// Rows of the drawn screen, centred in the picture column's rows. Odd, so
+/// the mark has a middle row inside the frame.
+const SCREEN_ROWS: usize = 7;
 /// The mark in the middle of the drawn screen.
 const ON_AIR: &str = "⦿ LIVE";
 

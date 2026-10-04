@@ -391,13 +391,17 @@ shut.
   stairs (`>` in the gap, the spawn) along the third leg, a small yard
   and the screen as three tiles of static closing the street. **Shops
   are where the game is played; the street is flavor.** Everything that
-  spends or earns happens inside a building with a lit sign (ARMORER,
-  TAILOR, LOCKERS, DEAD AIR, PATCH, LOANS with the bits machine in its
-  corner, BLADES) or at the screen; stalls, carts, and the reader only
-  talk. A shop that does nothing yet is `closed=True` in the generator:
-  its name is on the wall unlit (`map::DARK_SIGNS`), its walls and door
-  take no neon. Today that is INK, BATHS, BANDS (its panel still opens
-  as a preview), SLEEP, SHRINE, MARKET, TEK, VIDS, AERIAL. Every one
+  spends or earns happens inside a building with a lit sign or at the
+  screen; stalls, carts, and the reader only talk. The open shops are
+  laid out by how often a runner needs them: the armorer and the blade
+  shop side by side in the middle of the street with patch and Dead Air
+  just west of them, the lockers beside the wire stairs where a runner
+  arrives, loans (the bits machine in its corner) further east toward
+  the screen, the tailor at the west end. A shop that does nothing yet
+  is `closed='Name'` in the generator: its sign is in `map::DARK_SIGNS`
+  (its own color at `DARK_SIGN`, throwing no light), its walls and door
+  take no neon. Today that is MARKET, SHRINE, PAWN, INK, BATHS, BANDS
+  (its panel still opens as a preview), SLEEP, COIN, VIDS. Every one
   is already a `Landmark` (the flag is its name): its reach is its
   front doors, its popover says `data::CLOSED_PITCH`, and Enter answers
   `data::CLOSED_LINES`, the same for all. Opening one is three moves:

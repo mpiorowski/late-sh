@@ -150,9 +150,9 @@ fn every_closed_shop_answers_enter_with_the_same_line() {
         Landmark::Sleep,
         Landmark::Shrine,
         Landmark::Market,
-        Landmark::Tek,
+        Landmark::Coin,
         Landmark::Vids,
-        Landmark::Aerial,
+        Landmark::Pawn,
     ] {
         assert_eq!(landmark.on_enter(), Enter::Line(landmark));
         assert_eq!(data::lines(landmark), data::CLOSED_LINES, "{landmark:?}");
