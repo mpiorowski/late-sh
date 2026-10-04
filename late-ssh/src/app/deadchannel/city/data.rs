@@ -108,14 +108,6 @@ pub const NOTICES: [Notice; 4] = [
     },
 ];
 
-/// What the bar pours. Flavor; the real drinks are upstairs, for chips.
-pub const DRINKS: [&str; 4] = [
-    "static on ice",
-    "dead air, neat",
-    "test pattern (comes with the bars)",
-    "the last broadcast (ask)",
-];
-
 /// Prices the tailor will charge once the rack exists (GAME.md placeholders,
 /// design review pending). Chips, burned whole.
 pub const TAILOR_PRICES: [(&str, &str); 3] = [
@@ -138,11 +130,6 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
             "the handles glow so you can find each other in the rain.",
             "\"cyan or magenta. nobody buys the black ones.\"",
         ],
-        Landmark::Blades => &[
-            "what the armorer won't sell.",
-            "\"no receipts. no names.\" the vendor grins at your mark.",
-            "the tire iron is 585 bits here too. the street has one price.",
-        ],
         Landmark::Reader => &[
             "she reads the static. it has said your name a lot lately.",
             "\"come back when the clock stops glitching,\" she says, and does not explain.",
@@ -161,6 +148,7 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
         | Landmark::Repairs
         | Landmark::Board
         | Landmark::Bits
+        | Landmark::Blades
         | Landmark::Screen
         | Landmark::Wire
         | Landmark::Ledge => &[],
@@ -196,14 +184,14 @@ pub fn pitch(landmark: Landmark) -> &'static str {
         Landmark::Tailor => "hoods, eyes, coats, marks: the look. chips only",
         Landmark::Lockers => "the stash. a cut going in, and it survives a dropped signal",
         Landmark::Bands => "tuner, jammer, ghost: the choice is made once",
-        Landmark::Bar => "the signal is warm in here",
+        Landmark::Bar => "the signal is warm in here. a glass for a crystal",
         Landmark::Screen => "tuned to a dead channel. the glyphs come out of it. a ration a step",
         Landmark::Repairs => "repairs, when there is something to repair",
         Landmark::Board => "standing orders. nothing posted yet",
         Landmark::Bits => "it hums. it lends now, and it remembers",
         Landmark::Noodles => "two bowls or none",
         Landmark::Umbrellas => "it never stops",
-        Landmark::Blades => "what the armorer won't sell",
+        Landmark::Blades => "what the armorer won't sell: the next tier up, for crystals",
         Landmark::Reader => "she reads the static",
         Landmark::Stairs => "the way down is not open",
         Landmark::Wire => "back up to #deadchannel",

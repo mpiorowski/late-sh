@@ -680,7 +680,7 @@ fn tick_commands(app: &mut App) -> bool {
             // strip and the frame HUD are painting from.
             let sheet = match &app.fight.sheet {
                 Some(sheet) => format!(
-                    "runner lv {} · signal {}/{} · rations {}/{} · bits {} · locker {} · owed {} · {} · {}",
+                    "runner lv {} · signal {}/{} · rations {}/{} · bits {} · locker {} · owed {} · crystals {} · {} · {}",
                     sheet.level,
                     sheet.signal,
                     sheet.max_signal(),
@@ -689,6 +689,7 @@ fn tick_commands(app: &mut App) -> bool {
                     sheet.bits,
                     sheet.stash,
                     sheet.debt,
+                    sheet.crystals,
                     crate::app::deadchannel::fight::ui::weapon_name(sheet),
                     crate::app::deadchannel::fight::ui::armor_name(sheet),
                 ),

@@ -59,10 +59,13 @@ live in.
 - **Reuse the LoGD balance data 1:1.** Combat curves, price ladders, gem
   chances, level pacing: twenty-years-tested numbers, and they're
   fiction-free (rename the items, keep the math). Deviations from the curves
-  need a stated reason. Two stand: a glyph pays three times LoGD's bits
-  and exp (`PAY_SCALE`) and a drop keeps 70% of the exp
-  (`EXP_KEEP_ON_DEATH`), both for the three-to-four-week climb ("The
-  daily ration loop"). This is the real salvage from the dragon work, plus
+  need a stated reason. Four stand: a glyph pays three times LoGD's bits
+  and exp (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`) and a drop keeps 65%
+  of the exp (`EXP_KEEP_ON_DEATH`), both for the three-to-four-week
+  climb ("The daily ration loop"); and the armorer's wall costs 225% of
+  LoGD's ladder while patch costs half (`PRICE_PERCENT`,
+  `PATCH_PERCENT`, "The crystal pass"), because at LoGD's prices under
+  triple pay a runner held the top kit half way up. This is the real salvage from the dragon work, plus
   the pure-resolver + per-user save schema *shapes* as a parts bin.
 - **No full-screen game destination.** Interaction surfaces are: a
   lightweight modal (Lobby-modal shape) for spending rations / setting fight
@@ -626,8 +629,9 @@ to allocate, and nothing on it another player cannot see.
 | On screen | What it is | Number | LoGD source |
 |---|---|---|---|
 | level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, scaled by marks | `lib/experience.php` |
-| a glyph's pay | bits and exp per kill | LoGD's creature table times three (`PAY_SCALE`): LoGD paced a season, this ladder is a month; paying more per kill keeps prices and thresholds LoGD's and the bits in step with the exp | creature seeds |
-| a drop | exp kept | 70% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
+| a glyph's pay | bits and exp per kill | LoGD's creature table times three (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`): LoGD paced a season, this ladder is a month; paying more per kill keeps prices and thresholds LoGD's and the bits in step with the exp | creature seeds |
+| a drop | exp kept | 65% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
+| crystals | the rare currency | one kill in twelve leaves one, a bright glyph always; a drop never takes them, a mark and the ledge do | forest gems |
 | signal | health | 10 per level, full at the day roll | `HP_PER_LEVEL` |
 | attack / defense | fight stats | level + weapon tier / level + armor tier | `battle-skills.php` |
 | rations | fights left today | 10 per UTC day | `TURNS_PER_DAY` |
@@ -671,8 +675,8 @@ replica-safe by construction, and a runner nobody touches costs nothing.
 
 **Signal dropped** means off the wire until the day roll. You still read
 the wire and still see the lounge theater; you cannot hit, and the wire
-says so when you try. You lose the bits on hand and three tenths of your
-exp (`EXP_KEEP_ON_DEATH`, 0.70; LoGD's tenth made a drop too cheap to
+says so when you try. You lose the bits on hand and 35% of your
+exp (`EXP_KEEP_ON_DEATH`, 0.65; LoGD's tenth made a drop too cheap to
 matter over a month); the stash is untouched, gear is untouched, and so
 is the debt.
 Punishment as spectatorship, in the exact surface you live in, and it is
@@ -719,9 +723,12 @@ Rules:
 
 ### Gear: two slots, fifteen tiers
 
-Weapon and armor, tiers 1 to 15, one shared `COST_LADDER` (48 bits at
-tier 1 to 10,350 at tier 15), power equals tier, 75% trade-in on the
-piece you hand back. Bought only at the city's armorer, only with bits.
+Weapon and armor, tiers 1 to 15, one shared `COST_LADDER` at
+`PRICE_PERCENT` (108 bits at tier 1 to 23,287 at tier 15), power equals
+tier, 75% trade-in on the piece you hand back. Bought at the city's
+armorer with bits, any tier the purse reaches: the price is what keeps
+the kit on the level ("The crystal pass"). The blade cart sells the
+next tier up for crystals.
 Chips never touch gear: this is the hard economy line made concrete. In
 LoGD the tier is the item and the name is pure fiction, so the rename is
 free and the names carry no balance.
@@ -962,9 +969,10 @@ that is enough.
 ### What a runner is not (decisions)
 
 - No skill tree. Bands and their four-move ladders are the whole of it.
-- No charm, no flirting stat, no gems, no mounts, no mercenaries, no
+- No charm, no flirting stat, no mounts, no mercenaries, no
   companions in v1. (Companions as an earned fourth portrait slot is a
-  season idea, not a v1 idea.)
+  season idea, not a v1 idea.) *Amended 2026-10-04:* gems came back as
+  crystals ("The crystal pass"); the rest stands.
 - No timed regeneration of anything.
 - No inventory. Two slots, one item each, the tier is the item.
 - No point allocation on a level gained: a level is a level (LoGD gives
@@ -1049,7 +1057,7 @@ never does.
   at the top of the wall, pinned by a seeded simulation test. Revisit
   when the bands ship.
 - **What the kill takes:** level back to 1, exp to 0, weapon and armor to
-  tier 0, bits to the starting 50, the locker emptied. The climb is a
+  tier 0, bits to the starting 50, the locker emptied, the crystals gone. The climb is a
   real climb again, and nothing saved for it carries over.
 - **What it keeps:** the peak level (the tailor's rack stays open), the
   look, the badges, the kill count, today's rations, and the debt.
@@ -1275,13 +1283,85 @@ one it borrowed from.
   level 1, bare hands, empty pockets and locker. The marks, the peak, the
   kills, the face, and the debt come down too, no starting bits, and not
   with the signal down, so it is never loan forgiveness, a bit farm, or a
-  way back on the wire before the roll. The wire hears it, so a runner
+  way back on the wire before the roll. (The crystals go too.) The wire hears it, so a runner
   with nothing to lose is refused: the fall is not a free line to post.
 - **The operators stay unbuilt.** The step down and the machine answer
   the lock from below, for a fraction of fourteen named characters, and
   the road pass may replace the exchange loop they would gate. If the
   climb reads too soft once staff have played this, the operators are
   the cleanest way to make it harder.
+
+## The crystal pass: the wall's price, the bright glyph, and something to want (2026-10-04)
+
+Status: **built, staff only like the rest** (`fight/`, `city/`,
+`fight/CRYSTALS.md`). A week of staff play asked two questions at once.
+A level 8 runner held the whole level 15 kit, both pieces, with bits to
+spare: the armorer was finished half way up the ladder. And with the kit
+done, a day was ten identical presses of the same key. LoGD answered the
+second with gems: a small chance of something special in every forest
+fight, spent on things gold could not buy. Both answers are in:
+
+- **The wall costs what a level pays.** The first cut gated the wall (a
+  tier a level) and was thrown out the same day: a gate makes the
+  reading come out right without making the game right, and hides the
+  number that was wrong. The number was the price. Under triple pay,
+  LoGD's ladder let a level buy two to four tiers. The wall now asks
+  225% of the ladder, at which a level's kills pay for about its own
+  pair of pieces, and patch asks half a bit a point, because at the old
+  patch price a runner one tier behind spent on patch what the next
+  tier needed and never caught up (`fight/BALANCE.md`, the sweep). The
+  careful runner now fights every level in that level's kit and wears
+  the top one at 15; gear takes over half the bits earned, patch under
+  a quarter. Nothing stops a rich runner buying ahead; a tier ahead is
+  worth two or three points of odds, so nobody needs to.
+- **Crystals.** One kill in twelve of the glyph of your level leaves
+  one. Rare enough to be a moment, common enough that a week holds a
+  few. They are the one thing a dropped signal does not take (LoGD's
+  gems survived death too): losing the purse is the cost of a drop,
+  losing the rare thing would make nobody carry it. A mark and the
+  ledge take them with everything else.
+- **The bright glyph.** Two steps of every day have a bright one waiting
+  behind them: the glyph of your level burning harder, for double the
+  bits and a certain crystal. The picker shows it with its threat word
+  like any other offer, so it is a choice and never an ambush, and it
+  is for that step only. The two steps come from the date alone, the
+  same for every runner (the Le Word lesson below: one object a day for
+  the room to compare, "the bright one is on six today"), which also
+  means no column and no reroll. It pays the plain glyph's exp on
+  purpose: the pace of the climb belongs to the rations, and a second
+  way to level faster would have to be balanced against the first.
+  From the wall's kit it is about a coin toss; one thing a crystal buys
+  makes it a fight to take.
+- **Dead Air pours.** A glass for a crystal, one a day, gone at the
+  roll: attack, defense, or the signal's bars. The consumable sink, and
+  the reason to walk into the bar. The prepared runner's move is to
+  save one for the Old Signal (two tries in five dry, a little better
+  than even with a glass).
+- **The blade cart takes the other wallet.** The next tier up from what
+  a slot carries, for three crystals and no bits. The standing sink:
+  three crystals is a few days' luck, and what they buy grows with the
+  climb, so the choice between a glass tonight and a piece later is a
+  real one.
+- **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
+  forest fights) and hired swords (a second attacker). More fights a day
+  breaks the ten-minute ritual, and a companion is a second combat
+  system; neither is here. A glass and one tier of gear are numbers the
+  sheet already has.
+- **The balance is measured.** `fight/arena.rs` plays every matchup and
+  four whole climbs through the real machine under any set of numbers
+  (`data::Rules`), and one contract holds every target as a band
+  (`fight/BALANCE.md`): the pace of the careful and reckless runners,
+  the kit tracking the level, where the bits go, the fair fight easy and
+  the bright one a coin toss, a glass that helps against the Old Signal
+  without handing it over, and the whole crystal pass worth days, not
+  weeks (the runner who plays all of it marks about two days ahead of
+  the one who plays none). The drop keeps 65% of the exp, down from 70,
+  to hold the reckless runner at four weeks.
+
+What this pass leaves for the next: the board's standing orders are the
+natural third crystal source ("put down three bright ones this week"),
+and the reader, who already talks about the static, is the natural place
+to ask which steps are bright tomorrow.
 
 ## The road pass: the daily run, the hand, and being seen (2026-09-24)
 

@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod arena;
 pub mod data;
 pub mod input;
 pub mod session;

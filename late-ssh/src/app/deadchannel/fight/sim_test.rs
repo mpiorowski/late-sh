@@ -1,4 +1,4 @@
-use super::{CAREFUL, Climb, NEGLECTFUL, Player, RECKLESS, climb, summary};
+use super::{Bench, CAREFUL, Climb, NEGLECTFUL, Player, RECKLESS, climb, summary};
 
 /// Seeded climbs per player: enough for a stable median, few enough to
 /// stay a unit test.
@@ -14,8 +14,9 @@ const CAREFUL_MARK_DAYS: std::ops::RangeInclusive<u32> = 18..=24;
 const RECKLESS_MARK_DAYS: std::ops::RangeInclusive<u32> = 25..=31;
 
 fn climbs(player: Player) -> Vec<Climb> {
+    let mut bench = Bench::live();
     (0..SEEDS)
-        .map(|seed| climb(player, seed, MAX_DAYS))
+        .map(|seed| climb(player, seed, MAX_DAYS, &mut bench))
         .collect()
 }
 

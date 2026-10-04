@@ -21,7 +21,7 @@ const TIERS: usize = COST_LADDER.len();
 /// What Enter does at the landmark within reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Enter {
-    /// Opens the landmark's panel (the shops and the board).
+    /// Opens the landmark's panel (the shops, the board, the blade cart).
     Panel(Landmark),
     /// The street answers with a line (carts, the screen, the stairs).
     Line(Landmark),
@@ -46,13 +46,12 @@ impl Landmark {
             | Landmark::Bar
             | Landmark::Repairs
             | Landmark::Board
-            | Landmark::Bits => Enter::Panel(self),
+            | Landmark::Bits
+            | Landmark::Blades => Enter::Panel(self),
             Landmark::Screen => Enter::Fight,
-            Landmark::Noodles
-            | Landmark::Umbrellas
-            | Landmark::Blades
-            | Landmark::Reader
-            | Landmark::Stairs => Enter::Line(self),
+            Landmark::Noodles | Landmark::Umbrellas | Landmark::Reader | Landmark::Stairs => {
+                Enter::Line(self)
+            }
             Landmark::Wire => Enter::Leave,
             Landmark::Ledge => Enter::Ledge,
         }

@@ -4,7 +4,8 @@
 //! open patch from anywhere on the street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
 //! `Command::Outfit`), the lockers `d` and `w`, the bits machine `b` and
-//! `r`, the ledge `r` twice to step off; the tailor's hands every key to
+//! `r`, Dead Air `s`, `d`, and `t` (a glass each), the blade cart `w` and
+//! `a`, the ledge `r` twice to step off; the tailor's hands every key to
 //! `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page opens it (the site guide's key, taken over
@@ -23,7 +24,7 @@ use crate::app::state::App;
 use super::data;
 use super::map::Landmark;
 use super::state::Enter;
-use crate::app::deadchannel::fight::state::{Command, Slot};
+use crate::app::deadchannel::fight::state::{Command, Drink, Slot};
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.guide.state.is_open() {
@@ -160,6 +161,29 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
                 return true;
             }
             _ => {}
+        }
+    }
+    if app.city.panel() == Some(Landmark::Bar) {
+        let drink = match event {
+            ParsedInput::Byte(b's') | ParsedInput::Char('s') => Some(Drink::StaticOnIce),
+            ParsedInput::Byte(b'd') | ParsedInput::Char('d') => Some(Drink::DeadAirNeat),
+            ParsedInput::Byte(b't') | ParsedInput::Char('t') => Some(Drink::TestPattern),
+            _ => None,
+        };
+        if let Some(drink) = drink {
+            app.fight.request(Command::Drink { drink });
+            return true;
+        }
+    }
+    if app.city.panel() == Some(Landmark::Blades) {
+        let slot = match event {
+            ParsedInput::Byte(b'w') | ParsedInput::Char('w') => Some(Slot::Weapon),
+            ParsedInput::Byte(b'a') | ParsedInput::Char('a') => Some(Slot::Armor),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            app.fight.request(Command::Cart { slot });
+            return true;
         }
     }
     // The ledge: `r` once to lean out, `r` again to step off. Any other

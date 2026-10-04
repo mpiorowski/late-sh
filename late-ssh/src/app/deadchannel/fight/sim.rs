@@ -19,7 +19,8 @@ use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::data::MAX_LEVEL;
-use super::state::{Applied, Command, MAX_TIER, Pick, Sheet, Slot};
+use super::data::{DRINK_CRYSTALS, RULES, Rules};
+use super::state::{Applied, Command, Drink, MAX_TIER, Pick, Sheet, Slot};
 
 /// How the simulated runner plays. Every field is spelled out: a player
 /// is a named rule, not a default.
@@ -37,6 +38,29 @@ pub struct Player {
     pub step_down_at: Option<Threat>,
     /// When the runner starts heeding the armorer and the picker.
     pub heeds: Heeds,
+    /// Step in against the bright glyph, on a step one waits behind,
+    /// whenever it reads this or better at full signal; `None` never
+    /// does.
+    pub takes_bright: Option<Threat>,
+    /// The glass bought before a step in whenever a crystal covers it and
+    /// none is poured yet; `None` never drinks.
+    pub drinks: Option<Drink>,
+    /// Buys the blade cart's piece, the weaker slot first, whenever the
+    /// crystals cover it.
+    pub carts: bool,
+    /// What the runner holds back from the armorer.
+    pub purse: Purse,
+}
+
+/// How a simulated runner splits its bits between the armorer and patch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purse {
+    /// Every bit goes on the best piece it covers; patch gets what is
+    /// left.
+    SpendAll,
+    /// Keeps the price of one full patch at its level back from the
+    /// armorer: gear never leaves it unable to heal.
+    KeepAPatch,
 }
 
 /// When a simulated runner starts playing by its rule for gear and for
@@ -57,6 +81,10 @@ pub const CAREFUL: Player = Player {
     patch_under: 1.0,
     step_down_at: None,
     heeds: Heeds::Always,
+    takes_bright: None,
+    drinks: None,
+    carts: false,
+    purse: Purse::KeepAPatch,
 };
 
 /// Pushes it: runs late, patches only when half gone. Drops a few times
@@ -66,6 +94,10 @@ pub const RECKLESS: Player = Player {
     patch_under: 0.5,
     step_down_at: None,
     heeds: Heeds::Always,
+    takes_bright: None,
+    drinks: None,
+    carts: false,
+    purse: Purse::SpendAll,
 };
 
 /// Walks past the armorer and the picker's warning until the street takes
@@ -77,7 +109,35 @@ pub const NEGLECTFUL: Player = Player {
     patch_under: 1.0,
     step_down_at: Some(Threat::Grim),
     heeds: Heeds::AfterFirstDrop,
+    takes_bright: None,
+    drinks: None,
+    carts: false,
+    purse: Purse::KeepAPatch,
 };
+
+/// The careful runner who also plays the crystal pass: takes the bright
+/// glyph when it reads even or better, buys the blade cart's pieces, and
+/// drinks static on ice with what is left. What the crystals are worth,
+/// measured against [`CAREFUL`].
+pub const KEEN: Player = Player {
+    run_under: 0.4,
+    patch_under: 1.0,
+    step_down_at: None,
+    heeds: Heeds::Always,
+    takes_bright: Some(Threat::Even),
+    drinks: Some(Drink::StaticOnIce),
+    carts: true,
+    purse: Purse::KeepAPatch,
+};
+
+/// The players the balance is read from, by name: the report and the
+/// sweep print every one.
+pub const PLAYERS: [(&str, Player); 4] = [
+    ("careful", CAREFUL),
+    ("reckless", RECKLESS),
+    ("neglectful", NEGLECTFUL),
+    ("keen", KEEN),
+];
 
 /// One climb from a fresh row, day 1 to the first mark or to `max_days`.
 /// Days count from 1; `None` is "not within `max_days`".
@@ -99,13 +159,81 @@ pub struct Climb {
     pub recovered_on: Option<u32>,
     /// Steps into the static that met the Old Signal.
     pub boss_tries: u32,
+    /// The weapon and armor tiers carried on leaving each level (at the
+    /// kill that gained the next one, or at the mark for the last),
+    /// indexed by level like `level_on`: the kit the level was fought in.
+    pub kit_on: [Option<(i32, i32)>; MAX_LEVEL as usize + 1],
+    /// Where the bits and the crystals went.
+    pub ledger: Ledger,
+}
+
+/// One climb's money, summed: what the glyphs paid and where it went.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ledger {
+    /// Bits the glyphs paid, before the machine's garnish.
+    pub earned: i64,
+    /// Bits paid at the armorer, net of trade-ins.
+    pub gear: i64,
+    /// Bits paid at patch.
+    pub patched: i64,
+    /// Bits the street took with a dropped signal.
+    pub dropped: i64,
+    pub crystals_found: i32,
+    pub crystals_spent: i32,
+    /// Steps in against a bright glyph, and how many put it down.
+    pub bright_tries: u32,
+    pub bright_kills: u32,
+}
+
+/// The bench a batch of climbs is played at: the rules, and what each
+/// pick reads at full signal under them, by level, gear, marks, and glass,
+/// remembered. The step-down and bright rules ask before every fight, the
+/// answer only moves when one of those does, and it is the same answer on
+/// every seed (the odds run on fixed dice), so one bench serves a whole
+/// batch. One bench per set of rules: the memo is only true under its own.
+pub struct Bench {
+    pub rules: Rules,
+    threats: HashMap<(Pick, i32, i32, i32, i32, Option<Drink>), Threat>,
+}
+
+impl Bench {
+    /// The live game.
+    pub fn live() -> Self {
+        Self::under(RULES)
+    }
+
+    /// A candidate set of rules.
+    pub fn under(rules: Rules) -> Self {
+        Self {
+            rules,
+            threats: HashMap::new(),
+        }
+    }
+
+    fn threat(&mut self, pick: Pick, sheet: &Sheet) -> Threat {
+        let key = (
+            pick,
+            sheet.level,
+            sheet.weapon_tier,
+            sheet.armor_tier,
+            sheet.marks,
+            sheet.drink,
+        );
+        let rules = self.rules;
+        *self
+            .threats
+            .entry(key)
+            .or_insert_with(|| fresh_threat(&rules, sheet, pick))
+    }
 }
 
 /// Play `player` from a fresh row with `seed` for at most `max_days`.
 /// Each day: settle the roll, then until the rations are gone or the
-/// signal is down: buy the best affordable upgrade per slot, patch by the
-/// rule, pick the fight by the rule, step in, and fight by the rule.
-pub fn climb(player: Player, seed: u64, max_days: u32) -> Climb {
+/// signal is down: buy the best affordable upgrade per slot, shop the
+/// cart and the bar by the rule, patch by the rule, pick the fight by the
+/// rule, step in, and fight by the rule.
+pub fn climb(player: Player, seed: u64, max_days: u32, bench: &mut Bench) -> Climb {
+    let rules = bench.rules;
     let mut rng = StdRng::seed_from_u64(seed);
     let mut sheet = Sheet::fresh(Uuid::nil(), date(1));
     let mut report = Climb {
@@ -116,11 +244,9 @@ pub fn climb(player: Player, seed: u64, max_days: u32) -> Climb {
         first_drop_on: None,
         recovered_on: None,
         boss_tries: 0,
+        kit_on: [None; MAX_LEVEL as usize + 1],
+        ledger: Ledger::default(),
     };
-    // The fair glyph's threat at full signal, by level, gear, and marks:
-    // the step-down rule asks it before every fight, and it only moves
-    // when one of those does.
-    let mut threats: HashMap<(i32, i32, i32, i32), Threat> = HashMap::new();
     report.level_on[1] = Some(1);
     for day in 1..=max_days {
         sheet.settle(date(day));
@@ -129,41 +255,75 @@ pub fn climb(player: Player, seed: u64, max_days: u32) -> Climb {
                 Heeds::Always => true,
                 Heeds::AfterFirstDrop => report.first_drop_on.is_some(),
             };
-            if heeding {
-                outfit(&mut sheet, &mut rng);
-            }
+            // Patch first: the heal is what the next fight is fought on,
+            // and the armorer only sees what the purse rule leaves.
             let patch_line = (f64::from(sheet.max_signal()) * player.patch_under).ceil() as i32;
-            if sheet.signal < patch_line && sheet.bits >= sheet.patch_price() {
-                sheet.apply(Command::Patch, &mut rng);
+            if sheet.signal < patch_line
+                && let Applied::Patched { paid, .. } =
+                    sheet.apply_under(&rules, Command::Patch, &mut rng).applied
+            {
+                report.ledger.patched += paid;
+            }
+            if heeding {
+                report.ledger.gear += outfit(&rules, player.purse, &mut sheet, &mut rng);
+            }
+            if player.carts {
+                let slot = match sheet.weapon_tier <= sheet.armor_tier {
+                    true => Slot::Weapon,
+                    false => Slot::Armor,
+                };
+                if let Applied::Carted { crystals, .. } = sheet
+                    .apply_under(&rules, Command::Cart { slot }, &mut rng)
+                    .applied
+                {
+                    report.ledger.crystals_spent += crystals;
+                }
+            }
+            if let Some(drink) = player.drinks
+                && let Applied::Drank { .. } = sheet
+                    .apply_under(&rules, Command::Drink { drink }, &mut rng)
+                    .applied
+            {
+                report.ledger.crystals_spent += DRINK_CRYSTALS;
             }
             let gate = sheet.signal_hears();
             if gate && report.heard_on.is_none() {
                 report.heard_on = Some(day);
             }
-            let pick = match (heeding, gate, player.step_down_at) {
-                (true, false, Some(line)) => {
-                    let key = (
-                        sheet.level,
-                        sheet.weapon_tier,
-                        sheet.armor_tier,
-                        sheet.marks,
-                    );
-                    let threat = *threats.entry(key).or_insert_with(|| fresh_threat(&sheet));
-                    match threat >= line && sheet.level > 1 {
+            let bright = match (
+                player.takes_bright,
+                sheet.bright_waits() && !sheet.is_down(),
+            ) {
+                (Some(line), true) => bench.threat(Pick::Bright, &sheet) <= line,
+                (Some(_), false) | (None, _) => false,
+            };
+            let pick = match (bright, heeding, gate, player.step_down_at) {
+                (true, _, _, _) => Pick::Bright,
+                (false, true, false, Some(line)) => {
+                    match bench.threat(Pick::Fair, &sheet) >= line && sheet.level > 1 {
                         true => Pick::Lower,
                         false => Pick::Fair,
                     }
                 }
-                (true, true, _) | (true, false, None) | (false, _, _) => Pick::Fair,
+                (false, true, true, _) | (false, true, false, None) | (false, false, _, _) => {
+                    Pick::Fair
+                }
             };
-            match sheet.apply(Command::Start { pick }, &mut rng).applied {
+            match sheet
+                .apply_under(&rules, Command::Start { pick }, &mut rng)
+                .applied
+            {
                 Applied::Started { .. } => {}
                 Applied::Refused(_) => break,
                 other => panic!("start answered {other:?}"),
             }
+            let kit = (sheet.weapon_tier, sheet.armor_tier);
             let boss = gate && pick == Pick::Fair;
             if boss {
                 report.boss_tries += 1;
+            }
+            if pick == Pick::Bright {
+                report.ledger.bright_tries += 1;
             }
             let run_line = (f64::from(sheet.max_signal()) * player.run_under).ceil() as i32;
             loop {
@@ -171,24 +331,38 @@ pub fn climb(player: Player, seed: u64, max_days: u32) -> Climb {
                     true => Command::Run,
                     false => Command::Attack,
                 };
-                match sheet.apply(command, &mut rng).applied {
+                match sheet.apply_under(&rules, command, &mut rng).applied {
                     Applied::Round => {}
                     Applied::Escaped => break,
-                    Applied::Won { leveled, .. } => {
+                    Applied::Won {
+                        leveled,
+                        bits,
+                        bright,
+                        crystals,
+                        ..
+                    } => {
+                        report.ledger.earned += bits;
+                        report.ledger.crystals_found += crystals;
+                        if bright {
+                            report.ledger.bright_kills += 1;
+                        }
                         if let Some(level) = leveled {
                             report.level_on[level as usize].get_or_insert(day);
+                            report.kit_on[level as usize - 1].get_or_insert(kit);
                             if report.first_drop_on.is_some() {
                                 report.recovered_on.get_or_insert(day);
                             }
                         }
                         break;
                     }
-                    Applied::Lost { .. } => {
+                    Applied::Lost { bits_lost } => {
+                        report.ledger.dropped += bits_lost;
                         report.deaths += 1;
                         report.first_drop_on.get_or_insert(day);
                         break;
                     }
                     Applied::Slain { .. } => {
+                        report.kit_on[MAX_LEVEL as usize] = Some(kit);
                         report.marked_on = Some(day);
                         return report;
                     }
@@ -200,29 +374,46 @@ pub fn climb(player: Player, seed: u64, max_days: u32) -> Climb {
     report
 }
 
-/// The fair glyph's threat for `sheet`'s runner at full signal, the
-/// rations topped up so the estimate is about the fight, not the day.
-fn fresh_threat(sheet: &Sheet) -> Threat {
+/// `pick`'s threat for `sheet`'s runner at full signal, a spent day's
+/// rations topped up so the estimate is about the fight, not the day (a
+/// day with a ration left keeps its step: the bright glyph waits behind
+/// it).
+fn fresh_threat(rules: &Rules, sheet: &Sheet, pick: Pick) -> Threat {
     let mut rested = sheet.clone();
     rested.signal = rested.max_signal();
     rested.rations_left = rested.rations_left.max(1);
-    let odds = odds(&rested, Pick::Fair, ODDS_FIGHTS).expect("a rested runner can step in");
+    let odds = odds_under(rules, &rested, pick, ODDS_FIGHTS).expect("a rested runner can step in");
     Threat::of(odds)
 }
 
-/// The best tier the bits cover for each slot, bought; the armorer
-/// refuses what is not an upgrade or not affordable, so this walks the
-/// wall from the top and takes the first sale.
-fn outfit(sheet: &mut Sheet, rng: &mut StdRng) {
-    for slot in [Slot::Weapon, Slot::Armor] {
-        for tier in (1..=MAX_TIER).rev() {
-            if let Applied::Outfitted { .. } =
-                sheet.apply(Command::Outfit { slot, tier }, rng).applied
-            {
-                break;
-            }
+/// The best tier the purse covers, for each slot, the weaker slot first,
+/// bought: the wall walked from the top down to the first piece whose
+/// price leaves the purse rule's reserve. Returns the bits paid.
+fn outfit(rules: &Rules, purse: Purse, sheet: &mut Sheet, rng: &mut StdRng) -> i64 {
+    let reserve = match purse {
+        Purse::SpendAll => 0,
+        Purse::KeepAPatch => {
+            i64::from(sheet.max_signal()) * i64::from(sheet.level) * rules.patch_percent / 100
+        }
+    };
+    let slots = match sheet.weapon_tier <= sheet.armor_tier {
+        true => [Slot::Weapon, Slot::Armor],
+        false => [Slot::Armor, Slot::Weapon],
+    };
+    let mut spent = 0;
+    for slot in slots {
+        let affordable = (sheet.tier_of(slot) + 1..=MAX_TIER)
+            .rev()
+            .find(|tier| sheet.outfit_price_under(rules, slot, *tier) + reserve <= sheet.bits);
+        if let Some(tier) = affordable
+            && let Applied::Outfitted { paid, .. } = sheet
+                .apply_under(rules, Command::Outfit { slot, tier }, rng)
+                .applied
+        {
+            spent += paid;
         }
     }
+    spent
 }
 
 /// How a fight reads before stepping in, worst last, from the chance of
@@ -274,17 +465,25 @@ const ODDS_ROUNDS: u32 = 200;
 /// start a fight: the signal is down, the rations are spent, a fight is
 /// already waiting, or there is nothing below the flicker.
 pub fn odds(sheet: &Sheet, pick: Pick, fights: u32) -> Option<f64> {
+    odds_under(&RULES, sheet, pick, fights)
+}
+
+/// [`odds`] under a candidate set of rules.
+pub fn odds_under(rules: &Rules, sheet: &Sheet, pick: Pick, fights: u32) -> Option<f64> {
     let mut rng = StdRng::seed_from_u64(ODDS_SEED);
     let mut wins = 0u32;
     for _ in 0..fights {
         let mut trial = sheet.clone();
-        match trial.apply(Command::Start { pick }, &mut rng).applied {
+        match trial
+            .apply_under(rules, Command::Start { pick }, &mut rng)
+            .applied
+        {
             Applied::Started { .. } => {}
             Applied::Refused(_) | Applied::Resumed => return None,
             other => panic!("start answered {other:?}"),
         }
         for _ in 0..ODDS_ROUNDS {
-            match trial.apply(Command::Attack, &mut rng).applied {
+            match trial.apply_under(rules, Command::Attack, &mut rng).applied {
                 Applied::Round => continue,
                 Applied::Won { .. } | Applied::Slain { .. } => {
                     wins += 1;

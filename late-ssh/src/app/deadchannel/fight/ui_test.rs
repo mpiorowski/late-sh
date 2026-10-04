@@ -4,7 +4,7 @@ use ratatui::backend::TestBackend;
 use uuid::Uuid;
 
 use super::{PickerView, SceneView, corrupt, draw_picker, draw_scene};
-use crate::app::deadchannel::fight::data::OLD_SIGNAL_TIER;
+use crate::app::deadchannel::fight::data::{OLD_SIGNAL_TIER, RATIONS_PER_DAY, bright_steps};
 use crate::app::deadchannel::fight::session::{Picker, Scene};
 use crate::app::deadchannel::fight::sim::Threat;
 use crate::app::deadchannel::fight::state::{Fight, Pick, Quarry, Sheet};
@@ -75,6 +75,7 @@ fn the_scene_shows_both_faces_the_exchange_and_the_keys() {
         foe_bits: 268,
         foe_exp: 77,
         log: Vec::new(),
+        bright: false,
     });
     let scene = Scene {
         lines: vec![
@@ -122,6 +123,7 @@ fn at_the_bottom() -> (Sheet, Scene) {
         foe_bits: 0,
         foe_exp: 0,
         log: Vec::new(),
+        bright: false,
     });
     let scene = Scene {
         lines: vec!["you hit the Old Signal for 21.".to_string()],
@@ -249,10 +251,16 @@ fn the_picker_offers_the_glyph_of_your_level_and_the_one_below_with_their_threat
     sheet.level = 2;
     sheet.signal = 20;
     sheet.bits = 0;
+    let [bright_step, _] = bright_steps(sheet.day);
+    let plain_step = (1..=RATIONS_PER_DAY)
+        .find(|step| !bright_steps(sheet.day).contains(step))
+        .expect("eight plain steps a day");
+    sheet.rations_left = RATIONS_PER_DAY - (plain_step - 1);
     let picker = Picker {
         cursor: Pick::Fair,
         fair: Some(Threat::Grim),
         lower: Some(Threat::Easy),
+        bright: Some(Threat::Risky),
     };
 
     let text = render_picker(&sheet, &picker);
@@ -270,6 +278,24 @@ fn the_picker_offers_the_glyph_of_your_level_and_the_one_below_with_their_threat
         text.contains("▸ [f]"),
         "the cursor sits on the fair fight: {text}"
     );
+    assert!(
+        !text.contains("[b]"),
+        "no bright glyph on a plain step: {text}"
+    );
+
+    // On a step one waits behind, the bright glyph heads the offers.
+    sheet.rations_left = RATIONS_PER_DAY - (bright_step - 1);
+    let bright = render_picker(&sheet, &picker);
+    assert!(bright.contains("[b]"), "{bright}");
+    assert!(bright.contains("bright hiss  lv 2"), "{bright}");
+    assert!(bright.contains("risky"), "{bright}");
+    assert!(
+        bright.contains("pays 582 bits · 72 exp · a crystal"),
+        "{bright}"
+    );
+    assert!(bright.contains("[g]"), "all three fit: {bright}");
+    assert!(bright.contains("[Enter] step in"), "{bright}");
+    sheet.rations_left = RATIONS_PER_DAY - (plain_step - 1);
 
     // At level 1 there is nothing below the flicker to offer.
     sheet.level = 1;
@@ -283,4 +309,9 @@ fn the_picker_offers_the_glyph_of_your_level_and_the_one_below_with_their_threat
     let down = render_picker(&sheet, &picker);
     assert!(down.contains("your signal is down"), "{down}");
     assert!(!down.contains("[f]"), "{down}");
+    assert!(
+        down.contains("[Enter] back to the street"),
+        "with nothing on offer the key closes the picker: {down}"
+    );
+    assert!(!down.contains("step in"), "{down}");
 }

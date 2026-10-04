@@ -17,10 +17,11 @@ unless the mirror shows a fight waiting on the row.
   the kit, rations, bits, exp toward the next level, the debt when there
   is one.
 - Then the offers, each its face, level, numbers, pay, and threat word:
+  `[b]` the bright glyph on a step one waits behind (`CRYSTALS.md`),
   `[f]` the glyph of your level (at the gate, the Old Signal in red),
   `[g]` the one a level down at half pay (absent at level 1).
-- `f` and `g` step in, up/down and Enter do the same with the cursor, Esc
-  closes it (`dispatch_escape`, ahead of the scene's arm).
+- `f`, `g`, and `b` step in, up/down and Enter do the same with the
+  cursor, Esc closes it (`dispatch_escape`, ahead of the scene's arm).
 - The threat word is `sim::odds` over the mirror: the fight played to the
   end two hundred times on fixed dice through the real machine, from the
   signal and the kit as they stand, read into `Threat` (nine in ten easy,
@@ -30,8 +31,11 @@ unless the mirror shows a fight waiting on the row.
 - Opening the picker also reloads the sheet, so the bars it shows are
   after the roll.
 - With the signal down or the rations spent the offers are replaced by
-  the reason; the keys still ask the row, which is the truth and answers
-  with the refusal on the scene.
+  the reason (`Sheet::shut`), the key row reads `[Enter] back to the
+  street`, and every step-in key closes the picker
+  (`FightSession::choose`): no scene opens only to repeat the reason.
+  The mirror is fresh for this (opening the picker reloaded it); with no
+  mirror yet the key still asks the row.
 
 ## The step down
 
@@ -46,6 +50,7 @@ hundred. `Pick::Lower` is the way back.
   arrival saying so.
 - Refused at level 1 (`Refusal::NoLowerGlyph`) without spending the
   ration.
+- It never leaves a crystal (`CRYSTALS.md`).
 - At the gate the fair pick is the Old Signal and the step down is the
   glyph of 14.
 - `sim_test.rs` pins it: the `NEGLECTFUL` runner gains a level within a
@@ -99,7 +104,7 @@ runner can borrow both tier-1 pieces.
 ## The ledge
 
 `Command::Reset`, the runner started over by choice: level 1, exp 0, bare
-hands, no bits on hand or in the locker, a level-1 signal.
+hands, no bits on hand or in the locker, no crystals, a level-1 signal.
 
 - What stays is what was earned or owed: the marks and their bonus, the
   peak (the tailor's rack), the kills, the look, today's rations, and
@@ -109,7 +114,7 @@ hands, no bits on hand or in the locker, a level-1 signal.
   the wire before the roll), a glyph waiting (`FightWaiting`), and a
   runner the fall would take nothing from (`NothingToLose`,
   `Sheet::has_something_to_lose`: level 1, no exp, no gear, no bits on
-  hand or locked up). The last one is what keeps the wire line from
+  hand or locked up, no crystals). The last one is what keeps the wire line from
   being a key to hold down: every step off costs something, so the
   rations bound how often one can be posted.
 - Two presses of `r` over the ledge (`city/state.rs::arm_reset`),

@@ -8,10 +8,11 @@
 //! After the commit, the wire (GAME.md, "The three surfaces"): the room
 //! sees the news, never the play-by-play. `Sheet::news` decides what is
 //! news (a dropped signal, a level gained, the Old Signal put down, a step
-//! off the ledge, a first kill, a near miss, the last ration of the day);
+//! off the ledge, a first kill, a bright glyph put down, a near miss, the
+//! last ration of the day);
 //! this file words it and posts it to #deadchannel as messages from the
-//! voice. An ordinary kill, a round, a run, a purchase, the locker, and the
-//! bits machine post nothing. The Old Signal also pays the mark's
+//! voice. An ordinary kill, a round, a run, a purchase, a glass, the locker,
+//! and the bits machine post nothing. The Old Signal also pays the mark's
 //! chips after the commit (`pay_mark`: once per mark and at most once a
 //! month, the door milestones' two gates; the debt is on the row as
 //! `unpaid_mark` until the grant answers, so a grant that errors is
@@ -107,7 +108,7 @@ impl FightService {
                         mut outcome,
                     })) => {
                         metrics::record_deadchannel_fight(beat_for(&outcome.applied));
-                        tracing::info!(applied = ?outcome.applied, level = sheet.level, signal = sheet.signal, rations_left = sheet.rations_left, bits = sheet.bits, "fight command applied");
+                        tracing::info!(applied = ?outcome.applied, level = sheet.level, signal = sheet.signal, rations_left = sheet.rations_left, bits = sheet.bits, crystals = sheet.crystals, "fight command applied");
                         svc.post_news(&username, &sheet, &outcome.applied).await;
                         // The debt on the row: this kill's mark, or one an
                         // earlier grant failed to settle. Either way the
@@ -271,6 +272,9 @@ impl FightService {
                 News::FirstBlood { foe } => {
                     format!("{username} put down their first {foe}. the static will remember.")
                 }
+                News::BrightDown { foe } => {
+                    format!("{username} put down a bright {foe}. it left a crystal.")
+                }
                 News::NearMiss { foe, signal } => {
                     format!("{username} put down the {foe} with {signal} signal left.")
                 }
@@ -421,6 +425,7 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Refused(_) => FightBeat::Refused,
         Applied::Started { pick: Pick::Fair } => FightBeat::Started,
         Applied::Started { pick: Pick::Lower } => FightBeat::SteppedDown,
+        Applied::Started { pick: Pick::Bright } => FightBeat::Bright,
         Applied::Resumed => FightBeat::Resumed,
         Applied::Round => FightBeat::Round,
         Applied::Won { .. } => FightBeat::Won,
@@ -434,6 +439,8 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Borrowed { .. } => FightBeat::Borrowed,
         Applied::Repaid { .. } => FightBeat::Repaid,
         Applied::Reset => FightBeat::Reset,
+        Applied::Drank { .. } => FightBeat::Drank,
+        Applied::Carted { .. } => FightBeat::Carted,
     }
 }
 

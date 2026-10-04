@@ -214,6 +214,8 @@ pub enum FirstContactBeat {
 pub enum FightBeat {
     Started,
     SteppedDown,
+    /// A step in against a bright glyph.
+    Bright,
     Resumed,
     Round,
     Won,
@@ -228,6 +230,10 @@ pub enum FightBeat {
     Borrowed,
     Repaid,
     Reset,
+    /// A glass poured at Dead Air.
+    Drank,
+    /// A piece bought off the blade cart.
+    Carted,
     Refused,
     Failed,
 }
@@ -1414,6 +1420,7 @@ mod inner {
         match beat {
             FightBeat::Started => "started",
             FightBeat::SteppedDown => "stepped_down",
+            FightBeat::Bright => "bright",
             FightBeat::Resumed => "resumed",
             FightBeat::Round => "round",
             FightBeat::Won => "won",
@@ -1426,6 +1433,8 @@ mod inner {
             FightBeat::Withdrew => "withdrew",
             FightBeat::Borrowed => "borrowed",
             FightBeat::Repaid => "repaid",
+            FightBeat::Drank => "drank",
+            FightBeat::Carted => "carted",
             FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",

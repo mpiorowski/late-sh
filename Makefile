@@ -100,6 +100,21 @@ test-llm: .env
 arena:
 	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all -j1 -E 'test(lateania::svc::arena)'"
 
+# The deadchannel balance arena (late-ssh/src/app/deadchannel/fight/BALANCE.md):
+# every contract plus the report, every table for the live rules, written to
+# late-ssh/target/deadchannel-arena.md. Run it when the fight's numbers or
+# rules change.
+.PHONY: deadchannel-arena
+deadchannel-arena:
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep)'"
+
+# The balance sweep: one reading per candidate set of rules in
+# arena_test.rs::SWEEP, side by side, written to
+# late-ssh/target/deadchannel-sweep.md. Edit SWEEP, run this, read the table.
+.PHONY: deadchannel-sweep
+deadchannel-sweep:
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_sweep)'"
+
 # Full pre-merge sweep, and the only place the otel feature is exercised:
 # clippy + tests run the whole workspace WITH --features otel, so the real
 # telemetry/metrics code (the config prod ships) is compiled and linted here.

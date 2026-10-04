@@ -37,10 +37,13 @@ use ratatui::{
 };
 
 use crate::app::deadchannel::fight::data::{
-    GARNISH_PERCENT, LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, TRADE_IN_PERCENT,
+    CART_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT, LOAN_FEE_PERCENT,
+    LOCKER_FEE_PERCENT, TRADE_IN_PERCENT, drink_edge,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
-use crate::app::deadchannel::fight::state::{Sheet, Slot as GearSlot, gear_name};
+use crate::app::deadchannel::fight::state::{
+    Drink, Sheet, Slot as GearSlot, gear_name, wall_price,
+};
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 use crate::app::deadchannel::guide::state::State as GuideState;
@@ -1691,24 +1694,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
             )));
             lines.push(Line::from(Span::styled("(not open yet)", muted_text)));
         }
-        Landmark::Bar => {
-            lines.push(Line::from(Span::styled(
-                "the signal is warm in here.",
-                text,
-            )));
-            lines.push(blank());
-            for drink in data::DRINKS {
-                lines.push(Line::from(vec![
-                    Span::styled("  ♪ ", glow(Neon::Amber)),
-                    Span::styled(drink, text),
-                ]));
-            }
-            lines.push(blank());
-            lines.push(Line::from(Span::styled(
-                "the bartender upstairs pours the real ones, for chips. down here the glasses are for looking at.",
-                dim_text,
-            )));
-        }
+        Landmark::Bar => lines.extend(bar_lines(view)),
         Landmark::Repairs => lines.extend(patch_lines(view)),
         Landmark::Board => {
             lines.push(Line::from(Span::styled("standing orders", head)));
@@ -1726,10 +1712,10 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
             )));
         }
         Landmark::Bits => lines.extend(machine_lines(view)),
+        Landmark::Blades => lines.extend(cart_lines(view)),
         Landmark::Screen
         | Landmark::Noodles
         | Landmark::Umbrellas
-        | Landmark::Blades
         | Landmark::Reader
         | Landmark::Stairs
         | Landmark::Wire
@@ -1851,7 +1837,7 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ]));
     }
     lines.push(Line::from(Span::styled(
-        "a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+        "half a bit a point, times your level. a dropped signal is the roll's to fix, not patch's.",
         dim_text,
     )));
     if let Some(till) = view.till {
@@ -2058,8 +2044,9 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ),
         head,
     )));
-    for (index, price) in data::COST_LADDER.iter().enumerate() {
+    for index in 0..data::COST_LADDER.len() {
         let tier = index as i32 + 1;
+        let price = wall_price(tier);
         let cell = |slot: GearSlot, name: &'static str| {
             let style = match tier.cmp(&sheet.tier_of(slot)) {
                 std::cmp::Ordering::Less => dim_text,
@@ -2118,6 +2105,172 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             "power equals tier. {}% back on what you hand in. bits only, no credit.",
             TRADE_IN_PERCENT
         ),
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
+/// Dead Air: the crystals on hand and the glass in you, the menu with
+/// each glass's key and what it does at this level, the refusal the row
+/// would give spelled out ahead of the keys, and the bartender's last
+/// word.
+fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = lit(Neon::Cyan);
+    let key = lit(Neon::Amber);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("crystals ", dim_text),
+        Span::styled(sheet.crystals.to_string(), number),
+        Span::styled("      in you ", dim_text),
+        Span::styled(
+            match sheet.drink {
+                Some(drink) => drink.name(),
+                None => "nothing",
+            },
+            text,
+        ),
+    ]));
+    lines.push(Line::default());
+    // Why the bartender would not pour, in the order the row checks.
+    let refusal = if sheet.is_down() {
+        Some("your signal is down. the bartender does not pour for static.")
+    } else if sheet.fight.is_some() {
+        Some("not with a glyph waiting on you. the glass can wait.")
+    } else if sheet.rations_left <= 0 {
+        Some("you are spent for today. it would wear off before you used it.")
+    } else if sheet.drink.is_some() {
+        Some("one glass a day. come back after the roll.")
+    } else if sheet.crystals < DRINK_CRYSTALS {
+        Some("a glass is a crystal, and you have none.")
+    } else {
+        None
+    };
+    let edge = drink_edge(sheet.level);
+    for drink in Drink::MENU {
+        let (label, does) = match drink {
+            Drink::StaticOnIce => ("[s] ", format!("+{edge} attack")),
+            Drink::DeadAirNeat => ("[d] ", format!("+{edge} defense")),
+            Drink::TestPattern => (
+                "[t] ",
+                format!(
+                    "+{} signal, and filled",
+                    sheet.level * DRINK_SIGNAL_PER_LEVEL
+                ),
+            ),
+        };
+        let lit_row = refusal.is_none();
+        lines.push(Line::from(vec![
+            Span::styled(
+                label,
+                match lit_row {
+                    true => key,
+                    false => muted_text,
+                },
+            ),
+            Span::styled(
+                format!("{:<18}", drink.name()),
+                match (sheet.drink == Some(drink), lit_row) {
+                    (true, _) => lit(Neon::Amber),
+                    (false, true) => text,
+                    (false, false) => dim_text,
+                },
+            ),
+            Span::styled(does, dim_text),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("    ", text),
+        Span::styled(format!("{:<18}", "the last broadcast"), muted_text),
+        Span::styled("\"ask when you have a mark.\"", muted_text),
+    ]));
+    lines.push(Line::default());
+    if let Some(reason) = refusal {
+        lines.push(Line::from(Span::styled(reason, text)));
+    }
+    lines.push(Line::from(Span::styled(
+        format!("a glass is {DRINK_CRYSTALS} crystal. one a day, and it wears off at the roll."),
+        dim_text,
+    )));
+    if let Some(till) = view.till {
+        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
+    }
+    lines
+}
+
+/// The blade cart: what the armorer won't sell for bits. The next tier
+/// up in each slot, priced in crystals alone, red where short, and the
+/// vendor's last word.
+fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let crystal = lit(Neon::Cyan);
+    let key = lit(Neon::Amber);
+    let short = dim(Neon::Red);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("crystals ", dim_text),
+        Span::styled(sheet.crystals.to_string(), crystal),
+        Span::styled("      weapon ", dim_text),
+        Span::styled(fight_ui::weapon_name(sheet).to_string(), text),
+        Span::styled("      armor ", dim_text),
+        Span::styled(fight_ui::armor_name(sheet).to_string(), text),
+    ]));
+    lines.push(Line::default());
+    for (label, slot) in [("[w] ", GearSlot::Weapon), ("[a] ", GearSlot::Armor)] {
+        match sheet.cart_tier(slot) {
+            Some(tier) => lines.push(Line::from(vec![
+                Span::styled(label, key),
+                Span::styled(
+                    format!(
+                        "{} for ",
+                        gear_name(slot, tier).expect("a tier on the wall")
+                    ),
+                    text,
+                ),
+                Span::styled(
+                    format!("{CART_CRYSTALS} crystals"),
+                    match CART_CRYSTALS > sheet.crystals {
+                        true => short,
+                        false => crystal,
+                    },
+                ),
+                Span::styled(
+                    format!("   the wall asks {} bits", sheet.outfit_price(slot, tier)),
+                    dim_text,
+                ),
+            ])),
+            None => lines.push(Line::from(vec![
+                Span::styled(label, muted_text),
+                Span::styled("nothing is made past the top of the wall", muted_text),
+            ])),
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "the next tier up from what you carry, for crystals and no bits. no receipts, no names.",
         dim_text,
     )));
     if let Some(till) = view.till {
