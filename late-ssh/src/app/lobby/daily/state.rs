@@ -1462,28 +1462,27 @@ impl DailyState {
     /// on a blocking thread like any shot's, and the struck rack comes back
     /// as the board's next row.
     pub(crate) fn practice_break(&mut self) {
-        let Some(board) = &mut self.board else {
-            return;
-        };
-        match board.entry {
-            BoardEntry::Practice => {}
-            BoardEntry::Lobby | BoardEntry::LoungeStrip => return,
-        }
+        let board = self
+            .board
+            .as_mut()
+            .expect("the tour's table stop has its board open");
+        assert_eq!(board.entry, BoardEntry::Practice);
+        // The rack is still on its way, or the break is already in flight.
         if board.load_rx.is_some() {
             return;
         }
-        let Some(detail) = &board.detail else {
-            return;
-        };
-        let Some(pool) = detail.pool() else {
-            return;
-        };
+        let detail = board
+            .detail
+            .as_ref()
+            .expect("a practice table that is not loading has its rack");
+        let pool = detail.pool().expect("the practice table is a pool table");
         if pool.state.move_count() > 0 {
             return;
         }
-        let Some(aimed) = pool.draft.shot(&pool.state) else {
-            return;
-        };
+        let aimed = pool
+            .draft
+            .shot(&pool.state)
+            .expect("a fresh rack has a break to play");
         let shot = Shot {
             speed: PRACTICE_BREAK_SPEED,
             ..aimed
@@ -1500,9 +1499,15 @@ impl DailyState {
                         row.turn_user_id = Some(state.turn_user());
                         Ok(Some(row))
                     }
-                    Err(error) => Err(error.to_string()),
+                    Err(error) => {
+                        tracing::warn!(error = ?error, "failed to serialize the practice break");
+                        Err(error.to_string())
+                    }
                 },
-                Err(error) => Err(error.root_cause().to_string()),
+                Err(error) => {
+                    tracing::warn!(error = ?error, "failed to play the practice break");
+                    Err(error.root_cause().to_string())
+                }
             };
             let _ = tx.send(struck);
         });

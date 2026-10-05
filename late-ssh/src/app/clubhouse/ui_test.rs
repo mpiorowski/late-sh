@@ -212,7 +212,7 @@ fn header_rows(header: &TourHeader, width: u16) -> Vec<String> {
 /// breaker names its keys at the width a default terminal leaves a modal.
 #[test]
 fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
-    let music = header_rows(&tour_header(Tutorial::VisitMusic, false, false).unwrap(), 72);
+    let music = header_rows(&tour_header(Tutorial::VisitMusic, TableStop::Racked, false).unwrap(), 72);
     let total = RadioStation::enabled().count();
     assert!(
         music[1].contains(&format!("{total} stations")),
@@ -226,7 +226,7 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
         "{music:#?}"
     );
 
-    let lobby = header_rows(&tour_header(Tutorial::VisitLobby, false, false).unwrap(), 72);
+    let lobby = header_rows(&tour_header(Tutorial::VisitLobby, TableStop::Racked, false).unwrap(), 72);
     assert!(
         lobby
             .last()
@@ -236,12 +236,12 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     );
 
     // The table asks for the break, then for Enter onward once it is struck.
-    let table = header_rows(&tour_header(Tutorial::VisitTable, false, false).unwrap(), 72);
+    let table = header_rows(&tour_header(Tutorial::VisitTable, TableStop::Racked, false).unwrap(), 72);
     assert!(
         table.last().unwrap().contains("[Enter] break ──"),
         "{table:#?}"
     );
-    let struck = header_rows(&tour_header(Tutorial::VisitTable, true, false).unwrap(), 72);
+    let struck = header_rows(&tour_header(Tutorial::VisitTable, TableStop::Played, false).unwrap(), 72);
     assert!(
         struck
             .last()
@@ -250,7 +250,18 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
         "{struck:#?}"
     );
 
-    assert!(tour_header(Tutorial::VisitGames, false, false).is_none());
+    // A terminal the table does not fit: the stop says so and moves on.
+    let small = header_rows(
+        &tour_header(Tutorial::VisitTable, TableStop::TooSmall, false).unwrap(),
+        72,
+    );
+    assert!(small[1].contains("needs a bigger window"), "{small:#?}");
+    assert!(
+        small.last().unwrap().contains("[Enter] next: the games ──"),
+        "{small:#?}"
+    );
+
+    assert!(tour_header(Tutorial::VisitGames, TableStop::Racked, false).is_none());
 }
 
 /// Every page stop moves on with Enter and says so on a default terminal.
@@ -328,7 +339,7 @@ fn the_dungeon_stop_fills_the_page_under_its_header() {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                let header = tour_header(Tutorial::VisitDungeon, false, fight.won()).unwrap();
+                let header = tour_header(Tutorial::VisitDungeon, TableStop::Racked, fight.won()).unwrap();
                 let page = header.draw_above(frame, Rect::new(1, 1, 78, 22));
                 fight::draw(frame, page, fight, "mat");
             })

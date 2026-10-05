@@ -94,6 +94,11 @@ const MAX_CUE_ROWS: u16 = 44;
 /// keys are taught.
 const MIN_CUE_ROWS_WITH_LEGEND: u16 = 8;
 
+/// Whether `area` has room for the table.
+pub(crate) fn fits(area: Rect) -> bool {
+    area.width >= MIN_WIDTH && area.height >= MIN_HEIGHT
+}
+
 pub(crate) fn draw(
     frame: &mut Frame,
     area: Rect,
@@ -102,7 +107,7 @@ pub(crate) fn draw(
     detail: &DailyMatchDetail,
     pool: &PoolDetail,
 ) {
-    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+    if !fits(area) {
         draw_too_small(frame, area, "The pool table", MIN_WIDTH, MIN_HEIGHT);
         return;
     }

@@ -326,6 +326,22 @@ fn returning_users_never_pour_or_glow() {
     assert!(!state.bar_glow());
 }
 
+/// `/onboard` reruns the tour for a regular: the pour was only ever for a
+/// first visit, so the bar neither glows nor greets them at the end.
+#[test]
+fn a_tour_rerun_never_pours_or_glows_for_a_returning_user() {
+    let mut state = state_with_lobby(false);
+    state.enter_screen(NOW);
+    state.begin_tutorial(NOW, TourStart::Rerun);
+    while state.tutorial != Tutorial::Done {
+        state.tutorial_advance();
+    }
+    state.player_x = 28;
+    state.player_y = 15;
+    assert!(!state.bar_glow());
+    assert!(!state.welcome_pour_due());
+}
+
 const BARTENDER: u128 = 9;
 
 fn lounge_msg(n: u128, author: u128, created: chrono::DateTime<chrono::Utc>) -> ChatMessage {

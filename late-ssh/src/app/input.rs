@@ -3569,7 +3569,7 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 /// included, dies here so no modal, composer, or game can hijack a newcomer
 /// mid-route. Returns true when the event was consumed.
 fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::clubhouse::state::TourStep;
+    use crate::app::clubhouse::state::{TableStop, TourStep};
 
     let Some(step) = app.clubhouse.tutorial_forced_step() else {
         return false;
@@ -3582,10 +3582,20 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
     };
     match (step, byte) {
         (TourStep::Enter, b'\r' | b'\n') => tour_advance(app),
-        // The table's one shot has to be played: the same keys strike the
-        // break, and only then does Enter move on.
-        (TourStep::Table, b'\r' | b'\n') if app.daily.practice_played() => tour_advance(app),
-        (TourStep::Table, b'\r' | b'\n' | b' ') => app.daily.practice_break(),
+        // The table's one shot has to be played: Enter or Space strikes the
+        // break, and only then does Enter move on. A terminal the table does
+        // not fit has no shot to see, so Enter walks on from there.
+        (TourStep::Table, b'\r' | b'\n' | b' ') => {
+            let table = crate::app::clubhouse::ui::table_stop(
+                app.content_area(),
+                app.daily.practice_played(),
+            );
+            match (table, byte) {
+                (TableStop::Racked, _) => app.daily.practice_break(),
+                (TableStop::TooSmall | TableStop::Played, b' ') => {}
+                (TableStop::TooSmall | TableStop::Played, _) => tour_advance(app),
+            }
+        }
         // The fight is the same: every press is the next blow until it is won.
         (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
         (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
@@ -3603,8 +3613,10 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
 /// Through `leave_board` so a board left behind is closed properly.
 pub(crate) fn start_tour(app: &mut App) {
     crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
-    app.clubhouse
-        .begin_tutorial(crate::app::presence::svc::now_ms());
+    app.clubhouse.begin_tutorial(
+        crate::app::presence::svc::now_ms(),
+        crate::app::clubhouse::state::TourStart::Rerun,
+    );
 }
 
 /// Enter at a tour stop: walk the newcomer to wherever the next one lives.

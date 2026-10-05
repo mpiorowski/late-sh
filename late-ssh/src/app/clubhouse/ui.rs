@@ -31,7 +31,8 @@ use late_core::models::presence::Emote;
 
 use super::crowd::Placement;
 use super::map;
-use super::state::{BannerLine, ClubhouseHit, State, Tutorial};
+use super::state::{BannerLine, ClubhouseHit, State, TableStop, Tutorial};
+use crate::app::lobby::daily::pool_ui;
 
 const LABEL_MAX: usize = 10;
 const FIRE_CHARS: [char; 6] = ['(', ')', '~', '^', '*', '\''];
@@ -1707,10 +1708,14 @@ impl TourHeader {
     /// the dungeon fight), with a breathing row either side like the modals
     /// give it. Returns the room left under it for the page.
     pub(crate) fn draw_above(&self, frame: &mut Frame, area: Rect) -> Rect {
-        let rows = Layout::vertical([Constraint::Length(self.rows() + 2), Constraint::Fill(1)])
-            .split(area);
-        self.draw(frame, rows[0].inner(Margin::new(TOUR_SIDE_PADDING, 1)));
-        rows[1]
+        let [above, below] = self.split_above(area);
+        self.draw(frame, above.inner(Margin::new(TOUR_SIDE_PADDING, 1)));
+        below
+    }
+
+    /// `[header, page]`, the way `draw_above` shares `area`.
+    fn split_above(&self, area: Rect) -> [Rect; 2] {
+        Layout::vertical([Constraint::Length(self.rows() + 2), Constraint::Fill(1)]).areas(area)
     }
 
     pub(crate) fn draw(&self, frame: &mut Frame, area: Rect) {
@@ -1739,12 +1744,50 @@ impl TourHeader {
     }
 }
 
+/// Where the practice table stop stands on a page whose content area is
+/// `content_area`. A struck break stays struck whatever the terminal does
+/// afterwards; until then the table has to fit under its header to be
+/// played.
+pub(crate) fn table_stop(content_area: Rect, played: bool) -> TableStop {
+    // Every table header is the same height, so any of them measures.
+    let [_, table] = table_header(TableStop::Racked).split_above(content_area);
+    match (played, pool_ui::fits(table)) {
+        (true, true | false) => TableStop::Played,
+        (false, true) => TableStop::Racked,
+        (false, false) => TableStop::TooSmall,
+    }
+}
+
+fn table_header(table: TableStop) -> TourHeader {
+    let key = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text = Style::default().fg(theme::TEXT());
+    let next = |label: &'static str| vec![Span::styled("[Enter] ", key), Span::styled(label, text)];
+    let (line, keys) = match table {
+        TableStop::TooSmall => (
+            "this table needs a bigger window. the lobby has one waiting.",
+            next("next: the games"),
+        ),
+        TableStop::Racked => ("your table, your break. nobody is watching.", next("break")),
+        TableStop::Played => (
+            "that was real physics. the lobby has a table waiting.",
+            next("next: the games"),
+        ),
+    };
+    TourHeader {
+        title: "✦ the tour · one shot of pool",
+        lines: vec![Line::from(Span::styled(line, text))],
+        keys,
+    }
+}
+
 /// The header for the stops that live inside a real surface, `None` for
-/// every other stage. `table_played` is whether the practice table's one
-/// shot has been struck, `fight_won` whether the dungeon's dragon is down.
+/// every other stage. `table` is where the practice table stop stands,
+/// `fight_won` whether the dungeon's dragon is down.
 pub(crate) fn tour_header(
     stage: Tutorial,
-    table_played: bool,
+    table: TableStop,
     fight_won: bool,
 ) -> Option<TourHeader> {
     let key = Style::default()
@@ -1801,21 +1844,7 @@ pub(crate) fn tour_header(
             ],
             keys: next("next: one shot of pool"),
         }),
-        Tutorial::VisitTable => {
-            let (line, keys) = if table_played {
-                (
-                    "that was real physics. the lobby has a table waiting.",
-                    next("next: the games"),
-                )
-            } else {
-                ("your table, your break. nobody is watching.", next("break"))
-            };
-            Some(TourHeader {
-                title: "✦ the tour · one shot of pool",
-                lines: vec![Line::from(Span::styled(line, text))],
-                keys,
-            })
-        }
+        Tutorial::VisitTable => Some(table_header(table)),
         Tutorial::VisitDungeon => Some(TourHeader {
             title: "✦ the tour · a taste of the dungeon",
             lines: vec![Line::from(vec![

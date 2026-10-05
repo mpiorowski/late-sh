@@ -176,7 +176,11 @@ fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
         slots: RadioSlots::empty(),
         source: AudioSource::Radio,
     };
-    let header = crate::app::clubhouse::ui::tour_header(Tutorial::VisitMusic, false, false).unwrap();
+    let header = crate::app::clubhouse::ui::tour_header(
+        Tutorial::VisitMusic,
+        crate::app::clubhouse::state::TableStop::Racked,
+        false,
+    ).unwrap();
     let mut state = StationsModalState::default();
     state.open(key("datawave"));
 

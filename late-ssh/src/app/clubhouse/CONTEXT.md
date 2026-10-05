@@ -182,7 +182,15 @@ room is the chat surface, and the full history lives in #lounge on Home.
   (`DailyState::open_practice_table`, see `app/lobby/daily/CONTEXT.md`),
   with the same header drawn above the board. The break is part of the
   route, not an option: Enter or Space plays it (`TourStep::Table`), and
-  Enter moves on only once it has been struck.
+  Enter moves on only once it has been struck. The one exception is a
+  terminal the table does not fit (`pool_ui::fits` on the room left under
+  the header, about 112x36 of content area): `ui::table_stop` answers
+  `TableStop::TooSmall`, the header says so, and Enter walks on. The gate
+  and the header both read `table_stop`, so they cannot disagree.
+- **A quit confirm outranks a held modal.** `q` mid-tour raises the quit
+  confirm while `sync_tour_modal` keeps the stop's modal open, so
+  `render.rs` skips the Stations modal while the confirm is up (it draws
+  later and would cover the prompt).
 - **The dungeon stop.** `VisitDungeon` shows what the roguelikes behind
   the Games page feel like without running one: `fight.rs` is a scripted
   four-beat scene drawn as the whole DCSS screen (the view of the level
@@ -203,15 +211,18 @@ room is the chat surface, and the full history lives in #lounge on Home.
   persists once via `ProfileService::set_clubhouse_tutorial_done`
   (fire-and-forget, failure only logged: worst case the tour runs again
   next session).
-- **`/onboard` runs it again** for anyone, from Home's composer: the chat
-  state raises a request, `start_tour` in `app/input.rs` walks to the
-  tavern and calls `State::begin_tutorial`, the same start the first visit
-  gets (welcome box at the door, a fresh fight). It is just as forced.
+- **`/onboard` runs it again** for anyone, from any composer that runs
+  commands (so not the Lounge's): the chat state raises a request,
+  `start_tour` in `app/input.rs` walks to the tavern and calls
+  `State::begin_tutorial` with `TourStart::Rerun`, the same route the first
+  visit gets (welcome box at the door, a fresh fight). It is just as
+  forced. Only `TourStart::FirstVisit` offers the welcome pour, so a
+  regular's rerun ends with no glow and no scripted greeting.
 - **The hidden treasure:** the bartender is deliberately absent from the
   route. His scripted welcome (`ghost::bartender_tutorial_greeting`, local
   banner only, never posted to #lounge) plus the comped welcome pour fire
-  the first time the newcomer walks up to the counter
-  (`State::welcome_pour_due`); since walking is gated until the homecoming
+  the first time the newcomer walks up to the counter in the session of
+  their first visit (`State::welcome_pour_due`); since walking is gated until the homecoming
   Enter, in practice that is after the send-off. The homecoming box ends
   with a whispered pointer at it, and the bar sign pulses until the pour is
   claimed (`State::bar_glow`). The once-ever guarantee is

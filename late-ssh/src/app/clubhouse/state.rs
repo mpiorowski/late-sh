@@ -93,9 +93,10 @@ struct BannerEntry {
 /// every top-level page in number order, stops twice more for the features
 /// that have no page of their own (the Stations modal on Home, the Lobby
 /// modal on The Arcade, each held open for real), has the newcomer play one
-/// break at a practice pool table, passes through Zen, ends back
-/// in the tavern, and `Done` is persisted once on the homecoming Enter. The
-/// bartender is
+/// break at a practice pool table and win one scripted dungeon fight on the
+/// Games page (the two stops where Enter is gated on playing first), passes
+/// through Zen, ends back in the tavern, and `Done` is persisted once on the
+/// homecoming Enter. The bartender is
 /// deliberately absent from the route: his comped welcome pour stays a
 /// hidden treasure for whoever walks up to the glowing bar after the
 /// send-off (see [`State::welcome_pour_due`]).
@@ -146,6 +147,37 @@ pub enum TourStep {
     Enter,
     Table,
     Fight,
+}
+
+/// Where the practice table stop stands, for its header and for what Enter
+/// does there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableStop {
+    /// The table does not fit this terminal: the stop says so and Enter
+    /// walks on.
+    TooSmall,
+    /// Racked and waiting for the break.
+    Racked,
+    /// The break has been struck.
+    Played,
+}
+
+/// Why the tour is starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TourStart {
+    /// The first visit, which arms the bartender's welcome pour.
+    FirstVisit,
+    /// `/onboard`: the route again, with no pour at the end of it.
+    Rerun,
+}
+
+/// The bartender's comped welcome pour, this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WelcomePour {
+    /// No first visit happened in this session, so there is nothing to pour.
+    NotOffered,
+    Unclaimed,
+    Claimed,
 }
 
 /// Where an Enter took the tour, for the input gate to act on.
@@ -199,10 +231,11 @@ pub struct State {
     seen_primed: bool,
     pub door_events: VecDeque<DoorEvent>,
     pub tutorial: Tutorial,
-    /// The hidden welcome pour fired this session, so walking back to the
-    /// bar doesn't repeat the bartender's scripted welcome. The once-ever
-    /// guarantee lives in the DB (`UserDrinks::record_welcome_pour`).
-    welcome_pour_claimed: bool,
+    /// The hidden welcome pour: offered by a first visit, claimed once per
+    /// session so walking back to the bar doesn't repeat the bartender's
+    /// scripted welcome. The once-ever guarantee lives in the DB
+    /// (`UserDrinks::record_welcome_pour`).
+    welcome_pour: WelcomePour,
     /// The dungeon stop's scripted fight.
     pub tour_fight: super::fight::Fight,
     /// The bartender banner plays his lines one at a time: the pinned line,
@@ -256,7 +289,7 @@ impl State {
             banner_queue: VecDeque::new(),
             banner_watermark: None,
             hit_layout: RefCell::new(Vec::new()),
-            welcome_pour_claimed: false,
+            welcome_pour: WelcomePour::NotOffered,
             tour_fight: super::fight::Fight::new(),
             tutorial: if tutorial_pending {
                 Tutorial::Pending
@@ -287,13 +320,19 @@ impl State {
         self.force_roster_refresh = true;
         self.refresh_crowd(now_ms);
         if self.tutorial == Tutorial::Pending {
-            self.begin_tutorial(now_ms);
+            self.begin_tutorial(now_ms, TourStart::FirstVisit);
         }
     }
 
     /// Start the tour at the door, whatever came before: the first visit
     /// arrives here from `Pending`, `/onboard` from anywhere, any time.
-    pub fn begin_tutorial(&mut self, now_ms: i64) {
+    /// Only a first visit offers the welcome pour; a rerun leaves it as it
+    /// stands.
+    pub fn begin_tutorial(&mut self, now_ms: i64, start: TourStart) {
+        match start {
+            TourStart::FirstVisit => self.welcome_pour = WelcomePour::Unclaimed,
+            TourStart::Rerun => {}
+        }
         self.tutorial = Tutorial::Welcome;
         self.tour_fight = super::fight::Fight::new();
         self.place(map::SPAWN, now_ms);
@@ -665,11 +704,10 @@ impl State {
     /// in practice this fires after the send-off. Returns true exactly once
     /// per session; the once-ever guarantee is the DB insert behind the comp.
     pub fn welcome_pour_due(&mut self) -> bool {
-        if self.tutorial != Tutorial::Off
-            && !self.welcome_pour_claimed
+        if self.welcome_pour == WelcomePour::Unclaimed
             && self.nearby() == Some(map::Interactive::Bartender)
         {
-            self.welcome_pour_claimed = true;
+            self.welcome_pour = WelcomePour::Claimed;
             return true;
         }
         false
@@ -678,7 +716,8 @@ impl State {
     /// The bar sign pulses once the tour has come home and the welcome pour
     /// is still unclaimed: the only pointer at the hidden treasure.
     pub fn bar_glow(&self) -> bool {
-        matches!(self.tutorial, Tutorial::Homecoming | Tutorial::Done) && !self.welcome_pour_claimed
+        matches!(self.tutorial, Tutorial::Homecoming | Tutorial::Done)
+            && self.welcome_pour == WelcomePour::Unclaimed
     }
 
     /// Enter at a tour stop: move to the next one and say where it lives.

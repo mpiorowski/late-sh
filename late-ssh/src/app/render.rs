@@ -1839,7 +1839,7 @@ impl App {
         // get it drawn across the top of the page.
         let tour_header = crate::app::clubhouse::ui::tour_header(
             ctx.clubhouse_state.tutorial,
-            ctx.daily.practice_played(),
+            crate::app::clubhouse::ui::table_stop(content_area, ctx.daily.practice_played()),
             ctx.clubhouse_state.tour_fight.won(),
         );
         let board_area = match (&tour_header, screen) {
@@ -2501,7 +2501,9 @@ impl App {
             );
         }
 
-        if ctx.stations_modal_open {
+        // The tour holds this modal open through a quit confirm, and it would
+        // draw over the prompt.
+        if ctx.stations_modal_open && !ctx.show_quit_confirm {
             crate::app::audio::stations_modal::ui::draw(
                 frame,
                 inner,
