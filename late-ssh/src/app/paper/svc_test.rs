@@ -17,6 +17,7 @@ use crate::test_helpers::{
     wait_for_render_contains, wait_for_render_not_contains,
 };
 use late_core::models::paper::PaperEdition;
+use late_core::models::user::User;
 
 #[test]
 fn an_edition_covers_the_whole_utc_day_before_it() {
@@ -111,6 +112,16 @@ async fn seed_lounge_page_for(
 /// One `#announcements` post by `author`, stamped inside today's edition
 /// window (yesterday, UTC), as the operator would have written it.
 async fn post_announcement(db: &late_core::db::Db, author: uuid::Uuid, body: &str) {
+    post_announcement_for(db, author, edition_for(Utc::now()), body).await
+}
+
+/// The same post, stamped inside `edition`'s window instead.
+async fn post_announcement_for(
+    db: &late_core::db::Db,
+    author: uuid::Uuid,
+    edition: chrono::NaiveDate,
+    body: &str,
+) {
     let client = db.get().await.expect("db client");
     let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
         .await
@@ -126,7 +137,7 @@ async fn post_announcement(db: &late_core::db::Db, author: uuid::Uuid, body: &st
     )
     .await
     .expect("announcement");
-    let (floor, _) = edition_window(edition_for(Utc::now()));
+    let (floor, _) = edition_window(edition);
     client
         .execute(
             "UPDATE chat_messages SET created = $2 WHERE id = $1",
@@ -302,6 +313,105 @@ async fn the_newsstand_answers_empty_and_ready_and_claims_the_login_pop_once() {
         wait_press(&mut rx).await,
         PressOutcome::Unavailable
     ));
+}
+
+#[tokio::test]
+async fn a_dated_request_reads_only_what_the_press_already_printed() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "paper-archivist").await;
+    let operator = create_test_user(&test_db.db, "paper-operator").await;
+    let service = PaperService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut rx = service.subscribe();
+    let today = edition_for(Utc::now());
+
+    // Tomorrow's paper does not exist yet.
+    let tomorrow = today + chrono::Duration::days(1);
+    service.request_edition(user.id, tomorrow);
+    let (_, trigger, outcome) = wait_open(&mut rx).await;
+    assert_eq!(trigger, PaperTrigger::Command);
+    assert!(
+        matches!(outcome, PaperOutcome::NotPrinted(day) if day == tomorrow),
+        "a future edition is not printed, got {outcome:?}"
+    );
+
+    // The operator posted that day but the sweeper never reached it: an
+    // announcement alone is not a back issue.
+    let unswept = today - chrono::Duration::days(5);
+    post_announcement_for(&test_db.db, operator.id, unswept, "posted, never swept").await;
+    service.request_edition(user.id, unswept);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    assert!(
+        matches!(outcome, PaperOutcome::NotPrinted(day) if day == unswept),
+        "an unswept day must not open on an announcement alone, got {outcome:?}"
+    );
+
+    // Swept, every page quiet, and nothing from the operator: no paper.
+    let quiet = today - chrono::Duration::days(7);
+    {
+        let client = test_db.db.get().await.expect("db client");
+        assert!(
+            PaperSectionRow::claim_printing(
+                &client,
+                quiet,
+                PaperSectionKind::Reading,
+                Utc::now(),
+                PAPER_MAX_ATTEMPTS
+            )
+            .await
+            .expect("claim reading")
+        );
+        PaperSectionRow::finish(&client, quiet, PaperSectionKind::Reading, None)
+            .await
+            .expect("settle reading quiet");
+    }
+    service.request_edition(user.id, quiet);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    assert!(
+        matches!(outcome, PaperOutcome::NotPrinted(day) if day == quiet),
+        "a swept day with no print and no announcement is not a paper, got {outcome:?}"
+    );
+
+    // A printed back issue opens with that day's column and announcement.
+    // NEW WORK stays off it (the shelf only knows what is open today), and
+    // reading it spends no login stamp.
+    let printed = today - chrono::Duration::days(3);
+    let lounge = seed_lounge_page_for(&test_db.db, printed, "- three days ago").await;
+    post_announcement_for(&test_db.db, operator.id, printed, "back issue notice").await;
+    service.request_edition(user.id, printed);
+    let (user_id, _, outcome) = wait_open(&mut rx).await;
+    assert_eq!(user_id, user.id);
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected the printed back issue, got {outcome:?}");
+    };
+    assert_eq!(issue.edition.edition, printed);
+    assert_eq!(
+        issue
+            .edition
+            .rooms
+            .iter()
+            .map(|room| (room.room_id, room.text.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![(lounge.id, Some("- three days ago"))]
+    );
+    assert_eq!(
+        issue
+            .announcements
+            .iter()
+            .map(|post| (post.author.as_str(), post.body.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("paper-operator", "back issue notice")]
+    );
+    assert!(
+        issue.work.is_none(),
+        "a back issue carries no NEW WORK, got {:?}",
+        issue.work
+    );
+    let client = test_db.db.get().await.expect("db client");
+    let reader = User::get(&client, user.id)
+        .await
+        .expect("load reader")
+        .expect("reader");
+    assert_eq!(reader.settings.get("paper_shown_on"), None);
 }
 
 #[tokio::test]

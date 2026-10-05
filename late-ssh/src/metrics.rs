@@ -87,6 +87,8 @@ pub enum PaperOpenResult {
     Command,
     /// Nothing printed for today's edition.
     Empty,
+    /// `/paper YYYY-MM-DD` named an edition the press never printed.
+    NotPrinted,
     /// This account's login pop for the edition was already claimed.
     AlreadyShown,
     Failed,
@@ -2286,6 +2288,7 @@ mod inner {
             PaperOpenResult::Login => "login",
             PaperOpenResult::Command => "command",
             PaperOpenResult::Empty => "empty",
+            PaperOpenResult::NotPrinted => "not_printed",
             PaperOpenResult::AlreadyShown => "already_shown",
             PaperOpenResult::Failed => "failed",
         }

@@ -198,7 +198,7 @@ impl PrintTally {
 pub struct PaperIssue {
     pub edition: PaperEdition,
     pub announcements: Vec<PaperAnnouncement>,
-    /// NEW WORK for this reader; `None` only on a preview.
+    /// NEW WORK for this reader; `None` on a preview and on a back issue.
     pub work: Option<PaperWork>,
 }
 
@@ -819,7 +819,7 @@ impl PaperService {
                 Some(PaperOutcome::Empty)
             }
             Ok(Opened::NotPrinted(edition)) => {
-                metrics::record_paper_open(PaperOpenResult::Empty);
+                metrics::record_paper_open(PaperOpenResult::NotPrinted);
                 Some(PaperOutcome::NotPrinted(edition))
             }
             Ok(Opened::AlreadyShown) => {
@@ -870,9 +870,15 @@ impl PaperService {
         }
         // NEW WORK is the paper's one per-reader read: the covered day's
         // released postings (rows already, printed once for everyone by
-        // the job press), picked against this reader's card.
-        let covered = day.pred_opt().unwrap_or(day);
-        let work = Some(read_work(&client, user_id, covered).await?);
+        // the job press), picked against this reader's card. A back issue
+        // goes without: the shelf keeps only postings still open today, so
+        // an old day's count would shrink as they close.
+        let work = if day == today {
+            let covered = day.pred_opt().unwrap_or(day);
+            Some(read_work(&client, user_id, covered).await?)
+        } else {
+            None
+        };
         let issue = PaperIssue {
             edition,
             announcements,
