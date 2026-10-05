@@ -202,11 +202,11 @@ fn a_member_room_missing_from_the_rail_still_gets_its_column() {
 fn paper_commands_parse_and_everything_else_falls_through() {
     assert_eq!(
         parse_paper_command("/paper"),
-        Some(Some(PaperCommand::Open))
+        Some(Some(PaperCommand::Open(None)))
     );
     assert_eq!(
         parse_paper_command("  /paper  "),
-        Some(Some(PaperCommand::Open))
+        Some(Some(PaperCommand::Open(None)))
     );
     assert_eq!(
         parse_paper_command("/paper print"),
@@ -220,14 +220,22 @@ fn paper_commands_parse_and_everything_else_falls_through() {
         parse_paper_command("/paper reset"),
         Some(Some(PaperCommand::Reset))
     );
+    assert_eq!(
+        parse_paper_command("/paper 2026-09-14"),
+        Some(Some(PaperCommand::Open(NaiveDate::from_ymd_opt(
+            2026, 9, 14
+        ))))
+    );
     // Junk after the command is a usage banner, not a chat line.
     assert_eq!(parse_paper_command("/paper yesterday"), Some(None));
     assert_eq!(parse_paper_command("/paper off"), Some(None));
+    assert_eq!(parse_paper_command("/paper 2026-02-30"), Some(None));
+    assert_eq!(parse_paper_command("/paper 2026-09-14 print"), Some(None));
     // Not the command at all: posts as text.
     assert_eq!(parse_paper_command("/papers"), None);
     assert_eq!(parse_paper_command("paper"), None);
 
-    assert!(!PaperCommand::Open.admin_only());
+    assert!(!PaperCommand::Open(None).admin_only());
     assert!(PaperCommand::Print.admin_only());
     assert!(PaperCommand::Preview.admin_only());
 }

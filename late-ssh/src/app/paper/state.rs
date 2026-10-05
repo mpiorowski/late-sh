@@ -5,7 +5,7 @@
 
 use std::{cell::Cell, collections::HashSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
 use late_core::models::work_profile::WorkStatus;
@@ -57,8 +57,9 @@ impl PaperState {
 /// are admin-only, refused with a banner for anyone else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaperCommand {
-    /// `/paper`: today's edition, from the rows.
-    Open,
+    /// `/paper`: today's edition, from the rows. `/paper YYYY-MM-DD`:
+    /// that day's edition, shown only if it was already printed.
+    Open(Option<NaiveDate>),
     /// `/paper print`: sweep now instead of waiting for the interval.
     Print,
     /// `/paper preview`: lay out tomorrow's edition from today's messages
@@ -73,7 +74,7 @@ pub(crate) enum PaperCommand {
 impl PaperCommand {
     pub(crate) fn admin_only(self) -> bool {
         match self {
-            Self::Open => false,
+            Self::Open(_) => false,
             Self::Print | Self::Preview | Self::Reset => true,
         }
     }
@@ -87,10 +88,13 @@ pub(crate) fn parse_paper_command(body: &str) -> Option<Option<PaperCommand>> {
     }
     let words: Vec<&str> = rest.split_whitespace().collect();
     Some(match words.as_slice() {
-        [] => Some(PaperCommand::Open),
+        [] => Some(PaperCommand::Open(None)),
         ["print"] => Some(PaperCommand::Print),
         ["preview"] => Some(PaperCommand::Preview),
         ["reset"] => Some(PaperCommand::Reset),
+        [date] => NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .ok()
+            .map(|date| PaperCommand::Open(Some(date))),
         _ => None,
     })
 }

@@ -3932,7 +3932,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /paper, or /paper print|preview|reset",
+                    "Usage: /paper, /paper YYYY-MM-DD, or /paper print|preview|reset",
                 ));
             };
             if command.admin_only() && !self.is_admin {

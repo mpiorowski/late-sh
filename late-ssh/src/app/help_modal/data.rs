@@ -649,6 +649,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "                     messages), rooms you are not in, what we were reading; pops",
         "                     once a day at login (after the tour, on a first visit)",
         "                     (Ctrl+O Tweaks → Daily paper at login turns the pop off)",
+        "  /paper 2026-09-14  an older edition, if graybeard printed one that day",
         "                     j/k, arrows or wheel scroll; drag the scrollbar or click",
         "                     its track to page. Esc/q/Enter or [x] closes the paper.",
         "                     admins: /paper print, preview, reset",

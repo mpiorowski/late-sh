@@ -208,6 +208,9 @@ pub enum PaperOutcome {
     /// Nothing printed for today's edition yet, and no announcement
     /// either.
     Empty,
+    /// `/paper YYYY-MM-DD` named an edition the press never printed
+    /// (a future day, a day before the paper, or one never swept).
+    NotPrinted(NaiveDate),
     Failed,
 }
 
@@ -673,10 +676,20 @@ impl PaperService {
     /// device got there first) sends nothing, since there is nothing to
     /// say.
     pub fn request(&self, user_id: Uuid, trigger: PaperTrigger) {
+        self.spawn_open(user_id, trigger, None);
+    }
+
+    /// `/paper YYYY-MM-DD`: that day's edition, read like `/paper` but only
+    /// if the press already printed it. Nothing is ever printed on demand.
+    pub fn request_edition(&self, user_id: Uuid, edition: NaiveDate) {
+        self.spawn_open(user_id, PaperTrigger::Command, Some(edition));
+    }
+
+    fn spawn_open(&self, user_id: Uuid, trigger: PaperTrigger, requested: Option<NaiveDate>) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Some(outcome) = service.resolve_open(user_id, trigger).await {
+                if let Some(outcome) = service.resolve_open(user_id, trigger, requested).await {
                     let _ = service.event_tx.send(PaperEvent::Open {
                         user_id,
                         trigger,
@@ -684,7 +697,9 @@ impl PaperService {
                     });
                 }
             }
-            .instrument(tracing::info_span!("paper.open", user_id = %user_id, ?trigger)),
+            .instrument(
+                tracing::info_span!("paper.open", user_id = %user_id, ?trigger, ?requested),
+            ),
         );
     }
 
@@ -785,8 +800,13 @@ impl PaperService {
     /// The single match listing every way an open request can end. Nothing
     /// gates a read: opening the paper spends no model call, so an AI-less
     /// deployment can still show whatever was printed.
-    async fn resolve_open(&self, user_id: Uuid, trigger: PaperTrigger) -> Option<PaperOutcome> {
-        match self.open(user_id, trigger).await {
+    async fn resolve_open(
+        &self,
+        user_id: Uuid,
+        trigger: PaperTrigger,
+        requested: Option<NaiveDate>,
+    ) -> Option<PaperOutcome> {
+        match self.open(user_id, trigger, requested).await {
             Ok(Opened::Ready(issue)) => {
                 metrics::record_paper_open(match trigger {
                     PaperTrigger::Login => PaperOpenResult::Login,
@@ -797,6 +817,10 @@ impl PaperService {
             Ok(Opened::Empty) => {
                 metrics::record_paper_open(PaperOpenResult::Empty);
                 Some(PaperOutcome::Empty)
+            }
+            Ok(Opened::NotPrinted(edition)) => {
+                metrics::record_paper_open(PaperOpenResult::Empty);
+                Some(PaperOutcome::NotPrinted(edition))
             }
             Ok(Opened::AlreadyShown) => {
                 metrics::record_paper_open(PaperOpenResult::AlreadyShown);
@@ -811,24 +835,43 @@ impl PaperService {
     }
 
     /// Today's edition, for the login pop (which spends the account's
-    /// stamp) or `/paper` (which does not). A preview is never a row, so
-    /// nothing here can hand a reader an unfinished draft.
-    async fn open(&self, user_id: Uuid, trigger: PaperTrigger) -> anyhow::Result<Opened> {
+    /// stamp) or `/paper` (which does not); or the `requested` edition for
+    /// `/paper YYYY-MM-DD`, only if the sweeper already reached it. A
+    /// preview is never a row, so nothing here can hand a reader an
+    /// unfinished draft.
+    async fn open(
+        &self,
+        user_id: Uuid,
+        trigger: PaperTrigger,
+        requested: Option<NaiveDate>,
+    ) -> anyhow::Result<Opened> {
         let today = edition_for(Utc::now());
+        let day = requested.unwrap_or(today);
+        if day > today {
+            return Ok(Opened::NotPrinted(day));
+        }
         let client = self.db.get().await?;
-        let edition = PaperEdition::load(&client, today).await?;
+        let edition = PaperEdition::load(&client, day).await?;
+        // A dated request reads only what the press already printed: no
+        // rows means no paper, even if the operator posted that day.
+        if requested.is_some() && !edition.is_swept() {
+            return Ok(Opened::NotPrinted(day));
+        }
         // The announcements are a plain read, no claim and no press: the
         // operator's posts in the window, word for word. A day with an
         // announcement and no column is still a paper.
-        let (floor, ceiling) = edition_window(today);
+        let (floor, ceiling) = edition_window(day);
         let announcements = read_announcements(&client, floor, ceiling).await?;
         if !edition.has_print() && announcements.is_empty() {
-            return Ok(Opened::Empty);
+            return Ok(match requested {
+                Some(day) => Opened::NotPrinted(day),
+                None => Opened::Empty,
+            });
         }
-        // NEW WORK is the paper's one per-reader read: yesterday's
+        // NEW WORK is the paper's one per-reader read: the covered day's
         // released postings (rows already, printed once for everyone by
         // the job press), picked against this reader's card.
-        let covered = today.pred_opt().unwrap_or(today);
+        let covered = day.pred_opt().unwrap_or(day);
         let work = Some(read_work(&client, user_id, covered).await?);
         let issue = PaperIssue {
             edition,
@@ -845,7 +888,7 @@ impl PaperService {
                 if !issue.edition.has_print() && !issue.edition.is_swept() {
                     return Ok(Opened::Empty);
                 }
-                if User::claim_paper_shown(&client, user_id, today).await? {
+                if User::claim_paper_shown(&client, user_id, day).await? {
                     Ok(Opened::Ready(issue))
                 } else {
                     Ok(Opened::AlreadyShown)
@@ -996,6 +1039,8 @@ fn note_section_print(
 enum Opened {
     Ready(PaperIssue),
     Empty,
+    /// A dated `/paper` asked for an edition that was never printed.
+    NotPrinted(NaiveDate),
     /// The login claim lost to another device or replica.
     AlreadyShown,
 }
@@ -1274,6 +1319,12 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
                 "Nothing printed yet today. Graybeard is still at the press.",
             ));
         }
+        (_, PaperOutcome::NotPrinted(edition)) => {
+            app.paper.modal = None;
+            app.banner = Some(Banner::info(&format!(
+                "No paper was printed for {edition}."
+            )));
+        }
         (_, PaperOutcome::Failed) => {
             app.paper.modal = None;
             app.banner = Some(Banner::error("The paper is not available right now"));
@@ -1314,12 +1365,16 @@ fn tick_commands(app: &mut App) -> bool {
         return false;
     };
     match command {
-        PaperCommand::Open => {
+        PaperCommand::Open(requested) => {
             app.paper.awaiting = Some(PaperTrigger::Command);
             app.paper.modal = Some(PaperModal::at_the_press());
-            app.paper
-                .service
-                .request(app.user_id, PaperTrigger::Command);
+            match requested {
+                Some(edition) => app.paper.service.request_edition(app.user_id, edition),
+                None => app
+                    .paper
+                    .service
+                    .request(app.user_id, PaperTrigger::Command),
+            }
         }
         PaperCommand::Print => {
             app.banner = Some(Banner::info("Printing today's edition…"));

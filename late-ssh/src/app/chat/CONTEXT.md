@@ -349,7 +349,7 @@ User commands:
 - `/roll [NdM ...]` rolls dice into the current room; bare `/roll` defaults to `d20`, caps are 100 dice per group and 1000 sides.
 - `/search [query]` opens the Ctrl+/ modal in message-search mode, pre-filled with `?query`. Parsed in `submit_composer`, drained via `take_requested_message_search` in `handle_post_submit_requests` (the modal is App-owned).
 - `/summary` asks the AI for a catch-up of the visible public room, from when you last left the app on this device (24h when the device has no mark), or exactly the window you type (`/summary 6h`, `/summary 90m`, up to 48h); see §14 Summary. `/history` opens the scroll-back modal, at the first message you missed when this session has an AFK line for the room; see §14 History Modal.
-- `/paper` opens The Late Edition, @graybeard's daily paper (`app/paper`, App-owned modal); `/paper print|preview|reset` are admin-only and banner for anyone else. Parsed in `submit_composer` into `requested_paper`, drained by `paper::svc::tick`.
+- `/paper` opens The Late Edition, @graybeard's daily paper (`app/paper`, App-owned modal); `/paper YYYY-MM-DD` opens an older edition if one was printed; `/paper print|preview|reset` are admin-only and banner for anyone else. Parsed in `submit_composer` into `requested_paper`, drained by `paper::svc::tick`.
 - `/voice` joins the enabled voice channel for the active room; `/mute` toggles paired-CLI mic mute.
 - `/ultimate` opens owned Ultimate Spells.
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
