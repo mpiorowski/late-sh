@@ -3937,7 +3937,9 @@ impl ChatState {
         if let Some(parsed) = parse_crown_command(&body) {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
-                return Some(Banner::error("Usage: /crown, /crown take, or /crown take N"));
+                return Some(Banner::error(
+                    "Usage: /crown, /crown take, or /crown take N",
+                ));
             };
             self.requested_crown = Some(command);
             return None;

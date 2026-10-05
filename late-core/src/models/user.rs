@@ -9,8 +9,7 @@ use uuid::Uuid;
 
 use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
 use super::profile_award::{
-    CROWN_AWARD_CATEGORY, MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT,
-    top_badge_per_game,
+    CROWN_AWARD_CATEGORY, MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
 };
 use super::statusline::{
     StatusComponentSetting, default_statusline_components, parse_statusline_components,

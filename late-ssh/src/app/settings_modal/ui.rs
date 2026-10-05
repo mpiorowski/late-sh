@@ -858,10 +858,7 @@ fn draw_settings_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalS
         ),
         Row::Bell => ("Bell", toggle_span(draft.notify_bell)),
         Row::Cooldown => ("Cooldown", cooldown_span(draft.notify_cooldown_mins)),
-        Row::NotifyFormat => (
-            "Format",
-            notify_format_span(draft.notify_format.as_deref()),
-        ),
+        Row::NotifyFormat => ("Format", notify_format_span(draft.notify_format.as_deref())),
     };
     let line = row_line(state, row, rect.width as usize, label, value);
     if matches!(row, Row::Cooldown | Row::NotifyFormat) {
@@ -995,11 +992,7 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
             interaction_mode_span(state.interaction_mode()),
             false,
         ),
-        TweakRow::FlagFallback => (
-            "Plain glyphs",
-            toggle_span(draft.show_flag_fallback),
-            false,
-        ),
+        TweakRow::FlagFallback => ("Plain glyphs", toggle_span(draft.show_flag_fallback), false),
         TweakRow::TerminalImages => (
             "Terminal images",
             terminal_images_span(draft.terminal_images),
@@ -1161,7 +1154,9 @@ fn draw_account_tab(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalSt
     frame.render_widget(Paragraph::new(section_heading("Account")), sections[0]);
 
     for (idx, row) in AccountRow::ALL.into_iter().enumerate() {
-        state.mouse.hit(sections[account_row_y(idx)], Target::Account(row));
+        state
+            .mouse
+            .hit(sections[account_row_y(idx)], Target::Account(row));
     }
     let width = area.width as usize;
     for (index, (row, label, description, destructive)) in rows.into_iter().enumerate() {
@@ -2965,7 +2960,13 @@ fn draw_invites_dialog(frame: &mut Surface<'_>, area: Rect, state: &SettingsModa
         );
         button(
             frame,
-            text_value_rect(Rect { y: row.y + 1, ..row }, 3),
+            text_value_rect(
+                Rect {
+                    y: row.y + 1,
+                    ..row
+                },
+                3,
+            ),
             state,
             "[Add code]",
             Target::AddInviteCode,

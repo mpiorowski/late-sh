@@ -166,7 +166,13 @@ fn paired_columns_share_scroll_and_keep_headings_fixed() {
     use late_core::models::leaderboard::{BoardWindows, LeaderboardData};
     use ratatui::{Terminal, backend::TestBackend};
     let mut state = LeaderboardPageState::new();
-    state.select(2); // Late Time has paired windows.
+    // Late Time has paired windows.
+    let late_time = state
+        .boards()
+        .iter()
+        .position(|board| *board == Board::TimeOnline)
+        .unwrap();
+    state.select(late_time);
     let entries: Vec<_> = (1..=40)
         .map(|rank| {
             entry(

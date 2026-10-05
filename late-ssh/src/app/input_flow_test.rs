@@ -5369,8 +5369,9 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
     wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;
 
-    // Picker rows in label order: the nine monthly rows, then Lateania.
-    app.handle_input(b"jjjjjjjjj\r");
+    // Picker rows in label order: the eight monthly rows (the crown is
+    // painted as a glyph, not a code, so it has no row), then Lateania.
+    app.handle_input(b"jjjjjjjj\r");
     let db = test_db.db.clone();
     wait_until(
         || {

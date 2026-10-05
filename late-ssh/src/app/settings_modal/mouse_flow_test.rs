@@ -539,7 +539,11 @@ async fn settings_mouse_rss_click_away_adds_the_feed_and_keeps_the_clicked_one_s
     wait_until(
         || async {
             let client = db.db.get().await.unwrap();
-            RssFeed::list_for_user(&client, user_id).await.unwrap().len() == 2
+            RssFeed::list_for_user(&client, user_id)
+                .await
+                .unwrap()
+                .len()
+                == 2
         },
         "subscription stored",
     )
@@ -736,7 +740,10 @@ async fn settings_mouse_invites_code_field_takes_the_caret_and_its_button_submit
     app.handle_input(b"??");
     click(&mut app, Target::Caret(Field::InviteCode, 0));
     assert_eq!(
-        app.settings_modal_state.invites_dialog().code_input().cursor(),
+        app.settings_modal_state
+            .invites_dialog()
+            .code_input()
+            .cursor(),
         (0, 0)
     );
     click(&mut app, Target::AddInviteCode);

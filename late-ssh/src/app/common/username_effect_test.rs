@@ -215,7 +215,13 @@ fn the_laureate_resolves_beside_the_live_holder() {
         }
     );
 
-    let resolved = resolve_all(&snapshot(&directory), Some(laureate), Some(laureate), 0, now);
+    let resolved = resolve_all(
+        &snapshot(&directory),
+        Some(laureate),
+        Some(laureate),
+        0,
+        now,
+    );
     assert_eq!(
         resolved[&laureate],
         ResolvedName {

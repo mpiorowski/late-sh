@@ -3,7 +3,6 @@
 //! tags and skips the group headings, and the chosen tags in the order
 //! they were picked. No I/O, no host knowledge beyond the target enum.
 
-
 use late_core::vocab::{self, Group, TAG_LIMIT};
 
 use crate::app::common::mouse::MouseState;
@@ -199,7 +198,7 @@ impl TagPickerState {
         self.notice = None;
         if self.query.pop().is_some() {
             self.cursor = self.first_tag_row();
-            } else {
+        } else {
             self.chosen.pop();
         }
     }
@@ -209,7 +208,7 @@ impl TagPickerState {
         let rows = self.rows();
         if rows.is_empty() {
             self.cursor = 0;
-                return;
+            return;
         }
         let step: isize = if delta < 0 { -1 } else { 1 };
         let mut left = delta.unsigned_abs();

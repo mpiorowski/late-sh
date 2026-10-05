@@ -116,7 +116,7 @@ fn resize_cancels_drag_and_short_content_has_no_scrollbar() {
 #[tokio::test]
 async fn paper_mouse_routing_honors_mode_modal_priority_and_loading_cancellation() {
     use crate::{
-        app::{common::primitives::Screen, leaderboard::state::Board, paper::svc::PaperTrigger},
+        app::{common::primitives::Screen, paper::svc::PaperTrigger},
         test_helpers::{make_app, new_test_db},
     };
     use late_core::{models::user::InteractionMode, test_utils::create_test_user};
@@ -125,6 +125,7 @@ async fn paper_mouse_routing_honors_mode_modal_priority_and_loading_cancellation
     let user = create_test_user(&db.db, "paper-mouse-routing").await;
     let mut app = make_app(db.db.clone(), user.id, "paper-mouse-routing");
     app.set_screen(Screen::Leaderboard);
+    let opened_board = app.leaderboard_page.selected_board();
     app.show_help = true;
     app.paper.modal = Some(paper());
     app.resize(80, 24).unwrap();
@@ -153,7 +154,11 @@ async fn paper_mouse_routing_honors_mode_modal_priority_and_loading_cancellation
     assert_eq!(app.paper.modal.as_ref().unwrap().scroll_offset(), 3);
     app.handle_input(b"j");
     assert_eq!(app.paper.modal.as_ref().unwrap().scroll_offset(), 4);
-    assert_eq!(app.leaderboard_page.selected_board(), Board::TopChips);
+    assert_eq!(
+        app.leaderboard_page.selected_board(),
+        opened_board,
+        "the paper takes j before the leaderboard rail"
+    );
     app.handle_input(close.as_bytes());
     assert!(app.paper.modal.is_none());
     assert!(

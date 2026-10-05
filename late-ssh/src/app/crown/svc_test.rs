@@ -144,7 +144,10 @@ async fn a_self_take_is_refused_uncharged() {
         .expect("first take");
     let after_first = balance(&client, holder.id).await;
 
-    match service.take(holder.id, &holder.username, CrownBid::AtPrice).await {
+    match service
+        .take(holder.id, &holder.username, CrownBid::AtPrice)
+        .await
+    {
         Err(CrownError::Refused(CrownRefusal::AlreadyYours)) => {}
         other => panic!("expected a self-take refusal, got {other:?}"),
     }
@@ -189,7 +192,10 @@ async fn a_take_the_buyer_cannot_afford_changes_nothing() {
         "the fixture must be too poor"
     );
 
-    match service.take(pauper.id, &pauper.username, CrownBid::AtPrice).await {
+    match service
+        .take(pauper.id, &pauper.username, CrownBid::AtPrice)
+        .await
+    {
         Err(CrownError::Refused(CrownRefusal::InsufficientChips { price })) => {
             assert_eq!(price, CROWN_MIN_PRICE);
         }

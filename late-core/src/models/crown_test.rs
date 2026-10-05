@@ -519,10 +519,22 @@ async fn the_last_reign_of_each_recent_month_is_who_wore_it_at_the_end() {
     let mut client = test_db.db.get().await.expect("db client");
 
     let takes = [
-        (june.id, Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap()),
-        (july_early.id, Utc.with_ymd_and_hms(2026, 7, 2, 12, 0, 0).unwrap()),
-        (july_late.id, Utc.with_ymd_and_hms(2026, 7, 30, 12, 0, 0).unwrap()),
-        (august.id, Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap()),
+        (
+            june.id,
+            Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap(),
+        ),
+        (
+            july_early.id,
+            Utc.with_ymd_and_hms(2026, 7, 2, 12, 0, 0).unwrap(),
+        ),
+        (
+            july_late.id,
+            Utc.with_ymd_and_hms(2026, 7, 30, 12, 0, 0).unwrap(),
+        ),
+        (
+            august.id,
+            Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap(),
+        ),
     ];
     let mut open: Option<CrownReign> = None;
     for (holder, taken_at) in takes {
@@ -551,8 +563,14 @@ async fn the_last_reign_of_each_recent_month_is_who_wore_it_at_the_end() {
     assert_eq!(
         summary,
         vec![
-            (chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), august.id),
-            (chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(), july_late.id),
+            (
+                chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+                august.id
+            ),
+            (
+                chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+                july_late.id
+            ),
         ]
     );
 }

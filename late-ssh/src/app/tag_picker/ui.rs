@@ -133,9 +133,7 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &TagPickerState) {
     let rows = state.rows();
     let height = area.height as usize;
     let width = area.width as usize;
-    let scroll = state
-        .mouse
-        .pane(area, (), rows.len(), state.cursor());
+    let scroll = state.mouse.pane(area, (), rows.len(), state.cursor());
     let end = (scroll + height).min(rows.len());
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, row) in rows[scroll..end].iter().enumerate() {

@@ -293,10 +293,12 @@ impl CrownService {
     /// else has to call this: the rollover is resolved at read time.
     pub async fn refresh_wearers(&self) -> Result<()> {
         let client = self.db.get().await?;
-        let open = CrownReign::find_open(&client).await?.map(|reign| CrownHolder {
-            user_id: reign.holder_user_id,
-            month: reign.month,
-        });
+        let open = CrownReign::find_open(&client)
+            .await?
+            .map(|reign| CrownHolder {
+                user_id: reign.holder_user_id,
+                month: reign.month,
+            });
         let mut month_ends = [None; 2];
         for (slot, reign) in month_ends
             .iter_mut()
