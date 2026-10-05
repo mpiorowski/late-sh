@@ -93,7 +93,6 @@ fn typing_filters_by_name_or_alias_and_enter_picks_then_clears() {
 fn the_cursor_skips_headings_and_space_toggles() {
     let mut picker = TagPickerState::default();
     picker.open(TagPickerTarget::EditorSkills, Vec::new());
-    picker.set_visible_height(10);
     let rows = picker.rows();
     let languages = tags(
         &rows[..rows
@@ -103,18 +102,16 @@ fn the_cursor_skips_headings_and_space_toggles() {
     )
     .len();
     // Down through every language lands on the first framework, past its
-    // heading, and the list scrolled to keep it in view.
+    // heading.
     picker.move_cursor(languages as isize);
     assert_eq!(picker.current(), Some("react"));
-    assert!(picker.scroll() > 0);
     picker.toggle();
     assert_eq!(chosen(&picker), vec!["react"]);
     picker.toggle();
     assert!(picker.chosen().is_empty());
-    // Up past the top stays on the first tag, and the scroll follows.
+    // Up past the top stays on the first tag.
     picker.move_cursor(-1000);
     assert_eq!(picker.current(), Some("rust"));
-    assert_eq!(picker.scroll(), 0);
 }
 
 #[test]

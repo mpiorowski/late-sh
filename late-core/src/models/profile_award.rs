@@ -144,7 +144,7 @@ fn ladder_label(ladder: &[&str]) -> &'static str {
 /// If you can earn it, you can hide it.
 pub fn chat_badge_rows() -> Vec<ChatBadgeRow> {
     let mut rows = Vec::new();
-    for category in all_award_categories() {
+    for category in chat_award_categories() {
         match BADGE_LADDERS
             .iter()
             .find(|ladder| ladder.contains(&category))
@@ -172,8 +172,9 @@ pub fn chat_badge_rows() -> Vec<ChatBadgeRow> {
     rows
 }
 
-/// Every award category that can ever show on a chat label, in the order the
-/// label stacks them (`award_category_priority`).
+/// Every award category there is, in the order the chat label stacks them
+/// (`award_category_priority`). The profile lists all of them; the chat
+/// label shows [`chat_award_categories`].
 pub fn all_award_categories() -> Vec<&'static str> {
     let mut all: Vec<&'static str> = RANKED_AWARD_CATEGORIES
         .iter()
@@ -183,6 +184,17 @@ pub fn all_award_categories() -> Vec<&'static str> {
         .collect();
     all.sort_by_key(|category| award_category_priority(category));
     all
+}
+
+/// Every award category that can ever show in a chat label's `[...]` group,
+/// in stacking order. The crown is the one award left out: chat paints last
+/// month's crown as a glyph before the name (`CROWN_LAUREATE_GLYPH` in
+/// late-ssh, resolved from `crown_reigns`), so the code would say it twice.
+pub fn chat_award_categories() -> Vec<&'static str> {
+    all_award_categories()
+        .into_iter()
+        .filter(|category| *category != CROWN_AWARD_CATEGORY)
+        .collect()
 }
 
 /// Whether an award's badge is printed without a rank digit: every milestone

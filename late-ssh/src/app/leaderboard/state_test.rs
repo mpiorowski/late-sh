@@ -23,17 +23,17 @@ fn wheel_selection_stops_at_ends_and_only_board_changes_reset_scroll() {
     assert_eq!(state.selected_index(), state.boards().len() - 1);
 }
 
-/// The page list is roster-derived: the four bespoke boards lead, then the
-/// game boards (the Lateania boards, then each door's board triple), then
-/// every daily puzzle, then every score game. A roster addition in late-core
-/// must grow this list without any page change.
+/// The page list is roster-derived: the four bespoke boards lead (Top
+/// Drinkers first), then the game boards (the Lateania boards, then each
+/// door's board triple), then every daily puzzle, then every score game. A
+/// roster addition in late-core must grow this list without any page change.
 #[test]
 fn board_list_follows_the_rosters() {
     let boards = Board::all();
-    assert_eq!(boards[0], Board::TopChips);
-    assert_eq!(boards[1], Board::ArcadeWins);
-    assert_eq!(boards[2], Board::TimeOnline);
-    assert_eq!(boards[3], Board::TopDrinkers);
+    assert_eq!(boards[0], Board::TopDrinkers);
+    assert_eq!(boards[1], Board::TopChips);
+    assert_eq!(boards[2], Board::ArcadeWins);
+    assert_eq!(boards[3], Board::TimeOnline);
     assert_eq!(boards[4], Board::LateaniaAdventurers);
     assert_eq!(boards[5], Board::LateaniaPvp);
     assert_eq!(boards[6], Board::DoorWins(DoorGame::ALL[0]));
@@ -95,7 +95,7 @@ fn online_time_uses_compact_two_unit_values() {
 #[test]
 fn selection_wraps_both_ways() {
     let mut state = LeaderboardPageState::new();
-    assert_eq!(state.selected_board(), Board::TopChips);
+    assert_eq!(state.selected_board(), Board::TopDrinkers);
     state.select_previous();
     assert_eq!(
         state.selected_index(),
@@ -103,5 +103,5 @@ fn selection_wraps_both_ways() {
         "previous from the first board wraps to the last"
     );
     state.select_next();
-    assert_eq!(state.selected_board(), Board::TopChips);
+    assert_eq!(state.selected_board(), Board::TopDrinkers);
 }

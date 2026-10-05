@@ -159,15 +159,22 @@ pub fn resolve(effect: UsernameEffect, phase: usize) -> NameStyle {
     }
 }
 
-/// The crown holder's glyph, painted immediately after their name. An
-/// emoji, so two cells wide (the chess-piece `\u{2654}` was too small to
-/// read as a prize); every surface that draws it measures it with
+/// The live crown holder's glyph, painted immediately after their name: the
+/// crown jewel, not the crown. The holder can lose it to the next bid; the
+/// laureate's 👑 is kept for having worn it to the end of a month. An emoji,
+/// so two cells wide. Every surface that draws it measures it with
 /// `unicode_width` rather than counting chars. Additive: it never takes the
 /// name's color and never displaces a title.
-pub const CROWN_GLYPH: &str = "\u{1F451}";
+pub const CROWN_GLYPH: &str = "\u{1F48E}";
+
+/// The laureate's glyph: whoever wore the crown when last month ended,
+/// painted before their name in chat for the whole month after. An emoji,
+/// so two cells wide. It stands in for the `[CRWN]` award code, which chat
+/// leaves out (`profile_award::chat_award_categories`); the profile keeps it.
+pub const CROWN_LAUREATE_GLYPH: &str = "\u{1F451}";
 
 /// What the renderers paint for one name: the color style, the title, the
-/// crown, or any combination. Cloned per frame into render contexts, so the
+/// crown, the laureate's crown, or any combination. Cloned per frame into render contexts, so the
 /// title is owned text.
 ///
 /// The crown rides this map rather than a second lookup because every
@@ -178,6 +185,8 @@ pub struct ResolvedName {
     pub style: Option<NameStyle>,
     pub title: Option<String>,
     pub crown: bool,
+    /// Whether this user wore the crown when last month ended.
+    pub laureate: bool,
     /// The dearest burn milestone this user owns, painted in the badge stack
     /// rather than beside the name: it is a badge, it just cannot be rented
     /// over. Never expires, so it has no staleness check here.
@@ -186,7 +195,11 @@ pub struct ResolvedName {
 
 impl ResolvedName {
     pub fn is_empty(&self) -> bool {
-        self.style.is_none() && self.title.is_none() && !self.crown && self.milestone.is_none()
+        self.style.is_none()
+            && self.title.is_none()
+            && !self.crown
+            && !self.laureate
+            && self.milestone.is_none()
     }
 }
 
@@ -194,14 +207,16 @@ impl ResolvedName {
 /// paint, dropping expired halves and entries left with nothing. Runs once
 /// per second per session in the tick loop.
 ///
-/// `crown_holder` is the one user wearing the crown right now, resolved by
-/// the caller (the crown is a reign, not a rental, and it lapses on the UTC
-/// month rather than on an `ends_at`). A holder who has bought nothing else
-/// gets an entry of their own here, which is why this cannot simply map over
-/// the directory.
+/// `crown_holder` is the one user wearing the crown right now and
+/// `crown_laureate` the one who wore it when last month ended, both resolved
+/// by the caller (the crown is a reign, not a rental, and it lapses on the
+/// UTC month rather than on an `ends_at`). A holder or laureate who has
+/// bought nothing else gets an entry of their own here, which is why this
+/// cannot simply map over the directory.
 pub fn resolve_all(
     entries: &HashMap<Uuid, NameFlair>,
     crown_holder: Option<Uuid>,
+    crown_laureate: Option<Uuid>,
     phase: usize,
     now: DateTime<Utc>,
 ) -> HashMap<Uuid, ResolvedName> {
@@ -219,6 +234,7 @@ pub fn resolve_all(
                     .filter(|title| title.ends_at > now)
                     .map(|title| title.text.clone()),
                 crown: false,
+                laureate: false,
                 milestone: flair.milestone.clone(),
             };
             (!resolved.is_empty()).then_some((*user_id, resolved))
@@ -226,6 +242,9 @@ pub fn resolve_all(
         .collect();
     if let Some(crown_holder) = crown_holder {
         resolved.entry(crown_holder).or_default().crown = true;
+    }
+    if let Some(crown_laureate) = crown_laureate {
+        resolved.entry(crown_laureate).or_default().laureate = true;
     }
     resolved
 }

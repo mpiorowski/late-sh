@@ -199,12 +199,12 @@ pub const CATALOGUE: &[Station] = &[
         enabled: true,
     },
     Station {
-        key: "plaza",
-        label: "plaza",
-        provider: Provider::Plaza,
-        // The `#.mp3` fragment never reaches Plaza. It is there for the CLI,
-        // which appends `/stream` to any URL without an audio extension.
-        stream: StationStream::Direct("https://radio.plaza.one/mp3#.mp3"),
+        key: "mellow",
+        label: "mellow",
+        provider: Provider::RadioParadise,
+        // The `#.mp3` fragment is there for the CLI, which appends `/stream` to
+        // any URL without an audio extension.
+        stream: StationStream::Direct("https://stream.radioparadise.com/mellow-192#.mp3"),
         section: Section::Chill,
         enabled: true,
     },
@@ -219,11 +219,11 @@ pub const CATALOGUE: &[Station] = &[
         enabled: true,
     },
     Station {
-        key: "mellow",
-        label: "mellow",
-        provider: Provider::RadioParadise,
-        // `#.mp3` for the CLI, as on the Plaza row.
-        stream: StationStream::Direct("https://stream.radioparadise.com/mellow-192#.mp3"),
+        key: "plaza",
+        label: "plaza",
+        provider: Provider::Plaza,
+        // `#.mp3` for the CLI, as on the mellow row.
+        stream: StationStream::Direct("https://radio.plaza.one/mp3#.mp3"),
         section: Section::Chill,
         enabled: true,
     },
@@ -235,7 +235,7 @@ pub const CATALOGUE: &[Station] = &[
         section: Section::Chill,
         enabled: true,
     },
-    // `#.mp3` for the CLI, as on the Plaza row. This path redirects to an
+    // `#.mp3` for the CLI, as on the mellow row. This path redirects to an
     // HTTPS node; the shorter `/m/rsj/mp3_128` one redirects to plain HTTP,
     // which the listen page cannot play.
     Station {

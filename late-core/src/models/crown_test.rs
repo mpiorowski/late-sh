@@ -7,6 +7,7 @@ use tokio_postgres::{AsyncMessage, Client, NoTls};
 use crate::{
     models::crown::{
         CROWN_CHANGED_CHANNEL, CROWN_MIN_PRICE, CrownChange, CrownReign, crown_month, next_price,
+        previous_crown_month,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -502,4 +503,70 @@ async fn deposed_holders_resolve_from_the_reign_before() {
         .expect("deposed");
     assert_eq!(deposed.len(), 1);
     assert_eq!(deposed.get(&second_reign.id), Some(&first.id));
+}
+
+/// The laureate is whoever wore the crown when the month ended: the last
+/// reign of that month, whether it was closed by a later take or left open
+/// across the rollover. Only the two newest months come back, newest first,
+/// one reign each.
+#[tokio::test]
+async fn the_last_reign_of_each_recent_month_is_who_wore_it_at_the_end() {
+    let test_db = test_db().await;
+    let june = create_test_user(&test_db.db, "crown-months-june").await;
+    let july_early = create_test_user(&test_db.db, "crown-months-july-early").await;
+    let july_late = create_test_user(&test_db.db, "crown-months-july-late").await;
+    let august = create_test_user(&test_db.db, "crown-months-august").await;
+    let mut client = test_db.db.get().await.expect("db client");
+
+    let takes = [
+        (june.id, Utc.with_ymd_and_hms(2026, 6, 10, 12, 0, 0).unwrap()),
+        (july_early.id, Utc.with_ymd_and_hms(2026, 7, 2, 12, 0, 0).unwrap()),
+        (july_late.id, Utc.with_ymd_and_hms(2026, 7, 30, 12, 0, 0).unwrap()),
+        (august.id, Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap()),
+    ];
+    let mut open: Option<CrownReign> = None;
+    for (holder, taken_at) in takes {
+        let tx = client.transaction().await.expect("tx");
+        CrownReign::lock_open(&tx).await.expect("lock");
+        if let Some(previous) = &open {
+            CrownReign::close_in_tx(&tx, previous.id, taken_at)
+                .await
+                .expect("close");
+        }
+        open = Some(
+            CrownReign::open_in_tx(&tx, holder, CROWN_MIN_PRICE, taken_at)
+                .await
+                .expect("open"),
+        );
+        tx.commit().await.expect("commit");
+    }
+
+    let last = CrownReign::last_of_recent_months(&client)
+        .await
+        .expect("last reigns");
+    let summary: Vec<(chrono::NaiveDate, uuid::Uuid)> = last
+        .iter()
+        .map(|reign| (reign.month, reign.holder_user_id))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(), august.id),
+            (chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(), july_late.id),
+        ]
+    );
+}
+
+/// The laureate's month is the calendar month before now, across a year
+/// boundary too.
+#[test]
+fn the_previous_crown_month_steps_back_one_calendar_month() {
+    assert_eq!(
+        previous_crown_month(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap()),
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+    );
+    assert_eq!(
+        previous_crown_month(Utc.with_ymd_and_hms(2027, 1, 31, 23, 59, 59).unwrap()),
+        chrono::NaiveDate::from_ymd_opt(2026, 12, 1).unwrap()
+    );
 }

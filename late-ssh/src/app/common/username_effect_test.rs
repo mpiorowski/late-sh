@@ -80,7 +80,7 @@ fn directory_set_expire_replace() {
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, None, 0, now);
     assert!(resolved[&user].style.is_some());
     assert!(
         !resolved.contains_key(&other),
@@ -131,7 +131,7 @@ fn title_and_color_resolve_and_expire_independently() {
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, None, 0, now);
     assert_eq!(
         resolved[&user].style,
         Some(NameStyle::Solid(Color::Rgb(120, 180, 255)))
@@ -140,13 +140,13 @@ fn title_and_color_resolve_and_expire_independently() {
 
     // The color lapses first: the title outlives it, and the entry stays.
     let later = now + Duration::minutes(90);
-    let resolved = resolve_all(&snapshot(&directory), None, 0, later);
+    let resolved = resolve_all(&snapshot(&directory), None, None, 0, later);
     assert_eq!(resolved[&user].style, None);
     assert_eq!(resolved[&user].title.as_deref(), Some("the insufferable"));
 
     // Both lapsed: the user drops out of the resolved map entirely.
     let much_later = now + Duration::hours(3);
-    assert!(!resolve_all(&snapshot(&directory), None, 0, much_later).contains_key(&user));
+    assert!(!resolve_all(&snapshot(&directory), None, None, 0, much_later).contains_key(&user));
 }
 
 /// The crown is not a rental, so it has no directory entry of its own: a
@@ -173,21 +173,58 @@ fn the_crown_resolves_for_a_holder_with_nothing_else_bought() {
     );
 
     // A holder with an empty wallet's worth of flair still gets an entry.
-    let resolved = resolve_all(&snapshot(&directory), Some(bare_holder), 0, now);
+    let resolved = resolve_all(&snapshot(&directory), Some(bare_holder), None, 0, now);
     assert!(resolved[&bare_holder].crown);
     assert_eq!(resolved[&bare_holder].style, None);
     assert!(!resolved[&decorated].crown);
 
     // The crown is additive: taking it never disturbs a live effect.
-    let resolved = resolve_all(&snapshot(&directory), Some(decorated), 0, now);
+    let resolved = resolve_all(&snapshot(&directory), Some(decorated), None, 0, now);
     assert!(resolved[&decorated].crown);
     assert!(resolved[&decorated].style.is_some());
     assert!(!resolved.contains_key(&bare_holder));
 
     // A vacant crown leaves nobody wearing it, and nobody else changed.
-    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, None, 0, now);
     assert!(!resolved[&decorated].crown);
     assert!(resolved[&decorated].style.is_some());
+}
+
+/// Last month's winner gets the laureate's crown whether or not they hold
+/// the live one, and the two marks are independent: one user can wear both.
+#[test]
+fn the_laureate_resolves_beside_the_live_holder() {
+    let directory = new_directory();
+    let laureate = Uuid::now_v7();
+    let holder = Uuid::now_v7();
+    let now = Utc::now();
+
+    let resolved = resolve_all(&snapshot(&directory), Some(holder), Some(laureate), 0, now);
+    assert_eq!(
+        resolved[&laureate],
+        ResolvedName {
+            laureate: true,
+            ..ResolvedName::default()
+        }
+    );
+    assert_eq!(
+        resolved[&holder],
+        ResolvedName {
+            crown: true,
+            ..ResolvedName::default()
+        }
+    );
+
+    let resolved = resolve_all(&snapshot(&directory), Some(laureate), Some(laureate), 0, now);
+    assert_eq!(
+        resolved[&laureate],
+        ResolvedName {
+            crown: true,
+            laureate: true,
+            ..ResolvedName::default()
+        }
+    );
+    assert!(!resolved.contains_key(&holder));
 }
 
 #[test]
@@ -237,7 +274,7 @@ fn a_burn_milestone_outlives_the_rentals_beside_it() {
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, None, 0, now);
     assert_eq!(resolved[&lapsed].style, None);
     assert_eq!(resolved[&lapsed].milestone.as_deref(), Some("\u{1F30B}"));
     assert_eq!(resolved[&bare].milestone.as_deref(), Some("\u{1F9E8}"));

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{Row, Transaction};
@@ -75,6 +75,14 @@ pub fn crown_month(now: DateTime<Utc>) -> NaiveDate {
     now.date_naive()
         .with_day(1)
         .expect("every valid date has a first day of its month")
+}
+
+/// The first of the UTC month before the one `now` falls in: the month
+/// whose last holder wears the laureate's crown all of this one.
+pub fn previous_crown_month(now: DateTime<Utc>) -> NaiveDate {
+    crown_month(now)
+        .checked_sub_months(Months::new(1))
+        .expect("the month before a valid month is valid")
 }
 
 /// One reign: who held the crown, what they paid for it, and when it started
@@ -141,6 +149,25 @@ impl CrownReign {
             .into_iter()
             .map(|row| (row.get("id"), row.get("holder_user_id")))
             .collect())
+    }
+
+    /// The last reign of each of the two newest months anyone took the
+    /// crown in, newest month first. The last reign of a month is who wore
+    /// the crown when that month ended, the same rule the `CRWN` award's
+    /// `crown_holder` CTE applies (`profile_award.rs`). Two months rather
+    /// than one so the current month's last reign is already in hand when
+    /// the rollover turns it into last month's, with no refresh at midnight.
+    pub async fn last_of_recent_months(client: &impl GenericClient) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT DISTINCT ON (month) *
+                 FROM crown_reigns
+                 ORDER BY month DESC, taken_at DESC
+                 LIMIT 2",
+                &[],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     /// Whether this reign still counts. An open reign from a previous UTC

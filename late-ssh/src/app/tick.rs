@@ -774,15 +774,17 @@ impl App {
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
                 // The crown rides the same map, and lapses the same way: an
                 // entry from a finished UTC month resolves to nobody, which
-                // is what empties the slot at the rollover with no sweeper.
-                let crown_holder = self
-                    .crown_holder_rx
-                    .as_mut()
-                    .and_then(|rx| *rx.borrow_and_update())
-                    .and_then(|holder| holder.if_current(now));
+                // is what empties the slot at the rollover with no sweeper,
+                // and the same rollover hands the laureate's crown on.
+                let crown_wearers = match self.crown_wearers_rx.as_mut() {
+                    Some(rx) => *rx.borrow_and_update(),
+                    // Only a test harness builds an app without the crown.
+                    None => crate::app::crown::svc::CrownWearers::default(),
+                };
                 let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
-                    crown_holder,
+                    crown_wearers.holder(now),
+                    crown_wearers.laureate(now),
                     phase,
                     now,
                 );

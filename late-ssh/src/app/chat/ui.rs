@@ -27,7 +27,7 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
-    username_effect::{CROWN_GLYPH, ResolvedName},
+    username_effect::{CROWN_GLYPH, CROWN_LAUREATE_GLYPH, ResolvedName},
 };
 use crate::app::deadchannel::runner::state::PORTRAIT_WIDTH;
 use crate::app::files::{
@@ -1779,6 +1779,7 @@ fn ensure_chat_rows_cache(
             is_friend,
             author: &author,
             crown: flair.is_some_and(|flair| flair.crown),
+            laureate: flair.is_some_and(|flair| flair.laureate),
             title: flair.and_then(|flair| flair.title.as_deref()),
             milestone: flair.and_then(|flair| flair.milestone.as_deref()),
             special_badges: special_list,
@@ -2666,6 +2667,7 @@ fn build_author_prefix_and_segments(
         is_friend,
         author,
         crown: false,
+        laureate: false,
         title: None,
         milestone: None,
         special_badges,
@@ -2686,6 +2688,8 @@ struct AuthorPrefixInput<'a> {
     author: &'a str,
     /// Whether this author currently wears the crown.
     crown: bool,
+    /// Whether this author wore the crown when last month ended.
+    laureate: bool,
     title: Option<&'a str>,
     /// The dearest burn milestone this author owns. A badge, not a mark on
     /// the name, so it joins the badge stack rather than trailing the
@@ -2724,6 +2728,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         is_friend,
         author,
         crown,
+        laureate,
         title,
         milestone,
         special_badges,
@@ -2753,6 +2758,16 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         col += glyph_w;
         prefix.push(' ');
         col += 1;
+    }
+
+    // Last month's crown leads the name: a title held for the whole month,
+    // so it stands apart from the live holder's glyph that trails the name.
+    // Painted in the author style (an emoji keeps its own colors), and the
+    // name beside it opens the profile, so it carries no segment.
+    if laureate {
+        prefix.push_str(CROWN_LAUREATE_GLYPH);
+        prefix.push(' ');
+        col += UnicodeWidthStr::width(CROWN_LAUREATE_GLYPH) as u16 + 1;
     }
 
     let author_w = UnicodeWidthStr::width(author) as u16;

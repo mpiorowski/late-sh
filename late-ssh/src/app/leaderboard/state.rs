@@ -15,7 +15,7 @@ use crate::app::common::primitives::thousands;
 const EMPTY: &[RankedEntry] = &[];
 
 /// One selectable board on the Leaderboards page. The four bespoke boards
-/// lead, then every game board; the per-game boards come straight off the
+/// lead (Top Drinkers first), then every game board; the per-game boards come straight off the
 /// late-core rosters, so a game added there appears here without a page
 /// change. `BadgeGuide` trails every ranked board: it carries no standings,
 /// `draw_detail` special-cases it before touching `standings`/`format_value`.
@@ -66,10 +66,10 @@ impl Board {
     /// then score games, each roster in its declaration order.
     pub(crate) fn all() -> Vec<Self> {
         let mut boards = vec![
+            Self::TopDrinkers,
             Self::TopChips,
             Self::ArcadeWins,
             Self::TimeOnline,
-            Self::TopDrinkers,
             Self::LateaniaAdventurers,
             Self::LateaniaPvp,
         ];

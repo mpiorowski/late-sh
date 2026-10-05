@@ -101,13 +101,13 @@ fn lounge_headlines_only_the_crown_with_both_names_and_the_next_price() {
     assert_eq!(stolen.action, "stole the crown from mira for 1,688");
     assert_eq!(
         lounge_headline(&stolen).as_deref(),
-        Some("\u{1F451} @tom stole the crown from @mira for 1,688 chips. Next price: 2,532 chips.")
+        Some("\u{1F48E} @tom stole the crown from @mira for 1,688 chips. Next price: 2,532 chips.")
     );
 
     let vacant = ActivityEvent::crown_taken(Uuid::nil(), "tom", Uuid::nil(), 500, 750, None);
     assert_eq!(
         lounge_headline(&vacant).as_deref(),
-        Some("\u{1F451} @tom claimed the vacant crown for 500 chips. Next price: 750 chips.")
+        Some("\u{1F48E} @tom claimed the vacant crown for 500 chips. Next price: 750 chips.")
     );
 
     let joined = ActivityEvent::joined(Uuid::nil(), "tom");

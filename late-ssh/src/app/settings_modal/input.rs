@@ -2,6 +2,7 @@ use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste
 use crate::app::state::App;
 
 use super::gem::GemKey;
+use super::mouse::{Field, Target};
 use super::state::{
     AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, INVITE_CODE_INPUT_MAX_LEN, IrcTokenFocus,
     LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN,
@@ -13,6 +14,11 @@ use crate::app::common::textarea_input::{
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
+    if let ParsedInput::Mouse(mouse) = event {
+        handle_mouse(app, mouse);
+        return;
+    }
+    app.settings_modal_state.mouse.reveal_selection();
     if app.settings_modal_state.invites_dialog().open() {
         handle_invites_dialog_input(app, event);
         return;
@@ -82,15 +88,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         _ => {}
     }
 
-    // Tab-strip clicks and body scroll-wheel are handled at the top level so
-    // they work from every tab. Per-tab mouse handlers (e.g. the Special-tab
-    // gem) still get a shot at any mouse event we don't claim here.
-    if let ParsedInput::Mouse(mouse) = &event
-        && handle_top_level_mouse(app, *mouse)
-    {
-        return;
-    }
-
     // An open theme search owns Esc: it backs out of the search, not out of
     // settings, the same way the Bio editor keeps its own keys.
     if app.settings_modal_state.selected_tab() == Tab::Themes
@@ -147,7 +144,9 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_row(-1),
         ParsedInput::Arrow(b'C') => app.settings_modal_state.cycle_setting(true),
         ParsedInput::Arrow(b'D') => app.settings_modal_state.cycle_setting(false),
-        ParsedInput::Byte(b' ') | ParsedInput::Byte(b'\r') => activate_selected_row(app),
+        ParsedInput::Byte(b' ') | ParsedInput::Char(' ') | ParsedInput::Byte(b'\r') => {
+            activate_selected_row(app)
+        }
         ParsedInput::Char('e') | ParsedInput::Char('E') => activate_selected_row(app),
         _ => {}
     }
@@ -192,7 +191,9 @@ fn handle_themes_tab_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Arrow(b'A') => state.move_theme_cursor(-1),
         ParsedInput::Arrow(b'D') => state.theme_cursor_left(),
         ParsedInput::Arrow(b'C') => state.theme_cursor_right(),
-        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => state.toggle_theme_tree_row(),
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => {
+            state.toggle_theme_tree_row()
+        }
         _ => {}
     }
 }
@@ -236,14 +237,16 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_tweak_row(-1),
-        // Enter on the Right sidebar row opens the panel editor; everywhere
-        // else (and Space / ← / →) it just flips the selected toggle.
+        // Enter opens Right sidebar's panel editor. Interaction mode opens its
+        // chooser on Enter/Space; Left/Right always retain keyboard cycling.
         ParsedInput::Byte(b'\r') | ParsedInput::Char('e' | 'E')
             if app.settings_modal_state.selected_tweak_row() == TweakRow::RightSidebar =>
         {
             app.settings_modal_state.open_right_sidebar_components();
         }
-        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => toggle_tweak(app),
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => {
+            toggle_tweak(app)
+        }
         ParsedInput::Arrow(b'C') => cycle_tweak(app, true),
         ParsedInput::Arrow(b'D') => cycle_tweak(app, false),
         ParsedInput::Byte(b'h') | ParsedInput::Char('h') => {
@@ -251,30 +254,6 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(b'l') | ParsedInput::Char('l') => {
             app.settings_modal_state.gem_mut().handle_key(GemKey::L);
-        }
-        ParsedInput::Mouse(mouse)
-            if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) =>
-        {
-            let Some(x) = mouse.x.checked_sub(1) else {
-                return;
-            };
-            let Some(y) = mouse.y.checked_sub(1) else {
-                return;
-            };
-            let hit = app
-                .settings_modal_state
-                .gem()
-                .hit_area
-                .get()
-                .filter(|rect| {
-                    x >= rect.x
-                        && x < rect.x + rect.width
-                        && y >= rect.y
-                        && y < rect.y + rect.height
-                });
-            if hit.is_some() {
-                app.settings_modal_state.gem_mut().handle_click();
-            }
         }
         _ => {}
     }
@@ -309,7 +288,7 @@ fn handle_account_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_account_row(-1),
-        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => {
+        ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => {
             match app.settings_modal_state.selected_account_row() {
                 AccountRow::Invites => app.settings_modal_state.open_invites_dialog(),
                 AccountRow::LinkAccounts => app.settings_modal_state.open_link_account_dialog(),
@@ -325,59 +304,149 @@ pub(crate) fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
 }
 
-/// Handle tab-strip clicks and body scroll-wheel at the top level. Returns
-/// `true` if the event was claimed (caller should `return` early). False
-/// otherwise — the event then falls through to per-tab handlers, which may
-/// have their own mouse semantics (e.g. the Special-tab gem).
-fn handle_top_level_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) {
+    if !app.interaction_mode.mouse_enabled() {
+        return;
+    }
     let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
-        return false;
+        return;
     };
+    let state = &mut app.settings_modal_state;
     match mouse.kind {
+        MouseEventKind::ScrollUp => state.mouse.scroll(x, y, -3, app.size),
+        MouseEventKind::ScrollDown => state.mouse.scroll(x, y, 3, app.size),
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
-            if let Some(tab) = app.settings_modal_state.tab_at_point(x, y) {
-                app.settings_modal_state.select_tab(tab);
-                return true;
+            let Some(target) = state.mouse.target(x, y, app.size) else {
+                return;
+            };
+            let same_editor = match target {
+                Target::Caret(Field::Username, _) => state.editing_username(),
+                Target::Caret(Field::System, _) => state.editing_system_field().is_some(),
+                Target::Caret(Field::Feed, _) => state.editing_feed_url(),
+                Target::Bio => state.editing_bio(),
+                _ => false,
+            };
+            if state.editing_text() && !same_editor && target != Target::Cancel {
+                state.submit_text_edit();
             }
-            false
+            activate_mouse_target(app, target);
         }
-        MouseEventKind::ScrollUp if app.settings_modal_state.body_contains(x, y) => {
-            scroll_current_tab(app, -3)
-        }
-        MouseEventKind::ScrollDown if app.settings_modal_state.body_contains(x, y) => {
-            scroll_current_tab(app, 3)
-        }
-        _ => false,
+        _ => {}
     }
 }
 
-/// Scroll the row cursor on tabs that have one. Returns `true` if the wheel
-/// was consumed. Tabs without a list (Bio, Themes-with-its-own-scroll,
-/// Special) are left alone here.
-fn scroll_current_tab(app: &mut App, delta: isize) -> bool {
-    match app.settings_modal_state.selected_tab() {
-        Tab::Settings => {
-            app.settings_modal_state.move_row(delta);
-            true
-        }
-        Tab::Account => {
-            app.settings_modal_state.move_account_row(delta);
-            true
-        }
-        Tab::Feeds => {
-            app.settings_modal_state.move_feed_cursor(delta);
-            true
-        }
-        Tab::Statusline => {
-            let state = &mut app.settings_modal_state;
-            match state.statusline_pane() {
-                StatuslinePane::List => state.move_statusline_cursor(delta),
-                StatuslinePane::Detail => state.move_statusline_dial(delta),
-            }
-            true
-        }
-        _ => false,
+fn activate_mouse_target(app: &mut App, target: Target) {
+    let state = &mut app.settings_modal_state;
+    if state.link_account_dialog().pending() || state.irc_token_dialog().pending() {
+        return;
     }
+    if state.delete_account_dialog().pending() && target != Target::Close {
+        return;
+    }
+    state.select_mouse_target(target);
+    match target {
+        Target::Close => {
+            if state.invites_dialog().open() {
+                state.close_invites_dialog();
+            } else if state.link_account_dialog().open() {
+                state.close_link_account_dialog();
+            } else if state.delete_account_dialog().open() {
+                state.close_delete_account_dialog();
+            } else if state.irc_token_dialog().open() {
+                state.close_irc_token_dialog();
+            } else if state.right_sidebar_components_open() {
+                state.close_right_sidebar_components();
+            } else if state.chat_badges_open() {
+                state.close_chat_badges();
+            } else if state.picker_open() {
+                state.close_picker();
+            } else {
+                // Leaving mid-search keeps the theme it previewed, as Esc does.
+                if state.theme_searching() {
+                    state.cancel_theme_search();
+                }
+                app.show_settings = false;
+            }
+        }
+        Target::Tab(tab) => state.select_tab(tab),
+        Target::Row(_) => activate_selected_row(app),
+        Target::RowCycle(_, forward) => state.cycle_setting(forward),
+        Target::Tweak(TweakRow::RightSidebar) => state.open_right_sidebar_components(),
+        Target::Tweak(_) => toggle_tweak(app),
+        Target::TweakCycle(_, forward) => cycle_tweak(app, forward),
+        Target::SidebarMode => cycle_tweak(app, true),
+        Target::SidebarPanels => state.open_right_sidebar_components(),
+        Target::Account(row) => match row {
+            AccountRow::Invites => state.open_invites_dialog(),
+            AccountRow::LinkAccounts => state.open_link_account_dialog(),
+            AccountRow::IrcToken => state.open_irc_token_dialog(),
+            AccountRow::DeleteAccount => state.open_delete_account_dialog(),
+        },
+        Target::Theme(_) => {
+            state.toggle_theme_tree_row();
+            if state.theme_searching() {
+                state.save();
+            }
+        }
+        Target::Star(_) => state.toggle_theme_favorite(),
+        Target::Search => state.start_theme_search(),
+        Target::Status(_) => {
+            state.focus_statusline_pane(StatuslinePane::Detail);
+            state.mouse.reveal_selection();
+        }
+        Target::StatusToggle(_) => state.toggle_statusline_component(),
+        Target::StatusMove(_, delta) => state.move_statusline_component(delta),
+        Target::Dial(_) => {
+            state.focus_statusline_pane(StatuslinePane::Detail);
+            state.cycle_statusline_dial(true);
+        }
+        Target::DialCycle(_, forward) => {
+            state.focus_statusline_pane(StatuslinePane::Detail);
+            state.cycle_statusline_dial(forward);
+        }
+        Target::Sidebar(_) => state.toggle_right_sidebar_component(),
+        Target::SidebarMove(_, delta) => state.move_right_sidebar_component(delta),
+        Target::Badge(_) => state.toggle_chat_badge(),
+        Target::Pick(_) => apply_picker_selection(app),
+        Target::Bio => {
+            if !state.editing_bio() {
+                state.start_bio_edit();
+            }
+        }
+        Target::Feed(_) => {}
+        Target::AddFeed => state.start_feed_url_edit(),
+        Target::RemoveFeed => state.remove_selected_feed(),
+        Target::RefreshFeeds => state.refresh_feeds(),
+        Target::Submit => {} // the click already submitted the open editor
+        Target::Cancel => {
+            if state.editing_username() {
+                state.cancel_username_edit();
+            } else if state.editing_system_field().is_some() {
+                state.cancel_system_field_edit();
+            } else if state.editing_feed_url() {
+                state.cancel_feed_url_edit();
+            }
+        }
+        Target::Caret(field, col) => state.position_caret(field, col),
+        Target::AddInviteCode => state.submit_invite_code(),
+        Target::GenerateCode => state.generate_link_account_code(),
+        Target::LookupCode => {
+            state.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
+            state.activate_link_account_enter_code();
+        }
+        Target::KeepAccount(keep) => state.select_link_account_main(keep),
+        Target::ConfirmLink => state.submit_link_account_confirmation(),
+        Target::ConfirmDelete => state.submit_delete_account_confirmation(),
+        Target::Irc(focus) => {
+            if state.irc_token_dialog().focus() != focus {
+                state.move_irc_token_focus(focus);
+            }
+            state.activate_irc_token_focus();
+        }
+        Target::DismissToken => state.dismiss_irc_token_reveal(),
+        Target::Gem => state.gem_mut().handle_click(),
+    }
+    app.settings_modal_state.mouse.invalidate();
 }
 
 fn is_close_event(event: &ParsedInput) -> bool {
@@ -402,7 +471,6 @@ fn activate_selected_row(app: &mut App) {
             crate::app::tag_picker::state::TagPickerTarget::SettingsLangs,
         ),
         Row::Theme
-        | Row::TranslateTo
         | Row::AutoTranslate
         | Row::TranslateMine
         | Row::DirectMessages
@@ -414,6 +482,7 @@ fn activate_selected_row(app: &mut App) {
         | Row::NotifyFormat => app.settings_modal_state.cycle_setting(true),
         Row::Country => app.settings_modal_state.open_picker(PickerKind::Country),
         Row::Timezone => app.settings_modal_state.open_picker(PickerKind::Timezone),
+        Row::TranslateTo => app.settings_modal_state.open_picker(PickerKind::Language),
     }
 }
 
@@ -754,7 +823,7 @@ fn handle_bio_input(app: &mut App, event: ParsedInput) {
 fn handle_picker_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => app.settings_modal_state.close_picker(),
-        ParsedInput::Byte(b'\r') => app.settings_modal_state.apply_picker_selection(),
+        ParsedInput::Byte(b'\r') => apply_picker_selection(app),
         ParsedInput::Byte(0x7F) => app.settings_modal_state.picker_backspace(),
         ParsedInput::Arrow(b'B') => app.settings_modal_state.picker_move(1),
         ParsedInput::Arrow(b'A') => app.settings_modal_state.picker_move(-1),
@@ -776,11 +845,6 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
                 .max(1) as isize;
             app.settings_modal_state.picker_move(-page);
         }
-        ParsedInput::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => app.settings_modal_state.picker_move(-3),
-            MouseEventKind::ScrollDown => app.settings_modal_state.picker_move(3),
-            _ => {}
-        },
         ParsedInput::Char(ch) if !ch.is_control() => app.settings_modal_state.picker_push(ch),
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             app.settings_modal_state.picker_push(byte as char)
@@ -793,11 +857,21 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
 /// was one of the two rail rows. The modal owns the account default; the device
 /// layout is the app's, so the sync lives here rather than inside the modal.
 fn toggle_tweak(app: &mut App) {
-    if apply_interaction_mode_row(app, true) {
+    if app.settings_modal_state.selected_tweak_row() == TweakRow::InteractionMode {
+        app.settings_modal_state
+            .open_picker(PickerKind::InteractionMode);
         return;
     }
     app.settings_modal_state.toggle_selected_tweak();
     app.sync_device_rails_from_settings();
+}
+
+fn apply_picker_selection(app: &mut App) {
+    if let Some(mode) = app.settings_modal_state.picker_interaction_mode() {
+        app.set_interaction_mode(mode);
+        app.settings_modal_state.set_interaction_mode_display(mode);
+    }
+    app.settings_modal_state.apply_picker_selection();
 }
 
 fn cycle_tweak(app: &mut App, forward: bool) {
@@ -812,15 +886,10 @@ fn cycle_tweak(app: &mut App, forward: bool) {
 /// flips the mouse live and persists) and mirror it into the modal for display.
 /// Returns whether it handled the row.
 fn apply_interaction_mode_row(app: &mut App, forward: bool) -> bool {
-    use late_core::models::user::InteractionMode;
     if app.settings_modal_state.selected_tweak_row() != TweakRow::InteractionMode {
         return false;
     }
-    let order = [
-        InteractionMode::Keyboard,
-        InteractionMode::Mouse,
-        InteractionMode::Hybrid,
-    ];
+    let order = super::state::INTERACTION_MODES;
     let cur = order
         .iter()
         .position(|m| *m == app.interaction_mode)

@@ -39,6 +39,7 @@ use crate::app::common::{
     composer, mentions,
     primitives::{Banner, Screen},
 };
+use crate::app::crown::svc::CrownBid;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
@@ -367,22 +368,38 @@ pub(crate) enum CrownCommand {
     /// `/crown`: who wears it, for how long, and what taking it costs.
     Status,
     /// `/crown take`: buy it at whatever the ladder says right now.
-    Take,
+    /// `/crown take N`: bid N, which the service checks against the price.
+    Take { bid: CrownBid },
 }
 
-/// `Some(Some(command))` on `/crown` or `/crown take`, `Some(None)` on
-/// anything else after `/crown` (usage banner), `None` when the line is not
-/// a crown command at all.
+/// `Some(Some(command))` on `/crown`, `/crown take` or `/crown take N`,
+/// `Some(None)` on anything else after `/crown` (usage banner), `None` when
+/// the line is not a crown command at all. A bid must be a positive whole
+/// number of chips; whether it beats the price is the service's call, under
+/// the lock, since the price can move between typing and landing.
 fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
     let rest = body.trim().strip_prefix("/crown")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    Some(match rest.trim() {
-        "" => Some(CrownCommand::Status),
-        "take" => Some(CrownCommand::Take),
-        _ => None,
-    })
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(Some(CrownCommand::Status));
+    }
+    if rest == "take" {
+        return Some(Some(CrownCommand::Take {
+            bid: CrownBid::AtPrice,
+        }));
+    }
+    let Some(offer) = rest.strip_prefix("take ") else {
+        return Some(None);
+    };
+    match offer.trim().parse::<i64>() {
+        Ok(offer) if offer > 0 => Some(Some(CrownCommand::Take {
+            bid: CrownBid::Offer(offer),
+        })),
+        Ok(_) | Err(_) => Some(None),
+    }
 }
 
 /// The pot, requested from the composer. `App` owns the pot service, so the
@@ -3920,7 +3937,7 @@ impl ChatState {
         if let Some(parsed) = parse_crown_command(&body) {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
-                return Some(Banner::error("Usage: /crown, or /crown take"));
+                return Some(Banner::error("Usage: /crown, /crown take, or /crown take N"));
             };
             self.requested_crown = Some(command);
             return None;

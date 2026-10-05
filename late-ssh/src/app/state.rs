@@ -613,10 +613,9 @@ pub struct App {
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub(super) crown_service: Option<crate::app::crown::svc::CrownService>,
-    /// The process-shared crown holder, read on the ~1s edge and folded into
-    /// `name_flair`, so no render ever queries for the glyph.
-    pub(super) crown_holder_rx:
-        Option<watch::Receiver<Option<crate::app::crown::svc::CrownHolder>>>,
+    /// The process-shared crown holder and laureate, read on the ~1s edge
+    /// and folded into `name_flair`, so no render ever queries for a glyph.
+    pub(super) crown_wearers_rx: Option<watch::Receiver<crate::app::crown::svc::CrownWearers>>,
     pub(super) crown_events_rx: Option<broadcast::Receiver<crate::app::crown::svc::CrownEvent>>,
     pub(super) pot_service: Option<crate::app::pot::svc::PotService>,
     pub(super) referral_service: crate::app::referral::svc::ReferralService,
@@ -1555,10 +1554,10 @@ impl App {
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
-            crown_holder_rx: config
+            crown_wearers_rx: config
                 .crown_service
                 .as_ref()
-                .map(crate::app::crown::svc::CrownService::subscribe_holder),
+                .map(crate::app::crown::svc::CrownService::subscribe_wearers),
             crown_events_rx: config
                 .crown_service
                 .as_ref()
@@ -3562,7 +3561,7 @@ impl App {
         changed
     }
 
-    /// The crown's two commands and the answers to them. The glyph itself is
+    /// The crown's commands and the answers to them. The glyph itself is
     /// not handled here: it rides `name_flair`, resolved on the ~1s edge in
     /// `tick.rs` from the process-shared holder, so a takeover on another
     /// replica moves it with no event of any kind.
@@ -3581,8 +3580,8 @@ impl App {
                     crate::app::chat::state::CrownCommand::Status => {
                         service.status_task(self.user_id);
                     }
-                    crate::app::chat::state::CrownCommand::Take => {
-                        service.take_task(self.user_id, self.username.clone());
+                    crate::app::chat::state::CrownCommand::Take { bid } => {
+                        service.take_task(self.user_id, self.username.clone(), bid);
                         self.banner = Some(Banner::success("Reaching for the crown..."));
                     }
                 },

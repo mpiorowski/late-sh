@@ -236,6 +236,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
             style: None,
             title: Some("the night clerk".to_string()),
             crown: false,
+            laureate: false,
             milestone: None,
         },
     )]);
@@ -397,10 +398,11 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
     );
 }
 
-/// The crown is glued to the name, ahead of a rented title and ahead of the
-/// badge stack, and it never displaces either.
+/// The live holder's crown is glued to the name, ahead of a rented title and
+/// ahead of the badge stack, and it never displaces either. Last month's
+/// crown leads the name, and someone who is both wears both.
 #[test]
-fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
+fn the_crown_glyphs_frame_the_author_name() {
     theme::set_current_by_id("late");
 
     let room_id = Uuid::from_u128(1);
@@ -438,6 +440,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
             style: None,
             title: Some("the night clerk".to_string()),
             crown: true,
+            laureate: true,
             milestone: None,
         },
     )]);
@@ -486,7 +489,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
     assert!(
         rendered
             .iter()
-            .any(|row| row.contains("bob \u{1F451}, the night clerk 🐱")),
+            .any(|row| row.contains("\u{1F451} bob \u{1F48E}, the night clerk 🐱")),
         "no crowned author header in {rendered:#?}"
     );
 }
@@ -2674,6 +2677,7 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         is_friend: false,
         author: "bob",
         crown: false,
+        laureate: false,
         title: None,
         milestone: None,
         special_badges: &[],
@@ -2712,6 +2716,7 @@ fn header_segments_show_a_burn_milestone_on_top_of_a_rented_badge_and_flag() {
         is_friend: false,
         author: "bob",
         crown: false,
+        laureate: false,
         title: None,
         milestone: Some("\u{1F30B}"),
         special_badges: &[],
@@ -2744,6 +2749,7 @@ fn header_prefix_wears_a_milestone_with_no_rentals_at_all() {
         is_friend: false,
         author: "bob",
         crown: true,
+        laureate: false,
         title: Some("the night clerk"),
         milestone: Some("\u{1F9E8}"),
         special_badges: &[],
@@ -2753,10 +2759,50 @@ fn header_prefix_wears_a_milestone_with_no_rentals_at_all() {
         presence_badges: &[],
         runner_badge: None,
     });
-    assert_eq!(prefix, "bob \u{1F451}, the night clerk \u{1F9E8}");
+    assert_eq!(prefix, "bob \u{1F48E}, the night clerk \u{1F9E8}");
     assert!(crown_range.is_some());
     assert_eq!(segs.len(), 2);
     assert_eq!(segs[1].target, HeaderTarget::StoreMilestone);
+}
+
+/// Last month's crown sits before the name, after the friend heart, and
+/// shifts everything after it: the name's byte range (what the painter
+/// tints) and its click columns both start past the glyph. It has no
+/// segment of its own, and no `[CRWN]` joins the badge group.
+#[test]
+fn header_prefix_leads_the_name_with_last_months_crown() {
+    let AuthorPrefix {
+        prefix,
+        segments: segs,
+        author_range,
+        crown_range,
+        title_range: _,
+        runner_range: _,
+    } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: true,
+        author: "bob",
+        crown: false,
+        laureate: true,
+        title: None,
+        milestone: None,
+        special_badges: &[],
+        chat_badges: &[],
+        bonsai_glyph: None,
+        profile_award_badges: Some("LATE"),
+        presence_badges: &[],
+        runner_badge: None,
+    });
+    let lead = format!("{FRIEND_BADGE} \u{1F451} ");
+    assert_eq!(prefix, format!("{lead}bob [LATE]"));
+    assert_eq!(author_range, (lead.len(), lead.len() + 3));
+    assert_eq!(crown_range, None);
+    let name_col = 1 + UnicodeWidthStr::width(lead.as_str()) as u16;
+    let name_segment = segs
+        .iter()
+        .find(|seg| seg.start_col == name_col)
+        .expect("the name keeps its profile segment");
+    assert_eq!(name_segment.target, HeaderTarget::Profile);
+    assert_eq!(name_segment.end_col, name_col + 3);
 }
 
 #[test]
@@ -2773,6 +2819,7 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
         is_friend: false,
         author: "bob",
         crown: false,
+        laureate: false,
         title: Some("the insufferable"),
         milestone: None,
         special_badges: &[],
@@ -2803,6 +2850,7 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
         is_friend: false,
         author: "bob",
         crown: false,
+        laureate: false,
         title: Some("   "),
         milestone: None,
         special_badges: &[],
@@ -2826,6 +2874,7 @@ fn header_prefix_orders_all_badge_classes() {
         is_friend: false,
         author: "alice",
         crown: false,
+        laureate: false,
         title: None,
         milestone: None,
         special_badges: &["mod", "developer", "artist"],
@@ -2858,6 +2907,7 @@ fn header_prefix_leads_the_badge_stack_with_the_runner_badge() {
         is_friend: false,
         author: "mira",
         crown: false,
+        laureate: false,
         title: Some("the night clerk"),
         milestone: None,
         special_badges: &["mod"],

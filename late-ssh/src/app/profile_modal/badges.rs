@@ -10,7 +10,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::app::common::theme;
+use crate::app::common::{theme, username_effect::CROWN_LAUREATE_GLYPH};
 
 pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'static>> {
     let badge_style = Style::default()
@@ -63,7 +63,10 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
 
     let mut lines = vec![
         Line::from(Span::styled(
-            "Every code below also shows in your profile's Badges list and in your chat username stack.",
+            format!(
+                "Every code below also shows in your profile's Badges list and in your chat username \
+                 stack, except CRWN: chat paints last month's crown as a {CROWN_LAUREATE_GLYPH} before the name."
+            ),
             dim,
         )),
         Line::from(""),

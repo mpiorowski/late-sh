@@ -3,9 +3,10 @@
 //! tags and skips the group headings, and the chosen tags in the order
 //! they were picked. No I/O, no host knowledge beyond the target enum.
 
-use std::cell::Cell;
 
 use late_core::vocab::{self, Group, TAG_LIMIT};
+
+use crate::app::common::mouse::MouseState;
 
 /// What the cap reads as when a thirteenth tag is picked.
 pub(crate) const CAP_NOTICE: &str = "Twelve is the cap; drop one to add another.";
@@ -63,14 +64,19 @@ pub(crate) enum Row {
     Tag(&'static str),
 }
 
+/// What a click in the picker can land on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Target {
+    Done,
+    Row(usize),
+}
+
 #[derive(Default)]
 pub(crate) struct TagPickerState {
+    pub(crate) mouse: MouseState<Target, ()>,
     target: Option<TagPickerTarget>,
     query: String,
     cursor: usize,
-    scroll: usize,
-    /// Rows the list showed last frame, so a page and a scroll fit it.
-    visible_height: Cell<usize>,
     chosen: Vec<String>,
     notice: Option<&'static str>,
 }
@@ -94,6 +100,7 @@ impl TagPickerState {
             }
         }
         self.cursor = self.first_tag_row();
+        self.mouse.reveal_selection();
     }
 
     /// Close and hand back the target with the chosen tags; none when the
@@ -125,16 +132,8 @@ impl TagPickerState {
         self.cursor
     }
 
-    pub(crate) fn scroll(&self) -> usize {
-        self.scroll
-    }
-
     pub(crate) fn notice(&self) -> Option<&'static str> {
         self.notice
-    }
-
-    pub(crate) fn set_visible_height(&self, height: usize) {
-        self.visible_height.set(height.max(1));
     }
 
     pub(crate) fn is_chosen(&self, tag: &str) -> bool {
@@ -192,7 +191,6 @@ impl TagPickerState {
         self.query.push(ch);
         self.notice = None;
         self.cursor = self.first_tag_row();
-        self.scroll = 0;
     }
 
     /// Backspace edits the query; on an empty query it drops the last
@@ -201,8 +199,7 @@ impl TagPickerState {
         self.notice = None;
         if self.query.pop().is_some() {
             self.cursor = self.first_tag_row();
-            self.scroll = 0;
-        } else {
+            } else {
             self.chosen.pop();
         }
     }
@@ -212,8 +209,7 @@ impl TagPickerState {
         let rows = self.rows();
         if rows.is_empty() {
             self.cursor = 0;
-            self.scroll = 0;
-            return;
+                return;
         }
         let step: isize = if delta < 0 { -1 } else { 1 };
         let mut left = delta.unsigned_abs();
@@ -232,7 +228,14 @@ impl TagPickerState {
             left -= 1;
         }
         self.cursor = at as usize;
-        self.keep_cursor_visible();
+    }
+
+    /// A click on a tag row moves the cursor there and toggles it.
+    pub(crate) fn click_row(&mut self, index: usize) {
+        if matches!(self.rows().get(index), Some(Row::Tag(_))) {
+            self.cursor = index;
+            self.toggle();
+        }
     }
 
     /// Space: pick or drop the tag under the cursor. A thirteenth pick is
@@ -270,7 +273,6 @@ impl TagPickerState {
                 .iter()
                 .position(|row| *row == Row::Tag(tag))
                 .unwrap_or(0);
-            self.keep_cursor_visible();
         }
     }
 
@@ -279,22 +281,6 @@ impl TagPickerState {
             .iter()
             .position(|row| matches!(row, Row::Tag(_)))
             .unwrap_or(0)
-    }
-
-    /// Scroll so the cursor's row is on screen, with its heading when the
-    /// cursor sits right under one.
-    fn keep_cursor_visible(&mut self) {
-        let visible = self.visible_height.get().max(1);
-        let rows = self.rows();
-        let mut top = self.cursor;
-        if top > 0 && matches!(rows.get(top - 1), Some(Row::Heading(_))) {
-            top -= 1;
-        }
-        if top < self.scroll {
-            self.scroll = top;
-        } else if self.cursor >= self.scroll + visible {
-            self.scroll = self.cursor + 1 - visible;
-        }
     }
 }
 

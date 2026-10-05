@@ -9,7 +9,8 @@ use uuid::Uuid;
 
 use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
 use super::profile_award::{
-    MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
+    CROWN_AWARD_CATEGORY, MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT,
+    top_badge_per_game,
 };
 use super::statusline::{
     StatusComponentSetting, default_statusline_components, parse_statusline_components,
@@ -143,11 +144,11 @@ impl RightSidebarMode {
         }
     }
 
-    pub fn cycle(self, _forward: bool) -> Self {
-        match self {
-            Self::On => Self::Off,
-            Self::Off => Self::Auto,
-            Self::Auto => Self::On,
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) | (Self::Auto, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Auto,
+            (Self::Auto, true) | (Self::Off, false) => Self::On,
         }
     }
 }
@@ -312,11 +313,11 @@ impl RoomListMode {
         }
     }
 
-    pub fn cycle(self, _forward: bool) -> Self {
-        match self {
-            Self::On => Self::Off,
-            Self::Off => Self::Auto,
-            Self::Auto => Self::On,
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) | (Self::Auto, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Auto,
+            (Self::Auto, true) | (Self::Off, false) => Self::On,
         }
     }
 }
@@ -750,7 +751,6 @@ impl User {
                           -- Monthly like the boards below, rankless like the
                           -- milestones above: one holder, so no rank digit
                           -- (`profile_award::is_rankless_award`).
-                          WHEN 'crown' THEN 'CRWN'
                           WHEN 'late_time' THEN 'LATE'
                           WHEN 'top_drinkers' THEN 'DRNK'
                           ELSE (
@@ -770,7 +770,6 @@ impl User {
                                  CASE category
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
-                                   WHEN 'crown' THEN 5
                                    WHEN 'artboard' THEN 6
                                    WHEN 'late_time' THEN 7
                                    WHEN 'top_drinkers' THEN 8
@@ -801,6 +800,10 @@ impl User {
                       -- (`extract_hidden_award_categories`). Hiding the top
                       -- rung of a game ladder lets the next one show.
                       AND NOT (COALESCE(u.settings->'hidden_award_categories', '[]'::jsonb) ? pa.category)
+                      -- The crown never joins the group: chat paints last
+                      -- month's winner as a glyph before the name instead
+                      -- (`profile_award::chat_award_categories`).
+                      AND pa.category <> $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
                         OR pa.category = ANY($5)
@@ -813,6 +816,7 @@ impl User {
                     &CHAT_FLAG_SLOT,
                     &PROFILE_AWARD_RANK_LIMIT,
                     &milestone_categories,
+                    &CROWN_AWARD_CATEGORY,
                 ],
             )
             .await?;

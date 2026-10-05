@@ -981,6 +981,23 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if let ParsedInput::Mouse(mouse) = &event {
+        // Honor keyboard-only mode before any page can consume the report.
+        if !app.interaction_mode.mouse_enabled() {
+            return;
+        }
+        // SGR coordinates are 1-based; the pet follows the cursor on Zen.
+        if let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) {
+            app.last_mouse = Some((x, y));
+        }
+        // The frame stays clickable even when a page captures all input
+        // (drawing, framing, naming/rating a piece, or playing a game).
+        // App-wide modals above retain their input priority.
+        if handle_topbar_screen_click(app, ctx.screen, *mouse) {
+            return;
+        }
+    }
+
     if handle_dedicated_screen_input(app, ctx, &event) {
         return;
     }
@@ -1030,17 +1047,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
-            // Keyboard-only mode ignores the mouse entirely, so the terminal's
-            // own selection/copy is untouched (belt-and-suspenders: capture is
-            // also off at the terminal, but a client may still send reports).
-            if !app.interaction_mode.mouse_enabled() {
-                return;
-            }
-            // Every report says where the cursor is (SGR coordinates are
-            // 1-based); the pet walks after it on the Zen page.
-            if let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) {
-                app.last_mouse = Some((x, y));
-            }
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
@@ -2051,6 +2057,12 @@ fn dispatch_escape(app: &mut App) {
         app.show_ultimate_modal = false;
         return;
     }
+    // Drawn over the settings modal and the profile editor, so it takes Esc
+    // ahead of both, the same order `handle_parsed_input` gives its keys.
+    if app.tag_picker.is_open() {
+        crate::app::tag_picker::input::close(app);
+        return;
+    }
     if app.show_settings {
         settings_modal::input::handle_escape(app);
         return;
@@ -2100,10 +2112,6 @@ fn dispatch_escape(app: &mut App) {
     }
     if app.icon_picker_open {
         close_icon_picker(app);
-        return;
-    }
-    if app.tag_picker.is_open() {
-        crate::app::tag_picker::input::close(app);
         return;
     }
     if app.jobs.post.is_open() {
@@ -2563,6 +2571,25 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     app.chat.clear_message_selection();
 }
 
+fn handle_topbar_screen_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
+    // Zen is full-bleed and has no app frame or screen numbers.
+    if screen == Screen::Zen
+        || mouse.kind != MouseEventKind::Down
+        || mouse.button != Some(MouseButton::Left)
+    {
+        return false;
+    }
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    let Some(target) = topbar_screen_hit_test(x, y) else {
+        return false;
+    };
+    app.pending_chat_profile_open = None;
+    select_screen_from_topbar(app, screen, target);
+    true
+}
+
 fn chat_room_list_view<'a>(
     app: &'a App,
     usernames: &'a UsernameLookup<'a>,
@@ -2726,11 +2753,6 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
-    if let Some(target) = topbar_screen_hit_test(x, y) {
-        app.pending_chat_profile_open = None;
-        select_screen_from_topbar(app, screen, target);
-        return true;
-    }
     // Petting the pet is a passing gesture, not a move: it takes the click
     // before the Zen focus, so a click on the pet leaves the keys with the
     // chat tile the page opened on.

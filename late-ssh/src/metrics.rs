@@ -698,6 +698,7 @@ mod inner {
         match refusal {
             CrownRefusal::AlreadyYours => "already_yours",
             CrownRefusal::InsufficientChips { .. } => "insufficient_chips",
+            CrownRefusal::BidTooLow { .. } => "bid_too_low",
         }
     }
 

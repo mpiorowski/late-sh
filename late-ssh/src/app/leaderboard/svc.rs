@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
-use crate::app::common::username_effect::CROWN_GLYPH;
+use crate::app::common::username_effect::CROWN_LAUREATE_GLYPH;
 use crate::metrics;
 
 /// How often the leaderboard is rebuilt from the DB while at least one session
@@ -362,7 +362,7 @@ fn award_roll_placement(entry: &AwardRollEntry) -> String {
     match entry.category.as_str() {
         CROWN_AWARD_CATEGORY => {
             format!(
-                "{CROWN_GLYPH} @{name} took it last for {} chips",
+                "{CROWN_LAUREATE_GLYPH} @{name} took it last for {} chips",
                 thousands(value)
             )
         }

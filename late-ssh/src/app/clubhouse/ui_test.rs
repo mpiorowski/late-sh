@@ -153,6 +153,7 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
         style: None,
         title: Some("the night clerk".to_string()),
         crown: true,
+        laureate: false,
         milestone: None,
     };
     let dim = Style::default().fg(ratatui::style::Color::DarkGray);
@@ -171,7 +172,7 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
     let text: String = row.iter().map(|(ch, _)| *ch).collect();
     let crown_at = text
         .chars()
-        .position(|ch| ch == '\u{1F451}')
+        .position(|ch| ch == '\u{1F48E}')
         .unwrap_or_else(|| panic!("no crown on the floor label: {text:?}"));
     assert_eq!(row[crown_at - 2].0, 'b');
     assert_eq!(

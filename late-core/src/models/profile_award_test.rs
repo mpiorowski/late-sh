@@ -178,6 +178,15 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
     assert_eq!(crowns[0].score_value, 7_500);
     assert_eq!(crowns[0].badge(), "CRWN");
 
+    // The profile keeps it, the chat label does not: chat paints last
+    // month's crown as a glyph before the name, so `[CRWN]` would say it
+    // twice.
+    let chat = crate::models::user::User::list_chat_author_metadata(&client, &[last.id])
+        .await
+        .expect("chat metadata");
+    assert_eq!(chat.len(), 1);
+    assert_eq!(chat[0].profile_award_badges, None);
+
     let earlier = list_profile_awards_for_user(&client, first.id)
         .await
         .expect("awards");
@@ -650,9 +659,13 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
 
 /// The Settings badge picker covers every badge a label can show, each
 /// category exactly once, with every game ladder folded into a single row.
+/// The crown is not one of them: chat shows it as a glyph, not a code, so
+/// there is nothing to hide.
 #[test]
 fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
-    use crate::models::profile_award::{BADGE_LADDERS, all_award_categories, chat_badge_rows};
+    use crate::models::profile_award::{
+        BADGE_LADDERS, all_award_categories, chat_award_categories, chat_badge_rows,
+    };
 
     let rows = chat_badge_rows();
     let mut covered: Vec<&str> = rows
@@ -660,9 +673,11 @@ fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
         .flat_map(|row| row.categories.iter().copied())
         .collect();
     covered.sort_unstable();
-    let mut all = all_award_categories();
-    all.sort_unstable();
-    assert_eq!(covered, all);
+    let mut on_chat = chat_award_categories();
+    on_chat.sort_unstable();
+    assert_eq!(covered, on_chat);
+    assert!(!covered.contains(&CROWN_AWARD_CATEGORY));
+    assert!(all_award_categories().contains(&CROWN_AWARD_CATEGORY));
 
     for ladder in BADGE_LADDERS {
         let owning: Vec<_> = rows
