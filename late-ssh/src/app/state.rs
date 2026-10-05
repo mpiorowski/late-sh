@@ -709,7 +709,7 @@ pub struct App {
     /// reconnect lands in the right mode.
     pub(crate) paired_source: late_core::models::user::AudioSource,
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
-    /// Pinned stations behind `v1`..`v3` (`users.settings.radio_slots`).
+    /// Pinned stations behind `v1`..`v5` (`users.settings.radio_slots`).
     pub(crate) radio_slots: late_core::models::user::RadioSlots,
     pub(crate) stations_modal_state: crate::app::audio::stations_modal::state::StationsModalState,
 

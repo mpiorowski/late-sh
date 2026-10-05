@@ -104,7 +104,7 @@ fn music_stage_height_is_constant() {
         assert_eq!(texts.len(), MUSIC_DOCK_HEIGHT as usize, "{source:?}");
         assert!(texts[0].starts_with("vol"), "{source:?}");
         assert!(texts[1].starts_with("▌ radio"), "{source:?}");
-        assert!(texts[10].contains("v+x source"), "{source:?}");
+        assert!(texts[11].contains("v+x source"), "{source:?}");
     }
 }
 
@@ -122,16 +122,19 @@ fn on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek() {
     assert!(texts[1].starts_with("▌ radio"));
     // The track row falls back to the station label without live metadata.
     assert_eq!(texts[2], "datawave");
-    assert!(texts[3].starts_with("── datawave"), "{}", texts[3]);
+    // The heading names the station and credits its provider.
+    assert_eq!(texts[3], "datawave · nightride");
     assert!(texts[4].starts_with("○ chillsynth"));
     assert!(texts[4].trim_end().ends_with("v1"));
     assert!(texts[5].starts_with("○ nightride"));
     assert!(texts[6].starts_with("● datawave"));
     assert!(texts[6].trim_end().ends_with("v3"));
-    assert!(texts[7].contains("nightride.fm"));
-    assert!(texts[8].starts_with("▌ youtube"));
-    assert_eq!(texts[9], "fallback stream");
-    assert!(texts[10].contains("v+r tune"));
+    assert!(texts[7].starts_with("○ mellow"));
+    assert!(texts[8].starts_with("○ plaza"));
+    assert!(texts[8].trim_end().ends_with("v5"));
+    assert!(texts[9].starts_with("▌ youtube"));
+    assert_eq!(texts[10], "fallback stream");
+    assert!(texts[11].contains("v+r tune"));
 }
 
 #[test]
@@ -148,7 +151,7 @@ fn on_youtube_radio_collapses_to_its_title_bar() {
     assert!(texts[1].starts_with("▌ radio"));
     assert!(texts[2].starts_with("▌ youtube"));
     assert_eq!(texts[3], "fallback stream");
-    assert!(texts[10].contains("v+v queue"), "{}", texts[10]);
+    assert!(texts[11].contains("v+v queue"), "{}", texts[11]);
     assert!(
         texts.iter().all(|row| !row.contains("An Artist")),
         "the radio track is hidden on youtube: {texts:?}"
@@ -159,7 +162,7 @@ fn on_youtube_radio_collapses_to_its_title_bar() {
 fn both_title_bars_keep_their_listener_counts() {
     let texts = stage_texts(AudioSource::Radio);
     assert!(texts[1].trim_end().ends_with('1'));
-    assert!(texts[8].trim_end().ends_with('3'));
+    assert!(texts[9].trim_end().ends_with('3'));
     let texts = stage_texts(AudioSource::Youtube);
     assert!(texts[1].trim_end().ends_with('1'));
     assert!(texts[2].trim_end().ends_with('3'));
@@ -174,17 +177,22 @@ fn an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider() {
         .map(line_text)
         .collect();
     assert!(
-        texts[4..7].iter().all(|row| row.starts_with("○ ")),
+        texts[4..9].iter().all(|row| row.starts_with("○ ")),
         "{texts:?}"
     );
     assert!(texts[6].starts_with("○ pin via v+r"), "{}", texts[6]);
     assert!(texts[6].trim_end().ends_with("v3"));
-    assert!(
-        texts[3].contains("lofi"),
-        "the rule still names it: {}",
-        texts[3]
-    );
-    assert!(texts[7].contains("late.sh house"), "{}", texts[7]);
+    assert_eq!(texts[3], "lofi · late.sh", "the heading still names it");
+}
+
+/// The rail is 21 columns: a long station keeps its whole label and the
+/// provider credit gives way first.
+#[test]
+fn the_heading_truncates_the_provider_before_the_station() {
+    let heading = |key: &str| line_text(&station_heading_line(21, station(key)));
+    assert_eq!(heading("darksynth"), "darksynth · nightride");
+    assert_eq!(heading("horrorsynth"), "horrorsynth · nightr…");
+    assert_eq!(heading("swissclassic"), "swiss classic · radi…");
 }
 
 #[test]

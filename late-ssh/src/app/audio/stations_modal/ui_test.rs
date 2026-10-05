@@ -67,11 +67,38 @@ fn the_pinned_row_names_every_slot_and_marks_empty_ones() {
     let mut slots = RadioSlots::empty();
     slots.pin(0, key("rektify"));
     slots.pin(2, key("chill"));
-    let text = line_text(&pinned_line(slots));
+    let text = line_text(&pinned_line(slots, 74));
     assert_eq!(
         text.split_whitespace().collect::<Vec<_>>(),
-        vec!["pinned", "v1", "ambient", "v2", "—", "v3", "lofi"]
+        vec![
+            "pinned", "v1", "ambient", "v2", "—", "v3", "lofi", "v4", "—", "v5", "—"
+        ]
     );
+}
+
+/// Five long labels overflow the modal's 74 columns: they shorten evenly
+/// and every slot key stays on screen.
+#[test]
+fn the_pinned_row_shortens_long_labels_to_fit_every_slot() {
+    let mut slots = RadioSlots::empty();
+    for (index, station) in [
+        "swissclassic",
+        "horrorsynth",
+        "coderadio",
+        "spacesynth",
+        "chillsynth",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        slots.pin(index, key(station));
+    }
+    let text = line_text(&pinned_line(slots, 74));
+    assert!(text.width() <= 74, "{} wide: {text}", text.width());
+    for slot in 1..=RADIO_SLOTS {
+        assert!(text.contains(&format!("v{slot} ")), "{text}");
+    }
+    assert!(text.contains("swiss c…"), "{text}");
 }
 
 #[test]

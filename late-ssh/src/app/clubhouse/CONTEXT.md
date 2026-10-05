@@ -156,8 +156,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   (`Tutorial::Welcome`), then the tour walks every top-level page in number
   order with two Enter interludes for the features that have no page of
   their own: `VisitChat` (1) -> `VisitMusic` (Enter, still on Home: the
-  sources, the Music Booth, and the two ways to actually hear sound:
-  late.sh/listen or the `late` CLI) -> `VisitArcade` (2) -> `VisitLobby`
+  station networks counted live from the catalogue by `ui::music_pitch`,
+  the YouTube jukebox, the music keys, and the two ways to actually hear
+  sound: late.sh/listen or the `late` CLI) -> `VisitArcade` (2) -> `VisitLobby`
   (Enter, still on The Arcade: the Ctrl+G daily duels and live tables) ->
   `VisitGames` (3) -> `VisitArtboard` (4) -> `VisitDirectory` (5) ->
   `VisitLeaderboard` (6) -> `VisitZen` (`Ctrl+F`: Zen has no digit, so the

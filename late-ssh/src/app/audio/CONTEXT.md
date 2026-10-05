@@ -54,7 +54,7 @@ late-ssh/src/app/audio/
 │   └── svc.rs              # NowPlayingService: 10s Icecast poll, watch<HashMap<mount, NowPlaying>>
 └── radio_meta/
     ├── mod.rs
-    ├── polled.rs           # PolledFeed (Plaza, CodeRadio, ParadiseMellow, FipJazz, SwissJazz, SwissClassic): endpoint URL, catalogue key, payload parser
+    ├── polled.rs           # PolledFeed (Plaza, CodeRadio, six Paradise* channels, FipJazz, SwissJazz, SwissClassic): endpoint URL, catalogue key, payload parser
     └── svc.rs              # RadioMetaService: Nightride SSE loop + one poll loop per PolledFeed, watch<HashMap<station, ArtistTitle>>
 ```
 
@@ -510,37 +510,38 @@ and `Ambient` both count as music.
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 11` rows (`MUSIC_STAGE_HEIGHT = 14` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
+Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
 
 **Product rules (user requirements):**
 1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
 2. **The YouTube track is always visible, the radio track only while on radio.** A radio listener wants to know whether the booth is playing something worth switching for; a YouTube listener does not care what the radio is playing, so radio collapses to its title bar there.
-3. **The stage height is constant.** Both sources fill exactly 11 dock rows, so the panels below never shift.
+3. **The stage height is constant.** Both sources fill exactly 12 dock rows, so the panels below never shift.
 4. **The stage never claims audio the session cannot produce.** With no client paired, the eq strip shows the guide pointer rather than dancing bars, matching the volume row's `—` (§10).
 
-### Layout (dock rows 0-10)
+### Layout (dock rows 0-11)
 
 | Row | On radio | On youtube |
 |-----|----------|------------|
 | 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, `—` when no client is paired) | same |
 | 1   | `radio` title bar + count | `radio` title bar + count |
 | 2   | current station's track | `youtube` title bar + count |
-| 3   | rule naming the current station | youtube track |
+| 3   | heading: `darksynth · nightride` | youtube track |
 | 4-6 | pinned slot rows `v1`..`v3` | progress, skip meter, `next ⌄` |
-| 7   | provider attribution | queue row 1 |
-| 8   | `youtube` title bar + count | queue row 2 |
-| 9   | youtube track (dim) | queue row 3 |
-| 10  | footer `v+r tune  v+x source` | footer `v+v queue  v+x source` |
+| 7-8 | pinned slot rows `v4`..`v5` | queue rows 1-2 |
+| 9   | `youtube` title bar + count | queue row 3 |
+| 10  | youtube track (dim) | queue row 4 |
+| 11  | footer `v+r tune  v+x source` | footer `v+v queue  v+x source` |
 
 Track rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` bold, the youtube peek on radio `TEXT_DIM`. Track text per source:
 - **youtube**: `youtube_track_text(queue)`: `Channel - Title` for the current item (falls back to `by <submitter> - Title`, then bare title); `fallback stream` when nothing is submitted (the fallback is the steady state, never "queue empty").
 - **radio**: live `Artist - Title` (or a bare title) for the selected station from the `RadioMetaService` map (`radio_now_playing`); falls back to the station label while metadata is absent.
 
 Detail rows:
-- **YouTube** (`youtube_detail_lines`, padded to `MUSIC_YOUTUBE_DETAIL_HEIGHT = 6`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 3` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
-- **Radio** (`radio_detail_lines`, exactly `RADIO_SLOTS + 1 = 4`): one selector row per pinned slot (`v1`..`v3`; an empty slot reads `pin via v+r`), then the current station's provider attribution (the visible credit Nightride asked for). A station that is not pinned lights no slot row; the rule above still names it.
+- **YouTube** (`youtube_detail_lines`, padded to `MUSIC_YOUTUBE_DETAIL_HEIGHT = 6`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 4` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
+- **Radio heading** (`station_heading_line`): the current station's label in amber, then ` · ` and its provider's short name (`Provider::label()`) as the credit, both italic. On the 21-column rail the provider is cut with `…` before the station label ever is (`horrorsynth · nightr…`). Nightride's condition is artist credit, which the track row carries; the heading keeps the provider named as well.
+- **Radio** (`radio_detail_lines`, exactly `RADIO_SLOTS = 5`): one selector row per pinned slot (`v1`..`v5`; an empty slot reads `pin via v+r`). A station that is not pinned lights no slot row; the heading above still names it.
 
-Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, right-aligned `v1`..`v3` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`.
+Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, right-aligned `v1`..`v5` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`.
 
 ### Active-source rule
 
@@ -609,7 +610,7 @@ Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a backgro
 - Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
 - `parse_meta_line` skips records with an empty station/artist/title; valid records merge into the `watch<HashMap<String, ArtistTitle>>` via `send_modify` (merge, not replace, so a partial event doesn't blank other stations).
 - Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the Nightride keys are cleared (`clear_nightride`, which keeps polled stations) so the UI falls back to station display names instead of showing stale tracks.
-- Polled providers (`radio_meta/polled.rs::PolledFeed`): Plaza (`https://api.plaza.one/status`, `song.artist`/`song.title`), Code Radio (AzuraCast `/api/nowplaying/coderadio`, `now_playing.song.artist`/`title`), Radio Paradise Mellow (`https://api.radioparadise.com/api/now_playing?chan=1`, `artist`/`title`) and FIP Jazz (`https://api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, `now.secondLine` as artist and `now.firstLine` as title; a `now` with a null `songUuid` is the programme blurb between songs: `parse` returns `None`, the key is removed, the poll counts as `outcome="no_track"` and the 15s pace is kept). Radio Swiss Jazz and Classic use the endpoint their sites poll (`https://api.radioswissjazz.ch/api/v1/rsj/en/current`, `https://api.radioswissclassic.ch/api/v1/rsc/en/current`; `channel.playingnow.current.metadata.artist`/`title`, where Classic's `artist` is the composer). `run_poll_loop` fetches every 15s and writes the track under the feed's catalogue key; a track needs a title but may have an empty artist (shown as the bare title); a failed poll removes only that key and doubles the delay up to 60s. A loop does not start while its catalogue row is `enabled: false`, so a disabled station sends its provider nothing. Each poll counts into `late_ssh_radio_meta_polls_total{feed, outcome}` (`metrics::record_radio_meta_poll`).
+- Polled providers (`radio_meta/polled.rs::PolledFeed`): Plaza (`https://api.plaza.one/status`, `song.artist`/`song.title`), Code Radio (AzuraCast `/api/nowplaying/coderadio`, `now_playing.song.artist`/`title`), Radio Paradise, one feed per channel (`https://api.radioparadise.com/api/now_playing?chan=N`, `artist`/`title`; Main 0, Mellow 1, Rock 2, Globe 3, Beyond 5, KFAT 945; Serenity, 42, is not carried because it streams AAC only and the CLI decodes MP3 only) and FIP Jazz (`https://api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, `now.secondLine` as artist and `now.firstLine` as title; a `now` with a null `songUuid` is the programme blurb between songs: `parse` returns `None`, the key is removed, the poll counts as `outcome="no_track"` and the 15s pace is kept). Radio Swiss Jazz and Classic use the endpoint their sites poll (`https://api.radioswissjazz.ch/api/v1/rsj/en/current`, `https://api.radioswissclassic.ch/api/v1/rsc/en/current`; `channel.playingnow.current.metadata.artist`/`title`, where Classic's `artist` is the composer). `RadioMetaService::start_task` starts one `run_poll_loop` per `PolledFeed::ALL` entry; each fetches every 15s and writes the track under the feed's catalogue key; a track needs a title but may have an empty artist (shown as the bare title); a failed poll removes only that key and doubles the delay up to 60s. A loop does not start while its catalogue row is `enabled: false`, so a disabled station sends its provider nothing. Each poll counts into `late_ssh_radio_meta_polls_total{feed, outcome}` (`metrics::record_radio_meta_poll`).
 - Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map, with the house mounts merged in (`svc::pair_radio_tracks`), as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the CLI's MPRIS publisher); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
 
 Stream URL notes:
@@ -679,7 +680,7 @@ These are intentional non-goals. Reopen only if the constraint that put them her
 Open work that's been deliberately punted past v1. Each line is a "we know it's missing, here's the next-time hook."
 
 - **Public `POST /api/queue/submit` HTTP route.** Booth submit goes through the in-process service. Revive when there's a non-SSH submitter (web form, third-party). YouTube Data API validation path is already in code (un-trusted route in `AudioService::submit_url_task`).
-- **Expanded queue management outside Booth.** The sidebar music stage already shows current/fallback, skip progress, and up to three next YouTube items; richer queue actions remain Booth-only.
+- **Expanded queue management outside Booth.** The sidebar music stage already shows current/fallback, skip progress, and up to four next YouTube items; richer queue actions remain Booth-only.
 - **Heartbeat cadence tuning.** 10s `LoadVideo` re-broadcast was carried over from the old `PLAYBACK_SYNC_INTERVAL`. Could be slower (30s) once we have confidence stuck browsers don't accumulate.
 - **Region-lock partial failure UX.** Data API validation catches public/embeddable metadata but not every playback-region failure. Client errors are warn-only today because one surface can fail while another succeeds.
 - **Better admin feedback** when DB insert fails after local URL validation succeeds.

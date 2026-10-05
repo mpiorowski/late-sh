@@ -79,14 +79,11 @@ impl RadioMetaService {
     pub fn start_task(&self, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
         let tx = self.tx.clone();
         tokio::spawn(async move {
+            let polls =
+                PolledFeed::ALL.map(|feed| run_poll_loop(feed, tx.clone(), shutdown.clone()));
             tokio::join!(
                 run_sse_loop(tx.clone(), shutdown.clone()),
-                run_poll_loop(PolledFeed::Plaza, tx.clone(), shutdown.clone()),
-                run_poll_loop(PolledFeed::CodeRadio, tx.clone(), shutdown.clone()),
-                run_poll_loop(PolledFeed::ParadiseMellow, tx.clone(), shutdown.clone()),
-                run_poll_loop(PolledFeed::FipJazz, tx.clone(), shutdown.clone()),
-                run_poll_loop(PolledFeed::SwissJazz, tx.clone(), shutdown.clone()),
-                run_poll_loop(PolledFeed::SwissClassic, tx.clone(), shutdown.clone()),
+                futures_util::future::join_all(polls),
             );
         })
     }

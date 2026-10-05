@@ -1,4 +1,4 @@
-use late_core::models::user::{AudioSource, RadioSlots, RadioStation};
+use late_core::models::user::{AudioSource, RADIO_SLOTS, RadioSlots, RadioStation};
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Margin, Rect},
@@ -78,20 +78,43 @@ pub(crate) fn draw(
     ])
     .split(inner);
 
-    frame.render_widget(Paragraph::new(pinned_line(view.slots)), layout[1]);
+    frame.render_widget(
+        Paragraph::new(pinned_line(view.slots, usize::from(layout[1].width))),
+        layout[1],
+    );
     draw_list(frame, layout[3], state, view);
     frame.render_widget(Paragraph::new(footer_line()), layout[5]);
 }
 
-/// `  pinned   v1 chillsynth   v2 —   v3 datawave`
-fn pinned_line(slots: RadioSlots) -> Line<'static> {
+/// `  pinned  v1 chillsynth  v2 —  v3 datawave  v4 mellow  v5 plaza`.
+/// When the labels overflow `width`, every label is cut to the same length
+/// so each slot key stays on screen.
+fn pinned_line(slots: RadioSlots, width: usize) -> Line<'static> {
+    const PREFIX: &str = "  pinned  ";
+    const KEY_WIDTH: usize = "v1 ".len();
+    const GAP: &str = "  ";
+    let label = |slot: Option<RadioStation>| match slot {
+        Some(station) => station.label(),
+        None => "—",
+    };
+    let chrome = PREFIX.len() + RADIO_SLOTS * KEY_WIDTH + (RADIO_SLOTS - 1) * GAP.len();
+    let natural: usize = slots.iter().map(|slot| label(slot).width()).sum();
+    let label_room = if chrome + natural <= width {
+        usize::MAX
+    } else {
+        width.saturating_sub(chrome) / RADIO_SLOTS
+    };
+
     let mut spans = vec![Span::styled(
-        "  pinned   ",
+        PREFIX,
         Style::default()
             .fg(theme::TEXT_FAINT())
             .add_modifier(Modifier::ITALIC),
     )];
     for (index, slot) in slots.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(GAP));
+        }
         spans.push(Span::styled(
             format!("v{}", index + 1),
             Style::default()
@@ -99,17 +122,14 @@ fn pinned_line(slots: RadioSlots) -> Line<'static> {
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw(" "));
-        match slot {
-            Some(station) => spans.push(Span::styled(
-                station.label().to_string(),
-                Style::default().fg(theme::TEXT()),
-            )),
-            None => spans.push(Span::styled(
-                "—".to_string(),
-                Style::default().fg(theme::TEXT_FAINT()),
-            )),
-        }
-        spans.push(Span::raw("   "));
+        let style = match slot {
+            Some(_) => Style::default().fg(theme::TEXT()),
+            None => Style::default().fg(theme::TEXT_FAINT()),
+        };
+        spans.push(Span::styled(
+            truncate_to_width(label(slot), label_room),
+            style,
+        ));
     }
     Line::from(spans)
 }
@@ -241,7 +261,7 @@ fn footer_line() -> Line<'static> {
         Span::styled(" move  ", label),
         Span::styled("↵", key),
         Span::styled(" listen  ", label),
-        Span::styled("1-3", key),
+        Span::styled(format!("1-{RADIO_SLOTS}"), key),
         Span::styled(" pin  ", label),
         Span::styled("0", key),
         Span::styled(" unpin  ", label),

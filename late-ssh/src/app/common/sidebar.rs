@@ -35,16 +35,16 @@ const RULE_HEIGHT: u16 = 1;
 // to whatever height it's given; the stage pins 3.
 const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock portion of the stage: volume row (1) + the two sources as an
-// accordion (9) + keybind footer (1). Constant for BOTH active sources, so
+// accordion (10) + keybind footer (1). Constant for BOTH active sources, so
 // the panels below never shift; `music_stage_height_is_constant` locks this
-// in tests. On radio: title + track + station rule + `RADIO_SLOTS` slot rows
-// + attribution, then the youtube title + track. On youtube: the radio
-// title alone, then the youtube title + track + `MUSIC_YOUTUBE_DETAIL_HEIGHT`
-// detail rows.
-const MUSIC_DOCK_HEIGHT: u16 = 11;
+// in tests. On radio: title + track + station heading (with its provider
+// credit) + `RADIO_SLOTS` slot rows, then the youtube title + track. On
+// youtube: the radio title alone, then the youtube title + track +
+// `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
+const MUSIC_DOCK_HEIGHT: u16 = 12;
 // Full music stage: the wave strip on top of the dock.
 const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
-const MUSIC_QUEUE_HEIGHT: u16 = 3;
+const MUSIC_QUEUE_HEIGHT: u16 = 4;
 // YouTube detail rows: progress, skip meter, `next` header, the queue rows.
 const MUSIC_YOUTUBE_DETAIL_HEIGHT: u16 = 3 + MUSIC_QUEUE_HEIGHT;
 /// The bonsai preview block plus its footer row.
@@ -89,7 +89,7 @@ pub(crate) struct SidebarProps<'a> {
     /// stations modal.
     pub selected_radio_station: RadioStation,
     /// The user's pinned stations (`users.settings.radio_slots`), the
-    /// radio detail rows behind `v1`..`v3`.
+    /// radio detail rows behind `v1`..`v5`.
     pub radio_slots: RadioSlots,
     /// Live `Artist - Title` for the selected station from its provider's
     /// feed; the radio track row falls back to the station label while absent.
@@ -660,9 +660,9 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
                 true,
                 props.marquee_tick,
             ));
-            // The rule names the current station, which may be off-slot
-            // (picked from the stations modal).
-            lines.push(labeled_rule_line(width, station_label));
+            // The heading names the current station, which may be off-slot
+            // (picked from the stations modal), and credits its provider.
+            lines.push(station_heading_line(width, props.selected_station));
             lines.extend(radio_detail_lines(
                 width,
                 props.selected_station,
@@ -730,21 +730,28 @@ fn dock_track_line(width: u16, track: Option<&str>, active: bool, tick: usize) -
     }
 }
 
-/// Labeled rule above the radio slot rows: dim dashes around the current
-/// station's name.
-fn labeled_rule_line(width: u16, label: &str) -> Line<'static> {
-    let used = 3 + label.chars().count() + 1;
-    let trail = (width as usize).saturating_sub(used).max(1);
+/// Heading above the radio slot rows: `darksynth · nightride`, the current
+/// station's name and its provider's credit. On a narrow rail the provider
+/// gives way first; the station label is never cut.
+fn station_heading_line(width: u16, station: RadioStation) -> Line<'static> {
+    let label = station.label();
+    let credit_room =
+        (width as usize).saturating_sub(label.chars().count() + " · ".chars().count());
+    let faint = Style::default()
+        .fg(theme::TEXT_FAINT())
+        .add_modifier(Modifier::ITALIC);
     Line::from(vec![
-        Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
         Span::styled(
             label.to_string(),
             Style::default()
                 .fg(theme::AMBER_DIM())
                 .add_modifier(Modifier::ITALIC),
         ),
-        Span::raw(" "),
-        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(" · ".to_string(), faint),
+        Span::styled(
+            truncate_chars(station.provider().label(), credit_room),
+            faint,
+        ),
     ])
 }
 
@@ -959,13 +966,12 @@ fn youtube_detail_lines(width: u16, queue: &QueueSnapshot, tick: usize) -> Vec<L
     lines
 }
 
-/// Radio detail rows (exactly `RADIO_SLOTS + 1`): one row per pinned
-/// slot (`v1`..`v3`, `●` on the current station, an empty slot points at
-/// the stations modal), then the current station's provider credit (the
-/// visible attribution Nightride asked for). A current station that is not
-/// pinned lights no slot row; the rule above still names it.
+/// Radio slot rows (exactly `RADIO_SLOTS`): one row per pinned slot
+/// (`v1`..`v5`, `●` on the current station, an empty slot points at the
+/// stations modal). A current station that is not pinned lights no slot
+/// row; the heading above still names it.
 fn radio_detail_lines(width: u16, selected: RadioStation, slots: RadioSlots) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = slots
+    slots
         .iter()
         .enumerate()
         .map(|(index, slot)| {
@@ -977,15 +983,7 @@ fn radio_detail_lines(width: u16, selected: RadioStation, slots: RadioSlots) -> 
                 None => selector_row_line(width, "pin via v+r", &key, false),
             }
         })
-        .collect();
-
-    lines.push(Line::from(Span::styled(
-        truncate_chars(selected.provider().attribution(), width as usize),
-        Style::default()
-            .fg(theme::TEXT_FAINT())
-            .add_modifier(Modifier::ITALIC),
-    )));
-    lines
+        .collect()
 }
 
 fn progress_line(width: u16, elapsed_secs: u64, duration_secs: u64) -> Line<'static> {

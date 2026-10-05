@@ -25,6 +25,8 @@ use crate::app::common::username_effect::{CROWN_GLYPH, NameStyle, ResolvedName, 
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
+use late_core::models::user::RadioStation;
+use late_core::radio::Provider;
 
 use late_core::models::presence::Emote;
 
@@ -1448,45 +1450,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
             Tutorial::VisitMusic => (
                 Screen::Dashboard,
                 " ✦ the tour · the music ",
-                vec![
-                    Line::from(Span::styled(
-                        "the house has a soundtrack, always on: our own radio",
-                        text,
-                    )),
-                    Line::from(vec![
-                        Span::styled("streams, ", text),
-                        Span::styled("Nightride", name),
-                        Span::styled(" guest stations, and a community ", text),
-                        Span::styled("YouTube", name),
-                    ]),
-                    Line::from(Span::styled(
-                        "jukebox: queue tracks, vote on them, browse the history.",
-                        text,
-                    )),
-                    Line::default(),
-                    Line::from(Span::styled(
-                        "one catch: SSH carries no sound. two ways to listen:",
-                        text,
-                    )),
-                    Line::from(vec![
-                        Span::styled("late.sh/listen", name),
-                        Span::styled(" plays it in any browser, nothing to install;", text),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("the ", text),
-                        Span::styled("late", name),
-                        Span::styled(" CLI plays it right here in your terminal.", text),
-                    ]),
-                    Line::default(),
-                    Line::from(vec![
-                        Span::styled("[v v] ", key),
-                        Span::styled("Music Booth · ", text),
-                        Span::styled("[v x] ", key),
-                        Span::styled("source · ", text),
-                        Span::styled("[?] ", key),
-                        Span::styled("the install guide", text),
-                    ]),
-                ],
+                music_pitch(key, text, name),
                 "2",
                 "the arcade",
             ),
@@ -1789,6 +1753,96 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
     );
 }
 
+/// The music stop's pitch: the catalogue counted live by network (so the
+/// numbers never go stale as stations are cleared), the jukebox, how to
+/// actually hear any of it, and the keys.
+fn music_pitch(key: Style, text: Style, name: Style) -> Vec<Line<'static>> {
+    let count = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(theme::TEXT_DIM());
+
+    // Networks in catalogue order, our own house streams last: guests are
+    // the headline, the house is the fallback.
+    let mut networks: Vec<(Provider, usize)> = Vec::new();
+    for station in RadioStation::enabled() {
+        let provider = station.provider();
+        match networks.iter_mut().find(|(seen, _)| *seen == provider) {
+            Some((_, n)) => *n += 1,
+            None => networks.push((provider, 1)),
+        }
+    }
+    networks.sort_by_key(|(provider, _)| *provider == Provider::House);
+    let total: usize = networks.iter().map(|(_, n)| n).sum();
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("the house never goes quiet: ", text),
+            Span::styled(format!("{total} radio stations"), count),
+            Span::styled(", live, always on,", text),
+        ]),
+        Line::from(vec![
+            Span::styled("plus a community ", text),
+            Span::styled("YouTube", name),
+            Span::styled(" jukebox: queue tracks, vote, skip.", text),
+        ]),
+        Line::default(),
+    ];
+    for (provider, n) in networks {
+        let (network, tagline) = network_pitch(provider);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{n:>3}  "), count),
+            Span::styled(format!("{network:<17}"), name),
+            Span::styled(tagline, dim),
+        ]));
+    }
+    lines.extend([
+        Line::default(),
+        Line::from(Span::styled(
+            "one catch: SSH carries no sound. two ways to listen:",
+            text,
+        )),
+        Line::from(vec![
+            Span::styled("late.sh/listen", name),
+            Span::styled(" plays it in any browser, nothing to install;", text),
+        ]),
+        Line::from(vec![
+            Span::styled("the ", text),
+            Span::styled("late", name),
+            Span::styled(" CLI plays it right here in your terminal.", text),
+        ]),
+        Line::default(),
+        Line::from(vec![
+            Span::styled("[v r] ", key),
+            Span::styled("every station · ", text),
+            Span::styled("[v 1-5] ", key),
+            Span::styled("your pinned five · ", text),
+            Span::styled("[v v] ", key),
+            Span::styled("Music Booth", text),
+        ]),
+        Line::from(vec![
+            Span::styled("[v x] ", key),
+            Span::styled("radio ⇄ youtube · ", text),
+            Span::styled("[?] ", key),
+            Span::styled("the install guide", text),
+        ]),
+    ]);
+    lines
+}
+
+/// A network's name and what it plays, for the music stop's roster.
+fn network_pitch(provider: Provider) -> (&'static str, &'static str) {
+    match provider {
+        Provider::Nightride => ("Nightride", "synthwave, darksynth, spacesynth"),
+        Provider::RadioParadise => ("Radio Paradise", "eclectic, mellow, rock, world"),
+        Provider::CodeRadio => ("Code Radio", "lofi to code to"),
+        Provider::Plaza => ("Nightwave Plaza", "vaporwave"),
+        Provider::RadioSwiss => ("Radio Swiss", "jazz and classical"),
+        Provider::Fip => ("FIP", "jazz from Radio France"),
+        Provider::House => ("late.sh", "our own lofi and classical"),
+    }
+}
+
 fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
     let Some(prop) = view.state.nearby() else {
         return;
@@ -1829,7 +1883,7 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
                     Line::from(Span::styled(now, Style::default().fg(theme::AMBER_GLOW()))),
                     Line::from(Span::styled("v v music booth · v x switch source", text)),
                     Line::from(Span::styled(
-                        "v s skip vote · v 1-3 pinned station · v r stations",
+                        "v s skip vote · v 1-5 pinned station · v r stations",
                         text,
                     )),
                     Line::from(Span::styled("m mute · +/- volume · Enter opens booth", dim)),

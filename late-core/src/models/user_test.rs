@@ -980,7 +980,7 @@ async fn set_radio_slot_changes_one_stored_slot() {
     assert_eq!(stored.get(1), Some(station("plaza")));
 
     assert!(
-        User::set_radio_slot(&client, user.id, 3, None)
+        User::set_radio_slot(&client, user.id, crate::radio::RADIO_SLOTS, None)
             .await
             .is_err()
     );

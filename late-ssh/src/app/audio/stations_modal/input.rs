@@ -28,7 +28,7 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 }
 
 /// Enter: tune the paired client to the highlighted station right away
-/// (persisted like `v1`..`v3`), switching the source to radio if YouTube
+/// (persisted like `v1`..`v5`), switching the source to radio if YouTube
 /// was active so Enter always produces sound. The modal stays open so the
 /// listener can keep trying stations.
 fn listen_to_selected(app: &mut App) {

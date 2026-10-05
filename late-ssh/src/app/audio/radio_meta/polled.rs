@@ -12,8 +12,13 @@ pub enum PolledFeed {
     Plaza,
     /// freeCodeCamp Code Radio's AzuraCast now-playing API.
     CodeRadio,
-    /// Radio Paradise's now-playing API, Mellow Mix channel.
+    /// Radio Paradise's now-playing API, one variant per channel.
+    ParadiseMain,
     ParadiseMellow,
+    ParadiseRock,
+    ParadiseGlobe,
+    ParadiseBeyond,
+    ParadiseKfat,
     /// Radio France's live metadata for the FIP Jazz webradio. This is the
     /// endpoint their own web player polls, not a documented API.
     FipJazz,
@@ -85,10 +90,15 @@ struct RadioSwissEntry {
 }
 
 impl PolledFeed {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 11] = [
         Self::Plaza,
         Self::CodeRadio,
+        Self::ParadiseMain,
         Self::ParadiseMellow,
+        Self::ParadiseRock,
+        Self::ParadiseGlobe,
+        Self::ParadiseBeyond,
+        Self::ParadiseKfat,
         Self::FipJazz,
         Self::SwissJazz,
         Self::SwissClassic,
@@ -100,7 +110,12 @@ impl PolledFeed {
         match self {
             Self::Plaza => "plaza",
             Self::CodeRadio => "coderadio",
+            Self::ParadiseMain => "paradise",
             Self::ParadiseMellow => "mellow",
+            Self::ParadiseRock => "rock",
+            Self::ParadiseGlobe => "global",
+            Self::ParadiseBeyond => "beyond",
+            Self::ParadiseKfat => "kfat",
             Self::FipJazz => "fipjazz",
             Self::SwissJazz => "swissjazz",
             Self::SwissClassic => "swissclassic",
@@ -113,8 +128,13 @@ impl PolledFeed {
             Self::CodeRadio => {
                 "https://coderadio-admin-v2.freecodecamp.org/api/nowplaying/coderadio"
             }
-            // Channel 1 is the Mellow Mix (0 is the Main Mix).
+            // Channel ids from `api.radioparadise.com/api/list_chan`.
+            Self::ParadiseMain => "https://api.radioparadise.com/api/now_playing?chan=0",
             Self::ParadiseMellow => "https://api.radioparadise.com/api/now_playing?chan=1",
+            Self::ParadiseRock => "https://api.radioparadise.com/api/now_playing?chan=2",
+            Self::ParadiseGlobe => "https://api.radioparadise.com/api/now_playing?chan=3",
+            Self::ParadiseBeyond => "https://api.radioparadise.com/api/now_playing?chan=5",
+            Self::ParadiseKfat => "https://api.radioparadise.com/api/now_playing?chan=945",
             // 65 is FIP Jazz's station id.
             Self::FipJazz => "https://api.radiofrance.fr/livemeta/live/65/webrf_webradio_player",
             Self::SwissJazz => "https://api.radioswissjazz.ch/api/v1/rsj/en/current",
@@ -140,7 +160,12 @@ impl PolledFeed {
                     .now_playing
                     .song
             }
-            Self::ParadiseMellow => {
+            Self::ParadiseMain
+            | Self::ParadiseMellow
+            | Self::ParadiseRock
+            | Self::ParadiseGlobe
+            | Self::ParadiseBeyond
+            | Self::ParadiseKfat => {
                 serde_json::from_str::<Song>(body).context("parsing radio paradise now-playing")?
             }
             Self::FipJazz => {

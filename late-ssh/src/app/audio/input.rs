@@ -38,7 +38,7 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
     }
 }
 
-/// `v1`..`v3`: tune to the station pinned in that slot. Only meaningful
+/// `v1`..`v5`: tune to the station pinned in that slot. Only meaningful
 /// while radio is the active source; on YouTube the key is swallowed so a
 /// stray digit never lands in the composer. An empty slot, or a digit past
 /// the last slot, is a no-op for the same reason.

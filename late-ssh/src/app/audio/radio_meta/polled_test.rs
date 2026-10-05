@@ -1,5 +1,5 @@
 use super::*;
-use late_core::radio::CATALOGUE;
+use late_core::radio::{CATALOGUE, Provider};
 
 #[test]
 fn plaza_status_yields_the_current_song() {
@@ -112,5 +112,30 @@ fn every_feed_writes_under_a_catalogue_key() {
                 .any(|station| station.key == feed.station_key()),
             "{feed:?}"
         );
+    }
+}
+
+/// A station from a polled provider with no feed would only ever show its
+/// label: no track on the rail, in the Stations modal or on the listen page.
+#[test]
+fn every_station_from_a_polled_provider_has_a_feed() {
+    for station in CATALOGUE {
+        let polled = match station.provider {
+            Provider::Nightride | Provider::House => false,
+            Provider::Plaza
+            | Provider::CodeRadio
+            | Provider::RadioParadise
+            | Provider::Fip
+            | Provider::RadioSwiss => true,
+        };
+        if polled {
+            assert!(
+                PolledFeed::ALL
+                    .iter()
+                    .any(|feed| feed.station_key() == station.key),
+                "{}",
+                station.key
+            );
+        }
     }
 }

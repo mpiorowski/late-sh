@@ -15,10 +15,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 /// Pinned stations per user, reachable as `v1`..`v{RADIO_SLOTS}`.
-pub const RADIO_SLOTS: usize = 3;
+pub const RADIO_SLOTS: usize = 5;
 
-/// Who runs a station. Carries the visible credit the rail shows for the
-/// current station and which metadata adapter feeds its now-playing row.
+/// Who runs a station. Carries the credit the rail's station heading shows
+/// for the current station and which metadata adapter feeds its
+/// now-playing row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
     /// Nightride FM. Approved as a direct-client source on the condition that
@@ -40,7 +41,7 @@ pub enum Provider {
 }
 
 impl Provider {
-    /// Short lowercase name for station lists.
+    /// Short lowercase name for station lists and the rail's station heading.
     pub fn label(self) -> &'static str {
         match self {
             Self::Nightride => "nightride",
@@ -50,20 +51,6 @@ impl Provider {
             Self::RadioParadise => "paradise",
             Self::Fip => "fip",
             Self::RadioSwiss => "radio swiss",
-        }
-    }
-
-    /// The credit row the rail shows while one of this provider's stations
-    /// is current.
-    pub fn attribution(self) -> &'static str {
-        match self {
-            Self::Nightride => "nightride.fm · live",
-            Self::House => "late.sh house · cc music",
-            Self::Plaza => "plaza.one · live",
-            Self::CodeRadio => "freecodecamp.org · code radio",
-            Self::RadioParadise => "radioparadise.com · live",
-            Self::Fip => "fip · radio france",
-            Self::RadioSwiss => "radio swiss · srg ssr",
         }
     }
 
@@ -80,12 +67,14 @@ impl Provider {
     }
 }
 
-/// The group the Stations modal lists a station under: Nightride's
-/// network first as its own section, the rest by what they play. Catalogue
+/// The group the Stations modal lists a station under: Nightride's and
+/// Radio Paradise's networks first as their own sections, the rest by what
+/// they play. Catalogue
 /// rows of one section sit together, in the order the variants are declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
     Nightride,
+    Paradise,
     Chill,
     Jazz,
     Classical,
@@ -95,6 +84,7 @@ impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Self::Nightride => "nightride",
+            Self::Paradise => "paradise",
             Self::Chill => "chill",
             Self::Jazz => "jazz",
             Self::Classical => "classical",
@@ -198,14 +188,56 @@ pub const CATALOGUE: &[Station] = &[
         section: Section::Nightride,
         enabled: true,
     },
+    // Radio Paradise: the 192k MP3 streams, in the order their own channel
+    // list uses. The `#.mp3` fragment is there for the CLI, which appends
+    // `/stream` to any URL without an audio extension. Serenity is left out:
+    // it streams AAC only, which the CLI cannot decode.
+    Station {
+        key: "paradise",
+        label: "main mix",
+        provider: Provider::RadioParadise,
+        stream: StationStream::Direct("https://stream.radioparadise.com/mp3-192#.mp3"),
+        section: Section::Paradise,
+        enabled: true,
+    },
     Station {
         key: "mellow",
         label: "mellow",
         provider: Provider::RadioParadise,
-        // The `#.mp3` fragment is there for the CLI, which appends `/stream` to
-        // any URL without an audio extension.
         stream: StationStream::Direct("https://stream.radioparadise.com/mellow-192#.mp3"),
-        section: Section::Chill,
+        section: Section::Paradise,
+        enabled: true,
+    },
+    Station {
+        key: "rock",
+        label: "rock",
+        provider: Provider::RadioParadise,
+        stream: StationStream::Direct("https://stream.radioparadise.com/rock-192#.mp3"),
+        section: Section::Paradise,
+        enabled: true,
+    },
+    Station {
+        key: "global",
+        label: "globe",
+        provider: Provider::RadioParadise,
+        stream: StationStream::Direct("https://stream.radioparadise.com/global-192#.mp3"),
+        section: Section::Paradise,
+        enabled: true,
+    },
+    Station {
+        key: "beyond",
+        label: "beyond",
+        provider: Provider::RadioParadise,
+        stream: StationStream::Direct("https://stream.radioparadise.com/beyond-192#.mp3"),
+        section: Section::Paradise,
+        enabled: true,
+    },
+    Station {
+        key: "kfat",
+        label: "kfat",
+        provider: Provider::RadioParadise,
+        stream: StationStream::Direct("https://stream.radioparadise.com/kfat-192#.mp3"),
+        section: Section::Paradise,
         enabled: true,
     },
     Station {
@@ -222,7 +254,7 @@ pub const CATALOGUE: &[Station] = &[
         key: "plaza",
         label: "plaza",
         provider: Provider::Plaza,
-        // `#.mp3` for the CLI, as on the mellow row.
+        // `#.mp3` for the CLI, as on the radio paradise rows.
         stream: StationStream::Direct("https://radio.plaza.one/mp3#.mp3"),
         section: Section::Chill,
         enabled: true,
@@ -235,9 +267,9 @@ pub const CATALOGUE: &[Station] = &[
         section: Section::Chill,
         enabled: true,
     },
-    // `#.mp3` for the CLI, as on the mellow row. This path redirects to an
-    // HTTPS node; the shorter `/m/rsj/mp3_128` one redirects to plain HTTP,
-    // which the listen page cannot play.
+    // `#.mp3` for the CLI, as on the radio paradise rows. This path
+    // redirects to an HTTPS node; the shorter `/m/rsj/mp3_128` one redirects
+    // to plain HTTP, which the listen page cannot play.
     Station {
         key: "swissjazz",
         label: "swiss jazz",
@@ -379,7 +411,8 @@ impl<'de> Deserialize<'de> for RadioStation {
 pub struct RadioSlots([Option<RadioStation>; RADIO_SLOTS]);
 
 impl RadioSlots {
-    const DEFAULT_KEYS: [&'static str; RADIO_SLOTS] = ["chillsynth", "nightride", "datawave"];
+    const DEFAULT_KEYS: [&'static str; RADIO_SLOTS] =
+        ["chillsynth", "nightride", "datawave", "mellow", "plaza"];
 
     pub fn empty() -> Self {
         Self([None; RADIO_SLOTS])

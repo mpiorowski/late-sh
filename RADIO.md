@@ -12,7 +12,7 @@ what is still to come.
   source disappears as a user-facing concept; the house mounts become radio stations.
 - `radio` is backed by a **station catalogue** (server-side, code-defined) that can grow
   without touching the UI: Nightride today, Nightwave Plaza, Code Radio and others later.
-- Users **pin up to three stations** from the catalogue into slots `v1`..`v3` for fast
+- Users **pin up to five stations** from the catalogue into slots `v1`..`v5` for fast
   access, and browse / listen to the full catalogue from a modal (`v` then `r`).
 - The widget gets **shorter** (19 rows to 14 on the rail): the stage keeps a constant
   height, always shows both listener counts and the YouTube track, and never claims audio
@@ -45,15 +45,14 @@ pub struct Station {
 }
 ```
 
-- `Provider` carries the attribution line the detail area shows for the current station
-  (`nightride.fm · live`, `late.sh house · cc music`, `plaza.one · live`,
-  `freecodecamp.org · code radio`) and which metadata adapter feeds it (§6).
+- `Provider` carries the short name the rail's station heading credits
+  (`darksynth · nightride`) and which metadata adapter feeds it (§8).
 - `HouseMount("classical")` resolves against `icecast_base_url` exactly like
   `icecast_stream_url` does today, so the house streams stay Liquidsoap-served and
   third-party streams stay direct-to-client (the "never proxy" rule is unchanged).
 - Launch catalogue: `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify`
   (ambient), `classical` (house), `lofi` (house `chill` mount, relabelled), `plaza`,
-  `coderadio`, plus Nightride's `darksynth`, `horrorsynth`, `ebsm`, Radio Paradise's `mellow`, FIP's `fipjazz`, and Radio Swiss's `swissjazz` and
+  `coderadio`, plus Nightride's `darksynth`, `horrorsynth`, `ebsm`, Radio Paradise's `paradise` (main mix), `mellow`, `rock`, `global` (globe), `beyond` and `kfat`, FIP's `fipjazz`, and Radio Swiss's `swissjazz` and
   `swissclassic`. A new station ships as an `enabled: false` row until the verification
   checklist in §9 passes, then is flipped on in a one-line commit.
 - `RadioStation` becomes a `StationKey(String)` newtype validated against the catalogue;
@@ -85,36 +84,40 @@ for anyone tuned outside those three (their station in slot 1: an `ambient` list
 A pin or unpin writes one slot (`User::set_radio_slot`) against the stored array, not the
 session's copy of all three, so two sessions pinning different slots both land.
 
-`RADIO_SLOTS = 3` is a constant; each extra slot costs one rail row. A fourth key saved
-under the earlier four-slot shape is ignored on read.
+`RADIO_SLOTS = 5` is a constant; each extra slot costs one rail row. Defaults are
+`[chillsynth, nightride, datawave, mellow, plaza]`. A three-slot array saved before the
+slot count grew reads with `v4` and `v5` empty; the next pin writes the full five.
 
 ## 5. Rail widget (24 columns wide)
 
 The two sources are an accordion in the fixed order radio → youtube: each source's rows
-sit directly under its own title bar, and the dock is 11 rows for both.
+sit directly under its own title bar, and the dock is 12 rows for both.
 
 ```
  on radio                       on youtube
  vol  ▰▰▰▰▰▰▱▱▱▱  60%      0   vol  ▰▰▰▰▰▰▱▱▱▱  60%
  ▌ radio ────────── 12     1   ▌ radio ────────── 12
  Artist - Title            2   ▌ youtube ────────  5
- ── plaza ───────────      3   Channel - Title
+ plaza · plaza.one         3   Channel - Title
  ● plaza           v1      4   39:59 ────●─── 53:43
  ○ nightride       v2      5   skip ○○ 0/2 v+s
  ○ datawave        v3      6   next ⌄
- plaza.one · live          7   1  Queued track
- ▌ youtube ────────  5     8   2  Queued track
- Channel - Title           9   3  Queued track
- v+r tune  v+x source     10   v+v queue  v+x source
+ ○ mellow          v4      7   1  Queued track
+ ○ chillsynth      v5      8   2  Queued track
+ ▌ youtube ────────  5     9   3  Queued track
+ Channel - Title          10   4  Queued track
+ v+r tune  v+x source     11   v+v queue  v+x source
 ```
 
-- 3 (eq strip) + 11 = **14 rows**.
+- 3 (eq strip) + 12 = **15 rows**.
+- Row 3 is the station heading: label, ` · `, the provider's short name. The provider is
+  cut with `…` first on the 21-column rail (`horrorsynth · nightr…`).
 - Both title bars always carry their listener count.
 - The YouTube track is always visible: from radio it is the peek that answers "is the booth
   playing something good". The radio track shows only while radio is the source; on YouTube
   radio collapses to its title bar.
-- Current station off-slot (picked from the modal, not pinned): no `●` lights up, the rule
-  on row 3 still names it, row 2 still shows its track.
+- Current station off-slot (picked from the modal, not pinned): no `●` lights up, the
+  heading on row 3 still names it, row 2 still shows its track.
 - Row 2 falls back to the station label when metadata is absent.
 - House stations have no progress bar on the rail: the slot rows need the space.
 
@@ -123,7 +126,7 @@ sit directly under its own title bar, and the dock is 11 rows for both.
 | Key          | Today                                   | After                                                   |
 |--------------|-----------------------------------------|---------------------------------------------------------|
 | `v` `x`      | cycle radio → youtube → icecast         | toggle radio ⇄ youtube                                  |
-| `v` `1`..`5` | station/stream by index in active source| `v` `1`..`4`: play the station pinned in that slot (radio active); no-op on youtube |
+| `v` `1`..`5` | station/stream by index in active source| `v` `1`..`3`: play the station pinned in that slot (radio active); no-op on youtube |
 | `v` `r`      | (unused)                                | open the Stations modal                                 |
 | `v` `v`      | Music Booth (YouTube queue)             | unchanged                                               |
 | `v` `s`      | skip vote                               | unchanged                                               |
@@ -138,7 +141,7 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 
 ```
 ┌ stations ───────────────────────────────────────────────────────┐
-│ pinned   v1 chillsynth   v2 nightride   v3 datawave                │
+│ pinned  v1 chillsynth  v2 nightride  v3 datawave  v4 mellow  v5 plaza │
 │                                                                   │
 │   nightride                                                       │
 │ ▸ ● chillsynth   nightride     FM-84 - Running in the Night   v1  │
@@ -151,7 +154,7 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 │   ○ plaza        plaza.one     Macintosh Plus - リサフランク420    │
 │   ○ code radio   freecodecamp  Trebles and Blues - Dusk            │
 │                                                                   │
-│ ↑↓ move   Enter listen   1-3 pin to slot   0 unpin   Esc           │
+│ ↑↓ move   Enter listen   1-5 pin to slot   0 unpin   Esc           │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -161,13 +164,13 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 - `Enter` = listen now: persists `radio_station` and pushes `SetPlaybackSource` through the
   existing `persist_radio_station` path. Audible immediately on the paired CLI. It also
   flips `audio_source` to `radio` if YouTube was active, so Enter always produces sound.
-- `1`..`4` = pin the highlighted station into that slot (replaces what was there, de-dupes
+- `1`..`3` = pin the highlighted station into that slot (replaces what was there, de-dupes
   if the station already sits in another slot). `0` = unpin. Persists `radio_slots`.
   The rail re-renders from the same setting, so pinning is visible behind the modal.
 - No filter: the catalogue is short enough to scan, and the sections do the narrowing.
-- The list is grouped by section (`late_core::radio::Section`: nightride first as its own
-  section, then chill, jazz, classical), one faint heading per group with a blank line
-  between groups. The catalogue itself is ordered by section, guests before house within
+- The list is grouped by section (`late_core::radio::Section`: nightride, then paradise,
+  each its own section, then chill, jazz, classical), one faint heading per group with a
+  blank line between groups. The catalogue itself is ordered by section, guests before house within
   a group; the headings are not selectable
   and the cursor skips them.
 - Why no separate "preview then revert": the paired CLI is the only audible surface, so a
@@ -190,7 +193,7 @@ keyed by catalogue key:
 | House     | `NowPlayingService` per-mount map (exists)                    | mirror into the map       |
 | Plaza     | `https://api.plaza.one/status` JSON, poll ~15s                | `song.artist`, `song.title` |
 | CodeRadio | AzuraCast `…/api/nowplaying/coderadio` JSON, poll ~15s        | `now_playing.song.artist/title` |
-| RadioParadise | `api.radioparadise.com/api/now_playing?chan=1` JSON, poll ~15s | `artist`, `title`       |
+| RadioParadise | `api.radioparadise.com/api/now_playing?chan=N` JSON, one poller per channel, ~15s | `artist`, `title` |
 | RadioSwiss | `api.radioswissjazz.ch/api/v1/rsj/en/current`, `api.radioswissclassic.ch/api/v1/rsc/en/current`, poll ~15s | `channel.playingnow.current.metadata.artist/title` |
 | Fip       | `api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, poll ~15s | `now.secondLine` (artist), `now.firstLine` (title) |
 
@@ -217,26 +220,26 @@ the way Nightride is (direct stream, third-party player allowed, attribution). O
    already asked for. Streams at `radio.plaza.one` (`/mp3` 128k, `/ogg`, `/opus`), public
    API at `api.plaza.one` (`/status` now-playing), and the whole client is MIT on GitHub
    (`nightwaveplaza/plaza`). Third-party directories and Cyberpunk/Discord integrations
-   already list the stream; a courtesy email like the Nightride one is still the right move.
-3. (Reserve) **Radio Paradise Mellow Mix**. Listener-supported, public `now_playing` API,
-   widely integrated in third-party players (Volumio, moOde, Music Assistant). Chill rather
-   than lofi; add if a third slot of "calm" is wanted.
-
-4. **Radio Paradise Mellow Mix** (`radioparadise.com`). Enabled as `mellow`: stream
-   `stream.radioparadise.com/mellow-192` (192k MP3), now-playing
-   `api.radioparadise.com/api/now_playing?chan=1`. No written third-party-player terms
-   were found; the courtesy email is still owed. The Main Mix is `mp3-192` / `chan=0`.
-5. **FIP Jazz** (Radio France). Enabled as `fipjazz`: stream
+   already list the stream. The station gave the green light. Plaza is one channel: the
+   `/ogg` and `/opus` variants are the same stream at 64k, so `plaza` is the only row.
+3. **Radio Paradise** (`radioparadise.com`), its own `paradise` section. The station's
+   creator gave the green light. Every 192k MP3 channel is enabled: `paradise` (Main Mix,
+   `mp3-192`, `chan=0`), `mellow` (`mellow-192`, `chan=1`), `rock` (RockIt!, `rock-192`,
+   `chan=2`), `global` (The Globe, `global-192`, `chan=3`), `beyond` (`beyond-192`,
+   `chan=5`) and `kfat` (`kfat-192`, `chan=945`); channel ids come from
+   `api.radioparadise.com/api/list_chan`. Serenity (`chan=42`) is out: its only stream
+   is 64k AAC, which the MP3-only CLI decoder cannot play.
+4. **FIP Jazz** (Radio France). Enabled as `fipjazz`: stream
    `icecast.radiofrance.fr/fipjazz-midfi.mp3` (128k MP3), now-playing from the live
    metadata endpoint Radio France's own web player polls (not a documented API, so it
    may change without notice). No permission asked yet. Also probed on 2026-10-03, not
    added: WQXR and Venice Classic Radio answer over HTTPS with CORS.
-6. **Radio Swiss Jazz / Radio Swiss Classic** (SRG SSR). Enabled as `swissjazz` and
+5. **Radio Swiss Jazz / Radio Swiss Classic** (SRG SSR). Enabled as `swissjazz` and
    `swissclassic`: streams `stream.srg-ssr.ch/srgssr/rsj/mp3/128` and `…/rsc_de/mp3/128`
    (128k MP3; the shorter `/m/rsj/mp3_128` form redirects to plain `http://` and must not
    be used). Now-playing from the endpoints their own sites poll, undocumented. No
    permission asked yet.
-7. (Candidate, nothing built) **KEXP** (`kexp-mp3-128.streamguys1.com/kexp128.mp3`;
+6. (Candidate, nothing built) **KEXP** (`kexp-mp3-128.streamguys1.com/kexp128.mp3`;
    `api.kexp.org/v2/plays/?limit=1`). Answered with `audio/mpeg` and browser CORS on
    2026-10-03. No written third-party-player terms were found; ask first.
 
@@ -284,7 +287,9 @@ Each step ships on its own and leaves the product working:
 
 ## 11. Decisions taken (revisit if they feel wrong in use)
 
-- **Slot count**: 3 (`RADIO_SLOTS`); each extra slot costs one rail row.
+- **Slot count**: 5 (`RADIO_SLOTS`). Folding the provider credit into the station heading
+  paid for one of the two new rows; the dock grew by one, which also gave YouTube a
+  fourth queue row.
 - **House progress bar**: dropped from the rail; the slot rows need the space.
 - **Off-slot listening**: allowed from the modal; the rule row names the station.
 - **Footer**: `v+r tune  v+x source` on radio (both groups fit a 21-column rail).

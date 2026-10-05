@@ -193,3 +193,46 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
     assert_eq!(row[crown_at + 2].0, ',');
     assert_eq!(row[crown_at + 2].1, dim, "the title after it stays dim");
 }
+
+/// The music stop counts the catalogue live: every enabled station is in
+/// the headline total, and every network that has one gets a roster row,
+/// with our own house streams last.
+#[test]
+fn the_music_pitch_counts_every_station_by_network() {
+    let style = Style::default();
+    let text: Vec<String> = music_pitch(style, style, style)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let total = RadioStation::enabled().count();
+    assert!(
+        text[0].contains(&format!("{total} radio stations")),
+        "{}",
+        text[0]
+    );
+
+    let roster: Vec<(usize, &str)> = text
+        .iter()
+        .filter_map(|line| {
+            let (count, rest) = line.trim_start().split_once("  ")?;
+            Some((count.parse().ok()?, rest.trim_start()))
+        })
+        .collect();
+    assert_eq!(roster.iter().map(|(n, _)| n).sum::<usize>(), total);
+    for station in RadioStation::enabled() {
+        let (network, _) = network_pitch(station.provider());
+        assert!(
+            roster.iter().any(|(_, row)| row.starts_with(network)),
+            "{network} has no roster row"
+        );
+    }
+    assert!(
+        roster.last().unwrap().1.starts_with("late.sh"),
+        "{roster:?}"
+    );
+}

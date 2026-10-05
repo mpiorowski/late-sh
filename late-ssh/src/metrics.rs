@@ -2031,7 +2031,12 @@ mod inner {
         let feed = match feed {
             PolledFeed::Plaza => "plaza",
             PolledFeed::CodeRadio => "coderadio",
+            PolledFeed::ParadiseMain => "paradise_main",
             PolledFeed::ParadiseMellow => "paradise_mellow",
+            PolledFeed::ParadiseRock => "paradise_rock",
+            PolledFeed::ParadiseGlobe => "paradise_globe",
+            PolledFeed::ParadiseBeyond => "paradise_beyond",
+            PolledFeed::ParadiseKfat => "paradise_kfat",
             PolledFeed::FipJazz => "fip_jazz",
             PolledFeed::SwissJazz => "swiss_jazz",
             PolledFeed::SwissClassic => "swiss_classic",

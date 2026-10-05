@@ -7,7 +7,7 @@ fn catalogue_keys_are_unique_and_the_default_is_enabled() {
     keys.dedup();
     assert_eq!(keys.len(), CATALOGUE.len(), "duplicate station key");
     assert_eq!(RadioStation::default().as_str(), "chillsynth");
-    assert_eq!(RadioStation::enabled().count(), 16);
+    assert_eq!(RadioStation::enabled().count(), 21);
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn stream_urls_resolve_house_mounts_against_the_base_and_keep_direct_urls() {
         chillsynth.stream_url("https://late.sh/stream"),
         "https://stream.nightride.fm/chillsynth.mp3"
     );
-    assert_eq!(chillsynth.provider().attribution(), "nightride.fm · live");
+    assert_eq!(chillsynth.provider(), Provider::Nightride);
 }
 
 #[test]
@@ -60,11 +60,13 @@ fn key(key: &str) -> RadioStation {
 }
 
 #[test]
-fn default_slots_are_the_three_house_picks() {
+fn default_slots_are_the_five_house_picks() {
     let slots = RadioSlots::default();
     assert_eq!(slots.get(0), Some(key("chillsynth")));
     assert_eq!(slots.get(1), Some(key("nightride")));
     assert_eq!(slots.get(2), Some(key("datawave")));
+    assert_eq!(slots.get(3), Some(key("mellow")));
+    assert_eq!(slots.get(4), Some(key("plaza")));
 }
 
 #[test]
@@ -81,19 +83,22 @@ fn pinning_moves_a_station_between_slots_and_unpinning_empties_one() {
     );
     slots.unpin(2);
     assert_eq!(slots.get(2), None);
-    assert_eq!(slots.get(4), None);
+    assert_eq!(slots.get(RADIO_SLOTS), None);
 }
 
 #[test]
 fn slots_round_trip_through_json_and_tolerate_bad_rows() {
-    let value = serde_json::json!(["classical", "classical", "rektify", "extra"]);
+    // Past the last slot, even a valid key is ignored.
+    let value = serde_json::json!(["classical", "classical", "rektify", "extra", null, "plaza"]);
     let slots = RadioSlots::from_json(&value).unwrap();
     assert_eq!(slots.get(0), Some(key("classical")));
     assert_eq!(slots.get(1), None, "a repeated key keeps its first slot");
     assert_eq!(slots.get(2), Some(key("rektify")));
+    assert_eq!(slots.get(3), None, "an unknown key reads as empty");
+    assert_eq!(slots.position_of(key("plaza")), None);
     assert_eq!(
         slots.to_json(),
-        serde_json::json!(["classical", null, "rektify"])
+        serde_json::json!(["classical", null, "rektify", null, null])
     );
     assert_eq!(
         RadioSlots::from_json(&serde_json::json!(["rekt", "nope"])).unwrap(),
