@@ -3548,6 +3548,33 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
     assert_eq!(app.screen, Screen::Arcade);
 }
 
+/// `/onboard` from Home puts anyone back at the tavern door with the tour
+/// running from the top, as forced as a first visit.
+#[tokio::test]
+async fn onboard_command_starts_the_tour_again() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app) = chat_compose_app("onboard-command").await;
+    app.clubhouse.tutorial = Tutorial::Done;
+    for _ in 0..3 {
+        app.clubhouse.tour_fight.strike();
+    }
+    assert!(app.clubhouse.tour_fight.won());
+
+    app.handle_input(b"/onboard");
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Clubhouse);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
+    assert!(!app.clubhouse.tour_fight.won());
+
+    app.handle_input(b"3");
+    assert_eq!(app.screen, Screen::Clubhouse);
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
+}
+
 /// The Lounge composer is plain speech: a `/` draft is refused with a
 /// banner and kept for editing, never run and never posted.
 #[tokio::test]

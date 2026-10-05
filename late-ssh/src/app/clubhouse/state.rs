@@ -287,9 +287,16 @@ impl State {
         self.force_roster_refresh = true;
         self.refresh_crowd(now_ms);
         if self.tutorial == Tutorial::Pending {
-            self.tutorial = Tutorial::Welcome;
-            self.place(map::SPAWN, now_ms);
+            self.begin_tutorial(now_ms);
         }
+    }
+
+    /// Start the tour at the door, whatever came before: the first visit
+    /// arrives here from `Pending`, `/onboard` from anywhere, any time.
+    pub fn begin_tutorial(&mut self, now_ms: i64) {
+        self.tutorial = Tutorial::Welcome;
+        self.tour_fight = super::fight::Fight::new();
+        self.place(map::SPAWN, now_ms);
     }
 
     pub fn roster_refresh_due(&mut self) -> bool {

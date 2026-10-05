@@ -130,6 +130,7 @@ const COMMANDS: &[Command] = &[
     global("me", "send an action line (/me waves)"),
     global("members", "room members"),
     global("pair", "shared coding scratchpad; both run /pair @user"),
+    global("onboard", "take the first-visit tour again"),
     global("paper", "graybeard's daily paper (/paper [YYYY-MM-DD])"),
     global("paste-image", "upload image from CLI clipboard"),
     global("petname", "name your pet (/petname Mochi; bare shows)"),

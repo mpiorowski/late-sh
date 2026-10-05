@@ -3599,6 +3599,14 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
     true
 }
 
+/// `/onboard`: the first-visit tour from the top, for anyone who asks.
+/// Through `leave_board` so a board left behind is closed properly.
+pub(crate) fn start_tour(app: &mut App) {
+    crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
+    app.clubhouse
+        .begin_tutorial(crate::app::presence::svc::now_ms());
+}
+
 /// Enter at a tour stop: walk the newcomer to wherever the next one lives.
 fn tour_advance(app: &mut App) {
     use crate::app::clubhouse::state::TourMove;

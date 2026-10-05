@@ -203,6 +203,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   persists once via `ProfileService::set_clubhouse_tutorial_done`
   (fire-and-forget, failure only logged: worst case the tour runs again
   next session).
+- **`/onboard` runs it again** for anyone, from Home's composer: the chat
+  state raises a request, `start_tour` in `app/input.rs` walks to the
+  tavern and calls `State::begin_tutorial`, the same start the first visit
+  gets (welcome box at the door, a fresh fight). It is just as forced.
 - **The hidden treasure:** the bartender is deliberately absent from the
   route. His scripted welcome (`ghost::bartender_tutorial_greeting`, local
   banner only, never posted to #lounge) plus the comped welcome pour fire

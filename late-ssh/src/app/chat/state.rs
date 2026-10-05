@@ -1069,6 +1069,7 @@ pub struct ChatState {
     requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
     requested_shop_modal: bool,
+    requested_onboard: bool,
     requested_lobby_toggle: bool,
     requested_zen_toggle: bool,
     requested_guide: bool,
@@ -1427,6 +1428,7 @@ impl ChatState {
             requested_room_info_modal: None,
             requested_settings_modal: false,
             requested_shop_modal: false,
+            requested_onboard: false,
             requested_lobby_toggle: false,
             requested_zen_toggle: false,
             requested_guide: false,
@@ -2125,6 +2127,10 @@ impl ChatState {
 
     pub fn take_requested_shop_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_shop_modal)
+    }
+
+    pub fn take_requested_onboard(&mut self) -> bool {
+        std::mem::take(&mut self.requested_onboard)
     }
 
     pub fn take_requested_lobby_toggle(&mut self) -> bool {
@@ -3725,6 +3731,12 @@ impl ChatState {
         if body.trim() == "/shop" {
             self.clear_composer_after_submit();
             self.requested_shop_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/onboard" {
+            self.clear_composer_after_submit();
+            self.requested_onboard = true;
             return None;
         }
 
