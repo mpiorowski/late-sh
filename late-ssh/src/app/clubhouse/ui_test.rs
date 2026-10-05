@@ -236,3 +236,30 @@ fn the_music_pitch_counts_every_station_by_network() {
         "{roster:?}"
     );
 }
+
+/// An 80x24 terminal leaves the tour 22 rows inside the app frame. The
+/// music stop's roster grows with the catalogue, so the pitch gives way
+/// before the hint that says which key moves the tour on.
+#[test]
+fn the_music_stop_keeps_its_continue_hint_on_a_default_terminal() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitMusic,
+                Screen::Dashboard,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    assert!(
+        rows.iter().any(|row| row.contains("[2] next: the arcade")),
+        "{rows:#?}"
+    );
+}

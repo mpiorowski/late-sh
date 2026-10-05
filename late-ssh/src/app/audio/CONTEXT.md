@@ -537,7 +537,7 @@ Track rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` 
 - **radio**: live `Artist - Title` (or a bare title) for the selected station from the `RadioMetaService` map (`radio_now_playing`); falls back to the station label while metadata is absent.
 
 Detail rows:
-- **YouTube** (`youtube_detail_lines`, padded to `MUSIC_YOUTUBE_DETAIL_HEIGHT = 6`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 4` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
+- **YouTube** (`youtube_detail_lines`, padded to `MUSIC_YOUTUBE_DETAIL_HEIGHT = 7`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 4` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
 - **Radio heading** (`station_heading_line`): the current station's label in amber, then ` · ` and its provider's short name (`Provider::label()`) as the credit, both italic. On the 21-column rail the provider is cut with `…` before the station label ever is (`horrorsynth · nightr…`). Nightride's condition is artist credit, which the track row carries; the heading keeps the provider named as well.
 - **Radio** (`radio_detail_lines`, exactly `RADIO_SLOTS = 5`): one selector row per pinned slot (`v1`..`v5`; an empty slot reads `pin via v+r`). A station that is not pinned lights no slot row; the heading above still names it.
 

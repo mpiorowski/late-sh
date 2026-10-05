@@ -1714,26 +1714,33 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
         return;
     }
     let dim = Style::default().fg(theme::TEXT_DIM());
+    // The footer owns the bottom rows of the box: on a short terminal the
+    // pitch (its separator blank first) is what gets cut, never the hint
+    // that says which key moves the tour on.
     let mut lines = pitch;
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "take it in; everything above unlocks when the tour ends.",
-        dim,
-    )));
-    lines.push(Line::from(vec![
-        Span::styled(format!("[{next_key}] "), key),
-        Span::styled(format!("next: {next_label}"), text),
-    ]));
+    let footer = vec![
+        Line::from(Span::styled(
+            "take it in; everything above unlocks when the tour ends.",
+            dim,
+        )),
+        Line::from(vec![
+            Span::styled(format!("[{next_key}] "), key),
+            Span::styled(format!("next: {next_label}"), text),
+        ]),
+    ];
 
     let width = (lines
         .iter()
+        .chain(&footer)
         .map(Line::width)
         .max()
         .unwrap_or(0)
         .max(title.chars().count())
         + 4)
     .min(usize::from(area.width).saturating_sub(2)) as u16;
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
+    let height =
+        ((lines.len() + footer.len()) as u16 + 2).min(area.height.saturating_sub(1));
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 3,
@@ -1741,16 +1748,20 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
         height,
     };
 
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border)
+        .title(Span::styled(title, border.add_modifier(Modifier::BOLD)));
+    let rows = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(footer.len() as u16),
+    ])
+    .split(block.inner(rect));
+
     frame.render_widget(Clear, rect);
-    frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border)
-                .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
-        ),
-        rect,
-    );
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), rows[0]);
+    frame.render_widget(Paragraph::new(footer), rows[1]);
 }
 
 /// The music stop's pitch: the catalogue counted live by network (so the

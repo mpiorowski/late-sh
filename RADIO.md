@@ -14,7 +14,7 @@ what is still to come.
   without touching the UI: Nightride today, Nightwave Plaza, Code Radio and others later.
 - Users **pin up to five stations** from the catalogue into slots `v1`..`v5` for fast
   access, and browse / listen to the full catalogue from a modal (`v` then `r`).
-- The widget gets **shorter** (19 rows to 14 on the rail): the stage keeps a constant
+- The widget gets **shorter** (19 rows to 15 on the rail): the stage keeps a constant
   height, always shows both listener counts and the YouTube track, and never claims audio
   the session cannot produce.
 
@@ -67,7 +67,7 @@ pub struct Station {
 | `audio_source`   | `radio` \| `youtube` \| `icecast`  | `radio` \| `youtube`; migration 220 rewrites `icecast`   |
 | `radio_station`  | one of five Nightride keys         | any enabled catalogue key                                |
 | `icecast_stream` | `chill` \| `classical`             | read by migration 220, then left in place and ignored    |
-| `radio_slots`    | (new)                              | JSON array of up to 3 unique catalogue keys              |
+| `radio_slots`    | (new)                              | JSON array of up to 5 unique catalogue keys              |
 
 SQL migration `220_retire_icecast_audio_source.sql`, no read-side conversion: every
 `audio_source: icecast` user becomes `radio` with `radio_station` set to the mount they had
@@ -76,17 +76,18 @@ from before they moved to icecast. Nobody loses what they were listening to. A p
 draining on the previous build can write `icecast` again after the migration ran; that
 user reads as `radio` on whatever `radio_station` holds.
 
-Slot defaults when `radio_slots` is absent: `[chillsynth, nightride, datawave]`, fixed,
-so a slot never moves because the user retuned. The same migration saves explicit slots
-for anyone tuned outside those three (their station in slot 1: an `ambient` listener keeps
-`v1` = ambient). Default source stays `radio` / `chillsynth` for new users, as today.
+Slot defaults when `radio_slots` is absent:
+`[chillsynth, nightride, datawave, mellow, plaza]`, fixed, so a slot never moves because
+the user retuned. The same migration saves explicit slots for anyone tuned outside
+`chillsynth`, `nightride` and `datawave` (their station in slot 1: an `ambient` listener
+keeps `v1` = ambient). Default source stays `radio` / `chillsynth` for new users, as today.
 
 A pin or unpin writes one slot (`User::set_radio_slot`) against the stored array, not the
-session's copy of all three, so two sessions pinning different slots both land.
+session's copy of all five, so two sessions pinning different slots both land.
 
-`RADIO_SLOTS = 5` is a constant; each extra slot costs one rail row. Defaults are
-`[chillsynth, nightride, datawave, mellow, plaza]`. A three-slot array saved before the
-slot count grew reads with `v4` and `v5` empty; the next pin writes the full five.
+`RADIO_SLOTS = 5` is a constant; each extra slot costs one rail row. A stored array
+shorter than five reads with the missing slots empty (`v4` and `v5` for a three-slot
+array); the next pin writes the full five.
 
 ## 5. Rail widget (24 columns wide)
 
@@ -126,7 +127,7 @@ sit directly under its own title bar, and the dock is 12 rows for both.
 | Key          | Today                                   | After                                                   |
 |--------------|-----------------------------------------|---------------------------------------------------------|
 | `v` `x`      | cycle radio → youtube → icecast         | toggle radio ⇄ youtube                                  |
-| `v` `1`..`5` | station/stream by index in active source| `v` `1`..`3`: play the station pinned in that slot (radio active); no-op on youtube |
+| `v` `1`..`5` | station/stream by index in active source| `v` `1`..`5`: play the station pinned in that slot (radio active); no-op on youtube |
 | `v` `r`      | (unused)                                | open the Stations modal                                 |
 | `v` `v`      | Music Booth (YouTube queue)             | unchanged                                               |
 | `v` `s`      | skip vote                               | unchanged                                               |
@@ -164,7 +165,7 @@ Follows the booth modal conventions (`centered_rect`, `theme` colours, footer ke
 - `Enter` = listen now: persists `radio_station` and pushes `SetPlaybackSource` through the
   existing `persist_radio_station` path. Audible immediately on the paired CLI. It also
   flips `audio_source` to `radio` if YouTube was active, so Enter always produces sound.
-- `1`..`3` = pin the highlighted station into that slot (replaces what was there, de-dupes
+- `1`..`5` = pin the highlighted station into that slot (replaces what was there, de-dupes
   if the station already sits in another slot). `0` = unpin. Persists `radio_slots`.
   The rail re-renders from the same setting, so pinning is visible behind the modal.
 - No filter: the catalogue is short enough to scan, and the sections do the narrowing.
@@ -291,5 +292,5 @@ Each step ships on its own and leaves the product working:
   paid for one of the two new rows; the dock grew by one, which also gave YouTube a
   fourth queue row.
 - **House progress bar**: dropped from the rail; the slot rows need the space.
-- **Off-slot listening**: allowed from the modal; the rule row names the station.
+- **Off-slot listening**: allowed from the modal; the heading row names the station.
 - **Footer**: `v+r tune  v+x source` on radio (both groups fit a 21-column rail).

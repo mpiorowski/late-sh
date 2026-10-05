@@ -2055,7 +2055,7 @@ Global keys (work anywhere)
 
 Tune a station
   v then 1..5       tune to the station pinned in that slot (radio active)
-  v then r          open Stations: ↑↓ move, Enter listen, 1-3 pin to a slot, 0 unpin, Esc close
+  v then r          open Stations: ↑↓ move, Enter listen, 1-5 pin to a slot, 0 unpin, Esc close
                     every row shows what that station is playing right now, so you can check before you switch
 
 Swap which source you hear
