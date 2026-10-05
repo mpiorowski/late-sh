@@ -185,7 +185,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   Enter moves on only once it has been struck.
 - **The dungeon stop.** `VisitDungeon` shows what the roguelikes behind
   the Games page feel like without running one: `fight.rs` is a scripted
-  seven-beat scene drawn as the whole DCSS screen (the view of the level
+  four-beat scene drawn as the whole DCSS screen (the view of the level
   centred on the hero, lit cells against remembered ones, the character
   panel under the newcomer's own name down the right, the crawl-worded
   message window underneath). Nothing is simulated or saved;

@@ -344,7 +344,7 @@ fn the_dungeon_stop_fills_the_page_under_its_header() {
     let rows = draw(&fight);
     let breaker = at(&rows, "[Enter] fight ──").expect("the breaker asks for the fight");
     let hero = at(&rows, "mat the Slayer").expect("the panel is drawn");
-    let monster = at(&rows, "fire dragon   ").expect("the monster list is drawn");
+    let monster = at(&rows, " fire dragon   ").expect("the monster list is drawn");
     let log = at(&rows, "A fire dragon comes into view.").expect("the log is drawn");
     assert!(
         breaker < hero && hero < monster && monster < log,

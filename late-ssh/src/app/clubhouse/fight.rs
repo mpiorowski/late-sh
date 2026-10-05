@@ -8,16 +8,16 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 
-use crate::app::common::theme;
-
 /// The explored level, far bigger than the fight: the view is centred on
 /// the hero the way crawl centres it, so a wide terminal shows more of it.
 /// `LANE` is the row the hero walks in along, through the hall's west door.
+/// Glyphs are crawl's own: `≈` lava, `~` shallow water, `⌠` a fountain, `_`
+/// an altar, `'` and `+` doors.
 const MAP: [&str; 22] = [
     "  ###########                      #########################",
     "  #.........#                      #.......................#",
@@ -26,15 +26,15 @@ const MAP: [&str; 22] = [
     "  #.........#                      #.#            ##########",
     "  #######.###                      #.#                ##########",
     "        #.#               ##########'##########       #........#",
-    "        #.#               #...................#       #.....%..#",
-    "        #.#               #....#.........#..?.#########........#",
-    "        #.#               #...................'................#",
-    "        #.#################...................#########....>...#",
+    "        #.#               #...............≈≈≈≈#       #.....%..#",
+    "        #.#               #....#.._......#≈≈≈≈#########........#",
+    "        #.#               #.~~~............≈≈.'................#",
+    "        #.#################.~⌠~...............#########....>...#",
     "        #.................'...................#       #........#",
     "        #########.#########...................#       #........#",
-    "                #.#       #...............$$..#       #........#",
-    "                #.#       #....#.........#....#       #####.####",
-    "                #.#       #...................#           #.#",
+    "                #.#       #........?......$$≈≈#       #........#",
+    "                #.#       #....#.........#≈≈≈≈#       #####.####",
+    "                #.#       #...!...........≈≈≈≈#           #.#",
     "                #.#       ##########+##########           #.#",
     "           ######.#######                                 #.#",
     "           #............#                   ###############.#",
@@ -45,7 +45,7 @@ const MAP: [&str; 22] = [
 const LANE: i32 = 11;
 const DRAGON_X: i32 = 38;
 /// The hall the fight happens in, walls included: columns, then rows. Only
-/// what is inside it and within `SIGHT` of the hero is lit.
+/// what is inside it and within `SIGHT` of the hero is in view.
 const HALL: ((i32, i32), (i32, i32)) = ((26, 46), (6, 16));
 const SIGHT: i32 = 8;
 
@@ -60,103 +60,102 @@ const NOISE_CELLS: u16 = 9;
 /// The game clock at the first beat, in tenths of a turn.
 const CLOCK: u32 = 312_047;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Effect {
-    None,
-    /// The dragon's breath, from its mouth to the hero.
-    Fire,
-    /// The hero's wand of acid, from the hero to the dragon.
-    Acid,
+/// Crawl's sixteen colours, by its own names, as the terminal's palette.
+/// The scene is painted in these and not the house theme: that is what a
+/// crawl session looks like here.
+mod crawl {
+    use ratatui::style::Color;
+    pub(super) const BLACK: Color = Color::Black;
+    pub(super) const BLUE: Color = Color::Blue;
+    pub(super) const GREEN: Color = Color::Green;
+    pub(super) const CYAN: Color = Color::Cyan;
+    pub(super) const RED: Color = Color::Red;
+    pub(super) const MAGENTA: Color = Color::Magenta;
+    pub(super) const BROWN: Color = Color::Yellow;
+    pub(super) const LIGHTGREY: Color = Color::Gray;
+    pub(super) const DARKGREY: Color = Color::DarkGray;
+    pub(super) const LIGHTBLUE: Color = Color::LightBlue;
+    pub(super) const LIGHTGREEN: Color = Color::LightGreen;
+    pub(super) const LIGHTRED: Color = Color::LightRed;
+    pub(super) const LIGHTMAGENTA: Color = Color::LightMagenta;
+    pub(super) const YELLOW: Color = Color::LightYellow;
+    pub(super) const WHITE: Color = Color::White;
 }
 
 /// How hurt the dragon is, which colours its entry in the monster list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Dragon {
     Unhurt,
-    HeavilyWounded,
     SeverelyWounded,
     Dead,
+}
+
+/// The message channel a line is printed on, which is what colours it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    Plain,
+    Warning,
+    Danger,
+    God,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Beat {
     hero_x: i32,
-    effect: Effect,
+    /// Whether the dragon's breath fills the lane this turn.
+    breath: bool,
     hero_hp: u16,
     /// Filled cells of the noise meter.
     noise: u16,
     dragon: Dragon,
     /// What crawl would print for this turn.
-    log: &'static [&'static str],
+    log: &'static [(Channel, &'static str)],
 }
 
-const BEATS: [Beat; 7] = [
+const BEATS: [Beat; 4] = [
     Beat {
         hero_x: 31,
-        effect: Effect::None,
+        breath: false,
         hero_hp: 118,
         noise: 0,
         dragon: Dragon::Unhurt,
-        log: &["A fire dragon comes into view."],
+        log: &[(Channel::Warning, "A fire dragon comes into view.")],
     },
     Beat {
         hero_x: 33,
-        effect: Effect::None,
-        hero_hp: 118,
-        noise: 9,
-        dragon: Dragon::Unhurt,
-        log: &["The fire dragon roars deafeningly!"],
-    },
-    Beat {
-        hero_x: 33,
-        effect: Effect::Fire,
+        breath: true,
         hero_hp: 41,
-        noise: 7,
+        noise: 8,
         dragon: Dragon::Unhurt,
         log: &[
-            "The fire dragon breathes flames at you.",
-            "The blast of flame engulfs you!! You are burned terribly!",
-        ],
-    },
-    Beat {
-        hero_x: 33,
-        effect: Effect::None,
-        hero_hp: 97,
-        noise: 1,
-        dragon: Dragon::Unhurt,
-        log: &["You drink the potion of heal wounds. You feel much better."],
-    },
-    Beat {
-        hero_x: 33,
-        effect: Effect::Acid,
-        hero_hp: 97,
-        noise: 5,
-        dragon: Dragon::HeavilyWounded,
-        log: &[
-            "You zap the wand. The bolt of acid hits the fire dragon!!",
-            "The fire dragon is heavily wounded.",
+            (Channel::Plain, "The fire dragon breathes flames at you."),
+            (
+                Channel::Danger,
+                "The blast of flame engulfs you!! You are burned terribly!",
+            ),
         ],
     },
     Beat {
         hero_x: 37,
-        effect: Effect::None,
-        hero_hp: 68,
-        noise: 4,
+        breath: false,
+        hero_hp: 41,
+        noise: 5,
         dragon: Dragon::SeverelyWounded,
         log: &[
-            "You slash the fire dragon!! The fire dragon claws you!",
-            "The fire dragon is severely wounded.",
+            (Channel::Plain, "You slash the fire dragon!!!"),
+            (Channel::Plain, "The fire dragon is severely wounded."),
         ],
     },
     Beat {
         hero_x: 37,
-        effect: Effect::None,
-        hero_hp: 68,
+        breath: false,
+        hero_hp: 41,
         noise: 4,
         dragon: Dragon::Dead,
         log: &[
-            "You slice the fire dragon!!! You kill the fire dragon!",
-            "Okawaru is honoured by your kill.",
+            (Channel::Plain, "You slice the fire dragon!!!"),
+            (Channel::Plain, "You kill the fire dragon!"),
+            (Channel::God, "Okawaru is honoured by your kill."),
         ],
     },
 ];
@@ -188,68 +187,63 @@ impl Fight {
     }
 }
 
-/// One cell of the level at this beat: its glyph and how it is lit. What
-/// the hero can see is drawn in full colour, what they only remember is
-/// faint, and what was never explored is blank, the way crawl draws a level.
+/// One cell of the level at this beat: its glyph and colour. What the
+/// hero can see has crawl's colours, what they only remember is dark grey
+/// (stairs and items keep theirs), and what was never explored is blank.
 fn cell(beat: Beat, x: i32, y: i32) -> (char, Style) {
-    let bold = Modifier::BOLD;
     if y == LANE && x == beat.hero_x {
-        return (
-            '@',
-            Style::default()
-                .fg(theme::BG_CANVAS())
-                .bg(theme::TEXT_BRIGHT())
-                .add_modifier(bold),
-        );
+        return ('@', Style::default().fg(crawl::BLACK).bg(crawl::LIGHTGREY));
     }
     if y == LANE && x == DRAGON_X {
         return match beat.dragon {
-            Dragon::Unhurt | Dragon::HeavilyWounded | Dragon::SeverelyWounded => {
-                ('D', Style::default().fg(theme::ERROR()).add_modifier(bold))
-            }
+            Dragon::Unhurt | Dragon::SeverelyWounded => ('D', Style::default().fg(crawl::GREEN)),
             // A corpse, as crawl draws one.
-            Dragon::Dead => ('†', Style::default().fg(theme::ERROR())),
+            Dragon::Dead => ('†', Style::default().fg(crawl::GREEN)),
         };
     }
-    let between = y == LANE && x > beat.hero_x && x < DRAGON_X;
-    match beat.effect {
-        Effect::Fire if between || ((x - beat.hero_x).abs() <= 1 && (y - LANE).abs() == 1) => {
-            let color = if (x + y) % 2 == 0 {
-                theme::ERROR()
-            } else {
-                theme::AMBER_GLOW()
-            };
-            return ('§', Style::default().fg(color).add_modifier(bold));
-        }
-        Effect::Acid if between => {
-            return (
-                '*',
-                Style::default().fg(theme::SUCCESS()).add_modifier(bold),
-            );
-        }
-        Effect::None | Effect::Fire | Effect::Acid => {}
+    let in_lane = y == LANE && x > beat.hero_x && x < DRAGON_X;
+    let around_hero = (x - beat.hero_x).abs() <= 1 && (y - LANE).abs() == 1;
+    if beat.breath && (in_lane || around_hero) {
+        // A cloud of flame flickers between these three.
+        let color = match (x + 2 * y).rem_euclid(3) {
+            0 => crawl::RED,
+            1 => crawl::YELLOW,
+            _ => crawl::LIGHTRED,
+        };
+        return ('§', Style::default().fg(color));
     }
 
     let row = match usize::try_from(y) {
-        Ok(y) if y < MAP.len() => MAP[y].as_bytes(),
+        Ok(y) if y < MAP.len() => MAP[y],
         Ok(_) | Err(_) => return (' ', Style::default()),
     };
     let glyph = match usize::try_from(x) {
-        Ok(x) if x < row.len() => char::from(row[x]),
-        Ok(_) | Err(_) => return (' ', Style::default()),
+        Ok(x) => match row.chars().nth(x) {
+            Some(glyph) => glyph,
+            None => return (' ', Style::default()),
+        },
+        Err(_) => return (' ', Style::default()),
     };
     let ((left, right), (top, bottom)) = HALL;
     let in_hall = (left..=right).contains(&x) && (top..=bottom).contains(&y);
     let (dx, dy) = (x - beat.hero_x, y - LANE);
-    if !in_hall || dx * dx + dy * dy > SIGHT * SIGHT {
-        return (glyph, Style::default().fg(theme::TEXT_FAINT()));
-    }
-    let color = match glyph {
-        '#' => theme::AMBER_DIM(),
-        '\'' | '+' => theme::AMBER(),
-        '$' => theme::AMBER_GLOW(),
-        '?' => theme::MENTION(),
-        _ => theme::TEXT(),
+    let in_view = in_hall && dx * dx + dy * dy <= SIGHT * SIGHT;
+    let color = match (glyph, in_view) {
+        // Stairs and items look the same remembered as seen.
+        ('>', _) => crawl::RED,
+        ('<', _) => crawl::GREEN,
+        ('$', _) => crawl::YELLOW,
+        ('?', _) => crawl::WHITE,
+        ('!', _) => crawl::LIGHTMAGENTA,
+        (')', _) => crawl::CYAN,
+        ('%', _) => crawl::BROWN,
+        (_, false) => crawl::DARKGREY,
+        ('#', true) => crawl::BROWN,
+        ('≈', true) => crawl::RED,
+        ('~', true) => crawl::CYAN,
+        ('⌠', true) => crawl::BLUE,
+        ('_', true) => crawl::CYAN,
+        (_, true) => crawl::LIGHTGREY,
     };
     (glyph, Style::default().fg(color))
 }
@@ -265,19 +259,41 @@ fn map_row(beat: Beat, y: i32, cols: u16) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// `Health: 41/118  ========--------------`, crawl's own bar.
-fn bar(label: &'static str, now: u16, max: u16, color: Color) -> Vec<Span<'static>> {
-    let filled = (now * BAR_CELLS).div_ceil(max);
+fn caption(text: &'static str) -> Span<'static> {
+    Span::styled(text, Style::default().fg(crawl::BROWN))
+}
+
+fn value(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), Style::default().fg(crawl::LIGHTGREY))
+}
+
+/// `Health: 41/118  ========--------------`, crawl's own bar: what is left
+/// in `full`, what this turn took (`was` down to `now`) in red, the rest
+/// empty. The number yellows under half and reddens under a quarter.
+fn bar(label: &'static str, now: u16, was: u16, max: u16, full: Color) -> Vec<Span<'static>> {
+    let cells = |points: u16| (points * BAR_CELLS).div_ceil(max);
+    let (filled, lost) = (cells(now), cells(was) - cells(now));
+    let number = if now * 4 <= max {
+        crawl::RED
+    } else if now * 2 <= max {
+        crawl::YELLOW
+    } else {
+        crawl::LIGHTGREY
+    };
     vec![
-        Span::styled(label, Style::default().fg(theme::AMBER())),
+        caption(label),
         Span::styled(
             format!("{:<8}", format!("{now}/{max}")),
-            Style::default().fg(theme::TEXT_BRIGHT()),
+            Style::default().fg(number),
         ),
-        Span::styled("=".repeat(usize::from(filled)), Style::default().fg(color)),
+        Span::styled("=".repeat(usize::from(filled)), Style::default().fg(full)),
         Span::styled(
-            "-".repeat(usize::from(BAR_CELLS - filled)),
-            Style::default().fg(theme::TEXT_FAINT()),
+            "=".repeat(usize::from(lost)),
+            Style::default().fg(crawl::RED),
+        ),
+        Span::styled(
+            "-".repeat(usize::from(BAR_CELLS - filled - lost)),
+            Style::default().fg(crawl::DARKGREY),
         ),
     ]
 }
@@ -287,79 +303,73 @@ fn stats(
     left: (&'static str, &'static str),
     right: (&'static str, &'static str),
 ) -> Vec<Span<'static>> {
-    let label = Style::default().fg(theme::AMBER());
-    let value = Style::default().fg(theme::TEXT());
     vec![
-        Span::styled(left.0, label),
-        Span::styled(format!("{:<13}", left.1), value),
-        Span::styled(right.0, label),
-        Span::styled(right.1, value),
+        caption(left.0),
+        value(format!("{:<13}", left.1)),
+        caption(right.0),
+        value(right.1),
     ]
 }
 
 /// The character panel, top to bottom, one entry per row.
 fn panel(fight: &Fight, hero: &str) -> Vec<Vec<Span<'static>>> {
     let beat = fight.now();
-    let bright = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .add_modifier(Modifier::BOLD);
-    let label = Style::default().fg(theme::AMBER());
-    let text = Style::default().fg(theme::TEXT());
-    let hp_color = if beat.hero_hp * 2 <= HERO_HP {
-        theme::ERROR()
+    let was = BEATS[fight.beat.saturating_sub(1)].hero_hp;
+    let title = Style::default().fg(crawl::YELLOW);
+    let noise_color = if beat.noise * 3 <= NOISE_CELLS {
+        crawl::LIGHTGREY
+    } else if beat.noise * 3 <= NOISE_CELLS * 2 {
+        crawl::YELLOW
     } else {
-        theme::SUCCESS()
-    };
-    let noise_color = if beat.noise * 2 > NOISE_CELLS {
-        theme::ERROR()
-    } else {
-        theme::AMBER_GLOW()
+        crawl::RED
     };
     let clock = CLOCK + 10 * fight.beat as u32;
     let monster = match beat.dragon {
-        Dragon::Unhurt => Some(theme::SUCCESS()),
-        Dragon::HeavilyWounded => Some(theme::AMBER_GLOW()),
-        Dragon::SeverelyWounded => Some(theme::ERROR()),
+        Dragon::Unhurt => Some(crawl::GREEN),
+        Dragon::SeverelyWounded => Some(crawl::MAGENTA),
         Dragon::Dead => None,
     };
     vec![
-        vec![Span::styled(format!("{hero} the Slayer"), bright)],
-        vec![Span::styled("Minotaur of Okawaru ****..", text)],
-        bar("Health: ", beat.hero_hp, HERO_HP, hp_color),
-        bar("Magic:  ", HERO_MP, HERO_MP, theme::MENTION()),
+        vec![Span::styled(format!("{hero} the Slayer"), title)],
+        vec![Span::styled("Minotaur of Okawaru ****..", title)],
+        bar(
+            "Health: ",
+            beat.hero_hp,
+            was.max(beat.hero_hp),
+            HERO_HP,
+            crawl::LIGHTGREEN,
+        ),
+        bar("Magic:  ", HERO_MP, HERO_MP, HERO_MP, crawl::LIGHTBLUE),
         stats(("AC: ", "21"), ("Str: ", "27")),
         stats(("EV: ", "12"), ("Int: ", " 6")),
         stats(("SH: ", " 9"), ("Dex: ", "13")),
         stats(("XL: ", "14 Next: 62%"), ("Place: ", "Dungeon:13")),
         vec![
-            Span::styled("Noise: ", label),
+            caption("Noise: "),
             Span::styled(
                 "=".repeat(usize::from(beat.noise)),
                 Style::default().fg(noise_color),
             ),
             Span::styled(
                 "-".repeat(usize::from(NOISE_CELLS - beat.noise)),
-                Style::default().fg(theme::TEXT_FAINT()),
+                Style::default().fg(crawl::DARKGREY),
             ),
-            Span::styled("  Time: ", label),
-            Span::styled(format!("{}.{} (1.0)", clock / 10, clock % 10), text),
+            caption("  Time: "),
+            value(format!("{}.{} (1.0)", clock / 10, clock % 10)),
         ],
         vec![
-            Span::styled("a) ", label),
+            caption("a) "),
             Span::styled(
                 "+3 battleaxe (flame)",
-                Style::default().fg(theme::SUCCESS()),
+                Style::default().fg(crawl::LIGHTRED),
             ),
         ],
-        vec![
-            Span::styled("Throw: ", label),
-            Span::styled("7 javelins", text),
-        ],
+        vec![caption("Throw: "), value("7 javelins")],
         match monster {
             Some(health) => vec![
-                Span::styled("D ", Style::default().fg(theme::ERROR())),
-                Span::styled("█ ", Style::default().fg(health)),
-                Span::styled("fire dragon", text),
+                Span::styled("D ", Style::default().fg(crawl::GREEN)),
+                Span::styled(" ", Style::default().bg(health)),
+                value(" fire dragon"),
             ],
             None => Vec::new(),
         },
@@ -368,7 +378,7 @@ fn panel(fight: &Fight, hero: &str) -> Vec<Vec<Span<'static>>> {
 
 /// The whole screen as `height` lines of `width`: the view of the level
 /// with the panel down its right edge, then the message window, which
-/// fills from its top and keeps the newest message brightest.
+/// fills from its top, each line in its channel's colour.
 fn lines(fight: &Fight, hero: &str, width: u16, height: u16) -> Vec<Line<'static>> {
     let beat = fight.now();
     let log_rows = (height / 4).clamp(3, 7).min(height);
@@ -385,17 +395,17 @@ fn lines(fight: &Fight, hero: &str, width: u16, height: u16) -> Vec<Line<'static
         })
         .collect();
 
-    let fresh = beat.log.len();
-    let said: Vec<&'static str> = BEATS[..=fight.beat]
+    let said: Vec<(Channel, &'static str)> = BEATS[..=fight.beat]
         .iter()
         .flat_map(|beat| beat.log.iter().copied())
         .collect();
     let shown = said.len().min(usize::from(log_rows));
-    for (index, message) in said[said.len() - shown..].iter().enumerate() {
-        let color = if index + fresh >= shown {
-            theme::TEXT_BRIGHT()
-        } else {
-            theme::TEXT_DIM()
+    for (channel, message) in &said[said.len() - shown..] {
+        let color = match channel {
+            Channel::Plain => crawl::LIGHTGREY,
+            Channel::Warning => crawl::LIGHTRED,
+            Channel::Danger => crawl::RED,
+            Channel::God => crawl::CYAN,
         };
         lines.push(Line::from(Span::styled(
             *message,
