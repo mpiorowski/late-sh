@@ -234,7 +234,7 @@ pub(crate) fn close_board(app: &mut App) {
             app.show_lobby_modal = true;
             app.lobby.mark_seen(&app.daily);
         }
-        BoardEntry::LoungeStrip => {}
+        BoardEntry::LoungeStrip | BoardEntry::Practice => {}
     }
 }
 

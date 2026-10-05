@@ -153,37 +153,44 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
   (`users.settings.clubhouse_tutorial_done`, late-core). Fires once on the
   first clubhouse entry: a centered box at the door pitches what late.sh is
-  (`Tutorial::Welcome`), then the tour walks every top-level page in number
-  order with two Enter interludes for the features that have no page of
-  their own: `VisitChat` (1) -> `VisitMusic` (Enter, still on Home: the
-  station networks counted live from the catalogue by `ui::music_pitch`,
-  the YouTube jukebox, the music keys, and the two ways to actually hear
-  sound: late.sh/listen or the `late` CLI) -> `VisitArcade` (2) -> `VisitLobby`
-  (Enter, still on The Arcade: the Ctrl+G daily duels and live tables) ->
-  `VisitGames` (3) -> `VisitArtboard` (4) -> `VisitDirectory` (5) ->
-  `VisitLeaderboard` (6) -> `VisitZen` (`Ctrl+F`: Zen has no digit, so the
-  stop teaches the chord and the main tile keys) -> `Homecoming` (0, back in
-  the tavern). Each stop
-  draws a centered pitch box over the real page (`ui::draw_tour_overlay`,
-  called from `render.rs`) ending in the next key; `Homecoming`'s Enter
-  finishes the tour in place and frees input: the player stays in the
-  tavern. Hold the line at these two interludes and the Zen stop: pages are
-  self-evidencing, and every extra forced stop taxes all future newcomers.
+  (`Tutorial::Welcome`), then **Enter moves every stop on** and the tour
+  walks the newcomer to the next page itself: `VisitChat` (Home) ->
+  `VisitMusic` (still on Home) -> `VisitArcade` -> `VisitLobby` (still on
+  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitArtboard` -> `VisitDirectory` ->
+  `VisitLeaderboard` -> `VisitZen` -> `Homecoming` (back in the tavern).
+  `State::tutorial_advance` is the only thing that moves the stage; it
+  returns a `TourMove` telling the gate where the next stop lives.
+  `Homecoming`'s Enter finishes the tour in place and frees input.
+- **Every stop is one `ui::TourHeader`,** drawn one way: a title, the
+  pitch, a blank row, then a breaker with the stop's keys flush right, two columns in
+  from the frame (`TOUR_SIDE_PADDING`) with a breathing row above and
+  below. Only where it lands differs.
+- **Boxed stops** (`TourHeader::draw_box`): the welcome and homecoming
+  boxes in the tavern (`ui::draw_tutorial`) and the page stops, centered
+  over the real page (`ui::draw_tour_overlay`, called from `render.rs`). A
+  page stop's title carries the page's own key (`[3] the games`), since
+  the newcomer never presses it.
+- **Surface stops** hold a real surface open and take the header at its
+  top (`ui::tour_header`). The music stop holds the Stations modal, the
+  lobby stop holds the Lobby modal (`State::tour_modal`, kept in step by
+  `sync_tour_modal` in `app/input.rs`); both modals take the header as an
+  argument and drop their own footer, because none of its keys work
+  mid-tour. Nothing in a held modal moves on its own.
+- **The practice table.** Enter at the lobby stop opens `VisitTable`: a
+  pool table that exists only in this session
+  (`DailyState::open_practice_table`, see `app/lobby/daily/CONTEXT.md`),
+  with the same header drawn above the board. The break is part of the
+  route, not an option: Enter or Space plays it (`TourStep::Table`), and
+  Enter moves on only once it has been struck.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
   `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
   below the quit-confirm modal) swallows every input, mouse and chords
-  included, except the named digit (which runs `set_screen`; the stage
-  advances in `State::tutorial_screen_entered`, hooked there), `Ctrl+F` at
-  the Zen stop (`TourStep::Zen`, which runs the real `toggle_zen_globally`
-  so the page opens exactly as it does everywhere; Enter runs the same
-  toggle there, because the gate also blocks the `/zen` fallback and a
-  terminal that swallows the chord would otherwise trap the newcomer), Enter where
-  the box names it (the two interludes advance via `tutorial_advance`
-  without persisting; only the homecoming Enter finishes and persists),
-  and `q` (quitting always works; Esc's lone-byte path can still arm the
-  quit confirm). There is no skip. Completion persists once via
-  `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget, failure
-  only logged: worst case the tour runs again next session).
+  included, except Enter, Space at the practice table, and `q` (quitting always works). A lone Esc reaches
+  `dispatch_escape` without passing the gate, so that returns early while a
+  stop is up, after the quit-confirm arm. There is no skip. Completion
+  persists once via `ProfileService::set_clubhouse_tutorial_done`
+  (fire-and-forget, failure only logged: worst case the tour runs again
+  next session).
 - **The hidden treasure:** the bartender is deliberately absent from the
   route. His scripted welcome (`ghost::bartender_tutorial_greeting`, local
   banner only, never posted to #lounge) plus the comped welcome pour fire

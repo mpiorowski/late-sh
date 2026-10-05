@@ -8,6 +8,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::clubhouse::ui::TourHeader;
 use crate::app::common::theme;
 
 use super::state::StationsModalState;
@@ -36,13 +37,25 @@ pub(crate) struct StationsView<'a> {
     pub source: AudioSource,
 }
 
+/// `tour` is the first-visit tour's pitch, written above the dial while the
+/// tour holds the modal open. The footer goes then: none of its keys work.
 pub(crate) fn draw(
     frame: &mut Frame,
     area: Rect,
     state: &StationsModalState,
     view: &StationsView<'_>,
+    tour: Option<&TourHeader>,
 ) {
-    let wanted_height = CHROME_ROWS + list_lines(view, None, 0).0.len().max(1) as u16;
+    // The header's rows and the breathing row under it, traded for the
+    // footer and its breathing row.
+    let (header_rows, footer_rows) = match tour {
+        Some(header) => (header.rows() + 1, 0),
+        None => (0, 1),
+    };
+    let wanted_height = CHROME_ROWS - 2
+        + header_rows
+        + 2 * footer_rows
+        + list_lines(view, None, 0).0.len().max(1) as u16;
     let popup = centered_rect(
         area,
         MODAL_WIDTH.min(area.width),
@@ -68,22 +81,27 @@ pub(crate) fn draw(
     }
 
     let layout = Layout::vertical([
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // pinned slots
-        Constraint::Length(1), // breathing
-        Constraint::Min(1),    // list
-        Constraint::Length(1), // breathing
-        Constraint::Length(1), // footer
-        Constraint::Length(1), // breathing
+        Constraint::Length(1),                             // breathing
+        Constraint::Length(header_rows.saturating_sub(1)), // tour header
+        Constraint::Length(header_rows.min(1)),            // breathing
+        Constraint::Length(1),                             // pinned slots
+        Constraint::Length(1),                             // breathing
+        Constraint::Min(1),                                // list
+        Constraint::Length(1),                             // breathing
+        Constraint::Length(footer_rows),                   // footer
+        Constraint::Length(footer_rows),                   // breathing
     ])
     .split(inner);
 
+    match tour {
+        Some(header) => header.draw(frame, layout[1]),
+        None => frame.render_widget(Paragraph::new(footer_line()), layout[7]),
+    }
     frame.render_widget(
-        Paragraph::new(pinned_line(view.slots, usize::from(layout[1].width))),
-        layout[1],
+        Paragraph::new(pinned_line(view.slots, usize::from(layout[3].width))),
+        layout[3],
     );
-    draw_list(frame, layout[3], state, view);
-    frame.render_widget(Paragraph::new(footer_line()), layout[5]);
+    draw_list(frame, layout[5], state, view);
 }
 
 /// `  pinned  v1 chillsynth  v2 —  v3 datawave  v4 mellow  v5 plaza`.

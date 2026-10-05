@@ -156,3 +156,44 @@ fn the_list_groups_stations_under_one_heading_per_section() {
         "the cursor follows swiss jazz past the headings"
     );
 }
+
+/// The first-visit tour holds the modal open with its pitch on top. On a
+/// default terminal the dial gives up rows, never the tour's key, and the
+/// modal's own footer goes because none of its keys work mid-tour.
+#[test]
+fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
+    use crate::app::clubhouse::state::Tutorial;
+
+    let rows: Vec<StationRow> = RadioStation::enabled()
+        .map(|station| StationRow {
+            station,
+            now_playing: None,
+        })
+        .collect();
+    let view = StationsView {
+        rows: &rows,
+        current: key("datawave"),
+        slots: RadioSlots::empty(),
+        source: AudioSource::Radio,
+    };
+    let header = crate::app::clubhouse::ui::tour_header(Tutorial::VisitMusic, false).unwrap();
+    let mut state = StationsModalState::default();
+    state.open(key("datawave"));
+
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| draw(frame, Rect::new(1, 1, 78, 22), &state, &view, Some(&header)))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let text: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+
+    let at = |needle: &str| text.iter().position(|row| row.contains(needle));
+    let title = at("the tour · the radio").expect("the pitch is drawn");
+    let breaker = at("[Enter] next: the arcade").expect("the tour key is drawn");
+    let pinned = at("pinned  v1").expect("the dial is drawn");
+    assert!(title < breaker && breaker < pinned, "{text:#?}");
+    assert_eq!(at("Esc close"), None, "{text:#?}");
+}

@@ -194,54 +194,68 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
     assert_eq!(row[crown_at + 2].1, dim, "the title after it stays dim");
 }
 
-/// The music stop counts the catalogue live: every enabled station is in
-/// the headline total, and every network that has one gets a roster row,
-/// with our own house streams last.
-#[test]
-fn the_music_pitch_counts_every_station_by_network() {
-    let style = Style::default();
-    let text: Vec<String> = music_pitch(style, style, style)
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect()
-        })
-        .collect();
-    let total = RadioStation::enabled().count();
-    assert!(
-        text[0].contains(&format!("{total} radio stations")),
-        "{}",
-        text[0]
-    );
-
-    let roster: Vec<(usize, &str)> = text
-        .iter()
-        .filter_map(|line| {
-            let (count, rest) = line.trim_start().split_once("  ")?;
-            Some((count.parse().ok()?, rest.trim_start()))
-        })
-        .collect();
-    assert_eq!(roster.iter().map(|(n, _)| n).sum::<usize>(), total);
-    for station in RadioStation::enabled() {
-        let (network, _) = network_pitch(station.provider());
-        assert!(
-            roster.iter().any(|(_, row)| row.starts_with(network)),
-            "{network} has no roster row"
-        );
-    }
-    assert!(
-        roster.last().unwrap().1.starts_with("late.sh"),
-        "{roster:?}"
-    );
+fn header_rows(header: &TourHeader, width: u16) -> Vec<String> {
+    let height = header.rows();
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| header.draw(frame, Rect::new(0, 0, width, height)))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
 }
 
-/// An 80x24 terminal leaves the tour 22 rows inside the app frame. The
-/// music stop's roster grows with the catalogue, so the pitch gives way
-/// before the hint that says which key moves the tour on.
+/// The stops that live inside a real surface: the music stop counts the
+/// catalogue live, the lobby stop leads to the practice table, and each one's
+/// breaker names its keys at the width a default terminal leaves a modal.
 #[test]
-fn the_music_stop_keeps_its_continue_hint_on_a_default_terminal() {
+fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
+    let music = header_rows(&tour_header(Tutorial::VisitMusic, false).unwrap(), 72);
+    let total = RadioStation::enabled().count();
+    assert!(
+        music[1].contains(&format!("{total} stations")),
+        "{music:#?}"
+    );
+    assert!(
+        music
+            .last()
+            .unwrap()
+            .contains("[Enter] next: the arcade ──"),
+        "{music:#?}"
+    );
+
+    let lobby = header_rows(&tour_header(Tutorial::VisitLobby, false).unwrap(), 72);
+    assert!(
+        lobby
+            .last()
+            .unwrap()
+            .contains("[Enter] next: one shot of pool ──"),
+        "{lobby:#?}"
+    );
+
+    // The table asks for the break, then for Enter onward once it is struck.
+    let table = header_rows(&tour_header(Tutorial::VisitTable, false).unwrap(), 72);
+    assert!(
+        table.last().unwrap().contains("[Enter] break ──"),
+        "{table:#?}"
+    );
+    let struck = header_rows(&tour_header(Tutorial::VisitTable, true).unwrap(), 72);
+    assert!(
+        struck
+            .last()
+            .unwrap()
+            .contains("[Enter] next: the games ──"),
+        "{struck:#?}"
+    );
+
+    assert!(tour_header(Tutorial::VisitGames, false).is_none());
+}
+
+/// Every page stop moves on with Enter and says so on a default terminal.
+#[test]
+fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
     let backend = ratatui::backend::TestBackend::new(80, 24);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
     terminal
@@ -249,8 +263,8 @@ fn the_music_stop_keeps_its_continue_hint_on_a_default_terminal() {
             draw_tour_overlay(
                 frame,
                 Rect::new(1, 1, 78, 22),
-                Tutorial::VisitMusic,
-                Screen::Dashboard,
+                Tutorial::VisitGames,
+                Screen::Games,
             )
         })
         .unwrap();
@@ -259,7 +273,46 @@ fn the_music_stop_keeps_its_continue_hint_on_a_default_terminal() {
         .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
         .collect();
     assert!(
-        rows.iter().any(|row| row.contains("[2] next: the arcade")),
+        rows.iter()
+            .any(|row| row.contains("the tour · [3] the games")),
         "{rows:#?}"
     );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[Enter] next: the artboard")),
+        "{rows:#?}"
+    );
+}
+
+/// Boxed or hosted, a stop reads the same: the keys close the breaker flush
+/// right, two columns in from the frame.
+#[test]
+fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitGames,
+                Screen::Games,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let breaker = rows
+        .iter()
+        .find(|row| row.contains("[Enter]"))
+        .expect("the stop names its key");
+    assert!(
+        breaker
+            .trim_end()
+            .ends_with("[Enter] next: the artboard ──  │"),
+        "{rows:#?}"
+    );
+    assert!(breaker.trim_start().starts_with("│  ──"), "{rows:#?}");
 }

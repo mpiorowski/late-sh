@@ -4,7 +4,7 @@ use anyhow::Context;
 use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
@@ -1834,6 +1834,26 @@ impl App {
             app_content_and_sidebar_areas(inner, ctx.show_right_sidebar)
         };
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
+        // The tour stops that write into a real surface: the two modals take
+        // the header themselves, the practice table gets it drawn above.
+        let tour_header = crate::app::clubhouse::ui::tour_header(
+            ctx.clubhouse_state.tutorial,
+            ctx.daily.practice_played(),
+        );
+        let board_area = match (&tour_header, screen) {
+            (Some(header), Screen::DailyMatch) => {
+                // A breathing row either side, like the modals give it.
+                let rows =
+                    Layout::vertical([Constraint::Length(header.rows() + 2), Constraint::Fill(1)])
+                        .split(content_area);
+                header.draw(
+                    frame,
+                    rows[0].inner(Margin::new(crate::app::clubhouse::ui::TOUR_SIDE_PADDING, 1)),
+                );
+                rows[1]
+            }
+            (Some(_), _) | (None, _) => content_area,
+        };
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -2164,7 +2184,7 @@ impl App {
             }
             Screen::DailyMatch => crate::app::lobby::daily::board_ui::draw(
                 frame,
-                content_area,
+                board_area,
                 ctx.daily,
                 ctx.terminal_image_protocol,
                 terminal_images,
@@ -2335,7 +2355,14 @@ impl App {
         }
 
         if ctx.show_lobby_modal {
-            crate::app::lobby::modal_ui::draw(frame, inner, ctx.lobby, ctx.daily, ctx.house);
+            crate::app::lobby::modal_ui::draw(
+                frame,
+                inner,
+                ctx.lobby,
+                ctx.daily,
+                ctx.house,
+                tour_header.as_ref(),
+            );
         }
 
         // One-time arcade-name claim modal, over the door landings that need a
@@ -2484,6 +2511,7 @@ impl App {
                     slots: ctx.radio_slots,
                     source: ctx.paired_source,
                 },
+                tour_header.as_ref(),
             );
         }
 

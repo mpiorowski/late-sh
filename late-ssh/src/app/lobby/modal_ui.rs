@@ -34,12 +34,15 @@ const MODAL_MAX_HEIGHT: u16 = 40;
 const MODAL_H_MARGIN: u16 = 8;
 const MODAL_V_MARGIN: u16 = 4;
 
+/// `tour` is the first-visit tour's pitch, written above the list while the
+/// tour holds the modal open. The footer goes then: none of its keys work.
 pub(crate) fn draw(
     frame: &mut Frame,
     area: Rect,
     lobby: &LobbyState,
     daily: &DailyState,
     house: &HouseState,
+    tour: Option<&crate::app::clubhouse::ui::TourHeader>,
 ) {
     let width = area
         .width
@@ -64,16 +67,34 @@ pub(crate) fn draw(
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    // The header's rows and a breathing row either side of it, traded for
+    // the status and footer rows.
+    let (header_rows, footer_rows) = match tour {
+        Some(header) => (header.rows() + 2, 0),
+        None => (0, 1),
+    };
     let layout = Layout::vertical([
-        Constraint::Fill(1),   // list
-        Constraint::Length(1), // status / prompt
-        Constraint::Length(1), // footer
+        Constraint::Length(header_rows), // tour header
+        Constraint::Fill(1),             // list
+        Constraint::Length(footer_rows), // status / prompt
+        Constraint::Length(footer_rows), // footer
     ])
     .split(inner);
 
-    draw_list(frame, layout[0], lobby, daily, house);
-    draw_status(frame, layout[1], lobby, daily);
-    draw_footer(frame, layout[2], lobby, daily);
+    draw_list(frame, layout[1], lobby, daily, house);
+    match tour {
+        Some(header) => header.draw(
+            frame,
+            layout[0].inner(ratatui::layout::Margin::new(
+                crate::app::clubhouse::ui::TOUR_SIDE_PADDING,
+                1,
+            )),
+        ),
+        None => {
+            draw_status(frame, layout[2], lobby, daily);
+            draw_footer(frame, layout[3], lobby, daily);
+        }
+    }
 
     if let Some(draft) = &daily.challenge_draft {
         draw_draft_overlay(frame, popup, draft);

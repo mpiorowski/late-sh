@@ -88,13 +88,14 @@ struct BannerEntry {
 
 /// The first-visit tour. `Pending` arms it until the screen is first opened;
 /// then the tour is FORCED: while it runs, the input gate in `app/input.rs`
-/// (`handle_tour_gate`) swallows everything except the single key the
-/// current box names (`State::tutorial_forced_step`) and the quit keys. The
-/// route walks every top-level page in number order with two Enter
-/// interludes for the features that have no page of their own (the music on
-/// Home, the Ctrl+G lobby on The Arcade), takes the Ctrl+F chord into Zen
-/// from the last page, ends back in the tavern, and
-/// `Done` is persisted once on the homecoming Enter. The bartender is
+/// (`handle_tour_gate`) swallows everything except Enter, which moves every
+/// stop on (`State::tutorial_advance`), and the quit keys. The route walks
+/// every top-level page in number order, stops twice more for the features
+/// that have no page of their own (the Stations modal on Home, the Lobby
+/// modal on The Arcade, each held open for real), has the newcomer play one
+/// break at a practice pool table, passes through Zen, ends back
+/// in the tavern, and `Done` is persisted once on the homecoming Enter. The
+/// bartender is
 /// deliberately absent from the route: his comped welcome pour stays a
 /// hidden treasure for whoever walks up to the glowing bar after the
 /// send-off (see [`State::welcome_pour_due`]).
@@ -104,41 +105,64 @@ pub enum Tutorial {
     Off,
     /// Armed, fires on the first clubhouse entry this session.
     Pending,
-    /// Centered box at the door: what late.sh is, then `1`.
+    /// Centered box at the door: what late.sh is.
     Welcome,
-    /// On Home: the chat pitch, then Enter.
+    /// On Home: the chat pitch.
     VisitChat,
-    /// Still on Home: the music pitch (sources, how to actually hear it),
-    /// then `2`.
+    /// Still on Home: the real Stations modal, held open under the music
+    /// pitch.
     VisitMusic,
-    /// On The Arcade: solo games and chips, then Enter.
+    /// On The Arcade: solo games and chips.
     VisitArcade,
-    /// Still on The Arcade: the Ctrl+G lobby pitch (daily duels, live
-    /// tables), then `3`.
+    /// Still on The Arcade: the real Lobby modal, held open under the
+    /// multiplayer pitch.
     VisitLobby,
-    /// On the Games hub: the heavy-door pitch, then `4`.
+    /// At the practice pool table: one break, in this session's memory only,
+    /// which has to be played to move on.
+    VisitTable,
+    /// On the Games hub: the heavy-door pitch.
     VisitGames,
-    /// On the Artboard: the shared canvas, then `5`.
+    /// On the Artboard: the shared canvas.
     VisitArtboard,
-    /// On the Profiles page: people and their projects, then `6`.
+    /// On the Profiles page: people and their projects.
     VisitDirectory,
-    /// On the Leaderboards: the last page, then `Ctrl+F` (or Enter) into Zen.
+    /// On the Leaderboards: the last page.
     VisitLeaderboard,
-    /// On Zen: the tiling page and its chord, then `0` home.
+    /// On Zen: the tiling page and its chord.
     VisitZen,
-    /// Back in the tavern: the send-off box, Enter sets them free.
+    /// Back in the tavern: the send-off box.
     Homecoming,
     Done,
 }
 
-/// The one input the forced tour accepts right now: a page digit and the
-/// screen it leads to, the Ctrl+F chord into Zen, or Enter (the mid-route
-/// interlude boxes and the homecoming box).
+/// What the forced tour accepts right now. Enter moves every stop on; at
+/// the practice table it (or Space) first has to play the break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourStep {
-    Page(u8, Screen),
-    Zen,
     Enter,
+    Table,
+}
+
+/// Where an Enter took the tour, for the input gate to act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TourMove {
+    /// The next stop is on the page already open.
+    Stay,
+    Page(Screen),
+    /// To the practice pool table.
+    Table,
+    /// Into Zen, through the same toggle `Ctrl+F` runs.
+    Zen,
+    /// The tour just ended and should be persisted.
+    Finished,
+}
+
+/// The real modal a stop holds open under its pitch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TourModal {
+    None,
+    Stations,
+    Lobby,
 }
 
 #[derive(Debug)]
@@ -562,25 +586,6 @@ impl State {
         self.drunk.levels(now)
     }
 
-    /// Advance the page tour when a top-level screen is entered. Each stop
-    /// waits for exactly the page it points at; the input gate only lets the
-    /// matching digit through, but the state machine guards the order on its
-    /// own so a stray `set_screen` (a landmark Enter, a slash command) can
-    /// never skip a stop.
-    pub fn tutorial_screen_entered(&mut self, screen: Screen) {
-        self.tutorial = match (self.tutorial, screen) {
-            (Tutorial::Welcome, Screen::Dashboard) => Tutorial::VisitChat,
-            (Tutorial::VisitMusic, Screen::Arcade) => Tutorial::VisitArcade,
-            (Tutorial::VisitLobby, Screen::Games) => Tutorial::VisitGames,
-            (Tutorial::VisitGames, Screen::Artboard) => Tutorial::VisitArtboard,
-            (Tutorial::VisitArtboard, Screen::Profiles) => Tutorial::VisitDirectory,
-            (Tutorial::VisitDirectory, Screen::Leaderboard) => Tutorial::VisitLeaderboard,
-            (Tutorial::VisitLeaderboard, Screen::Zen) => Tutorial::VisitZen,
-            (Tutorial::VisitZen, Screen::Clubhouse) => Tutorial::Homecoming,
-            (stage, _) => stage,
-        };
-    }
-
     /// True when no tour stands between the newcomer and the rest of the
     /// app: none was ever due, or it has been walked. `Pending` (armed,
     /// not yet at the door) is not settled, unlike `tutorial_forced_step`,
@@ -596,17 +601,40 @@ impl State {
     pub fn tutorial_forced_step(&self) -> Option<TourStep> {
         match self.tutorial {
             Tutorial::Off | Tutorial::Pending | Tutorial::Done => None,
-            Tutorial::Welcome => Some(TourStep::Page(b'1', Screen::Dashboard)),
-            Tutorial::VisitChat => Some(TourStep::Enter),
-            Tutorial::VisitMusic => Some(TourStep::Page(b'2', Screen::Arcade)),
-            Tutorial::VisitArcade => Some(TourStep::Enter),
-            Tutorial::VisitLobby => Some(TourStep::Page(b'3', Screen::Games)),
-            Tutorial::VisitGames => Some(TourStep::Page(b'4', Screen::Artboard)),
-            Tutorial::VisitArtboard => Some(TourStep::Page(b'5', Screen::Profiles)),
-            Tutorial::VisitDirectory => Some(TourStep::Page(b'6', Screen::Leaderboard)),
-            Tutorial::VisitLeaderboard => Some(TourStep::Zen),
-            Tutorial::VisitZen => Some(TourStep::Page(b'0', Screen::Clubhouse)),
-            Tutorial::Homecoming => Some(TourStep::Enter),
+            Tutorial::VisitTable => Some(TourStep::Table),
+            Tutorial::Welcome
+            | Tutorial::VisitChat
+            | Tutorial::VisitMusic
+            | Tutorial::VisitArcade
+            | Tutorial::VisitLobby
+            | Tutorial::VisitGames
+            | Tutorial::VisitArtboard
+            | Tutorial::VisitDirectory
+            | Tutorial::VisitLeaderboard
+            | Tutorial::VisitZen
+            | Tutorial::Homecoming => Some(TourStep::Enter),
+        }
+    }
+
+    /// The modal the current stop holds open, which the input gate keeps in
+    /// step after every key.
+    pub fn tour_modal(&self) -> TourModal {
+        match self.tutorial {
+            Tutorial::VisitMusic => TourModal::Stations,
+            Tutorial::VisitLobby => TourModal::Lobby,
+            Tutorial::Off
+            | Tutorial::Pending
+            | Tutorial::Welcome
+            | Tutorial::VisitChat
+            | Tutorial::VisitArcade
+            | Tutorial::VisitTable
+            | Tutorial::VisitGames
+            | Tutorial::VisitArtboard
+            | Tutorial::VisitDirectory
+            | Tutorial::VisitLeaderboard
+            | Tutorial::VisitZen
+            | Tutorial::Homecoming
+            | Tutorial::Done => TourModal::None,
         }
     }
 
@@ -632,26 +660,29 @@ impl State {
         matches!(self.tutorial, Tutorial::Homecoming | Tutorial::Done) && !self.welcome_pour_claimed
     }
 
-    /// Advance past an Enter box (via the input gate): the two mid-route
-    /// interludes flip to the next stop on their page, and the homecoming
-    /// popup finishes the tour. Returns true only when the tour just
-    /// finished and should be persisted.
-    pub fn tutorial_advance(&mut self) -> bool {
-        match self.tutorial {
-            Tutorial::VisitChat => {
-                self.tutorial = Tutorial::VisitMusic;
-                false
-            }
-            Tutorial::VisitArcade => {
-                self.tutorial = Tutorial::VisitLobby;
-                false
-            }
-            Tutorial::Homecoming => {
-                self.tutorial = Tutorial::Done;
-                true
-            }
-            _ => false,
-        }
+    /// Enter at a tour stop: move to the next one and say where it lives.
+    /// The tour never reads the screen back, so nothing but this can move it.
+    pub fn tutorial_advance(&mut self) -> TourMove {
+        let (next, went) = match self.tutorial {
+            Tutorial::Off | Tutorial::Pending | Tutorial::Done => return TourMove::Stay,
+            Tutorial::Welcome => (Tutorial::VisitChat, TourMove::Page(Screen::Dashboard)),
+            Tutorial::VisitChat => (Tutorial::VisitMusic, TourMove::Stay),
+            Tutorial::VisitMusic => (Tutorial::VisitArcade, TourMove::Page(Screen::Arcade)),
+            Tutorial::VisitArcade => (Tutorial::VisitLobby, TourMove::Stay),
+            Tutorial::VisitLobby => (Tutorial::VisitTable, TourMove::Table),
+            Tutorial::VisitTable => (Tutorial::VisitGames, TourMove::Page(Screen::Games)),
+            Tutorial::VisitGames => (Tutorial::VisitArtboard, TourMove::Page(Screen::Artboard)),
+            Tutorial::VisitArtboard => (Tutorial::VisitDirectory, TourMove::Page(Screen::Profiles)),
+            Tutorial::VisitDirectory => (
+                Tutorial::VisitLeaderboard,
+                TourMove::Page(Screen::Leaderboard),
+            ),
+            Tutorial::VisitLeaderboard => (Tutorial::VisitZen, TourMove::Zen),
+            Tutorial::VisitZen => (Tutorial::Homecoming, TourMove::Page(Screen::Clubhouse)),
+            Tutorial::Homecoming => (Tutorial::Done, TourMove::Finished),
+        };
+        self.tutorial = next;
+        went
     }
 }
 

@@ -18,6 +18,7 @@ use crate::app::{
         },
         pool_core::{
             cue::{PowerBand, ShotMode},
+            rules::PoolRules,
             shot::{Shot, Timeline},
             table_3d::Eye,
         },
@@ -176,6 +177,9 @@ impl EventEffect {
     }
 }
 
+/// The speed of the practice table's one shot, in m/s: a hard break.
+const PRACTICE_BREAK_SPEED: f64 = 8.0;
+
 /// How a board was opened. A hop from one board to the next keeps the
 /// entry of the first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +190,9 @@ pub enum BoardEntry {
     /// From the #lounge live strip: closing returns to the card, the modal
     /// was never open.
     LoungeStrip,
+    /// The first-visit tour's practice table: a rack that lives in this
+    /// session's memory and is never written, read back, or shown to anyone.
+    Practice,
 }
 
 pub struct DailyBoardState {
@@ -1403,6 +1410,114 @@ impl DailyState {
         self.request_board_reload();
     }
 
+    /// Open the practice pool table: an eight-ball rack with this player on
+    /// the break against nobody. The row is built here and handed to the
+    /// board down its own load channel, so everything past this point is the
+    /// real board.
+    pub(crate) fn open_practice_table(&mut self, return_screen: Screen, username: &str) {
+        let house = Uuid::now_v7();
+        let mut state = DailyPoolState::new(PoolRules::EightBall, self.user_id, house);
+        // `new` flips a coin for the break; here the newcomer always has it.
+        state.seats = [self.user_id, house];
+        let now = Utc::now();
+        let row = DailyMatch {
+            id: Uuid::now_v7(),
+            created: now,
+            updated: now,
+            game_kind: DailyMatch::GAME_KIND_EIGHTBALL.to_string(),
+            status: DailyMatch::STATUS_ACTIVE.to_string(),
+            challenger_id: self.user_id,
+            opponent_id: Some(house),
+            turn_user_id: Some(self.user_id),
+            turn_deadline_at: None,
+            winner_user_id: None,
+            result: String::new(),
+            state: serde_json::to_value(&state).expect("a pool state serializes"),
+            challenger_result_seen_at: None,
+            opponent_result_seen_at: None,
+            chat_room_id: None,
+            win_payout: None,
+        };
+        let names = HashMap::from([
+            (self.user_id, username.to_string()),
+            (house, "the house".to_string()),
+        ]);
+        self.open_board_inner(
+            row.id,
+            DailyGame::EightBall,
+            names,
+            false,
+            return_screen,
+            BoardEntry::Practice,
+        );
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(Ok(Some(row)));
+        if let Some(board) = &mut self.board {
+            board.load_rx = Some(rx);
+        }
+    }
+
+    /// The one shot the practice table allows: the break, from where the cue
+    /// ball was set down, at the rack, at one fixed speed. The physics runs
+    /// on a blocking thread like any shot's, and the struck rack comes back
+    /// as the board's next row.
+    pub(crate) fn practice_break(&mut self) {
+        let Some(board) = &mut self.board else {
+            return;
+        };
+        match board.entry {
+            BoardEntry::Practice => {}
+            BoardEntry::Lobby | BoardEntry::LoungeStrip => return,
+        }
+        if board.load_rx.is_some() {
+            return;
+        }
+        let Some(detail) = &board.detail else {
+            return;
+        };
+        let Some(pool) = detail.pool() else {
+            return;
+        };
+        if pool.state.move_count() > 0 {
+            return;
+        }
+        let Some(aimed) = pool.draft.shot(&pool.state) else {
+            return;
+        };
+        let shot = Shot {
+            speed: PRACTICE_BREAK_SPEED,
+            ..aimed
+        };
+        let mut state = pool.state.clone();
+        let mut row = detail.row.clone();
+        let (tx, rx) = oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            let seat = state.turn;
+            let struck = match state.apply_shot(seat, &shot) {
+                Ok(_) => match serde_json::to_value(&state) {
+                    Ok(value) => {
+                        row.state = value;
+                        row.turn_user_id = Some(state.turn_user());
+                        Ok(Some(row))
+                    }
+                    Err(error) => Err(error.to_string()),
+                },
+                Err(error) => Err(error.root_cause().to_string()),
+            };
+            let _ = tx.send(struck);
+        });
+        board.load_rx = Some(rx);
+    }
+
+    /// Whether the practice table's one shot has been played.
+    pub(crate) fn practice_played(&self) -> bool {
+        self.board
+            .as_ref()
+            .and_then(|board| board.detail.as_ref())
+            .and_then(DailyMatchDetail::pool)
+            .is_some_and(|pool| pool.state.move_count() > 0)
+    }
+
     pub fn close_board(&mut self) {
         self.ack_finished_result();
         self.board = None;
@@ -1456,6 +1571,12 @@ impl DailyState {
         let Some(board) = &mut self.board else {
             return;
         };
+        // A practice table has no row to read back: its rows arrive from
+        // `practice_break`, down the same channel.
+        match board.entry {
+            BoardEntry::Practice => return,
+            BoardEntry::Lobby | BoardEntry::LoungeStrip => {}
+        }
         if board.load_rx.is_some() {
             board.reload_pending = true;
             return;

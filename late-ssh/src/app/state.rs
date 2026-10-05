@@ -2472,9 +2472,6 @@ impl App {
             self.clubhouse
                 .enter_screen(crate::app::presence::svc::now_ms());
         }
-        // The first-visit tour advances on page entry, so digits and Tab
-        // both move it along.
-        self.clubhouse.tutorial_screen_entered(screen);
         self.sync_visible_chat_room();
     }
 
