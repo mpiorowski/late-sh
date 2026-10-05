@@ -232,6 +232,7 @@ fn tutorial_tours_every_page_then_comes_home() {
             Tutorial::VisitGames,
             TourModal::None,
         ),
+        (TourMove::Stay, Tutorial::VisitDungeon, TourModal::None),
         (
             TourMove::Page(Screen::Artboard),
             Tutorial::VisitArtboard,
@@ -267,17 +268,26 @@ fn tutorial_tours_every_page_then_comes_home() {
     assert_eq!(state.tutorial_advance(), TourMove::Stay);
 }
 
-/// The practice table is the one stop Enter alone does not pass: the gate
-/// reads this step to make the break come first.
+/// The practice table and the fight are the stops Enter alone does not
+/// pass: the gate reads these steps to make the shot and the win come first.
 #[test]
-fn the_practice_table_is_its_own_step() {
+fn the_table_and_the_fight_are_their_own_steps() {
     let mut state = state_with_lobby(true);
     state.enter_screen(NOW);
-    while state.tutorial != Tutorial::VisitTable {
-        assert_eq!(state.tutorial_forced_step(), Some(TourStep::Enter));
+    let mut steps = Vec::new();
+    while let Some(step) = state.tutorial_forced_step() {
+        if step != TourStep::Enter {
+            steps.push((state.tutorial, step));
+        }
         state.tutorial_advance();
     }
-    assert_eq!(state.tutorial_forced_step(), Some(TourStep::Table));
+    assert_eq!(
+        steps,
+        [
+            (Tutorial::VisitTable, TourStep::Table),
+            (Tutorial::VisitDungeon, TourStep::Fight),
+        ]
+    );
 }
 
 #[test]

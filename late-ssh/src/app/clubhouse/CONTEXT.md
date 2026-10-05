@@ -22,6 +22,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 | `crowd.rs` | Pure: the room derived from presence records (`crowd`: one `Patron` per user, contested spots settled, the door stack, emotes, the last pet), `pick_spot` / `first_stand` (where a session sits), `dog_at` (the dog as a function of the wall clock). |
 | `drunk.rs` | `DrunkMap`, the process's mirror of `user_drinks` (seeded by the ghost task, bumped on every local pour). |
 | `state.rs` | Per-session state: this session's own stand (its part of its presence record), `settle` (follow a newer stand on another device, pick again after losing a spot or when a seat frees), the derived `Crowd`, camera target, animation clock, arrival/departure door events, the `Tutorial` state machine. |
+| `fight.rs` | The tour's dungeon stop: a scripted fight as pure data (`BEATS`) plus its renderer. Not a game; see §5. |
 | `input.rs` | Walking (arrows/hjkl), `i` composer, `w`/`x` emotes, `t` bartender mention, `n` out back to Nightcap (the avatar first steps onto `map::BACK_DOOR_MAT`, in its published stand too, so the room sees them leave by the door), Enter on landmarks/dog/the back door, tutorial Enter. Returns `false` for globals. |
 | `ui.rs` | Renderer: camera pan, base-grid styling, animations, crowd placement, emote frames, speech bubbles, door ambience, tutorial overlays, prop popovers, composer footer, and any chat overlay that lands here (a `/summary` or reaction list requested on Home; it owns input via `screen_composes_chat`, so it must be drawn). |
 | `nightcap/` | Nightcap, the small bar out back (`n` from the tavern or Enter at the back door, `map::BACK_DOOR`, past the end of the counter; Esc back): its own `Screen::Nightcap`, the stools from presence (`stools.rs`), `SharedWall`, and `CONTEXT.md`. A sub-slice, not a sibling domain. The generator script carries the door art (`back_door`), but `RUST_TEMPLATE` still lacks the `BACK_DOOR` zone and the `Interactive::BackDoor` arm, same drift as the rest. |
@@ -156,7 +157,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   (`Tutorial::Welcome`), then **Enter moves every stop on** and the tour
   walks the newcomer to the next page itself: `VisitChat` (Home) ->
   `VisitMusic` (still on Home) -> `VisitArcade` -> `VisitLobby` (still on
-  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitArtboard` -> `VisitDirectory` ->
+  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitDungeon` (still on Games) -> `VisitArtboard` -> `VisitDirectory` ->
   `VisitLeaderboard` -> `VisitZen` -> `Homecoming` (back in the tavern).
   `State::tutorial_advance` is the only thing that moves the stage; it
   returns a `TourMove` telling the gate where the next stop lives.
@@ -182,10 +183,21 @@ room is the chat surface, and the full history lives in #lounge on Home.
   with the same header drawn above the board. The break is part of the
   route, not an option: Enter or Space plays it (`TourStep::Table`), and
   Enter moves on only once it has been struck.
+- **The dungeon stop.** `VisitDungeon` shows what the roguelikes behind
+  the Games page feel like without running one: `fight.rs` is a scripted
+  seven-beat scene drawn as the whole DCSS screen (the view of the level
+  centred on the hero, lit cells against remembered ones, the character
+  panel under the newcomer's own name down the right, the crawl-worded
+  message window underneath). Nothing is simulated or saved;
+  `Fight::strike` plays the next beat. It takes the Games page over the
+  way the practice table takes the board: `render.rs` draws the header
+  across the top (`TourHeader::draw_above`) and the fight in the rest of
+  the content area instead of the hub. Enter or Space is a blow
+  (`TourStep::Fight`), and Enter moves on only once the dragon is down.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
   `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
   below the quit-confirm modal) swallows every input, mouse and chords
-  included, except Enter, Space at the practice table, and `q` (quitting always works). A lone Esc reaches
+  included, except Enter, Space at the practice table and the fight, and `q` (quitting always works). A lone Esc reaches
   `dispatch_escape` without passing the gate, so that returns early while a
   stop is up, after the quit-confirm arm. There is no skip. Completion
   persists once via `ProfileService::set_clubhouse_tutorial_done`

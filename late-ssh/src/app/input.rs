@@ -3586,9 +3586,14 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
         // break, and only then does Enter move on.
         (TourStep::Table, b'\r' | b'\n') if app.daily.practice_played() => tour_advance(app),
         (TourStep::Table, b'\r' | b'\n' | b' ') => app.daily.practice_break(),
+        // The fight is the same: every press is the next blow until it is won.
+        (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
+        (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
         // The way out is always open.
-        (TourStep::Enter | TourStep::Table, b'q' | b'Q') => trigger_global_quit(app),
-        (TourStep::Enter | TourStep::Table, _) => {}
+        (TourStep::Enter | TourStep::Table | TourStep::Fight, b'q' | b'Q') => {
+            trigger_global_quit(app)
+        }
+        (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
     }
     sync_tour_modal(app);
     true

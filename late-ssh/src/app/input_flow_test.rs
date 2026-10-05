@@ -3513,9 +3513,23 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
     };
     assert_eq!(shots(&app), 1);
 
-    // Enter leaves the table behind and the rest of the route is Enter too.
+    // Enter leaves the table behind for the games page.
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Games);
+    assert!(app.daily.board.is_none());
+
+    // The dungeon stop stays on that page until the fight is won: every
+    // Enter or Space is a blow, and the page only turns after the last one.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitDungeon);
+    while !app.clubhouse.tour_fight.won() {
+        app.handle_input(b" ");
+        assert_eq!(app.screen, Screen::Games);
+        assert_eq!(app.clubhouse.tutorial, Tutorial::VisitDungeon);
+    }
+
+    // The rest of the route is Enter alone.
     for screen in [
-        Screen::Games,
         Screen::Artboard,
         Screen::Profiles,
         Screen::Leaderboard,
@@ -3524,7 +3538,6 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
     ] {
         app.handle_input(b"\r");
         assert_eq!(app.screen, screen);
-        assert!(app.daily.board.is_none());
     }
     assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
 

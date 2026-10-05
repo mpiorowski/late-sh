@@ -4,7 +4,7 @@ use anyhow::Context;
 use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
@@ -1835,22 +1835,16 @@ impl App {
         };
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         // The tour stops that write into a real surface: the two modals take
-        // the header themselves, the practice table gets it drawn above.
+        // the header themselves, the practice table and the dungeon fight
+        // get it drawn across the top of the page.
         let tour_header = crate::app::clubhouse::ui::tour_header(
             ctx.clubhouse_state.tutorial,
             ctx.daily.practice_played(),
+            ctx.clubhouse_state.tour_fight.won(),
         );
         let board_area = match (&tour_header, screen) {
-            (Some(header), Screen::DailyMatch) => {
-                // A breathing row either side, like the modals give it.
-                let rows =
-                    Layout::vertical([Constraint::Length(header.rows() + 2), Constraint::Fill(1)])
-                        .split(content_area);
-                header.draw(
-                    frame,
-                    rows[0].inner(Margin::new(crate::app::clubhouse::ui::TOUR_SIDE_PADDING, 1)),
-                );
-                rows[1]
+            (Some(header), Screen::DailyMatch | Screen::Games) => {
+                header.draw_above(frame, content_area)
             }
             (Some(_), _) | (None, _) => content_area,
         };
@@ -1893,6 +1887,13 @@ impl App {
                     );
                 }
             }
+            // The tour's dungeon stop plays its fight where the hub would be.
+            Screen::Games if tour_header.is_some() => crate::app::clubhouse::fight::draw(
+                frame,
+                board_area,
+                &ctx.clubhouse_state.tour_fight,
+                ctx.clubhouse_state.username(),
+            ),
             Screen::Games => {
                 crate::app::door::hub::ui::draw_games_hub(
                     frame,

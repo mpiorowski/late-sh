@@ -212,7 +212,7 @@ fn header_rows(header: &TourHeader, width: u16) -> Vec<String> {
 /// breaker names its keys at the width a default terminal leaves a modal.
 #[test]
 fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
-    let music = header_rows(&tour_header(Tutorial::VisitMusic, false).unwrap(), 72);
+    let music = header_rows(&tour_header(Tutorial::VisitMusic, false, false).unwrap(), 72);
     let total = RadioStation::enabled().count();
     assert!(
         music[1].contains(&format!("{total} stations")),
@@ -226,7 +226,7 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
         "{music:#?}"
     );
 
-    let lobby = header_rows(&tour_header(Tutorial::VisitLobby, false).unwrap(), 72);
+    let lobby = header_rows(&tour_header(Tutorial::VisitLobby, false, false).unwrap(), 72);
     assert!(
         lobby
             .last()
@@ -236,12 +236,12 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
     );
 
     // The table asks for the break, then for Enter onward once it is struck.
-    let table = header_rows(&tour_header(Tutorial::VisitTable, false).unwrap(), 72);
+    let table = header_rows(&tour_header(Tutorial::VisitTable, false, false).unwrap(), 72);
     assert!(
         table.last().unwrap().contains("[Enter] break ──"),
         "{table:#?}"
     );
-    let struck = header_rows(&tour_header(Tutorial::VisitTable, true).unwrap(), 72);
+    let struck = header_rows(&tour_header(Tutorial::VisitTable, true, false).unwrap(), 72);
     assert!(
         struck
             .last()
@@ -250,7 +250,7 @@ fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
         "{struck:#?}"
     );
 
-    assert!(tour_header(Tutorial::VisitGames, false).is_none());
+    assert!(tour_header(Tutorial::VisitGames, false, false).is_none());
 }
 
 /// Every page stop moves on with Enter and says so on a default terminal.
@@ -279,7 +279,7 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
     );
     assert!(
         rows.iter()
-            .any(|row| row.contains("[Enter] next: the artboard")),
+            .any(|row| row.contains("[Enter] next: a taste of the dungeon")),
         "{rows:#?}"
     );
 }
@@ -311,8 +311,59 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
     assert!(
         breaker
             .trim_end()
-            .ends_with("[Enter] next: the artboard ──  │"),
+            .ends_with("[Enter] next: a taste of the dungeon ──  │"),
         "{rows:#?}"
     );
     assert!(breaker.trim_start().starts_with("│  ──"), "{rows:#?}");
+}
+
+/// The dungeon stop takes the page over the way the practice table does:
+/// the header across the top, the crawl screen filling the rest, whole on a
+/// default terminal. Its breaker asks for blows until the win.
+#[test]
+fn the_dungeon_stop_fills_the_page_under_its_header() {
+    use crate::app::clubhouse::fight::{self, Fight};
+    let draw = |fight: &Fight| {
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let header = tour_header(Tutorial::VisitDungeon, false, fight.won()).unwrap();
+                let page = header.draw_above(frame, Rect::new(1, 1, 78, 22));
+                fight::draw(frame, page, fight, "mat");
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..24)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect::<Vec<String>>()
+    };
+    let at = |rows: &[String], needle: &str| rows.iter().position(|row| row.contains(needle));
+
+    let mut fight = Fight::new();
+    let rows = draw(&fight);
+    let breaker = at(&rows, "[Enter] fight ──").expect("the breaker asks for the fight");
+    let hero = at(&rows, "mat the Slayer").expect("the panel is drawn");
+    let monster = at(&rows, "fire dragon   ").expect("the monster list is drawn");
+    let log = at(&rows, "A fire dragon comes into view.").expect("the log is drawn");
+    assert!(
+        breaker < hero && hero < monster && monster < log,
+        "{rows:#?}"
+    );
+    // The panel takes the right of the page, the view of the level the left.
+    assert_eq!(rows[hero].find("mat the Slayer"), Some(41), "{rows:#?}");
+    assert!(rows[log].starts_with(" A fire dragon"), "{rows:#?}");
+
+    while !fight.won() {
+        fight.strike();
+    }
+    let rows = draw(&fight);
+    assert!(
+        at(&rows, "[Enter] next: the artboard ──").is_some(),
+        "{rows:#?}"
+    );
+    assert!(
+        at(&rows, "You kill the fire dragon!").is_some(),
+        "{rows:#?}"
+    );
 }

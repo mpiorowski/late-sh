@@ -122,6 +122,9 @@ pub enum Tutorial {
     VisitTable,
     /// On the Games hub: the heavy-door pitch.
     VisitGames,
+    /// Still on the Games hub: one scripted fight (`fight::Fight`), which has
+    /// to be won to move on.
+    VisitDungeon,
     /// On the Artboard: the shared canvas.
     VisitArtboard,
     /// On the Profiles page: people and their projects.
@@ -136,11 +139,13 @@ pub enum Tutorial {
 }
 
 /// What the forced tour accepts right now. Enter moves every stop on; at
-/// the practice table it (or Space) first has to play the break.
+/// the practice table it (or Space) first has to play the break, and at the
+/// dungeon stop it first has to win the fight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourStep {
     Enter,
     Table,
+    Fight,
 }
 
 /// Where an Enter took the tour, for the input gate to act on.
@@ -198,6 +203,8 @@ pub struct State {
     /// bar doesn't repeat the bartender's scripted welcome. The once-ever
     /// guarantee lives in the DB (`UserDrinks::record_welcome_pour`).
     welcome_pour_claimed: bool,
+    /// The dungeon stop's scripted fight.
+    pub tour_fight: super::fight::Fight,
     /// The bartender banner plays his lines one at a time: the pinned line,
     /// the ids waiting their turn, and the newest `created` already taken
     /// from the tail (so each line enqueues exactly once).
@@ -250,6 +257,7 @@ impl State {
             banner_watermark: None,
             hit_layout: RefCell::new(Vec::new()),
             welcome_pour_claimed: false,
+            tour_fight: super::fight::Fight::new(),
             tutorial: if tutorial_pending {
                 Tutorial::Pending
             } else {
@@ -307,6 +315,10 @@ impl State {
 
     /// The name this session's own patron is drawn with, before the record
     /// comes back: the live profile name, so a rename reaches it.
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
     pub fn set_username(&mut self, username: &str) {
         if self.username != username {
             self.username = username.to_string();
@@ -602,6 +614,7 @@ impl State {
         match self.tutorial {
             Tutorial::Off | Tutorial::Pending | Tutorial::Done => None,
             Tutorial::VisitTable => Some(TourStep::Table),
+            Tutorial::VisitDungeon => Some(TourStep::Fight),
             Tutorial::Welcome
             | Tutorial::VisitChat
             | Tutorial::VisitMusic
@@ -629,6 +642,7 @@ impl State {
             | Tutorial::VisitArcade
             | Tutorial::VisitTable
             | Tutorial::VisitGames
+            | Tutorial::VisitDungeon
             | Tutorial::VisitArtboard
             | Tutorial::VisitDirectory
             | Tutorial::VisitLeaderboard
@@ -671,7 +685,8 @@ impl State {
             Tutorial::VisitArcade => (Tutorial::VisitLobby, TourMove::Stay),
             Tutorial::VisitLobby => (Tutorial::VisitTable, TourMove::Table),
             Tutorial::VisitTable => (Tutorial::VisitGames, TourMove::Page(Screen::Games)),
-            Tutorial::VisitGames => (Tutorial::VisitArtboard, TourMove::Page(Screen::Artboard)),
+            Tutorial::VisitGames => (Tutorial::VisitDungeon, TourMove::Stay),
+            Tutorial::VisitDungeon => (Tutorial::VisitArtboard, TourMove::Page(Screen::Artboard)),
             Tutorial::VisitArtboard => (Tutorial::VisitDirectory, TourMove::Page(Screen::Profiles)),
             Tutorial::VisitDirectory => (
                 Tutorial::VisitLeaderboard,

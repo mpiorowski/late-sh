@@ -1346,6 +1346,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         | Tutorial::VisitLobby
         | Tutorial::VisitTable
         | Tutorial::VisitGames
+        | Tutorial::VisitDungeon
         | Tutorial::VisitArtboard
         | Tutorial::VisitDirectory
         | Tutorial::VisitLeaderboard
@@ -1488,7 +1489,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     text,
                 )),
             ],
-            "the artboard",
+            "a taste of the dungeon",
         ),
         Tutorial::VisitArtboard => (
             Screen::Artboard,
@@ -1621,14 +1622,15 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
             ],
             "home to the lounge",
         ),
-        // The music, lobby and practice-table stops write their pitch
-        // into the real surface they hold open: see `tour_header`.
+        // The music, lobby, practice-table and dungeon stops write their
+        // pitch into the real surface they hold open: see `tour_header`.
         Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Welcome
         | Tutorial::VisitMusic
         | Tutorial::VisitLobby
         | Tutorial::VisitTable
+        | Tutorial::VisitDungeon
         | Tutorial::Homecoming
         | Tutorial::Done => return,
     };
@@ -1650,8 +1652,9 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
 /// One tour stop, drawn the same way wherever it lands: a title, the pitch,
 /// then a breaker carrying the only keys the stop takes, flush right. The
 /// surface stops write it into the top of the real surface they hold open
-/// (the Stations modal, the Lobby modal, the practice table); every other
-/// stop gets it in a box of its own (`draw_box`).
+/// (the Stations modal, the Lobby modal) or across the top of the page
+/// they take over (the practice table, the dungeon fight: `draw_above`);
+/// every other stop gets it in a box of its own (`draw_box`).
 pub(crate) struct TourHeader {
     title: &'static str,
     lines: Vec<Line<'static>>,
@@ -1699,6 +1702,17 @@ impl TourHeader {
         frame.render_widget(block, rect);
         self.draw(frame, inner);
     }
+
+    /// The stop across the top of a page it takes over (the practice table,
+    /// the dungeon fight), with a breathing row either side like the modals
+    /// give it. Returns the room left under it for the page.
+    pub(crate) fn draw_above(&self, frame: &mut Frame, area: Rect) -> Rect {
+        let rows = Layout::vertical([Constraint::Length(self.rows() + 2), Constraint::Fill(1)])
+            .split(area);
+        self.draw(frame, rows[0].inner(Margin::new(TOUR_SIDE_PADDING, 1)));
+        rows[1]
+    }
+
     pub(crate) fn draw(&self, frame: &mut Frame, area: Rect) {
         let amber = Style::default().fg(theme::AMBER());
         let mut lines = vec![Line::from(Span::styled(
@@ -1727,8 +1741,12 @@ impl TourHeader {
 
 /// The header for the stops that live inside a real surface, `None` for
 /// every other stage. `table_played` is whether the practice table's one
-/// shot has been struck.
-pub(crate) fn tour_header(stage: Tutorial, table_played: bool) -> Option<TourHeader> {
+/// shot has been struck, `fight_won` whether the dungeon's dragon is down.
+pub(crate) fn tour_header(
+    stage: Tutorial,
+    table_played: bool,
+    fight_won: bool,
+) -> Option<TourHeader> {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
@@ -1798,6 +1816,21 @@ pub(crate) fn tour_header(stage: Tutorial, table_played: bool) -> Option<TourHea
                 keys,
             })
         }
+        Tutorial::VisitDungeon => Some(TourHeader {
+            title: "✦ the tour · a taste of the dungeon",
+            lines: vec![Line::from(vec![
+                Span::styled("one fight, sketched. ", text),
+                Span::styled("Dungeon Crawl", name),
+                Span::styled(" and ", text),
+                Span::styled("NetHack", name),
+                Span::styled(" run here for real.", text),
+            ])],
+            keys: if fight_won {
+                next("next: the artboard")
+            } else {
+                next("fight")
+            },
+        }),
         Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Welcome
