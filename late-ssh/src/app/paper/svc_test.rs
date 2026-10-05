@@ -515,23 +515,12 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // Nothing pops while the tour holds the keys, however long it takes.
-    for bytes in [
-        &b"1"[..],
-        b"\r",
-        b"2",
-        b"\r",
-        b"3",
-        b"4",
-        b"5",
-        b"6",
-        b"\x06",
-    ] {
-        app.handle_input(bytes);
+    // Enter is the only key the route takes, stop after stop.
+    while app.clubhouse.tutorial != Tutorial::Homecoming {
+        app.handle_input(b"\r");
         let frame = render_plain(&mut app);
         assert!(!frame.contains("The Late Edition"), "{frame}");
     }
-    app.handle_input(b"0");
-    assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
     assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
 
     // Settling in is the last step of the opening; the paper is next.

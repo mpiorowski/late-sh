@@ -180,7 +180,8 @@ fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
         Tutorial::VisitMusic,
         crate::app::clubhouse::state::TableStop::Racked,
         false,
-    ).unwrap();
+    )
+    .unwrap();
     let mut state = StationsModalState::default();
     state.open(key("datawave"));
 

@@ -187,6 +187,12 @@ impl Fight {
     }
 }
 
+impl Default for Fight {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One cell of the level at this beat: its glyph and colour. What the
 /// hero can see has crawl's colours, what they only remember is dark grey
 /// (stairs and items keep theirs), and what was never explored is blank.
@@ -359,10 +365,7 @@ fn panel(fight: &Fight, hero: &str) -> Vec<Vec<Span<'static>>> {
         ],
         vec![
             caption("a) "),
-            Span::styled(
-                "+3 battleaxe (flame)",
-                Style::default().fg(crawl::LIGHTRED),
-            ),
+            Span::styled("+3 battleaxe (flame)", Style::default().fg(crawl::LIGHTRED)),
         ],
         vec![caption("Throw: "), value("7 javelins")],
         match monster {

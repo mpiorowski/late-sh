@@ -554,26 +554,24 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
     expect_shell_data_contains(&mut shell_channel, b"welcome to the late lounge").await;
 
     // A brand-new account runs the forced tour, which swallows every key but
-    // the one its current stop asks for: a page digit, or Enter on the two
-    // mid-route interlude boxes (the music on Home, the lobby on The Arcade).
-    // The route is pinned in `clubhouse/state_test.rs`.
-    for key in [&b"1"[..], b"\r", b"2"] {
+    // Enter: three of them walk from the door past Home's two stops to The
+    // Arcade. The route is pinned in `clubhouse/state_test.rs`.
+    for _ in 0..3 {
         shell_channel
-            .data(key)
+            .data(&b"\r"[..])
             .await
             .expect("send shell input after token close");
     }
     expect_shell_data_contains(&mut shell_channel, b"The Arcade").await;
 
     // A further post-close interaction proves the first frame was not merely
-    // the render loop's final draw while shutting down.
-    for key in [&b"\r"[..], b"3", b"4", b"5"] {
-        shell_channel
-            .data(key)
-            .await
-            .expect("send tour input after token close");
-    }
-    expect_shell_data_contains(&mut shell_channel, b"Profiles").await;
+    // the render loop's final draw while shutting down: one more Enter holds
+    // the Lobby modal open under the tour's pitch.
+    shell_channel
+        .data(&b"\r"[..])
+        .await
+        .expect("send tour input after token close");
+    expect_shell_data_contains(&mut shell_channel, b"opens this from anywhere").await;
 
     client
         .disconnect(russh::Disconnect::ByApplication, "", "en")

@@ -3618,14 +3618,20 @@ async fn forced_tour_quit_confirm_shows_over_the_held_stations_modal() {
 
     app.handle_input(b"q");
     let frame = render_plain(&mut app);
-    assert!(frame.contains("Clicked by mistake, right?"), "frame={frame:?}");
+    assert!(
+        frame.contains("Clicked by mistake, right?"),
+        "frame={frame:?}"
+    );
     assert!(!frame.contains("the tour · the radio"), "frame={frame:?}");
 
     app.handle_input(b"\x1b");
     app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
     crate::app::input::flush_pending_escape(&mut app);
     let frame = render_plain(&mut app);
-    assert!(!frame.contains("Clicked by mistake, right?"), "frame={frame:?}");
+    assert!(
+        !frame.contains("Clicked by mistake, right?"),
+        "frame={frame:?}"
+    );
     assert!(frame.contains("the tour · the radio"), "frame={frame:?}");
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitMusic);
 }
