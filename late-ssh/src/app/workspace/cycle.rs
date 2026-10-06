@@ -3,7 +3,8 @@
 //! -> each house table you're seated at -> each Arcade daily puzzle you've
 //! started but not finished -> each live door game (a recently-detached
 //! Lateania world, the running roguelikes, then the two loaded native
-//! remakes) -> back to the base. The one key that spans the Lobby game
+//! remakes) -> an open watch of someone else's game -> back to the base.
+//! The one key that spans the Lobby game
 //! domains, the Arcade dailies, and the door games: inside a running
 //! roguelike the same backtick detaches (the game keeps running) and hops
 //! onward; inside an active Lateania world it leaves (autosave) and keeps
@@ -41,6 +42,10 @@ pub(crate) enum GameWorkspace {
     /// means the door is still loaded on this session, which it stays until
     /// an explicit leave or the idle deadline.
     Door(Screen),
+    /// An open watch of someone else's live game, drawn on the Games hub's
+    /// screen. The stream stays up while the session is away, so hopping in
+    /// is a plain screen switch.
+    Watch,
 }
 
 /// Where the hop chain comes home to: the page you went into the games
@@ -179,6 +184,12 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             true => GameWorkspace::Door(Screen::GreenDragon),
             false => return false,
         },
+        // An open watch reaches here through its own key handler
+        // (`door::spectate::input`); the hub proper and a preview never do.
+        Screen::Games => match watch_open(app) {
+            true => GameWorkspace::Watch,
+            false => return false,
+        },
         _ => return false,
     };
     let my_turn_ids: Vec<Uuid> = app
@@ -190,6 +201,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     let seated_tables = app.house.my_seated_tables();
     let arcade_stops = unfinished_daily_stops(app);
     let door_stops = crate::app::door::hub::state::live_doors(app);
+    let watch_open = watch_open(app);
     let base = app.workspace_base.screen();
     // Preserve where the first stop in the hop chain was opened from so
     // `q`/`Esc` still returns there after any number of backtick hops. Arcade
@@ -210,6 +222,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         &seated_tables,
         &arcade_stops,
         &door_stops,
+        watch_open,
         current,
     );
     // Hopping out of an active Arcade puzzle closes the view (the board
@@ -238,7 +251,8 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
                 | Screen::Brogue
                 | Screen::Lateania
                 | Screen::Darkroom
-                | Screen::GreenDragon => {
+                | Screen::GreenDragon
+                | Screen::Games => {
                     app.set_screen(base);
                 }
                 _ => {
@@ -292,11 +306,23 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             }
             true
         }
+        // The open watch draws over the hub whenever the hub is on screen.
+        GameWorkspace::Watch => {
+            app.set_screen(Screen::Games);
+            true
+        }
     }
 }
 
+/// Whether this session holds an open watch: the cycle's last stop.
+fn watch_open(app: &App) -> bool {
+    app.spectate_state
+        .as_ref()
+        .is_some_and(|state| state.is_open())
+}
+
 /// The stop after `current` in `[base, boards..., tables..., arcade...,
-/// doors...]`. A current stop missing from the list (the turn just passed,
+/// doors..., watch]`. A current stop missing from the list (the turn just passed,
 /// the seat was lost, the puzzle got solved, the dungeon run ended) restarts
 /// from the front so the hop chain keeps draining the queue instead of
 /// bailing home early.
@@ -305,6 +331,7 @@ fn next_workspace(
     seated_tables: &[HouseTable],
     arcade_stops: &[ArcadeStop],
     door_stops: &[Screen],
+    watch_open: bool,
     current: GameWorkspace,
 ) -> GameWorkspace {
     let stops: Vec<GameWorkspace> = my_turn_ids
@@ -314,6 +341,7 @@ fn next_workspace(
         .chain(seated_tables.iter().copied().map(GameWorkspace::HouseTable))
         .chain(arcade_stops.iter().copied().map(GameWorkspace::Arcade))
         .chain(door_stops.iter().copied().map(GameWorkspace::Door))
+        .chain(watch_open.then_some(GameWorkspace::Watch))
         .collect();
     let next = match current {
         GameWorkspace::Base => stops.first(),

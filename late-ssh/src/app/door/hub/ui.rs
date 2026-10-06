@@ -60,8 +60,8 @@ pub struct HubView<'a> {
     pub live: &'a [LiveRow],
     /// The live row this session is watching, when it is still listed.
     pub live_selected: Option<usize>,
-    /// This session is watching a live game: no card is selected, and the
-    /// landing pane is left to the watch view (`watch_pane_area`).
+    /// This session previews a live game: no card is selected, and the
+    /// landing pane is left to the preview (`watch_pane_area`).
     pub watching: bool,
     /// The `show_watch_chat` setting, shown (and flipped with `t`) on the
     /// watchable doors' landings.
@@ -228,9 +228,9 @@ fn rail_rows(
         .collect()
 }
 
-/// The pane beside the rail where the watch view draws while this session
-/// watches a live game: the landing's place, plus the breathing row under
-/// the top border. `None` under the hub's too-small guard.
+/// The pane beside the rail where the preview draws while the rail sits on
+/// a live row: the landing's place, plus the breathing row under the top
+/// border. `None` under the hub's too-small guard.
 pub fn watch_pane_area(area: Rect) -> Option<Rect> {
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         return None;
@@ -290,8 +290,8 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     let selected = view.selected.min(view.roster.len() - 1);
     draw_sidebar(frame, body[0], selected, view);
 
-    // A watch owns the pane beside the rail while this session holds one;
-    // the caller draws it into `watch_pane_area`.
+    // A preview owns the pane beside the rail while the rail sits on a live
+    // row; the caller draws it into `watch_pane_area`.
     if view.watching {
         view.max_scroll.set(0);
         draw_watch_footer(frame, layout[1]);
@@ -639,12 +639,12 @@ fn fit(text: &str, width: usize) -> String {
     cut
 }
 
-/// The footer while a live game is being watched: the landing keys are gone
-/// with the landing.
+/// The footer while a live game is previewed: the landing keys are gone
+/// with the landing, and Enter opens the watch.
 fn draw_watch_footer(frame: &mut Frame, area: Rect) {
     let hints: &[(&str, &str)] = &[
         ("\u{2191} \u{2193}  or  j k", "switch"),
-        ("i", "chat"),
+        ("Enter", "watch with chat"),
         ("Esc", "back"),
     ];
     frame.render_widget(Paragraph::new(hint_line(hints)), area);

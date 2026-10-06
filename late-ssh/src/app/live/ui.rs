@@ -9,7 +9,8 @@
 //! What goes in the frame is the source's own: a daily match paints its
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
 //! (`audio/booth/live.rs`), a News article its ASCII art
-//! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`).
+//! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`), a
+//! door game a drawn dungeon room (`door/spectate/live.rs`).
 
 use std::cell::Cell;
 
@@ -25,6 +26,7 @@ use crate::app::{
     audio::booth::live as booth_live,
     chat::news::live as news_live,
     common::theme,
+    door::spectate::live as door_live,
     games::pool_core::canvas::Rgb,
     lobby::daily::{live_board::canvas_background, live_strip as match_strip},
     statusline::data::TITLE_COLS,
@@ -190,6 +192,7 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Track(track) => booth_live::body(budget, track),
         LiveStripView::Article(article) => news_live::body(budget, article),
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
+        LiveStripView::DoorGame(game) => door_live::body(budget, game),
     };
     frame_lines(width, body, host)
 }
@@ -290,6 +293,7 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
         // A shared link is never happening right now (`news_live::body`).
         LiveStripView::Article(_) => false,
         LiveStripView::Stream(_) => stream_live::glow(),
+        LiveStripView::DoorGame(_) => door_live::glow(),
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -307,6 +311,7 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
         LiveStripView::Article(article) => news_live::compact_spans(rest, article),
         LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
+        LiveStripView::DoorGame(game) => door_live::compact_spans(rest, game),
     }
 }
 

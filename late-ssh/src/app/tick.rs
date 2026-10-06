@@ -481,11 +481,16 @@ impl App {
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
+        let own_door_game = crate::app::door::spectate::chat::own_running_game(self).and_then(
+            |(game, playname)| crate::app::door::spectate::state::LiveGameKey::new(game, &playname),
+        );
         changed |= self.live.tick(
             &self.daily,
             &self.audio,
             self.chat.news.all_articles(),
             &self.chat.live_streams,
+            &self.live_games.live_rows(),
+            own_door_game,
             reading,
             picture_settings,
         );
@@ -583,15 +588,27 @@ impl App {
         // The watch chat: the watchers' pane and the player's own pane each
         // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);
-        // A watch lives only on the Games hub. Leaving the hub ends it, and
-        // so does the watched game ending (or its stream dropping): back to
-        // the hub with a word on why the screen went away.
-        let watch_end = self
-            .spectate_state
-            .as_ref()
-            .and_then(|state| state.end_reason(self.screen == Screen::Games));
+        // A preview lives only on the Games hub, so leaving the hub ends it.
+        // An open watch outlives a hop away until it has been off screen for
+        // `AWAY_WINDOW`; the stamp below is what that measures from. The
+        // watched game ending (or its stream dropping) ends either, with a
+        // word on why the screen went away.
+        let now = std::time::Instant::now();
+        let on_hub = self.screen == Screen::Games;
+        let watch_end = match self.spectate_state.as_mut() {
+            Some(state) => {
+                if on_hub {
+                    state.mark_seen(now);
+                }
+                state.end_reason(on_hub, now)
+            }
+            None => None,
+        };
         match watch_end {
-            Some(crate::app::door::spectate::state::WatchEnd::LeftHub) => {
+            Some(
+                crate::app::door::spectate::state::WatchEnd::LeftHub
+                | crate::app::door::spectate::state::WatchEnd::WentAway,
+            ) => {
                 self.stop_spectating();
                 changed = true;
             }

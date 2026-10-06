@@ -149,6 +149,16 @@ impl LiveGamesService {
             .map(|g| g.watchers)
     }
 
+    /// Publish `roster` as `game`'s live games, as the roster task does for
+    /// a block from the host, so app flows can be driven without a door host.
+    #[cfg(test)]
+    pub(crate) fn publish_roster_for_tests(&self, game: SpectateGame, roster: Vec<LiveGame>) {
+        let publish = match game {
+            SpectateGame::Dcss => &self.dcss_tx,
+        };
+        publish.send_replace(Arc::new(roster));
+    }
+
     /// Whether a roster changed since this holder last looked. Marks it seen.
     pub fn tick(&mut self) -> bool {
         match self.dcss.has_changed() {

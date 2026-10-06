@@ -3,7 +3,9 @@
 // (`ChatRoom::get_or_create_watch_room`), reached through a `ChatLink`:
 //
 // - a watcher's link lives on their watch (`spectate::state::State`) and
-//   feeds the chat pane beside the watched screen, where they read and type;
+//   feeds the chat pane beside the watched screen, where they read and type.
+//   Only an open watch drives it: a preview beside the rail has no chat, so
+//   browsing the live rows joins nobody's room;
 // - a player's link (`App::own_watch_chat`) lives while their own game runs
 //   and feeds the read-only pane beside it (one line under it on a narrow
 //   terminal). The player only reads: every key they press still goes to the
@@ -34,7 +36,7 @@ const LINE_FRESH_MINUTES: i64 = 10;
 pub fn tick(app: &mut App) -> bool {
     let mut changed = false;
 
-    if let Some(state) = app.spectate_state.as_mut() {
+    if let Some(state) = app.spectate_state.as_mut().filter(|state| state.is_open()) {
         changed |= drive(
             state.chat_mut(),
             &app.live_games,
@@ -64,9 +66,15 @@ pub fn tick(app: &mut App) -> bool {
 
 /// The running game this session's player should see watcher chat under.
 fn own_game(app: &App) -> Option<(SpectateGame, String)> {
-    if !app.profile_state.profile().show_watch_chat {
-        return None;
+    match app.profile_state.profile().show_watch_chat {
+        true => own_running_game(app),
+        false => None,
     }
+}
+
+/// This session's own running game on a watchable door, by its door and the
+/// player's handle.
+pub(crate) fn own_running_game(app: &App) -> Option<(SpectateGame, String)> {
     let state = app.dcss_state.as_ref()?;
     if !state.is_running() {
         return None;

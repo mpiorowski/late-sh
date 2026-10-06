@@ -278,7 +278,7 @@ Room favorites:
 Home presence:
 - The top activity/multiplayer/quest strip was removed; presence (online count + connected friends) lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`; the sidebar Activity panel is retired) surfaced in the TUI as the one-row activity ticker above the composer, never as chat rows. The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
 
-`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse, the Games hub while it is watching a door game, a player's own running DCSS game), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
+`App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse, the Games hub while it has a door-game watch open, a player's own running DCSS game), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
 
 There are separate `ChatRowsCache` instances on `App` for:
 - Home lounge dashboard chat.
@@ -1042,7 +1042,7 @@ Embedded game chat:
 - Uses `EmbeddedRoomChatView`.
 - Composer is capped at 4 visible lines.
 - Game-backed chat rooms are joined through their surface's idempotent `join_game_room_chat` (fired from `App::tick`), not the Home room rail.
-- The door watch view (`app/door/spectate`) is the one pane that lives inside another page: `Screen::Games` is in the pane roster (`app/input.rs::screen_has_chat_pane`) but resolves to a room only while the session is watching and the pane is docked. The player being watched gets the same room read-only beside their own game through `draw_embedded_room_messages` (the message half of `draw_embedded_room_chat`: no composer, selection, overlay or click target), or its newest message as one row on a narrow terminal (`door/dcss/CONTEXT.md` §1).
+- The door watch view (`app/door/spectate`) is the one pane that lives inside another page: `Screen::Games` is in the pane roster (`app/input.rs::screen_has_chat_pane`) but resolves to a room only while the session has a watch open (a preview beside the rail has no chat) and the pane is docked. `draw_embedded_room_chat` returns its composer rect so the watch can tee its rule into the composer's borders. The player being watched gets the same room read-only beside their own game through `draw_embedded_room_messages` (the message half of `draw_embedded_room_chat`: no composer, selection, overlay or click target), or its newest message as one row on a narrow terminal (`door/dcss/CONTEXT.md` §1).
 
 Message rendering:
 - Local message storage is newest-first.

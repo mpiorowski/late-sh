@@ -82,8 +82,8 @@ impl InputContext {
 fn screen_has_chat_pane(screen: Screen) -> bool {
     matches!(
         screen,
-        // Games draws a pane only while this session watches a live game
-        // (the watch chat); the hub proper resolves to no room.
+        // Games draws a pane only while this session has a watch open (the
+        // watch chat); the hub proper and a preview resolve to no room.
         Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen | Screen::Games
     )
 }
@@ -1273,7 +1273,7 @@ fn watched_live_row(
 }
 
 /// Move the hub's rail selection to `entry`: a card ends any watch and
-/// becomes the selected card, a live row starts watching that game.
+/// becomes the selected card, a live row previews that game.
 fn select_rail_entry(
     app: &mut App,
     roster: &[crate::app::door::hub::state::HubGame],
@@ -1302,10 +1302,20 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     let roster = HubGame::roster(app.is_runner());
     let selected = app.games_hub_state.selected_game(roster);
 
-    // A watch is the rail sitting on a live row: its docked chat gets every
-    // event first, and what it leaves falls to the rail keys below.
-    if app.spectate_state.is_some() && crate::app::door::spectate::input::handle_event(app, event) {
-        return true;
+    // An open watch owns the page and every event on it. A preview is the
+    // rail sitting on a live row: it gets each event first (Enter opens it),
+    // and what it leaves falls to the rail keys below.
+    {
+        use crate::app::door::spectate::{input as spectate_input, state::WatchMode};
+        match spectate_input::mode(app) {
+            Some(WatchMode::Open) => return spectate_input::handle_open_event(app, event),
+            Some(WatchMode::Preview) => {
+                if spectate_input::handle_preview_event(app, event) {
+                    return true;
+                }
+            }
+            None => {}
+        }
     }
 
     // The rc config modal is fully modal while open: `x` clears the stored
@@ -2454,9 +2464,10 @@ fn dispatch_escape(app: &mut App) {
         app.set_screen(Screen::Dashboard);
         return;
     }
-    // Esc from the Games hub peels the watch (a selected chat message, then
-    // the watch itself), closes the rc config modal, cancels a pending reset
-    // prompt, and otherwise drops back to Home.
+    // Esc from the Games hub peels the watch (a selected chat message, an
+    // open watch back to its preview, then the preview), closes the rc
+    // config modal, cancels a pending reset prompt, and otherwise drops back
+    // to Home.
     if ctx.screen == Screen::Games {
         if app.spectate_state.is_some() {
             crate::app::door::spectate::input::handle_escape(app);
@@ -3033,7 +3044,7 @@ pub(crate) struct PendingChatProfileOpen {
 /// on which room an interaction belongs to. Screens outside
 /// `screen_has_chat_pane` resolve to `None`, as do pane screens with no
 /// room on show (no active table, pre-109 match, synthetic Home entry, a
-/// Games hub that is not watching anyone).
+/// Games hub with no open watch).
 fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
         Screen::Dashboard => app.chat.selected_room_id,

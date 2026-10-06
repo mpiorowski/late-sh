@@ -1,9 +1,10 @@
-// The watch view, drawn beside the Games hub's rail (in the landing's place)
-// while this session sits on one of the rail's live rows. One header row
-// (who, which game, how long, who else is watching), then the player's
-// screen with the watch chat docked beside it (`chat_dock`). The screen is
-// the player's size, not ours: a smaller one is centered, a larger one is
-// cropped to a window that follows the cursor (crawl parks it on the `@`).
+// The watch view. As a preview it draws beside the Games hub's rail (in the
+// landing's place) while the rail sits on a live row: one header row, then
+// the player's screen alone. Opened (Enter on the row) it takes the whole
+// page: the header over the screen, and the watch chat docked beside it
+// (`chat_dock`). The screen is the player's size, not ours: a smaller one is
+// centered, a larger one is cropped to a window that follows the cursor
+// (crawl parks it on the `@`).
 //
 // `own_game_split` and the two drawers under it are the other end of the
 // same chat: what a player sees of it around their own running game, a
@@ -17,7 +18,7 @@ use ratatui::widgets::Paragraph;
 
 use super::chat::WatchLine;
 use super::proxy::{LiveGame, WatchStatus};
-use super::state::State;
+use super::state::{State, WatchMode};
 use crate::app::chat::ui::{
     EmbeddedRoomChatView, draw_embedded_room_chat, draw_embedded_room_messages,
 };
@@ -158,24 +159,34 @@ pub fn fit_axis(screen_len: u16, view_len: u16, cursor: u16) -> AxisFit {
     }
 }
 
-/// `chat` is the watched player's chat room, `None` until this session is in
-/// it.
+/// What the watch view draws around the watched screen.
+pub enum WatchPane<'a> {
+    /// The preview beside the hub's rail: the screen alone.
+    Preview,
+    /// An open watch: the chat docked beside the screen. The chat view is
+    /// `None` until this session is in the room; the dock stays reserved.
+    Open(Option<EmbeddedRoomChatView<'a>>),
+}
+
 pub fn draw(
     frame: &mut Frame,
     area: Rect,
     view: &SpectateView<'_>,
-    chat: Option<EmbeddedRoomChatView<'_>>,
+    pane: WatchPane<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    let dock = match chat {
-        Some(_) => chat_dock(area),
-        None => ChatDock::Hidden,
+    let dock = match pane {
+        WatchPane::Preview => ChatDock::Hidden,
+        WatchPane::Open(_) => chat_dock(area),
     };
     let layout = watch_layout(area, dock);
     let body = layout.screen;
-    if let (Some(chat), Some((rule, pane))) = (chat, layout.chat) {
+    if let (WatchPane::Open(chat), Some((rule, chat_area))) = (pane, layout.chat) {
         draw_rule(frame, rule);
-        draw_embedded_room_chat(frame, pane, chat, terminal_images);
+        if let Some(chat) = chat {
+            let composer = draw_embedded_room_chat(frame, chat_area, chat, terminal_images);
+            join_rule_to_composer(frame, rule, composer);
+        }
     }
 
     let (rows, cols) = view.state.with_screen(|screen| screen.size());
@@ -221,8 +232,13 @@ fn draw_header(
 ) {
     let playname = view.state.playname();
     let dim = Style::default().fg(theme::TEXT_DIM());
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let lead = match view.state.mode() {
+        WatchMode::Preview => " ",
+        WatchMode::Open => " watching ",
+    };
     let mut spans = vec![
-        Span::styled(" watching ", dim),
+        Span::styled(lead, dim),
         Span::styled(
             playname.to_string(),
             Style::default()
@@ -232,6 +248,9 @@ fn draw_header(
         Span::styled(format!(" \u{b7} {}", view.state.game().label()), dim),
     ];
     if let Some(game) = view.entry {
+        if !game.status.is_empty() {
+            spans.push(Span::styled(format!(" \u{b7} {}", game.status), dim));
+        }
         spans.push(Span::styled(
             format!(
                 " \u{b7} {} in",
@@ -248,23 +267,38 @@ fn draw_header(
     if let Some((cols, rows)) = cropped {
         spans.push(Span::styled(
             format!(" \u{b7} their screen is {cols}x{rows}, yours is smaller"),
-            Style::default().fg(theme::TEXT_FAINT()),
+            faint,
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
-    // The hub's footer carries the keys; the header only says when the chat
-    // has no room to dock, since `i` then does nothing.
-    match dock {
-        ChatDock::Right | ChatDock::Below => {}
-        ChatDock::Hidden => frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "widen the terminal to chat ",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        ),
+    // A preview leaves its keys to the hub's footer. An open watch has the
+    // whole page, so its keys ride the header's right end, with a word when
+    // the chat has no room to dock (`i` then does nothing).
+    let keys = match (view.state.mode(), dock) {
+        (WatchMode::Preview, _) => return,
+        (WatchMode::Open, ChatDock::Right | ChatDock::Below) => "` hop out \u{b7} Esc back ",
+        (WatchMode::Open, ChatDock::Hidden) => {
+            "widen the terminal to chat \u{b7} ` hop out \u{b7} Esc back "
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(keys, faint))).alignment(Alignment::Right),
+        area,
+    );
+}
+
+/// Where the composer block's top and bottom borders run into a rule beside
+/// it, the rule's cell becomes a tee, so the two read as one line.
+fn join_rule_to_composer(frame: &mut Frame, rule: Rect, composer: Rect) {
+    if rule.width != 1 || composer.height == 0 {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    for y in [composer.y, composer.y + composer.height - 1] {
+        if y >= rule.y && y < rule.y + rule.height {
+            buf[(rule.x, y)].set_symbol("\u{251c}");
+        }
     }
 }
 

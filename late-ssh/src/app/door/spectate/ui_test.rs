@@ -120,3 +120,20 @@ fn a_players_chat_never_costs_crawl_its_minimum_screen() {
     let small = Rect::new(1, 1, 100, 24);
     assert_eq!(own_game_split(small), (small, OwnChat::Hidden));
 }
+
+#[test]
+fn the_rule_tees_into_the_composer_borders() {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(3, 6)).expect("test terminal");
+    terminal
+        .draw(|frame| {
+            let rule = Rect::new(0, 0, 1, 6);
+            draw_rule(frame, rule);
+            join_rule_to_composer(frame, rule, Rect::new(1, 2, 2, 3));
+        })
+        .expect("draw");
+    let column: String = (0..6)
+        .map(|y| terminal.backend().buffer()[(0, y)].symbol().to_string())
+        .collect();
+    assert_eq!(column, "\u{2502}\u{2502}\u{251c}\u{2502}\u{251c}\u{2502}");
+}

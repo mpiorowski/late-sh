@@ -17,6 +17,10 @@ use crate::app::{
         thumbnail::Thumbnail,
     },
     chat::news::live::{self as news_live, ArticleStripView},
+    door::spectate::{
+        live::{self as door_live, DoorGameStripView},
+        state::{LiveGameKey, LiveRow},
+    },
     files::inline_image::InlineImageRenderSettings,
     lobby::daily::{live::MatchStripView, state::DailyState},
     stream::{
@@ -33,6 +37,7 @@ pub enum LiveStripView<'a> {
     Track(TrackStripView),
     Article(ArticleStripView),
     Stream(StreamStripView),
+    DoorGame(DoorGameStripView),
 }
 
 impl LiveStripView<'_> {
@@ -47,6 +52,7 @@ impl LiveStripView<'_> {
             Self::Track(track) => Some(LiveSource::BoothTrack(track.item.id)),
             Self::Article(article) => Some(LiveSource::NewsArticle(article.item.article.id)),
             Self::Stream(strip) => Some(LiveSource::Stream(strip.stream.user_id)),
+            Self::DoorGame(strip) => Some(LiveSource::DoorGame(strip.key)),
         }
     }
 }
@@ -86,7 +92,9 @@ impl LiveState {
 
     /// Read the sources and decide what the strip shows. `articles` is the
     /// session's News snapshot and `streams` its copy of the stream
-    /// registry (`ChatState::live_streams`). `reading` is
+    /// registry (`ChatState::live_streams`). `door_games` are the live games
+    /// on the watchable doors (`LiveGamesService::live_rows`), and
+    /// `own_door_game` the viewer's own running one. `reading` is
     /// whether the viewer has a message selected in the card: the strip then
     /// holds its height. `picture_settings` is how this session's terminal
     /// paints an image. True when what the strip draws changed.
@@ -96,6 +104,8 @@ impl LiveState {
         audio: &AudioState,
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
+        door_games: &[LiveRow],
+        own_door_game: Option<LiveGameKey>,
         reading: bool,
         picture_settings: InlineImageRenderSettings,
     ) -> bool {
@@ -103,6 +113,7 @@ impl LiveState {
         candidates.extend(audio.live_candidates());
         candidates.extend(news_live::candidates(articles));
         candidates.extend(stream_live::candidates(streams));
+        candidates.extend(door_live::candidates(door_games, own_door_game));
         let changed = self.refresh(&candidates, Instant::now(), Utc::now(), reading);
         let thumbnail = match self.showing() {
             Some(LiveSource::BoothTrack(item_id)) => audio
@@ -112,6 +123,7 @@ impl LiveState {
             | Some(LiveSource::DailyResult(_))
             | Some(LiveSource::NewsArticle(_))
             | Some(LiveSource::Stream(_))
+            | Some(LiveSource::DoorGame(_))
             | None => None,
         };
         let picture_changed = self.refresh_track_picture(thumbnail, picture_settings);
@@ -208,8 +220,9 @@ impl LiveState {
 
     /// What the strip paints, if it is up. `listening_on` is the viewer's
     /// audio source, which decides what opening a booth track does;
-    /// `articles` is the session's News snapshot and `streams` its copy of
-    /// the stream registry.
+    /// `articles` is the session's News snapshot, `streams` its copy of the
+    /// stream registry, and `door_games` the live games on the watchable
+    /// doors.
     pub fn view<'a>(
         &self,
         daily: &'a DailyState,
@@ -217,6 +230,7 @@ impl LiveState {
         listening_on: AudioSource,
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
+        door_games: &[LiveRow],
     ) -> Option<LiveStripView<'a>> {
         match self.showing()? {
             LiveSource::DailyMatch(match_id) => {
@@ -240,6 +254,9 @@ impl LiveState {
             LiveSource::Stream(streamer_id) => {
                 stream_live::view(streams, streamer_id).map(LiveStripView::Stream)
             }
+            LiveSource::DoorGame(key) => {
+                door_live::view(door_games, key).map(LiveStripView::DoorGame)
+            }
         }
     }
 
@@ -251,7 +268,8 @@ impl LiveState {
             source @ (LiveSource::DailyMatch(_)
             | LiveSource::BoothTrack(_)
             | LiveSource::NewsArticle(_)
-            | LiveSource::Stream(_)) => Some(source),
+            | LiveSource::Stream(_)
+            | LiveSource::DoorGame(_)) => Some(source),
         }
     }
 }

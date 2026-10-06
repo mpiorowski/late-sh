@@ -3350,12 +3350,15 @@ pub(crate) fn embedded_chat_layout(
     }
 }
 
+/// An embedded room chat: messages above, the composer block at the bottom.
+/// Returns the composer block's rect, for a surface that joins its own rules
+/// into the block's borders.
 pub fn draw_embedded_room_chat(
     frame: &mut Frame,
     area: Rect,
     mut view: EmbeddedRoomChatView<'_>,
     terminal_images: &mut TerminalImageFrame,
-) {
+) -> Rect {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
         .max(composer_placeholder_lines(
@@ -3403,6 +3406,7 @@ pub fn draw_embedded_room_chat(
         view.composer_rect_slot,
         view.composer_viewport_top_slot,
     );
+    composer_area
 }
 
 /// An embedded room drawn to be read and nothing else: its messages fill

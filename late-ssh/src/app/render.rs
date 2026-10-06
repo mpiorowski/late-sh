@@ -698,6 +698,9 @@ impl App {
             .unwrap_or_default();
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
+        // The live games on the watchable doors: the hub rail's live rows,
+        // and a live strip source.
+        let live_rows = self.live_games.live_rows();
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
         let dashboard_live_strip = if home_selected {
@@ -707,6 +710,7 @@ impl App {
                 self.paired_source,
                 self.chat.news.all_articles(),
                 &self.chat.live_streams,
+                &live_rows,
             )
         } else {
             None
@@ -722,6 +726,7 @@ impl App {
                 self.paired_source,
                 self.chat.news.all_articles(),
                 &self.chat.live_streams,
+                &live_rows,
             )
         } else {
             None
@@ -775,6 +780,7 @@ impl App {
                     self.paired_source,
                     self.chat.news.all_articles(),
                     &self.chat.live_streams,
+                    &live_rows,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
         } else {
@@ -1527,7 +1533,7 @@ impl App {
                         darkroom_live,
                         greendragon_live,
                         spectate_state: self.spectate_state.as_ref(),
-                        live_rows: self.live_games.live_rows(),
+                        live_rows,
                         dcss_watchers,
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
@@ -2014,9 +2020,26 @@ impl App {
                 &ctx.clubhouse_state.tour_fight,
                 ctx.clubhouse_state.username(),
             ),
+            // An open watch takes the whole page, the hub's rail included.
+            Screen::Games if ctx.spectate_state.is_some_and(|state| state.is_open()) => {
+                if let Some(state) = ctx.spectate_state {
+                    crate::app::door::spectate::ui::draw(
+                        frame,
+                        content_area,
+                        &crate::app::door::spectate::ui::SpectateView {
+                            state,
+                            entry: state
+                                .row_in(&ctx.live_rows)
+                                .map(|index| &ctx.live_rows[index].entry),
+                        },
+                        crate::app::door::spectate::ui::WatchPane::Open(ctx.watch_chat_view.take()),
+                        terminal_images,
+                    );
+                }
+            }
             Screen::Games => {
                 // The rail's selection sits on a live row while this session
-                // watches one; the watch then draws in the landing's place.
+                // previews one; the preview then draws in the landing's place.
                 let live_selected = ctx
                     .spectate_state
                     .and_then(|state| state.row_in(&ctx.live_rows));
@@ -2072,7 +2095,7 @@ impl App {
                             state,
                             entry: live_selected.map(|index| &ctx.live_rows[index].entry),
                         },
-                        ctx.watch_chat_view.take(),
+                        crate::app::door::spectate::ui::WatchPane::Preview,
                         terminal_images,
                     );
                 }

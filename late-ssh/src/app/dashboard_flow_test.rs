@@ -739,3 +739,71 @@ async fn r_on_a_news_story_replies_in_lounge_with_its_title_quoted() {
         "the reply quotes the article, with no message to point at"
     );
 }
+
+/// Somebody starts a DCSS game: it goes up on the live strip, `o` opens the
+/// watch on it (the game across the Games page, its chat beside it), and the
+/// watch is a stop on the backtick cycle, so `` ` `` toggles between it and
+/// Home. No render runs between the keys: the test door host is unreachable,
+/// so a tick would see the stream end and drop the watch.
+#[tokio::test]
+async fn o_on_a_live_door_game_opens_the_watch_and_backtick_toggles_it_with_home() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-door-me").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-door-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    let started_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("wall clock after the unix epoch")
+        .as_secs()
+        - 30;
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix,
+            watchers: 0,
+            status: "XL3 Lair:2".to_string(),
+        }],
+    );
+    wait_for_render_contains(&mut app, "crawler is playing").await;
+    wait_for_render_contains(&mut app, "o or click to watch").await;
+
+    app.handle_input(b"o");
+    let watch = |app: &crate::app::state::App| {
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.game(), state.playname().to_string(), state.mode()))
+    };
+    assert_eq!(app.screen, Screen::Games, "o opens the Games page");
+    assert_eq!(
+        watch(&app),
+        Some((SpectateGame::Dcss, "crawler".to_string(), WatchMode::Open)),
+        "on the open watch of that game"
+    );
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "backtick hops home");
+    assert_eq!(
+        watch(&app).map(|(_, _, mode)| mode),
+        Some(WatchMode::Open),
+        "with the watch kept open"
+    );
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Games, "and backtick hops back in");
+    assert_eq!(watch(&app).map(|(_, _, mode)| mode), Some(WatchMode::Open));
+}

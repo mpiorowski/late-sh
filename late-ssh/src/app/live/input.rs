@@ -33,6 +33,7 @@ pub fn reply_from_key(app: &mut App) -> bool {
         | Some(LiveSource::DailyResult(_))
         | Some(LiveSource::BoothTrack(_))
         | Some(LiveSource::Stream(_))
+        | Some(LiveSource::DoorGame(_))
         | None => false,
     }
 }
@@ -122,5 +123,9 @@ fn open(app: &mut App, source: LiveSource) -> bool {
                 None => false,
             }
         }
+        // The open watch: the game across the page with its watch chat, a
+        // stop on the backtick cycle, so the same key hops back out. Gone
+        // between the frame and the key (the game ended): nothing to open.
+        LiveSource::DoorGame(key) => crate::app::door::spectate::input::open_live_game(app, key),
     }
 }

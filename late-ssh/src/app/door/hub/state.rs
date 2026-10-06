@@ -7,8 +7,9 @@
 //! Under the cards the rail pins a `live` section: one row per game someone
 //! is playing right now on a door whose host serves watch sessions. Those
 //! rows are part of the same selection ([`rail_step`]); sitting on one
-//! watches that game in the landing's place (`door::spectate`), and `t` on a
-//! watchable card flips whether the player sees their own watchers' chat.
+//! previews that game in the landing's place, Enter opens the full watch
+//! with its chat (`door::spectate`), and `t` on a watchable card flips
+//! whether the player sees their own watchers' chat.
 //! Adding a future door game is a
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
 //! new top-level screen. Minecraft is the one card with nothing to launch: the

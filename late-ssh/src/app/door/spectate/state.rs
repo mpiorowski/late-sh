@@ -1,15 +1,20 @@
 // Per-session spectating state: which live game this session watches, and the
-// read-only stream doing it. Watching lives inside the Games hub: a watch is
-// the hub's rail sitting on one of its live rows, so while a `State` is held
-// the hub draws the watched screen where the selected card's landing would
-// be, and leaving the hub ends the watch (`App::tick`).
+// read-only stream doing it. A watch starts as a preview: the Games hub's
+// rail sitting on one of its live rows, the watched screen alone where the
+// selected card's landing would be. Enter opens it: the watched screen
+// across the whole page with the watch chat docked beside it. A preview ends
+// when the session leaves the hub; an open watch is a stop on the backtick
+// cycle, so it outlives a hop away, and ends on Esc, when the game does, or
+// once it has been off screen for `AWAY_WINDOW` (`App::tick`).
 //
 // `ChatLink` is a session's tie to a player's watch-chat room. A watch holds
 // one (the pane beside the watched screen); a player holds one for their own
 // running game (the line under it). `chat.rs` drives both.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use late_core::models::arcade_handle::{HANDLE_MAX_LEN, handle_shape_valid};
 use late_core::models::leaderboard::DoorGame;
 use uuid::Uuid;
 
@@ -18,7 +23,7 @@ use crate::render_signal::RenderSignal;
 
 /// The doors whose hosts serve watch sessions. A new variant breaks the build
 /// at its roster task, its watch target, and its label.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpectateGame {
     Dcss,
 }
@@ -36,6 +41,47 @@ impl SpectateGame {
         match self {
             Self::Dcss => "DCSS",
         }
+    }
+}
+
+/// How long an open watch stays up off screen: the same five minutes a
+/// detached Lateania world stays on the backtick cycle. A watch is passive,
+/// so time away from it, not time without a key, is what ends it.
+pub const AWAY_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+/// One live game by its door and its player's handle, held inline so it is
+/// `Copy`: the live strip's key for it (`LiveSource::DoorGame`). Built only
+/// from a name in the arcade handle shape, which every playname a door host
+/// lists is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LiveGameKey {
+    game: SpectateGame,
+    handle: [u8; HANDLE_MAX_LEN],
+    len: u8,
+}
+
+impl LiveGameKey {
+    /// `None` for a name outside the handle shape.
+    pub fn new(game: SpectateGame, playname: &str) -> Option<Self> {
+        if !handle_shape_valid(playname) {
+            return None;
+        }
+        let mut handle = [0; HANDLE_MAX_LEN];
+        handle[..playname.len()].copy_from_slice(playname.as_bytes());
+        Some(Self {
+            game,
+            handle,
+            len: playname.len() as u8,
+        })
+    }
+
+    pub fn game(&self) -> SpectateGame {
+        self.game
+    }
+
+    pub fn playname(&self) -> &str {
+        std::str::from_utf8(&self.handle[..usize::from(self.len)])
+            .expect("a handle is ascii by construction")
     }
 }
 
@@ -110,11 +156,26 @@ impl ChatLink {
     }
 }
 
+/// How much of a watch is on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchMode {
+    /// The rail sits on the live row: the watched screen alone, beside the
+    /// rail. No chat.
+    Preview,
+    /// Enter on the live row: the watched screen across the whole page, the
+    /// watch chat docked beside it.
+    Open,
+}
+
 pub struct State {
     game: SpectateGame,
     playname: String,
     process: SpectateProcess,
-    /// The watched player's chat room, beside their screen.
+    mode: WatchMode,
+    /// When an open watch was last on screen, for `AWAY_WINDOW`.
+    seen_at: Instant,
+    /// The watched player's chat room, beside their screen once the watch is
+    /// open.
     chat: ChatLink,
 }
 
@@ -131,7 +192,32 @@ impl State {
             chat: ChatLink::new(game, playname.clone()),
             playname,
             process,
+            mode: WatchMode::Preview,
+            seen_at: Instant::now(),
         }
+    }
+
+    /// The watch is on screen at `now`.
+    pub fn mark_seen(&mut self, now: Instant) {
+        self.seen_at = now;
+    }
+
+    pub fn mode(&self) -> WatchMode {
+        self.mode
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.mode == WatchMode::Open
+    }
+
+    /// Enter on the previewed row.
+    pub fn open(&mut self) {
+        self.mode = WatchMode::Open;
+    }
+
+    /// Esc out of an open watch: back to the preview beside the rail.
+    pub fn close(&mut self) {
+        self.mode = WatchMode::Preview;
     }
 
     /// This watch's row among the hub rail's live rows; `None` once the
@@ -165,27 +251,46 @@ impl State {
         self.process.with_screen(f)
     }
 
-    /// Why this watch should end now, if it should: a watch lives only on the
-    /// Games hub, and only while its stream is open.
-    pub fn end_reason(&self, on_hub: bool) -> Option<WatchEnd> {
-        end_reason(on_hub, self.status(), &self.playname)
+    /// Why this watch should end at `now`, if it should: a preview lives
+    /// only on the Games hub, an open watch until it has been off screen for
+    /// `AWAY_WINDOW`, and any watch only while its stream is open.
+    pub fn end_reason(&self, on_hub: bool, now: Instant) -> Option<WatchEnd> {
+        let away = match on_hub {
+            true => Duration::ZERO,
+            false => now.saturating_duration_since(self.seen_at),
+        };
+        end_reason(self.mode, on_hub, away, self.status(), &self.playname)
     }
 }
 
 /// Why a watch ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum WatchEnd {
-    /// The session left the Games hub.
+    /// The session left the Games hub with the watch still a preview.
     LeftHub,
+    /// An open watch went `AWAY_WINDOW` without being on screen.
+    WentAway,
     /// The stream closed: the game ended or the host went away.
     GameEnded(String),
 }
 
-fn end_reason(on_hub: bool, status: WatchStatus, playname: &str) -> Option<WatchEnd> {
-    match (on_hub, status) {
-        (false, _) => Some(WatchEnd::LeftHub),
-        (true, WatchStatus::Ended) => Some(WatchEnd::GameEnded(playname.to_string())),
-        (true, WatchStatus::Connecting | WatchStatus::Watching) => None,
+fn end_reason(
+    mode: WatchMode,
+    on_hub: bool,
+    away: Duration,
+    status: WatchStatus,
+    playname: &str,
+) -> Option<WatchEnd> {
+    match (mode, on_hub, status) {
+        (WatchMode::Preview, false, _) => Some(WatchEnd::LeftHub),
+        (_, _, WatchStatus::Ended) => Some(WatchEnd::GameEnded(playname.to_string())),
+        (WatchMode::Open, false, WatchStatus::Connecting | WatchStatus::Watching)
+            if away >= AWAY_WINDOW =>
+        {
+            Some(WatchEnd::WentAway)
+        }
+        (WatchMode::Preview, true, WatchStatus::Connecting | WatchStatus::Watching)
+        | (WatchMode::Open, _, WatchStatus::Connecting | WatchStatus::Watching) => None,
     }
 }
 

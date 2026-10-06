@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use crate::app::door::spectate::state::LiveGameKey;
+
 /// What the live strip can show. Closed: a new source has to say which
 /// lane it waits in (`lane`), its minimum (`min_for`), what it looks like
 /// (`ui.rs`), and what the keys do to it (`input.rs`) before it builds. The
@@ -37,6 +39,9 @@ pub enum LiveSource {
     /// A stream that went live, by the streamer's user id (one stream per
     /// user).
     Stream(Uuid),
+    /// A door game somebody started that others can watch (DCSS today), by
+    /// its door and the player's handle (one live game per player per door).
+    DoorGame(LiveGameKey),
 }
 
 /// The two lanes of the queue. The strip always takes from `News` first.
@@ -52,7 +57,8 @@ fn lane(source: LiveSource) -> Lane {
         LiveSource::DailyMatch(_)
         | LiveSource::DailyResult(_)
         | LiveSource::BoothTrack(_)
-        | LiveSource::Stream(_) => Lane::Rest,
+        | LiveSource::Stream(_)
+        | LiveSource::DoorGame(_) => Lane::Rest,
     }
 }
 
@@ -66,6 +72,9 @@ pub const LIVE_TRACK_MIN: Duration = Duration::from_secs(2 * 60);
 /// A stream that just went live stays up at least this long, the same as a
 /// booth track: long enough to see who it is and open the watch page.
 pub const LIVE_STREAM_MIN: Duration = Duration::from_secs(2 * 60);
+/// A door game that just started stays up at least this long, the same as a
+/// stream: long enough to see who is playing and hop in to watch.
+pub const LIVE_DOOR_GAME_MIN: Duration = Duration::from_secs(2 * 60);
 /// A shared link stays up at least this long: a link takes longer to read
 /// than a board takes to glance at. It equals `LIVE_MAX_UP`, so a link is
 /// up exactly this long.
@@ -92,6 +101,7 @@ fn min_for(source: LiveSource) -> chrono::Duration {
         LiveSource::DailyMatch(_) | LiveSource::DailyResult(_) => LIVE_MATCH_MIN,
         LiveSource::BoothTrack(_) => LIVE_TRACK_MIN,
         LiveSource::Stream(_) => LIVE_STREAM_MIN,
+        LiveSource::DoorGame(_) => LIVE_DOOR_GAME_MIN,
         LiveSource::NewsArticle(_) => LIVE_NEWS_MIN,
     })
 }
@@ -102,7 +112,7 @@ pub struct LiveCandidate {
     pub source: LiveSource,
     /// When it joined its lane: a match row's `updated` (the claim, every
     /// move), when a match finished, when a track was queued, when a stream
-    /// went live, when a link was shared. A match that moves again joins
+    /// went live, when a door game started, when a link was shared. A match that moves again joins
     /// again at the back.
     pub updated: DateTime<Utc>,
     /// When somebody last acted on it right now, if they have: a pool

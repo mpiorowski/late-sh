@@ -2064,9 +2064,31 @@ impl App {
     }
 
     pub(crate) fn stop_spectating(&mut self) {
-        // The watch can end under an open composer or a selected message (the
-        // game ended, the session left the hub): neither may outlive the
-        // pane it belonged to.
+        self.clear_watch_chat_focus();
+        // Dropping the State aborts the stream; the host unlists the watcher.
+        self.spectate_state = None;
+    }
+
+    /// Enter on the previewed live row: the watch takes the whole page and
+    /// its chat docks beside it.
+    pub(crate) fn open_watch(&mut self) {
+        if let Some(state) = self.spectate_state.as_mut() {
+            state.open();
+        }
+    }
+
+    /// Esc out of an open watch: back to the preview beside the rail.
+    pub(crate) fn close_watch(&mut self) {
+        self.clear_watch_chat_focus();
+        if let Some(state) = self.spectate_state.as_mut() {
+            state.close();
+        }
+    }
+
+    /// The watch chat can go off screen under an open composer or a selected
+    /// message (the game ended, the watch closed or stopped): neither may
+    /// outlive the pane it belonged to.
+    fn clear_watch_chat_focus(&mut self) {
         if let Some(room_id) = self.spectate_chat_room_id() {
             if self.chat.composer_room_id() == Some(room_id) {
                 self.chat.reset_composer();
@@ -2075,14 +2097,16 @@ impl App {
                 self.chat.clear_message_selection();
             }
         }
-        // Dropping the State aborts the stream; the host unlists the watcher.
-        self.spectate_state = None;
     }
 
-    /// The chat room the watch view shows: the watched player's room, once
-    /// this session is in it.
+    /// The chat room the open watch shows: the watched player's room, once
+    /// this session is in it. `None` for a preview, which has no chat.
     pub(crate) fn spectate_chat_room_id(&self) -> Option<Uuid> {
-        let room_id = self.spectate_state.as_ref()?.chat().room_id()?;
+        let state = self
+            .spectate_state
+            .as_ref()
+            .filter(|state| state.is_open())?;
+        let room_id = state.chat().room_id()?;
         self.chat.room_by_id(room_id).map(|room| room.id)
     }
 
