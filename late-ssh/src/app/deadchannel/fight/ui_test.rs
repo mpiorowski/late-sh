@@ -458,6 +458,7 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
 fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = 4;
+    sheet.draft_up();
     sheet.signal = 12;
     sheet.road.static_cards = 3;
     let road = sheet.todays_road();
@@ -530,6 +531,7 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
 fn a_road_that_is_over_is_the_days_card() {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = 3;
+    sheet.draft_up();
     sheet.signal = 0;
     sheet.rations_left = 7;
     sheet.kills_today = 2;
@@ -670,7 +672,7 @@ fn a_draft_owed_takes_the_road_panel() {
             "a new card",
             "level 6. it takes the place of a block, until the mark",
             "[1] riposte hits for a block's worth plus all the block you have up",
-            "[2] bulwark two energy. holds three blocks",
+            "[2] bulwark two energy. holds two blocks and a half",
             "[1] [2] take one",
             "drafted: siphon",
         ] {

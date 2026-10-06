@@ -2037,6 +2037,18 @@ impl Sheet {
     }
 }
 
+#[cfg(test)]
+impl Sheet {
+    /// For a runner a test sets down at a level: the first option of
+    /// every draft that level has reached, taken, as the road would have
+    /// had it.
+    pub(crate) fn draft_up(&mut self) {
+        while let Some(draft) = self.draft() {
+            self.cards.push(draft.options[0]);
+        }
+    }
+}
+
 /// A noise turn: static into the deck, as much as it still holds.
 fn noise(fight: &mut Fight) -> String {
     match fight.piles.add_static(NOISE_CARDS) {

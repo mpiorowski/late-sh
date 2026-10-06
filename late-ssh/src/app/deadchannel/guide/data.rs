@@ -146,7 +146,7 @@ pub const SECTIONS: &[Section] = &[
                 "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass at dead air, and three buy the next piece up at the blade shop, no bits asked.",
             ),
             Block::Rule(
-                "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *245* signal, *39* attack, *22* defense, and no bits.",
+                "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *290* signal, *39* attack, *22* defense, and no bits.",
             ),
             Block::Rule(
                 "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and every level costs a little more.",
@@ -341,7 +341,7 @@ pub const SECTIONS: &[Section] = &[
                 "`r` runs, and there are no dice in it: what the glyph meant to do this turn lands on your way out, against whatever block is up. run while it gathers and it costs nothing. the step stays spent and pays nothing. there is no other way out of a fight.",
             ),
             Block::Rule(
-                "`a` is a fine way to play, and it plays every card you can draft. when a heavy lands it mutes it or puts two blocks up, and it hits with everything else; it never blocks a plain hit and never thinks a turn ahead. the hand played well takes about half the damage.",
+                "`a` is a fine way to play, and it plays every card you can draft. when a heavy lands it mutes it or puts two blocks up, it hits with everything else, and energy left over goes on a block if something is landing. it never gives up a hit to block a plain one and never thinks a turn ahead. the hand played well takes about a third of the damage.",
             ),
             Block::Rule(
                 "a dropped connection finds the fight waiting on the row, the same hand in it, when you step back in.",
@@ -359,16 +359,16 @@ pub const SECTIONS: &[Section] = &[
                 "the card goes in *in place of* a strike or a block, so the deck is always ten cards. it stays until the mark; the next climb you pick again.",
             ),
             Block::Rule(
-                "*level 3*, for a strike. *jab*: free, hits for half a strike. or *siphon*: a strike that mends you for half of what it hits.",
+                "*level 3*, for a strike. *jab*: free, hits for three quarters of a strike. or *siphon*: a strike that mends you for half of what it hits.",
             ),
             Block::Rule(
-                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds three blocks.",
+                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
             ),
             Block::Rule(
-                "*level 9*, for a strike, and both put static to work. *burn*: free, one more energy this turn, and one more again for every static card in your hand, burned up. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
+                "*level 9*, for a strike, and both put static to work. *burn*: free, two more energy this turn, and one more again for every static card in your hand, burned up. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
             ),
             Block::Rule(
-                "*level 12*, for a strike. *sever*: a strike that hits twice as hard once the glyph is at half its signal or less. or *mute*: two energy, and whatever the glyph meant to do this turn does nothing. a glyph that is only gathering has nothing to mute.",
+                "*level 12*, for a strike. *sever*: a strike that hits for two and a half once the glyph is at half its signal or less. or *mute*: two energy, and whatever the glyph meant to do this turn does nothing. a glyph that is only gathering has nothing to mute.",
             ),
             Block::Rule(
                 "every number on a new card comes from your strike or your block, so the armorer makes them all bigger.",

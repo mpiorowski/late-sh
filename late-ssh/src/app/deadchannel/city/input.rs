@@ -27,6 +27,27 @@ use super::map::Landmark;
 use super::state::Enter;
 use crate::app::deadchannel::fight::state::{Command, Drink, Slot};
 
+/// Go down into the city: `0` on the Lounge, or Enter on Night City's card
+/// in the Games hub. Callers hold the runner gate (`App::is_runner`). A
+/// descent always lands on the street: a panel or the ledge left open on
+/// the way up does not carry over.
+pub fn descend(app: &mut App) {
+    app.city.dismiss();
+    app.fight.close();
+    app.tailor.close();
+    app.guide.state.close();
+    // The descent is a touch: the sheet re-reads (and the day rolls if it
+    // turned) before the strip shows it.
+    app.fight.reload();
+    // The first descent opens the guide by itself, once per runner
+    // (`app/deadchannel/guide`).
+    app.guide.descend();
+    // On the shared street from here until the session ends
+    // (`deadchannel/street`).
+    app.street.descend();
+    app.set_screen(Screen::City);
+}
+
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.guide.state.is_open() {
         return crate::app::deadchannel::guide::input::handle_event(app, event);

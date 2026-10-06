@@ -356,12 +356,13 @@ pub const OLD_SIGNAL: FoeKind = FoeKind {
 /// the door's `DRAGON_*`), numbers for its exchange loop. In the round the
 /// Old Signal is tuned on its own (`fight/BALANCE.md`): from the top of the
 /// wall a first kill lands about one try in two on the `Auto` key and nine
-/// in ten for a runner reading the hand, and a glass makes the key's try
-/// near sure. No dice but the shuffle means the odds move in steps: five
-/// more signal is one more strike to land, and halves the key's chances.
-/// The arena's contract holds the band; move these with it.
+/// in ten for a runner reading the hand, whatever was drafted, and a glass
+/// makes the key's try near sure. No dice but the shuffle means the odds
+/// move in steps: ten more signal is one more hit to land, and takes ten
+/// points or more off the key's chances. The arena's contract holds the
+/// band for every build; move these with it.
 pub const OLD_SIGNAL_TIER: FoeTier = FoeTier {
-    signal: 245,
+    signal: 290,
     attack: 39,
     defense: 22,
     bits: 0,
@@ -632,13 +633,13 @@ pub fn lower_foe_for_level(level: i32) -> Option<(usize, &'static FoeKind, FoeTi
 /// leaves one (the way out is not a farm), and a bright glyph always does.
 pub const CRYSTAL_DROP_ONE_IN: u32 = 12;
 
-/// What a bright glyph has over the glyph of its level: a third more
-/// signal, 15% more attack and defense (rounded up), and twice the
+/// What a bright glyph has over the glyph of its level: half as much
+/// signal again, 15% more attack and defense (rounded up), and twice the
 /// bits. The exp is the plain glyph's: the bright one is for the crystal
 /// and the purse, and the climb's pace stays the rations' (GAME.md, "The
 /// daily ration loop"). `arena_test.rs` holds how it reads from a kit
 /// level with the runner.
-pub const BRIGHT_SIGNAL_PERCENT: i32 = 135;
+pub const BRIGHT_SIGNAL_PERCENT: i32 = 150;
 pub const BRIGHT_EDGE_PERCENT: u32 = 115;
 pub const BRIGHT_BITS_TIMES: i64 = 2;
 
@@ -654,7 +655,7 @@ pub const FOE_SIGNAL_PERCENT: i32 = 100;
 
 /// A glyph's hit, as a percentage of its attack less a quarter of your
 /// defense.
-pub const HIT_PERCENT: u32 = 170;
+pub const HIT_PERCENT: u32 = 185;
 
 /// A block card, as a percentage of your defense. Under a hit on purpose:
 /// one block never stops one hit whole, so blocking is a choice and not a
@@ -666,18 +667,18 @@ pub const BLOCK_PERCENT: u32 = 60;
 /// guide say the same number in words: move them together.
 ///
 /// A jab, of a strike.
-pub const JAB_PERCENT: i32 = 50;
+pub const JAB_PERCENT: i32 = 75;
 /// What a siphon mends, of a strike.
 pub const SIPHON_MEND_PERCENT: i32 = 50;
 /// A bulwark, of a block.
-pub const BULWARK_PERCENT: i32 = 300;
+pub const BULWARK_PERCENT: i32 = 250;
 /// Energy a burn hands back before any static feeds it; each static card
 /// it burns is one more.
-pub const BURN_ENERGY: u8 = 1;
+pub const BURN_ENERGY: u8 = 2;
 /// What a ground adds for each static card in the hand, of a strike.
 pub const GROUND_PERCENT: i32 = 100;
 /// A sever once the glyph is at half its signal or less, of a strike.
-pub const SEVER_PERCENT: i32 = 200;
+pub const SEVER_PERCENT: i32 = 250;
 
 /// Static cards a `Noise` turn puts into the deck.
 pub const NOISE_CARDS: usize = 2;

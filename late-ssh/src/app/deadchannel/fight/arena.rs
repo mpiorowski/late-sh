@@ -346,6 +346,10 @@ struct Reading {
     ambient_day: u32,
     reckless_day: u32,
     keen_day: u32,
+    /// The day the Old Signal first hears the runner (level 15 with the
+    /// exp to leave it): the day the boss is reached, win or lose.
+    careful_gate_day: u32,
+    ambient_gate_day: u32,
     ambient_drops: i64,
     reckless_drops: i64,
     /// The careful runner's level at the end of day one and day seven.
@@ -363,6 +367,9 @@ struct Reading {
     dropped_share: f64,
     /// What it earned and never spent or lost.
     idle_share: f64,
+    /// Patch's share of what the ambient runner earned: the runner on
+    /// the key is the one who gets hit.
+    ambient_patch_share: f64,
     /// The fair fight on auto from a kit level with the runner, at its
     /// hardest over levels 2 to 15.
     fair_low: f64,
@@ -404,6 +411,10 @@ struct BuildReading {
     build: Build,
     careful_day: u32,
     ambient_day: u32,
+    /// The mean day of the ambient runner's mark over the seeds (a climb
+    /// that never marks counting as a day past the limit): smoother than
+    /// the median, which moves a failed try at a time.
+    ambient_mean_day: f64,
     ambient_drops: i64,
     /// The fair fight and the bright one on auto, from a kit level with
     /// the runner and the cards drafted by then, at their hardest over
@@ -449,6 +460,11 @@ impl BuildReading {
             build,
             careful_day: marked(&on(sim::CAREFUL)),
             ambient_day: marked(&ambient),
+            ambient_mean_day: ambient
+                .iter()
+                .map(|climb| f64::from(climb.marked_on.unwrap_or(MAX_DAYS + 1)))
+                .sum::<f64>()
+                / ambient.len() as f64,
             ambient_drops: median_of(&ambient, |climb| i64::from(climb.deaths)),
             fair_low: low(&mut fair.iter().map(|fight| fight.odds)),
             bright_low: low(&mut (4..=MAX_LEVEL).map(|level| fight(level, Pick::Bright).odds)),
@@ -486,7 +502,7 @@ fn draft_spreads(builds: &[BuildReading]) -> Vec<DraftSpread> {
                 options: draft.options,
                 days: draft
                     .options
-                    .map(|option| mean(option, |reading| f64::from(reading.ambient_day))),
+                    .map(|option| mean(option, |reading| reading.ambient_mean_day)),
                 boss: draft
                     .options
                     .map(|option| mean(option, |reading| reading.boss_auto)),
@@ -512,6 +528,8 @@ impl Reading {
         let builds = fan(sim::builds(), |build| BuildReading::take(rules, build));
         let marked =
             |climbs: &[Climb]| sim::median(climbs.iter().map(|climb| climb.marked_on), MAX_DAYS);
+        let heard =
+            |climbs: &[Climb]| sim::median(climbs.iter().map(|climb| climb.heard_on), MAX_DAYS);
         let leads: Vec<i64> = (3..=MAX_LEVEL)
             .filter_map(|level| kit_lead(&careful, level))
             .collect();
@@ -552,6 +570,8 @@ impl Reading {
             ambient_day: marked(&ambient),
             reckless_day: marked(&reckless),
             keen_day,
+            careful_gate_day: heard(&careful),
+            ambient_gate_day: heard(&ambient),
             ambient_drops: median_of(&ambient, |climb| i64::from(climb.deaths)),
             reckless_drops: median_of(&reckless, |climb| i64::from(climb.deaths)),
             day_one_level: median_of(&careful, |climb| level_after(climb, 1)),
@@ -565,6 +585,8 @@ impl Reading {
             patch_share,
             dropped_share,
             idle_share: 1.0 - gear_share - patch_share - dropped_share,
+            ambient_patch_share: median_of(&ambient, |climb| climb.ledger.patched) as f64
+                / median_of(&ambient, |climb| climb.ledger.earned).max(1) as f64,
             fair_low: low(&fair_odds),
             turns_low: low(&turns),
             turns_high: high(&turns),
@@ -593,6 +615,14 @@ impl Reading {
         let pct = |share: f64| (share * 100.0).round() as i64;
         let mut checks = vec![
             (
+                (14..=17).contains(&self.careful_gate_day)
+                    && (14..=17).contains(&self.ambient_gate_day),
+                format!(
+                    "the old signal is reached on day {} read sharp and day {} on the key, want 14 to 17",
+                    self.careful_gate_day, self.ambient_gate_day
+                ),
+            ),
+            (
                 (14..=18).contains(&self.careful_day),
                 format!("careful marks on day {}, want 14 to 18", self.careful_day),
             ),
@@ -611,12 +641,15 @@ impl Reading {
                 ),
             ),
             (
-                (20..=28).contains(&self.reckless_day),
-                format!("reckless marks on day {}, want 20 to 28", self.reckless_day),
+                (18..=28).contains(&self.reckless_day) && self.reckless_day >= self.ambient_day,
+                format!(
+                    "reckless marks on day {} against ambient's {}, want 18 to 28 and never ahead",
+                    self.reckless_day, self.ambient_day
+                ),
             ),
             (
-                (2..=8).contains(&self.reckless_drops),
-                format!("reckless drops {} times, want 2 to 8", self.reckless_drops),
+                (1..=8).contains(&self.reckless_drops),
+                format!("reckless drops {} times, want 1 to 8", self.reckless_drops),
             ),
             (
                 self.keen_day <= self.careful_day && self.keen_day + 5 >= self.careful_day,
@@ -651,9 +684,11 @@ impl Reading {
                 ),
             ),
             (
-                (0.05..=0.30).contains(&self.patch_share),
+                (0.05..=0.30).contains(&self.ambient_patch_share)
+                    && self.patch_share <= self.ambient_patch_share,
                 format!(
-                    "patch takes {}% of the bits, want 5 to 30%",
+                    "patch takes {}% of the ambient runner's bits and {}% of the careful one's, want 5 to 30% on the key and no more read sharp",
+                    pct(self.ambient_patch_share),
                     pct(self.patch_share)
                 ),
             ),
@@ -824,13 +859,15 @@ impl Reading {
             .collect()
     }
 
-    const HEADER: &str = "| rules | careful | ambient (drops) | reckless (drops) | keen | lv day 1 / 7 | kit lead | top kit | gear | patch | dropped | idle | fair low | turns | left auto / sharp | bright auto (left) | bright sharp | boss auto / sharp / auto with a glass (turns) | crystals a day | builds: ambient day, boss auto | misses |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    const HEADER: &str = "| rules | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | lv day 1 / 7 | kit lead | top kit | gear | patch, careful / ambient | dropped | idle | fair low | turns | left auto / sharp | bright auto (left) | bright sharp | boss auto / sharp / auto with a glass (turns) | crystals a day | builds: ambient day, boss auto | misses |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
 
     /// The reading as one row of the sweep's table.
     fn row(&self, name: &str) -> String {
         let half = |lead: i64| format!("{:+.1}", lead as f64 / 2.0);
         format!(
-            "| {name} | {} | {} ({}) | {} ({}) | {} | {} / {} | {} to {} | {} | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} to {:.1} | {:.0}% / {:.0}% | {:.0} to {:.0}% ({:.0}%) | {:.0} to {:.0}% | {:.0}% / {:.0}% / {:.0}% ({:.1}) | {:.1} | {} to {}, {:.0} to {:.0}% | {} |\n",
+            "| {name} | {} / {} | {} | {} ({}) | {} ({}) | {} | {} / {} | {} to {} | {} | {:.0}% | {:.0}% / {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} to {:.1} | {:.0}% / {:.0}% | {:.0} to {:.0}% ({:.0}%) | {:.0} to {:.0}% | {:.0}% / {:.0}% / {:.0}% ({:.1}) | {:.1} | {} to {}, {:.0} to {:.0}% | {} |\n",
+            self.careful_gate_day,
+            self.ambient_gate_day,
             self.careful_day,
             self.ambient_day,
             self.ambient_drops,
@@ -847,6 +884,7 @@ impl Reading {
             },
             self.gear_share * 100.0,
             self.patch_share * 100.0,
+            self.ambient_patch_share * 100.0,
             self.dropped_share * 100.0,
             self.idle_share * 100.0,
             self.fair_low * 100.0,

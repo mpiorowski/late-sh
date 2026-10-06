@@ -1263,7 +1263,8 @@ fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
 fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     use crate::app::door::hub::state::HubGame;
 
-    let selected = app.games_hub_state.selected_game();
+    let roster = HubGame::roster(app.is_runner());
+    let selected = app.games_hub_state.selected_game(roster);
 
     // The rc config modal is fully modal while open: `x` clears the stored
     // config, paste replaces it (handle_bracketed_paste), Esc closes it
@@ -1296,12 +1297,13 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         let body = app_content_area(app);
         if let Some(idx) = crate::app::door::hub::ui::sidebar_hit_test(
             body,
-            app.games_hub_state.selected(),
+            roster,
+            app.games_hub_state.selected(roster),
             mouse.x.saturating_sub(1),
             mouse.y.saturating_sub(1),
         ) {
             app.door_delete_confirm = false;
-            app.games_hub_state.select(idx);
+            app.games_hub_state.select(roster, idx);
             return true;
         }
         return false;
@@ -1333,7 +1335,8 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     // hub at all (see the guard above) - its own landing is
                     // the only place that can reach this arm, and it never
                     // will, but the match still has to be exhaustive.
-                    HubGame::Lateania
+                    HubGame::NightCity
+                    | HubGame::Lateania
                     | HubGame::Minecraft
                     | HubGame::Rebels
                     | HubGame::Nethack
@@ -1377,14 +1380,14 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         ParsedInput::Byte(b'l' | b'j')
         | ParsedInput::Char('l' | 'j')
         | ParsedInput::Arrow(b'C' | b'B') => {
-            app.games_hub_state.select_next();
+            app.games_hub_state.select_next(roster);
             true
         }
         // Left: h, k, or Left/Up arrow.
         ParsedInput::Byte(b'h' | b'k')
         | ParsedInput::Char('h' | 'k')
         | ParsedInput::Arrow(b'D' | b'A') => {
-            app.games_hub_state.select_prev();
+            app.games_hub_state.select_prev(roster);
             true
         }
         // Lateania has multiple character slots now, so its own landing (with
@@ -1417,9 +1420,7 @@ fn open_door_rc_modal(app: &mut App, game: late_core::models::door_rc::DoorRcGam
         late_core::models::door_rc::DoorRcGame::Nethack => HubGame::Nethack,
         late_core::models::door_rc::DoorRcGame::Dcss => HubGame::Dcss,
     };
-    if let Some(idx) = HubGame::ALL.iter().position(|g| *g == hub_game) {
-        app.games_hub_state.select(idx);
-    }
+    app.games_hub_state.select_game(hub_game);
     app.set_screen(Screen::Games);
     app.door_rc_modal = Some(game);
 }
@@ -1432,6 +1433,9 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
 
     app.door_delete_confirm = false;
     match game {
+        // Only on a runner's roster, so the gate already held when the
+        // card was selected; the descent is the one `0` takes.
+        HubGame::NightCity => crate::app::deadchannel::city::input::descend(app),
         HubGame::Lateania => {
             // Lands on the character-select landing rather than jumping
             // straight into the world, since which of the account's saved
@@ -4154,31 +4158,15 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         // `0` is the clubhouse. Pressed again on the clubhouse it goes
         // down to the undercity (deadchannel's street), runners only;
-        // from the undercity it comes back up. A descent always lands on
-        // the street: a panel or the ledge left open on the way up does
-        // not carry over.
+        // from the undercity it comes back up.
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            let target = match ctx.screen {
+            match ctx.screen {
                 Screen::Clubhouse if app.is_runner() => {
-                    app.city.dismiss();
-                    app.fight.close();
-                    app.tailor.close();
-                    app.guide.state.close();
-                    // The descent is a touch: the sheet re-reads (and the
-                    // day rolls if it turned) before the strip shows it.
-                    app.fight.reload();
-                    // The first descent opens the guide by itself, once
-                    // per runner (`app/deadchannel/guide`).
-                    app.guide.descend();
-                    // On the shared street from here until the session
-                    // ends (`deadchannel/street`).
-                    app.street.descend();
-                    Screen::City
+                    crate::app::deadchannel::city::input::descend(app)
                 }
-                _ => Screen::Clubhouse,
-            };
-            app.set_screen(target);
+                _ => app.set_screen(Screen::Clubhouse),
+            }
             true
         }
         b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {

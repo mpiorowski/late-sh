@@ -860,7 +860,8 @@ async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     // Walk the hub sidebar down to NetHack and open the config box. The step
     // count comes from the selector order itself, so a game inserted above
     // NetHack moves the cursor here instead of opening another game's config.
-    let steps = HubGame::ALL
+    // A fresh account is no runner, so its roster has no Night City.
+    let steps = HubGame::roster(false)
         .iter()
         .position(|game| *game == HubGame::Nethack)
         .expect("nethack is in the selector");

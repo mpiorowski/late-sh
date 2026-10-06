@@ -585,6 +585,7 @@ fn the_bright_glyph_is_harder_pays_double_bits_and_leaves_a_crystal() {
     let (mut sheet, lane) = before_a_bright_node();
     sheet.level = 8;
     sheet.signal = 80;
+    sheet.draft_up();
     assert_eq!(sheet.node_ahead(lane), Some(Node::Bright));
     let rations = sheet.rations_left;
     // Nor does the bright one answer to a plain fight.
@@ -1110,6 +1111,7 @@ fn at_the_top(marks: i32) -> Sheet {
     let mut sheet = fresh();
     sheet.level = MAX_LEVEL;
     sheet.peak_level = MAX_LEVEL;
+    sheet.draft_up();
     sheet.marks = marks;
     sheet.exp = exp_to_seek(marks);
     sheet.weapon_tier = MAX_TIER;
@@ -1362,6 +1364,7 @@ fn a_sure_kill(sheet: &mut Sheet, bits: i64) {
 fn stepping_down_meets_the_glyph_a_level_below_at_half_pay() {
     let mut sheet = fresh();
     sheet.level = 3;
+    sheet.draft_up();
     let mut rng = StdRng::seed_from_u64(1);
     let step_down = Command::Step {
         lane: 1,
@@ -1729,6 +1732,7 @@ fn static_fills_the_deck_to_the_cap_and_rides_it_to_the_next_fight() {
     let mut sheet = fresh();
     sheet.level = 6;
     sheet.signal = 60;
+    sheet.draft_up();
     // The ghost frame opens with noise.
     sheet.fight = Some(a_fight(5, 500, 1, 0, 0));
     assert_eq!(the_fight(&sheet).intent(), Intent::Noise);
@@ -1883,6 +1887,7 @@ fn a_rest_mends_the_signal_or_clears_the_deck() {
     let mut rng = StdRng::seed_from_u64(1);
     let (mut sheet, lane) = before_a(Node::Rest);
     sheet.level = 4;
+    sheet.draft_up();
     sheet.signal = 10;
     sheet.road.static_cards = 3;
     let rations = sheet.rations_left;
@@ -1961,6 +1966,7 @@ fn a_cache_pays_bits_and_the_machine_takes_its_share() {
     let mut rng = StdRng::seed_from_u64(1);
     let (mut sheet, lane) = before_a(Node::Cache);
     sheet.level = 3;
+    sheet.draft_up();
     sheet.signal = 30;
     sheet.debt = 40;
     let bits = RULES.cache(3);
@@ -2113,8 +2119,8 @@ fn the_drafted_cards_do_what_they_print() {
     let powers = sheet.powers(the_fight(&sheet));
     assert_eq!(
         (powers.strike, powers.block, powers.hit),
-        (10, 6, 10),
-        "attack 10, 60% of defense 10, 170% of 8 attack less a quarter of defense"
+        (10, 6, 11),
+        "attack 10, 60% of defense 10, 185% of 8 attack less a quarter of defense"
     );
     let play =
         |sheet: &mut Sheet, rng: &mut StdRng, slot: u8| sheet.apply(Command::Play { slot }, rng);
@@ -2134,30 +2140,30 @@ fn the_drafted_cards_do_what_they_print() {
             Card::Burn,
         ],
     );
-    // Burn with no static to feed it: free, and one more energy.
+    // Burn with no static to feed it: free, and two more energy.
     let burn = play(&mut sheet, &mut rng, 4);
-    assert_eq!(burn.lines, vec!["you burn hot. +1 energy.".to_string()]);
-    assert_eq!(table(&sheet), (500, 0, 4, 30));
-    // Jab: free, half a strike.
+    assert_eq!(burn.lines, vec!["you burn hot. +2 energy.".to_string()]);
+    assert_eq!(table(&sheet), (500, 0, 5, 30));
+    // Jab: free, three quarters of a strike, rounded up.
     play(&mut sheet, &mut rng, 0);
-    assert_eq!(table(&sheet), (495, 0, 4, 30));
+    assert_eq!(table(&sheet), (492, 0, 5, 30));
     // Siphon: a strike, and half of it back.
     let siphon = play(&mut sheet, &mut rng, 1);
     assert_eq!(
         siphon.lines,
         vec!["you siphon 10 out of the drift. +5 signal.".to_string()]
     );
-    assert_eq!(table(&sheet), (485, 0, 3, 35));
-    // Bulwark: three blocks, for two.
+    assert_eq!(table(&sheet), (482, 0, 4, 35));
+    // Bulwark: two blocks and a half, for two.
     play(&mut sheet, &mut rng, 3);
-    assert_eq!(table(&sheet), (485, 18, 1, 35));
-    // Riposte: a block's worth and the eighteen standing, which stay.
+    assert_eq!(table(&sheet), (482, 15, 2, 35));
+    // Riposte: a block's worth and the fifteen standing, which stay.
     play(&mut sheet, &mut rng, 2);
-    assert_eq!(table(&sheet), (461, 18, 0, 35));
+    assert_eq!(table(&sheet), (461, 15, 1, 35));
 
-    // The hit for 10 eats ten of the block; the glyph gathers next.
+    // The hit for 11 eats eleven of the block; the glyph gathers next.
     sheet.apply(Command::EndTurn, &mut rng);
-    assert_eq!(table(&sheet), (461, 8, ENERGY, 35));
+    assert_eq!(table(&sheet), (461, 4, ENERGY, 35));
     deal(
         &mut sheet,
         [
@@ -2175,28 +2181,28 @@ fn the_drafted_cards_do_what_they_print() {
         ground.lines,
         vec!["you ground 2 static into the drift. 30.".to_string()]
     );
-    assert_eq!(table(&sheet), (431, 8, 2, 35));
+    assert_eq!(table(&sheet), (431, 4, 2, 35));
     assert_eq!(
         the_fight(&sheet).piles.hand,
         vec![None, None, None, Some(Card::Sever), Some(Card::Mute)]
     );
     assert_eq!(the_fight(&sheet).piles.static_cards(), 0);
-    // Sever: a strike over half, two under it.
+    // Sever: a strike over half, two and a half at it or under.
     sheet.fight.as_mut().expect("a fight").foe_signal = 250;
     let sever = play(&mut sheet, &mut rng, 3);
     assert_eq!(
         sever.lines,
-        vec!["you sever the drift's feed. 20.".to_string()]
+        vec!["you sever the drift's feed. 25.".to_string()]
     );
-    assert_eq!(table(&sheet), (230, 8, 1, 35));
+    assert_eq!(table(&sheet), (225, 4, 1, 35));
     // A mute is two energy, and one is left.
     assert_eq!(
         play(&mut sheet, &mut rng, 4).applied,
         Applied::Refused(Refusal::NoEnergy)
     );
 
-    // It gathers, then means to come down for 20. A burn eats the two
-    // static cards beside it for three energy in all, which pays for the
+    // It gathers, then means to come down for 22. A burn eats the two
+    // static cards beside it for four energy in all, which pays for the
     // mute; and then nothing lands: no damage, no static, the block
     // untouched, and the mute is spent with the turn.
     sheet.apply(Command::EndTurn, &mut rng);
@@ -2214,9 +2220,9 @@ fn the_drafted_cards_do_what_they_print() {
     let burn = play(&mut sheet, &mut rng, 2);
     assert_eq!(
         burn.lines,
-        vec!["you burn 2 static off your hand. +3 energy.".to_string()]
+        vec!["you burn 2 static off your hand. +4 energy.".to_string()]
     );
-    assert_eq!(table(&sheet), (230, 8, ENERGY + 3, 35));
+    assert_eq!(table(&sheet), (225, 4, ENERGY + 4, 35));
     play(&mut sheet, &mut rng, 0);
     assert!(the_fight(&sheet).muted);
     let statics = the_fight(&sheet).piles.static_cards();
@@ -2225,7 +2231,7 @@ fn the_drafted_cards_do_what_they_print() {
         muted.lines,
         vec!["the drift moves, and nothing comes out.".to_string()]
     );
-    assert_eq!(table(&sheet), (230, 8, ENERGY, 35));
+    assert_eq!(table(&sheet), (225, 4, ENERGY, 35));
     let fight = the_fight(&sheet);
     assert_eq!((fight.muted, fight.piles.static_cards()), (false, statics));
 }

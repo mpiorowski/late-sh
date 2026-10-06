@@ -181,6 +181,9 @@ struct DrawContext<'a> {
     daily_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     house: &'a crate::app::lobby::house::state::HouseState,
     house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// The Games hub cards this session sees (`HubGame::roster`): Night
+    /// City heads it for runners only.
+    games_hub_roster: &'static [crate::app::door::hub::state::HubGame],
     games_hub_selected: usize,
     /// Rows the selected Games hub landing is scrolled down.
     games_hub_scroll: u16,
@@ -425,6 +428,7 @@ impl App {
         let brogue_live = HubGame::Brogue.live_screen(self).is_some();
         let darkroom_live = HubGame::Darkroom.live_screen(self).is_some();
         let greendragon_live = HubGame::GreenDragon.live_screen(self).is_some();
+        let games_hub_roster = HubGame::roster(self.is_runner());
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
@@ -1388,7 +1392,8 @@ impl App {
                         daily_chat_view,
                         house: &self.house,
                         house_chat_view,
-                        games_hub_selected: self.games_hub_state.selected(),
+                        games_hub_roster,
+                        games_hub_selected: self.games_hub_state.selected(games_hub_roster),
                         games_hub_scroll: self.games_hub_state.scroll(),
                         games_hub_max_scroll: self.games_hub_state.max_scroll(),
                         door_rc_modal: self
@@ -1899,6 +1904,7 @@ impl App {
                     frame,
                     content_area,
                     &crate::app::door::hub::ui::HubView {
+                        roster: ctx.games_hub_roster,
                         selected: ctx.games_hub_selected,
                         scroll: ctx.games_hub_scroll,
                         max_scroll: ctx.games_hub_max_scroll,
@@ -1923,6 +1929,12 @@ impl App {
                         rc_modal: ctx.door_rc_modal.map(|(game, content)| {
                             crate::app::door::hub::ui::RcModalView { game, content }
                         }),
+                        night_city: crate::app::deadchannel::city::landing::LandingView {
+                            sheet: ctx.city_sheet,
+                            street: ctx.city_street,
+                            own_user_id: ctx.city_own_user_id,
+                            tick: ctx.marquee_tick,
+                        },
                     },
                 );
             }

@@ -45,22 +45,23 @@ pub enum Card {
     Surge,
     /// A block, and every static card in the hand gone for good.
     Wipe,
-    /// Half a strike, for nothing.
+    /// Most of a strike, for nothing.
     Jab,
     /// A strike that mends you for half of itself.
     Siphon,
     /// Hits for a block's worth and for every point of block standing;
     /// the block stays.
     Riposte,
-    /// Three blocks in one card, for two energy.
+    /// Two blocks and a half in one card, for two energy.
     Bulwark,
-    /// An energy for nothing, and one more for every static card in the
+    /// Two energy for nothing, and one more for every static card in the
     /// hand, which burns up for good.
     Burn,
     /// A strike, and one more for every static card in the hand, which
     /// goes with it for good.
     Ground,
-    /// A strike, twice over once the glyph is at half its signal or less.
+    /// A strike, and two and a half of them once the glyph is at half its
+    /// signal or less.
     Sever,
     /// Whatever the glyph meant to do this turn does nothing.
     Mute,
@@ -212,13 +213,13 @@ impl Card {
             Card::Block => "holds your block until a hit eats it",
             Card::Surge => "two energy. hits for two strikes and a half",
             Card::Wipe => "a block, and every static card in your hand thrown out",
-            Card::Jab => "free. hits for half a strike",
+            Card::Jab => "free. hits for three quarters of a strike",
             Card::Siphon => "a strike that mends you for half of what it hits",
             Card::Riposte => "hits for a block's worth plus all the block you have up",
-            Card::Bulwark => "two energy. holds three blocks",
-            Card::Burn => "free. +1 energy, and +1 per static card in hand, burned",
+            Card::Bulwark => "two energy. holds two blocks and a half",
+            Card::Burn => "free. +2 energy, and +1 per static card in hand, burned",
             Card::Ground => "a strike, plus one per static card in hand. they go too",
-            Card::Sever => "a strike. twice as hard once the glyph is at half or less",
+            Card::Sever => "a strike. hits for 2.5 strikes once the glyph is at half",
             Card::Mute => "two energy. the glyph's move this turn does nothing",
             Card::Static => "a dead card. play it to throw it out for good",
         }

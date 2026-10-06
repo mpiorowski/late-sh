@@ -1533,8 +1533,9 @@ decision: the road is what makes the day a shared object, and a road
 over the old exchange loop would have been five presses of one key with
 a map over them. Where the build differs from the text above:
 
-- **The deck is five strikes, three blocks, a surge, and a wipe.** The
-  band choice is not built, so there are no band moves to deal. The
+- **The deck starts as five strikes, three blocks, a surge, and a
+  wipe** ("The draft" below is how it changes). The band choice is not
+  built, so there are no band moves to deal. The
   surge (two and a half strikes for two energy) and the wipe (a block
   that throws every static card out of the hand) are the bandless
   deck's two moves; a band's replace them when the bands ship.
@@ -1557,9 +1558,11 @@ a map over them. Where the build differs from the text above:
 - **Auto is a turn, not a fight.** `a` plays the obvious turn and ends
   it, so the runner on the key presses it three or four times a fight
   (the old attack key, the same finger) and can take the hand back on
-  any turn. It never blocks a plain hit and never thinks ahead: the
-  hand played well takes about half the damage, and that gap is the
-  whole of what skill is worth.
+  any turn. It hits with everything, guards a heavy, and puts energy it
+  has left over on a block when something is landing. It never gives up
+  a hit to block a plain one and never thinks ahead: the hand played
+  well takes about a third of the damage, and that gap is the whole of
+  what skill is worth.
 - **Static rides the deck for the day**, capped at a hand's worth
   (five), and playing a static card (one energy) throws it out for
   good. A rest clears the deck; patch does not.
@@ -1582,10 +1585,56 @@ a map over them. Where the build differs from the text above:
   daily ration loop").
 
 Measured, and what it taught (`fight/BALANCE.md`): a level a day for
-the first week and the first mark on day 16 for a careful runner, day
-20 on the `Auto` key. And the cost of no dice: odds move in steps, so
+the first week, the Old Signal on the screen on day 16 whoever plays the
+cards, and the first mark that day for a careful runner and a day or so
+later on the `Auto` key. And the cost of no dice: odds move in steps, so
 the Old Signal and the bright glyph sit near cliffs that the arena's
 contract has to hold.
+
+### The draft: new cards for everyone (2026-10-06)
+
+Decided over the bands, which wait: a class choice splits the room into
+three decks to balance before anybody has played one. The draft gives
+every runner new cards to play with and keeps one deck to tune.
+
+- **Four drafts, two cards each, the same for everybody.** At levels 3,
+  6, 9, and 12 a new card is waiting on the road: one of two, and the
+  road waits until it is taken (`1` or `2`). "What did you take at
+  nine" is a thing the wire can ask, because everybody was asked the
+  same question.
+- **The deck stays ten.** The card goes in over a strike or a block,
+  never beside one. Draw odds do not move, a hand is still five of ten,
+  and a deck is still read at a glance. Sixteen decks exist, and the
+  arena fights all of them on every pass.
+- **Every question has two right answers.** Level 3, for a strike: a
+  *jab* (free, three quarters of a strike) or a *siphon* (a strike that
+  mends half of itself): tempo or sustain. Level 6, for a block: a
+  *riposte* (hits for a block's worth and all the block standing) or a
+  *bulwark* (two and a half blocks for two energy): armor as a weapon
+  or as a wall. Level 9, for a strike: a *burn* (free, two energy, and
+  one more for each static card in hand, burned up) or a *ground* (a
+  strike, and one more for each static card in hand, thrown out):
+  static turned into energy or into damage. Level 12, for a strike: a
+  *sever* (two and a half strikes once the glyph is at half) or a
+  *mute* (two energy, the glyph's move this turn does nothing): the
+  finisher or the cut-out.
+- **Nothing new on the table.** Every card is made of what the round
+  already had: a hit, a block, energy, static, the signal. Every number
+  is a share of the strike or the block, so the armorer still prices all
+  of it and a weapon tier makes every card bigger.
+- **No card is a trap on the key.** The first burn paid for its energy
+  with a static card, which the `Auto` key took every turn and choked
+  on. A card the floor cannot play is a wrong answer dressed as a
+  choice, so the burn now only gives, and the key learned to block with
+  the energy it has left. The contract holds every build to the pace
+  and every draft's two options to within a day and a half of each
+  other.
+- **A mark takes the cards back** with the level, and so does the
+  ledge. The next climb is asked again.
+
+Waits: card drops from bright glyphs (the collecting loop), a way to
+see the whole deck outside a fight, the wire saying what a runner took,
+and the bands, whose two moves would replace the surge and the wipe.
 
 ### Being seen: your color is your level
 

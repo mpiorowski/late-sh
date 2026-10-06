@@ -480,7 +480,7 @@ fn card_text(card: Card, powers: &Powers, board: &Board) -> [String; 2] {
         Card::Riposte => [hit, "+block up".to_string()],
         Card::Burn => [format!("+{} energy", effect.energy), "-static".to_string()],
         Card::Ground => [hit, "x static".to_string()],
-        Card::Sever => [hit, "x2 < half".to_string()],
+        Card::Sever => [hit, "x2.5<half".to_string()],
         Card::Mute => ["its move".to_string(), "= nothing".to_string()],
         Card::Static => ["dead card".to_string(), "play=gone".to_string()],
     }
