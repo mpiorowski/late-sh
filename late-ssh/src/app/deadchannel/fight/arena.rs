@@ -1051,12 +1051,9 @@ fn economy_table(rules: &Rules) -> String {
 
 /// The climb as a curve: the median level every player stands at when
 /// each day ends, a road a day from a fresh row.
-fn days_table(rules: Rules, days: usize) -> String {
-    let batches: Vec<(&str, Vec<Climb>)> = fan(sim::PLAYERS.to_vec(), |(name, player)| {
-        (name, climbs(player, rules, SEEDS, MAX_DAYS))
-    });
+fn days_table(batches: &[(&str, Vec<Climb>)], days: usize) -> String {
     let mut out = String::from("| day |");
-    for (name, _) in &batches {
+    for (name, _) in batches {
         out.push_str(&format!(" {name} |"));
     }
     out.push_str("\n|---|");
@@ -1064,7 +1061,7 @@ fn days_table(rules: Rules, days: usize) -> String {
     out.push('\n');
     for day in 0..days {
         out.push_str(&format!("| {} |", day + 1));
-        for (_, climbs) in &batches {
+        for (_, climbs) in batches {
             let level = median_of(climbs, |climb| level_after(climb, day + 1));
             let marked = climbs
                 .iter()
@@ -1583,12 +1580,12 @@ fn report(rules: Rules) -> String {
     for miss in reading.misses() {
         out.push_str(&format!("\nMissed: {miss}\n"));
     }
-    out.push_str("\n## The climb, day by day: the level at the end of each day\n\n");
-    out.push_str(&days_table(rules, CURVE_DAYS));
-    out.push_str("\n## A day at a time: where each player stands at dusk\n\n");
     let batches = fan(sim::PLAYERS.to_vec(), |(name, player)| {
         (name, climbs(player, rules, SEEDS, MAX_DAYS))
     });
+    out.push_str("\n## The climb, day by day: the level at the end of each day\n\n");
+    out.push_str(&days_table(&batches, CURVE_DAYS));
+    out.push_str("\n## A day at a time: where each player stands at dusk\n\n");
     for (name, climbs) in &batches {
         out.push_str(&day_table(name, climbs, FIRST_DAYS));
     }

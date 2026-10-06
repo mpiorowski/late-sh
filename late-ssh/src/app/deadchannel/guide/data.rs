@@ -131,7 +131,7 @@ pub const SECTIONS: &[Section] = &[
                 "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a *rest* or a *cache*.",
             ),
             Block::Rule(
-                "a fight is a *hand of cards*: five drawn, three energy a turn, and the glyph shows its next move before you play. `a` plays the obvious turn for you, every turn if you like.",
+                "a fight is a *hand of cards*: five drawn, three energy a turn, and the glyph shows its next move before you play. `a` plays the obvious turn for you, every turn if you like. at levels *3*, *6*, *9*, and *12* you pick a *new card* for the deck.",
             ),
             Block::Rule(
                 "*gear is the cards.* your weapon is what a strike hits for, your armor what a block holds. at the armorer `w` buys the weapon and `a` the armor, bits only. a level pays for about *one tier of each*: every level you gain, go back for the next piece.",
@@ -323,7 +323,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "everyone carries the same ten cards: five *strikes*, three *blocks*, a *surge*, a *wipe*. five are drawn a turn, you have *three energy* to play them, and what you do not play is discarded.",
+                "everyone starts with the same ten cards: five *strikes*, three *blocks*, a *surge*, a *wipe*. five are drawn a turn, you have *three energy* to play them, and what you do not play is discarded.",
             ),
             Block::Rule(
                 "a *strike* hits for your attack less half the glyph's defense. a *surge* is two and a half strikes for two energy. the number is on the card, and a better weapon makes it bigger.",
@@ -341,10 +341,37 @@ pub const SECTIONS: &[Section] = &[
                 "`r` runs, and there are no dice in it: what the glyph meant to do this turn lands on your way out, against whatever block is up. run while it gathers and it costs nothing. the step stays spent and pays nothing. there is no other way out of a fight.",
             ),
             Block::Rule(
-                "`a` is a fine way to play. it puts two blocks up when a heavy lands and hits with everything else; it never blocks a plain hit and never thinks a turn ahead. the hand played well takes about half the damage.",
+                "`a` is a fine way to play, and it plays every card you can draft. when a heavy lands it mutes it or puts two blocks up, and it hits with everything else; it never blocks a plain hit and never thinks a turn ahead. the hand played well takes about half the damage.",
             ),
             Block::Rule(
                 "a dropped connection finds the fight waiting on the row, the same hand in it, when you step back in.",
+            ),
+        ],
+    },
+    Section {
+        title: "new cards",
+        neon: Neon::Amber,
+        blocks: &[
+            Block::Rule(
+                "at levels *3*, *6*, *9*, and *12* a new card is waiting for you on the road: one of two, the same two for everybody. `1` or `2` takes it, and the road waits until you do.",
+            ),
+            Block::Rule(
+                "the card goes in *in place of* a strike or a block, so the deck is always ten cards. it stays until the mark; the next climb you pick again.",
+            ),
+            Block::Rule(
+                "*level 3*, for a strike. *jab*: free, hits for half a strike. or *siphon*: a strike that mends you for half of what it hits.",
+            ),
+            Block::Rule(
+                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
+            ),
+            Block::Rule(
+                "*level 9*, for a strike. *burn*: free, two more energy this turn, and a static card into your deck. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
+            ),
+            Block::Rule(
+                "*level 12*, for a strike. *sever*: a strike that hits twice as hard once the glyph is at half its signal or less. or *mute*: two energy, and whatever the glyph meant to do this turn does nothing. a glyph that is only gathering has nothing to mute.",
+            ),
+            Block::Rule(
+                "every number on a new card comes from your strike or your block, so the armorer makes them all bigger.",
             ),
         ],
     },
