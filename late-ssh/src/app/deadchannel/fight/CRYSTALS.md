@@ -2,8 +2,8 @@
 
 Parent: `../CONTEXT.md` §3c (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The crystal pass". This
-file is the contract of what keeps the daily loop from being one key held
-down: crystals, the bright glyph, Dead Air, and the blade shop. How
+file is the contract of the things bits cannot buy: crystals, the bright
+glyph, Dead Air, and the blade shop. How
 they are measured and tuned is `BALANCE.md`. Everything here is a command
 or a rule on the same sheet under the same row lock (`fight/state.rs`,
 `fight/svc.rs`); nothing has a writer of its own.
@@ -22,33 +22,38 @@ or a rule on the same sheet under the same row lock (`fight/state.rs`,
 - A dropped signal never takes them. An Old Signal mark and a step off
   the ledge do, and a runner holding only crystals has something to lose
   at the ledge.
-- Shown on the picker's budget row, on the strip when there are any, and
+- Shown on the road's budget row, on the strip when there are any, and
   at the bar and the blade shop.
 
 ## The bright glyph
 
-`Pick::Bright`, the third offer in the picker, key `b`.
+`Pick::Bright`, the call a `Node::Bright` answers, key `b` (or Enter)
+with the road's cursor on it.
 
-- It waits behind `BRIGHT_STEPS_PER_DAY` (2) steps of every day.
-  `data::bright_steps(day)` is a pure function of the UTC date: the same
-  two steps for every runner (one object for the room to talk about),
-  no column, no reroll. `Sheet::step` is the step the next ration buys
-  (1 to 10); `Sheet::bright_waits` is whether one is behind it.
-- The offer is for that step only: spending the ration on anything else
-  walks past it.
+- Two nodes of every day's road are bright (`road::BRIGHT_NODES`), each
+  on a fight step of its own and never the first, one lane each.
+  `road::road_for(day)` is a pure function of the UTC date: the same
+  two nodes for every runner (one object for the room to talk about),
+  no column, no reroll. The map shows them from the first step, burning
+  amber, so a runner walks to one or around it.
+- The node answers only the bright call: a plain fight asked of it is
+  `Refusal::WrongCall` and the ration is kept, as is the bright call
+  asked of a plain glyph's node.
 - It is the glyph of the runner's level lifted (`bright_foe_for_level`):
   `BRIGHT_SIGNAL_PERCENT` (135) of the signal, `BRIGHT_EDGE_PERCENT`
   (115, rounded up) of the attack and defense, `BRIGHT_BITS_TIMES` (2)
-  the bits, the plain glyph's exp. The exp stays plain on purpose: the
-  climb's pace is the rations', and the bright one is for the crystal.
-- `Fight::bright` is on the row (absent on fights stored before it,
-  which read as plain); `Fight::name` puts `bright` ahead of the kind
-  in every line.
-- Off its step it is `Refusal::NoBrightGlyph` and the ration is kept.
+  the bits, the plain glyph's exp, the same pattern of moves. The exp
+  stays plain on purpose: every road has the same five fights whichever
+  lanes are walked, so the climb's pace is the rations', and the bright
+  one is for the crystal.
+- `Fight::bright` is on the row; `Fight::name` puts `bright` ahead of
+  the kind in every line, the scene is dressed in amber
+  (`fight/ui.rs::bright_dress`), and the step is marked `BrightWon` on
+  the run when it goes down.
 - The wire hears a bright kill (`News::BrightDown`), after a level and a
   first kill, ahead of a near miss.
-- At the gate the fair pick is the Old Signal and the bright one is
-  still the glyph of 15.
+- At the gate a glyph's node is the Old Signal and a bright node is
+  still the bright glyph of 15.
 
 ## Dead Air
 
@@ -88,6 +93,7 @@ or a rule on the same sheet under the same row lock (`fight/state.rs`,
 
 ## Measured
 
-The numbers (the bright glyph's odds with and without a glass, the Old
-Signal with a glass, crystals a day, what the keen runner gains) are in
-`BALANCE.md`, section 6, with the targets they are held to.
+The numbers (the bright glyph's odds on the `Auto` key and read sharp,
+what it leaves of the signal, the Old Signal with a glass, crystals a
+day, what the keen runner gains) are in `BALANCE.md`, section 6, with
+the targets they are held to.

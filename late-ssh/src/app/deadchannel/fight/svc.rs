@@ -9,10 +9,10 @@
 //! sees the news, never the play-by-play. `Sheet::news` decides what is
 //! news (a dropped signal, a level gained, the Old Signal put down, a step
 //! off the ledge, a first kill, a bright glyph put down, a near miss, the
-//! last ration of the day);
+//! day's road walked to its end);
 //! this file words it and posts it to #deadchannel as messages from the
-//! voice. An ordinary kill, a round, a run, a purchase, a glass, the locker,
-//! and the bits machine post nothing. The Old Signal also pays the mark's
+//! voice. An ordinary kill, a card, a turn, a run, a rest, a cache, a
+//! purchase, a glass, the locker, and the bits machine post nothing. The Old Signal also pays the mark's
 //! chips after the commit (`pay_mark`: once per mark and at most once a
 //! month, the door milestones' two gates; the debt is on the row as
 //! `unpaid_mark` until the grant answers, so a grant that errors is
@@ -251,12 +251,12 @@ impl FightService {
     async fn post_news(&self, username: &str, sheet: &Sheet, applied: &Applied) {
         for news in sheet.news(applied) {
             let body = match news {
-                News::Dropped { bits_lost } => {
+                News::Dropped { bits_lost, step } => {
                     let took = match bits_lost {
                         0 => "the street found nothing on them.".to_string(),
                         n => format!("the street took {n} bits."),
                     };
-                    format!("{username}'s signal dropped at the end of the row. {took}")
+                    format!("{username}'s signal dropped at step {step} of the road. {took}")
                 }
                 News::Leveled { level } => {
                     self.with_face(sheet.user_id, format!("{username} is level {level}."))
@@ -284,7 +284,7 @@ impl FightService {
                 News::NearMiss { foe, signal } => {
                     format!("{username} put down the {foe} with {signal} signal left.")
                 }
-                News::LastRation {
+                News::RoadWalked {
                     kills,
                     runs,
                     signal,
@@ -300,7 +300,7 @@ impl FightService {
                         n => format!(", {n} runs"),
                     };
                     format!(
-                        "{username} spent the last ration. {glyphs}{runs}, signal {signal}/{max_signal}."
+                        "{username} walked the road. {glyphs}{runs}, signal {signal}/{max_signal}."
                     )
                 }
             };
@@ -438,7 +438,12 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Started { pick: Pick::Lower } => FightBeat::SteppedDown,
         Applied::Started { pick: Pick::Bright } => FightBeat::Bright,
         Applied::Resumed => FightBeat::Resumed,
+        Applied::Played { .. } => FightBeat::Played,
         Applied::Round => FightBeat::Round,
+        Applied::Drafted { .. } => FightBeat::Drafted,
+        Applied::Mended { .. } => FightBeat::Mended,
+        Applied::Cleared { .. } => FightBeat::Cleared,
+        Applied::Cached { .. } => FightBeat::Cached,
         Applied::Won { .. } => FightBeat::Won,
         Applied::Slain { .. } => FightBeat::Slain,
         Applied::Lost { .. } => FightBeat::Lost,

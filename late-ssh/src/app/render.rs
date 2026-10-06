@@ -2680,7 +2680,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     // key. The chrome says so, the way the door games do.
     if screen == Screen::City {
         spans.push(Span::styled(
-            "· f fight · p patch · ? guide ",
+            "· f road · p patch · ? guide ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }

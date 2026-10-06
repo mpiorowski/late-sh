@@ -1,5 +1,5 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
-//! run), Enter at a landmark (a shop panel, a street line, the picker at
+//! run), Enter at a landmark (a shop panel, a street line, the road at
 //! the screen, or the wire out), `f` to walk up to the static and `p` to
 //! open patch from anywhere on the street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
@@ -9,8 +9,8 @@
 //! `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page opens it (the site guide's key, taken over
-//! down here: the street has its own). While the fight picker or scene is
-//! open every key goes to `fight/input.rs`. Returns `false` for anything it
+//! down here: the street has its own). While the road or the fight scene
+//! is open every key goes to `fight/input.rs`. Returns `false` for anything it
 //! does not own so global keys (page digits, Tab, `q`) keep working. While a panel is open, or the
 //! runner is looking over the ledge, every other typed key is swallowed:
 //! the walk keys, so the runner does not wander under the box, and the
@@ -76,7 +76,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     // `f` walks up to the static from anywhere on the street, not only at
-    // one of its three screens. Same path as Enter there: the picker, or a
+    // one of its three screens. Same path as Enter there: the road, or a
     // waiting fight straight back in.
     if let Some(b'f' | b'F') = event_byte(event) {
         app.music_prefix_armed = false;

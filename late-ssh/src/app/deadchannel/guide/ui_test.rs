@@ -101,18 +101,18 @@ fn the_short_version_is_the_first_screen() {
     // The box at full size: the loop, the prize, and the keys all show
     // before a single scroll, since most runners read nothing else.
     let top = render(&state, 100, 45);
-    assert!(top.contains("fight glyphs ▸ buy gear"));
+    assert!(top.contains("walk the road ▸ buy gear"));
     assert!(top.contains("40,000 chips"));
-    assert!(top.contains("fight"));
+    assert!(top.contains("auto: play the turn for me"));
     assert!(top.contains("this guide"));
-    assert!(top.contains("gear wins fights."));
+    assert!(top.contains("opens the road"));
     assert!(!top.contains("the wire ─"));
 
     // The end after a long scroll, the top gone.
     state.scroll_by(1000);
     let end = render(&state, 100, 45);
     assert!(end.contains("opens it again."));
-    assert!(!end.contains("fight glyphs ▸ buy gear"));
+    assert!(!end.contains("walk the road ▸ buy gear"));
 }
 
 #[test]

@@ -10,7 +10,7 @@
 //! portrait format, built from the glyph alphabet and the static shades,
 //! so a foe and a runner face each other in one register.
 
-/// Fights per UTC day (`TURNS_PER_DAY`).
+/// Steps of the road per UTC day (`TURNS_PER_DAY`): a ration buys one.
 pub const RATIONS_PER_DAY: i32 = 10;
 /// Signal (health) per level; max signal is a flat multiple.
 pub const SIGNAL_PER_LEVEL: i32 = 10;
@@ -26,13 +26,6 @@ pub const MAX_LEVEL: i32 = 15;
 /// What the armorer pays for the piece you hand back, as a percentage of
 /// its price on the wall (`weapons.php`: 75%). Rounded down.
 pub const TRADE_IN_PERCENT: i64 = 75;
-/// Odds a run gets away, out of `RUN_ODDS_OUT_OF`. LoGD's forest run is a
-/// coin toss that the foe answers with a free strike when it fails; two
-/// in three here because a fight on the street is short and a failed run
-/// that costs the fight anyway reads as a rigged door.
-pub const RUN_ODDS: u32 = 2;
-pub const RUN_ODDS_OUT_OF: u32 = 3;
-
 /// A win that leaves the signal at or under this is a near miss, and the
 /// wire says so (GAME.md, "shaped luck": the moments people retell).
 pub const NEAR_MISS_SIGNAL: i32 = 3;
@@ -202,6 +195,25 @@ pub struct FoeKind {
     pub portrait: [&'static str; 3],
     /// How it arrives, in the announcer's voice.
     pub arrives: &'static str,
+    /// What it does, turn after turn, round and round: the whole of its
+    /// mind, shown a turn ahead. A `Heavy` always follows a `Charge`.
+    pub pattern: &'static [Intent],
+}
+
+/// What a glyph means to do with its turn, shown before you play yours
+/// (GAME.md, "The round": block or race is the whole question, and it has
+/// to read at a glance).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Intent {
+    /// Hits for its hit.
+    Hit,
+    /// Gathers itself: nothing lands this turn, the next is a `Heavy`.
+    Charge,
+    /// Hits for twice its hit.
+    Heavy,
+    /// Floods the deck: [`NOISE_CARDS`] static cards, no damage, and no
+    /// block stops it.
+    Noise,
 }
 
 pub const FOES: [FoeKind; 15] = [
@@ -209,76 +221,115 @@ pub const FOES: [FoeKind; 15] = [
         name: "flicker",
         portrait: ["  ▘  ", " ▗▖▝ ", "  ▖  "],
         arrives: "a flicker sputters out of the static. it is barely there.",
+        pattern: &[Intent::Hit],
     },
     FoeKind {
         name: "hiss",
         portrait: [" ░ ░ ", "░▒░▒░", " ░ ░ "],
         arrives: "the noise thickens into a hiss. it has edges.",
+        pattern: &[Intent::Hit, Intent::Hit, Intent::Noise],
     },
     FoeKind {
         name: "drift",
         portrait: ["  ▚  ", " ▞▚▞ ", "  ▞  "],
         arrives: "a drift slides sideways out of the picture and stops in front of you.",
+        pattern: &[Intent::Hit, Intent::Charge, Intent::Heavy],
     },
     FoeKind {
         name: "stray signal",
         portrait: [" ┼ ┼ ", "▐▘ ▝▌", " ┼─┼ "],
         arrives: "a stray signal, still carrying somebody's voice. it turns toward you.",
+        pattern: &[Intent::Charge, Intent::Heavy, Intent::Hit, Intent::Hit],
     },
     FoeKind {
         name: "crackle",
         portrait: [" ╪ ╪ ", "▐▚▞▚▌", " ╫ ╫ "],
         arrives: "the screen crackles and something climbs down off it.",
+        pattern: &[Intent::Hit, Intent::Noise, Intent::Charge, Intent::Heavy],
     },
     FoeKind {
         name: "ghost frame",
         portrait: [" ░▒░ ", "▐◌ ◌▌", " ▒░▒ "],
         arrives: "a ghost frame: one picture, held too long, burned in. it remembers you.",
+        pattern: &[Intent::Noise, Intent::Hit, Intent::Hit],
     },
     FoeKind {
         name: "howler",
         portrait: ["▚▞▚▞▚", "▐▓▒▓▌", "▞▚▞▚▞"],
         arrives: "a howler. the whole street hears it before it sees it.",
+        pattern: &[Intent::Charge, Intent::Heavy],
     },
     FoeKind {
         name: "dead pixels",
         portrait: ["▖▗▖▗▖", "▝▘▝▘▝", "▖▗▖▗▖"],
         arrives: "dead pixels, a swarm of them, moving like one thing.",
+        pattern: &[Intent::Hit, Intent::Noise, Intent::Hit, Intent::Hit],
     },
     FoeKind {
         name: "carrier",
         portrait: [" ╫╫╫ ", "▐╪═╪▌", " ▟▓▙ "],
         arrives: "a carrier steps out of the static wearing a coat. it is not a runner.",
+        pattern: &[Intent::Hit, Intent::Charge, Intent::Heavy, Intent::Hit],
     },
     FoeKind {
         name: "blackout",
         portrait: [" ███ ", "▐█ █▌", " ███ "],
         arrives: "a blackout. where it stands there is no light at all.",
+        pattern: &[Intent::Charge, Intent::Heavy, Intent::Hit, Intent::Noise],
     },
     FoeKind {
         name: "feedback",
         portrait: ["╬╬╬╬╬", "▐▞▚▞▌", "╬╬╬╬╬"],
         arrives: "feedback, screaming at itself, and now at you.",
+        pattern: &[
+            Intent::Hit,
+            Intent::Charge,
+            Intent::Heavy,
+            Intent::Charge,
+            Intent::Heavy,
+        ],
     },
     FoeKind {
         name: "white noise",
         portrait: ["▒▓▒▓▒", "▓░▓░▓", "▒▓▒▓▒"],
         arrives: "white noise, all of it, walking.",
+        pattern: &[
+            Intent::Noise,
+            Intent::Hit,
+            Intent::Hit,
+            Intent::Noise,
+            Intent::Hit,
+        ],
     },
     FoeKind {
         name: "test pattern",
         portrait: ["▐▌▐▌▐", "▓░▓░▓", "▌▐▌▐▌"],
         arrives: "the test pattern comes on. it has never done that with somebody standing here.",
+        pattern: &[
+            Intent::Hit,
+            Intent::Charge,
+            Intent::Heavy,
+            Intent::Noise,
+            Intent::Hit,
+        ],
     },
     FoeKind {
         name: "burnout",
         portrait: [" ▓█▓ ", "█▐░▌█", " ▓█▓ "],
         arrives: "a burnout, what is left when a channel runs too hot. it is still hot.",
+        pattern: &[
+            Intent::Charge,
+            Intent::Heavy,
+            Intent::Charge,
+            Intent::Heavy,
+            Intent::Hit,
+        ],
     },
     FoeKind {
         name: "interference",
         portrait: ["╪╫╪╫╪", "▐┼╬┼▌", "╫╪╫╪╫"],
         arrives: "interference from somewhere below. this is the top of it.",
+        pattern: &[Intent::Hit, Intent::Charge, Intent::Heavy, Intent::Noise],
     },
 ];
 
@@ -290,24 +341,36 @@ pub const OLD_SIGNAL: FoeKind = FoeKind {
     name: "Old Signal",
     portrait: ["▗╬╬╬▖", "▐█▬█▌", "▟╬█╬▙"],
     arrives: "the static parts. under it something has been broadcasting since before the city. it is the Old Signal, and it heard you.",
+    pattern: &[
+        Intent::Hit,
+        Intent::Noise,
+        Intent::Charge,
+        Intent::Heavy,
+        Intent::Hit,
+        Intent::Charge,
+        Intent::Heavy,
+    ],
 };
 
 /// LoGD's dragon is 45 attack, 25 defense, 300 hit points (`dragon.php`,
-/// the door's `DRAGON_*`), and a runner with no bands, no specialty, and
-/// no bonus hit points wins that about one time in fifty at the top of
-/// the wall. Cut until a first kill lands about two tries in five and the
-/// capped mark bonus lifts it to about four in five; `state_test` pins
-/// both with the seeded simulation. Revisit when the bands ship.
+/// the door's `DRAGON_*`), numbers for its exchange loop. In the round the
+/// Old Signal is tuned on its own (`fight/BALANCE.md`): from the top of the
+/// wall a first kill lands about one try in two on the `Auto` key and nine
+/// in ten for a runner reading the hand, and a glass makes the key's try
+/// near sure. No dice but the shuffle means the odds move in steps: five
+/// more signal is one more strike to land, and halves the key's chances.
+/// The arena's contract holds the band; move these with it.
 pub const OLD_SIGNAL_TIER: FoeTier = FoeTier {
-    signal: 240,
-    attack: 36,
+    signal: 245,
+    attack: 39,
     defense: 22,
     bits: 0,
     exp: 0,
 };
 
 /// The line the kill that crosses [`exp_to_seek`] prints under itself.
-pub const HEARD_LINE: &str = "below the static something has heard you. the next step in meets it.";
+pub const HEARD_LINE: &str =
+    "below the static something has heard you. the next glyph on the road will be it.";
 
 /// The kill, before the reset's own line (GAME.md, "Marks: the reset").
 pub const SLAIN_LINE: &str =
@@ -336,13 +399,14 @@ pub fn title(marks: i32) -> Option<&'static str> {
 }
 
 /// What a glyph pays over LoGD's table, in bits and in exp, as
-/// percentages. LoGD paced a season; the climb here is three to four weeks
-/// to the first mark (GAME.md, "The daily ration loop"), so the exp is
-/// tripled and `sim_test.rs` holds that window. The bits are a separate
-/// knob on purpose: exp sets the pace, bits set how far the purse reaches
-/// at the armorer and at patch (`fight/BALANCE.md`).
-pub const PAY_BITS_PERCENT: i64 = 300;
-pub const PAY_EXP_PERCENT: i64 = 300;
+/// percentages. LoGD paced a season of ten forest fights a day; the climb
+/// here is two to three weeks to the first mark on five fights a day
+/// (GAME.md, "The daily ration loop"; `road.rs`), so a kill pays over five
+/// times LoGD's exp and `sim_test.rs` holds that window. The bits are a
+/// separate knob on purpose: exp sets the pace, bits set how far the purse
+/// reaches at the armorer and at patch (`fight/BALANCE.md`).
+pub const PAY_BITS_PERCENT: i64 = 400;
+pub const PAY_EXP_PERCENT: i64 = 540;
 
 /// The armorer's prices as a percentage of the city's ladder
 /// (`city/data.rs::COST_LADDER`, LoGD's). The knob that decides how the kit
@@ -350,8 +414,9 @@ pub const PAY_EXP_PERCENT: i64 = 300;
 pub const PRICE_PERCENT: i64 = 225;
 
 /// What patch charges per missing point of signal, per level, as a
-/// percentage of a bit.
-pub const PATCH_PERCENT: i64 = 50;
+/// percentage of a bit. A bit a point: the road's rests mend for nothing,
+/// so patch is the price of not walking to one (`fight/BALANCE.md`).
+pub const PATCH_PERCENT: i64 = 100;
 
 /// [`PATCH_PERCENT`] as the panel says it, so the copy moves with the knob.
 pub fn patch_rate() -> String {
@@ -380,6 +445,21 @@ pub struct Rules {
     pub bright_edge_percent: u32,
     pub bright_bits_times: i64,
     pub cart_crystals: i32,
+    /// A glyph's signal as a percentage of the creature table's: how many
+    /// turns a fight lasts.
+    pub foe_signal_percent: i32,
+    /// What a glyph's hit lands for, as a percentage of its attack less a
+    /// quarter of your defense.
+    pub hit_percent: u32,
+    /// What a block card holds, as a percentage of your defense.
+    pub block_percent: u32,
+    /// What a rest on the road mends, as a percentage of the signal's max.
+    pub rest_mend_percent: i32,
+    /// What a cache on the road holds, as a percentage of what the glyph
+    /// of your level pays.
+    pub cache_percent: i64,
+    /// The Old Signal's numbers.
+    pub old_signal: FoeTier,
 }
 
 /// The rules the game is played under.
@@ -395,6 +475,12 @@ pub const RULES: Rules = Rules {
     bright_edge_percent: BRIGHT_EDGE_PERCENT,
     bright_bits_times: BRIGHT_BITS_TIMES,
     cart_crystals: CART_CRYSTALS,
+    foe_signal_percent: FOE_SIGNAL_PERCENT,
+    hit_percent: HIT_PERCENT,
+    block_percent: BLOCK_PERCENT,
+    rest_mend_percent: REST_MEND_PERCENT,
+    cache_percent: CACHE_PERCENT,
+    old_signal: OLD_SIGNAL_TIER,
 };
 
 impl Rules {
@@ -407,11 +493,48 @@ impl Rules {
             index,
             &FOES[index],
             FoeTier {
+                signal: (tier.signal * self.foe_signal_percent / 100).max(1),
                 bits: tier.bits * self.pay_bits_percent / 100,
                 exp: tier.exp * self.pay_exp_percent / 100,
                 ..tier
             },
         )
+    }
+
+    /// What a strike card lands for: your attack less half the glyph's
+    /// defense, never under one. The weapon tier is in the attack, so the
+    /// armorer's wall is the strike's ladder.
+    pub fn strike(&self, attack: u32, foe_defense: u32) -> i32 {
+        (attack as i32 - (foe_defense / 2) as i32).max(1)
+    }
+
+    /// What a surge lands for: two strikes and half of a third, for two
+    /// energy and one card.
+    pub fn surge(&self, strike: i32) -> i32 {
+        strike * 2 + (strike + 1) / 2
+    }
+
+    /// What a block card holds: a share of your defense, never under one.
+    /// The armor tier is in the defense.
+    pub fn block(&self, defense: u32) -> i32 {
+        ((defense * self.block_percent / 100) as i32).max(1)
+    }
+
+    /// What a glyph's hit lands for before your block: its attack less a
+    /// quarter of your defense, scaled, never under one. A heavy lands for
+    /// twice this.
+    pub fn hit(&self, foe_attack: u32, defense: u32) -> i32 {
+        ((foe_attack.saturating_sub(defense / 4) * self.hit_percent / 100) as i32).max(1)
+    }
+
+    /// The bits in a cache on the road for a runner of `level`.
+    pub fn cache(&self, level: i32) -> i64 {
+        self.foe(level).2.bits * self.cache_percent / 100
+    }
+
+    /// What a rest mends of a signal whose max is `max_signal`, rounded up.
+    pub fn mend(&self, max_signal: i32) -> i32 {
+        (max_signal * self.rest_mend_percent + 99) / 100
     }
 
     /// The glyph a level below a runner of `level`, its pay cut to
@@ -489,11 +612,6 @@ pub fn lower_foe_for_level(level: i32) -> Option<(usize, &'static FoeKind, FoeTi
 /// leaves one (the way out is not a farm), and a bright glyph always does.
 pub const CRYSTAL_DROP_ONE_IN: u32 = 12;
 
-/// Steps of the day that a bright glyph waits behind, out of the day's
-/// [`RATIONS_PER_DAY`]. Two a day: enough that every ritual has a choice
-/// in it, few enough that it is one.
-pub const BRIGHT_STEPS_PER_DAY: usize = 2;
-
 /// What a bright glyph has over the glyph of its level: a third more
 /// signal, 15% more attack and defense (rounded up), and twice the
 /// bits. The exp is the plain glyph's: the bright one is for the crystal
@@ -509,28 +627,29 @@ pub fn bright_foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
     RULES.bright_foe(level)
 }
 
-/// The steps of `day` (1 is the first ration spent, [`RATIONS_PER_DAY`]
-/// the last) that a bright glyph waits behind. A pure function of the
-/// date, so it is the same two steps for every runner that day (GAME.md,
-/// "The lesson of Le Word": one object for the room to talk about), needs
-/// no column, and cannot be rerolled. Ascending.
-pub fn bright_steps(day: chrono::NaiveDate) -> [i32; BRIGHT_STEPS_PER_DAY] {
-    use chrono::Datelike;
-    let seed = splitmix(day.num_days_from_ce() as u64);
-    let first = (seed % RATIONS_PER_DAY as u64) as i32;
-    // The second lands on one of the other nine steps.
-    let second =
-        (first + 1 + ((seed >> 32) % (RATIONS_PER_DAY as u64 - 1)) as i32) % RATIONS_PER_DAY;
-    [first.min(second) + 1, first.max(second) + 1]
-}
+/// A glyph's signal over the creature table's. The table is LoGD's and
+/// was paced for its exchange loop; this is the round's length
+/// (`fight/BALANCE.md`).
+pub const FOE_SIGNAL_PERCENT: i32 = 100;
 
-/// SplitMix64's finalizer: one well-mixed word from a small seed.
-fn splitmix(seed: u64) -> u64 {
-    let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
-}
+/// A glyph's hit, as a percentage of its attack less a quarter of your
+/// defense.
+pub const HIT_PERCENT: u32 = 170;
+
+/// A block card, as a percentage of your defense. Under a hit on purpose:
+/// one block never stops one hit whole, so blocking is a choice and not a
+/// reflex (GAME.md, "The round").
+pub const BLOCK_PERCENT: u32 = 60;
+
+/// Static cards a `Noise` turn puts into the deck.
+pub const NOISE_CARDS: usize = 2;
+
+/// What a rest on the road mends, as a percentage of the signal's max.
+pub const REST_MEND_PERCENT: i32 = 35;
+
+/// What a cache on the road holds, as a percentage of what the glyph of
+/// your level pays.
+pub const CACHE_PERCENT: i64 = 50;
 
 /// What a glass at Dead Air costs, in crystals. One glass a day.
 pub const DRINK_CRYSTALS: i32 = 1;
@@ -595,13 +714,29 @@ pub const RUN_LINES: [&str; 2] = [
 /// A crystal left by a kill, under the kill's own line.
 pub const CRYSTAL_LINE: &str = "something is left in the static where it stood. a crystal.";
 
+/// Static into the deck, under the hit that landed. It says where the
+/// card came from and what to do about it every time: a dead card nobody
+/// can account for reads as a bug.
+pub const STATIC_LINE: &str = "that hit left a static card in your deck. play it to throw it out.";
+
+/// A draft owed, under the kill that reached its level and under a pick
+/// that leaves another owed.
+pub const DRAFT_LINE: &str = "a new card is waiting for you on the road.";
+
 /// The bright glyph's arrival, under the glyph's own line.
 pub const BRIGHT_LINE: &str = "this one is bright. it burns harder, and it is carrying something.";
 
 /// The lower glyph's arrival, under its own line: the step down is said.
 pub const STEPPED_DOWN_LINE: &str = "you went looking for something smaller. it pays like it.";
 
-pub const RUN_FAILED_LINES: [&str; 2] = [
-    "you turn and it is already there.",
-    "no way out of the frame. it catches you turning.",
+/// A rest on the road, by what was done with it.
+pub const MEND_LINE: &str = "a dry doorway out of the rain. you sit until the picture steadies.";
+pub const CLEAR_LINE: &str =
+    "a dry doorway out of the rain. you shake the static out of your deck.";
+
+/// A cache on the road, ahead of what it held.
+pub const CACHE_LINES: [&str; 3] = [
+    "a locker somebody never came back for.",
+    "a coat on a railing, the pockets still heavy.",
+    "a dead terminal with its tray hanging open.",
 ];

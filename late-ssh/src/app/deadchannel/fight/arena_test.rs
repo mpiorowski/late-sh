@@ -1,4 +1,4 @@
-use super::{Reading, publish, report, sweep};
+use super::{Reading, publish, report, runs, sweep};
 use crate::app::deadchannel::fight::data::{RULES, Rules};
 
 /// The candidates `make deadchannel-sweep` reads side by side. Edit this
@@ -6,31 +6,44 @@ use crate::app::deadchannel::fight::data::{RULES, Rules};
 const SWEEP: &[(&str, Rules)] = &[
     ("live", RULES),
     (
-        "prices 200%",
+        "hits 150%",
         Rules {
-            price_percent: 200,
+            hit_percent: 150,
             ..RULES
         },
     ),
     (
-        "prices 250%",
+        "hits 190%",
         Rules {
-            price_percent: 250,
+            hit_percent: 190,
             ..RULES
         },
     ),
     (
-        "patch 100%",
+        "blocks 50%",
         Rules {
-            patch_percent: 100,
+            block_percent: 50,
             ..RULES
         },
     ),
     (
-        "the old game: prices 100%, patch 100%",
+        "blocks 70%",
         Rules {
-            price_percent: 100,
-            patch_percent: 100,
+            block_percent: 70,
+            ..RULES
+        },
+    ),
+    (
+        "glyph signal 115%",
+        Rules {
+            foe_signal_percent: 115,
+            ..RULES
+        },
+    ),
+    (
+        "patch 50%",
+        Rules {
+            patch_percent: 50,
             ..RULES
         },
     ),
@@ -41,6 +54,13 @@ const SWEEP: &[(&str, Rules)] = &[
 #[ignore = "the report: run it with make deadchannel-arena"]
 fn arena_report() {
     publish("deadchannel-arena.md", &report(RULES));
+}
+
+/// Whole runs, start to finish, for the live rules. `make deadchannel-run`.
+#[test]
+#[ignore = "the printed runs: run it with make deadchannel-run"]
+fn arena_run() {
+    publish("deadchannel-run.md", &runs(RULES));
 }
 
 /// One reading per candidate in [`SWEEP`]. `make deadchannel-sweep`.
