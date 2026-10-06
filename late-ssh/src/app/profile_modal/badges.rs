@@ -1,7 +1,8 @@
-//! Compact earned-award preview for profile overview.
+//! Earned-award list for the profile.
 //!
-//! Profile awards are stored permanently, but the overview intentionally shows
-//! only a short preview so the profile still reads quickly.
+//! Profile awards are stored permanently, and the profile shows every one of
+//! them: wrapped onto as many rows as the width needs, never folded into a
+//! "+N more". The badges are the reason to scroll down that far.
 
 use late_core::models::profile_award::ProfileAward;
 use ratatui::{
@@ -9,55 +10,212 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::app::common::theme;
+use crate::app::common::{theme, username_effect::CROWN_LAUREATE_GLYPH};
 
-pub(crate) const PREVIEW_LIMIT: usize = 6;
-
-pub(crate) fn preview_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
-    if awards.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::new();
+pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'static>> {
     let badge_style = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(theme::TEXT_DIM());
+    const GAP: &str = "  ";
 
-    let mut spans = Vec::new();
-    for award in awards.iter().take(PREVIEW_LIMIT) {
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
+    let mut lines = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for award in awards {
+        let text = format!("[{} {}]", award.badge(), award.month_label());
+        let text_width = text.chars().count();
+        let needed = if spans.is_empty() {
+            text_width
+        } else {
+            used + GAP.len() + text_width
+        };
+        if !spans.is_empty() && needed > width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
         }
-        spans.push(Span::styled(
-            format!("[{} {}]", award.badge(), award.month_label()),
-            badge_style,
-        ));
+        if !spans.is_empty() {
+            spans.push(Span::raw(GAP));
+            used += GAP.len();
+        }
+        spans.push(Span::styled(text, badge_style));
+        used += text_width;
     }
-
-    let remaining = awards.len().saturating_sub(PREVIEW_LIMIT);
-    if remaining > 0 {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(format!("+{remaining} more"), dim));
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
     }
-
-    lines.push(Line::from(spans));
     lines
 }
 
-pub(crate) fn legend_lines() -> Vec<Line<'static>> {
+/// The full badge guide: what each code means, how it is earned, and whether
+/// it pays chips. Lives here because the badges themselves are `ProfileAward`
+/// data (`late_core::models::profile_award`); rendered on the Leaderboards
+/// page (`leaderboard::ui::draw_detail`), which has the room a one-line
+/// profile legend never did.
+pub(crate) fn guide_lines() -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
-    vec![
-        Line::from(Span::styled("CHIP1-3 Top Chips  AW1-3 Arcade Wins", dim)),
-        Line::from(Span::styled("LA1-3 Lateris  24#1-3 2048  SN1-3 Snake", dim)),
+    let heading = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
+    let code = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text = Style::default().fg(theme::TEXT());
+
+    let mut lines = vec![
         Line::from(Span::styled(
-            "LMG Lateania Archdemon  LKN Lateania Frontier King",
+            format!(
+                "Every code below also shows in your profile's Badges list and in your chat username \
+                 stack, except CRWN: chat paints last month's crown as a {CROWN_LAUREATE_GLYPH} before the name."
+            ),
             dim,
         )),
-        Line::from(Span::styled("LYS Lateania Sundering Deep", dim)),
+        Line::from(""),
+        Line::from(Span::styled("Monthly awards", heading)),
         Line::from(Span::styled(
-            "NHA NetHack Amulet  NHY NetHack Ascension",
+            "Snapshotted at month end from last month's totals on the boards to the left. Top 3 only, \
+             rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own, with two \
+             exceptions: the crown and Late Time each have one holder, so no digit; and the Artboard \
+             gallery pays its three places 40,000 / 15,000 / 10,000 chips.",
             dim,
         )),
-    ]
+        Line::from(""),
+    ];
+    for (item_code, name, source) in [
+        (
+            "AW",
+            "Arcade Wins",
+            "last month's daily-puzzle points (Arcade Wins board)",
+        ),
+        (
+            "CHIP",
+            "Top Chips",
+            "last month's chips earned (Top Chips board; table money, gifts, and spending ignored)",
+        ),
+        ("LA", "Lateris", "best Tetris score last month"),
+        ("24#", "2048", "best 2048 score last month"),
+        ("SN", "Snake", "best Snake score last month"),
+        (
+            "CRWN",
+            "The Crown",
+            "wore the crown when last month ended (/crown)",
+        ),
+        (
+            "ART",
+            "Artboard Gallery",
+            "last month's most applauded piece, one per hanger, 3 applause to count (Artboard page, Hang a piece); pays 40,000 / 15,000 / 10,000 chips",
+        ),
+        (
+            "LATE",
+            "Late Time",
+            "most time online last month, first place only (Late Time board)",
+        ),
+        (
+            "DRNK",
+            "Top Drinkers",
+            "most buzz from drinks taken last month, first place only, no chips (Top Drinkers board)",
+        ),
+    ] {
+        lines.push(entry_line(item_code, name, source, code, text, dim));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("One-off feats", heading)));
+    lines.push(Line::from(Span::styled(
+        "Earned once per account and kept forever, no rank digit. The badge lands the first \
+         time; the chips land again every time the feat's own gate allows, shown below.",
+        dim,
+    )));
+    lines.push(Line::from(""));
+    for (item_code, name, source) in [
+        (
+            "LMG",
+            "Lateania Archdemon",
+            "slay the Archdemon Mal'gareth (10,000 chips per character, 30-day gap)",
+        ),
+        (
+            "LKN",
+            "Lateania Frontier King",
+            "slay the King Who Was Promised Nothing (10,000 chips per character, 30-day gap)",
+        ),
+        (
+            "LYS",
+            "Lateania Sundering Deep",
+            "slay Yssgar, the Sundering Deep (10,000 chips per character, 30-day gap)",
+        ),
+        (
+            "LKA",
+            "Kaethyr Ascendant",
+            "slay Kaethyr Ascendant in Kaelmyr (10,000 chips per character, 30-day gap)",
+        ),
+        (
+            "NHA",
+            "NetHack Amulet",
+            "pick up the Amulet of Yendor (20,000 chips per run, 30-day gap)",
+        ),
+        (
+            "NHY",
+            "NetHack Ascension",
+            "ascend to demigodhood (40,000 chips per run, 30-day gap)",
+        ),
+        (
+            "GDS",
+            "Green Dragon Slayer",
+            "slay the green dragon (10,000 chips, every kill)",
+        ),
+        (
+            "DCO",
+            "DCSS Orb of Zot",
+            "pick up the Orb of Zot (20,000 chips per run, 30-day gap)",
+        ),
+        (
+            "DCW",
+            "DCSS Escape",
+            "escape the dungeon with the Orb (40,000 chips per run, 30-day gap)",
+        ),
+        (
+            "BRE",
+            "Brogue Escape",
+            "escape the Dungeons of Doom (20,000 chips per run, 30-day gap)",
+        ),
+        (
+            "BRM",
+            "Brogue Mastery",
+            "the Dungeons of Doom's super-victory (40,000 chips per run, 30-day gap)",
+        ),
+        (
+            "ADE",
+            "A Dark Room Escape",
+            "fly the starship off the rock (15,000 chips, every run)",
+        ),
+        (
+            "ADB",
+            "A Dark Room Homefleet",
+            "fly out holding the fleet beacon (20,000 chips, every run)",
+        ),
+        (
+            "SIG",
+            "Old Signal",
+            "put down the Old Signal in deadchannel (40,000 chips per mark, 30-day gap)",
+        ),
+    ] {
+        lines.push(entry_line(item_code, name, source, code, text, dim));
+    }
+
+    lines
+}
+
+fn entry_line(
+    item_code: &'static str,
+    name: &'static str,
+    source: &'static str,
+    code_style: Style,
+    name_style: Style,
+    dim_style: Style,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{item_code:<4}"), code_style),
+        Span::styled(format!(" {name} "), name_style),
+        Span::styled(format!("— {source}"), dim_style),
+    ])
 }

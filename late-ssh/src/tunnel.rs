@@ -232,20 +232,24 @@ impl Drop for TunnelSessionGuard {
         {
             metrics::add_ssh_session(-1);
             let mut active_users = self.state.active_users.lock_recover();
-            let mut user_still_afk = false;
+            let mut became_offline = false;
             if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.active_session_token.as_ref() {
                     active.sessions.retain(|session| session.token != *token);
                 }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
+                    became_offline = true;
                 } else {
                     active.connection_count -= 1;
-                    user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
             }
+            if became_offline {
+                self.state
+                    .leaderboard_service
+                    .online_user_disconnected(user_id);
+            }
             drop(active_users);
-            crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
         }
 
         if self.per_ip_incremented {
@@ -389,19 +393,25 @@ async fn tunnel_handler(
         guard.per_ip_incremented = true;
     }
 
-    // ensure_user only fails on infrastructure errors (DB unreachable, …)
-    // today — there is no User.banned column. HTTP 500 is the right
-    // semantic: the bastion's reconnect dispatcher will treat 5xx as
-    // retryable. When ban support lands, route ban rejections through
-    // a post-upgrade WS close 4002 instead.
-    let (user, is_new_user) =
-        match ensure_user(&state, &handshake.username, &handshake.fingerprint).await {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::warn!(error = ?e, "tunnel ensure_user failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
+    // Admission checks above handle bans and server closure. Infrastructure
+    // errors stay retryable so the bastion can redial after recovery.
+    let (user, is_new_user) = match ensure_user(&state, &handshake.fingerprint).await {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!(error = ?e, "tunnel ensure_user failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if is_new_user
+        && let Some(code) = crate::app::referral::state::ssh_invite_code(&handshake.username)
+    {
+        state.referral_service.attach_task(
+            user.id,
+            code,
+            late_core::models::referral::ReferralSource::Ssh,
+        );
+    }
 
     let Some(tunnel_permit) = state.tunnel_sessions.enter_if_accepting(&state.is_draining) else {
         tracing::info!(
@@ -420,11 +430,10 @@ async fn tunnel_handler(
     // Mirrors the auth_publickey block in the russh path.
     {
         let mut active_users = state.active_users.lock_recover();
-        if let Some(active) = active_users.get_mut(&user.id) {
+        let became_online = if let Some(active) = active_users.get_mut(&user.id) {
             active.connection_count += 1;
             active.username = user.username.clone();
             active.fingerprint = Some(handshake.fingerprint.clone());
-            active.peer_ip = Some(handshake.peer_ip);
             active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
             active.last_login_at = Instant::now();
             if !active
@@ -436,27 +445,31 @@ async fn tunnel_handler(
                     token: session_token.clone(),
                     fingerprint: Some(handshake.fingerprint.clone()),
                     peer_ip: Some(handshake.peer_ip),
-                    afk: None,
+                    away: false,
                 });
             }
+            false
         } else {
             active_users.insert(
                 user.id,
                 ActiveUser {
                     username: user.username.clone(),
                     fingerprint: Some(handshake.fingerprint.clone()),
-                    peer_ip: Some(handshake.peer_ip),
                     audio_source: late_core::models::user::extract_audio_source(&user.settings),
                     sessions: vec![ActiveSession {
                         token: session_token.clone(),
                         fingerprint: Some(handshake.fingerprint.clone()),
                         peer_ip: Some(handshake.peer_ip),
-                        afk: None,
+                        away: false,
                     }],
                     connection_count: 1,
                     last_login_at: Instant::now(),
                 },
             );
+            true
+        };
+        if became_online {
+            state.leaderboard_service.online_user_connected(user.id);
         }
     }
     metrics::add_ssh_session(1);
@@ -532,6 +545,7 @@ async fn start_tunnel_shell(
     session_token: String,
     session_rx: mpsc::Receiver<crate::session::SessionMessage>,
     reconnect_reason: Option<u16>,
+    key_fingerprint: String,
     out_tx: mpsc::Sender<Message>,
     frame_drop_log_every: u64,
 ) -> Option<TunnelShell> {
@@ -546,18 +560,19 @@ async fn start_tunnel_shell(
 
     let (input_tx, input_rx) = mpsc::channel::<SshInputEvent>(INPUT_QUEUE_CAP);
     let cli_session_token = session_token.clone();
+    let size = crate::terminal_size::clamp_terminal_size(u32::from(pty.cols), u32::from(pty.rows));
     let session_config = build_session_config(
         state,
         SessionBootstrapInputs {
             user,
             is_new_user,
             term: pty.term.clone(),
-            cols: pty.cols,
-            rows: pty.rows,
+            cols: size.cols,
+            rows: size.rows,
             session_token,
             session_rx: Some(session_rx),
             activity_feed_rx: Some(state.activity_feed.subscribe()),
-            room_join_rx: Some(state.room_join_feed.subscribe()),
+            key_fingerprint: Some(key_fingerprint),
             supports_reconnect_on_drain: true,
             reconnect_reason,
         },
@@ -587,9 +602,10 @@ async fn start_tunnel_shell(
     }
 
     // Initial alt-screen enter, mirroring shell_request's pre-loop write.
+    let mouse_on = app.lock().await.interaction_mode.mouse_enabled();
     let _ = out_tx
         .send(Message::Binary(
-            crate::app::state::App::enter_alt_screen().into(),
+            crate::app::state::App::enter_alt_screen(mouse_on).into(),
         ))
         .await;
 
@@ -619,7 +635,7 @@ async fn start_tunnel_shell(
     })
 }
 
-async fn queue_input(shell: &TunnelShell, event: SshInputEvent) -> bool {
+fn queue_input(shell: &TunnelShell, event: SshInputEvent) -> bool {
     match shell.input_tx.try_reserve() {
         Ok(permit) => {
             permit.send(event);
@@ -689,7 +705,12 @@ async fn handle_session(
     let (session_tx, session_rx) = mpsc::channel(64);
     state
         .session_registry
-        .register(session_token.clone(), session_tx, user.id)
+        .register(
+            session_token.clone(),
+            session_tx,
+            user.id,
+            Some(handshake.fingerprint.clone()),
+        )
         .await;
     let mut session_rx = Some(session_rx);
 
@@ -745,7 +766,7 @@ async fn handle_session(
                             send_protocol_close(&out_tx, "binary before shell_start").await;
                             break;
                         };
-                        if !queue_input(shell, SshInputEvent::Bytes(bytes.into())).await {
+                        if !queue_input(shell, SshInputEvent::Bytes(bytes.into())) {
                             break;
                         }
                     }
@@ -802,6 +823,7 @@ async fn handle_session(
                                 session_token.clone(),
                                 rx,
                                 handshake.reconnect_reason,
+                                handshake.fingerprint.clone(),
                                 out_tx.clone(),
                                 frame_drop_log_every,
                             )
@@ -813,7 +835,7 @@ async fn handle_session(
                         }
                         Ok(ControlFrame::Resize { cols, rows }) => {
                             if let Some(shell) = shell.as_ref() {
-                                if !queue_input(shell, SshInputEvent::Resize { cols, rows }).await {
+                                if !queue_input(shell, SshInputEvent::Resize { cols, rows }) {
                                     break;
                                 }
                             } else if let Some(pty) = pty.as_mut() {

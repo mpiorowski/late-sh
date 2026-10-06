@@ -1,0 +1,603 @@
+//! The Late Edition's session state and the pure layout: from an edition's
+//! rows plus this reader's rail order to the modal's lines. No I/O here,
+//! and no palette either: lines carry `PaperInk`, and `ui.rs` picks the
+//! colours inside the draw. `svc.rs` owns the requests and the tick.
+
+use std::{cell::Cell, collections::HashSet};
+
+use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::job_posting::JobPosting;
+use late_core::models::paper::{PaperEdition, PaperRoomPage, PaperSectionKind, PaperStatus};
+use late_core::models::work_profile::WorkStatus;
+use ratatui::layout::Rect;
+use tokio::sync::broadcast;
+use uuid::Uuid;
+
+use super::svc::{PaperEvent, PaperService, PaperTrigger};
+use crate::app::jobs::state::{PAPER_MATCHES, match_tail, posting_count_label};
+
+/// Rooms the reader is not in that make the paper: the top few by
+/// activity, bumped rooms first. A cap, so the paper stays a paper and
+/// not the whole site.
+pub(crate) const PAPER_ELSEWHERE_LIMIT: usize = 3;
+/// How many of yesterday's `#announcements` posts the paper prints, the
+/// newest ones. A day with more than this is not a day anyone has had.
+pub(crate) const PAPER_ANNOUNCEMENTS_LIMIT: i64 = 50;
+
+/// The paper's per-session state, owned by `App`.
+pub(crate) struct PaperState {
+    pub(super) service: PaperService,
+    pub(super) rx: broadcast::Receiver<PaperEvent>,
+    pub(crate) modal: Option<PaperModal>,
+    /// Armed at boot for returning readers with the tweak on; fires once
+    /// the splash is down.
+    pub(super) login_pop_pending: bool,
+    /// The trigger whose result this session still wants. Closing the
+    /// "at the press" modal clears it, so a late answer is dropped.
+    pub(super) awaiting: Option<PaperTrigger>,
+    /// A ready paper that arrived while a newcomer's tour held the keys.
+    pub(super) pending_modal: Option<PaperModal>,
+}
+
+impl PaperState {
+    pub(crate) fn modal_visible(&self) -> bool {
+        self.modal.is_some()
+    }
+
+    /// Esc on the modal: closes it, and if it was still at the press,
+    /// forgets the request so the answer is dropped when it lands.
+    pub(crate) fn close_modal(&mut self) {
+        if self.modal.take().is_some_and(|modal| modal.at_the_press) {
+            self.awaiting = None;
+        }
+    }
+}
+
+/// What `/paper` asked for. The open is for everyone; the press commands
+/// are admin-only, refused with a banner for anyone else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaperCommand {
+    /// `/paper`: today's edition, from the rows. `/paper YYYY-MM-DD`:
+    /// that day's edition, shown only if it was already printed.
+    Open(Option<NaiveDate>),
+    /// `/paper print`: sweep now instead of waiting for the interval.
+    Print,
+    /// `/paper preview`: lay out tomorrow's edition from today's messages
+    /// so far, in memory and for the caller only, so a column can be read
+    /// without waiting for midnight and without touching the real rows.
+    Preview,
+    /// `/paper reset`: drop today's rows and the caller's login stamp, so
+    /// both the print and the pop can be seen again.
+    Reset,
+}
+
+impl PaperCommand {
+    pub(crate) fn admin_only(self) -> bool {
+        match self {
+            Self::Open(_) => false,
+            Self::Print | Self::Preview | Self::Reset => true,
+        }
+    }
+}
+
+/// `None`: not a `/paper` line. `Some(None)`: `/paper` with junk after it.
+pub(crate) fn parse_paper_command(body: &str) -> Option<Option<PaperCommand>> {
+    let rest = body.trim().strip_prefix("/paper")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    Some(match words.as_slice() {
+        [] => Some(PaperCommand::Open(None)),
+        ["print"] => Some(PaperCommand::Print),
+        ["preview"] => Some(PaperCommand::Preview),
+        ["reset"] => Some(PaperCommand::Reset),
+        [date] => NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .ok()
+            .map(|date| PaperCommand::Open(Some(date))),
+        _ => None,
+    })
+}
+
+/// The modal: a title, styled lines, a scroll offset.
+#[derive(Clone, Debug)]
+pub(crate) struct PaperModal {
+    pub title: String,
+    pub lines: Vec<PaperLine>,
+    scroll_offset: Cell<u16>,
+    viewport: Cell<PaperViewport>,
+    drag_grab: Cell<Option<u16>>,
+    /// Still waiting for `/paper`'s answer; Esc drops the request.
+    pub at_the_press: bool,
+}
+
+/// Geometry and wrapped extent published by the draw, in frame cells.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaperViewport {
+    pub popup: Rect,
+    pub body: Rect,
+    pub close: Rect,
+    pub track: Rect,
+    pub content_height: u16,
+}
+
+impl PaperViewport {
+    fn max_scroll(self) -> u16 {
+        self.content_height.saturating_sub(self.body.height)
+    }
+}
+
+impl PaperModal {
+    /// The spinner state after `/paper`, up until the rows arrive.
+    pub(crate) fn at_the_press() -> Self {
+        Self {
+            title: " The Late Edition ".to_string(),
+            lines: vec![
+                PaperLine::new(),
+                vec![PaperSpan::new("  at the press…", PaperInk::Meta)],
+            ],
+            scroll_offset: Cell::new(0),
+            viewport: Cell::new(PaperViewport::default()),
+            drag_grab: Cell::new(None),
+            at_the_press: true,
+        }
+    }
+
+    pub(crate) fn edition(layout: PaperLayout<'_>) -> Self {
+        Self {
+            title: format!(
+                " The Late Edition · {} ",
+                layout.edition.edition.format("%a %b %-d")
+            ),
+            lines: lay_out(layout),
+            scroll_offset: Cell::new(0),
+            viewport: Cell::new(PaperViewport::default()),
+            drag_grab: Cell::new(None),
+            at_the_press: false,
+        }
+    }
+
+    pub(crate) fn scroll_offset(&self) -> u16 {
+        self.scroll_offset.get()
+    }
+
+    /// Clamped to the last drawn body. With no body to clamp against (a
+    /// resize not yet redrawn, or a frame too small to print) the offset
+    /// stays put, and the next full draw clamps it to the real extent.
+    pub(crate) fn scroll(&self, delta: i16) {
+        let viewport = self.viewport.get();
+        if viewport.body.is_empty() {
+            return;
+        }
+        let next = i32::from(self.scroll_offset.get()) + i32::from(delta);
+        self.scroll_offset
+            .set(next.clamp(0, i32::from(viewport.max_scroll())) as u16);
+    }
+
+    pub(crate) fn scroll_to_top(&self) {
+        self.scroll_offset.set(0);
+    }
+
+    pub(crate) fn viewport(&self) -> PaperViewport {
+        self.viewport.get()
+    }
+
+    pub(crate) fn set_viewport(&self, viewport: PaperViewport) {
+        if self.viewport.replace(viewport) != viewport {
+            self.cancel_drag();
+        }
+        self.scroll(0);
+    }
+
+    pub(crate) fn invalidate_viewport(&self) {
+        self.viewport.set(PaperViewport::default());
+        self.cancel_drag();
+    }
+
+    pub(crate) fn thumb(&self) -> Rect {
+        let viewport = self.viewport.get();
+        let track = viewport.track;
+        if track.is_empty() || viewport.max_scroll() == 0 {
+            return Rect::default();
+        }
+        let height = (u32::from(track.height) * u32::from(viewport.body.height)
+            / u32::from(viewport.content_height))
+        .max(1)
+        .min(u32::from(track.height)) as u16;
+        let travel = track.height - height;
+        let top = (u32::from(self.scroll_offset.get()) * u32::from(travel)
+            + u32::from(viewport.max_scroll()) / 2)
+            / u32::from(viewport.max_scroll());
+        Rect::new(track.x, track.y + top as u16, 1, height)
+    }
+
+    pub(crate) fn begin_drag(&self, y: u16) {
+        self.drag_grab.set(Some(y.saturating_sub(self.thumb().y)));
+    }
+
+    pub(crate) fn cancel_drag(&self) {
+        self.drag_grab.set(None);
+    }
+
+    pub(crate) fn drag_to(&self, y: u16) {
+        let Some(grab) = self.drag_grab.get() else {
+            return;
+        };
+        let viewport = self.viewport.get();
+        let travel = viewport.track.height.saturating_sub(self.thumb().height);
+        if travel == 0 {
+            return;
+        }
+        let top = (i32::from(y) - i32::from(viewport.track.y) - i32::from(grab))
+            .clamp(0, i32::from(travel)) as u32;
+        self.scroll_offset.set(
+            ((top * u32::from(viewport.max_scroll()) + u32::from(travel) / 2) / u32::from(travel))
+                as u16,
+        );
+    }
+}
+
+/// One of yesterday's `#announcements` posts, printed word for word: the
+/// operator's own text, never rewritten by the press.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaperAnnouncement {
+    pub author: String,
+    pub posted_at: DateTime<Utc>,
+    pub body: String,
+}
+
+/// NEW WORK as read for one reader: what went active on the covered day,
+/// and this reader's card and matches. The one per-reader selection in
+/// the paper; the rows it selects from were released once for everyone.
+/// A paper with no NEW WORK section (a preview) carries no `PaperWork` at
+/// all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaperWork {
+    /// Postings released on the covered day, on the shelf now; zero on a
+    /// day nothing landed, which still prints the section.
+    pub released: usize,
+    /// The reader's card status, or none without a card.
+    pub card: Option<WorkStatus>,
+    /// The reader's best matches among them, up to `PAPER_MATCHES`.
+    pub matches: Vec<JobPosting>,
+}
+
+/// Everything the layout needs from the session: the edition's rows, the
+/// pages read at open time (announcements, new work), and how this
+/// reader's rail is ordered (favorites first, as the rail draws them),
+/// which rooms they are in, and which rooms carry a shop bump.
+pub(crate) struct PaperLayout<'a> {
+    pub edition: &'a PaperEdition,
+    /// Yesterday's announcements, oldest first; empty on a day the
+    /// operator said nothing.
+    pub announcements: &'a [PaperAnnouncement],
+    /// Yesterday's job releases as they concern this reader; `None`
+    /// prints no NEW WORK section (the job feed off, a preview).
+    pub work: Option<&'a PaperWork>,
+    /// Member rooms in rail order; rooms the edition has no page for are
+    /// skipped, rooms missing from the rail follow by activity.
+    pub rail_order: &'a [Uuid],
+    pub member_room_ids: &'a HashSet<Uuid>,
+    /// Rail labels (slugs) of rooms under an active `room_bump`.
+    pub bumped_labels: &'a [String],
+}
+
+/// What a span of the paper is, never what colour it is. The palette is a
+/// render-pass thing (`theme`'s thread local is set by `App::render`), and
+/// the modal is laid out a tick earlier, on whatever worker thread the
+/// session happened to wake on: reading the palette here printed the paper
+/// in whichever session last rendered on that thread. `ui.rs` maps these
+/// to styles inside the draw, where the reader's theme is the live one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaperInk {
+    /// A section heading: AMBER ON THE PAGE.
+    Heading,
+    /// A room's name.
+    Title,
+    /// The counts beside a title.
+    Meta,
+    /// A shop bump on an elsewhere room.
+    Bumped,
+    /// The `/join` hint on an elsewhere topic room.
+    JoinHint,
+    /// A column's own text.
+    Body,
+    /// The byline and the footer.
+    Faint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PaperSpan {
+    pub text: String,
+    pub ink: PaperInk,
+}
+
+impl PaperSpan {
+    pub(crate) fn new(text: impl Into<String>, ink: PaperInk) -> Self {
+        Self {
+            text: text.into(),
+            ink,
+        }
+    }
+}
+
+/// One printed line: the spans left to right, empty for a blank line.
+pub(crate) type PaperLine = Vec<PaperSpan>;
+
+fn heading(text: &str) -> PaperLine {
+    vec![PaperSpan::new(text, PaperInk::Heading)]
+}
+
+/// A room's headline. `elsewhere` rooms (the reader is not in them) count
+/// "members" and, for topic rooms, carry the `/join` hint; the reader's own
+/// rooms count "people".
+fn room_head(page: &PaperRoomPage, elsewhere: bool, bumped: bool) -> PaperLine {
+    let people = if elsewhere { "members" } else { "people" };
+    let joinable = elsewhere && page.kind == "topic";
+    let mut spans = vec![
+        PaperSpan::new(format!("#{}", page.label), PaperInk::Title),
+        PaperSpan::new(
+            format!(
+                " · {} message{} · {} {people}",
+                page.message_count,
+                if page.message_count == 1 { "" } else { "s" },
+                member_count_label(page.member_count)
+            ),
+            PaperInk::Meta,
+        ),
+    ];
+    if bumped {
+        spans.push(PaperSpan::new(" · bumped", PaperInk::Bumped));
+    }
+    if joinable {
+        spans.push(PaperSpan::new(
+            format!(" · /join #{}", page.label),
+            PaperInk::JoinHint,
+        ));
+    }
+    spans
+}
+
+/// Most accounts in the big rooms are long inactive, so an exact count
+/// oversells the crowd. Past a hundred it prints "100+".
+fn member_count_label(count: i64) -> String {
+    if count > 100 {
+        "100+".to_string()
+    } else {
+        count.to_string()
+    }
+}
+
+fn column_lines(text: &str) -> Vec<PaperLine> {
+    text.lines()
+        .map(|line| vec![PaperSpan::new(line, PaperInk::Body)])
+        .collect()
+}
+
+fn labels(pages: &[&PaperRoomPage]) -> String {
+    pages
+        .iter()
+        .map(|page| format!("#{}", page.label))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The whole paper, top to bottom: byline, yesterday's announcements
+/// verbatim, your rooms in rail order, elsewhere, what we were reading,
+/// outside, and a footer naming the rooms that were quiet or still at
+/// the press.
+/// The NEW WORK section's body for one reader, one arm per card.
+fn work_lines(work: &PaperWork) -> Vec<PaperLine> {
+    let count = posting_count_label(work.released);
+    let quiet_day = work.released == 0;
+    match work.card {
+        None if quiet_day => vec![vec![PaperSpan::new(
+            "No new postings yesterday. Create a work card on page 5 to see matches here.",
+            PaperInk::Faint,
+        )]],
+        None => vec![vec![PaperSpan::new(
+            format!(
+                "{count} yesterday, all remote. Create a work card on page 5 to see matches here."
+            ),
+            PaperInk::Body,
+        )]],
+        Some(WorkStatus::NotLooking) if quiet_day => vec![vec![PaperSpan::new(
+            "No new postings yesterday. Your work card is set to not looking (page 5).",
+            PaperInk::Faint,
+        )]],
+        Some(WorkStatus::NotLooking) => vec![vec![PaperSpan::new(
+            format!("{count} yesterday. Your work card is set to not looking (page 5)."),
+            PaperInk::Faint,
+        )]],
+        Some(WorkStatus::Open | WorkStatus::Casual) if quiet_day => vec![vec![PaperSpan::new(
+            "No new postings yesterday. All postings are on page 5.",
+            PaperInk::Faint,
+        )]],
+        Some(WorkStatus::Open | WorkStatus::Casual) if work.matches.is_empty() => {
+            vec![vec![PaperSpan::new(
+                format!("{count} yesterday, none matching your tags. All postings are on page 5."),
+                PaperInk::Body,
+            )]]
+        }
+        Some(WorkStatus::Open | WorkStatus::Casual) => {
+            let mut lines: Vec<PaperLine> = work
+                .matches
+                .iter()
+                .map(|posting| {
+                    vec![
+                        PaperSpan::new(posting.company.clone(), PaperInk::Title),
+                        PaperSpan::new(
+                            format!(" · {}", match_tail(posting, PAPER_MATCHES)),
+                            PaperInk::Meta,
+                        ),
+                    ]
+                })
+                .collect();
+            lines.push(vec![PaperSpan::new(
+                format!(
+                    "    {count} yesterday. All postings are on page 5, / filters to your tags."
+                ),
+                PaperInk::Faint,
+            )]);
+            lines
+        }
+    }
+}
+
+pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
+    let PaperLayout {
+        edition,
+        announcements,
+        work,
+        rail_order,
+        member_room_ids,
+        bumped_labels,
+    } = layout;
+    let covered = edition.edition.pred_opt().unwrap_or(edition.edition);
+    let mut lines = vec![vec![PaperSpan::new(
+        format!(
+            "by @graybeard · covers {} (UTC) · he read it all so you would not have to",
+            covered.format("%a %b %-d")
+        ),
+        PaperInk::Faint,
+    )]];
+
+    // The operator's word comes first and comes whole: every post from
+    // #announcements in the window, as written, no column and no jab.
+    if !announcements.is_empty() {
+        lines.push(PaperLine::new());
+        lines.push(heading("ANNOUNCEMENTS"));
+        for announcement in announcements {
+            lines.push(PaperLine::new());
+            lines.push(vec![
+                PaperSpan::new(format!("@{}", announcement.author), PaperInk::Title),
+                PaperSpan::new(
+                    format!(" · {}", announcement.posted_at.format("%H:%M")),
+                    PaperInk::Meta,
+                ),
+            ]);
+            lines.extend(column_lines(&announcement.body));
+        }
+    }
+
+    // NEW WORK: yesterday's releases, as they concern this reader. It
+    // prints on every edition. No card gets the one line that
+    // is the whole incentive to fill one; an open or casual card gets its
+    // matches, or a pointer at the shelf when none carried its tags; a
+    // not-looking card and a day with no release get a faint hint.
+    if let Some(work) = work {
+        lines.push(PaperLine::new());
+        lines.push(heading("NEW WORK"));
+        lines.extend(work_lines(work));
+    }
+
+    // Member rooms in rail order, then any the rail does not list.
+    let mut member_pages: Vec<&PaperRoomPage> = Vec::new();
+    for room_id in rail_order {
+        if let Some(page) = edition.rooms.iter().find(|page| page.room_id == *room_id)
+            && member_room_ids.contains(room_id)
+            && !member_pages.iter().any(|seen| seen.room_id == page.room_id)
+        {
+            member_pages.push(page);
+        }
+    }
+    for page in &edition.rooms {
+        if member_room_ids.contains(&page.room_id)
+            && !member_pages.iter().any(|seen| seen.room_id == page.room_id)
+        {
+            member_pages.push(page);
+        }
+    }
+    let mut quiet: Vec<&PaperRoomPage> = Vec::new();
+    let mut at_the_press: Vec<&PaperRoomPage> = Vec::new();
+    let mut missed: Vec<&PaperRoomPage> = Vec::new();
+    let mut printed_any = false;
+    for page in &member_pages {
+        match page.status {
+            PaperStatus::Ready => {
+                if !printed_any {
+                    lines.push(PaperLine::new());
+                    lines.push(heading("YOUR ROOMS"));
+                    printed_any = true;
+                }
+                lines.push(PaperLine::new());
+                lines.push(room_head(page, false, false));
+                if let Some(text) = &page.text {
+                    lines.extend(column_lines(text));
+                }
+            }
+            PaperStatus::Quiet => quiet.push(page),
+            PaperStatus::Printing => at_the_press.push(page),
+            PaperStatus::Failed => missed.push(page),
+        }
+    }
+
+    // Elsewhere: public rooms the reader is not in, bumped first, then by
+    // activity (the rows already come sorted by message count). The
+    // `/join` hint is for topic rooms only: `/join #<label>` opens (or
+    // creates) a topic room by slug, and a language room's label is its
+    // language code, which would open a brand-new topic room instead.
+    let mut elsewhere: Vec<&PaperRoomPage> = edition
+        .rooms
+        .iter()
+        .filter(|page| {
+            page.status == PaperStatus::Ready && !member_room_ids.contains(&page.room_id)
+        })
+        .collect();
+    let is_bumped = |page: &PaperRoomPage| {
+        page.kind == "topic" && !page.permanent && bumped_labels.contains(&page.label)
+    };
+    elsewhere.sort_by_key(|page| !is_bumped(page));
+    elsewhere.truncate(PAPER_ELSEWHERE_LIMIT);
+    if !elsewhere.is_empty() {
+        lines.push(PaperLine::new());
+        lines.push(heading("ELSEWHERE ON LATE.SH"));
+        for page in elsewhere {
+            lines.push(PaperLine::new());
+            lines.push(room_head(page, true, is_bumped(page)));
+            if let Some(text) = &page.text {
+                lines.extend(column_lines(text));
+            }
+        }
+    }
+
+    for (kind, title) in [
+        (PaperSectionKind::Reading, "WHAT WE WERE READING"),
+        (PaperSectionKind::Outside, "OUTSIDE"),
+    ] {
+        let Some(section) = edition
+            .sections
+            .iter()
+            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
+        else {
+            continue;
+        };
+        let Some(text) = &section.text else {
+            continue;
+        };
+        lines.push(PaperLine::new());
+        lines.push(heading(title));
+        lines.extend(column_lines(text));
+    }
+
+    if !quiet.is_empty() || !at_the_press.is_empty() || !missed.is_empty() {
+        lines.push(PaperLine::new());
+        let mut footer = Vec::new();
+        if !quiet.is_empty() {
+            footer.push(format!("quiet: {}", labels(&quiet)));
+        }
+        if !at_the_press.is_empty() {
+            footer.push(format!("still at the press: {}", labels(&at_the_press)));
+        }
+        if !missed.is_empty() {
+            footer.push(format!("missed the press: {}", labels(&missed)));
+        }
+        lines.push(vec![PaperSpan::new(footer.join(" · "), PaperInk::Faint)]);
+    }
+
+    lines
+}
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

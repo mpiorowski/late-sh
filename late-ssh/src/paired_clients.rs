@@ -1,5 +1,6 @@
 use late_core::MutexRecover;
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::models::user::{AudioSource, RadioStation};
+use late_core::models::user_ssh_key::KeyAudio;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -8,24 +9,21 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
-use crate::app::audio::client_state::{ClientAudioState, ClientKind, ClientSshMode};
+use crate::app::audio::client_state::{ClientAudioState, ClientKind};
 use crate::app::audio::stations;
 use crate::metrics;
 
-// Multiplexed outbound channel to every paired client (browser + CLI) for a
-// given SSH session token. Carries audio control (mute/volume/source) and
-// clipboard fan-out.
+// Multiplexed outbound channel to every paired client for a given SSH session
+// token. Carries audio control (mute/volume/source) and clipboard fan-out.
 //
-// Audio surface policy is intentionally small:
-// - CLI plays Icecast only when the user's source is Icecast.
-// - Real browser plays YouTube when paired; otherwise a capable CLI may spawn
-//   the embedded webview helper as its YouTube fallback.
-// - Browser plays Icecast only when no CLI is paired for the token; otherwise
-//   switching back to Icecast just pauses the web YouTube player so the CLI is
-//   the single Icecast surface.
+// Paired clients are the native CLI and the CLI's own embedded webview helper.
+// Browser pairing is gone, so there is no surface arbitration left: the source
+// alone decides who is audible.
+// - CLI plays a direct stream when the user's source is Icecast or Radio.
+// - The webview helper plays YouTube when the user's source is YouTube.
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -33,27 +31,38 @@ pub enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
-    RequestClipboardImage,
+    /// Absolute mute/volume writes, relayed from a paired client's own
+    /// `set_muted`/`set_volume` pair-WS events (a desktop MPRIS widget, media
+    /// keys). Absolute rather than a toggle so every paired client converges
+    /// on the same state even if one of them had drifted.
+    SetMuted {
+        muted: bool,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
+    /// Ask a capable CLI to read its clipboard image. `request_id` is echoed
+    /// back in the `clipboard_image`/`clipboard_image_failed` payload so a
+    /// late response to a timed-out request can't satisfy a newer one. Old
+    /// CLIs ignore the field and echo nothing; the server then falls back to
+    /// token-level matching.
+    RequestClipboardImage {
+        request_id: u64,
+    },
     /// Per-user setting: tell paired clients which audio source the user wants
     /// to hear. Server is the source of truth (persisted in
-    /// `users.settings.audio_source`). Browsers swap their playback element;
-    /// CLIs gate their Icecast decoder on this. YouTube-capable CLIs also use
-    /// it to start or stop their embedded webview helper.
+    /// `users.settings.audio_source`). The CLI gates its direct-stream decoder
+    /// on this and starts or stops its embedded webview helper for YouTube.
+    ///
+    /// There is no surface-arbitration flag here anymore. Browser pairing is
+    /// gone, so the audible surface follows straight from the source: the CLI
+    /// owns direct streams, the webview helper owns YouTube.
     SetPlaybackSource {
         source: AudioSource,
         #[serde(skip_serializing_if = "Option::is_none")]
         stream_url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         station: Option<String>,
-        /// Whether the browser should use its `<audio>` Icecast element when
-        /// `source == Icecast`. False when a CLI is paired, because the CLI is
-        /// then the single Icecast surface. CLI clients ignore this field.
-        web_icecast_enabled: bool,
-        /// Whether a YouTube-capable native CLI should spawn its embedded
-        /// webview helper when `source == Youtube`. False when a real browser
-        /// is paired for the token, because the browser is then the preferred
-        /// YouTube surface. Browser clients ignore this field.
-        embedded_webview_enabled: bool,
     },
     VoiceJoin {
         room: String,
@@ -69,33 +78,69 @@ pub enum PairControlMessage {
     VoiceSetDeafened {
         deafened: bool,
     },
+    /// Ask a capable CLI to open a URL in the user's default browser. Sent
+    /// for `/watch @user` and `/golive` so the stream page lands where the
+    /// browser already is; raw SSH sessions get a QR modal instead.
+    OpenUrl {
+        url: String,
+    },
 }
+
+/// Capacity of each paired client's outbound control queue. Control messages
+/// are small state replays; a client that stops reading gets newest-dropped
+/// behavior instead of an unbounded queue and re-syncs on reconnect.
+pub const PAIR_CONTROL_QUEUE_CAP: usize = 64;
+/// Max concurrent paired sockets per session token. A legitimate pairing is a
+/// CLI plus its webview helper, with headroom for a reconnect overlapping a
+/// stale entry; anything past this is a leak or an amplifier (one free SSH
+/// token used to be an unbounded socket mint).
+pub const MAX_PAIRED_CLIENTS_PER_TOKEN: usize = 8;
 
 #[derive(Clone)]
 pub struct PairedClientRegistry {
     clients: Arc<Mutex<HashMap<String, Vec<PairControlEntry>>>>,
     next_id: Arc<AtomicU64>,
     icecast_base_url: Arc<String>,
+    /// Tokens with an outstanding `RequestClipboardImage`, mapped to that
+    /// request's id. Inbound clipboard payloads are dropped unless their
+    /// token holds a slot here (so a rogue paired client cannot queue
+    /// multi-MB images into the session channel), and an echoed id that
+    /// doesn't match the slot is a late answer to an older, timed-out
+    /// request and is dropped too.
+    clipboard_requests: Arc<Mutex<HashMap<String, u64>>>,
+    next_clipboard_request_id: Arc<AtomicU64>,
+    /// Per-session audio bookkeeping that has to outlive the individual
+    /// sockets. Retired by `forget_session` when the SSH session ends.
+    session_audio: Arc<Mutex<HashMap<String, SessionAudio>>>,
+}
+
+/// What the server remembers about one SSH session's audio, across pair-WS
+/// reconnects.
+#[derive(Default)]
+struct SessionAudio {
+    /// True once the session's stored device audio has been pushed at a
+    /// paired client. The stored value describes what the CLI *process*
+    /// should start with, and one SSH session token is one CLI process, so it
+    /// is applied once per token and never again: a pair-WS reconnect
+    /// mid-session (a network change, an ingress restart) reports the state
+    /// the session is already running with, and re-aligning it there is how a
+    /// muted session used to get unmuted behind the user's back.
+    alignment_applied: bool,
+    /// Last mute/volume written to this device's key row. Kept so the
+    /// periodic `client_state` reports do not rewrite an unchanged value on
+    /// every heartbeat; only a real change costs a DB write.
+    persisted: Option<KeyAudio>,
 }
 
 #[derive(Clone)]
 struct PairControlEntry {
     registration_id: u64,
-    tx: UnboundedSender<PairControlMessage>,
+    tx: Sender<PairControlMessage>,
     state: ClientAudioState,
     usage_total_recorded: bool,
     user_id: Uuid,
     audio_source: AudioSource,
-    icecast_stream: IcecastStream,
     radio_station: RadioStation,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct UpdateStateResult {
-    pub previous_kind: ClientKind,
-    pub new_kind: ClientKind,
-    pub previous_claimed_icecast_output: bool,
-    pub new_claims_icecast_output: bool,
 }
 
 impl PairedClientRegistry {
@@ -104,19 +149,33 @@ impl PairedClientRegistry {
             clients: Arc::default(),
             next_id: Arc::default(),
             icecast_base_url: Arc::new(icecast_base_url.into()),
+            clipboard_requests: Arc::default(),
+            next_clipboard_request_id: Arc::default(),
+            session_audio: Arc::default(),
         }
     }
 
+    /// Returns `None` when the token already holds
+    /// [`MAX_PAIRED_CLIENTS_PER_TOKEN`] live entries; the caller must close
+    /// the socket instead of pairing it.
     pub fn register(
         &self,
         token: String,
-        tx: UnboundedSender<PairControlMessage>,
+        tx: Sender<PairControlMessage>,
         user_id: Uuid,
         audio_source: AudioSource,
-    ) -> u64 {
+    ) -> Option<u64> {
         let registration_id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let mut clients = self.clients.lock_recover();
         let entries = clients.entry(token.clone()).or_default();
+        if entries.len() >= MAX_PAIRED_CLIENTS_PER_TOKEN {
+            tracing::warn!(
+                token_hint = %token_hint(&token),
+                entries = entries.len(),
+                "rejecting paired client: token at capacity"
+            );
+            return None;
+        }
         tracing::info!(
             token_hint = %token_hint(&token),
             registration_id,
@@ -130,15 +189,13 @@ impl PairedClientRegistry {
             usage_total_recorded: false,
             user_id,
             audio_source,
-            icecast_stream: IcecastStream::default(),
             radio_station: RadioStation::default(),
         });
-        registration_id
+        Some(registration_id)
     }
 
     /// Remove the matching entry. The API disconnect path replays playback
-    /// source afterward so remaining browsers can react to CLI presence
-    /// changes.
+    /// source afterward so remaining clients react to CLI presence changes.
     pub fn unregister_if_match(&self, token: &str, registration_id: u64) {
         let mut clients = self.clients.lock_recover();
         let Some(entries) = clients.get_mut(token) else {
@@ -162,6 +219,7 @@ impl PairedClientRegistry {
         );
         if entries.is_empty() {
             clients.remove(token);
+            self.clipboard_requests.lock_recover().remove(token);
         }
     }
 
@@ -171,85 +229,56 @@ impl PairedClientRegistry {
         self.send_control_filter(token, msg, |_| true) > 0
     }
 
-    /// Send a control message only to browser entries on `token`. Used for
-    /// browser-only signals.
-    pub fn send_control_to_browsers(&self, token: &str, msg: PairControlMessage) -> bool {
-        self.send_control_filter(token, msg, |state| state.client_kind == ClientKind::Browser) > 0
-    }
-
     /// Send a voice control message to native CLIs on `token` that advertise
-    /// voice support. Browsers and older CLIs are skipped.
+    /// voice support. The webview helper and older CLIs are skipped.
     pub fn send_control_to_voice_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_voice) > 0
     }
 
-    /// True when the browser should be allowed to play the Icecast `<audio>`
-    /// element for this token. A paired CLI owns Icecast, so the browser must
-    /// stay silent on Icecast to avoid doubled streams.
-    pub fn web_icecast_enabled(&self, token: &str) -> bool {
-        let clients = self.clients.lock_recover();
-        !clients
-            .get(token)
-            .map(|entries| entries.iter().any(PairControlEntry::claims_icecast_output))
-            .unwrap_or(false)
+    /// Deliver to the first paired CLI advertising the `open_url`
+    /// capability. Returns whether anyone got it, so callers can fall back
+    /// to a QR modal for raw SSH sessions.
+    pub fn send_control_to_open_url_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_open_url) > 0
     }
 
-    /// True when the native CLI should provide the YouTube webview fallback
-    /// for this token. A real browser wins over the embedded helper; an
-    /// existing webview-helper entry does not suppress itself.
-    pub fn embedded_webview_enabled(&self, token: &str) -> bool {
-        let clients = self.clients.lock_recover();
-        !clients
-            .get(token)
-            .map(|entries| entries.iter().any(|entry| entry.is_real_browser()))
-            .unwrap_or(false)
-    }
-
-    /// Re-send each paired entry's cached playback source for `token`, with a
-    /// fresh browser Icecast allowance derived from current CLI presence.
+    /// Re-send each paired entry's cached playback source for `token`.
     pub fn broadcast_playback_source_for_token(&self, token: &str) -> bool {
         let targets: Vec<_> = {
             let clients = self.clients.lock_recover();
             let Some(entries) = clients.get(token) else {
                 return false;
             };
-            let web_icecast_enabled = web_icecast_enabled_for_entries(entries);
-            let embedded_webview_enabled = embedded_webview_enabled_for_entries(entries);
             entries
                 .iter()
-                .map(|entry| {
-                    playback_target(
-                        entry,
-                        &self.icecast_base_url,
-                        web_icecast_enabled,
-                        embedded_webview_enabled,
-                    )
-                })
+                .map(|entry| playback_target(entry, &self.icecast_base_url))
                 .collect()
         };
 
         let mut delivered = 0;
         for (tx, msg) in targets {
-            if tx.send(msg).is_ok() {
-                delivered += 1;
-            } else {
-                tracing::warn!(
-                    token_hint = %token_hint(token),
-                    "failed to replay paired playback source"
-                );
+            match tx.try_send(msg) {
+                Ok(()) => delivered += 1,
+                Err(err) => {
+                    tracing::warn!(
+                        token_hint = %token_hint(token),
+                        error = %try_send_reason(&err),
+                        "failed to replay paired playback source"
+                    );
+                }
             }
         }
         delivered > 0
     }
 
-    /// Send a control message to paired entries whose `client_kind` matches the
-    /// predicate. Used to target browser-only controls.
+    /// Send a control message to the paired entries a predicate accepts, e.g.
+    /// only those advertising voice support.
     /// Returns the number of entries that accepted the message.
     fn send_control_filter<F>(&self, token: &str, msg: PairControlMessage, mut matches: F) -> usize
     where
         F: FnMut(&ClientAudioState) -> bool,
     {
-        let targets: Vec<UnboundedSender<PairControlMessage>> = {
+        let targets: Vec<Sender<PairControlMessage>> = {
             let clients = self.clients.lock_recover();
             clients
                 .get(token)
@@ -269,36 +298,36 @@ impl PairedClientRegistry {
 
         let mut delivered = 0;
         for tx in targets {
-            if tx.send(msg.clone()).is_ok() {
-                delivered += 1;
-            } else {
-                tracing::warn!(
-                    token_hint = %token_hint(token),
-                    "failed to send paired client control message"
-                );
+            match tx.try_send(msg.clone()) {
+                Ok(()) => delivered += 1,
+                Err(err) => {
+                    tracing::warn!(
+                        token_hint = %token_hint(token),
+                        error = %try_send_reason(&err),
+                        "failed to send paired client control message"
+                    );
+                }
             }
         }
         delivered
     }
 
-    /// Record a state update for an entry and return the kind transition for
-    /// the caller. Pure state bookkeeping — playback gating lives on the
-    /// client side (CLI gates on `audio_source`, browser swaps its player on
-    /// `SetPlaybackSource`).
+    /// Record a state update for an entry and return its new kind. Pure state
+    /// bookkeeping — playback gating lives on the client side (CLI gates on
+    /// `audio_source`, the webview helper swaps its player on
+    /// `SetPlaybackSource`), so nothing here needs to rebroadcast a source.
     pub fn update_state_and_enforce_mute_policy(
         &self,
         token: &str,
         registration_id: u64,
         new_state: ClientAudioState,
-    ) -> Option<UpdateStateResult> {
+    ) -> Option<ClientKind> {
         let mut clients = self.clients.lock_recover();
         let entries = clients.get_mut(token)?;
         let entry = entries
             .iter_mut()
             .find(|entry| entry.registration_id == registration_id)?;
 
-        let previous_kind = entry.state.client_kind;
-        let previous_claimed_icecast_output = entry.claims_icecast_output();
         let previous_labels = entry.state.cli_usage_labels();
         let new_labels = new_state.cli_usage_labels();
 
@@ -320,33 +349,99 @@ impl PairedClientRegistry {
 
         let new_kind = new_state.client_kind;
         entry.state = new_state;
-        let new_claims_icecast_output = entry.claims_icecast_output();
-
-        Some(UpdateStateResult {
-            previous_kind,
-            new_kind,
-            previous_claimed_icecast_output,
-            new_claims_icecast_output,
-        })
+        Some(new_kind)
     }
 
-    /// Snapshot the state of the most recently registered entry, preferring a
-    /// browser if one is present. Callers that need the SSH user's own paired
-    /// client (typically a browser) use this to inspect mute/volume state.
+    /// Snapshot the state of the most recently registered entry, preferring
+    /// the webview helper when one is present. The helper only runs while the
+    /// user is on YouTube, and it is then the audible surface, so its
+    /// mute/volume is what the sidebar should report.
     pub fn snapshot(&self, token: &str) -> Option<ClientAudioState> {
         let clients = self.clients.lock_recover();
         let entries = clients.get(token)?;
         entries
             .iter()
             .rev()
-            .find(|entry| entry.state.client_kind == ClientKind::Browser)
+            .find(|entry| entry.state.client_kind == ClientKind::Webview)
             .or_else(|| entries.last())
             .map(|entry| entry.state.clone())
     }
 
+    /// Muted state of the most recently registered CLI entry on `token`, if
+    /// any. Used to align a connecting webview helper to the session's
+    /// current runtime mute instead of the boot preference: helper respawns
+    /// and pair-WS reconnects mid-session must not unmute a muted session.
+    pub fn cli_muted(&self, token: &str) -> Option<bool> {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)?
+            .iter()
+            .rev()
+            .find(|entry| entry.state.client_kind == ClientKind::Cli)
+            .map(|entry| entry.state.muted)
+    }
+
+    /// True while this session has never been handed its stored device audio.
+    /// The first paired client of the session consumes it (see
+    /// `note_alignment_applied`); every later connection on the same token is
+    /// a reconnect or a second surface and keeps whatever mute and volume the
+    /// session is already running with.
+    pub fn audio_alignment_pending(&self, token: &str) -> bool {
+        !self
+            .session_audio
+            .lock_recover()
+            .get(token)
+            .is_some_and(|audio| audio.alignment_applied)
+    }
+
+    /// Record that the stored device audio reached a paired client of `token`.
+    /// Called only once the alignment was actually delivered: a failed send
+    /// means the socket is dying and the CLI's next attempt still needs it,
+    /// otherwise a session that boots silent stays silent.
+    pub fn note_alignment_applied(&self, token: &str) {
+        self.session_audio
+            .lock_recover()
+            .entry(token.to_string())
+            .or_default()
+            .alignment_applied = true;
+    }
+
+    /// Claim a device-audio write for `token`, or decline it because the same
+    /// value is already stored. Reserving the value under the same lock that
+    /// reads it keeps two concurrent reports from both firing a write, and
+    /// keeps the CLI's periodic `client_state` heartbeats from rewriting an
+    /// unchanged row. Seed with [`note_persisted_audio`] at connect so the
+    /// value just read out of the DB is not immediately written back.
+    pub fn claim_audio_write(&self, token: &str, audio: KeyAudio) -> bool {
+        let mut sessions = self.session_audio.lock_recover();
+        let entry = sessions.entry(token.to_string()).or_default();
+        if entry.persisted == Some(audio) {
+            return false;
+        }
+        entry.persisted = Some(audio);
+        true
+    }
+
+    /// Seed what this session believes is already stored, without claiming a
+    /// write. Used right after the connect-time read.
+    pub fn note_persisted_audio(&self, token: &str, audio: Option<KeyAudio>) {
+        self.session_audio
+            .lock_recover()
+            .entry(token.to_string())
+            .or_default()
+            .persisted = audio;
+    }
+
+    /// Drop everything this registry remembers about a finished SSH session.
+    /// Paired-client entries retire themselves when their sockets close;
+    /// this covers the token-scoped state that outlives them by design.
+    pub fn forget_session(&self, token: &str) {
+        self.session_audio.lock_recover().remove(token);
+    }
+
     /// True when any paired native CLI on `token` advertises voice support.
     /// This intentionally scans every paired entry because `snapshot` prefers
-    /// browser/webview entries for music UI state.
+    /// webview entries for music UI state.
     pub fn has_voice_cli(&self, token: &str) -> bool {
         let clients = self.clients.lock_recover();
         clients
@@ -355,11 +450,11 @@ impl PairedClientRegistry {
     }
 
     /// Send a clipboard-image request to a paired CLI on `token` that
-    /// advertises the capability. Browser entries and capability-less CLIs
+    /// advertises the capability. Webview entries and capability-less CLIs
     /// are skipped — only one CLI per token can serve the clipboard.
     /// Returns true iff a capable CLI was found and the message queued.
     /// Distinct from `send_control` because the audio-priority `snapshot`
-    /// would shadow the CLI entry once a browser is paired.
+    /// would shadow the CLI entry once the webview helper is paired.
     pub fn request_clipboard_image(&self, token: &str) -> bool {
         let tx = {
             let clients = self.clients.lock_recover();
@@ -373,169 +468,150 @@ impl PairedClientRegistry {
         let Some(tx) = tx else {
             return false;
         };
-        if tx.send(PairControlMessage::RequestClipboardImage).is_err() {
+        let request_id = self
+            .next_clipboard_request_id
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        if let Err(err) = tx.try_send(PairControlMessage::RequestClipboardImage { request_id }) {
             tracing::warn!(
                 token_hint = %token_hint(token),
+                error = %try_send_reason(&err),
                 "failed to send paired clipboard image request"
             );
             return false;
         }
+        self.clipboard_requests
+            .lock_recover()
+            .insert(token.to_string(), request_id);
         true
     }
 
+    /// Consume the outstanding clipboard request for `token`, if any. Called
+    /// by the pair WS handler before it accepts an inbound clipboard image or
+    /// failure payload; a `false` return means the payload is unsolicited and
+    /// must be dropped. `request_id` is the id the client echoed back (None
+    /// from older CLIs that don't echo). An echo for a different id is a late
+    /// answer to an already-replaced request: it is refused and the slot
+    /// stays armed for the response still owed.
+    pub fn take_clipboard_request(&self, token: &str, request_id: Option<u64>) -> bool {
+        let mut requests = self.clipboard_requests.lock_recover();
+        let Some(&outstanding) = requests.get(token) else {
+            return false;
+        };
+        match request_id {
+            Some(echoed) if echoed != outstanding => false,
+            _ => {
+                requests.remove(token);
+                true
+            }
+        }
+    }
+
+    /// Drop the outstanding clipboard request for `token`. Called when the
+    /// session-side wait times out, so the slot doesn't stay armed forever
+    /// and a late response can't be accepted as if it were fresh.
+    pub fn cancel_clipboard_request(&self, token: &str) {
+        self.clipboard_requests.lock_recover().remove(token);
+    }
+
     /// Update every entry for `user_id` to the new audio source and push
-    /// `SetPlaybackSource` to each (CLI and browser alike). The CLI uses it to
-    /// gate its Icecast decoder; the browser uses it to swap playback element.
-    /// Browser Icecast is disabled whenever a CLI is present on the token, and
-    /// embedded CLI webview is disabled whenever a real browser is present.
+    /// `SetPlaybackSource` to each. The CLI uses it to gate its direct-stream
+    /// decoder and to start or stop its embedded webview helper.
     pub fn set_audio_source(&self, user_id: Uuid, source: AudioSource) {
         let mut targets = Vec::new();
         {
             let mut clients = self.clients.lock_recover();
             for entries in clients.values_mut() {
-                let web_icecast_enabled = web_icecast_enabled_for_entries(entries);
-                let embedded_webview_enabled = embedded_webview_enabled_for_entries(entries);
                 for entry in entries.iter_mut() {
                     if entry.user_id != user_id {
                         continue;
                     }
                     entry.audio_source = source;
-                    targets.push(playback_target(
-                        entry,
-                        &self.icecast_base_url,
-                        web_icecast_enabled,
-                        embedded_webview_enabled,
-                    ));
+                    targets.push(playback_target(entry, &self.icecast_base_url));
                 }
             }
         }
 
         for (tx, msg) in targets {
-            if tx.send(msg).is_err() {
-                tracing::warn!("failed to push SetPlaybackSource after audio source change");
+            if let Err(err) = tx.try_send(msg) {
+                tracing::warn!(
+                    error = %try_send_reason(&err),
+                    "failed to push SetPlaybackSource after audio source change"
+                );
             }
         }
     }
 
-    pub fn set_stream_preferences(
-        &self,
-        user_id: Uuid,
-        icecast_stream: IcecastStream,
-        radio_station: RadioStation,
-    ) {
+    /// Record the user's station on every entry without pushing anything;
+    /// the connect path sends the initial `SetPlaybackSource` itself.
+    pub fn set_stream_preferences(&self, user_id: Uuid, radio_station: RadioStation) {
         let mut clients = self.clients.lock_recover();
         for entries in clients.values_mut() {
             for entry in entries.iter_mut() {
                 if entry.user_id == user_id {
-                    entry.icecast_stream = icecast_stream;
                     entry.radio_station = radio_station;
                 }
             }
         }
     }
 
-    pub fn set_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) {
-        self.update_stream_choice(user_id, Some(stream), None);
-    }
-
+    /// Update every entry for `user_id` to the new station and push
+    /// `SetPlaybackSource` to each, so a radio listener retunes at once.
     pub fn set_radio_station(&self, user_id: Uuid, station: RadioStation) {
-        self.update_stream_choice(user_id, None, Some(station));
-    }
-
-    fn update_stream_choice(
-        &self,
-        user_id: Uuid,
-        icecast_stream: Option<IcecastStream>,
-        radio_station: Option<RadioStation>,
-    ) {
         let mut targets = Vec::new();
         {
             let mut clients = self.clients.lock_recover();
             for entries in clients.values_mut() {
-                let web_icecast_enabled = web_icecast_enabled_for_entries(entries);
-                let embedded_webview_enabled = embedded_webview_enabled_for_entries(entries);
                 for entry in entries.iter_mut() {
                     if entry.user_id != user_id {
                         continue;
                     }
-                    if let Some(stream) = icecast_stream {
-                        entry.icecast_stream = stream;
-                    }
-                    if let Some(station) = radio_station {
-                        entry.radio_station = station;
-                    }
-                    targets.push(playback_target(
-                        entry,
-                        &self.icecast_base_url,
-                        web_icecast_enabled,
-                        embedded_webview_enabled,
-                    ));
+                    entry.radio_station = station;
+                    targets.push(playback_target(entry, &self.icecast_base_url));
                 }
             }
         }
 
         for (tx, msg) in targets {
-            if tx.send(msg).is_err() {
-                tracing::warn!("failed to push SetPlaybackSource after stream choice change");
+            if let Err(err) = tx.try_send(msg) {
+                tracing::warn!(
+                    error = %try_send_reason(&err),
+                    "failed to push SetPlaybackSource after stream choice change"
+                );
             }
         }
     }
 }
 
-impl PairControlEntry {
-    fn is_real_browser(&self) -> bool {
-        self.state.client_kind == ClientKind::Browser
-            && self.state.ssh_mode != ClientSshMode::Webview
-    }
-
-    fn claims_icecast_output(&self) -> bool {
-        self.state.client_kind == ClientKind::Cli && self.state.icecast_output_available
-    }
-}
-
-fn web_icecast_enabled_for_entries(entries: &[PairControlEntry]) -> bool {
-    !entries.iter().any(PairControlEntry::claims_icecast_output)
-}
-
-fn embedded_webview_enabled_for_entries(entries: &[PairControlEntry]) -> bool {
-    !entries.iter().any(PairControlEntry::is_real_browser)
-}
-
 fn playback_target(
     entry: &PairControlEntry,
     icecast_base_url: &str,
-    web_icecast_enabled: bool,
-    embedded_webview_enabled: bool,
-) -> (UnboundedSender<PairControlMessage>, PairControlMessage) {
+) -> (Sender<PairControlMessage>, PairControlMessage) {
     (
         entry.tx.clone(),
-        playback_message(
-            icecast_base_url,
-            entry.audio_source,
-            entry.icecast_stream,
-            entry.radio_station,
-            web_icecast_enabled,
-            embedded_webview_enabled,
-        ),
+        playback_message(icecast_base_url, entry.audio_source, entry.radio_station),
     )
 }
 
 pub fn playback_message(
     icecast_base_url: &str,
     source: AudioSource,
-    icecast_stream: IcecastStream,
     radio_station: RadioStation,
-    web_icecast_enabled: bool,
-    embedded_webview_enabled: bool,
 ) -> PairControlMessage {
-    let selection =
-        stations::resolve_stream_selection(icecast_base_url, source, icecast_stream, radio_station);
+    let selection = stations::resolve_stream_selection(icecast_base_url, source, radio_station);
     PairControlMessage::SetPlaybackSource {
         source,
         stream_url: selection.as_ref().map(|selection| selection.url.clone()),
         station: selection.map(|selection| selection.station.to_string()),
-        web_icecast_enabled,
-        embedded_webview_enabled,
+    }
+}
+
+fn try_send_reason(
+    err: &tokio::sync::mpsc::error::TrySendError<PairControlMessage>,
+) -> &'static str {
+    match err {
+        tokio::sync::mpsc::error::TrySendError::Full(_) => "queue full",
+        tokio::sync::mpsc::error::TrySendError::Closed(_) => "receiver closed",
     }
 }
 
@@ -545,501 +621,5 @@ fn token_hint(token: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::audio::client_state::{ClientKind, ClientPlatform, ClientSshMode};
-
-    fn expected_source(
-        source: AudioSource,
-        web_icecast_enabled: bool,
-        embedded_webview_enabled: bool,
-    ) -> PairControlMessage {
-        playback_message(
-            "https://audio.late.sh",
-            source,
-            IcecastStream::default(),
-            RadioStation::default(),
-            web_icecast_enabled,
-            embedded_webview_enabled,
-        )
-    }
-
-    #[test]
-    fn paired_client_send_control_delivers_message() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        registry.register(
-            "tok1".to_string(),
-            tx,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-
-        assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
-        assert_eq!(rx.try_recv().unwrap(), PairControlMessage::ToggleMute);
-    }
-
-    #[test]
-    fn paired_client_unregister_if_match_removes_only_matching_entry() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel();
-        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
-        let first = registry.register(
-            "tok1".to_string(),
-            tx1,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-        let second = registry.register(
-            "tok1".to_string(),
-            tx2,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-
-        registry.unregister_if_match("tok1", first);
-
-        // Only the surviving entry should receive subsequent broadcasts.
-        assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
-        assert!(rx1.try_recv().is_err());
-        assert_eq!(rx2.try_recv().unwrap(), PairControlMessage::ToggleMute);
-
-        registry.unregister_if_match("tok1", second);
-        assert!(!registry.send_control("tok1", PairControlMessage::ToggleMute));
-    }
-
-    #[test]
-    fn paired_client_snapshot_tracks_latest_state() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let registration_id = registry.register(
-            "tok1".to_string(),
-            tx,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            registration_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Macos,
-                capabilities: vec!["clipboard_image".to_string()],
-                muted: true,
-                volume_percent: 35,
-                ..Default::default()
-            },
-        );
-
-        let snapshot = registry.snapshot("tok1").unwrap();
-        assert_eq!(snapshot.client_kind, ClientKind::Cli);
-        assert_eq!(snapshot.ssh_mode, ClientSshMode::Native);
-        assert_eq!(snapshot.platform, ClientPlatform::Macos);
-        assert!(snapshot.supports_clipboard_image());
-        assert!(snapshot.muted);
-        assert_eq!(snapshot.volume_percent, 35);
-    }
-
-    #[test]
-    fn voice_cli_detection_ignores_browser_preferred_snapshot() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, _cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::default());
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["voice".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        let (webview_tx, _webview_rx) = tokio::sync::mpsc::unbounded_channel();
-        let webview_id = registry.register(
-            "tok1".to_string(),
-            webview_tx,
-            user_id,
-            AudioSource::Youtube,
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            webview_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Webview,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["youtube".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        assert_eq!(
-            registry.snapshot("tok1").unwrap().client_kind,
-            ClientKind::Browser
-        );
-        assert!(registry.has_voice_cli("tok1"));
-    }
-
-    #[test]
-    fn paired_client_request_clipboard_image_reaches_cli_when_browser_paired() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register(
-            "tok1".to_string(),
-            cli_tx,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["clipboard_image".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register(
-            "tok1".to_string(),
-            browser_tx,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            browser_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Unknown,
-                platform: ClientPlatform::Unknown,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        assert!(registry.request_clipboard_image("tok1"));
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            PairControlMessage::RequestClipboardImage
-        );
-        assert!(browser_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn paired_client_request_clipboard_image_false_when_only_browser() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register(
-            "tok1".to_string(),
-            browser_tx,
-            Uuid::now_v7(),
-            AudioSource::default(),
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            browser_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Unknown,
-                platform: ClientPlatform::Unknown,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        assert!(!registry.request_clipboard_image("tok1"));
-        assert!(browser_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn state_update_never_sends_pair_control_message() {
-        // CLI playback gating lives on the CLI side (it reads
-        // SetPlaybackSource and silences the Icecast decoder when source !=
-        // Icecast). The server's state-update path is pure bookkeeping and
-        // must not push anything back at the client.
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube);
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["youtube".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-        assert!(cli_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn set_audio_source_pushes_playback_source_to_every_entry() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast);
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["youtube".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register(
-            "tok1".to_string(),
-            browser_tx,
-            user_id,
-            AudioSource::Icecast,
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            browser_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Unknown,
-                platform: ClientPlatform::Unknown,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        registry.set_audio_source(user_id, AudioSource::Youtube);
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, false)
-        );
-        assert_eq!(
-            browser_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, false)
-        );
-
-        registry.set_audio_source(user_id, AudioSource::Icecast);
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Icecast, false, false)
-        );
-        assert_eq!(
-            browser_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Icecast, false, false)
-        );
-    }
-
-    #[test]
-    fn browser_only_token_can_play_web_icecast() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let user_id = Uuid::now_v7();
-
-        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register(
-            "tok1".to_string(),
-            browser_tx,
-            user_id,
-            AudioSource::Youtube,
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            browser_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Unknown,
-                platform: ClientPlatform::Unknown,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        registry.set_audio_source(user_id, AudioSource::Icecast);
-        assert_eq!(
-            browser_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Icecast, true, false)
-        );
-    }
-
-    #[test]
-    fn browser_can_play_web_icecast_when_cli_output_is_unavailable() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast);
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["youtube".to_string()],
-                muted: false,
-                volume_percent: 30,
-                icecast_output_available: false,
-            },
-        );
-
-        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register(
-            "tok1".to_string(),
-            browser_tx,
-            user_id,
-            AudioSource::Icecast,
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            browser_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Unknown,
-                platform: ClientPlatform::Unknown,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        assert!(registry.broadcast_playback_source_for_token("tok1"));
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Icecast, true, false)
-        );
-        assert_eq!(
-            browser_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Icecast, true, false)
-        );
-    }
-
-    #[test]
-    fn embedded_webview_is_enabled_only_when_no_real_browser_is_paired() {
-        let registry = PairedClientRegistry::new("https://audio.late.sh");
-        let user_id = Uuid::now_v7();
-
-        let (cli_tx, mut cli_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast);
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            cli_id,
-            ClientAudioState {
-                client_kind: ClientKind::Cli,
-                ssh_mode: ClientSshMode::Native,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["youtube".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        let (webview_tx, mut webview_rx) = tokio::sync::mpsc::unbounded_channel();
-        let webview_id = registry.register(
-            "tok1".to_string(),
-            webview_tx,
-            user_id,
-            AudioSource::Icecast,
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            webview_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Webview,
-                platform: ClientPlatform::Linux,
-                capabilities: vec!["youtube".to_string()],
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        registry.set_audio_source(user_id, AudioSource::Youtube);
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, true)
-        );
-        assert_eq!(
-            webview_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, true)
-        );
-
-        let (browser_tx, mut browser_rx) = tokio::sync::mpsc::unbounded_channel();
-        let browser_id = registry.register(
-            "tok1".to_string(),
-            browser_tx,
-            user_id,
-            AudioSource::Youtube,
-        );
-        registry.update_state_and_enforce_mute_policy(
-            "tok1",
-            browser_id,
-            ClientAudioState {
-                client_kind: ClientKind::Browser,
-                ssh_mode: ClientSshMode::Unknown,
-                platform: ClientPlatform::Unknown,
-                capabilities: Vec::new(),
-                muted: false,
-                volume_percent: 30,
-                ..Default::default()
-            },
-        );
-
-        assert!(registry.broadcast_playback_source_for_token("tok1"));
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, false)
-        );
-        assert_eq!(
-            webview_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, false)
-        );
-        assert_eq!(
-            browser_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, false)
-        );
-
-        registry.unregister_if_match("tok1", browser_id);
-
-        assert!(registry.broadcast_playback_source_for_token("tok1"));
-        assert_eq!(
-            cli_rx.try_recv().unwrap(),
-            expected_source(AudioSource::Youtube, false, true)
-        );
-    }
-}
+#[path = "paired_clients_test.rs"]
+mod paired_clients_test;

@@ -1,15 +1,17 @@
 pub mod activity;
 pub mod ai;
-pub mod announcements;
 pub mod arcade;
 pub mod artboard;
 pub mod audio;
 pub mod bonsai;
-pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod clubhouse;
 pub mod common;
+pub mod crown;
 pub mod dashboard;
+#[cfg(test)]
+mod dashboard_flow_test;
+pub mod deadchannel;
 pub(crate) mod directory;
 pub mod door;
 pub mod files;
@@ -18,25 +20,51 @@ pub(crate) mod help_modal;
 pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;
+#[cfg(test)]
+mod input_flow_test;
+pub mod jobs;
+pub(crate) mod leaderboard;
+pub mod live;
+pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
+pub mod paper;
 pub mod pet;
-pub mod pinstar;
+pub mod pot;
+pub mod presence;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;
+pub mod referral;
 mod render;
+pub(crate) mod room_info_modal;
 pub(crate) mod room_search_modal;
-pub mod rooms;
+pub mod scratchpad;
 pub(crate) mod settings_modal;
 pub(crate) mod sheet_modal;
+#[cfg(test)]
+mod singleton_isolation_test;
+#[cfg(test)]
+mod smoke_test;
 pub mod state;
-mod tick;
+#[cfg(test)]
+mod state_test;
+pub(crate) mod statusline;
+pub mod stream;
+pub(crate) mod tag_picker;
+pub(crate) mod terminal_backend;
+#[cfg(test)]
+mod terminal_backend_test;
+pub mod tick;
+#[cfg(test)]
+mod tick_test;
 pub(crate) mod ultimates;
 pub mod voice;
-pub mod worldcup;
+pub mod workspace;
+pub mod zen;
 
+pub use hub::aquarium::svc::AquariumService;
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;
-pub use hub::svc::LeaderboardService;
+pub use leaderboard::svc::LeaderboardService;
 pub use ultimates::UltimateService;

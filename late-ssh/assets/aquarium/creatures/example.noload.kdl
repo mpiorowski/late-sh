@@ -5,6 +5,9 @@ sauce author=mevanlc date=20260506 license=CCBYSA4.0
 
 count -1
 
+/* The sidebar tank's stand-in: one row of 1 to 3 cells for each way it swims. Required. */
+mini left="<o(" right=")o>"
+
 /*
 A taxonomic *kindom* is kind of like a taxonomic *kingdom*, except *kindom* is entirely made up (by me, for this.)
 There are 4 (well, 5) kindoms: animal, plant, bacteria, fungi, and unalive.

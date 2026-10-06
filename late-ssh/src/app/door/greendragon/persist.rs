@@ -7,9 +7,12 @@ use serde_json::{Value, json};
 
 use super::model::Character;
 
-/// Bump when the save shape changes in a way that needs migration logic. Today
-/// serde defaults absorb additions, so v1 covers all current changes.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Bump when the save shape changes in a way that needs migration logic.
+/// Plain field additions are absorbed by serde defaults; v2 marks the switch
+/// from auto-applied dragon-kill boons to chooseable dragon points; v3 marks
+/// the address style becoming a real one-time choice (phase-2 saves carried a
+/// stamped `First` nobody ever picked, so the chooser re-arms for them).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Serialize a character into the stored blob shape.
 pub fn to_json(character: &Character) -> Value {
@@ -22,45 +25,32 @@ pub fn to_json(character: &Character) -> Value {
 /// Deserialize a stored blob back into a character. Falls back to a default
 /// character if the blob is missing/corrupt (the caller sets the name).
 pub fn from_json(blob: &Value) -> Character {
-    blob.get("character")
+    let version = blob
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    let mut c = blob
+        .get("character")
         .and_then(|c| serde_json::from_value::<Character>(c.clone()).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if version < 2 {
+        migrate_v1_dragon_boons(&mut c);
+    }
+    if version < 3 {
+        // Pre-phase-3 saves never chose an address style — the field was a
+        // placeholder stamp. Re-arm the one-time chooser for them.
+        c.style = super::model::AddressStyle::Unchosen;
+    }
+    c
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_a_character() {
-        let mut c = Character::new("hero", 42);
-        c.level = 7;
-        c.weapon_tier = 9;
-        c.gold = 1234;
-        c.dragon_kills = 2;
-        let blob = to_json(&c);
-        assert_eq!(blob["schema_version"], SCHEMA_VERSION);
-        let back = from_json(&blob);
-        assert_eq!(back.level, 7);
-        assert_eq!(back.weapon_tier, 9);
-        assert_eq!(back.gold, 1234);
-        assert_eq!(back.dragon_kills, 2);
-        assert_eq!(back.name, "hero");
-    }
-
-    #[test]
-    fn missing_fields_use_defaults() {
-        let blob = json!({ "schema_version": 1, "character": { "name": "old", "level": 3 } });
-        let c = from_json(&blob);
-        assert_eq!(c.name, "old");
-        assert_eq!(c.level, 3);
-        assert_eq!(c.gold, super::super::model::START_GOLD); // defaulted
-        assert!(c.alive);
-    }
-
-    #[test]
-    fn corrupt_blob_falls_back_to_default() {
-        let c = from_json(&json!({ "nonsense": true }));
-        assert_eq!(c.level, 1);
+/// v1 saves auto-applied +1 atk / +1 def / +5 HP per dragon kill *and* granted
+/// an implicit +1 daily forest fight per kill (capped at 10). v2 makes dragon
+/// points a one-per-kill player choice. Legacy characters keep their (over-
+/// granted) boons and have the implicit ff turned into spent ff points, so
+/// nothing they had regresses; they simply hold no unspent points.
+fn migrate_v1_dragon_boons(c: &mut Character) {
+    if c.dragon_kills > 0 && c.dragon_ff_bonus == 0 && c.dragon_points_unspent == 0 {
+        c.dragon_ff_bonus = c.dragon_kills.min(10);
     }
 }

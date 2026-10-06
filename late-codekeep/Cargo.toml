@@ -1,0 +1,26 @@
+[package]
+name = "late-codekeep"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone SSH/PTTY host for CodeKeep: The Pale. The TypeScript game runs in
+# its own process and stores one save beneath a stable per-account HOME.
+[[bin]]
+name = "late-codekeep"
+path = "src/main.rs"
+
+[features]
+otel = []
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+russh = { workspace = true }
+blake3 = { workspace = true }
+getrandom = { workspace = true }
+nix = { workspace = true, features = ["term", "process", "signal"] }

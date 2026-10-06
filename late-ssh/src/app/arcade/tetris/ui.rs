@@ -6,11 +6,28 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{BOARD_HEIGHT, BOARD_WIDTH, PieceKind, State};
+use super::state::{BOARD_HEIGHT, BOARD_WIDTH, Cell, PieceKind, State};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
 use crate::app::common::theme;
+
+/// What the hold slot holds: the parked piece, or a dash while it is empty.
+fn hold_text(state: &State) -> String {
+    state
+        .hold
+        .map(|kind| kind.name().to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Dimmed once this piece has spent its hold, so the slot shows at a glance
+/// whether pressing `c` will do anything.
+fn hold_color(state: &State) -> Color {
+    match state.hold_used {
+        true => theme::TEXT_FAINT(),
+        false => theme::AMBER_DIM(),
+    }
+}
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
@@ -20,12 +37,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("lines", state.lines.to_string(), theme::TEXT_BRIGHT()),
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
             ("next", state.next.name().to_string(), theme::AMBER_DIM()),
+            ("hold", hold_text(state), hold_color(state)),
         ]),
         keys: keys_line(vec![
             ("h/l", "move"),
             ("k", "rotate"),
             ("j", "soft"),
             ("Space", "hard drop"),
+            ("c", "hold"),
             ("p", "pause"),
             ("r", "restart"),
             ("`", "dashboard"),
@@ -63,7 +82,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 }
 
 fn board_lines(state: &State) -> Vec<Line<'static>> {
-    let board = state.board_with_active_piece();
+    let board = state.view_cells();
     let mut lines = Vec::with_capacity(BOARD_HEIGHT + 2);
     lines.push(Line::from(Span::styled(
         format!("┌{}┐", "─".repeat(BOARD_WIDTH * 2)),
@@ -93,15 +112,21 @@ fn board_lines(state: &State) -> Vec<Line<'static>> {
     lines
 }
 
-fn cell_span(cell: Option<PieceKind>) -> Span<'static> {
+fn cell_span(cell: Cell) -> Span<'static> {
     match cell {
-        Some(kind) => Span::styled(
+        Cell::Block(kind) => Span::styled(
             "██",
             Style::default()
                 .fg(piece_color(kind))
                 .add_modifier(Modifier::BOLD),
         ),
-        None => Span::styled("  ", Style::default().bg(theme::BG_SELECTION())),
+        Cell::Ghost(kind) => Span::styled(
+            "░░",
+            Style::default()
+                .fg(piece_color(kind))
+                .bg(theme::BG_SELECTION()),
+        ),
+        Cell::Empty => Span::styled("  ", Style::default().bg(theme::BG_SELECTION())),
     }
 }
 

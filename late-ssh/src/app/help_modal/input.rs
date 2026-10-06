@@ -3,7 +3,7 @@ use crate::app::{
     state::App,
 };
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x09) => {
             app.help_modal_state.move_topic(1);
@@ -43,7 +43,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             if let Some(topic) = app.help_modal_state.topic_at_point(x, y) {
-                // Double-click on a tab is treated as a plain switch — there's
+                // Double-click on a tab is treated as a plain switch: there's
                 // no deeper verb here, and the scroll behavior already lives
                 // on the wheel.
                 let _ = app.help_modal_state.click_topic(topic);
@@ -59,7 +59,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     app.show_help = false;
 }
 
@@ -71,15 +71,5 @@ fn is_close_event(event: &ParsedInput) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn close_keys_include_question_mark_esc_and_q() {
-        assert!(is_close_event(&ParsedInput::Byte(0x1B)));
-        assert!(is_close_event(&ParsedInput::Char('q')));
-        assert!(is_close_event(&ParsedInput::Char('Q')));
-        assert!(is_close_event(&ParsedInput::Char('?')));
-        assert!(!is_close_event(&ParsedInput::Char('j')));
-    }
-}
+#[path = "input_test.rs"]
+mod input_test;

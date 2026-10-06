@@ -152,10 +152,7 @@ fn draw_duration_field(frame: &mut Frame, area: Rect, state: &PollModalState, fo
         let minutes = duration_secs / 60;
         let selected = state.duration_index() == index;
         let style = if selected {
-            Style::default()
-                .fg(theme::BG_CANVAS())
-                .bg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD)
+            theme::punch_through(theme::SUCCESS()).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };

@@ -50,6 +50,21 @@ impl ArtboardProvenance {
         self.cells.insert(pos, username.into());
     }
 
+    /// Every attributed hand and how many glyph origins it painted, most
+    /// first, ties by name. The gallery's credits are read off this.
+    pub fn glyph_counts_by_username(&self) -> Vec<(String, usize)> {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for username in self.cells.values() {
+            *counts.entry(username.as_str()).or_default() += 1;
+        }
+        let mut counts: Vec<(String, usize)> = counts
+            .into_iter()
+            .map(|(username, count)| (username.to_string(), count))
+            .collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        counts
+    }
+
     pub fn apply_op(&mut self, before: &Canvas, op: &CanvasOp, username: &str) {
         match op {
             CanvasOp::PaintCell { pos, ch, .. } => {
@@ -253,83 +268,4 @@ pub fn apply_shared_op(
     username: &str,
 ) {
     shared.lock_recover().apply_op(before, op, username);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dartboard_core::{CanvasOp, RgbColor};
-
-    #[test]
-    fn paint_cell_tracks_last_writer() {
-        let mut provenance = ArtboardProvenance::default();
-        let before = Canvas::with_size(8, 4);
-
-        provenance.apply_op(
-            &before,
-            &CanvasOp::PaintCell {
-                pos: Pos { x: 2, y: 1 },
-                ch: 'A',
-                fg: RgbColor::new(1, 2, 3),
-            },
-            "mat",
-        );
-
-        let mut after = before.clone();
-        after.set(Pos { x: 2, y: 1 }, 'A');
-        assert_eq!(
-            provenance.username_at(&after, Pos { x: 2, y: 1 }),
-            Some("mat")
-        );
-    }
-
-    #[test]
-    fn clear_cell_removes_last_writer() {
-        let mut provenance = ArtboardProvenance::default();
-        let mut before = Canvas::with_size(8, 4);
-        before.set(Pos { x: 2, y: 1 }, 'A');
-        provenance.set_username(Pos { x: 2, y: 1 }, "mat");
-
-        provenance.apply_op(
-            &before,
-            &CanvasOp::ClearCell {
-                pos: Pos { x: 2, y: 1 },
-            },
-            "mat",
-        );
-
-        let mut after = before.clone();
-        after.clear(Pos { x: 2, y: 1 });
-        assert_eq!(provenance.username_at(&after, Pos { x: 2, y: 1 }), None);
-    }
-
-    #[test]
-    fn replace_preserves_unchanged_authors_and_retags_changed_cells() {
-        let mut provenance = ArtboardProvenance::default();
-        let mut before = Canvas::with_size(8, 4);
-        before.set(Pos { x: 1, y: 1 }, 'A');
-        before.set(Pos { x: 2, y: 1 }, 'B');
-        provenance.set_username(Pos { x: 1, y: 1 }, "alice");
-        provenance.set_username(Pos { x: 2, y: 1 }, "bob");
-
-        let mut after = before.clone();
-        after.set(Pos { x: 2, y: 1 }, 'C');
-
-        provenance.apply_op(
-            &before,
-            &CanvasOp::Replace {
-                canvas: after.clone(),
-            },
-            "carol",
-        );
-
-        assert_eq!(
-            provenance.username_at(&after, Pos { x: 1, y: 1 }),
-            Some("alice")
-        );
-        assert_eq!(
-            provenance.username_at(&after, Pos { x: 2, y: 1 }),
-            Some("carol")
-        );
-    }
 }

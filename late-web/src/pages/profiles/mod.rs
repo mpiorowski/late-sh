@@ -11,12 +11,15 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use late_core::models::{
-    profile::Profile, showcase::Showcase, user::User, work_profile::WorkProfile,
+    profile::Profile,
+    showcase::Showcase,
+    user::User,
+    work_profile::{WorkProfile, WorkStatus},
 };
 
 use crate::{AppState, error::AppError, metrics};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/profiles", get(index_handler))
         .route("/profiles/{slug}", get(handler))
@@ -90,12 +93,12 @@ struct IndexItem {
     work_type: String,
     location: String,
     skills: Vec<String>,
-    summary_preview: String,
     updated: String,
 }
 
 const PROFILE_LIST_LIMIT: i64 = 100;
-const SUMMARY_PREVIEW_CHARS: usize = 180;
+/// The index row shows the same five tags the terminal row does.
+const INDEX_ROW_TAGS: usize = 5;
 
 #[tracing::instrument(skip(state))]
 async fn handler(
@@ -144,9 +147,9 @@ async fn handler(
     let page = Page {
         headline: work.headline,
         username: user_profile.username.clone(),
-        status_id: status_id(&work.status),
-        status_label: status_label(&work.status),
-        work_type: work.work_type,
+        status_id: work.status.as_str(),
+        status_label: status_label(work.status),
+        work_type: work.work_type.label().to_string(),
         location: work.location,
         show_contact,
         contact: work.contact,
@@ -189,12 +192,11 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
         .await
         .context("failed to get db client for profiles index")?;
 
-    let mut profiles = WorkProfile::list_recent(&client, PROFILE_LIST_LIMIT)
+    // Open first, then casual, then not looking, freshest first inside each:
+    // the model sorts by the status enum's rank.
+    let profiles = WorkProfile::list_index(&client, PROFILE_LIST_LIMIT)
         .await
         .context("failed to list work profiles")?;
-    // Open first, then casual, then not-looking. Within each bucket the model
-    // already orders by updated DESC, so we just need a stable sort_by_key.
-    profiles.sort_by_key(|p| status_priority(&p.status));
 
     let user_ids: Vec<_> = profiles
         .iter()
@@ -212,22 +214,21 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
     let items: Vec<IndexItem> = profiles
         .into_iter()
         .map(|p| {
-            match p.status.as_str() {
-                "open" => open_count += 1,
-                "casual" => casual_count += 1,
-                _ => closed_count += 1,
+            match p.status {
+                WorkStatus::Open => open_count += 1,
+                WorkStatus::Casual => casual_count += 1,
+                WorkStatus::NotLooking => closed_count += 1,
             }
             IndexItem {
                 username: usernames
                     .get(&p.user_id)
                     .cloned()
                     .unwrap_or_else(|| p.user_id.to_string()[..8].to_string()),
-                status_id: status_id(&p.status),
-                status_label: status_label(&p.status),
-                work_type: p.work_type,
+                status_id: p.status.as_str(),
+                status_label: status_label(p.status),
+                work_type: p.work_type.label().to_string(),
                 location: p.location,
-                skills: p.skills,
-                summary_preview: summary_preview(&p.summary, SUMMARY_PREVIEW_CHARS),
+                skills: p.skills.into_iter().take(INDEX_ROW_TAGS).collect(),
                 updated: format_date(p.updated),
                 headline: p.headline,
                 slug: p.slug,
@@ -244,43 +245,12 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
     Ok(Html(page.render()?).into_response())
 }
 
-fn status_priority(status: &str) -> u8 {
+/// The long form of the status for the web, where there is room for it.
+fn status_label(status: WorkStatus) -> &'static str {
     match status {
-        "open" => 0,
-        "casual" => 1,
-        "not-looking" => 2,
-        _ => 3,
-    }
-}
-
-fn summary_preview(text: &str, max_chars: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= max_chars {
-        return collapsed;
-    }
-    let mut out: String = collapsed.chars().take(max_chars).collect();
-    if let Some(idx) = out.rfind(' ') {
-        out.truncate(idx);
-    }
-    out.push('…');
-    out
-}
-
-fn status_id(status: &str) -> &'static str {
-    match status {
-        "open" => "open",
-        "casual" => "casual",
-        "not-looking" => "not-looking",
-        _ => "unknown",
-    }
-}
-
-fn status_label(status: &str) -> &'static str {
-    match status {
-        "open" => "open to work",
-        "casual" => "casually listening",
-        "not-looking" => "not looking",
-        _ => "unknown",
+        WorkStatus::Open => "open to work",
+        WorkStatus::Casual => "casually listening",
+        WorkStatus::NotLooking => "not looking",
     }
 }
 
@@ -355,91 +325,4 @@ fn dash_or(value: Option<&str>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        dash_or, parse_contacts, render_markdown, split_paragraphs, status_id, status_label,
-        status_priority, summary_preview,
-    };
-
-    #[test]
-    fn paragraphs_drop_empty_and_trim() {
-        let para = split_paragraphs("hello\n\n  world  \n");
-        assert_eq!(para, vec!["hello", "world"]);
-    }
-
-    #[test]
-    fn status_helpers_map_known_values() {
-        assert_eq!(status_id("open"), "open");
-        assert_eq!(status_id("nope"), "unknown");
-        assert_eq!(status_label("not-looking"), "not looking");
-    }
-
-    #[test]
-    fn dash_or_handles_blank() {
-        assert_eq!(dash_or(None), "—");
-        assert_eq!(dash_or(Some("   ")), "—");
-        assert_eq!(dash_or(Some(" rust ")), "rust");
-    }
-
-    #[test]
-    fn status_priority_orders_open_first() {
-        let mut statuses = vec!["not-looking", "open", "casual", "weird"];
-        statuses.sort_by_key(|s| status_priority(s));
-        assert_eq!(statuses, vec!["open", "casual", "not-looking", "weird"]);
-    }
-
-    #[test]
-    fn summary_preview_collapses_whitespace_and_truncates_on_word() {
-        assert_eq!(
-            summary_preview("hello\n\n  there  friend", 80),
-            "hello there friend"
-        );
-        let preview = summary_preview("alpha beta gamma delta epsilon zeta", 18);
-        assert_eq!(preview, "alpha beta gamma…");
-    }
-
-    #[test]
-    fn render_markdown_renders_headings_and_lists() {
-        let html = render_markdown("# Hi\n\n- one\n- two");
-        assert!(html.contains("<h1>Hi</h1>"));
-        assert!(html.contains("<li>one</li>"));
-    }
-
-    #[test]
-    fn render_markdown_strips_raw_html() {
-        // Raw HTML in source must not survive — author content is untrusted.
-        let html = render_markdown("hello <script>alert(1)</script> world");
-        assert!(!html.contains("<script>"));
-        assert!(html.contains("hello"));
-        assert!(html.contains("world"));
-    }
-
-    #[test]
-    fn render_markdown_empty_returns_empty() {
-        assert_eq!(render_markdown(""), "");
-        assert_eq!(render_markdown("   \n  "), "");
-    }
-
-    #[test]
-    fn parse_contacts_splits_on_commas_and_trims() {
-        let items = parse_contacts("foo@bar.com, DM on late.sh ,  ");
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].value, "foo@bar.com");
-        assert_eq!(items[0].href, "mailto:foo@bar.com");
-        assert_eq!(items[1].value, "DM on late.sh");
-        assert_eq!(items[1].href, "");
-    }
-
-    #[test]
-    fn parse_contacts_links_urls_but_not_bare_text() {
-        let items = parse_contacts("https://t.me/me, just say hi");
-        assert_eq!(items[0].href, "https://t.me/me");
-        assert_eq!(items[1].href, "");
-    }
-
-    #[test]
-    fn parse_contacts_empty_input_yields_empty_list() {
-        assert!(parse_contacts("").is_empty());
-        assert!(parse_contacts("   ,  , ").is_empty());
-    }
-}
+mod profiles_test;

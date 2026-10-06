@@ -1,3 +1,4 @@
+use crate::app::chat::state::ComposerCommands;
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::help_modal::data::HelpTopic;
@@ -51,7 +52,8 @@ pub fn handle_compose_input(
         0x1B => app.chat.reset_composer(),
         b'\r' | b'\n' => {
             let keep_open = app.profile_state.profile().keep_composer_focused;
-            if let Some(b) = app.chat.submit_composer(keep_open, from_dashboard) {
+            let commands = ComposerCommands::for_screen(app.screen);
+            if let Some(b) = app.chat.submit_composer(keep_open, commands) {
                 app.banner = Some(b);
             }
             handle_post_submit_requests(app, from_dashboard);
@@ -114,24 +116,10 @@ fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
     app.show_settings = true;
-}
-
-fn open_mod_modal(app: &mut App) {
-    app.show_help = false;
-    app.show_settings = false;
-    app.show_hub_modal = false;
-    app.show_profile_modal = false;
-    app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.show_poll_modal = false;
-    app.poll_modal_state.close();
-    app.show_quit_confirm = false;
-    app.mod_modal_state
-        .open(app.permissions.can_access_mod_surface());
-    app.show_mod_modal = true;
 }
 
 fn open_poll_modal(app: &mut App, room_id: Uuid) {
@@ -142,16 +130,32 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_profile_modal = false;
     app.show_sheet_modal = false;
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
     app.show_quit_confirm = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.pending_chat_profile_open = None;
     app.poll_modal_state.open(room_id);
     app.show_poll_modal = true;
+}
+
+/// Open the tier picker on a message someone else wrote.
+fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTarget) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_quit_confirm = false;
+    crate::app::input::close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.gild_modal_state.open(target);
+    app.show_gild_modal = true;
 }
 
 pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll_modal: bool) {
@@ -165,12 +169,6 @@ pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll
 pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool) {
     if app.chat.take_requested_quit() {
         crate::app::input::trigger_global_quit(app);
-    }
-    if let Some(msg) = app.chat.take_requested_brb() {
-        app.go_afk(msg);
-    }
-    if app.chat.take_sent_regular_message() && app.afk.is_some() {
-        app.return_from_afk();
     }
     if let Some(url) = app.chat.take_requested_audio_url() {
         app.audio.submit_trusted(url);
@@ -188,14 +186,60 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         };
         app.banner = Some(banner);
     }
+    if let Some(command) = app.chat.take_requested_aquarium_command() {
+        match command {
+            crate::app::chat::state::AquariumCommand::Feed => {
+                crate::app::input::feed_aquarium_globally(app);
+            }
+        }
+    }
     if let Some(topic) = app.chat.take_requested_help_topic() {
         open_help_modal(app, topic);
     }
     if app.chat.take_requested_settings_modal() {
         open_settings_modal(app);
     }
+    if app.chat.take_requested_shop_modal() {
+        crate::app::input::open_shop_modal_globally(app);
+    }
+    if app.chat.take_requested_onboard() {
+        crate::app::input::start_tour(app);
+    }
+    if app.chat.take_requested_lobby_toggle() {
+        crate::app::input::toggle_lobby_globally(app);
+    }
+    if app.chat.take_requested_zen_toggle() {
+        crate::app::input::toggle_zen_globally(app);
+    }
+    if app.chat.take_requested_guide() {
+        crate::app::input::open_guide_globally(app);
+    }
+    if app.chat.take_requested_redraw() {
+        app.force_full_repaint();
+    }
+    if let Some(request) = app.chat.take_requested_room_info_modal() {
+        use crate::app::chat::state::RoomInfoRequest;
+        match request {
+            RoomInfoRequest::Create { slug } => app.room_info_modal_state.open_create(slug),
+            RoomInfoRequest::Edit {
+                room_id,
+                room_label,
+                owner_label,
+                topic,
+                rules,
+            } => {
+                app.room_info_modal_state.open_edit(
+                    room_id,
+                    room_label,
+                    owner_label,
+                    topic.as_deref(),
+                    rules.as_deref(),
+                );
+            }
+        }
+    }
     if app.chat.take_requested_mod_modal() {
-        open_mod_modal(app);
+        crate::app::mod_modal::input::open(app, None);
     }
     if let Some(room_id) = app.chat.take_requested_poll_room() {
         open_requested_poll_modal(app, room_id, allow_poll_modal);
@@ -203,17 +247,43 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
     }
+    if let Some(request) = app.chat.take_requested_pair() {
+        use crate::app::chat::state::PairRequest;
+        match request {
+            PairRequest::Directed(username) => {
+                crate::app::scratchpad::pair::request_pair(app, &username);
+            }
+        }
+    }
+    if app.chat.take_requested_brb() {
+        app.sent_away = true;
+        app.banner = Some(Banner::success(&format!(
+            "{} until your next key",
+            crate::app::common::away::AWAY_GLYPH
+        )));
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
+    }
+    if app.chat.take_requested_room_picker() {
+        crate::app::input::open_room_search_modal_globally(app);
+    }
+    if let Some(query) = app.chat.take_requested_message_search() {
+        crate::app::input::open_message_search_modal_globally(app, &query);
     }
     if let Some(request) = app.chat.take_requested_petname() {
         app.banner = Some(apply_petname_request(app, request));
     }
     if let Some(upload) = app.chat.take_requested_url_upload() {
-        crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
+        crate::app::input::trigger_url_image_upload(
+            app,
+            upload.url,
+            upload.room_id,
+            upload.reply_target,
+        );
     }
     if let Some(upload) = app.chat.take_requested_clipboard_image_upload() {
-        if app.request_paired_clipboard_image_upload(upload.room_id) {
+        if app.request_paired_clipboard_image_upload(upload.room_id, upload.reply_target) {
             app.banner = Some(Banner::success(
                 "Reading image from paired CLI clipboard...",
             ));
@@ -272,6 +342,13 @@ pub fn handle_scroll(app: &mut App, delta: isize) {
 }
 
 pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
+    // Wheel notches arrive as ±1 and get the same row-first fallback as
+    // `j`/`k` so a too-tall selected message stays readable. Larger deltas
+    // (PageUp/PageDown mirroring Ctrl-U/Ctrl-D) are deliberate jumps and
+    // skip it, like Ctrl-U/Ctrl-D themselves.
+    if delta.abs() == 1 && app.chat.scroll_selected_message_rows(-delta) {
+        return;
+    }
     select_message_in_room(app, room_id, delta);
 }
 
@@ -295,11 +372,22 @@ fn toggle_selected_room_favorite(app: &mut App) -> bool {
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
     app.banner = Some(if added {
-        Banner::success("Room added to favorites")
+        Banner::success("Added to favorites")
     } else {
-        Banner::success("Room removed from favorites")
+        Banner::success("Removed from favorites")
     });
     true
+}
+
+/// The favorite keys for the selected entry: `[` / `]` reorder, `f` toggles.
+/// Returns whether the byte was consumed.
+fn handle_favorite_keys(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'[' => move_selected_favorite(app, -1),
+        b']' => move_selected_favorite(app, 1),
+        b'f' | b'F' => toggle_selected_room_favorite(app),
+        _ => false,
+    }
 }
 
 fn move_selected_favorite(app: &mut App, delta: isize) -> bool {
@@ -315,6 +403,47 @@ fn move_selected_favorite(app: &mut App, delta: isize) -> bool {
     app.chat
         .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());
     true
+}
+
+/// Keys the embedded chat always wins over the game/board on a split
+/// screen (active room, daily board, house table): reaction-leader
+/// followups, `i` compose, `j`/`k` selection, Ctrl+D/Ctrl+U half-page.
+/// Route these to `handle_message_action_in_room` before the game handler.
+pub fn chat_priority_key(app: &App, byte: u8) -> bool {
+    if app.chat.is_reaction_leader_active() {
+        return true;
+    }
+    matches!(byte, b'i' | b'I' | b'j' | b'J' | b'k' | b'K' | 0x04 | 0x15)
+}
+
+/// Message-action keys that route to chat only while a message in
+/// `chat_room_id` is selected; otherwise the game keeps them (poker `f`
+/// fold / `r` raise, chess `r` resign, Enter plays, ...).
+pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
+    let selected_in_room = app
+        .chat
+        .selected_message_body_in_room(chat_room_id)
+        .is_some();
+    selected_in_room
+        && matches!(
+            byte,
+            b'd' | b'D'
+                | b'r'
+                | b'R'
+                | b'e'
+                | b'E'
+                | b'p'
+                | b'c'
+                | b't'
+                | b'T'
+                | b'f'
+                | b'F'
+                | b'g'
+                | b'G'
+                | b'\r'
+                | b'\n'
+                | 0x10
+        )
 }
 
 /// Shared message-list navigation and actions. Consumed by both the chat page
@@ -356,16 +485,9 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // reap a run of your own messages with repeated presses.
     // `r` enters reply mode and drops the selection.
     // `e` enters edit mode and drops the selection.
-    // `Ctrl-P` toggles the selected message's pinned dashboard status.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
         b'f' | b'F' if app.chat.begin_reaction_leader() => return true,
-        0x10 => {
-            if let Some(b) = app.chat.toggle_pin_selected_message_in_room(room_id) {
-                app.banner = Some(b);
-                return true;
-            }
-        }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
                 app.banner = Some(b);
@@ -397,6 +519,21 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 return true;
             }
         }
+        // `g` opens the gild picker on the selected message. Its own key
+        // rather than a leader, because the modal is where the money is
+        // confirmed and a mistyped leader must not cost chips. With a
+        // message selected the key is always consumed: a message the picker
+        // could only refuse (your own, or one outside a public room) banners
+        // the refusal instead of opening.
+        b'g' if app.chat.selected_message_id_in_room(room_id).is_some() => {
+            match app.chat.gild_target_in_room(room_id) {
+                Ok(target) => open_gild_modal(app, target),
+                Err(refusal) => {
+                    app.banner = Some(Banner::error(refusal.message()));
+                }
+            }
+            return true;
+        }
         b'c' => {
             if let Some(body) = app.chat.selected_message_body_in_room(room_id) {
                 app.pending_clipboard = Some(body);
@@ -405,16 +542,23 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 return true;
             }
         }
-        // `g` always jumps to a reply's referenced message. Enter is overloaded
-        // (image/News modals take precedence), so a reply that contains an image
-        // can't be followed with Enter alone; `g` reaches the parent regardless.
-        b'g' | b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+        // `t` translates the selected message (or collapses/reopens a shown
+        // translation). Selection stays put so a `t`-collapse-`t`-reopen
+        // doesn't lose your place.
+        b't' | b'T' if app.chat.selected_message_id_in_room(room_id).is_some() => {
+            if let Some(b) = app.chat.toggle_translation_selected_in_room(room_id) {
+                app.banner = Some(b);
+            }
+            return true;
+        }
+        // `G` always jumps to a reply's referenced message. Enter is overloaded
+        // (the image modal takes precedence), so a reply that contains an image
+        // can't be followed with Enter alone; `G` reaches the parent regardless.
+        // Lowercase `g` is the gild key above.
+        b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
-            return true;
-        }
-        b'\r' | b'\n' if app.chat.open_selected_news_modal_in_room(room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
@@ -428,12 +572,20 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     }
 
     match byte {
+        // Single-step moves scroll by rows inside a selected message that
+        // wraps taller than the pane before stepping off it; without the
+        // fallback a too-tall message's bottom is unreachable, since the
+        // viewport is otherwise derived purely from the selection.
         b'j' | b'J' => {
-            select_message_in_room(app, room_id, -1);
+            if !app.chat.scroll_selected_message_rows(1) {
+                select_message_in_room(app, room_id, -1);
+            }
             true
         }
         b'k' | b'K' => {
-            select_message_in_room(app, room_id, 1);
+            if !app.chat.scroll_selected_message_rows(-1) {
+                select_message_in_room(app, room_id, 1);
+            }
             true
         }
         0x04 => {
@@ -472,12 +624,18 @@ pub fn handle_message_arrow(app: &mut App, key: u8) -> bool {
 
 pub fn handle_message_arrow_in_room(app: &mut App, room_id: Uuid, key: u8) -> bool {
     match key {
+        // Arrows fall back the same way `j`/`k` do: rows inside a too-tall
+        // selected message first, then the adjacent message.
         b'A' => {
-            select_message_in_room(app, room_id, 1);
+            if !app.chat.scroll_selected_message_rows(-1) {
+                select_message_in_room(app, room_id, 1);
+            }
             true
         }
         b'B' => {
-            select_message_in_room(app, room_id, -1);
+            if !app.chat.scroll_selected_message_rows(1) {
+                select_message_in_room(app, room_id, -1);
+            }
             true
         }
         _ => false,
@@ -511,6 +669,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.feeds_selected {
         return super::feeds::input::handle_arrow(app, key);
     }
+    if cyberspace_surface_active(app) {
+        return super::cyberspace::input::handle_arrow(app, key);
+    }
     if app.chat.news_selected {
         return super::news::input::handle_arrow(app, key);
     }
@@ -521,6 +682,16 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         return super::work::input::handle_arrow(app, key);
     }
     handle_message_arrow(app, key)
+}
+
+/// Whether a cyberspace surface owns navigation keys: the pane itself, a
+/// pinned room's rail slot, or a room opened from the roster without one.
+fn cyberspace_surface_active(app: &App) -> bool {
+    app.chat.cyberspace_selected
+        || app.chat.cyberspace_notifications_selected
+        || app.chat.cyberspace_room_selected.is_some()
+        || app.chat.cyberspace_mail_selected.is_some()
+        || app.chat.cyberspace.open_room_name().is_some()
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
@@ -551,6 +722,17 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 
     if byte == b' ' {
         app.chat.activate_room_jump();
+        return true;
+    }
+
+    // Mentions, News, RSS and Browse can be favorited and reordered like a
+    // room, but their handlers below take every byte, so the favorite keys
+    // are answered first. None of those handlers bind `f`, `[` or `]`; the
+    // News composer is the one text input among them and keeps its bytes.
+    if app.chat.synthetic_entry_selected()
+        && !(app.chat.news_selected && app.chat.news.composing())
+        && handle_favorite_keys(app, byte)
+    {
         return true;
     }
 
@@ -588,6 +770,38 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::feeds::input::handle_byte(app, byte);
+    }
+
+    // An open room owns the pane whichever cyberspace entry is selected, so
+    // it is checked before the pane's own keys. A byte only reaches here
+    // while the room is being read: with the composer focused, `app::input`
+    // routes every one of them into it before chat routing runs.
+    if app.chat.cyberspace.open_room_name().is_some() {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        if matches!(byte, b'b' | b'B') {
+            app.leave_cyberspace_room();
+            return true;
+        }
+        return super::cyberspace::input::handle_room_byte(app, byte);
+    }
+
+    if app.chat.cyberspace_selected || app.chat.cyberspace_notifications_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::cyberspace::input::handle_byte(app, byte);
     }
 
     if app.chat.news_selected {
@@ -660,34 +874,5 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{is_next_room_key, is_prev_room_key, leader_reaction_emoji};
-
-    #[test]
-    fn next_room_keys_include_ctrl_n() {
-        assert!(is_next_room_key(b'l'));
-        assert!(is_next_room_key(b'L'));
-        assert!(is_next_room_key(0x0E));
-        assert!(!is_next_room_key(b'h'));
-    }
-
-    #[test]
-    fn prev_room_keys_include_ctrl_p() {
-        assert!(is_prev_room_key(b'h'));
-        assert!(is_prev_room_key(b'H'));
-        assert!(is_prev_room_key(0x10));
-        assert!(!is_prev_room_key(b'l'));
-    }
-
-    #[test]
-    fn leader_reaction_keys_are_plain_digits_except_custom_zero() {
-        assert_eq!(leader_reaction_emoji(b'0'), None);
-        assert_eq!(leader_reaction_emoji(b'1'), Some("👍"));
-        assert_eq!(leader_reaction_emoji(b'5'), Some("🔥"));
-        assert_eq!(leader_reaction_emoji(b'6'), Some("🙌"));
-        assert_eq!(leader_reaction_emoji(b'7'), Some("🚀"));
-        assert_eq!(leader_reaction_emoji(b'8'), Some("🤔"));
-        assert_eq!(leader_reaction_emoji(b'9'), Some("💩"));
-        assert_eq!(leader_reaction_emoji(b'!'), None);
-    }
-}
+#[path = "input_test.rs"]
+mod input_test;

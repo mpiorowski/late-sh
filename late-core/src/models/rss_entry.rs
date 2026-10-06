@@ -73,21 +73,34 @@ impl RssEntry {
         Ok(row.map(Self::from))
     }
 
+    /// List the newest non-dismissed entries across all of a user's feeds,
+    /// capped at `per_feed_limit` per feed so one high-volume feed (a news
+    /// site posting dozens of items a day) cannot evict low-volume feeds
+    /// (weekly digests, release blogs) from the flat `limit`-sized window.
     pub async fn list_visible_for_user(
         client: &Client,
         user_id: Uuid,
         limit: i64,
+        per_feed_limit: i64,
     ) -> Result<Vec<RssEntryView>> {
         let rows = client
             .query(
-                "SELECT e.*, f.title AS feed_title, f.url AS feed_url
-                 FROM rss_entries e
-                 JOIN rss_feeds f ON f.id = e.feed_id
-                 WHERE e.user_id = $1
-                   AND e.dismissed_at IS NULL
-                 ORDER BY COALESCE(e.published_at, e.created) DESC, e.created DESC
+                "SELECT * FROM (
+                     SELECT e.*, f.title AS feed_title, f.url AS feed_url,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY e.feed_id
+                                ORDER BY COALESCE(e.published_at, e.created) DESC,
+                                         e.created DESC
+                            ) AS feed_rank
+                     FROM rss_entries e
+                     JOIN rss_feeds f ON f.id = e.feed_id
+                     WHERE e.user_id = $1
+                       AND e.dismissed_at IS NULL
+                 ) ranked
+                 WHERE feed_rank <= $3
+                 ORDER BY COALESCE(published_at, created) DESC, created DESC
                  LIMIT $2",
-                &[&user_id, &limit],
+                &[&user_id, &limit, &per_feed_limit],
             )
             .await?;
 

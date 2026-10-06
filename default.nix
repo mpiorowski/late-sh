@@ -14,11 +14,14 @@
   unzip,
   makeWrapper ? null,
   alsa-lib,
+  libpulseaudio ? null,
   glib-networking ? null,
   gst_all_1 ? null,
   gtk3 ? null,
   mold,
   webkitgtk_4_1 ? null,
+  xcbuild ? null,
+  xorg ? null,
 }: let
   packageVersion = (builtins.fromTOML (builtins.readFile ./late-ssh/Cargo.toml)).package.version;
   gstPluginsBadNoLv2 =
@@ -67,13 +70,21 @@
         triple = "linux-arm64-release";
         hash = "sha256-tVymLCixjcW7cgpwgq5GjXjyE8o5vMz4QZXy/ljP5xM=";
       };
+      x86_64-darwin = {
+        triple = "mac-x64-release";
+        hash = "sha256-Fx8boIZuWUfg1CDswcM4FEduGRkTG4G7h8hynUXXISc=";
+      };
+      aarch64-darwin = {
+        triple = "mac-arm64-release";
+        hash = "sha256-+b5Juf7pzRWI2opAyFvaIfXqScTtgmYtyImxyRlWmgg=";
+      };
     };
   in
     if builtins.hasAttr stdenv.hostPlatform.system archives
     then builtins.getAttr stdenv.hostPlatform.system archives
     else throw "unsupported LiveKit WebRTC platform for Nix: ${stdenv.hostPlatform.system}";
   livekitWebrtcZip =
-    if stdenv.isLinux
+    if stdenv.isLinux || stdenv.isDarwin
     then
       fetchurl {
         url = "https://github.com/livekit/rust-sdks/releases/download/webrtc-51ef663/webrtc-${livekitWebrtc.triple}.zip";
@@ -116,6 +127,13 @@ in
         makeWrapper
         mold
         unzip
+      ]
+      # `unzip` unpacks the prebuilt WebRTC below. `xcbuild` supplies `xcrun`,
+      # which webrtc-sys's build script shells out to for the macOS SDK path
+      # and which the sandbox does not otherwise have.
+      ++ lib.optionals stdenv.isDarwin [
+        unzip
+        xcbuild
       ];
 
     buildInputs =
@@ -129,7 +147,9 @@ in
 
     # webrtc-sys downloads this archive in build.rs by default. Nix builds are
     # sandboxed, so provide it up front and point the build script at it.
-    preBuild = lib.optionalString stdenv.isLinux ''
+    # Both Linux and macOS link LiveKit voice, and both archives unpack to the
+    # same `{triple}/` layout.
+    preBuild = lib.optionalString (stdenv.isLinux || stdenv.isDarwin) ''
       mkdir -p "$TMPDIR/livekit-webrtc"
       unzip -q "${livekitWebrtcZip}" -d "$TMPDIR/livekit-webrtc"
       export LK_CUSTOM_WEBRTC="$TMPDIR/livekit-webrtc/${livekitWebrtc.triple}"
@@ -138,25 +158,29 @@ in
       test -f "$LK_CUSTOM_WEBRTC/desktop_capture.ninja"
     '';
 
-    # The embedded CLI YouTube helper uses WebKitGTK + GStreamer. WebKit
-    # discovers codecs, sinks, and TLS modules at runtime from WebKit helper
-    # processes, so a Nix-built binary must carry those search paths and the
-    # paths WebKit should expose inside its web-process sandbox.
+    # The CLI YouTube helper (`late-webview`) uses WebKitGTK + GStreamer.
+    # WebKit discovers codecs, sinks, and TLS modules at runtime from WebKit
+    # helper processes, so the Nix-built binaries must carry those search
+    # paths and the paths WebKit should expose inside its web-process
+    # sandbox. `late` itself no longer links WebKitGTK on Linux, but it is
+    # still wrapped: the spawned late-webview child inherits these variables.
     postFixup = lib.optionalString stdenv.isLinux ''
-      if [ -x "$out/bin/late" ]; then
-        wrapProgram "$out/bin/late" \
-          --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
-          --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
-          --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
-          --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
-      fi
-      if [ -x "$out/bin/late-cli" ]; then
-        wrapProgram "$out/bin/late-cli" \
-          --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
-          --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
-          --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
-          --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
-      fi
+      # WebRTC's voice audio device dlopen()s libpulse.so.0, and the same ADM
+      # Init() then dlopen()s libX11.so.6 for typing detection. The linker
+      # records neither and shrink-rpath would drop them. Add both after
+      # fixup, before wrapping: without libpulse voice init returns an error,
+      # without libX11 the generated trampoline abort()s the whole CLI.
+      patchelf --add-rpath "${lib.makeLibraryPath [libpulseaudio xorg.libX11]}" "$out/bin/late"
+
+      for bin in late late-cli late-webview; do
+        if [ -x "$out/bin/$bin" ]; then
+          wrapProgram "$out/bin/$bin" \
+            --set GST_PLUGIN_SYSTEM_PATH_1_0 "${gstreamerPluginPath}" \
+            --set GST_PLUGIN_SCANNER "${gstreamerPluginScanner}" \
+            --set LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS "${webkitGstreamerSandboxPath}" \
+            --prefix GIO_EXTRA_MODULES : "${glib-networking}/lib/gio/modules"
+        fi
+      done
     '';
 
     # Integration tests require a live postgres; skip by default.

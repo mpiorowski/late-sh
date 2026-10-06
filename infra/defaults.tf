@@ -1,20 +1,40 @@
 # Optional CI variables arrive as empty strings when the GitHub variable is
 # unset. Normalize them here so Terraform remains the single source of defaults.
+# App configuration does NOT live here: late-ssh reads one env (LATE_ENV=prod)
+# plus secrets, and everything else is compiled into its prod profile
+# (late-ssh/src/config.rs). These locals configure only infrastructure.
 locals {
-  rebels_enabled = trimspace(var.REBELS_ENABLED) != "" ? trimspace(var.REBELS_ENABLED) : "1"
-  rebels_host    = trimspace(var.REBELS_HOST) != "" ? trimspace(var.REBELS_HOST) : "frittura.org"
-  rebels_port    = trimspace(var.REBELS_PORT) != "" ? trimspace(var.REBELS_PORT) : "3788"
+  # One resource spec for every door-game host pod (nethack, dcss, brogue,
+  # dopewars, usurper, codekeep). They all have the same shape: an idle SSH
+  # listener that forks one short-lived child per player.
+  #
+  # Requests are what actually reserve node capacity, and measured idle draw is
+  # 1-2m CPU / 1-11Mi per host, so they stay small. Limits only cap bursts and
+  # cost nothing until used, so they stay roomy enough for the heaviest door:
+  # codekeep runs a Bun process per player (tens of MiB each) where the rest run
+  # C binaries. Raise the limits here, never per door.
+  door_cpu_request    = "50m"
+  door_memory_request = "64Mi"
+  door_cpu_limit      = "1000m"
+  door_memory_limit   = "1Gi"
 
-  # DOPEWARS_ENABLED arrives as an empty string from CI when the GitHub variable
-  # is unset; default it on. Like nethack this now gates only the CLIENT door
-  # (service-ssh's LATE_DOPEWARS_ENABLED); the late-dopewars host pod is always
-  # deployed. Host/port/PVC locals live in dopewars.tf.
-  dopewars_enabled = trimspace(var.DOPEWARS_ENABLED) != "" ? trimspace(var.DOPEWARS_ENABLED) : "1"
+  # Image per component. Images are deployed with `kubectl set image`
+  # (deploy_service.yml) and every deployment ignores image changes, so this
+  # value only matters when a deployment is CREATED: a door bootstrap passes
+  # exactly that door's tag in var.IMAGE_TAGS, and anything else falls back to
+  # a :bootstrap placeholder (a fresh disaster-recovery apply then needs one
+  # release per component to roll real images out).
+  image_tags = {
+    for component in ["ssh", "web", "bastion", "nethack", "dopewars", "codekeep", "dcss", "usurper", "brogue", "bashquest"] :
+    component => lookup(var.IMAGE_TAGS, component, "ghcr.io/mpiorowski/late-sh/late-${component}:bootstrap")
+  }
 
-  voice_enabled = trimspace(var.VOICE_ENABLED) != "" ? trimspace(var.VOICE_ENABLED) : "1"
-  voice_room    = trimspace(var.VOICE_ROOM) != "" ? trimspace(var.VOICE_ROOM) : "late-voice"
+  # The root domain and public subdomains are code, not variables: changing a
+  # hostname must land as a reviewed diff here and in the late-ssh/late-web
+  # prod profiles together (they hardcode late.sh / rtc.late.sh).
+  domain = "late.sh"
 
-  livekit_subdomain           = trimspace(var.LIVEKIT_SUBDOMAIN) != "" ? trimspace(var.LIVEKIT_SUBDOMAIN) : "rtc"
+  livekit_subdomain           = "rtc"
   livekit_image               = trimspace(var.LIVEKIT_IMAGE) != "" ? trimspace(var.LIVEKIT_IMAGE) : "livekit/livekit-server:v1.9.12"
   livekit_log_level           = trimspace(var.LIVEKIT_LOG_LEVEL) != "" ? trimspace(var.LIVEKIT_LOG_LEVEL) : "info"
   livekit_api_key             = trimspace(var.LIVEKIT_API_KEY) != "" ? trimspace(var.LIVEKIT_API_KEY) : "late-voice"
@@ -25,14 +45,44 @@ locals {
   livekit_turn_udp_port       = tonumber(trimspace(var.LIVEKIT_TURN_UDP_PORT) != "" ? trimspace(var.LIVEKIT_TURN_UDP_PORT) : "3478")
   livekit_turn_tls_port       = tonumber(trimspace(var.LIVEKIT_TURN_TLS_PORT) != "" ? trimspace(var.LIVEKIT_TURN_TLS_PORT) : "5349")
 
-  irc_enabled                  = trimspace(var.IRC_ENABLED) != "" ? trimspace(var.IRC_ENABLED) : "0"
-  irc_enabled_bool             = contains(["1", "true", "yes", "on"], lower(local.irc_enabled))
-  irc_host                     = trimspace(var.IRC_HOST) != "" ? trimspace(var.IRC_HOST) : "irc.${var.DOMAIN}"
-  irc_port                     = tonumber(trimspace(var.IRC_PORT) != "" ? trimspace(var.IRC_PORT) : "6697")
-  irc_max_conns_global         = trimspace(var.IRC_MAX_CONNS_GLOBAL) != "" ? trimspace(var.IRC_MAX_CONNS_GLOBAL) : "200"
-  irc_max_conns_per_user       = trimspace(var.IRC_MAX_CONNS_PER_USER) != "" ? trimspace(var.IRC_MAX_CONNS_PER_USER) : "3"
-  irc_max_auth_failures_per_ip = trimspace(var.IRC_MAX_AUTH_FAILURES_PER_IP) != "" ? trimspace(var.IRC_MAX_AUTH_FAILURES_PER_IP) : "20"
-  irc_auth_failure_window_secs = trimspace(var.IRC_AUTH_FAILURE_WINDOW_SECS) != "" ? trimspace(var.IRC_AUTH_FAILURE_WINDOW_SECS) : "300"
-  irc_tls_secret_name          = "irc-tls"
-  irc_tls_mount_path           = "/etc/irc-tls"
+  livekit_ingress_image     = trimspace(var.LIVEKIT_INGRESS_IMAGE) != "" ? trimspace(var.LIVEKIT_INGRESS_IMAGE) : "livekit/ingress:v1.4.3"
+  livekit_whip_subdomain    = "whip"
+  livekit_ingress_whip_port = tonumber(trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) != "" ? trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) : "7888")
+
+  # IRC edge (ingress TCP passthrough, IPv6 HAProxy, certificate). The app
+  # side is compiled into late-ssh's prod profile and always listens; these
+  # gate only what the edge exposes. IRC_PROXY_EMIT stays a variable because
+  # flipping edge emission is a deploy-time rollout step.
+  irc_enabled_bool    = true
+  irc_proxy_emit      = trimspace(var.IRC_PROXY_EMIT) != "" ? trimspace(var.IRC_PROXY_EMIT) : "0"
+  irc_proxy_emit_bool = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_emit))
+  irc_host            = "irc.${local.domain}"
+  irc_port            = 6697
+  irc_tls_secret_name = "irc-tls"
+  irc_tls_mount_path  = "/etc/irc-tls"
+
+  # Minecraft (infra/minecraft.tf). Image and game version are code: bumping
+  # the game version is a world upgrade and a client requirement for every
+  # player, so it lands as a reviewed diff. Java 25 runs both 1.21.x and
+  # 26.x Paper builds. Whitelist and ops come from GitHub variables so player
+  # names stay out of git; empty means nobody is seeded and the first names
+  # go in through rcon-cli (README.md).
+  minecraft_image     = "itzg/minecraft-server:2026.9.1-java25"
+  minecraft_version   = "26.2"
+  minecraft_port      = 25565
+  minecraft_heap      = "2G"
+  minecraft_whitelist = join(",", compact([for name in split(",", var.MINECRAFT_WHITELIST) : trimspace(name)]))
+  minecraft_ops       = join(",", compact([for name in split(",", var.MINECRAFT_OPS) : trimspace(name)]))
+
+  # Node placement (SCALE.md, Immediate Next Work 3). agent-1 joined the
+  # cluster with this label and a NoSchedule taint of the same key and value
+  # (/etc/rancher/rke2/config.yaml on the node, infra/README.md), so a
+  # workload lands there only when it carries both the node selector and the
+  # toleration. Everything without them stays on server-1: service-ssh, redis,
+  # the doors, ingress-nginx, ipv6-proxy, LiveKit's media hostPorts, and every
+  # workload whose local-path volume is still pinned to server-1 (the Postgres
+  # instances). Moving one of those needs a fresh volume on agent-1, not just
+  # these two fields.
+  support_node_label_key   = "role"
+  support_node_label_value = "support"
 }

@@ -1,5 +1,7 @@
 pub mod config;
 pub mod error;
+#[cfg(test)]
+mod error_test;
 mod metrics;
 mod pages;
 

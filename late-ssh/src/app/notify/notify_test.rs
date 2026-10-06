@@ -1,0 +1,151 @@
+use super::*;
+
+fn dm_bytes(mode: Mode, bell: bool) -> String {
+    let notification = Notification::dm("sender", "hello".to_string());
+    let notification = Notification {
+        title: "DM title".to_string(),
+        ..notification
+    };
+    String::from_utf8(terminal_bytes(&notification, mode, bell)).expect("valid utf8")
+}
+
+#[test]
+fn terminal_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
+    assert_eq!(
+        dm_bytes(Mode::Both, true),
+        "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\\x07"
+    );
+}
+
+#[test]
+fn terminal_bytes_osc777_mode_emits_only_osc_777() {
+    assert_eq!(
+        dm_bytes(Mode::Osc777, false),
+        "\x1b]777;notify;DM title;hello\x1b\\"
+    );
+}
+
+#[test]
+fn terminal_bytes_osc9_mode_emits_only_osc_9() {
+    assert_eq!(dm_bytes(Mode::Osc9, false), "\x1b]9;DM title: hello\x1b\\");
+}
+
+#[test]
+fn terminal_bytes_sanitize_control_bytes_and_separators() {
+    let notification = Notification {
+        kind: Kind::Dms,
+        title: "hey;\x07".to_string(),
+        body: "a\nb\x1bc".to_string(),
+    };
+    let got =
+        String::from_utf8(terminal_bytes(&notification, Mode::Both, false)).expect("valid utf8");
+    assert_eq!(
+        got,
+        "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
+    );
+}
+
+#[test]
+fn mode_from_format_maps_known_values_and_defaults_to_both() {
+    assert_eq!(Mode::from_format(Some("both")), Mode::Both);
+    assert_eq!(Mode::from_format(Some("osc777")), Mode::Osc777);
+    assert_eq!(Mode::from_format(Some("osc9")), Mode::Osc9);
+    assert_eq!(Mode::from_format(None), Mode::Both);
+    assert_eq!(Mode::from_format(Some("")), Mode::Both);
+    assert_eq!(Mode::from_format(Some("garbage")), Mode::Both);
+}
+
+#[test]
+fn drain_emits_first_enabled_kind_and_drops_the_rest() {
+    let (notifier, mut outbox) = channel();
+    let profile = Profile {
+        notify_kinds: vec!["mentions".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::dm("a", "dm body".to_string()));
+    notifier.push(Notification::mention("b", "mention body".to_string()));
+    notifier.push(Notification::mention("c", "later body".to_string()));
+
+    let bytes = outbox.drain(&profile).expect("one payload");
+    let got = String::from_utf8(bytes).expect("valid utf8");
+    assert!(got.contains("mention body"));
+    assert!(!got.contains("dm body"));
+    // The rest were dropped, not queued.
+    assert!(outbox.drain(&profile).is_none());
+}
+
+#[test]
+fn drain_always_allows_friend_notifications() {
+    let (notifier, mut outbox) = channel();
+    notifier.push(Notification::friend_online("pal"));
+    assert!(outbox.drain(&Profile::default()).is_some());
+}
+
+#[test]
+fn drain_honors_cooldown() {
+    let (notifier, mut outbox) = channel();
+    let profile = Profile {
+        notify_kinds: vec!["dms".to_string()],
+        notify_cooldown_mins: 5,
+        ..Profile::default()
+    };
+    notifier.push(Notification::dm("a", "first".to_string()));
+    assert!(outbox.drain(&profile).is_some());
+    notifier.push(Notification::dm("a", "second".to_string()));
+    assert!(outbox.drain(&profile).is_none());
+}
+
+// The whole reason `Streams` exists as its own kind: both stream alerts
+// must be mutable on their own. A friend going live is the one `Friends`
+// producer that does NOT ride the always-on `/friend` opt-in, so a nightly
+// streamer cannot force you to give up their login pings.
+#[test]
+fn stream_alerts_gate_on_their_own_kind() {
+    let (notifier, mut outbox) = channel();
+    let everything_else = Profile {
+        notify_kinds: vec![
+            "dms".to_string(),
+            "mentions".to_string(),
+            "game_events".to_string(),
+        ],
+        ..Profile::default()
+    };
+    notifier.push(Notification::stream_viewer("bob"));
+    assert!(outbox.drain(&everything_else).is_none());
+    notifier.push(Notification::friend_live("pal", None));
+    assert!(outbox.drain(&everything_else).is_none());
+
+    let streams_on = Profile {
+        notify_kinds: vec!["streams".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::stream_viewer("bob"));
+    let got = String::from_utf8(outbox.drain(&streams_on).expect("one payload")).expect("utf8");
+    assert!(got.contains("@bob is watching your stream"));
+
+    notifier.push(Notification::friend_live("pal", Some("render loop")));
+    let got = String::from_utf8(outbox.drain(&streams_on).expect("one payload")).expect("utf8");
+    assert!(got.contains("@pal is live: render loop"));
+}
+
+// A gild rides the `mentions` opt-in rather than a kind of its own, so the
+// one setting covers both ways a person can single you out in chat.
+#[test]
+fn gild_alerts_gate_on_the_mentions_kind() {
+    let (notifier, mut outbox) = channel();
+    let mentions_off = Profile {
+        notify_kinds: vec!["dms".to_string(), "game_events".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::gilded("bob", "Gold", 3_333));
+    assert!(outbox.drain(&mentions_off).is_none());
+
+    let mentions_on = Profile {
+        notify_kinds: vec!["mentions".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::gilded("bob", "Gold", 3_333));
+    let got = String::from_utf8(outbox.drain(&mentions_on).expect("one payload")).expect("utf8");
+    assert!(got.contains("Gold gild received"));
+    assert!(got.contains("@bob gilded your message (+3333 chips)"));
+}

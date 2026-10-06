@@ -1,14 +1,31 @@
 [workspace]
 members = [
     "late-bastion",
+    "late-bashquest",
+    "late-brogue",
     "late-cli",
+    "late-codekeep",
     "late-core",
+    "late-dcss",
     "late-dopewars",
     "late-nethack",
     "late-ssh",
+    "late-usurper",
     "late-web",
+    "late-webview",
 ]
 resolver = "2"
+
+[workspace.lints.rust]
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+enum_glob_use = "warn"
+wildcard_imports = "warn"
+unused_async = "warn"
 
 [workspace.dependencies]
 # Core Utils
@@ -76,17 +93,20 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 qrcodegen = "1.8.0"
 rand = "0.8"
 rand_core = "0.6"
-ratatui = "0.30"
+# unstable-rendered-line-info: `Paragraph::line_count`, which the Games hub
+# landings use to clamp their scroll (late-ssh `door::landing::render_scrolled`).
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ringbuf = "0.4.8"
 rstest = "0.26.1"
 rumenx-sudoku = "1.0.0"
 russh = "0.61.1"
+rustfft = "6.4.1"
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
-rustfft = "6.4.1"
 sha2 = "0.10"
 shlex = "1.3.0"
 symphonia = "0.5.5"
+tempfile = "3"
 tokio-rustls = "0.26"
 tokio-tungstenite = "0.28"
 tower = "0.5"
@@ -97,6 +117,13 @@ vte = "0.15"
 
 [patch.crates-io]
 asterion-core = { path = "vendor/asterion-core" }
+
+[profile.dev]
+# Full debuginfo makes linking the many test binaries eat several GB each
+# (freezes a swapless machine under `cargo nextest run`); line tables keep
+# readable backtraces at a fraction of the memory. Override locally with
+# CARGO_PROFILE_DEV_DEBUG=2 when a real debugger session needs full info.
+debug = "line-tables-only"
 
 [profile.release]
 # Strip debug info but keep symbols for readable panic stack traces

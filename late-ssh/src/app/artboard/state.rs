@@ -17,11 +17,19 @@ use tokio::sync::{
     broadcast::{self, error::TryRecvError},
     watch,
 };
+use uuid::Uuid;
 
+use super::color_picker::ColorPicker;
+use super::gallery::{
+    frame::frame_piece,
+    state::{Focus as GalleryFocus, GalleryState, HangFlow, RailRow},
+    svc::GalleryService,
+};
 use super::provenance::{SharedArtboardProvenance, apply_shared_op};
 use super::svc::{
-    ArtboardArchiveLoader, ArtboardArchiveResult, ArtboardArchiveSnapshot, ArtboardSnapshotService,
-    DartboardEvent, DartboardService, DartboardSnapshot,
+    ArtboardArchiveEntry, ArtboardArchiveLoader, ArtboardArchiveResult, ArtboardArchiveSnapshot,
+    ArtboardSnapshotKind, ArtboardSnapshotService, DartboardEvent, DartboardService,
+    DartboardSnapshot,
 };
 use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
@@ -54,7 +62,9 @@ pub struct State {
     pub(crate) editor: EditorSession,
     active_brush: Option<Brush>,
     drag_brush: Option<Brush>,
-    paint_color_index: Option<usize>,
+    /// The local paint colour; `None` paints in the peer colour.
+    paint_color: Option<RgbColor>,
+    color_picker: Option<ColorPicker>,
     floating_source_selection: Option<EditorSelection>,
     floating_source_bounds: Option<Bounds>,
     suppress_swatch_preview: bool,
@@ -72,7 +82,8 @@ pub struct State {
     snapshot_rx: watch::Receiver<DartboardSnapshot>,
     event_rx: broadcast::Receiver<DartboardEvent>,
     archive_loader: ArtboardArchiveLoader,
-    snapshot_browser: SnapshotBrowserState,
+    archives: ArchiveBrowser,
+    gallery: GalleryState,
     owner_overlay_cache: std::cell::RefCell<Option<(Pos, u16, u16, Canvas)>>,
 }
 
@@ -80,6 +91,8 @@ impl State {
     pub fn new(
         svc: DartboardService,
         snapshot_service: ArtboardSnapshotService,
+        gallery_service: GalleryService,
+        viewer_id: Uuid,
         username: String,
         shared_provenance: SharedArtboardProvenance,
     ) -> Self {
@@ -87,14 +100,15 @@ impl State {
         let snapshot = snapshot_rx.borrow().clone();
         let event_rx = svc.subscribe_events();
         let archive_loader = ArtboardArchiveLoader::new(snapshot_service);
-        Self {
+        let mut state = Self {
             snapshot,
             private_notice: None,
             svc,
             editor: EditorSession::default(),
             active_brush: None,
             drag_brush: None,
-            paint_color_index: None,
+            paint_color: None,
+            color_picker: None,
             floating_source_selection: None,
             floating_source_bounds: None,
             suppress_swatch_preview: false,
@@ -112,19 +126,35 @@ impl State {
             snapshot_rx,
             event_rx,
             archive_loader,
-            snapshot_browser: SnapshotBrowserState::default(),
+            archives: ArchiveBrowser::default(),
+            gallery: GalleryState::new(gallery_service, viewer_id),
             owner_overlay_cache: std::cell::RefCell::new(None),
+        };
+        // The archive keys are cheap (no canvases): list them on entry so
+        // the rail's numbers are there before anyone opens a list.
+        for kind in ArtboardSnapshotKind::ALL {
+            state.ensure_archive_listed(kind);
         }
+        state
     }
 
-    pub fn tick(&mut self) {
-        self.drain_archive_results();
+    /// Returns true when this tick changed anything render-visible: a canvas
+    /// snapshot swap, a drained dartboard event, or an archive load result.
+    /// In archive view the snapshot peek stays out of the report (the drain
+    /// is deliberately skipped there, so the latched watch flag must not
+    /// dirty every tick); leaving archive view is input-driven and the next
+    /// tick drains and reports it.
+    pub fn tick(&mut self) -> bool {
+        let mut changed = self.drain_archive_results();
+        changed |= self.gallery.tick();
+        changed |= !self.event_rx.is_empty();
 
         if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
             self.invalidate_owner_overlay_cache();
             self.editor.clamp_cursor(&self.snapshot.canvas);
             self.editor.clamp_viewport_origin(&self.snapshot.canvas);
+            changed = true;
         }
         if let Some(reason) = self.snapshot.connect_rejected.as_ref() {
             self.private_notice = Some(reason.clone());
@@ -146,6 +176,7 @@ impl State {
                 }
             }
         }
+        changed
     }
 
     pub fn cursor(&self) -> Pos {
@@ -187,7 +218,7 @@ impl State {
     }
 
     pub fn set_viewport_for_screen(&mut self, screen_size: (u16, u16)) {
-        let viewport = super::ui::canvas_area_for_screen(screen_size);
+        let viewport = super::ui::canvas_area_for_state(screen_size, self.gallery.rail_visible());
         self.editor
             .set_viewport(viewport_to_editor(viewport), &self.snapshot.canvas);
     }
@@ -412,7 +443,7 @@ impl State {
         x: u16,
         y: u16,
     ) -> Option<Pos> {
-        let viewport = super::ui::canvas_area_for_screen(screen_size);
+        let viewport = super::ui::canvas_area_for_state(screen_size, self.gallery.rail_visible());
         canvas_pos_for_screen_point(
             viewport,
             self.editor.viewport_origin,
@@ -472,7 +503,8 @@ impl State {
     pub fn canvas_for_render(&self, width: u16, height: u16) -> Option<Canvas> {
         let mut canvas = if self.ownership_overlay {
             self.owner_overlay_canvas(width, height)
-        } else if let Some(floating) = self.editor.floating.as_ref() {
+        } else {
+            let floating = self.editor.floating.as_ref()?;
             let mut canvas = self.snapshot.canvas.clone();
             if !floating.transparent {
                 if let Some(bounds) = self.floating_source_bounds {
@@ -487,8 +519,6 @@ impl State {
                 }
             }
             canvas
-        } else {
-            return None;
         };
 
         if self.ownership_overlay
@@ -674,17 +704,58 @@ impl State {
         self.active_user_color()
     }
 
+    /// The preset the paint colour sits on, or the cycle's starting point
+    /// when it is a custom or peer colour outside the presets.
     pub fn active_paint_color_index(&self) -> usize {
-        self.paint_color_index
-            .or_else(|| palette_index(self.active_user_color()))
-            .unwrap_or(1)
+        palette_index(self.active_user_color()).unwrap_or(1)
+    }
+
+    /// The preset the paint colour sits on; `None` for a custom colour.
+    pub fn active_paint_palette_index(&self) -> Option<usize> {
+        palette_index(self.active_user_color())
     }
 
     pub fn cycle_paint_color(&mut self, delta: isize) {
         let len = PAINT_PALETTE.len() as isize;
         let current = self.active_paint_color_index() as isize;
         let next = (current + delta).rem_euclid(len) as usize;
-        self.paint_color_index = Some(next);
+        self.select_palette_color(next);
+    }
+
+    pub fn select_palette_color(&mut self, index: usize) {
+        self.paint_color = Some(PAINT_PALETTE[index]);
+        self.suppress_swatch_preview = false;
+    }
+
+    pub fn is_color_picker_open(&self) -> bool {
+        self.color_picker.is_some()
+    }
+
+    pub fn color_picker(&self) -> Option<&ColorPicker> {
+        self.color_picker.as_ref()
+    }
+
+    pub fn color_picker_mut(&mut self) -> Option<&mut ColorPicker> {
+        self.color_picker.as_mut()
+    }
+
+    /// Open the picker on the current paint colour. The colour is local,
+    /// so an archive view may pick one too.
+    pub fn open_color_picker(&mut self) {
+        self.last_canvas_click = None;
+        self.color_picker = Some(ColorPicker::open(self.active_user_color()));
+    }
+
+    pub fn close_color_picker(&mut self) {
+        self.color_picker = None;
+    }
+
+    /// Enter in the picker: the working colour becomes the paint colour.
+    pub fn apply_color_picker(&mut self) {
+        let Some(picker) = self.color_picker.take() else {
+            return;
+        };
+        self.paint_color = Some(picker.color);
         self.suppress_swatch_preview = false;
     }
 
@@ -758,127 +829,261 @@ impl State {
         self.last_canvas_click = None;
     }
 
-    pub fn is_snapshot_browser_open(&self) -> bool {
-        self.snapshot_browser.open
-    }
+    // ----- archives -----
 
     pub fn is_archive_view_active(&self) -> bool {
-        self.snapshot_browser.active.is_some()
+        self.archives.active.is_some()
     }
 
     pub fn active_archive_snapshot(&self) -> Option<&ArtboardArchiveSnapshot> {
-        self.snapshot_browser.active.as_ref()
+        self.archives.active.as_ref()
     }
 
-    pub fn snapshot_browser_items(&self) -> &[ArtboardArchiveSnapshot] {
-        &self.snapshot_browser.items
-    }
-
-    pub fn snapshot_browser_selected_index(&self) -> usize {
-        self.snapshot_browser.selected_index
-    }
-
-    pub fn snapshot_browser_scroll_offset(&self) -> usize {
-        self.snapshot_browser.scroll_offset
-    }
-
-    pub fn snapshot_browser_loading(&self) -> bool {
-        self.snapshot_browser.loading
-    }
-
-    pub fn snapshot_browser_error(&self) -> Option<&str> {
-        self.snapshot_browser.error.as_deref()
-    }
-
-    pub fn set_snapshot_browser_visible_height(&self, height: usize) {
-        self.snapshot_browser.visible_height.set(height);
-    }
-
-    pub fn toggle_snapshot_browser_or_live(&mut self) {
-        if self.snapshot_browser.open {
-            self.close_snapshot_browser();
-        } else if self.is_archive_view_active() {
-            self.exit_archive_view();
-        } else {
-            self.open_snapshot_browser();
+    /// The archive kind whose list the rail is showing, while it is.
+    pub fn browsed_archive_kind(&self) -> Option<ArtboardSnapshotKind> {
+        if self.gallery.focus() != GalleryFocus::Archive {
+            return None;
+        }
+        match self.gallery.selected_row() {
+            RailRow::Archive(kind) => Some(kind),
+            RailRow::Board | RailRow::Gallery(_) | RailRow::Hang => None,
         }
     }
 
-    pub fn open_snapshot_browser(&mut self) {
+    pub fn archive_entries(&self, kind: ArtboardSnapshotKind) -> &[ArtboardArchiveEntry] {
+        &self.archives.lists[kind.index()].entries
+    }
+
+    pub fn archive_selected(&self, kind: ArtboardSnapshotKind) -> usize {
+        self.archives.lists[kind.index()].selected
+    }
+
+    pub fn archive_scroll(&self, kind: ArtboardSnapshotKind) -> usize {
+        self.archives.lists[kind.index()].scroll
+    }
+
+    pub fn archive_loading(&self, kind: ArtboardSnapshotKind) -> bool {
+        self.archives.lists[kind.index()].loading
+    }
+
+    pub fn archive_error(&self, kind: ArtboardSnapshotKind) -> Option<&str> {
+        self.archives.lists[kind.index()].error.as_deref()
+    }
+
+    /// The count the rail shows next to an archive row, once listed.
+    pub fn archive_count(&self, kind: ArtboardSnapshotKind) -> Option<usize> {
+        let list = &self.archives.lists[kind.index()];
+        list.loaded.then_some(list.entries.len())
+    }
+
+    /// The key being fetched right now, so the list can mark it.
+    pub fn archive_loading_key(&self) -> Option<&str> {
+        self.archives.inflight.as_deref()
+    }
+
+    pub fn archive_load_error(&self) -> Option<&str> {
+        self.archives.load_error.as_deref()
+    }
+
+    pub fn set_archive_visible_height(&self, height: usize) {
+        self.archives.visible_height.set(height.max(1));
+    }
+
+    /// Turn the rail into `kind`'s list. The keys load once per session;
+    /// the cursor's snapshot loads as it moves.
+    pub fn open_archive_list(&mut self, kind: ArtboardSnapshotKind) {
         self.close_help();
         self.close_glyph_picker();
+        self.close_color_picker();
         self.clear_local_state();
-        self.snapshot_browser.open = true;
-        self.snapshot_browser.error = None;
-        self.snapshot_browser.loading = true;
-        self.snapshot_browser.selected_index = self
-            .snapshot_browser
-            .active
-            .as_ref()
-            .and_then(|active| {
-                self.snapshot_browser
-                    .items
-                    .iter()
-                    .position(|item| item.board_key == active.board_key)
-                    .map(|idx| idx + 1)
-            })
-            .unwrap_or(0);
-        self.clamp_snapshot_browser_selection();
-        self.archive_loader.request_list();
+        self.gallery.rail_select(RailRow::Archive(kind));
+        self.gallery.focus_archive();
+        self.ensure_archive_listed(kind);
+        self.want_selected_archive(kind);
     }
 
-    pub fn close_snapshot_browser(&mut self) {
-        self.snapshot_browser.open = false;
+    /// Back to the rail rows. Whatever archive is on the board stays there
+    /// until the Board row (or `exit_archive_view`) brings the live board
+    /// back.
+    pub fn close_archive_list(&mut self) {
+        self.gallery.focus_rail();
     }
 
-    pub fn move_snapshot_browser_selection(&mut self, delta: isize) {
-        if !self.snapshot_browser.open {
-            return;
-        }
-        let last = self.snapshot_browser_option_count().saturating_sub(1) as isize;
-        self.snapshot_browser.selected_index =
-            (self.snapshot_browser.selected_index as isize + delta).clamp(0, last) as usize;
-        self.ensure_snapshot_browser_selection_visible();
-    }
-
-    pub fn snapshot_browser_home(&mut self) {
-        self.snapshot_browser.selected_index = 0;
-        self.snapshot_browser.scroll_offset = 0;
-    }
-
-    pub fn snapshot_browser_page(&mut self, delta_pages: isize) {
-        let page = self.snapshot_browser.visible_height.get().max(1) as isize;
-        self.move_snapshot_browser_selection(delta_pages.saturating_mul(page));
-    }
-
-    pub fn activate_snapshot_browser_selection(&mut self) {
-        if !self.snapshot_browser.open {
-            return;
-        }
-        if self.snapshot_browser.selected_index == 0 {
-            self.exit_archive_view();
-            self.snapshot_browser.open = false;
-            return;
-        }
-        let Some(item) = self
-            .snapshot_browser
-            .items
-            .get(self.snapshot_browser.selected_index - 1)
-            .cloned()
-        else {
+    pub fn archive_move(&mut self, delta: isize) {
+        let Some(kind) = self.browsed_archive_kind() else {
             return;
         };
-        self.activate_archive_snapshot(item);
-        self.snapshot_browser.open = false;
+        let visible = self.archives.visible_height.get().max(1);
+        let list = &mut self.archives.lists[kind.index()];
+        if list.entries.is_empty() {
+            list.selected = 0;
+            list.scroll = 0;
+            return;
+        }
+        let last = list.entries.len() as isize - 1;
+        list.selected = (list.selected as isize + delta).clamp(0, last) as usize;
+        if list.selected < list.scroll {
+            list.scroll = list.selected;
+        } else if list.selected >= list.scroll + visible {
+            list.scroll = list.selected + 1 - visible;
+        }
+        self.want_selected_archive(kind);
+    }
+
+    pub fn archive_page(&mut self, pages: isize) {
+        let visible = self.archives.visible_height.get().max(1) as isize;
+        self.archive_move(pages.saturating_mul(visible));
+    }
+
+    pub fn archive_select(&mut self, index: usize) {
+        let Some(kind) = self.browsed_archive_kind() else {
+            return;
+        };
+        let list = &mut self.archives.lists[kind.index()];
+        if index < list.entries.len() {
+            list.selected = index;
+            self.want_selected_archive(kind);
+        }
+    }
+
+    /// The archive list index under a screen point, from the last draw of
+    /// the rail.
+    pub fn archive_index_at(&self, x: u16, y: u16) -> Option<usize> {
+        let kind = self.browsed_archive_kind()?;
+        let line = self.gallery.rail_line_at(x, y)?;
+        let line = line.checked_sub(super::gallery::ui::ARCHIVE_LIST_HEADER_LINES)?;
+        let list = &self.archives.lists[kind.index()];
+        let index = list.scroll + line;
+        (index < list.entries.len()).then_some(index)
     }
 
     pub fn exit_archive_view(&mut self) {
-        self.snapshot_browser.active = None;
+        self.archives.active = None;
+        self.archives.wanted = None;
         self.snapshot = self.snapshot_rx.borrow_and_update().clone();
         self.invalidate_owner_overlay_cache();
         self.editor.clamp_cursor(&self.snapshot.canvas);
         self.editor.clamp_viewport_origin(&self.snapshot.canvas);
         self.clear_local_state();
+    }
+
+    fn ensure_archive_listed(&mut self, kind: ArtboardSnapshotKind) {
+        let list = &mut self.archives.lists[kind.index()];
+        if list.loaded || list.loading {
+            return;
+        }
+        list.loading = true;
+        list.error = None;
+        self.archive_loader.request_list(kind);
+    }
+
+    /// Point the board at the entry under the cursor.
+    fn want_selected_archive(&mut self, kind: ArtboardSnapshotKind) {
+        let list = &self.archives.lists[kind.index()];
+        let Some(entry) = list.entries.get(list.selected) else {
+            return;
+        };
+        self.archives.wanted = Some((kind, entry.board_key.clone()));
+        self.request_wanted_archive();
+    }
+
+    /// Show the wanted archive: from the board if it is already up, from
+    /// the cache if it has been seen, otherwise from the database, one
+    /// fetch at a time. A cursor that moves on while a fetch is out is
+    /// caught up with when the fetch lands.
+    fn request_wanted_archive(&mut self) {
+        let Some((kind, board_key)) = self.archives.wanted.clone() else {
+            return;
+        };
+        if self
+            .archives
+            .active
+            .as_ref()
+            .is_some_and(|active| active.board_key == board_key)
+        {
+            return;
+        }
+        if let Some(cached) = self
+            .archives
+            .cache
+            .iter()
+            .find(|snapshot| snapshot.board_key == board_key)
+            .cloned()
+        {
+            self.activate_archive_snapshot(cached);
+            return;
+        }
+        if self.archives.inflight.is_some() {
+            return;
+        }
+        self.archives.inflight = Some(board_key.clone());
+        self.archive_loader.request_load(kind, board_key);
+    }
+
+    // ----- gallery -----
+
+    pub fn gallery(&self) -> &GalleryState {
+        &self.gallery
+    }
+
+    pub fn gallery_mut(&mut self) -> &mut GalleryState {
+        &mut self.gallery
+    }
+
+    /// True while the gallery, not the board, owns view-mode input: the
+    /// rail, a listing, a piece, or the hang flow has focus.
+    pub fn gallery_claims_input(&self) -> bool {
+        !matches!(self.gallery.hang(), HangFlow::Idle)
+            || self.gallery.focus() != GalleryFocus::Canvas
+    }
+
+    /// True when Esc has an Artboard overlay to close before it can mean
+    /// anything global.
+    pub fn claims_escape(&self) -> bool {
+        self.help_open
+            || self.glyph_picker_open
+            || self.color_picker.is_some()
+            || self.gallery.claims_escape()
+    }
+
+    /// Start framing a piece on the live board. Every overlay closes and
+    /// the local selection is cleared so the frame starts empty.
+    pub fn begin_framing(&mut self) {
+        self.close_help();
+        self.close_glyph_picker();
+        self.close_color_picker();
+        self.clear_local_state();
+        self.gallery.begin_framing();
+    }
+
+    pub fn cancel_framing(&mut self) {
+        self.clear_local_state();
+        self.gallery.cancel_hang();
+    }
+
+    /// Crop the current selection into a piece and move on to naming it,
+    /// or say on the framing bar why it cannot hang.
+    pub fn frame_selection_for_hang(&mut self) {
+        let Some(selection) = self.editor.selection() else {
+            self.gallery
+                .set_framing_notice("Select a frame first (Shift+arrows or drag).".to_string());
+            return;
+        };
+        let bounds = selection
+            .bounds()
+            .normalized_for_canvas(&self.snapshot.canvas);
+        match frame_piece(
+            &self.snapshot.canvas,
+            &self.snapshot.provenance,
+            bounds,
+            &self.username,
+        ) {
+            Ok(framed) => {
+                self.clear_local_state();
+                self.gallery.set_confirm(framed);
+            }
+            Err(error) => self.gallery.set_framing_notice(error.notice()),
+        }
     }
 
     pub fn is_help_open(&self) -> bool {
@@ -1057,66 +1262,98 @@ impl State {
         self.floating_source_bounds = None;
         self.active_brush = Some(Brush::Glyph(glyph.ch));
         self.suppress_swatch_preview = false;
+        // The sampler is the eyedropper too: the glyph's colour becomes the
+        // paint colour, so Esc and typing carry it on.
+        if let Some(fg) = self.snapshot.canvas.fg(glyph.pos) {
+            self.paint_color = Some(fg);
+        }
         true
     }
 
-    fn drain_archive_results(&mut self) {
-        while let Some(result) = self.archive_loader.try_recv() {
-            self.snapshot_browser.loading = false;
-            match result {
-                ArtboardArchiveResult::Loaded(items) => {
-                    self.snapshot_browser.items = items;
-                    self.snapshot_browser.error = None;
-                    self.clamp_snapshot_browser_selection();
-                }
-                ArtboardArchiveResult::Failed(error) => {
-                    self.snapshot_browser.error = Some(error);
-                    self.clamp_snapshot_browser_selection();
-                }
+    /// Alt+K: the colour under the cursor becomes the paint colour. A blank
+    /// or uncoloured cell has none to give, and says so.
+    pub fn sample_color_at_cursor(&mut self) -> bool {
+        match self.snapshot.canvas.fg(self.editor.cursor) {
+            Some(fg) => {
+                self.paint_color = Some(fg);
+                self.suppress_swatch_preview = false;
+                true
+            }
+            None => {
+                self.private_notice = Some("No color under the cursor.".to_string());
+                false
             }
         }
     }
 
-    fn snapshot_browser_option_count(&self) -> usize {
-        self.snapshot_browser.items.len() + 1
-    }
-
-    fn clamp_snapshot_browser_selection(&mut self) {
-        let last = self.snapshot_browser_option_count().saturating_sub(1);
-        self.snapshot_browser.selected_index = self.snapshot_browser.selected_index.min(last);
-        self.ensure_snapshot_browser_selection_visible();
-    }
-
-    fn ensure_snapshot_browser_selection_visible(&mut self) {
-        let visible = self.snapshot_browser.visible_height.get().max(1);
-        if self.snapshot_browser.selected_index < self.snapshot_browser.scroll_offset {
-            self.snapshot_browser.scroll_offset = self.snapshot_browser.selected_index;
-        } else if self.snapshot_browser.selected_index
-            >= self.snapshot_browser.scroll_offset + visible
-        {
-            self.snapshot_browser.scroll_offset =
-                self.snapshot_browser.selected_index + 1 - visible;
+    fn drain_archive_results(&mut self) -> bool {
+        let mut changed = false;
+        while let Some(result) = self.archive_loader.try_recv() {
+            changed = true;
+            match result {
+                ArtboardArchiveResult::Listed { kind, entries } => {
+                    let list = &mut self.archives.lists[kind.index()];
+                    list.entries = entries;
+                    list.loaded = true;
+                    list.loading = false;
+                    list.error = None;
+                    list.selected = list.selected.min(list.entries.len().saturating_sub(1));
+                    list.scroll = list.scroll.min(list.selected);
+                    if self.browsed_archive_kind() == Some(kind) {
+                        self.want_selected_archive(kind);
+                    }
+                }
+                ArtboardArchiveResult::ListFailed { kind, error } => {
+                    let list = &mut self.archives.lists[kind.index()];
+                    list.loading = false;
+                    list.error = Some(error);
+                }
+                ArtboardArchiveResult::Loaded(snapshot) => {
+                    self.archives.inflight = None;
+                    self.archives.load_error = None;
+                    self.archives
+                        .cache
+                        .retain(|cached| cached.board_key != snapshot.board_key);
+                    if self.archives.cache.len() >= ARCHIVE_CACHE_SIZE {
+                        self.archives.cache.remove(0);
+                    }
+                    self.archives.cache.push(snapshot);
+                    self.request_wanted_archive();
+                }
+                ArtboardArchiveResult::LoadFailed { board_key, error } => {
+                    self.archives.inflight = None;
+                    self.archives.load_error = Some(error);
+                    // Do not chase the same key again; the cursor moving
+                    // on sets a new one.
+                    if self
+                        .archives
+                        .wanted
+                        .as_ref()
+                        .is_some_and(|(_, wanted)| *wanted == board_key)
+                    {
+                        self.archives.wanted = None;
+                    }
+                    self.request_wanted_archive();
+                }
+            }
         }
+        changed
     }
 
     fn activate_archive_snapshot(&mut self, item: ArtboardArchiveSnapshot) {
         self.clear_local_state();
-        if let Ok(canvas) = serde_json::from_value(item.canvas.clone()) {
-            self.snapshot.canvas = canvas;
-        }
-        if let Ok(provenance) = serde_json::from_value(item.provenance.clone()) {
-            self.snapshot.provenance = provenance;
-        }
+        self.snapshot.canvas = item.canvas.clone();
+        self.snapshot.provenance = item.provenance.clone();
         self.snapshot.peers.clear();
         self.snapshot.connect_rejected = None;
+        self.invalidate_owner_overlay_cache();
         self.editor.clamp_cursor(&self.snapshot.canvas);
         self.editor.clamp_viewport_origin(&self.snapshot.canvas);
-        self.snapshot_browser.active = Some(item);
+        self.archives.active = Some(item);
     }
 
     fn active_user_color(&self) -> RgbColor {
-        self.paint_color_index
-            .and_then(|idx| PAINT_PALETTE.get(idx).copied())
+        self.paint_color
             .or(self.snapshot.your_color)
             .unwrap_or(PAINT_PALETTE[1])
     }
@@ -1392,16 +1629,34 @@ pub enum BrushMode {
     Glyph(char),
 }
 
+/// How many decoded archives a session keeps so stepping back through
+/// the list is free.
+const ARCHIVE_CACHE_SIZE: usize = 8;
+
 #[derive(Default)]
-struct SnapshotBrowserState {
-    open: bool,
+struct ArchiveList {
+    entries: Vec<ArtboardArchiveEntry>,
+    loaded: bool,
     loading: bool,
     error: Option<String>,
-    items: Vec<ArtboardArchiveSnapshot>,
-    selected_index: usize,
-    scroll_offset: usize,
-    visible_height: Cell<usize>,
+    selected: usize,
+    scroll: usize,
+}
+
+/// The archive side of the rail: one key list per kind, the snapshot the
+/// cursor asks for, the one on the board, and the few seen lately.
+#[derive(Default)]
+struct ArchiveBrowser {
+    lists: [ArchiveList; 3],
+    /// The key under the cursor, the one the board should show.
+    wanted: Option<(ArtboardSnapshotKind, String)>,
+    /// The key a fetch is out for. One at a time.
+    inflight: Option<String>,
+    cache: Vec<ArtboardArchiveSnapshot>,
+    /// The archive on the board, replacing the live snapshot.
     active: Option<ArtboardArchiveSnapshot>,
+    load_error: Option<String>,
+    visible_height: Cell<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1546,608 +1801,5 @@ fn canvas_pos_for_screen_point(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::artboard::provenance::ArtboardProvenance;
-    use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
-    use dartboard_core::{CanvasOp, CellValue, RgbColor};
-    use dartboard_editor::Clipboard;
-
-    fn test_state() -> State {
-        let shared_provenance = ArtboardProvenance::default().shared();
-        let snapshot = DartboardSnapshot {
-            provenance: ArtboardProvenance::default(),
-            your_name: "painter".to_string(),
-            your_user_id: Some(1),
-            your_color: Some(PAINT_PALETTE[1]),
-            ..Default::default()
-        };
-        let svc = DartboardService::disconnected_for_tests(snapshot);
-        let mut state = State::new(
-            svc,
-            ArtboardSnapshotService::disabled(),
-            "painter".to_string(),
-            shared_provenance,
-        );
-        state.set_viewport_for_screen((80, 24));
-        state
-    }
-
-    #[test]
-    fn screen_point_conversion_uses_sgr_one_based_coords() {
-        let viewport = Rect::new(1, 1, 50, 22);
-        let pos = canvas_pos_for_screen_point(viewport, Pos { x: 0, y: 0 }, 120, 60, 2, 2);
-        assert_eq!(pos, Some(Pos { x: 0, y: 0 }));
-    }
-
-    #[test]
-    fn screen_point_conversion_respects_viewport_origin() {
-        let viewport = Rect::new(1, 1, 50, 22);
-        let pos = canvas_pos_for_screen_point(viewport, Pos { x: 10, y: 5 }, 120, 60, 12, 8);
-        assert_eq!(pos, Some(Pos { x: 20, y: 11 }));
-    }
-
-    #[test]
-    fn screen_point_conversion_rejects_points_outside_canvas() {
-        let viewport = Rect::new(1, 1, 50, 22);
-        assert_eq!(
-            canvas_pos_for_screen_point(viewport, Pos { x: 0, y: 0 }, 4, 4, 10, 10),
-            None
-        );
-    }
-
-    #[test]
-    fn owner_initial_skips_prefix_punctuation_and_defaults_when_missing() {
-        assert_eq!(owner_initial("__mat"), 'M');
-        assert_eq!(owner_initial("!!!"), '?');
-    }
-
-    #[test]
-    fn paste_cursor_end_handles_crlf_controls_and_bounds() {
-        assert_eq!(
-            paste_cursor_end(Pos { x: 2, y: 0 }, "A\r\nB\u{7}C", 4, 2),
-            Pos { x: 3, y: 1 }
-        );
-        assert_eq!(
-            paste_cursor_end(Pos { x: 3, y: 1 }, "ZZ", 4, 2),
-            Pos { x: 3, y: 1 }
-        );
-    }
-
-    #[test]
-    fn type_char_advances_cursor_right() {
-        let mut state = test_state();
-        state.type_char('A', (80, 24));
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'A');
-        assert_eq!(state.cursor(), Pos { x: 1, y: 0 });
-    }
-
-    #[test]
-    fn paint_color_cycles_and_typed_glyphs_use_selection() {
-        let mut state = test_state();
-        assert_eq!(state.active_paint_color_index(), 1);
-
-        state.cycle_paint_color(1);
-        assert_eq!(state.active_paint_color_index(), 2);
-        assert_eq!(state.active_paint_color(), PAINT_PALETTE[2]);
-
-        state.type_char('C', (80, 24));
-        assert_eq!(
-            state.snapshot.canvas.fg(Pos { x: 0, y: 0 }),
-            Some(PAINT_PALETTE[2])
-        );
-    }
-
-    #[test]
-    fn paint_color_cycle_wraps() {
-        let mut state = test_state();
-        state.cycle_paint_color(-2);
-        assert_eq!(state.active_paint_color_index(), PAINT_PALETTE.len() - 1);
-        assert_eq!(
-            state.active_paint_color(),
-            PAINT_PALETTE[PAINT_PALETTE.len() - 1]
-        );
-    }
-
-    #[test]
-    fn paste_bytes_lays_out_multiline_text_with_wrap() {
-        let mut state = test_state();
-
-        for _ in 0..2 {
-            state.move_right((80, 24));
-        }
-        state.move_down((80, 24));
-
-        state.paste_bytes(b"hello\nworld", (80, 24));
-
-        let canvas = &state.snapshot.canvas;
-        assert_eq!(canvas.get(Pos { x: 2, y: 1 }), 'h');
-        assert_eq!(canvas.get(Pos { x: 6, y: 1 }), 'o');
-        assert_eq!(canvas.get(Pos { x: 2, y: 2 }), 'w');
-        assert_eq!(canvas.get(Pos { x: 6, y: 2 }), 'd');
-    }
-
-    #[test]
-    fn drag_brush_requires_temp_brush_and_paints_without_advancing() {
-        let mut state = test_state();
-        state.paint_char('B');
-        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
-        state.begin_drag_brush_from_cursor();
-        state.move_right((80, 24));
-        assert!(state.paint_drag_brush());
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 0 }), 'B');
-        assert_eq!(state.cursor(), Pos { x: 1, y: 0 });
-        state.clear_drag_brush();
-        state.move_right((80, 24));
-        assert!(!state.paint_drag_brush());
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 0 }), ' ');
-    }
-
-    #[test]
-    fn drag_brush_no_longer_samples_canvas_without_temp_brush() {
-        let mut state = test_state();
-        state.paint_char('Z');
-        state.begin_drag_brush_from_cursor();
-        state.move_right((80, 24));
-        assert!(!state.paint_drag_brush());
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 0 }), ' ');
-    }
-
-    #[test]
-    fn escape_clears_active_and_drag_brushes() {
-        let mut state = test_state();
-        state.type_char('Q', (80, 24));
-        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
-        state.begin_drag_brush_from_cursor();
-        state.begin_selection_from_cursor();
-        state.clear_local_state();
-        assert_eq!(state.active_brush(), None);
-        state.move_right((80, 24));
-        assert!(!state.paint_drag_brush());
-        assert!(state.selection_view().is_none());
-    }
-
-    #[test]
-    fn selection_tracks_anchor_and_drag_cursor() {
-        let mut state = test_state();
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        state.move_down((80, 24));
-        assert!(state.update_selection_to_cursor());
-        let selection = state.selection_view().expect("selection should exist");
-        assert_eq!(selection.anchor, Pos { x: 0, y: 0 });
-        assert_eq!(selection.cursor, Pos { x: 1, y: 1 });
-        assert!(matches!(selection.shape, TuiSelectionShape::Rect));
-    }
-
-    #[test]
-    fn app_key_char_fills_active_selection_via_shared_executor() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(3, 2);
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        state.move_down((80, 24));
-
-        let dispatch = state.handle_app_key(AppKey {
-            code: dartboard_editor::AppKeyCode::Char('x'),
-            modifiers: Default::default(),
-        });
-
-        assert!(dispatch.handled);
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'x');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 1 }), 'x');
-        assert_eq!(state.brush_mode(), BrushMode::None);
-    }
-
-    #[test]
-    fn app_key_alt_c_returns_copy_effect() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(2, 1);
-        state.snapshot.canvas.set(Pos { x: 0, y: 0 }, 'A');
-
-        let dispatch = state.handle_app_key(AppKey {
-            code: dartboard_editor::AppKeyCode::Char('c'),
-            modifiers: dartboard_editor::AppModifiers {
-                alt: true,
-                ..Default::default()
-            },
-        });
-
-        assert_eq!(
-            dispatch.effects,
-            vec![dartboard_editor::HostEffect::CopyToClipboard(
-                "A ".to_string()
-            )]
-        );
-    }
-
-    #[test]
-    fn app_key_ctrl_c_copies_into_primary_swatch_and_arms_it() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(2, 1);
-        state.snapshot.canvas.set(Pos { x: 0, y: 0 }, 'A');
-
-        let dispatch = state.handle_app_key(AppKey {
-            code: dartboard_editor::AppKeyCode::Char('c'),
-            modifiers: dartboard_editor::AppModifiers {
-                ctrl: true,
-                ..Default::default()
-            },
-        });
-
-        assert!(dispatch.handled);
-        assert_eq!(state.active_swatch_index(), Some(0));
-        assert!(state.has_floating());
-        assert!(state.floating_is_transparent());
-        assert_eq!(
-            state.editor.swatches[0]
-                .as_ref()
-                .and_then(|swatch| swatch.clipboard.get(0, 0)),
-            Some(CellValue::Narrow('A'))
-        );
-    }
-
-    #[test]
-    fn app_key_space_dismisses_temp_brush_back_to_none() {
-        let mut state = test_state();
-        state.type_char('Q', (80, 24));
-        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
-
-        let dispatch = state.handle_app_key(AppKey {
-            code: dartboard_editor::AppKeyCode::Char(' '),
-            modifiers: Default::default(),
-        });
-
-        assert!(dispatch.handled);
-        assert!(!state.has_floating());
-        assert_eq!(state.brush_mode(), BrushMode::None);
-    }
-
-    #[test]
-    fn app_key_escape_without_selection_or_brush_falls_through() {
-        let mut state = test_state();
-
-        let dispatch = state.handle_app_key(AppKey {
-            code: dartboard_editor::AppKeyCode::Esc,
-            modifiers: Default::default(),
-        });
-
-        assert!(!dispatch.handled);
-    }
-
-    #[test]
-    fn swatch_brush_mode_reports_swatch() {
-        let mut state = test_state();
-        state.editor.swatches[0] = Some(Swatch {
-            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
-            pinned: false,
-        });
-
-        state.activate_swatch(0);
-
-        assert_eq!(state.brush_mode(), BrushMode::Swatch);
-        assert!(state.floating_is_transparent());
-    }
-
-    #[test]
-    fn temp_glyph_brush_mode_reports_canvas_glyph() {
-        let mut state = test_state();
-        state.type_char('🔥', (80, 24));
-
-        assert!(state.activate_temp_glyph_brush_at(Pos { x: 0, y: 0 }));
-
-        assert_eq!(state.brush_mode(), BrushMode::Glyph('🔥'));
-        assert!(state.has_floating());
-        assert!(state.floating_is_transparent());
-    }
-
-    #[test]
-    fn register_canvas_click_treats_wide_glyph_halves_as_one_target() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(4, 1);
-        let _ = state.snapshot.canvas.put_glyph(Pos { x: 0, y: 0 }, '👍');
-
-        assert!(!state.register_canvas_click(Pos { x: 0, y: 0 }));
-        assert!(state.register_canvas_click(Pos { x: 1, y: 0 }));
-    }
-
-    #[test]
-    fn temp_glyph_brush_from_wide_continuation_captures_full_glyph() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(4, 1);
-        let _ = state.snapshot.canvas.put_glyph(Pos { x: 0, y: 0 }, '👍');
-
-        assert!(state.activate_temp_glyph_brush_at(Pos { x: 1, y: 0 }));
-
-        assert_eq!(state.cursor(), Pos { x: 0, y: 0 });
-        assert_eq!(state.brush_mode(), BrushMode::Glyph('👍'));
-        let floating = state
-            .floating_view()
-            .expect("temp brush floating preview shown");
-        assert_eq!(floating.anchor, Pos { x: 0, y: 0 });
-        assert_eq!(floating.width, 2);
-        assert_eq!(floating.height, 1);
-        assert!(state.floating_is_transparent());
-    }
-
-    #[test]
-    fn app_key_ctrl_v_stamps_floating_like_reference_client() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(5, 3);
-        state.snapshot.canvas.set(Pos { x: 1, y: 1 }, 'A');
-        state.editor.cursor = Pos { x: 1, y: 1 };
-        state.begin_selection_from_cursor();
-        assert!(state.lift_selection_to_floating());
-        state.editor.cursor = Pos { x: 3, y: 0 };
-
-        let dispatch = state.handle_app_key(AppKey {
-            code: dartboard_editor::AppKeyCode::Char('v'),
-            modifiers: dartboard_editor::AppModifiers {
-                ctrl: true,
-                ..Default::default()
-            },
-        });
-
-        assert!(dispatch.handled);
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 3, y: 0 }), 'A');
-        assert!(state.has_floating());
-    }
-
-    #[test]
-    fn swatch_preview_tracks_pointer_after_canvas_reentry() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(40, 20);
-        state.editor.swatches[0] = Some(Swatch {
-            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
-            pinned: false,
-        });
-        state.editor.cursor = Pos { x: 12, y: 7 };
-
-        state.activate_swatch(0);
-
-        assert!(state.has_floating());
-        assert!(state.floating_view().is_some());
-
-        let dispatch = state.handle_pointer_event(AppPointerEvent {
-            column: 4,
-            row: 3,
-            kind: dartboard_editor::AppPointerKind::Moved,
-            modifiers: Default::default(),
-        });
-
-        assert!(dispatch.outcome.is_consumed());
-        let floating = state.floating_view().expect("floating preview shown");
-        assert_eq!(floating.anchor, Pos { x: 3, y: 2 });
-    }
-
-    #[test]
-    fn swatch_preview_suppression_hides_canvas_cursor() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(40, 20);
-        state.editor.swatches[0] = Some(Swatch {
-            clipboard: Clipboard::new(3, 3, vec![Some(CellValue::Narrow('A')); 9]),
-            pinned: false,
-        });
-
-        state.activate_swatch(0);
-
-        assert!(state.has_floating());
-        assert!(state.should_show_canvas_cursor());
-    }
-
-    #[test]
-    fn primary_swatch_pin_toggle_is_ignored() {
-        let mut state = test_state();
-        state.editor.swatches[0] = Some(Swatch {
-            clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('A'))]),
-            pinned: false,
-        });
-
-        state.toggle_swatch_pin(0);
-
-        assert_eq!(
-            state.swatches()[0].as_ref().map(|swatch| swatch.pinned),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn system_clipboard_export_uses_selection_when_present() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(3, 2);
-        state.snapshot.canvas.set(Pos { x: 0, y: 0 }, 'A');
-        state.snapshot.canvas.set(Pos { x: 1, y: 0 }, 'B');
-        state.snapshot.canvas.set(Pos { x: 1, y: 1 }, 'D');
-        state.editor.cursor = Pos { x: 1, y: 0 };
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        state.move_down((80, 24));
-
-        assert_eq!(state.export_system_clipboard_text(), "B \nD ");
-    }
-
-    #[test]
-    fn system_clipboard_export_uses_full_canvas_without_selection() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(3, 2);
-        state.snapshot.canvas.set(Pos { x: 0, y: 0 }, 'A');
-        state.snapshot.canvas.set(Pos { x: 1, y: 0 }, 'B');
-        state.snapshot.canvas.set(Pos { x: 0, y: 1 }, 'C');
-        state.snapshot.canvas.set(Pos { x: 2, y: 1 }, 'D');
-
-        assert_eq!(state.export_system_clipboard_text(), "AB \nC D");
-    }
-
-    #[test]
-    fn dismissing_floating_restores_original_selection() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(4, 2);
-        state.editor.cursor = Pos { x: 1, y: 0 };
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        assert!(state.lift_selection_to_floating());
-        state.editor.cursor = Pos { x: 0, y: 1 };
-
-        assert!(state.dismiss_floating());
-
-        let selection = state.selection_view().expect("selection restored");
-        assert_eq!(selection.anchor, Pos { x: 1, y: 0 });
-        assert_eq!(selection.cursor, Pos { x: 2, y: 0 });
-        assert_eq!(state.cursor(), Pos { x: 2, y: 0 });
-    }
-
-    #[test]
-    fn pointer_dismiss_floating_restores_original_selection() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(4, 2);
-        state.editor.cursor = Pos { x: 1, y: 0 };
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        assert!(state.lift_selection_to_floating());
-        state.editor.cursor = Pos { x: 0, y: 1 };
-
-        let dispatch = state.handle_pointer_event(AppPointerEvent {
-            column: 1,
-            row: 2,
-            kind: dartboard_editor::AppPointerKind::Down(dartboard_editor::AppPointerButton::Right),
-            modifiers: Default::default(),
-        });
-
-        assert!(dispatch.outcome.is_consumed());
-        assert_eq!(
-            dispatch.stroke_hint,
-            Some(dartboard_editor::PointerStrokeHint::End)
-        );
-        assert!(!state.has_floating());
-        let selection = state.selection_view().expect("selection restored");
-        assert_eq!(selection.anchor, Pos { x: 1, y: 0 });
-        assert_eq!(selection.cursor, Pos { x: 2, y: 0 });
-        assert_eq!(state.cursor(), Pos { x: 2, y: 0 });
-    }
-
-    #[test]
-    fn glyph_picker_opens_closes_and_inserts_selected_glyph() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(10, 3);
-        state.editor.cursor = Pos { x: 0, y: 0 };
-
-        state.open_glyph_picker();
-        assert!(state.is_glyph_picker_open());
-        assert!(state.glyph_catalog().is_some());
-
-        // First selectable entry on the emoji tab is the first COMMON_EMOJI
-        // ("👍" thumbs up). Confirm insertion paints it at the cursor and
-        // closes the picker.
-        assert!(state.glyph_picker_insert(false, (80, 24)));
-        assert!(!state.is_glyph_picker_open());
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), '👍');
-    }
-
-    #[test]
-    fn glyph_picker_inserts_full_kaomoji_string() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(20, 3);
-        state.editor.cursor = Pos { x: 2, y: 1 };
-        state.open_glyph_picker();
-        state
-            .glyph_picker_state_mut()
-            .set_tab(icon_picker::IconPickerTab::Kaomoji);
-        for ch in "happy smile".chars() {
-            state.glyph_picker_state_mut().search_insert_char(ch);
-        }
-
-        assert!(state.glyph_picker_insert(false, (80, 24)));
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), '(');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 3, y: 1 }), '*');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 7, y: 1 }), 'ω');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 10, y: 1 }), ')');
-        assert_eq!(state.cursor(), Pos { x: 11, y: 1 });
-    }
-
-    #[test]
-    fn glyph_picker_keep_open_leaves_picker_visible_after_insert() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(10, 3);
-        state.editor.cursor = Pos { x: 0, y: 0 };
-        state.open_glyph_picker();
-        assert!(state.glyph_picker_insert(true, (80, 24)));
-        assert!(state.is_glyph_picker_open());
-    }
-
-    #[test]
-    fn glyph_picker_open_dismisses_floating_and_selection() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(4, 2);
-        state.editor.cursor = Pos { x: 0, y: 0 };
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        assert!(state.lift_selection_to_floating());
-        assert!(state.has_floating());
-
-        state.open_glyph_picker();
-
-        assert!(state.is_glyph_picker_open());
-        assert!(!state.has_floating());
-        assert!(state.selection_view().is_none());
-    }
-
-    #[test]
-    fn edit_canvas_detects_real_canvas_changes_even_if_helper_reports_false() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(5, 3);
-
-        let changed = state.edit_canvas(|_editor, canvas, color| {
-            let _ = canvas.put_glyph_colored(Pos { x: 0, y: 0 }, '👍', color);
-            false
-        });
-
-        assert!(changed);
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), '👍');
-    }
-
-    #[test]
-    fn diff_canvas_op_wide_insert_left_of_filled_cell_replays_cleanly() {
-        let mut before = Canvas::with_size(5, 1);
-        before.set_colored(Pos { x: 1, y: 0 }, 'A', RgbColor::new(1, 2, 3));
-
-        let mut after = before.clone();
-        let _ = after.put_glyph_colored(Pos { x: 0, y: 0 }, '👍', RgbColor::new(4, 5, 6));
-
-        let op = diff_canvas_op(&before, &after, RgbColor::new(4, 5, 6)).expect("wide insert op");
-        let mut replay = before.clone();
-        replay.apply(&op);
-
-        assert_eq!(
-            op,
-            CanvasOp::PaintCell {
-                pos: Pos { x: 0, y: 0 },
-                ch: '👍',
-                fg: RgbColor::new(4, 5, 6),
-            }
-        );
-        assert_eq!(replay, after);
-        assert_eq!(replay.get(Pos { x: 0, y: 0 }), '👍');
-        assert_eq!(replay.cell(Pos { x: 1, y: 0 }), Some(CellValue::WideCont));
-    }
-
-    #[test]
-    fn commit_floating_moves_selected_region() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(5, 3);
-        state.snapshot.canvas.set(Pos { x: 1, y: 1 }, 'A');
-        state.snapshot.canvas.set(Pos { x: 2, y: 1 }, 'B');
-        state.editor.cursor = Pos { x: 1, y: 1 };
-        state.begin_selection_from_cursor();
-        state.move_right((80, 24));
-        assert!(state.lift_selection_to_floating());
-
-        state.editor.cursor = Pos { x: 0, y: 0 };
-        assert!(state.commit_floating());
-
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'A');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 0 }), 'B');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 1 }), ' ');
-        assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), ' ');
-        assert!(!state.has_floating());
-    }
-}
+#[path = "state_internal_test.rs"]
+mod state_internal_test;

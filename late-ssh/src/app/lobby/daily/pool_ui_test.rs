@@ -1,0 +1,542 @@
+//! Pool board tests.
+//!
+//! What a table looks like is not something an assertion can hold, so nothing
+//! here tries. These cover the parts of the screen that carry meaning: the
+//! wording the player is guided by, and the geometry that turns a click into a
+//! spot on the cloth.
+
+use uuid::Uuid;
+
+use super::*;
+use crate::app::games::pool_core::{
+    cue::ShotMode,
+    rules::{Group, PoolRules},
+    shot::Shot,
+};
+use crate::app::lobby::daily::pool_draft::{PoolDetail, PoolDraft, PoolPlayback};
+
+fn pool_state() -> DailyPoolState {
+    DailyPoolState::new(PoolRules::EightBall, Uuid::new_v4(), Uuid::new_v4())
+}
+
+#[test]
+fn the_status_line_fits_the_board_at_its_longest() {
+    // The status line is one centred row: whose shot, the armed mode with
+    // what the mouse does in it, whatever the rules are asking for, and the
+    // clock. Lay out every mode against every prompt with the longest clock
+    // and the whole thing must still fit the minimum board, or the guidance
+    // is clipped exactly when a new player most needs to read it.
+    let clock = "   23h 59m on the clock";
+    for mode in ShotMode::ALL {
+        for prompt in Prompt::ALL.into_iter().map(Some).chain([None]) {
+            let text: String = shooter_spans(mode, prompt)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            let width = "Your shot".len() + text.chars().count() + clock.len();
+            assert!(
+                width <= MIN_WIDTH as usize,
+                "{mode:?} with {prompt:?} is {width} wide, past the {MIN_WIDTH}-column minimum: \
+                 Your shot{text}{clock}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_table_view_round_trips_a_click_back_to_the_cloth() {
+    // The mouse hit test is `View::to_table` applied to the recorded rect, so
+    // what matters is that the mapping inverts over the whole playfield.
+    let state = pool_state();
+    let spec = state.spec().expect("known table");
+    let canvas = Canvas::new(MIN_WIDTH - PANEL_WIDTH, MIN_HEIGHT - 2, SURROUND);
+    let view = View::fit(spec, &canvas);
+
+    for at in [
+        [0.0, 0.0],
+        [spec.length, spec.width],
+        [spec.length * 0.5, spec.width * 0.5],
+        [spec.length * 0.22, spec.width * 0.75],
+    ] {
+        let back = view.to_table(view.to_px(at));
+        assert!(
+            (back[0] - at[0]).abs() < 1e-9 && (back[1] - at[1]).abs() < 1e-9,
+            "{at:?} came back as {back:?}"
+        );
+    }
+}
+
+#[test]
+fn the_layout_still_works_at_the_smallest_board_we_accept() {
+    // Run the real splits rather than compare the constants: the panel column
+    // is fixed-width and the table takes the rest, so the minimum size is the
+    // one place where growing a panel silently squeezes the table to nothing.
+    let area = Rect::new(0, 0, MIN_WIDTH, MIN_HEIGHT);
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
+    let cols =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(PANEL_WIDTH)]).split(rows[1]);
+    assert!(
+        cols[0].width > cols[1].width,
+        "the table must stay the larger half: {} vs {}",
+        cols[0].width,
+        cols[1].width
+    );
+
+    let (cue_rows, legend_rows) = column_split(cols[1].height);
+    assert!(
+        cue_rows >= READOUT_ROWS + MIN_CUE_ROWS_WITH_LEGEND,
+        "the cue drawing keeps rows of its own once the readouts have theirs: {cue_rows}"
+    );
+    assert_eq!(
+        legend_rows, LEGEND_ROWS,
+        "the legend is the only place the keys are taught, so the smallest board shows it"
+    );
+    assert_eq!(
+        INFO_ROWS + cue_rows + legend_rows,
+        cols[1].height,
+        "the column is spent to the last row"
+    );
+}
+
+#[test]
+fn a_tall_board_shows_the_whole_key_legend_and_caps_the_cue() {
+    // The right column is info, cue drawing, readouts, legend. The legend is
+    // all or nothing: half a key map teaches nothing, and the cue drawing
+    // stops growing so a tall terminal spends its rows on the keys instead.
+    let (cue_rows, legend_rows) = column_split(80);
+    assert_eq!(legend_rows, LEGEND_ROWS);
+    assert_eq!(
+        cue_rows,
+        READOUT_ROWS + MAX_CUE_ROWS,
+        "the cue drawing is capped"
+    );
+    assert_eq!(
+        LEGEND.len() as u16 + 1,
+        LEGEND_ROWS,
+        "every row of the legend, plus the exit row, fits in the rows reserved for it"
+    );
+    // Two keys to a row in a panel this narrow: keys and labels must fit the
+    // narrowest column, or the second one is clipped mid-word.
+    let inner = PANEL_WIDTH - 1;
+    for row in LEGEND.into_iter().chain([exit_row(true), exit_row(false)]) {
+        let width = format!(
+            "{:<6}{:<10}{:<4}{:<10}",
+            row[0].0, row[0].1, row[1].0, row[1].1
+        )
+        .trim_end()
+        .chars()
+        .count();
+        assert!(
+            width <= inner as usize,
+            "{row:?} is {width} wide, past the {inner}-column panel"
+        );
+    }
+}
+
+#[test]
+fn the_status_line_never_says_the_same_thing_twice() {
+    // Carrying the cue ball: the mode's hint is the placing instruction, so
+    // the prompt about placing it goes. Cue ball off the table and not yet
+    // picked up: the prompt is the one thing to do, so the aiming hint goes.
+    let text = |mode, prompt| -> String {
+        shooter_spans(mode, prompt)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let carrying = text(ShotMode::Place, Some(Prompt::MustPlace));
+    assert!(carrying.contains(ShotMode::Place.hint()), "{carrying}");
+    assert!(!carrying.contains("set the cue ball down"), "{carrying}");
+
+    let stranded = text(ShotMode::Idle, Some(Prompt::MustPlace));
+    assert!(stranded.contains("set the cue ball down"), "{stranded}");
+    assert!(!stranded.contains(ShotMode::Idle.hint()), "{stranded}");
+
+    // A pocket to call is news in every mode, and so is the hint.
+    let calling = text(ShotMode::Aim, Some(Prompt::CallPocket));
+    assert!(calling.contains(ShotMode::Aim.hint()), "{calling}");
+    assert!(calling.contains("call a pocket"), "{calling}");
+}
+
+#[test]
+fn the_exit_row_only_offers_chat_where_there_is_one() {
+    // `i` opens the match chat, and a match without a room has nothing for it
+    // to open. The lobby key stays either way.
+    assert!(exit_row(true).contains(&("i", "chat")));
+    assert!(!exit_row(false).iter().any(|(key, _)| *key == "i"));
+    assert!(exit_row(true).contains(&("Q", "lobby")));
+    assert!(exit_row(false).contains(&("Q", "lobby")));
+}
+
+#[test]
+fn the_legend_only_teaches_keys_that_act() {
+    // A spectator, or a player waiting on the other side, reads no aim,
+    // stroke or ball-in-hand key: the input gate refuses all of them, and a
+    // legend that teaches a dead key is a lie told to the one player who is
+    // reading it to learn.
+    let plays = |keys: LegendKeys| {
+        legend_rows_for(keys, true)
+            .into_iter()
+            .flatten()
+            .any(|(key, _)| ["a", "e", "m", "x s w", "h l", "{ }"].contains(&key))
+    };
+    let has = |keys: LegendKeys, want: &str| {
+        legend_rows_for(keys, true)
+            .into_iter()
+            .flatten()
+            .any(|(key, _)| key == want)
+    };
+    assert!(
+        plays(LegendKeys::AtTheTable),
+        "the shooter gets every control"
+    );
+    assert!(
+        !plays(LegendKeys::Waiting),
+        "waiting, nothing but the camera acts"
+    );
+    assert!(!plays(LegendKeys::Watching));
+    // The camera and the replay answer whoever is looking; resigning is only
+    // a player's, so a spectator is not taught it.
+    assert!(has(LegendKeys::Waiting, "v") && has(LegendKeys::Waiting, "r R"));
+    assert!(has(LegendKeys::Waiting, "X"), "a player can always resign");
+    assert!(has(LegendKeys::Watching, "v") && has(LegendKeys::Watching, "r R"));
+    assert!(!has(LegendKeys::Watching, "X"));
+    for keys in [
+        LegendKeys::AtTheTable,
+        LegendKeys::Waiting,
+        LegendKeys::Watching,
+    ] {
+        assert!(has(keys, "Q"), "{keys:?} can always leave");
+        assert!(
+            legend_rows_for(keys, true).len() as u16 <= LEGEND_ROWS,
+            "{keys:?} fits the rows reserved for the legend"
+        );
+    }
+}
+
+#[test]
+fn the_readout_names_what_the_line_is_on() {
+    let state = pool_state();
+    let draft = PoolDraft::new(&state);
+    let line = draft.line(&state).expect("a cue ball to shoot from");
+    let label = target_label(&state, Some(&line));
+    assert!(
+        label.starts_with("on: the 1"),
+        "a fresh eight-ball aim is on the one: {label}"
+    );
+    assert!(
+        label.contains("full ball"),
+        "aimed at its centre, which is a full ball: {label}"
+    );
+
+    let mut off = draft;
+    off.aim_at_point(&state, [state.spec().expect("table").length * 0.05, 0.0]);
+    let line = off.line(&state).expect("aimed");
+    let label = target_label(&state, Some(&line));
+    assert!(label.starts_with("on: the rail"), "a bare rail: {label}");
+    assert_eq!(target_label(&state, None), "on: nothing");
+}
+
+#[test]
+fn a_snooker_ball_is_named_with_what_it_scores() {
+    // On a small table the ball is too small to print its value, so the
+    // readout carries it.
+    use crate::app::games::pool_core::rules_snooker::{BLACK, RED_FIRST, YELLOW};
+
+    let snooker = DailyPoolState::new(PoolRules::Snooker, Uuid::new_v4(), Uuid::new_v4());
+    assert_eq!(ball_name(&snooker, RED_FIRST), "a red (1)");
+    assert_eq!(ball_name(&snooker, YELLOW), "the yellow (2)");
+    assert_eq!(ball_name(&snooker, BLACK), "the black (7)");
+    assert_eq!(
+        ball_name(&pool_state(), 8),
+        "the 8",
+        "pool keeps its numbers"
+    );
+}
+
+#[test]
+fn a_rack_hands_the_renderer_one_frame_per_ball() {
+    let state = pool_state();
+    let frames = PoolDraft::new(&state).frames(&state);
+    assert_eq!(frames.len(), state.rack.balls.len());
+    assert!(
+        frames.iter().all(|f| !f.potted),
+        "nothing is potted on the break"
+    );
+    assert!(frames.iter().any(|f| f.id == 0), "the cue ball is drawn");
+}
+
+#[test]
+fn a_potted_ball_stops_being_drawn() {
+    let mut state = pool_state();
+    state.rack.balls[3].potted = Some(1);
+    let frames = PoolDraft::new(&state).frames(&state);
+    assert_eq!(
+        frames.iter().filter(|f| f.potted).count(),
+        1,
+        "exactly the one that went down"
+    );
+}
+
+#[test]
+fn both_rulesets_get_their_own_name_on_the_panel() {
+    // One detail type serves both games, so the only thing telling a player
+    // which one they are in is this line.
+    for rules in PoolRules::ALL {
+        let named = match rules {
+            PoolRules::EightBall => "Eight-ball",
+            PoolRules::NineBall => "Nine-ball",
+            PoolRules::Snooker => "Snooker",
+        };
+        assert!(!named.is_empty(), "{rules:?}");
+    }
+    assert_ne!(
+        group_label(Group::Solids),
+        group_label(Group::Stripes),
+        "the two groups must not read the same"
+    );
+}
+
+#[test]
+fn every_pocket_has_a_name_to_call() {
+    // Eight-ball asks the player to name a pocket, so "pocket 3" is not good
+    // enough — and an index past the end must still say something.
+    let state = pool_state();
+    let geom = state.geometry().expect("known table");
+    let mut names: Vec<&str> = (0..geom.pockets.len())
+        .map(|i| table::pocket_name(i as u8))
+        .collect();
+    assert_eq!(names.len(), 6, "six pockets");
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), 6, "and six distinct names");
+    assert!(!table::pocket_name(200).is_empty());
+}
+
+#[test]
+fn a_click_lands_where_the_ball_was_drawn() {
+    // The whole point of `View::fit_area`: the hit test and the renderer must
+    // agree, or the pointer picks a ball that is not under it. Round-trip a
+    // ball's position out to a cell and back.
+    let state = pool_state();
+    let spec = state.spec().expect("known table");
+    let area = Rect::new(3, 2, MIN_WIDTH - PANEL_WIDTH, MIN_HEIGHT - 2);
+    let view = View::fit_area(spec, area.width, area.height * 2);
+
+    for ball in state.rack.balls.iter() {
+        let (px, py) = view.to_px(ball.pos);
+        let cell_x = area.x + px as u16;
+        let cell_y = area.y + (py / 2.0) as u16;
+        let back = table_point_at(spec, area, None, cell_x, cell_y)
+            .expect("the overview always lands on the table");
+        // One cell is two pixels tall, so a click resolves to within a cell's
+        // worth of table — plenty inside the click reach the picker uses.
+        let slack = 2.0 / view.to_px([1.0, 0.0]).0.max(1.0);
+        assert!(
+            (back[0] - ball.pos[0]).abs() < 0.05 && (back[1] - ball.pos[1]).abs() < 0.05,
+            "ball {} at {:?} came back as {back:?} (slack {slack})",
+            ball.id,
+            ball.pos
+        );
+    }
+}
+
+#[test]
+fn a_click_outside_the_table_rect_still_resolves_inside_the_room() {
+    // The rect is the whole left column, so its corners are off the cloth.
+    // `pool_click_table` is what rejects those; the mapping itself must not
+    // panic or wrap.
+    let state = pool_state();
+    let spec = state.spec().expect("known table");
+    let area = Rect::new(0, 0, MIN_WIDTH - PANEL_WIDTH, MIN_HEIGHT - 2);
+    let corner =
+        table_point_at(spec, area, None, 0, 0).expect("the overview always lands on the table");
+    assert!(
+        corner[0] < spec.length && corner[1] < spec.width,
+        "a corner click is off the playfield, not past the far rail: {corner:?}"
+    );
+}
+
+#[test]
+fn a_click_in_the_eye_view_lands_where_the_ray_was_cast() {
+    // The eye's mapping is the renderer's, inverted: a pixel is a ray and a
+    // ray is a point on the cloth. Two views on one board means two chances
+    // for a click to land somewhere the picture did not put it, so this
+    // round-trips the same way the overview's test does.
+    use crate::app::games::pool_core::table_3d::Eye;
+
+    let state = pool_state();
+    let spec = state.spec().expect("known table");
+    let canvas = Canvas::new(MIN_WIDTH - PANEL_WIDTH, MIN_HEIGHT - 2, SURROUND);
+    let cue = [spec.length * 0.25, spec.width * 0.5];
+    let eye = Eye::behind(cue, 0.0, spec, &canvas);
+
+    for at in [
+        [spec.length * 0.5, spec.width * 0.5],
+        [spec.length * 0.8, spec.width * 0.3],
+        [spec.length * 0.6, spec.width * 0.72],
+    ] {
+        let (px, py, _) = eye.to_screen(at, 0.0).expect("down the table, in view");
+        let back = eye.to_table(px, py).expect("and below the horizon");
+        assert!(
+            (back[0] - at[0]).abs() < 1e-6 && (back[1] - at[1]).abs() < 1e-6,
+            "{at:?} came back as {back:?}"
+        );
+    }
+
+    // The top of the frame is never table. The horizon is usually *off* the
+    // top — the view is framed on the table, not on the skyline — so a ray up
+    // there may well still meet the cloth plane, just somewhere past the far
+    // rail. Either answer is fine; landing on the playfield would not be.
+    let off = eye.to_table(10.0, 0.0);
+    assert!(
+        off.is_none_or(|at| at[0] < 0.0
+            || at[0] > spec.length
+            || at[1] < 0.0
+            || at[1] > spec.width),
+        "the top of the frame resolved onto the cloth at {off:?}"
+    );
+}
+
+#[test]
+fn playback_runs_then_retires() {
+    let mut state = pool_state();
+    state
+        .apply_shot(
+            0,
+            &Shot {
+                place: None,
+                azimuth: 0.0,
+                tip: [0.0, 0.0],
+                speed: 7.0,
+                called_pocket: None,
+                play_again: false,
+            },
+        )
+        .expect("the break is legal");
+    let timeline = state.last_timeline().expect("the break replays");
+    let duration = timeline.duration;
+
+    let playback = PoolPlayback::new(timeline);
+    assert!(!playback.finished(), "a fresh playback has not run yet");
+    assert_eq!(
+        playback.frame().len(),
+        state.rack.balls.len(),
+        "every ball is on screen for the whole shot"
+    );
+    assert!(
+        duration > 0.0,
+        "a break takes time, or there is nothing to animate"
+    );
+}
+
+#[test]
+fn the_panel_keeps_the_result_to_itself_until_the_shot_has_played() {
+    let mut state = pool_state();
+    state
+        .apply_shot(
+            0,
+            &Shot {
+                place: None,
+                azimuth: 0.0,
+                tip: [0.0, 0.0],
+                speed: 7.0,
+                called_pocket: None,
+                play_again: false,
+            },
+        )
+        .expect("the break is legal");
+    let timeline = state.last_timeline().expect("the break replays");
+    let said = |pool: &PoolDetail, shot_pending: bool| -> String {
+        last_shot_lines(pool, shot_pending)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.to_string())
+            .collect()
+    };
+
+    let mut pool = PoolDetail::new(state);
+    assert!(
+        said(&pool, false).contains("last:"),
+        "a settled board says what the last shot did"
+    );
+    assert!(
+        !said(&pool, true).contains("last:"),
+        "a shot waiting on its animation has not been seen yet"
+    );
+    // The animation itself is the long part of the wait, seconds where the
+    // other two are a tick apiece, and the status line and the win banner
+    // already sit through it.
+    pool.playback = Some(PoolPlayback::new(timeline));
+    assert!(
+        !said(&pool, false).contains("last:"),
+        "the result was on the panel while the shot was still rolling"
+    );
+    // A replay is watched with the result already known.
+    pool.replaying = true;
+    assert!(said(&pool, false).contains("last:"));
+}
+
+#[test]
+fn the_list_of_balls_on_is_written_in_their_own_colours() {
+    // A ball on the table is a few pixels and its number a few more, so the
+    // panel's list is where a player actually reads which ball is which. Plain
+    // digits made them look it up twice.
+    use crate::app::games::pool_core::{
+        canvas::rgb,
+        rules_snooker::{BLACK, RED_FIRST, YELLOW},
+        table_ui::text_colour,
+    };
+
+    let state = pool_state();
+    let spans = on_line(&state, &[1, 8, 14]);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "on: 1 8 14");
+    for id in [1u8, 8, 14] {
+        let want = rgb(text_colour(id));
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content == id.to_string() && span.style.fg == Some(want)),
+            "the {id} is written in its own colour"
+        );
+    }
+
+    // The 8 is near-black on the cloth and would be a silhouette as text, so
+    // it is lifted — and everything readable already is left exactly as the
+    // table paints it, or the list and the balls stop matching.
+    assert_ne!(
+        text_colour(8),
+        crate::app::games::pool_core::table_ui::ball_colour(8)
+    );
+    assert_eq!(
+        text_colour(1),
+        crate::app::games::pool_core::table_ui::ball_colour(1)
+    );
+
+    // Snooker names its balls, and colours those too.
+    let mut frame = DailyPoolState::new(PoolRules::Snooker, Uuid::new_v4(), Uuid::new_v4());
+    let reds: Vec<u8> = (RED_FIRST..RED_FIRST + 3).collect();
+    let spans = on_line(&frame, &reds);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "on: a red (3 up)");
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.content == "a red"
+                && span.style.fg == Some(rgb(text_colour(RED_FIRST))))
+    );
+
+    frame.on_colour = true;
+    let spans = on_line(&frame, &[YELLOW, BLACK]);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(
+        text, "on: yellow black",
+        "a colour of choice names the choice"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.content == "black" && span.style.fg == Some(rgb(text_colour(BLACK))))
+    );
+}

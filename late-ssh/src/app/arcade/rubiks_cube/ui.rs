@@ -15,6 +15,10 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
+/// Smallest board area the unfolded net still fits in.
+const MIN_WIDTH: u16 = 42;
+const MIN_HEIGHT: u16 = 18;
+
 const MINI_STICKER_WIDTH: usize = 2;
 const NET_FACE_INTERIOR: usize = MINI_STICKER_WIDTH * 3;
 const NET_BOX_WIDTH: usize = NET_FACE_INTERIOR + 2;
@@ -32,13 +36,20 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ),
             ("view", state.view_label(), theme::TEXT_BRIGHT()),
         ]),
-        keys: keys_line(vec![
-            ("u/d/l/r/f/b", "turn"),
-            ("Shift", "inverse"),
-            ("s/0", "reset daily"),
-            ("v/arrows", "rotate view"),
-            ("Esc", "exit"),
-        ]),
+        keys: keys_line(
+            vec![
+                ("u/d/l/r/f/b", "turn"),
+                ("Shift", "inverse"),
+                ("0", "reset daily"),
+                ("v/arrows", "rotate view"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(super::share::is_ready(
+                state,
+            )))
+            .collect(),
+        ),
         tip: Some(tip_line(if state.reset_pending() {
             "Press reset again to reset today's cube.".to_string()
         } else {
@@ -47,10 +58,13 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     };
 
     let board_area = draw_game_frame(frame, area, "Rubik's Cube", bottom, show_bottom_bar);
-    if board_area.width < 42 || board_area.height < 18 {
-        frame.render_widget(
-            Paragraph::new("Terminal too small for Rubik's Cube").alignment(Alignment::Center),
+    if board_area.width < MIN_WIDTH || board_area.height < MIN_HEIGHT {
+        crate::app::common::primitives::draw_too_small(
+            frame,
             board_area,
+            "Rubik's Cube",
+            MIN_WIDTH,
+            MIN_HEIGHT,
         );
         return;
     }

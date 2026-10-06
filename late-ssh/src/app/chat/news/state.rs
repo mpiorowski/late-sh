@@ -4,9 +4,98 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
-use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot};
+use late_core::models::article::{
+    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT, NEWS_SHARE_MAX_PAID_PER_DAY,
+    NEWS_SHARE_REWARD_CHIPS, NewsShareReward,
+};
+
+/// The success banner for a share, from what it actually minted. Both share
+/// surfaces (the News composer and an RSS `s`) read this, so neither can
+/// claim chips the ledger never wrote.
+pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
+    match reward {
+        NewsShareReward::Paid => {
+            Banner::success(&format!("{lead} +{NEWS_SHARE_REWARD_CHIPS} chips"))
+        }
+        NewsShareReward::RepeatUrl => Banner::success(&format!(
+            "{lead} Already paid for this link, no chips this time."
+        )),
+        NewsShareReward::DailyCapReached => Banner::success(&format!(
+            "{lead} Today's {NEWS_SHARE_MAX_PAID_PER_DAY} paid shares are used up, no chips this time."
+        )),
+    }
+}
 
 use super::svc::ArticleService;
+
+/// This session's news read cursor. Until the first load answers, the badge
+/// stays empty rather than guessing: a missing cursor row (`Loaded(None)`)
+/// means everything is unread, which is not the same as not knowing yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadCursor {
+    Loading,
+    Loaded(Option<DateTime<Utc>>),
+}
+
+/// The news badge: articles in the shared snapshot newer than the reader's
+/// cursor, no cursor row meaning all of them. The snapshot holds the newest
+/// [`NEWS_FEED_LIMIT`] articles, so the count saturates there.
+pub(crate) fn unread_in_snapshot(
+    articles: &[ArticleFeedItem],
+    last_read_at: Option<DateTime<Utc>>,
+) -> i64 {
+    let unread = articles
+        .iter()
+        .filter(|item| is_unread(item, last_read_at))
+        .count();
+    unread as i64
+}
+
+/// Badge text for a news unread count: a full snapshot of unread articles
+/// reads as a floor ("20+"), since older unread ones sit past the snapshot.
+pub(crate) fn news_unread_label(unread: i64) -> String {
+    if unread >= NEWS_FEED_LIMIT {
+        format!("{NEWS_FEED_LIMIT}+")
+    } else {
+        unread.to_string()
+    }
+}
+
+/// Whether a refreshed snapshot brought this reader something to announce:
+/// an article newer than anything the previous snapshot held, still
+/// unread, shared by someone else. Newer by `created`, not by id: the
+/// snapshot is capped, so a delete backfills an older article whose id was
+/// never seen, and that is not news. The first snapshot a session sees is
+/// its starting state, not news, so it never announces.
+pub(crate) fn has_fresh_unread_from_others(
+    previous: &[ArticleFeedItem],
+    next: &[ArticleFeedItem],
+    last_read_at: Option<DateTime<Utc>>,
+    reader: Uuid,
+) -> bool {
+    let Some(newest_seen) = previous.iter().map(|item| item.article.created).max() else {
+        return false;
+    };
+    next.iter().any(|item| {
+        item.article.created > newest_seen
+            && item.article.user_id != reader
+            && is_unread(item, last_read_at)
+    })
+}
+
+fn is_unread(item: &ArticleFeedItem, last_read_at: Option<DateTime<Utc>>) -> bool {
+    match last_read_at {
+        Some(last_read_at) => item.article.created > last_read_at,
+        None => true,
+    }
+}
+
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, article list).
+pub struct NewsTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
 
 pub struct State {
     article_service: ArticleService,
@@ -18,8 +107,7 @@ pub struct State {
     selected: usize,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
-    unread_count: i64,
-    last_read_at: Option<DateTime<Utc>>,
+    read_cursor: ReadCursor,
     marker_read_at: Option<DateTime<Utc>>,
     preserve_marker_read_at: bool,
     composing: bool,
@@ -33,7 +121,7 @@ impl State {
         let snapshot_rx = article_service.subscribe_snapshot();
         let event_rx = article_service.subscribe_events();
         article_service.list_articles_task();
-        article_service.refresh_unread_count_task(user_id);
+        article_service.load_read_cursor_task(user_id);
         Self {
             article_service,
             user_id,
@@ -44,8 +132,7 @@ impl State {
             selected: 0,
             snapshot_rx,
             event_rx,
-            unread_count: 0,
-            last_read_at: None,
+            read_cursor: ReadCursor::Loading,
             marker_read_at: None,
             preserve_marker_read_at: false,
             composing: false,
@@ -154,19 +241,13 @@ impl State {
         self.articles.get(self.selected_index())
     }
 
-    pub fn article_id_by_url(&self, url: &str) -> Option<Uuid> {
-        let url = url.trim();
-        if url.is_empty() {
-            return None;
-        }
-        self.source_articles
-            .iter()
-            .find(|item| item.article.url.trim() == url)
-            .map(|item| item.article.id)
-    }
-
     pub fn unread_count(&self) -> i64 {
-        self.unread_count
+        match self.read_cursor {
+            ReadCursor::Loading => 0,
+            ReadCursor::Loaded(last_read_at) => {
+                unread_in_snapshot(&self.source_articles, last_read_at)
+            }
+        }
     }
 
     pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
@@ -205,9 +286,14 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = self.last_read_at;
+        self.marker_read_at = match self.read_cursor {
+            ReadCursor::Loading => None,
+            ReadCursor::Loaded(last_read_at) => last_read_at,
+        };
         self.preserve_marker_read_at = true;
-        self.unread_count = 0;
+        // Clear the badge now; the stored cursor comes back as
+        // `ReadCursorLoaded` once the write lands.
+        self.read_cursor = ReadCursor::Loaded(Some(Utc::now()));
         self.article_service.mark_read_task(self.user_id);
     }
 
@@ -321,17 +407,43 @@ impl State {
         self.current_task = Some(self.article_service.process_url(self.user_id, url.trim()));
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
-        self.drain_snapshot();
-        self.drain_events()
+    pub fn tick(&mut self) -> NewsTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, article list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        let snapshot_banner = self.drain_snapshot();
+        let event_banner = self.drain_events();
+        NewsTick {
+            banner: event_banner.or(snapshot_banner),
+            changed,
+        }
     }
 
-    fn drain_snapshot(&mut self) {
-        if let Ok(true) = self.snapshot_rx.has_changed() {
-            let snapshot = self.snapshot_rx.borrow_and_update().clone();
-            self.source_articles = snapshot.articles;
-            self.rebuild_display();
+    fn drain_snapshot(&mut self) -> Option<Banner> {
+        let Ok(true) = self.snapshot_rx.has_changed() else {
+            return None;
+        };
+        let snapshot = self.snapshot_rx.borrow_and_update().clone();
+        let announce = match self.read_cursor {
+            ReadCursor::Loading => false,
+            ReadCursor::Loaded(last_read_at) => has_fresh_unread_from_others(
+                &self.source_articles,
+                &snapshot.articles,
+                last_read_at,
+                self.user_id,
+            ),
+        };
+        self.source_articles = snapshot.articles;
+        self.rebuild_display();
+        if !announce {
+            return None;
         }
+        let unread = self.unread_count();
+        let noun = if unread == 1 { "article" } else { "articles" };
+        Some(Banner::success(&format!(
+            "{} new {noun} in news",
+            news_unread_label(unread)
+        )))
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -339,12 +451,14 @@ impl State {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ArticleEvent::Created { user_id, .. } if self.user_id == user_id => {
+                    ArticleEvent::Created {
+                        user_id, reward, ..
+                    } if self.user_id == user_id => {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
-                        banner = Some(Banner::success("Article shared!"));
+                        banner = Some(news_share_banner("Article shared!", reward));
                     }
                     ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;
@@ -358,41 +472,24 @@ impl State {
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
                         banner = Some(Banner::success("Article deleted."));
                     }
-                    ArticleEvent::UnreadCountUpdated {
+                    ArticleEvent::ReadCursorLoaded {
                         user_id,
-                        unread_count,
                         last_read_at,
                     } if self.user_id == user_id => {
-                        self.unread_count = unread_count;
-                        self.last_read_at = last_read_at;
-                        if unread_count == 0 && !self.preserve_marker_read_at {
+                        self.read_cursor = ReadCursor::Loaded(last_read_at);
+                        if self.unread_count() == 0 && !self.preserve_marker_read_at {
                             self.marker_read_at = last_read_at;
-                        }
-                    }
-                    ArticleEvent::NewArticlesAvailable {
-                        user_id,
-                        unread_count,
-                    } if self.user_id == user_id => {
-                        let increased = unread_count > self.unread_count;
-                        self.unread_count = unread_count;
-                        if increased {
-                            let noun = if unread_count == 1 {
-                                "article"
-                            } else {
-                                "articles"
-                            };
-                            banner = Some(Banner::success(&format!(
-                                "{unread_count} new {noun} in news"
-                            )));
                         }
                     }
                     _ => (),
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    tracing::error!(%e, "failed to receive article event");
-                    break;
+                // Skipped events are gone; the receiver resumes at the oldest
+                // one still buffered, so keep draining.
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "article event receiver lagged");
                 }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
         banner
@@ -416,39 +513,5 @@ fn new_news_textarea() -> TextArea<'static> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{clamp_index, move_index};
-
-    #[test]
-    fn clamp_index_handles_empty_list() {
-        assert_eq!(clamp_index(4, 0), 0);
-    }
-
-    #[test]
-    fn clamp_index_caps_to_last_item() {
-        assert_eq!(clamp_index(9, 3), 2);
-    }
-
-    #[test]
-    fn move_index_moves_within_bounds() {
-        assert_eq!(move_index(2, -1, 5), 1);
-        assert_eq!(move_index(2, 2, 5), 4);
-    }
-
-    #[test]
-    fn move_index_clamps_at_edges() {
-        assert_eq!(move_index(0, -1, 5), 0);
-        assert_eq!(move_index(4, 1, 5), 4);
-    }
-
-    #[test]
-    fn move_index_returns_zero_for_empty_list() {
-        assert_eq!(move_index(0, 1, 0), 0);
-        assert_eq!(move_index(3, -1, 0), 0);
-    }
-
-    #[test]
-    fn clamp_index_passes_through_when_within_bounds() {
-        assert_eq!(clamp_index(1, 5), 1);
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

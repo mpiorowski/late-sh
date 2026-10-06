@@ -5,6 +5,11 @@ use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 use super::state::{ResetKind, State};
 
 pub fn handle_key(state: &mut State, byte: u8) -> bool {
+    // Any key cuts the win cascade short and does nothing else, so the press
+    // that stops the cards never also moves one.
+    if state.skip_win_animation() {
+        return true;
+    }
     match byte {
         b'n' | b'N' => {
             if state.request_reset(ResetKind::NewBoard) {
@@ -77,6 +82,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
 }
 
 pub fn handle_mouse(state: &mut State, area: Rect, mouse: MouseEvent) -> bool {
+    // A click stops the cascade; a scroll or a drifting pointer does not, so
+    // a mouse resting on the board cannot cut the finish short by itself.
+    if matches!(mouse.kind, MouseEventKind::Down) && state.skip_win_animation() {
+        return true;
+    }
     match mouse.kind {
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             let Some(x) = mouse.x.checked_sub(1) else {
@@ -139,6 +149,9 @@ fn mouse_over_board(area: Rect, mouse: MouseEvent) -> bool {
 }
 
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    if state.skip_win_animation() {
+        return true;
+    }
     match key {
         b'A' => {
             state.move_vertical(-1);
@@ -159,3 +172,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

@@ -8,13 +8,22 @@ use uuid::Uuid;
 use crate::app::common::primitives::Banner;
 
 use super::{
-    catalog::ShopCategory,
+    catalog::{CompanionSection, ShopCategory},
     entitlements::ShopEntitlements,
-    svc::{ActiveChatRoomEffect, ShopCatalogItem, ShopEvent, ShopService, ShopSnapshot},
+    svc::{
+        ActiveChatRoomEffect, ActiveRental, ActiveUsernameEffect, ShopCatalogItem, ShopEvent,
+        ShopService, ShopSnapshot,
+    },
 };
-use late_core::models::marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU};
+use late_core::models::{
+    aquarium_shield::AquariumShield,
+    bonsai_decay_protection::BonsaiDecayProtection,
+    marketplace::{CHAT_CONSUMABLE_ITEM_KIND, TankStockKind},
+    rental::TITLE_MAX_LEN,
+    username_effect::{GlowColor, GradientPair, UsernameEffect},
+};
 
-pub struct ShopState {
+pub(crate) struct ShopState {
     user_id: Uuid,
     service: ShopService,
     snapshot_rx: watch::Receiver<ShopSnapshot>,
@@ -23,12 +32,14 @@ pub struct ShopState {
     category_index: usize,
     selected_index: usize,
     pending_room_effect: Option<PendingRoomEffect>,
+    pending_username_effect: Option<PendingUsernameEffect>,
+    pending_custom_title: Option<PendingCustomTitle>,
     category_rects: Cell<[Rect; ShopCategory::ALL.len()]>,
     item_rects: RefCell<Vec<(Rect, usize)>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct RoomEffectTarget {
+pub(crate) struct RoomEffectTarget {
     pub room_id: Uuid,
     pub label: String,
     pub kind: String,
@@ -38,7 +49,7 @@ pub struct RoomEffectTarget {
 }
 
 #[derive(Clone, Debug)]
-pub struct PendingRoomEffect {
+pub(crate) struct PendingRoomEffect {
     pub sku: String,
     pub item_name: String,
     pub price_chips: i64,
@@ -48,13 +59,76 @@ pub struct PendingRoomEffect {
     pub daily_limited: bool,
 }
 
-pub struct ShopTick {
+/// The style picker armed by Enter on a username-effect item: cycle through
+/// the tier's styles (each swatch previews in its real colors), Enter buys.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingUsernameEffect {
+    pub sku: String,
+    pub item_name: String,
+    pub price_chips: i64,
+    /// How long the bought tier runs, so the confirm modal quotes the window
+    /// the buyer is actually paying for.
+    pub duration_secs: i64,
+    pub options: Vec<UsernameEffect>,
+    pub selected: usize,
+}
+
+impl PendingUsernameEffect {
+    pub(crate) fn selected_effect(&self) -> Option<UsernameEffect> {
+        self.options.get(self.selected).copied()
+    }
+}
+
+/// The text prompt armed by Enter on a custom title: type up to
+/// `TITLE_MAX_LEN` characters, Enter sends them to be screened and bought.
+/// Same shape as the style picker above, with a line of text where the
+/// swatches are.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingCustomTitle {
+    pub sku: String,
+    pub price_chips: i64,
+    /// How long the bought tier runs, so the prompt quotes the window the
+    /// buyer is actually paying for.
+    pub duration_secs: i64,
+    pub input: String,
+}
+
+impl PendingCustomTitle {
+    /// What the buyer has typed, with the surrounding whitespace gone. Empty
+    /// until there is a title worth screening, which is what gates Enter.
+    pub(crate) fn trimmed(&self) -> &str {
+        self.input.trim()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.input.chars().count()
+    }
+}
+
+/// The pickable styles a username-effect item sells, from its payload
+/// variant. Unknown variants sell nothing (and the picker refuses to arm).
+fn username_effect_options(variant: Option<&str>) -> Vec<UsernameEffect> {
+    match variant {
+        Some("glow") => GlowColor::ALL
+            .into_iter()
+            .map(UsernameEffect::Glow)
+            .collect(),
+        Some("gradient") => GradientPair::ALL
+            .into_iter()
+            .map(UsernameEffect::Gradient)
+            .collect(),
+        Some("shimmer") => vec![UsernameEffect::Shimmer],
+        _ => Vec::new(),
+    }
+}
+
+pub(crate) struct ShopTick {
     pub banner: Option<Banner>,
     pub snapshot_changed: bool,
 }
 
 impl ShopState {
-    pub fn new(
+    pub(crate) fn new(
         user_id: Uuid,
         service: ShopService,
         snapshot_rx: watch::Receiver<ShopSnapshot>,
@@ -70,12 +144,14 @@ impl ShopState {
             category_index: 0,
             selected_index: 0,
             pending_room_effect: None,
+            pending_username_effect: None,
+            pending_custom_title: None,
             category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
             item_rects: RefCell::new(Vec::new()),
         }
     }
 
-    pub fn tick(&mut self) -> ShopTick {
+    pub(crate) fn tick(&mut self) -> ShopTick {
         let mut snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
@@ -103,40 +179,69 @@ impl ShopState {
         }
     }
 
-    pub fn balance(&self) -> i64 {
+    pub(crate) fn balance(&self) -> i64 {
         self.snapshot.balance
     }
 
-    pub fn is_loaded(&self) -> bool {
+    pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
     }
 
-    pub fn entitlements(&self) -> &ShopEntitlements {
+    pub(crate) fn entitlements(&self) -> &ShopEntitlements {
         &self.snapshot.entitlements
     }
 
-    pub fn all_items(&self) -> &[ShopCatalogItem] {
+    pub(crate) fn all_items(&self) -> &[ShopCatalogItem] {
         &self.snapshot.items
     }
 
-    pub fn selected_category(&self) -> ShopCategory {
+    pub(crate) fn selected_category(&self) -> ShopCategory {
         ShopCategory::ALL[self.category_index.min(ShopCategory::ALL.len() - 1)]
     }
 
-    pub fn selected_category_index(&self) -> usize {
+    pub(crate) fn selected_category_index(&self) -> usize {
         self.category_index
     }
 
-    pub fn visible_items(&self) -> Vec<&ShopCatalogItem> {
+    pub(crate) fn visible_items(&self) -> Vec<&ShopCatalogItem> {
         let category = self.selected_category();
-        self.snapshot
+        let mut items: Vec<&ShopCatalogItem> = self
+            .snapshot
             .items
             .iter()
             .filter(|item| category.matches_item(item))
-            .collect()
+            .collect();
+        // Two tabs order their sections themselves, stable, so catalog
+        // order holds inside each group. Chat: the name-adjacent rentals
+        // lead, username effects first, then titles, then the room
+        // consumables. Companions: `CompanionSection` order, the tank's
+        // growth and plants between the tank and its fish.
+        items.sort_by_key(|item| match category {
+            ShopCategory::Chat => match item {
+                item if item.is_username_effect() => 0,
+                item if item.is_title_rental() => 1,
+                _ => 2,
+            },
+            ShopCategory::Companions => CompanionSection::of(item) as usize,
+            ShopCategory::Badges | ShopCategory::Flags | ShopCategory::Ultimates => 0,
+        });
+        items
     }
 
-    pub fn active_aquarium_fish(&self) -> Vec<(String, usize)> {
+    /// How many of one kind the user owns, in the water and parked: what
+    /// the kind's cap counts (`TankStockKind::cap`).
+    pub(crate) fn owned_tank_stock(&self, kind: TankStockKind) -> i32 {
+        self.snapshot
+            .items
+            .iter()
+            .filter(|item| item.tank_stock_kind() == Some(kind))
+            .map(|item| item.quantity.max(0))
+            .sum()
+    }
+
+    /// Every creature in the water, fish and plants alike, as the tank
+    /// draws them: `(creature, active count)`.
+    pub(crate) fn active_aquarium_creatures(&self) -> Vec<(String, usize)> {
         if !self.snapshot.entitlements.has_aquarium() {
             return Vec::new();
         }
@@ -151,84 +256,78 @@ impl ShopState {
             .collect()
     }
 
-    pub fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
+    pub(crate) fn active_room_effects(&self) -> &HashMap<Uuid, Vec<ActiveChatRoomEffect>> {
         &self.snapshot.active_room_effects
     }
 
-    pub fn bot_username_color_active(&self) -> bool {
-        self.snapshot.bot_username_color_active
-            && self
-                .snapshot
-                .bot_username_color_ends_at
-                .is_some_and(|ends_at| ends_at > Utc::now())
-    }
-
-    pub fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
+    pub(crate) fn pending_room_effect(&self) -> Option<&PendingRoomEffect> {
         self.pending_room_effect.as_ref()
     }
 
-    pub fn pet_food_quantity(&self) -> i32 {
-        self.snapshot
-            .items
-            .iter()
-            .find(|item| item.sku == PET_FOOD_SKU)
-            .map(|item| item.quantity.max(0))
-            .unwrap_or(0)
+    pub(crate) fn pending_username_effect(&self) -> Option<&PendingUsernameEffect> {
+        self.pending_username_effect.as_ref()
     }
 
-    pub fn aquarium_food_quantity(&self) -> i32 {
-        self.snapshot
-            .items
-            .iter()
-            .find(|item| item.sku == AQUARIUM_FOOD_SKU)
-            .map(|item| item.quantity.max(0))
-            .unwrap_or(0)
+    pub(crate) fn pending_custom_title(&self) -> Option<&PendingCustomTitle> {
+        self.pending_custom_title.as_ref()
     }
 
-    pub fn aquarium_hungry(&self) -> bool {
-        self.snapshot.aquarium_hungry
+    /// Whether the Shop can sell a buyer-written title at all. False means no
+    /// screen is configured, and an unscreened title never ships.
+    pub(crate) fn custom_titles_available(&self) -> bool {
+        self.snapshot.custom_titles_available
     }
 
-    pub fn equipped_chat_badge(&self) -> Option<String> {
-        let mut pieces = Vec::new();
-        pieces.extend(
-            self.snapshot
-                .items
-                .iter()
-                .filter(|item| item.is_flag_badge() && item.equipped)
-                .filter_map(|item| item.badge_emoji.as_deref()),
-        );
-        pieces.extend(
-            self.snapshot
-                .items
-                .iter()
-                .filter(|item| item.is_chat_badge() && !item.is_flag_badge() && item.equipped)
-                .filter_map(|item| item.badge_emoji.as_deref()),
-        );
-        let badge = pieces.join(" ");
+    pub(crate) fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
+        self.snapshot.active_username_effect
+    }
+
+    pub(crate) fn active_bonsai_decay_protection(&self) -> Option<BonsaiDecayProtection> {
+        self.snapshot.active_bonsai_decay_protection
+    }
+
+    pub(crate) fn active_aquarium_shield(&self) -> Option<AquariumShield> {
+        self.snapshot.active_aquarium_shield
+    }
+
+    pub(crate) fn active_badge_rental(&self) -> Option<&ActiveRental> {
+        self.snapshot.active_badge_rental.as_ref()
+    }
+
+    pub(crate) fn active_flag_rental(&self) -> Option<&ActiveRental> {
+        self.snapshot.active_flag_rental.as_ref()
+    }
+
+    pub(crate) fn active_title(&self) -> Option<&ActiveRental> {
+        self.snapshot.active_title.as_ref()
+    }
+
+    /// The badge string this user's chat label carries, flag first then badge,
+    /// exactly as `chat_author_badge` joins them for every other viewer. Comes
+    /// straight off the snapshot, which read it from the one query that
+    /// resolves the live rentals.
+    pub(crate) fn equipped_chat_badge(&self) -> Option<String> {
+        let badge = [
+            self.snapshot.chat_label_flag.as_deref(),
+            self.snapshot.chat_label_badge.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
         (!badge.is_empty()).then_some(badge)
     }
 
-    pub fn dynamic_bonsai_enabled(&self) -> bool {
-        self.snapshot
-            .items
-            .iter()
-            .any(|item| item.is_dynamic_bonsai() && item.equipped)
-    }
-
-    pub fn has_dynamic_bonsai(&self) -> bool {
-        self.snapshot.entitlements.has_dynamic_bonsai()
-    }
-
-    pub fn selected_index(&self) -> usize {
+    pub(crate) fn selected_index(&self) -> usize {
         self.selected_index
     }
 
-    pub fn selected_item(&self) -> Option<&ShopCatalogItem> {
+    pub(crate) fn selected_item(&self) -> Option<&ShopCatalogItem> {
         self.visible_items().get(self.selected_index).copied()
     }
 
-    pub fn move_selection(&mut self, delta: isize) {
+    pub(crate) fn move_selection(&mut self, delta: isize) {
         let len = self.visible_items().len();
         if len == 0 {
             self.selected_index = 0;
@@ -238,8 +337,10 @@ impl ShopState {
             (self.selected_index as isize + delta).rem_euclid(len as isize) as usize;
     }
 
-    pub fn select_next_category(&mut self) {
+    pub(crate) fn select_next_category(&mut self) {
         self.pending_room_effect = None;
+        self.pending_username_effect = None;
+        self.pending_custom_title = None;
         self.category_index = (self.category_index + 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
@@ -248,30 +349,34 @@ impl ShopState {
     /// (e.g. clicking a chat-author store badge to open the shop on Badges)
     /// where stepping with `select_next_category` would be brittle to
     /// `ShopCategory::ALL` reordering.
-    pub fn select_category(&mut self, category: ShopCategory) {
+    pub(crate) fn select_category(&mut self, category: ShopCategory) {
         if let Some(idx) = ShopCategory::ALL.iter().position(|c| *c == category) {
             self.category_index = idx;
             self.selected_index = 0;
             self.pending_room_effect = None;
+            self.pending_username_effect = None;
+            self.pending_custom_title = None;
         }
     }
 
-    pub fn select_previous_category(&mut self) {
+    pub(crate) fn select_previous_category(&mut self) {
         self.pending_room_effect = None;
+        self.pending_username_effect = None;
+        self.pending_custom_title = None;
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
 
-    pub fn set_category_rects(&self, rects: [Rect; ShopCategory::ALL.len()]) {
+    pub(crate) fn set_category_rects(&self, rects: [Rect; ShopCategory::ALL.len()]) {
         self.category_rects.set(rects);
     }
 
-    pub fn set_item_rects(&self, rects: Vec<(Rect, usize)>) {
+    pub(crate) fn set_item_rects(&self, rects: Vec<(Rect, usize)>) {
         *self.item_rects.borrow_mut() = rects;
     }
 
-    pub fn category_at_point(&self, x: u16, y: u16) -> Option<usize> {
+    pub(crate) fn category_at_point(&self, x: u16, y: u16) -> Option<usize> {
         let rects = self.category_rects.get();
         rects.iter().enumerate().find_map(|(idx, rect)| {
             if rect_contains(*rect, x, y) {
@@ -282,7 +387,7 @@ impl ShopState {
         })
     }
 
-    pub fn item_at_point(&self, x: u16, y: u16) -> Option<usize> {
+    pub(crate) fn item_at_point(&self, x: u16, y: u16) -> Option<usize> {
         let rects = self.item_rects.borrow();
         rects.iter().find_map(|(rect, idx)| {
             if rect_contains(*rect, x, y) {
@@ -293,7 +398,7 @@ impl ShopState {
         })
     }
 
-    pub fn select_item(&mut self, index: usize) {
+    pub(crate) fn select_item(&mut self, index: usize) {
         let len = self.visible_items().len();
         if len == 0 {
             self.selected_index = 0;
@@ -302,25 +407,83 @@ impl ShopState {
         }
     }
 
-    pub fn select_category_by_index(&mut self, index: usize) {
+    pub(crate) fn select_category_by_index(&mut self, index: usize) {
         if index < ShopCategory::ALL.len() {
             self.category_index = index;
             self.selected_index = 0;
             self.pending_room_effect = None;
+            self.pending_username_effect = None;
+            self.pending_custom_title = None;
         }
     }
 
-    pub fn activate_selected(&mut self, current_room: Option<RoomEffectTarget>) -> Option<Banner> {
+    pub(crate) fn activate_selected(
+        &mut self,
+        current_room: Option<RoomEffectTarget>,
+    ) -> Option<Banner> {
         let item = self.selected_item()?.clone();
-        let is_dynamic_bonsai = item.is_dynamic_bonsai();
         let current_room_id = current_room.as_ref().map(|room| room.room_id);
-        if item.is_aquarium_fish() {
+        if item.is_username_effect() {
+            let options = username_effect_options(item.username_effect_variant.as_deref());
+            if options.is_empty() {
+                return Some(Banner::error("This effect is not available"));
+            }
+            self.pending_username_effect = Some(PendingUsernameEffect {
+                duration_secs: item.rental_duration(),
+                sku: item.sku,
+                item_name: item.name,
+                price_chips: item.price_chips,
+                options,
+                selected: 0,
+            });
+            return Some(Banner::success("Pick a style"));
+        }
+        if item.is_sprout() {
+            return Some(Banner::error(
+                "Sprouts come up on their own, every 14 days; - cuts the one on the floor",
+            ));
+        }
+        if item.is_welcome_fish() {
+            return Some(Banner::error(
+                "Fry are not for sale, they only breed: one with the tank, one per fourteen-day streak",
+            ));
+        }
+        if item.is_tank_stock() {
             if !self.snapshot.entitlements.has_aquarium() {
-                return Some(Banner::error("Unlock Aquarium before buying fish"));
+                return Some(Banner::error(
+                    "Unlock Aquarium before buying fish or plants",
+                ));
             }
             self.service
-                .purchase_item_task(self.user_id, item.sku, current_room_id);
+                .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
+        // A custom title has no text until the buyer writes one, so Enter
+        // opens a prompt instead of buying. With no screen configured there is
+        // nothing to sell: an unscreened title never ships.
+        if item.is_custom_title() {
+            if !self.snapshot.custom_titles_available {
+                return Some(Banner::error("Custom titles are closed right now"));
+            }
+            self.pending_custom_title = Some(PendingCustomTitle {
+                duration_secs: item.rental_duration(),
+                sku: item.sku,
+                price_chips: item.price_chips,
+                input: String::new(),
+            });
+            return Some(Banner::success("Write your title"));
+        }
+        // Rentals are bought outright, every time: there is no picker and no
+        // equip step, and a rebuy replaces the live row and resets its clock.
+        if item.is_badge_rental() || item.is_title_rental() {
+            self.service
+                .purchase_item_task(self.user_id, item.sku, None, None);
+            return Some(Banner::success(&format!("Renting {}", item.name)));
+        }
+        // The shield minds a tank; without one it would take the chips and
+        // mind nothing.
+        if item.is_aquarium_shield() && !self.snapshot.entitlements.has_aquarium() {
+            return Some(Banner::error("Unlock Aquarium before buying a shield"));
         }
         if item.is_consumable() {
             if item.requires_room {
@@ -349,46 +512,32 @@ impl ShopState {
                 "Buying"
             };
             self.service
-                .purchase_item_task(self.user_id, item.sku, current_room_id);
+                .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("{action} {}", item.name)));
         }
         if item.owned {
-            if item.equipped {
-                if let Some(slot) = item.slot {
-                    self.service.unequip_slot_task(self.user_id, slot);
-                    if is_dynamic_bonsai {
-                        return Some(Banner::success("Using classic Bonsai"));
-                    }
-                    return Some(Banner::success("Clearing displayed badge"));
-                }
-                return Some(Banner::success(&format!("{} already unlocked", item.name)));
-            }
-            if item.slot.is_some() {
-                self.service.equip_item_task(self.user_id, item.sku);
-                if is_dynamic_bonsai {
-                    return Some(Banner::success("Using Dynamic Bonsai"));
-                }
-                return Some(Banner::success(&format!("Displaying {}", item.name)));
-            }
+            // Nothing on sale equips a slot any more: badges and flags went
+            // all-rental in migration 148, and the bonsai variant unlock was
+            // retired in migration 177.
             return Some(Banner::success(&format!("{} already unlocked", item.name)));
         }
 
         self.service
-            .purchase_item_task(self.user_id, item.sku, current_room_id);
+            .purchase_item_task(self.user_id, item.sku, current_room_id, None);
         Some(Banner::success(&format!("Purchasing {}", item.name)))
     }
 
-    pub fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
+    pub(crate) fn confirm_pending_room_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_room_effect.take()?;
         self.service
-            .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id));
+            .purchase_item_task(self.user_id, pending.sku, Some(pending.room_id), None);
         Some(Banner::success(&format!(
             "Activating {} in {}",
             pending.item_name, pending.room_label
         )))
     }
 
-    pub fn cancel_pending_room_effect(&mut self) -> Option<Banner> {
+    pub(crate) fn cancel_pending_room_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_room_effect.take()?;
         Some(Banner::success(&format!(
             "Cancelled {} for {}",
@@ -396,29 +545,81 @@ impl ShopState {
         )))
     }
 
-    pub fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
+    pub(crate) fn cycle_pending_username_effect(&mut self, delta: isize) {
+        if let Some(pending) = &mut self.pending_username_effect {
+            let len = pending.options.len();
+            if len > 0 {
+                pending.selected =
+                    (pending.selected as isize + delta).rem_euclid(len as isize) as usize;
+            }
+        }
+    }
+
+    pub(crate) fn confirm_pending_username_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_username_effect.take()?;
+        let effect = pending.selected_effect()?;
+        self.service
+            .purchase_item_task(self.user_id, pending.sku, None, Some(effect));
+        Some(Banner::success(&format!(
+            "Activating {}",
+            pending.item_name
+        )))
+    }
+
+    pub(crate) fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
+        let pending = self.pending_username_effect.take()?;
+        Some(Banner::success(&format!("Cancelled {}", pending.item_name)))
+    }
+
+    /// Type one character into the title prompt. The cap is the renderers'
+    /// (`TITLE_MAX_LEN`), enforced here so the prompt simply stops accepting
+    /// rather than letting someone type a title the purchase would refuse.
+    pub(crate) fn push_custom_title_char(&mut self, ch: char) {
+        if let Some(pending) = &mut self.pending_custom_title
+            && pending.len() < TITLE_MAX_LEN
+        {
+            pending.input.push(ch);
+        }
+    }
+
+    pub(crate) fn backspace_custom_title(&mut self) {
+        if let Some(pending) = &mut self.pending_custom_title {
+            pending.input.pop();
+        }
+    }
+
+    /// Send the typed title to be screened and bought. A blank prompt is not a
+    /// refusal, it is an unfinished one: the modal stays open and nothing is
+    /// sent.
+    pub(crate) fn confirm_pending_custom_title(&mut self) -> Option<Banner> {
+        let text = self.pending_custom_title.as_ref()?.trimmed().to_string();
+        if text.is_empty() {
+            return Some(Banner::error("Type a title first"));
+        }
+        let pending = self.pending_custom_title.take()?;
+        self.service
+            .purchase_custom_title_task(self.user_id, pending.sku, text);
+        Some(Banner::success("Screening your title"))
+    }
+
+    pub(crate) fn cancel_pending_custom_title(&mut self) -> Option<Banner> {
+        self.pending_custom_title.take()?;
+        Some(Banner::success("Cancelled custom title"))
+    }
+
+    /// `+` / `-` on a fish or a plant: one copy into or out of the water.
+    pub(crate) fn adjust_selected_tank_stock(&mut self, delta: i32) -> Option<Banner> {
         let item = self.selected_item()?.clone();
-        if !item.is_aquarium_fish() {
+        if !item.is_tank_stock() {
             return None;
         }
         if !self.snapshot.entitlements.has_aquarium() {
-            return Some(Banner::error("Unlock Aquarium before managing fish"));
+            return Some(Banner::error("Unlock Aquarium before managing the tank"));
         }
         self.service
-            .adjust_aquarium_fish_task(self.user_id, item.sku, delta);
+            .adjust_aquarium_active_task(self.user_id, item.sku, delta);
         let label = if delta > 0 { "Adding" } else { "Removing" };
         Some(Banner::success(&format!("{label} {}", item.name)))
-    }
-
-    pub fn use_aquarium_food(&mut self) -> Banner {
-        if !self.snapshot.entitlements.has_aquarium() {
-            return Banner::error("Unlock Aquarium before feeding it");
-        }
-        if self.aquarium_food_quantity() <= 0 {
-            return Banner::error("Buy Aquarium Food first");
-        }
-        self.service.use_aquarium_food_task(self.user_id);
-        Banner::success("Feeding aquarium")
     }
 
     fn clamp_selection(&mut self) {
@@ -442,12 +643,25 @@ impl ShopState {
         });
         if self
             .snapshot
-            .bot_username_color_ends_at
-            .is_some_and(|ends_at| ends_at <= now)
+            .active_username_effect
+            .is_some_and(|effect| effect.ends_at <= now)
         {
-            self.snapshot.bot_username_color_active = false;
-            self.snapshot.bot_username_color_ends_at = None;
+            self.snapshot.active_username_effect = None;
             changed = true;
+        }
+        // The rentals lapse in the detail pane on their own clock, with no
+        // refresh to wait for. `chat_label_*` is deliberately left alone: what
+        // the label carries is the label query's call, and it arrives with the
+        // next snapshot.
+        for rental in [
+            &mut self.snapshot.active_badge_rental,
+            &mut self.snapshot.active_flag_rental,
+            &mut self.snapshot.active_title,
+        ] {
+            if rental.as_ref().is_some_and(|rental| rental.ends_at <= now) {
+                *rental = None;
+                changed = true;
+            }
         }
         changed
     }
@@ -488,6 +702,8 @@ impl ShopState {
             category_index: 0,
             selected_index: 0,
             pending_room_effect: None,
+            pending_username_effect: None,
+            pending_custom_title: None,
             category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
             item_rects: RefCell::new(Vec::new()),
         }
@@ -495,105 +711,5 @@ impl ShopState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_state() -> ShopState {
-        let snapshot = ShopSnapshot {
-            user_id: None,
-            balance: 0,
-            items: Vec::new(),
-            entitlements: ShopEntitlements::default(),
-            active_room_effects: HashMap::new(),
-            bot_username_color_active: false,
-            bot_username_color_ends_at: None,
-            aquarium_hungry: false,
-        };
-        ShopState::for_test_snapshot(snapshot)
-    }
-
-    #[test]
-    fn category_at_point_hits_set_rect() {
-        let state = make_state();
-        let mut rects = [Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()];
-        rects[0] = Rect::new(2, 3, 12, 1);
-        rects[1] = Rect::new(15, 3, 6, 1);
-        state.set_category_rects(rects);
-
-        assert_eq!(state.category_at_point(2, 3), Some(0));
-        assert_eq!(state.category_at_point(13, 3), Some(0));
-        assert_eq!(state.category_at_point(15, 3), Some(1));
-        assert_eq!(state.category_at_point(20, 3), Some(1));
-        assert_eq!(state.category_at_point(0, 3), None);
-        assert_eq!(state.category_at_point(2, 4), None);
-    }
-
-    #[test]
-    fn item_at_point_hits_set_rect() {
-        let state = make_state();
-        let rects = vec![
-            (Rect::new(2, 5, 40, 1), 0),
-            (Rect::new(2, 6, 40, 1), 1),
-            (Rect::new(2, 8, 40, 1), 3),
-        ];
-        state.set_item_rects(rects);
-
-        assert_eq!(state.item_at_point(2, 5), Some(0));
-        assert_eq!(state.item_at_point(41, 5), Some(0));
-        assert_eq!(state.item_at_point(2, 6), Some(1));
-        assert_eq!(state.item_at_point(2, 8), Some(3));
-        assert_eq!(state.item_at_point(2, 7), None);
-        assert_eq!(state.item_at_point(0, 5), None);
-    }
-
-    #[test]
-    fn select_category_by_index_switches_and_resets_selection() {
-        let mut state = make_state();
-        assert_eq!(state.selected_category_index(), 0);
-        assert_eq!(state.selected_category(), ShopCategory::Companions);
-
-        state.selected_index = 5;
-        state.select_category_by_index(2);
-
-        assert_eq!(state.selected_category_index(), 2);
-        assert_eq!(state.selected_category(), ShopCategory::Aquarium);
-        assert_eq!(state.selected_index, 0);
-        assert!(state.pending_room_effect.is_none());
-    }
-
-    #[test]
-    fn select_category_by_index_out_of_bounds_is_noop() {
-        let mut state = make_state();
-        state.select_category_by_index(99);
-        assert_eq!(state.selected_category_index(), 0);
-    }
-
-    #[test]
-    fn select_item_handles_empty_list() {
-        let mut state = make_state();
-        state.selected_index = 5;
-        state.select_item(0);
-        assert_eq!(state.selected_index, 0);
-    }
-
-    #[test]
-    fn set_item_rects_replaces_previous() {
-        let state = make_state();
-        let first = vec![(Rect::new(0, 0, 10, 1), 0)];
-        state.set_item_rects(first);
-        assert_eq!(state.item_at_point(5, 0), Some(0));
-
-        let second = Vec::new();
-        state.set_item_rects(second);
-        assert_eq!(state.item_at_point(5, 0), None);
-    }
-
-    #[test]
-    fn rect_contains_edge_cases() {
-        assert!(!rect_contains(Rect::new(0, 0, 0, 1), 0, 0));
-        assert!(!rect_contains(Rect::new(0, 0, 1, 0), 0, 0));
-        assert!(rect_contains(Rect::new(2, 3, 5, 1), 2, 3));
-        assert!(!rect_contains(Rect::new(2, 3, 5, 1), 7, 3));
-        assert!(!rect_contains(Rect::new(2, 3, 5, 1), 2, 4));
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

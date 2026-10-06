@@ -14,6 +14,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         b'j' | b'J' | b's' | b'S' => state.soft_drop(),
         b'h' | b'H' | b'a' | b'A' => state.move_left(),
         b'l' | b'L' | b'd' | b'D' => state.move_right(),
+        // `c` is the hold key every modern falling-block game uses; the vim
+        // and wasd movement rows have already claimed the alternatives.
+        b'c' | b'C' => state.hold_piece(),
         b' ' => state.hard_drop(),
         _ => false,
     }

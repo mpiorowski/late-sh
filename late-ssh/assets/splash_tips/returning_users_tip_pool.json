@@ -6,9 +6,19 @@
   "late.sh - bring a friend next time :)",
   "late.sh - tell a friend!",
   "Your bonsai missed you 🌱",
-  "The cat noticed you were gone",
+  "The cat/dog noticed you were gone",
   "late.sh - quietly waiting for you",
   "The playlist kept spinning while you were away",
   "IRC regular? Mint an access token in ctrl+o settings",
-  "Back again — glad you're here!"
+  "Back again, glad you're here!",
+  "Looking for an old message? Ctrl+/ then ?query searches your chat history",
+  "Unread DMs wait for you near the top of the room rail, under core",
+  "Mid-dungeon in NetHack, DCSS, or Brogue? Press ` to step out to chat; the game keeps running and ` (or Enter on its hub card) drops you back in. Mid-adventure in Lateania, ` hops out with an autosave and hops back in for the next 5 minutes",
+  "Select any message and press t to translate it into your language",
+  "Away for a while? /summary in a public room gives you an AI catch-up of what you missed",
+  "Missed a day? /paper opens The Late Edition, graybeard's grumpy digest of every public room; /paper YYYY-MM-DD digs up an older one",
+  "/history opens right on your first unread message when a room has news for you",
+  "Someone said something good? Select it and press g to gild it: two thirds of what you pay lands in their balance, and the marker never comes off",
+  "The crown costs 1.5x whatever the last holder paid, and it goes back to vacant every month",
+  "The bottom statusline is yours: Ctrl+O, then the Statusline tab. Hide the shortcut hints or add a clock, quests, the pot, or who's online"
 ]

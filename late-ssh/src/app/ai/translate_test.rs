@@ -1,0 +1,184 @@
+use std::time::Duration;
+
+use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+use late_core::models::chat_room::ChatRoom;
+use late_core::models::message_translation::{
+    CachedTranslation, MessageTranslation, TranslateLang,
+};
+use uuid::Uuid;
+
+use super::{TranslationOutcome, TranslationService};
+use crate::app::ai::svc::AiService;
+use crate::test_helpers::new_test_db;
+
+async fn seeded_message(db: &late_core::db::Db, body: &str) -> (Uuid, Uuid) {
+    let client = db.get().await.expect("db client");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let user = late_core::test_utils::create_test_user(db, "translator").await;
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: body.to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+    (message.id, room.id)
+}
+
+#[tokio::test]
+async fn cached_translation_is_served_without_the_api() {
+    let test_db = new_test_db().await;
+    let (message_id, room_id) = seeded_message(&test_db.db, "你好").await;
+    let client = test_db.db.get().await.expect("db client");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message_id,
+        TranslateLang::En,
+        "你好",
+        &CachedTranslation::Translated("hello".to_string()),
+        false,
+    )
+    .await
+    .expect("seed cache");
+
+    // AI disabled: a cache hit is the only way this can produce text.
+    let service = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut events = service.subscribe();
+    service.request(message_id, room_id, "你好".to_string(), TranslateLang::En);
+
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("event before timeout")
+        .expect("channel open");
+    assert_eq!(event.message_id, message_id);
+    assert_eq!(event.room_id, room_id);
+    assert_eq!(event.target, TranslateLang::En);
+    assert!(!event.author_shared, "private row stays private");
+    match event.outcome {
+        TranslationOutcome::Translated(text) => assert_eq!(text, "hello"),
+        TranslationOutcome::SameLanguage => panic!("cache hit holds a translation"),
+        TranslationOutcome::Failed => panic!("cache hit must not fail"),
+    }
+}
+
+#[tokio::test]
+async fn author_shared_row_broadcasts_the_shared_flag() {
+    let test_db = new_test_db().await;
+    let (message_id, room_id) = seeded_message(&test_db.db, "bonjour tout le monde").await;
+    let client = test_db.db.get().await.expect("db client");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message_id,
+        TranslateLang::En,
+        "bonjour tout le monde",
+        &CachedTranslation::Translated("hello everyone".to_string()),
+        true,
+    )
+    .await
+    .expect("seed shared cache");
+
+    // A plain private request hitting an author-shared row still carries
+    // the flag: sessions decide display from the event alone.
+    let service = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut events = service.subscribe();
+    service.request(
+        message_id,
+        room_id,
+        "bonjour tout le monde".to_string(),
+        TranslateLang::En,
+    );
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("event before timeout")
+        .expect("channel open");
+    assert_eq!(event.message_id, message_id);
+    assert!(event.author_shared);
+
+    // The bulk sweep reads the same flag off the row.
+    service.load_cached(room_id, vec![message_id], TranslateLang::En);
+    let swept = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("sweep event before timeout")
+        .expect("channel open");
+    assert_eq!(swept.message_id, message_id);
+    assert!(swept.author_shared);
+    match swept.outcome {
+        TranslationOutcome::Translated(text) => assert_eq!(text, "hello everyone"),
+        TranslationOutcome::SameLanguage => panic!("cache hit holds a translation"),
+        TranslationOutcome::Failed => panic!("cache hit must not fail"),
+    }
+}
+
+#[tokio::test]
+async fn cached_same_language_verdict_is_served_without_the_api() {
+    let test_db = new_test_db().await;
+    let (message_id, room_id) = seeded_message(&test_db.db, "just chatting in english").await;
+    let client = test_db.db.get().await.expect("db client");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message_id,
+        TranslateLang::En,
+        "just chatting in english",
+        &CachedTranslation::SameLanguage,
+        false,
+    )
+    .await
+    .expect("seed cache");
+
+    // AI disabled: only the cache can answer, and the cached answer is
+    // "nothing to translate", not a translation and not a failure.
+    let service = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut events = service.subscribe();
+    service.request(
+        message_id,
+        room_id,
+        "just chatting in english".to_string(),
+        TranslateLang::En,
+    );
+
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("event before timeout")
+        .expect("channel open");
+    assert_eq!(event.message_id, message_id);
+    assert!(matches!(event.outcome, TranslationOutcome::SameLanguage));
+}
+
+#[tokio::test]
+async fn cache_miss_with_ai_disabled_reports_failure() {
+    let test_db = new_test_db().await;
+    let (message_id, room_id) = seeded_message(&test_db.db, "서버 너무 좋다").await;
+
+    let service = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut events = service.subscribe();
+    service.request(
+        message_id,
+        room_id,
+        "서버 너무 좋다".to_string(),
+        TranslateLang::En,
+    );
+
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("event before timeout")
+        .expect("channel open");
+    assert_eq!(event.message_id, message_id);
+    assert!(matches!(event.outcome, TranslationOutcome::Failed));
+
+    // The single-flight set must be clear again: a retry produces another
+    // event instead of being swallowed as a duplicate.
+    service.request(
+        message_id,
+        room_id,
+        "서버 너무 좋다".to_string(),
+        TranslateLang::En,
+    );
+    let retry = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("retry event before timeout")
+        .expect("channel open");
+    assert_eq!(retry.message_id, message_id);
+}

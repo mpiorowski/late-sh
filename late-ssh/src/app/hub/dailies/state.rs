@@ -5,6 +5,8 @@ use crate::app::common::primitives::Banner;
 
 use super::svc::{QuestEvent, QuestService, QuestSnapshot};
 
+/// `pub` (not `pub(crate)`) because the public `ArcadeHubView` carries a
+/// reference to it for the arcade quest strip.
 pub struct QuestState {
     user_id: Uuid,
     snapshot_rx: watch::Receiver<QuestSnapshot>,
@@ -12,12 +14,13 @@ pub struct QuestState {
     snapshot: QuestSnapshot,
 }
 
-pub struct QuestTick {
+pub(crate) struct QuestTick {
     pub banner: Option<Banner>,
+    pub snapshot_changed: bool,
 }
 
 impl QuestState {
-    pub fn new(
+    pub(crate) fn new(
         user_id: Uuid,
         service: QuestService,
         snapshot_rx: watch::Receiver<QuestSnapshot>,
@@ -32,7 +35,7 @@ impl QuestState {
         }
     }
 
-    pub fn tick(&mut self) -> QuestTick {
+    pub(crate) fn tick(&mut self) -> QuestTick {
         let snapshot_changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if snapshot_changed {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
@@ -64,14 +67,30 @@ impl QuestState {
             }
         }
 
-        QuestTick { banner }
+        QuestTick {
+            banner,
+            snapshot_changed,
+        }
     }
 
-    pub fn snapshot(&self) -> &QuestSnapshot {
+    pub(crate) fn snapshot(&self) -> &QuestSnapshot {
         &self.snapshot
     }
 
-    pub fn is_loaded(&self) -> bool {
+    pub(crate) fn is_loaded(&self) -> bool {
         self.snapshot.user_id == Some(self.user_id)
+    }
+
+    /// Quests still open in each cadence, for the status bar's `quests`
+    /// segment. Zero until the snapshot belongs to this user, so a session
+    /// that has not loaded yet reads as "nothing outstanding" rather than
+    /// flashing another user's count.
+    pub(crate) fn open_counts(&self) -> (usize, usize) {
+        if !self.is_loaded() {
+            return (0, 0);
+        }
+        let open =
+            |items: &[super::svc::QuestItem]| items.iter().filter(|q| !q.completed()).count();
+        (open(&self.snapshot.daily), open(&self.snapshot.weekly))
     }
 }

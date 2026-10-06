@@ -1,0 +1,293 @@
+name: doors
+
+# One CI/CD workflow for every door asset image (docker/doors/*.Dockerfile).
+# Each game is a matrix entry; per-game validation lives in
+# docker/doors/smoke/<game>.sh next to its Dockerfile, and the published tag
+# is parsed from the root Dockerfile's `FROM ...door-<game>:<tag>` pin, which
+# is the single source of truth (bump the pin, and this workflow builds and
+# publishes that exact tag).
+#
+#   - changes: decide which games this run covers. PRs and main pushes build
+#     only the games whose inputs changed; the weekly schedule and a no-game
+#     dispatch build all of them (the drift check: door builds fetch pinned
+#     artifacts over the network, so upstream/checksum breakage should surface
+#     here, not at release time).
+#   - build_validate: compile the door Dockerfile, load it locally, and run
+#     the game's smoke script against it.
+#   - push_image: on push to main, publish ghcr door-<game> at the pinned tag.
+#     workflow_dispatch is the bootstrap/re-push lever (first publication
+#     happens from the branch that introduces the door Dockerfile, before the
+#     root Dockerfile pin can resolve). Scheduled runs never push: the weekly
+#     drift check must not silently mutate a pinned tag.
+#   - verify_deployed: manual, per-environment, single game. Confirms the live
+#     late-<game> deployment is rolled out; for nethack it also re-checks and
+#     idempotently re-seeds the save PVC.
+#
+# The late-<game> host images (runtime-<game>) build from the root Dockerfile
+# via deploy_service.yml; they are not built here.
+
+on:
+  pull_request:
+    paths:
+      - docker/doors/**
+      - docker/codekeep/**
+      - scripts/usurper_seed_data.py
+      - scripts/brogue_hangup_save.patch
+      - .github/workflows/doors.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/doors/**
+      - docker/codekeep/**
+      - scripts/usurper_seed_data.py
+      - scripts/brogue_hangup_save.patch
+      - .github/workflows/doors.yml
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC, all games
+  workflow_dispatch:
+    inputs:
+      game:
+        description: "Game to build (all = every door)"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - nethack
+          - dopewars
+          - dcss
+          - usurper
+          - brogue
+          - codekeep
+          - bashquest
+      run_verify_deployed:
+        description: "Also verify the door host is rolled out on the live cluster (needs a single game, not all)"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for verify_deployed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: resolve_changed_games
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      games: ${{ steps.resolve.outputs.games }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Map the trigger to the list of games this run covers. File paths that
+      # feed a single game map to that game; anything shared (this workflow)
+      # maps to all. Unknown events and unusable diffs fail open to all games:
+      # an extra build is cheap, a silently skipped one is not.
+      - name: resolve
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_GAME: ${{ inputs.game }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          all_games="nethack dopewars dcss usurper brogue codekeep bashquest"
+
+          game_for_file() {
+            case "$1" in
+              docker/doors/smoke/*.sh) basename "$1" .sh ;;
+              docker/doors/*.Dockerfile) basename "$1" .Dockerfile ;;
+              docker/codekeep/*) echo codekeep ;;
+              scripts/usurper_seed_data.py) echo usurper ;;
+              scripts/brogue_hangup_save.patch) echo brogue ;;
+              *) echo all ;;
+            esac
+          }
+
+          case "$EVENT" in
+            schedule)
+              games="$all_games"
+              ;;
+            workflow_dispatch)
+              if [ "$DISPATCH_GAME" = "all" ] || [ -z "$DISPATCH_GAME" ]; then
+                games="$all_games"
+              else
+                games="$DISPATCH_GAME"
+              fi
+              ;;
+            pull_request|push)
+              base="$PR_BASE"
+              if [ "$EVENT" = "push" ]; then base="$PUSH_BEFORE"; fi
+              if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
+                echo "no usable diff base, building all games"
+                games="$all_games"
+              else
+                games=""
+                while IFS= read -r file; do
+                  g=$(game_for_file "$file")
+                  if [ "$g" = "all" ]; then games="$all_games"; break; fi
+                  case " $games " in *" $g "*) ;; *) games="$games $g" ;; esac
+                done < <(git diff --name-only "$base" HEAD)
+              fi
+              ;;
+            *)
+              games="$all_games"
+              ;;
+          esac
+
+          # A triggered run with an unexpectedly empty diff fails open to all.
+          if [ -z "${games// /}" ]; then
+            games="$all_games"
+          fi
+
+          json=$(printf '%s\n' $games | jq -R . | jq -cs .)
+          echo "games: $json"
+          echo "games=$json" >> "$GITHUB_OUTPUT"
+
+  build_validate:
+    name: build_validate (${{ matrix.game }})
+    needs: changes
+    if: ${{ needs.changes.outputs.games != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        game: ${{ fromJSON(needs.changes.outputs.games) }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: read_door_image_tag
+        id: pin
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          tag=$(sed -nE "s|^FROM ghcr\.io/[^/]+/[^/]+/door-${GAME}:([^[:space:]]+) AS .*|\1|p" Dockerfile)
+          if [ -z "$tag" ]; then
+            echo "::error::no door-${GAME} pin found in the root Dockerfile"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: build_door_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/doors/${{ matrix.game }}.Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ matrix.game }}-build:ci
+          cache-from: type=gha,scope=door-${{ matrix.game }}
+          cache-to: type=gha,mode=max,scope=door-${{ matrix.game }}
+
+      - name: smoke_test
+        run: bash docker/doors/smoke/${{ matrix.game }}.sh "${{ matrix.game }}-build:ci" "${{ steps.pin.outputs.tag }}"
+
+  push_image:
+    name: push_image (${{ matrix.game }})
+    needs: [changes, build_validate]
+    if: ${{ needs.changes.outputs.games != '[]' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        game: ${{ fromJSON(needs.changes.outputs.games) }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: login_to_ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: read_door_image_tag
+        id: pin
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          tag=$(sed -nE "s|^FROM ghcr\.io/[^/]+/[^/]+/door-${GAME}:([^[:space:]]+) AS .*|\1|p" Dockerfile)
+          if [ -z "$tag" ]; then
+            echo "::error::no door-${GAME} pin found in the root Dockerfile"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The tag is stable per recipe revision, so re-pushing it on an
+      # unrelated main push is a layer-cached no-op.
+      - name: push_door_image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/doors/${{ matrix.game }}.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository }}/door-${{ matrix.game }}:${{ steps.pin.outputs.tag }}
+          cache-from: type=gha,scope=door-${{ matrix.game }}
+          cache-to: type=gha,mode=max,scope=door-${{ matrix.game }}
+
+  verify_deployed:
+    name: verify_deployed
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_verify_deployed && inputs.game != 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/late-${{ inputs.game }} -n default --timeout=180s
+
+      # Idempotent re-seed + write check against the live PVC, as the late
+      # user. mkdir -p / touch never clobber existing saves or bones. Fails if
+      # the mount is missing or not writable. NetHack-only: it is the one door
+      # whose game never creates its own save directory.
+      - name: verify_and_seed_nethack_save_dir
+        if: ${{ inputs.game == 'nethack' }}
+        run: |
+          POD=$(kubectl get pod -l app=late-nethack -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "late-nethack pod: ${POD}"
+          kubectl exec "${POD}" -- sh -c '
+            set -e
+            mkdir -p /var/games/nethack-var/save
+            touch /var/games/nethack-var/record
+            test -w /var/games/nethack-var/save
+            test -w /var/games/nethack-var/record
+            echo "save dir OK:" && ls -la /var/games/nethack-var
+          '

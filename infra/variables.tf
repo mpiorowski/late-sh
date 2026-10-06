@@ -1,6 +1,9 @@
 # =============================================================================
 # Core Infrastructure Variables
 # =============================================================================
+# App configuration is NOT declared here. late-ssh reads LATE_ENV plus secrets;
+# every other app value is compiled into late-ssh/src/config.rs. Variables in
+# this file exist only for infrastructure shape, images, and secrets.
 
 variable "KUBE_CONFIG_PATH" {
   description = "Path to the kubeconfig file"
@@ -18,11 +21,6 @@ variable "LOG_LEVEL" {
   type        = string
 }
 
-variable "DOMAIN" {
-  description = "The root domain (e.g., late.sh)."
-  type        = string
-}
-
 variable "GRAFANA_URL" {
   description = "The URL for the Grafana dashboard."
   type        = string
@@ -32,24 +30,10 @@ variable "GRAFANA_URL" {
 # Service Images
 # =============================================================================
 
-variable "SSH_IMAGE_TAG" {
-  description = "Docker image for late-ssh (e.g., ghcr.io/org/late-ssh:sha-abc123)."
-  type        = string
-}
-
-variable "WEB_IMAGE_TAG" {
-  description = "Docker image for late-web (e.g., ghcr.io/org/late-web:sha-abc123)."
-  type        = string
-}
-
-variable "NETHACK_IMAGE_TAG" {
-  description = "Docker image for late-nethack, the NetHack door host (e.g., ghcr.io/org/late-nethack:sha-abc123)."
-  type        = string
-}
-
-variable "DOPEWARS_IMAGE_TAG" {
-  description = "Docker image for late-dopewars, the dopewars door host (e.g., ghcr.io/org/late-dopewars:sha-abc123)."
-  type        = string
+variable "IMAGE_TAGS" {
+  description = "Component name -> full image ref (keys: ssh, web, and each door in doors.tf). Deploys never go through terraform: deploy_service.yml rolls images with kubectl set image and every deployment ignores image changes. Pass a key only when an apply must CREATE that deployment (a door bootstrap); anything missing falls back to a :bootstrap placeholder that matters only on first create."
+  type        = map(string)
+  default     = {}
 }
 
 # =============================================================================
@@ -60,57 +44,6 @@ variable "SSH_HOST_KEY" {
   description = "Ed25519 private key for the SSH server (russh host key)."
   type        = string
   sensitive   = true
-}
-
-# =============================================================================
-# SSH / Rate Limits
-# =============================================================================
-
-variable "SSH_OPEN" {
-  description = "Allow open SSH access (no auth required)."
-  type        = string
-}
-
-variable "MAX_CONNS_GLOBAL" {
-  description = "Max total concurrent SSH connections."
-  type        = string
-}
-
-variable "MAX_CONNS_PER_IP" {
-  description = "Max concurrent SSH connections per IP."
-  type        = string
-}
-
-variable "SSH_IDLE_TIMEOUT" {
-  description = "SSH idle timeout in seconds."
-  type        = string
-}
-
-variable "FRAME_DROP_LOG_EVERY" {
-  description = "Log every Nth frame drop."
-  type        = string
-}
-
-variable "SSH_MAX_ATTEMPTS_PER_IP" {
-  description = "Max SSH connection attempts per IP in rate limit window."
-  type        = string
-}
-
-variable "SSH_RATE_LIMIT_WINDOW_SECS" {
-  description = "SSH rate limit window in seconds."
-  type        = string
-}
-
-variable "SSH_PROXY_PROTOCOL" {
-  description = "Enable PROXY protocol parsing in late-ssh."
-  type        = string
-  default     = "1"
-}
-
-variable "SSH_PROXY_TRUSTED_CIDRS" {
-  description = "Comma-separated CIDRs trusted to send PROXY protocol headers."
-  type        = string
-  default     = "10.42.0.0/16,46.62.210.86/32"
 }
 
 # =============================================================================
@@ -135,39 +68,13 @@ variable "IPV6_PROXY_IMAGE" {
   default     = "haproxy:2.9-alpine"
 }
 
-variable "WS_PAIR_MAX_ATTEMPTS_PER_IP" {
-  description = "Max WebSocket pair attempts per IP in rate limit window."
-  type        = string
-}
-
-variable "WS_PAIR_RATE_LIMIT_WINDOW_SECS" {
-  description = "WebSocket pair rate limit window in seconds."
-  type        = string
-}
-
-variable "DB_POOL_SIZE" {
-  description = "Database connection pool size."
-  type        = string
-}
-
 # Bastion (late-bastion)
 # =============================================================================
 
 variable "BASTION_ENABLED" {
-  description = "\"1\" to deploy the late-bastion pod and the :5222 NGINX TCP entry. Off by default until Phase 3 wires the bastion's /tunnel client."
+  description = "\"1\" to deploy the late-bastion pod and the :5222 NGINX TCP entry alongside direct SSH."
   type        = string
   default     = "0"
-}
-
-variable "BASTION_IMAGE_TAG" {
-  description = "Docker image for late-bastion (e.g., ghcr.io/org/late-bastion:sha-abc123). Unused when BASTION_ENABLED=0."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_IMAGE_TAG)) > 0
-    error_message = "BASTION_IMAGE_TAG must be non-empty when BASTION_ENABLED=1."
-  }
 }
 
 variable "BASTION_HOST_KEY" {
@@ -189,8 +96,8 @@ variable "BASTION_SHARED_SECRET" {
   default     = ""
 
   validation {
-    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_SHARED_SECRET)) > 0
-    error_message = "BASTION_SHARED_SECRET must be non-empty when BASTION_ENABLED=1."
+    condition     = length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty for the late-ssh tunnel listener."
   }
 }
 
@@ -212,58 +119,8 @@ variable "BASTION_SSH_IDLE_TIMEOUT" {
   default     = "3600"
 }
 
-variable "BASTION_TUNNEL_TRUSTED_CIDRS" {
-  description = "CIDRs allowed to reach late-ssh /tunnel. Should match the bastion pod CIDR."
-  type        = string
-  default     = "10.42.0.0/16"
-}
-
 # =============================================================================
-# Door Games
-# =============================================================================
-
-variable "REBELS_ENABLED" {
-  description = "Enable the Rebels in the Sky SSH door game."
-  type        = string
-  default     = ""
-}
-
-variable "REBELS_HOST" {
-  description = "Rebels in the Sky SSH server hostname."
-  type        = string
-  default     = ""
-}
-
-variable "REBELS_PORT" {
-  description = "Rebels in the Sky SSH server port."
-  type        = string
-  default     = ""
-}
-
-variable "NETHACK_ENABLED" {
-  description = "Enable the NetHack SSH door game (real upstream binary on a PTY). Empty defaults to on; the nethack-save PVC is provisioned regardless. See infra/nethack.tf."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.NETHACK_ENABLED)))
-    error_message = "NETHACK_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "DOPEWARS_ENABLED" {
-  description = "Enable the dopewars door game CLIENT (service-ssh reaches the late-dopewars host over SSH; the host pod is always deployed). Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DOPEWARS_ENABLED)))
-    error_message = "DOPEWARS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-# =============================================================================
-# AI (Gemini)
+# Secrets injected into late-ssh
 # =============================================================================
 
 variable "AI_API_KEY" {
@@ -271,20 +128,6 @@ variable "AI_API_KEY" {
   type        = string
   sensitive   = true
 }
-
-variable "AI_MODEL" {
-  description = "Gemini model name."
-  type        = string
-}
-
-variable "AI_ENABLED" {
-  description = "Enable AI features."
-  type        = string
-}
-
-# =============================================================================
-# YouTube Data API
-# =============================================================================
 
 variable "YOUTUBE_API_KEY" {
   description = "YouTube Data API key for queue submit validation."
@@ -295,24 +138,6 @@ variable "YOUTUBE_API_KEY" {
 # =============================================================================
 # Voice / LiveKit
 # =============================================================================
-
-variable "VOICE_ENABLED" {
-  description = "Enable late voice rooms in late-ssh."
-  type        = string
-  default     = ""
-}
-
-variable "VOICE_ROOM" {
-  description = "Default LiveKit room used by the late voice room MVP."
-  type        = string
-  default     = ""
-}
-
-variable "LIVEKIT_SUBDOMAIN" {
-  description = "Subdomain used for the public LiveKit endpoint under DOMAIN."
-  type        = string
-  default     = ""
-}
 
 variable "LIVEKIT_IMAGE" {
   description = "LiveKit server image."
@@ -328,6 +153,18 @@ variable "LIVEKIT_LOG_LEVEL" {
 
 variable "LIVEKIT_API_KEY" {
   description = "LiveKit API key used by late-ssh for token minting."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_INGRESS_IMAGE" {
+  description = "LiveKit ingress service image (WHIP ingest for OBS streams)."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_INGRESS_WHIP_PORT" {
+  description = "LiveKit ingress WHIP HTTP port (behind the nginx ingress)."
   type        = string
   default     = ""
 }
@@ -372,49 +209,29 @@ variable "LIVEKIT_TURN_TLS_PORT" {
 # IRC
 # =============================================================================
 
-variable "IRC_ENABLED" {
-  description = "Enable the embedded IRC listener in late-ssh. Production should use TLS."
+variable "IRC_PROXY_EMIT" {
+  description = "Make the IRC ingress proxies emit PROXY protocol headers. Enable only after the parser-capable image is deployed."
   type        = string
   default     = ""
 
   validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_ENABLED)))
-    error_message = "IRC_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_PROXY_EMIT)))
+    error_message = "IRC_PROXY_EMIT must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
   }
 }
 
-variable "IRC_HOST" {
-  description = "Public IRC hostname used for the TLS certificate."
+# =============================================================================
+# Minecraft
+# =============================================================================
+
+variable "MINECRAFT_WHITELIST" {
+  description = "Comma-separated Minecraft usernames allowed to join. Seeded on every boot; names added via rcon-cli persist alongside. Empty seeds nobody."
   type        = string
   default     = ""
 }
 
-variable "IRC_PORT" {
-  description = "Public and container IRC TLS port."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_MAX_CONNS_GLOBAL" {
-  description = "Max total concurrent IRC connections."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_MAX_CONNS_PER_USER" {
-  description = "Max concurrent IRC connections per late.sh user."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_MAX_AUTH_FAILURES_PER_IP" {
-  description = "Max failed IRC auth attempts per IP in the auth failure window."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_AUTH_FAILURE_WINDOW_SECS" {
-  description = "IRC auth failure rate-limit window in seconds."
+variable "MINECRAFT_OPS" {
+  description = "Comma-separated Minecraft usernames granted operator. Seeded on every boot. Empty seeds nobody."
   type        = string
   default     = ""
 }
@@ -442,20 +259,4 @@ variable "S3_ENDPOINT" {
 variable "DB_BACKUPS_BUCKET" {
   description = "S3 bucket name for CloudNativePG backups."
   type        = string
-}
-
-variable "FILES_BUCKET" {
-  description = "S3/R2 bucket name for public uploaded files."
-  type        = string
-}
-
-variable "FILES_PUBLIC_BASE_URL" {
-  description = "Public base URL for uploaded files."
-  type        = string
-}
-
-variable "FILES_S3_REGION" {
-  description = "S3/R2 signing region for uploaded files. Cloudflare R2 uses auto."
-  type        = string
-  default     = "auto"
 }

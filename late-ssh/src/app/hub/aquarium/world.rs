@@ -7,14 +7,14 @@ use ratatui::style::Color;
 use super::{config::LayerConfig, kdl_parse};
 
 #[derive(Debug, Clone)]
-pub struct ReefWorld {
+pub(crate) struct ReefWorld {
     pub surface: WorldLayer,
     pub floor: WorldLayer,
     pub viewport_x: i32,
 }
 
 impl ReefWorld {
-    pub fn new(surface: WorldLayer, floor: WorldLayer) -> Self {
+    pub(crate) fn new(surface: WorldLayer, floor: WorldLayer) -> Self {
         Self {
             surface,
             floor,
@@ -22,7 +22,7 @@ impl ReefWorld {
         }
     }
 
-    pub fn visible_bounds(&self, visible_width: u16) -> WorldBounds {
+    pub(crate) fn visible_bounds(&self, visible_width: u16) -> WorldBounds {
         WorldBounds {
             start: self.viewport_x,
             end: self.viewport_x.saturating_add(visible_width as i32),
@@ -31,13 +31,13 @@ impl ReefWorld {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorldBounds {
+pub(crate) struct WorldBounds {
     pub start: i32,
     pub end: i32,
 }
 
 #[derive(Debug, Clone)]
-pub struct WorldLayer {
+pub(crate) struct WorldLayer {
     chunks: Vec<LayerChunk>,
     pattern: Vec<usize>,
     pattern_width: i32,
@@ -46,7 +46,7 @@ pub struct WorldLayer {
 }
 
 impl WorldLayer {
-    pub fn cell_at(&self, world_x: i32, row: u16) -> Option<char> {
+    pub(crate) fn cell_at(&self, world_x: i32, row: u16) -> Option<char> {
         let mut offset = world_x.rem_euclid(self.pattern_width);
         for chunk_index in &self.pattern {
             let chunk = &self.chunks[*chunk_index];
@@ -64,7 +64,7 @@ impl WorldLayer {
 
     #[cfg(test)]
     #[allow(dead_code)]
-    pub fn chunk_count(&self) -> usize {
+    pub(crate) fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
 }
@@ -76,7 +76,7 @@ struct LayerChunk {
     height: u16,
 }
 
-pub fn load_world_layer(config: &LayerConfig) -> Result<WorldLayer> {
+pub(crate) fn load_world_layer(config: &LayerConfig) -> Result<WorldLayer> {
     let source = if let Some(source) = embedded_world_layer(config.file.to_string_lossy().as_ref())
     {
         source.to_string()

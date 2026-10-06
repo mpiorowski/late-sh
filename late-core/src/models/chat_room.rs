@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
+use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -19,7 +20,28 @@ crate::model! {
         pub language_code: Option<String>,
         pub dm_user_a: Option<Uuid>,
         pub dm_user_b: Option<Uuid>,
+        // What this room is about, one line. Projected as the IRC topic.
+        pub topic: Option<String>,
+        // The room's general rules, shown on request.
+        pub rules: Option<String>,
+        // Who opened this room. Written by the create paths only, never
+        // back-filled; see `owner_id` for the ownership actually in force.
+        pub created_by: Option<Uuid>,
     }
+}
+
+/// Trim a room-info field and treat an empty result as "unset" (NULL).
+fn clean_info(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// One user's rooms and the per-room counters that come back with them.
+/// Both maps are keyed by room id and always carry an entry for every room
+/// in `rooms`, so callers never have to distinguish "absent" from "zero".
+pub struct UserRoomState {
+    pub rooms: Vec<ChatRoom>,
+    pub last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub unread_counts: HashMap<Uuid, i64>,
 }
 
 impl ChatRoom {
@@ -41,6 +63,43 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// The small bar out back of the Clubhouse (migration 189): its own
+    /// kind, auto-joined and permanent like #lounge so every session holds
+    /// the room without a membership write per visit, and excluded from
+    /// every listing by kind so it is only ever seen from its own screen.
+    ///
+    /// Also seats every existing account. Auto-join runs only when an
+    /// account is created, so accounts from before the bar opened would
+    /// otherwise never hold the room, and their owners would sit down with
+    /// nothing to speak into. Idempotent: a conflict is a member already.
+    pub async fn ensure_nightcap(client: &Client) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, permanent, slug)
+                 VALUES ('nightcap', 'public', true, true, $1)
+                 ON CONFLICT (slug) WHERE kind = 'nightcap'
+                 DO UPDATE
+                    SET visibility = 'public',
+                        auto_join = true,
+                        permanent = true,
+                        updated = current_timestamp
+                 RETURNING *",
+                &[&NIGHTCAP_SLUG],
+            )
+            .await?;
+        let room = Self::from(row);
+        client
+            .execute(
+                "INSERT INTO chat_room_members (room_id, user_id, last_read_at)
+                 SELECT $1, u.id, current_timestamp
+                 FROM users u
+                 ON CONFLICT (room_id, user_id) DO NOTHING",
+                &[&room.id],
+            )
+            .await?;
+        Ok(room)
+    }
+
     pub async fn find_lounge(client: &Client) -> Result<Option<Self>> {
         let row = client
             .query_opt(
@@ -55,6 +114,26 @@ impl ChatRoom {
         let row = client
             .query_opt(
                 "SELECT * FROM chat_rooms WHERE slug = $1 AND kind <> 'dm' LIMIT 1",
+                &[&slug],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    /// The public, non-DM room for a slug, preferring a permanent room and
+    /// then the oldest match. Used by the daily paper, which must resolve
+    /// `#announcements` to the same room `auto_join_public_rooms` joins
+    /// users to.
+    pub async fn find_public_non_dm_by_slug(client: &Client, slug: &str) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT *
+                 FROM chat_rooms
+                 WHERE slug = $1
+                   AND kind <> 'dm'
+                   AND visibility = 'public'
+                 ORDER BY permanent DESC, created ASC, id ASC
+                 LIMIT 1",
                 &[&slug],
             )
             .await?;
@@ -146,6 +225,25 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// The game's haunted channel (GAME.md, First contact stage 4): its own
+    /// kind, so every room listing (browse lists only `topic`, IRC lists
+    /// lounge/language/topic) excludes it by construction and the join path
+    /// can gate on the first-contact invitation. Never auto-joined; seeded
+    /// on the first invited `/join #deadchannel`.
+    pub async fn get_or_create_deadchannel_room(client: &Client) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
+                 VALUES ('deadchannel', 'public', false, $1)
+                 ON CONFLICT (slug) WHERE kind = 'deadchannel'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&DEADCHANNEL_SLUG],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     pub async fn get_or_create_game_room(
         client: &Client,
         game_kind: GameKind,
@@ -166,17 +264,136 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
+    /// Permanent per-streamer chat room for "watch me" streams: `kind='game'`
+    /// (hidden from the Home rail and IRC, joinable by anyone through the
+    /// public game-room join path), `game_kind='stream'`, slug
+    /// `{username}-live`. Same seeded shape as the house-table rooms; chat
+    /// history persists between streams. `owner` is recorded as `created_by`
+    /// on first creation and is the only user allowed to publish into the
+    /// room's stream.
+    pub async fn get_or_create_stream_room(
+        client: &Client,
+        username: &str,
+        owner: Uuid,
+    ) -> Result<Self> {
+        // The room follows the account, not the name: the owner lookup comes
+        // first, so a freed-and-reclaimed username never lands a new streamer
+        // in the original owner's room (and its chat history). A renamed
+        // streamer keeps their room under the old slug.
+        let existing = client
+            .query_opt(
+                "SELECT * FROM chat_rooms
+                 WHERE kind = 'game' AND game_kind = 'stream' AND created_by = $1
+                 ORDER BY id LIMIT 1",
+                &[&owner],
+            )
+            .await?;
+        if let Some(row) = existing {
+            return Ok(Self::from(row));
+        }
+        let slug = normalize_game_slug(&format!("{username}-live"))?;
+        let row = client
+            .query_opt(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, created_by)
+                 VALUES ('game', 'public', false, $1, 'stream', $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO NOTHING
+                 RETURNING *",
+                &[&slug, &owner],
+            )
+            .await?;
+        if let Some(row) = row {
+            return Ok(Self::from(row));
+        }
+        // The insert lost: either a concurrent go_live for this same owner
+        // just created the room (re-check by owner), or the plain slug
+        // belongs to another account (its owner was renamed and this
+        // username reclaimed).
+        let raced = client
+            .query_opt(
+                "SELECT * FROM chat_rooms
+                 WHERE kind = 'game' AND game_kind = 'stream' AND created_by = $1
+                 ORDER BY id LIMIT 1",
+                &[&owner],
+            )
+            .await?;
+        if let Some(row) = raced {
+            return Ok(Self::from(row));
+        }
+        // Squatted slug: suffix with random id bits so each account still
+        // gets exactly one room of its own.
+        let owner_simple = owner.simple().to_string();
+        let suffix = &owner_simple[owner_simple.len() - 8..];
+        let slug = normalize_game_slug(&format!("{username}-live-{suffix}"))?;
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, created_by)
+                 VALUES ('game', 'public', false, $1, 'stream', $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug, &owner],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// Chat room for a claimed daily match, plus both players' memberships,
+    /// in one statement. `kind = 'game'` (hidden from the Home rail, no
+    /// Mentions, no IRC) and `visibility = 'public'`, the same shape as the
+    /// house-table and stream rooms: a spectator who opens the board joins
+    /// through the public game-room path and talks there. The two players
+    /// are seeded as members so the room is theirs before anyone walks in.
+    /// `game_kind` is the daily roster kind string; the slug is
+    /// `daily-{match_id}`, unique per match. No ON CONFLICT: a duplicate
+    /// slug means a bug, not a race to absorb.
+    ///
+    /// Rooms created while match chat was players-only stay `private`, and
+    /// `ChatService::join_game_room` keeps spectators out of those.
+    pub async fn create_daily_match_room(
+        client: &impl GenericClient,
+        game_kind: &str,
+        slug: &str,
+        player_a: Uuid,
+        player_b: Uuid,
+    ) -> Result<Self> {
+        let slug = normalize_game_slug(slug)?;
+        let row = client
+            .query_one(
+                "WITH room AS (
+                     INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                     VALUES ('game', 'public', false, $1, $2)
+                     RETURNING *
+                 ),
+                 members AS (
+                     INSERT INTO chat_room_members (room_id, user_id)
+                     SELECT room.id, member_id
+                     FROM room, unnest(ARRAY[$3, $4]::uuid[]) AS member_id
+                 )
+                 SELECT * FROM room",
+                &[&slug, &game_kind, &player_a, &player_b],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// Create a private room owned by `created_by`. The creator is recorded in
+    /// the same statement, so a private room is never momentarily ownerless.
+    pub async fn create_private_room(
+        client: &Client,
+        slug: &str,
+        created_by: Uuid,
+    ) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
         let row = client
             .query_opt(
-                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
-                 VALUES ('topic', 'private', false, $1)
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, created_by)
+                 VALUES ('topic', 'private', false, $1, $2)
                  ON CONFLICT (visibility, slug) WHERE kind = 'topic'
                  DO NOTHING
                  RETURNING *",
-                &[&slug],
+                &[&slug, &created_by],
             )
             .await?;
 
@@ -184,6 +401,98 @@ impl ChatRoom {
             Some(row) => Ok(Self::from(row)),
             None => bail!("private room #{slug} already exists"),
         }
+    }
+
+    /// Record who opened a room, from the create path only. The `created_by IS
+    /// NULL` guard is a concurrency guard, not a back-fill: two sessions racing
+    /// `/public #foo` both land here, and the loser must not overwrite the
+    /// winner. Never call this to grant ownership of an existing room.
+    pub async fn set_creator(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "UPDATE chat_rooms SET created_by = $2
+                 WHERE id = $1 AND created_by IS NULL",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Owners of `room_ids`, derived rather than stored: the recorded creator
+    /// while they are still a member, otherwise the earliest remaining member
+    /// (ties broken by user id so the answer is stable). Ownership therefore
+    /// succeeds on its own when a creator leaves, and rooms that predate
+    /// `created_by` resolve to their first member. A room with no members left
+    /// is absent from the map.
+    pub async fn owner_ids_for_rooms(
+        client: &Client,
+        room_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if room_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT DISTINCT ON (m.room_id) m.room_id, m.user_id
+                   FROM chat_room_members m
+                   JOIN chat_rooms r ON r.id = m.room_id
+                  WHERE m.room_id = ANY($1)
+                  ORDER BY m.room_id,
+                           COALESCE(m.user_id = r.created_by, false) DESC,
+                           m.joined_at ASC,
+                           m.user_id ASC",
+                &[&room_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("room_id"), row.get("user_id")))
+            .collect())
+    }
+
+    /// The streamer whose room this is, or `None` when the room is not a
+    /// stream room. Deliberately not the derived `owner_id`: that one succeeds
+    /// to the earliest remaining member, which on a *public* room would hand a
+    /// passing viewer the streamer's moderation powers. A stream room's owner
+    /// is the recorded `created_by` and nobody else, for as long as the room
+    /// exists.
+    pub async fn stream_room_owner(client: &Client, room_id: Uuid) -> Result<Option<Uuid>> {
+        let row = client
+            .query_opt(
+                "SELECT created_by FROM chat_rooms
+                 WHERE id = $1 AND kind = 'game' AND game_kind = 'stream'",
+                &[&room_id],
+            )
+            .await?;
+        Ok(row.and_then(|row| row.get("created_by")))
+    }
+
+    /// The owner of one room. Same derivation as `owner_ids_for_rooms`.
+    pub async fn owner_id(client: &Client, room_id: Uuid) -> Result<Option<Uuid>> {
+        Ok(Self::owner_ids_for_rooms(client, &[room_id])
+            .await?
+            .remove(&room_id))
+    }
+
+    /// Set what the room is about and its rules. Empty strings are stored as
+    /// NULL so a cleared field reads as "unset" rather than blank. Authority is
+    /// resolved by the caller (service layer).
+    pub async fn set_topic_and_rules(
+        client: &Client,
+        room_id: Uuid,
+        topic: Option<&str>,
+        rules: Option<&str>,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE chat_rooms
+                    SET topic = $2, rules = $3, updated = current_timestamp
+                  WHERE id = $1
+                 RETURNING *",
+                &[&room_id, &clean_info(topic), &clean_info(rules)],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {
@@ -208,6 +517,19 @@ impl ChatRoom {
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    /// Existing DM room between two users, if one has been created.
+    pub async fn get_dm(client: &Client, user_a: Uuid, user_b: Uuid) -> Result<Option<Self>> {
+        let (dm_user_a, dm_user_b) = canonical_dm_pair(user_a, user_b);
+        let row = client
+            .query_opt(
+                "SELECT * FROM chat_rooms
+                 WHERE kind = 'dm' AND dm_user_a = $1 AND dm_user_b = $2",
+                &[&dm_user_a, &dm_user_b],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     pub async fn list_for_user(client: &Client, user_id: Uuid) -> Result<Vec<Self>> {
@@ -235,6 +557,106 @@ impl ChatRoom {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
+    /// The rooms a user is in, together with the two per-room counters the
+    /// chat rail renders from.
+    ///
+    /// One query rather than three. `last_message_at` and the unread count
+    /// both key off the very `chat_room_members` row this already walks, so
+    /// folding them in as laterals removes two redundant scans of the user's
+    /// membership set on every snapshot pass. The snapshot poll runs per
+    /// session every `CHAT_REFRESH_INTERVAL`, so those scans were the same
+    /// work repeated millions of times a day.
+    ///
+    /// `system_user_id` is the #lounge feed bot (`app/activity/lounge.rs`),
+    /// whose `· `-prefixed activity lines must never light an unread badge.
+    /// It is passed in rather than re-derived per row: the old shape joined
+    /// `users` and read `settings->>'system'` out of JSONB for every message,
+    /// which made Postgres hash the entire users table to answer a question
+    /// with one constant answer. `None` means no system user exists yet, in
+    /// which case nothing is excluded.
+    pub async fn list_for_user_with_state(
+        client: &Client,
+        user_id: Uuid,
+        system_user_id: Option<Uuid>,
+    ) -> Result<UserRoomState> {
+        let rows = client
+            .query(
+                // The system-feed bot posts ambient activity lines prefixed
+                // with `· `; those must never light anyone's unread badge. The
+                // same author also posts real messages (a new public room
+                // reported to #moderators), which must. The prefix is the
+                // discriminator everywhere else too, see
+                // `chat/state.rs::system_line_text_in`.
+                //
+                // IS NOT DISTINCT FROM keeps a NULL $2 (no system user) from
+                // nulling out the whole predicate and dropping every row.
+                //
+                // The unread count stops at $3; see `UNREAD_COUNT_CAP` for why
+                // an exact total is neither needed nor affordable.
+                "SELECT r.*,
+                        latest.created AS last_message_at,
+                        COALESCE(unread.unread_count, 0)::bigint AS unread_count
+                 FROM chat_rooms r
+                 JOIN chat_room_members m ON m.room_id = r.id
+                 LEFT JOIN LATERAL (
+                    SELECT created
+                    FROM chat_messages
+                    WHERE room_id = r.id
+                    ORDER BY created DESC, id DESC
+                    LIMIT 1
+                 ) latest ON true
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS unread_count
+                    FROM (
+                       SELECT 1
+                       FROM chat_messages msg
+                       WHERE msg.room_id = r.id
+                         AND msg.user_id <> m.user_id
+                         AND NOT (
+                             msg.user_id IS NOT DISTINCT FROM $2::uuid
+                             AND msg.body LIKE '· %'
+                         )
+                         AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                       LIMIT $3
+                    ) capped
+                 ) unread ON true
+                 WHERE m.user_id = $1
+                 ORDER BY
+                     CASE
+                         WHEN r.kind = 'lounge' AND r.slug = 'lounge' THEN 0
+                         WHEN r.permanent THEN 1
+                         WHEN r.visibility = 'public' THEN 2
+                         WHEN r.kind = 'dm' THEN 4
+                         ELSE 3
+                     END ASC,
+                     COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
+                     r.created ASC,
+                     r.id ASC",
+                &[
+                    &user_id,
+                    &system_user_id,
+                    &crate::models::chat_room_member::ChatRoomMember::UNREAD_COUNT_CAP,
+                ],
+            )
+            .await?;
+
+        let mut state = UserRoomState {
+            rooms: Vec::with_capacity(rows.len()),
+            last_message_at: HashMap::with_capacity(rows.len()),
+            unread_counts: HashMap::with_capacity(rows.len()),
+        };
+        for row in rows {
+            // Read the joined columns before `from` consumes the row.
+            let last_message_at: Option<DateTime<Utc>> = row.get("last_message_at");
+            let unread_count: i64 = row.get("unread_count");
+            let room = Self::from(row);
+            state.last_message_at.insert(room.id, last_message_at);
+            state.unread_counts.insert(room.id, unread_count);
+            state.rooms.push(room);
+        }
+        Ok(state)
+    }
+
     pub async fn get_target_user_ids(client: &Client, room_id: Uuid) -> Result<Option<Vec<Uuid>>> {
         let visibility: String = client
             .query_one(
@@ -252,6 +674,16 @@ impl ChatRoom {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn list_by_ids(client: &Client, room_ids: &[Uuid]) -> Result<Vec<Self>> {
+        if room_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = client
+            .query("SELECT * FROM chat_rooms WHERE id = ANY($1)", &[&room_ids])
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     pub async fn is_kind(client: &Client, room_id: Uuid, kind: &str) -> Result<bool> {
@@ -353,6 +785,7 @@ impl ChatRoom {
             .query(
                 "SELECT r.id,
                         r.slug,
+                        r.topic,
                         COALESCE(m.member_count, 0)::bigint AS member_count,
                         COALESCE(msg.message_count, 0)::bigint AS message_count,
                         msg.last_message_at
@@ -387,6 +820,7 @@ impl ChatRoom {
                 slug.map(|slug| DiscoverPublicTopicRoom {
                     room_id: row.get("id"),
                     slug,
+                    topic: row.get("topic"),
                     member_count: row.get("member_count"),
                     message_count: row.get("message_count"),
                     last_message_at: row.get("last_message_at"),
@@ -430,7 +864,7 @@ impl ChatRoom {
             .collect())
     }
 
-    pub async fn touch_updated(client: &Client, room_id: Uuid) -> Result<u64> {
+    pub async fn touch_updated(client: &impl GenericClient, room_id: Uuid) -> Result<u64> {
         let rows = client
             .execute(
                 "UPDATE chat_rooms SET updated = current_timestamp WHERE id = $1",
@@ -468,21 +902,42 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    /// Create or update a permanent public room. Permanent rooms are auto-joined
-    /// by all users on connect and cannot be left.
+    /// Create a permanent public room. Permanent rooms are auto-joined by all
+    /// users on connect and cannot be left. Re-running this on a room that is
+    /// already permanent is a no-op, so the caller can retry safely; an
+    /// existing *non*-permanent room is left alone and the call fails, because
+    /// promoting it would bulk-add every user to an unleaveable room with no
+    /// undo — a mistyped slug must not do that.
     pub async fn ensure_permanent(client: &Client, slug: &str) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
         let existing = client
             .query_opt(
-                "SELECT id
+                "SELECT *
                  FROM chat_rooms
                  WHERE slug = $1 AND kind = 'topic' AND visibility = 'public'",
                 &[&slug],
             )
             .await?;
-        if existing.is_some() {
-            bail!("room #{slug} already exists");
+        if let Some(existing) = existing {
+            let room = Self::from(existing);
+            if room.permanent {
+                return Ok(room);
+            }
+            // Promote an existing non-permanent public room (e.g. a user-created
+            // `/public` room) to a permanent auto-join room. Callers bulk-add all
+            // users afterwards, so a mistyped slug will bulk-add everyone to an
+            // unleavable room — `/create-room` is admin-only for that reason.
+            let row = client
+                .query_one(
+                    "UPDATE chat_rooms
+                     SET permanent = true, auto_join = true, updated = now()
+                     WHERE id = $1
+                     RETURNING *",
+                    &[&room.id],
+                )
+                .await?;
+            return Ok(Self::from(row));
         }
 
         let row = client
@@ -597,6 +1052,9 @@ impl ChatRoom {
 pub struct DiscoverPublicTopicRoom {
     pub room_id: Uuid,
     pub slug: String,
+    /// What the room is about, when a mod has set it. This is the one line
+    /// someone reads before deciding whether to join.
+    pub topic: Option<String>,
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,
@@ -610,6 +1068,25 @@ pub struct PublicTopicRoomSummary {
     pub member_count: i64,
 }
 
+/// The haunted channel's slug: reserved from user creation in
+/// `normalize_topic_slug`, owned by `get_or_create_deadchannel_room`.
+pub const DEADCHANNEL_SLUG: &str = "deadchannel";
+/// The haunted channel's `chat_rooms.kind` (migration 170): its own kind
+/// so every kind whitelist (browse, IRC, the rail's sections) excludes or
+/// places it by construction rather than by slug.
+pub const DEADCHANNEL_KIND: &str = "deadchannel";
+/// The small bar's slug and `chat_rooms.kind` (migration 189), owned by
+/// `ensure_nightcap`. Its own kind so every listing skips it by
+/// construction; see `late-ssh/src/app/clubhouse/nightcap/CONTEXT.md`.
+pub const NIGHTCAP_SLUG: &str = "nightcap";
+pub const NIGHTCAP_KIND: &str = "nightcap";
+/// Kinds no cross-room reader may surface, whatever membership or
+/// visibility would allow: message search, history paging, and mention
+/// resolution all bind this as `kind <> ALL($n::text[])`. A hidden room is
+/// only ever seen from its own screen; membership alone is no gate, since
+/// the nightcap room seats every account.
+pub const HIDDEN_ROOM_KINDS: &[&str] = &[NIGHTCAP_KIND];
+
 pub fn canonical_dm_pair(user_a: Uuid, user_b: Uuid) -> (Uuid, Uuid) {
     if user_a.as_u128() < user_b.as_u128() {
         (user_a, user_b)
@@ -622,6 +1099,18 @@ fn normalize_topic_slug(slug: &str) -> Result<String> {
     let slug = normalize_room_slug(slug)?;
     if slug == "lounge" {
         bail!("cannot create room with reserved name 'lounge'");
+    }
+    if slug == NIGHTCAP_SLUG {
+        bail!("cannot create room with reserved name 'nightcap'");
+    }
+    if slug == DEADCHANNEL_SLUG {
+        // The game's home channel (GAME.md, First contact): the invitation
+        // DM ends in `/join #deadchannel`, so the name has to be waiting
+        // for the game, not for whoever typed it first. The message is the
+        // fiction rather than "reserved", which would confirm there is
+        // something to reserve it for; the room itself lives under its own
+        // kind (`get_or_create_deadchannel_room`), not through here.
+        bail!("only static on that channel");
     }
     Ok(slug)
 }
@@ -662,45 +1151,5 @@ fn normalize_game_slug(slug: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn canonical_dm_pair_orders_smaller_first() {
-        let a = Uuid::from_u128(1);
-        let b = Uuid::from_u128(2);
-        assert_eq!(canonical_dm_pair(a, b), (a, b));
-        assert_eq!(canonical_dm_pair(b, a), (a, b));
-    }
-
-    #[test]
-    fn canonical_dm_pair_equal_uuids() {
-        let a = Uuid::from_u128(42);
-        let (x, y) = canonical_dm_pair(a, a);
-        assert_eq!(x, a);
-        assert_eq!(y, a);
-    }
-
-    #[test]
-    fn normalize_topic_slug_slugifies_room_names() {
-        assert_eq!(
-            normalize_topic_slug("  Rust Nerds  ").unwrap(),
-            "rust-nerds"
-        );
-        assert_eq!(normalize_topic_slug("room\nname").unwrap(), "room-name");
-        assert_eq!(normalize_topic_slug("vps/d9d0").unwrap(), "vps-d9d0");
-        assert_eq!(normalize_topic_slug("a___b...c").unwrap(), "a-b-c");
-    }
-
-    #[test]
-    fn normalize_topic_slug_rejects_empty_or_reserved_names() {
-        assert!(normalize_topic_slug("   ").is_err());
-        assert!(normalize_topic_slug("!!!").is_err());
-        assert!(normalize_topic_slug("lounge").is_err());
-    }
-
-    #[test]
-    fn normalize_room_slug_allows_lounge_for_non_creation_paths() {
-        assert_eq!(normalize_room_slug(" Lounge ").unwrap(), "lounge");
-    }
-}
+#[path = "chat_room_internal_test.rs"]
+mod chat_room_internal_test;

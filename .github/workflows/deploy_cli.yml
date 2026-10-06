@@ -1,12 +1,42 @@
 name: deploy_cli
 
+# Builds the late CLI for every shipped platform and publishes the release
+# distribution to R2. Called by release.yml for -cli releases;
+# workflow_dispatch is the manual lever.
+#
+# Supply-chain shape: every binary gets a Sigstore build-provenance
+# attestation (actions/attest, keyless, signed by this workflow's OIDC
+# identity) whose bundle ships next to it as <binary>.sigstore.json, and
+# sha256sums.txt is uploaded to the GitHub Release as well as to R2. The
+# installers read checksums from GitHub and binaries from R2, so tampering
+# with the bucket alone cannot ship a different binary to anyone running a
+# trusted copy of the installer.
+#
+# Two rules keep the provenance honest:
+# - The workflow must run on the release tag itself. The Sigstore identity
+#   and the recorded source commit come from the OIDC token, which carries
+#   the ref the workflow ran on, not the ref checked out. A manual redeploy
+#   is therefore `gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>`;
+#   build_cli refuses any other ref.
+# - A published tag is immutable. The checksum file on the GitHub Release is
+#   uploaded once; a rebuild that produces different bytes fails to publish
+#   and ships under a new tag instead.
+
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to deploy, for example v0.27.11-cli"
+        description: "Release tag to deploy, for example v0.27.11-cli. Dispatch on that same tag: gh workflow run deploy_cli.yml --ref <tag> -f release_tag=<tag>"
         required: true
         type: string
       environment:
@@ -18,37 +48,43 @@ on:
           - production
           - staging
 
-concurrency:
-  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli'))) && format('deploy-cli-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
 jobs:
   ci:
     name: ci
-    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
     with:
       package: late-cli
-      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      source_ref: ${{ inputs.release_tag }}
 
   build_cli:
     name: build_late_cli_${{ matrix.target }}
-    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     needs: ci
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Linux desktop targets also ship the standalone late-webview
+          # helper: late itself must not link WebKitGTK, so a host without
+          # the webview libraries can still run the CLI.
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_name: late
+            webview_helper: true
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             binary_name: late
+            webview_helper: true
           - runner: ubuntu-latest
             target: x86_64-linux-android
             binary_name: late
@@ -67,10 +103,24 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_name: late.exe
     steps:
+      # The attestation identity and its source commit are taken from the
+      # OIDC token, which reflects the ref this run started on. Checking out
+      # the tag below only changes the files being built, so a dispatch from
+      # main would sign main's commit as the release. Refuse that.
+      - name: assert_ref_is_release_tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/tags/${RELEASE_TAG}" ]]; then
+            echo "this workflow must run on refs/tags/${RELEASE_TAG}, got ${GITHUB_REF}; redeploy with: gh workflow run deploy_cli.yml --ref ${RELEASE_TAG} -f release_tag=${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
       - name: checkout
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          ref: ${{ inputs.release_tag }}
 
       - name: restore_rust_cache
         uses: Swatinem/rust-cache@v2
@@ -87,6 +137,10 @@ jobs:
       - name: set_up_android_sdk
         if: matrix.android == true
         uses: android-actions/setup-android@v4.0.1
+        # The action's default installs the removed legacy `tools` package,
+        # which fails on current cmdline-tools. Only the NDK is needed.
+        with:
+          packages: platform-tools
 
       - name: install_android_ndk
         if: matrix.android == true
@@ -138,58 +192,92 @@ jobs:
 
       - name: stamp_cli_version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.release_tag }}"
-          else
-            tag="${{ github.event.release.tag_name }}"
-          fi
-          test -n "$tag"
-          echo "stamping CLI version: ${tag}"
+          test -n "$RELEASE_TAG"
+          echo "stamping CLI version: ${RELEASE_TAG}"
           # build.rs reads this and embeds it as the binary version, matching
           # the VERSION file published by publish_cli for the same tag.
-          echo "LATE_CLI_VERSION=${tag}" >> "$GITHUB_ENV"
+          echo "LATE_CLI_VERSION=${RELEASE_TAG}" >> "$GITHUB_ENV"
 
       - name: cargo_build_cli
-        if: matrix.android != true
         run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
 
-      - name: cargo_build_cli_android
-        if: matrix.android == true
-        run: cargo build --locked --release -p late-cli --bin late --target ${{ matrix.target }}
+      - name: cargo_build_webview_helper
+        if: matrix.webview_helper == true
+        run: cargo build --locked --release -p late-webview --bin late-webview --target ${{ matrix.target }}
 
       - name: stage_cli_artifact
         shell: bash
         run: |
           mkdir -p dist/${{ matrix.target }}
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.target }}/${{ matrix.binary_name }}"
+          if [[ "${{ matrix.webview_helper }}" == "true" ]]; then
+            cp "target/${{ matrix.target }}/release/late-webview" "dist/${{ matrix.target }}/late-webview"
+          fi
+
+      # Keyless Sigstore provenance for each staged binary. One attestation
+      # per file keeps every bundle single-subject, which is what
+      # `cosign verify-blob-attestation --bundle` expects.
+      - name: attest_cli_provenance
+        id: attest_cli
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.target }}/${{ matrix.binary_name }}
+
+      - name: attest_webview_helper_provenance
+        if: matrix.webview_helper == true
+        id: attest_webview
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ matrix.target }}/late-webview
+
+      - name: stage_provenance_bundles
+        shell: bash
+        env:
+          CLI_BUNDLE: ${{ steps.attest_cli.outputs.bundle-path }}
+          WEBVIEW_BUNDLE: ${{ steps.attest_webview.outputs.bundle-path }}
+        run: |
+          test -n "$CLI_BUNDLE"
+          cp "$CLI_BUNDLE" "dist/${{ matrix.target }}/${{ matrix.binary_name }}.sigstore.json"
+          if [[ "${{ matrix.webview_helper }}" == "true" ]]; then
+            test -n "$WEBVIEW_BUNDLE"
+            cp "$WEBVIEW_BUNDLE" "dist/${{ matrix.target }}/late-webview.sigstore.json"
+          fi
 
       - name: upload_cli_artifact
         uses: actions/upload-artifact@v6
         with:
           name: late-${{ matrix.target }}
-          path: dist/${{ matrix.target }}/${{ matrix.binary_name }}
+          path: dist/${{ matrix.target }}/
           if-no-files-found: error
 
   publish_cli:
     name: publish_late_cli
-    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-cli')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-cli')) }}
     needs: build_cli
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease == true && 'staging' || 'production') }}
+    environment: ${{ inputs.environment }}
+    # contents: write is for `gh release upload` of sha256sums.txt and the
+    # per-target archives only.
+    permissions:
+      contents: write
+    concurrency:
+      group: deploy-cli-${{ inputs.environment }}
+      cancel-in-progress: false
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       DIST_BUCKET: ${{ vars.BUCKET || 'late-sh-r' }}
       S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
-      IS_PRERELEASE: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging') || (github.event_name != 'workflow_dispatch' && github.event.release.prerelease) }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      IS_PRERELEASE: ${{ inputs.environment == 'staging' }}
     steps:
       - name: checkout
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          ref: ${{ inputs.release_tag }}
 
       - name: download_cli_artifacts
         uses: actions/download-artifact@v8
@@ -211,11 +299,21 @@ jobs:
 
           for artifact_dir in dist/late-*; do
             target="${artifact_dir#dist/late-}"
-            source_file="$(find "${artifact_dir}" -maxdepth 1 -type f \( -name 'late' -o -name 'late.exe' \) -print -quit)"
-            test -n "$source_file"
-            binary_name="$(basename "$source_file")"
             mkdir -p "publish/releases/${RELEASE_TAG}/${target}"
-            cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
+            main_binary_found=0
+            for binary_name in late late.exe late-webview; do
+              source_file="${artifact_dir}/${binary_name}"
+              [[ -f "$source_file" ]] || continue
+              if [[ "$binary_name" != "late-webview" ]]; then
+                main_binary_found=1
+              fi
+              cp "$source_file" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}"
+              # Every published binary ships with its provenance bundle; a
+              # missing one is a build bug, not something to publish around.
+              test -f "${source_file}.sigstore.json"
+              cp "${source_file}.sigstore.json" "publish/releases/${RELEASE_TAG}/${target}/${binary_name}.sigstore.json"
+            done
+            test "$main_binary_found" -eq 1
           done
 
           cp scripts/install.sh "publish/releases/${RELEASE_TAG}/install.sh"
@@ -226,7 +324,7 @@ jobs:
             files=()
             while IFS= read -r -d '' file; do
               files+=("${file#./}")
-            done < <(find . -mindepth 2 -maxdepth 2 -type f \( -name 'late' -o -name 'late.exe' \) -print0 | LC_ALL=C sort -z)
+            done < <(find . -mindepth 2 -maxdepth 2 -type f \( -name 'late' -o -name 'late.exe' -o -name 'late-webview' \) -print0 | LC_ALL=C sort -z)
             sha256sum "${files[@]}" > sha256sums.txt
           )
 
@@ -246,6 +344,91 @@ jobs:
             cp "publish/releases/${RELEASE_TAG}/sha256sums.txt" publish/latest/sha256sums.txt
           fi
 
+      # The installers verify binaries against the checksum file on the
+      # GitHub Release, not the copy on R2. This runs before any bucket
+      # upload so a tag never exists on R2 without its GitHub checksums,
+      # which would make every install of it fail closed.
+      #
+      # A published tag is immutable: the checksum asset is written once.
+      # Overwriting it with a rebuild would make every install of the tag
+      # fail closed until the new binaries reach R2, and for good if that
+      # upload never lands. A rebuild that matches (a re-run of failed jobs
+      # reuses the same artifacts) is fine; one that differs ships under a
+      # new tag. To retry a tag on purpose, delete the asset by hand first:
+      # gh release delete-asset <tag> sha256sums.txt
+      - name: upload_release_checksums_to_github
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          checksums="publish/releases/${RELEASE_TAG}/sha256sums.txt"
+          has_checksums="$(gh release view "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets \
+            --jq '[.assets[].name] | index("sha256sums.txt") != null')"
+          case "$has_checksums" in
+            false)
+              gh release upload "${RELEASE_TAG}" "$checksums" --repo "${GITHUB_REPOSITORY}"
+              ;;
+            true)
+              gh release download "${RELEASE_TAG}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --pattern sha256sums.txt \
+                --output published-sha256sums.txt
+              if cmp -s "$checksums" published-sha256sums.txt; then
+                echo "sha256sums.txt for ${RELEASE_TAG} is already published and matches this build"
+              else
+                echo "sha256sums.txt for ${RELEASE_TAG} is already published and differs from this build; a published tag is immutable, ship the rebuild under a new tag" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "unexpected answer from gh release view: ${has_checksums}" >&2
+              exit 1
+              ;;
+          esac
+
+      # One archive per target on the GitHub Release, named by target triple,
+      # so `mise use -g github:mpiorowski/late-sh` can pick the right one.
+      # Runs after the checksum step, which already refused a rebuild that
+      # differs, so an asset that exists is left alone: tags are immutable.
+      - name: upload_release_archives_to_github
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p gh-assets
+          for target_dir in "publish/releases/${RELEASE_TAG}"/*/; do
+            target="$(basename "$target_dir")"
+            files=()
+            for binary_name in late late.exe late-webview; do
+              [[ -f "${target_dir}${binary_name}" ]] && files+=("$binary_name")
+            done
+            case "$target" in
+              *-windows-*)
+                archive="late-${target}.zip"
+                (cd "$target_dir" && zip -X -q "${OLDPWD}/gh-assets/${archive}" "${files[@]}")
+                ;;
+              *)
+                archive="late-${target}.tar.gz"
+                # upload-artifact drops the exec bit; restore it in the archive.
+                tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=0755 \
+                  -C "$target_dir" -cf - "${files[@]}" | gzip -n > "gh-assets/${archive}"
+                ;;
+            esac
+          done
+
+          published="$(gh release view "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets \
+            --jq '.assets[].name')"
+          for archive in gh-assets/*; do
+            name="$(basename "$archive")"
+            if grep -qxF "$name" <<<"$published"; then
+              echo "${name} for ${RELEASE_TAG} is already published; leaving it"
+              continue
+            fi
+            gh release upload "${RELEASE_TAG}" "$archive" --repo "${GITHUB_REPOSITORY}"
+          done
+
       - name: upload_release_distribution
         run: |
           aws s3 cp \
@@ -255,7 +438,7 @@ jobs:
             --endpoint-url "${S3_ENDPOINT}"
 
       - name: upload_latest_distribution
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'production') || (github.event_name != 'workflow_dispatch' && github.event.release.prerelease == false) }}
+        if: ${{ inputs.environment == 'production' }}
         run: |
           aws s3 cp \
             publish/latest/ \

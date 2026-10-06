@@ -1,0 +1,743 @@
+use crate::ssh::run_with_listener;
+use crate::test_helpers::{new_test_db, test_app_state, test_config, wait_until};
+use getrandom::SysRng;
+use russh::keys::signature::rand_core::UnwrapErr;
+use russh::{
+    ChannelMsg, client,
+    keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg},
+};
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::time::{Duration, timeout};
+
+#[tokio::test]
+async fn emits_ssh_banner_when_client_connects_over_tcp() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let connect = timeout(Duration::from_secs(2), TcpStream::connect(addr)).await;
+    assert!(connect.is_ok(), "tcp connect timed out");
+    let mut stream = connect.unwrap().expect("tcp connect failed");
+
+    let mut banner = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), stream.read(&mut banner))
+        .await
+        .expect("banner read timeout")
+        .expect("banner read");
+    assert!(n > 0, "expected ssh banner bytes");
+    assert!(
+        std::str::from_utf8(&banner[..n])
+            .unwrap_or("")
+            .starts_with("SSH-2.0-"),
+        "expected SSH identification banner"
+    );
+
+    handle.abort();
+}
+
+struct TestClient;
+
+#[tokio::test]
+async fn ssh_bootstrap_applies_saved_splash_mode_after_authentication() {
+    use late_core::models::user::{ArtSplashMode, User, UserParams};
+    let test_db = new_test_db().await;
+    let state = test_app_state(test_db.db.clone(), test_config(test_db.db.config().clone()));
+    let piece = crate::test_helpers::publish_test_splash(&state).await;
+    let db_client = test_db.db.get().await.unwrap();
+    db_client
+        .execute(
+            "UPDATE artboard_pieces SET owner_marked_nsfw = true WHERE id = $1",
+            &[&piece],
+        )
+        .await
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+    for (mode, expect_art) in [
+        (ArtSplashMode::Sfw, false),
+        (ArtSplashMode::Always, true),
+        (ArtSplashMode::Never, false),
+    ] {
+        let key = new_client_key();
+        User::create(
+            &db_client,
+            UserParams {
+                fingerprint: key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+                username: format!("splash-{}", mode.as_str()),
+                settings: serde_json::json!({"art_splash_mode": mode.as_str()}),
+            },
+        )
+        .await
+        .unwrap();
+        let mut connection = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+            .await
+            .unwrap();
+        assert!(authenticate(&mut connection, "splash-test", key).await);
+        let mut shell = connection.channel_open_session().await.unwrap();
+        shell
+            .request_pty(true, "xterm-256color", 160, 40, 0, 0, &[])
+            .await
+            .unwrap();
+        shell.request_shell(true).await.unwrap();
+        let mut received = Vec::new();
+        timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(ChannelMsg::Data { data }) = shell.wait().await {
+                    received.extend_from_slice(&data);
+                    let plain = String::from_utf8_lossy(&received);
+                    if plain.contains("login splash fixture") || plain.contains(".------.") {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("splash frame");
+        assert_eq!(
+            String::from_utf8_lossy(&received).contains("login splash fixture"),
+            expect_art,
+            "{mode:?}"
+        );
+        connection
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .unwrap();
+    }
+    server.abort();
+}
+
+impl client::Handler for TestClient {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+async fn new_account_uses_generated_name_instead_of_ssh_login() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let server_state = state.clone();
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, server_state, None).await;
+    });
+
+    let ssh_login = "private-local-login";
+    let key = Arc::new(
+        PrivateKey::random(
+            &mut UnwrapErr(SysRng),
+            russh::keys::ssh_key::Algorithm::Ed25519,
+        )
+        .expect("generate client key"),
+    );
+    let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client");
+    let auth = client
+        .authenticate_publickey(
+            ssh_login,
+            PrivateKeyWithHashAlg::new(
+                key,
+                client
+                    .best_supported_rsa_hash()
+                    .await
+                    .expect("rsa hash")
+                    .flatten(),
+            ),
+        )
+        .await
+        .expect("authenticate")
+        .success();
+    assert!(auth, "public-key auth should succeed");
+
+    let db_client = test_db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::find_by_fingerprint(&db_client, &fingerprint)
+        .await
+        .expect("user lookup")
+        .expect("new account");
+    assert_ne!(user.username, ssh_login);
+    assert!(
+        crate::usernames::is_curated_base_username(&user.username),
+        "new account should use a curated modifier+noun name, got {}",
+        user.username
+    );
+    assert!(
+        state.leaderboard_service.online_user_is_active(user.id),
+        "successful SSH authentication starts online-time tracking"
+    );
+
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect client");
+    wait_until(
+        || {
+            let active = state.leaderboard_service.online_user_is_active(user.id);
+            async move { !active }
+        },
+        "SSH disconnect stops online-time tracking",
+    )
+    .await;
+    handle.abort();
+}
+
+async fn authenticate(
+    client: &mut client::Handle<TestClient>,
+    user: &str,
+    key: Arc<PrivateKey>,
+) -> bool {
+    let hash = client
+        .best_supported_rsa_hash()
+        .await
+        .expect("rsa hash")
+        .flatten();
+    client
+        .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key, hash))
+        .await
+        .expect("authenticate")
+        .success()
+}
+
+fn new_client_key() -> Arc<PrivateKey> {
+    Arc::new(
+        PrivateKey::random(
+            &mut UnwrapErr(SysRng),
+            russh::keys::ssh_key::Algorithm::Ed25519,
+        )
+        .expect("generate client key"),
+    )
+}
+
+/// `ssh invite-<code>@late.sh` names the inviter on the connect that creates
+/// the account. The same login from an account that already exists, even one
+/// young enough to still add a code in Settings, names nobody.
+#[tokio::test]
+async fn invite_login_attaches_only_the_connect_that_creates_the_account() {
+    use late_core::models::referral::{InviteCode, Referral};
+    use late_core::models::user::User;
+
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let db_client = test_db.db.get().await.expect("db client");
+    let inviter = late_core::test_utils::create_test_user(&test_db.db, "ssh-inviter").await;
+    let code = InviteCode::ensure(&**db_client, inviter.id)
+        .await
+        .expect("invite code");
+    let invite_login = format!("invite-{code}");
+    let returning = late_core::test_utils::create_test_user(&test_db.db, "ssh-returning").await;
+    let returning_key = new_client_key();
+    late_core::models::user_ssh_key::UserSshKey::ensure(
+        &db_client,
+        returning.id,
+        &returning_key
+            .public_key()
+            .fingerprint(HashAlg::Sha256)
+            .to_string(),
+    )
+    .await
+    .expect("attach key");
+    let new_key = new_client_key();
+    let new_fingerprint = new_key
+        .public_key()
+        .fingerprint(HashAlg::Sha256)
+        .to_string();
+
+    // The returning account goes first, so by the time the new account's
+    // attach has landed, one for it would have landed too.
+    let mut clients = Vec::new();
+    for key in [returning_key, new_key] {
+        let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+            .await
+            .expect("connect client");
+        assert!(authenticate(&mut client, &invite_login, key).await);
+        clients.push(client);
+    }
+
+    let created = User::find_by_fingerprint(&db_client, &new_fingerprint)
+        .await
+        .expect("user lookup")
+        .expect("new account");
+    wait_until(
+        || {
+            let db = test_db.db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                Referral::inviter_username(&**client, created.id)
+                    .await
+                    .expect("inviter lookup")
+                    .is_some()
+            }
+        },
+        "the new account's invite attached",
+    )
+    .await;
+    assert_eq!(
+        (
+            Referral::inviter_username(&**db_client, created.id)
+                .await
+                .expect("inviter lookup"),
+            Referral::inviter_username(&**db_client, returning.id)
+                .await
+                .expect("inviter lookup"),
+        ),
+        (Some(inviter.username.clone()), None)
+    );
+
+    for client in clients {
+        client
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .expect("disconnect client");
+    }
+    handle.abort();
+}
+
+/// A refused connection never reaches the SSH handshake: the socket is
+/// closed instead of answering with a banner and failing at auth later.
+#[tokio::test]
+async fn rate_limited_connection_is_closed_before_the_handshake() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.max_conns_per_ip = 100;
+    config.ssh_max_attempts_per_ip = 1;
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let key = new_client_key();
+    let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client 1");
+    assert!(
+        authenticate(&mut c1, "rate-limit-user", key.clone()).await,
+        "first auth should succeed"
+    );
+    c1.disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect client 1");
+
+    let mut stream = TcpStream::connect(addr).await.expect("tcp connect 2");
+    let mut buf = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), stream.read(&mut buf))
+        .await
+        .expect("read timeout")
+        .expect("read");
+    assert_eq!(
+        n, 0,
+        "rate-limited connection must be closed without a banner"
+    );
+
+    handle.abort();
+}
+
+/// Per-IP refusals happen before the global permit is taken, so a peer
+/// hammering the rate limiter cannot starve other addresses of slots.
+#[tokio::test]
+async fn rate_limited_peer_does_not_consume_a_global_permit() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.max_conns_global = 2;
+    config.max_conns_per_ip = 100;
+    config.ssh_max_attempts_per_ip = 1;
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    // 127.0.0.1 takes permit 1 and its only allowed attempt.
+    let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client 1");
+    assert!(authenticate(&mut c1, "permit-user-1", new_client_key()).await);
+
+    // 127.0.0.1 again: rate-limited, closed, and must not hold permit 2.
+    let mut rejected = TcpStream::connect(addr).await.expect("tcp connect 2");
+    let mut buf = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), rejected.read(&mut buf))
+        .await
+        .expect("read timeout")
+        .expect("read");
+    assert_eq!(n, 0, "rate-limited connection must be closed");
+
+    // A different address still gets the second permit.
+    let socket = TcpSocket::new_v4().expect("socket");
+    socket
+        .bind("127.0.0.2:0".parse().expect("loopback alias"))
+        .expect("bind 127.0.0.2");
+    let stream = socket.connect(addr).await.expect("connect from 127.0.0.2");
+    let mut c3 = client::connect_stream(Arc::new(client::Config::default()), stream, TestClient)
+        .await
+        .expect("connect client 3");
+    assert!(
+        authenticate(&mut c3, "permit-user-3", new_client_key()).await,
+        "second permit must still be available to another address"
+    );
+
+    handle.abort();
+}
+
+/// The global cap closes the socket outright and frees the slot when the
+/// admitted session ends.
+#[tokio::test]
+async fn global_limit_closes_socket_and_frees_slot_on_disconnect() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.max_conns_global = 1;
+    config.max_conns_per_ip = 100;
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client 1");
+    assert!(authenticate(&mut c1, "global-limit-user", new_client_key()).await);
+
+    let mut rejected = TcpStream::connect(addr).await.expect("tcp connect 2");
+    let mut buf = [0u8; 64];
+    let n = timeout(Duration::from_secs(2), rejected.read(&mut buf))
+        .await
+        .expect("read timeout")
+        .expect("read");
+    assert_eq!(
+        n, 0,
+        "over the global limit the socket is closed, no banner"
+    );
+
+    c1.disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect client 1");
+
+    wait_until(
+        || async {
+            let Ok(mut stream) = TcpStream::connect(addr).await else {
+                return false;
+            };
+            let mut buf = [0u8; 64];
+            match timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) => n > 0 && buf.starts_with(b"SSH-2.0-"),
+                _ => false,
+            }
+        },
+        "slot is free again after the admitted session disconnects",
+    )
+    .await;
+
+    handle.abort();
+}
+
+#[tokio::test]
+async fn closing_token_exec_channel_does_not_close_interactive_shell() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    let user = "token-channel-user";
+    let key = Arc::new(
+        PrivateKey::random(
+            &mut UnwrapErr(SysRng),
+            russh::keys::ssh_key::Algorithm::Ed25519,
+        )
+        .expect("generate client key"),
+    );
+    let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client");
+    let auth = client
+        .authenticate_publickey(
+            user,
+            PrivateKeyWithHashAlg::new(
+                key,
+                client
+                    .best_supported_rsa_hash()
+                    .await
+                    .expect("rsa hash")
+                    .flatten(),
+            ),
+        )
+        .await
+        .expect("auth client")
+        .success();
+    assert!(auth, "auth should succeed");
+
+    let mut token_channel = client
+        .channel_open_session()
+        .await
+        .expect("open token channel");
+    token_channel
+        .exec(true, "late-cli-token-v1")
+        .await
+        .expect("exec token request");
+    let mut token_payload = Vec::new();
+    while token_payload.is_empty() {
+        match timeout(Duration::from_secs(15), token_channel.wait())
+            .await
+            .expect("token response timeout")
+            .expect("token channel closed before data")
+        {
+            ChannelMsg::Data { data } => token_payload.extend_from_slice(data.as_ref()),
+            ChannelMsg::Close => panic!("token channel closed before data"),
+            _ => {}
+        }
+    }
+    assert!(
+        std::str::from_utf8(&token_payload)
+            .expect("token payload utf8")
+            .contains("session_token"),
+        "token exec should return session JSON"
+    );
+
+    let mut shell_channel = client
+        .channel_open_session()
+        .await
+        .expect("open shell channel");
+    shell_channel
+        .request_pty(true, "xterm-256color", 80, 24, 0, 0, &[])
+        .await
+        .expect("request pty");
+    shell_channel
+        .request_shell(true)
+        .await
+        .expect("request shell");
+    expect_shell_data(&mut shell_channel).await;
+
+    token_channel.close().await.expect("close token channel");
+    shell_channel
+        .data(&b"\x1b"[..])
+        .await
+        .expect("dismiss splash after token close");
+    expect_shell_data_contains(&mut shell_channel, b"welcome to the late lounge").await;
+
+    // A brand-new account runs the forced tour, which swallows every key but
+    // Enter: three of them walk from the door past Home's two stops to The
+    // Arcade. The route is pinned in `clubhouse/state_test.rs`.
+    for _ in 0..3 {
+        shell_channel
+            .data(&b"\r"[..])
+            .await
+            .expect("send shell input after token close");
+    }
+    expect_shell_data_contains(&mut shell_channel, b"The Arcade").await;
+
+    // A further post-close interaction proves the first frame was not merely
+    // the render loop's final draw while shutting down: one more Enter holds
+    // the Lobby modal open under the tour's pitch.
+    shell_channel
+        .data(&b"\r"[..])
+        .await
+        .expect("send tour input after token close");
+    expect_shell_data_contains(&mut shell_channel, b"opens this from anywhere").await;
+
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect client");
+    handle.abort();
+}
+
+async fn expect_shell_data(channel: &mut russh::Channel<client::Msg>) {
+    loop {
+        match timeout(Duration::from_secs(15), channel.wait()).await {
+            Ok(Some(ChannelMsg::Data { .. })) => return,
+            Ok(Some(ChannelMsg::Close)) => panic!("interactive shell closed unexpectedly"),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("interactive shell channel ended unexpectedly"),
+            Err(_) => panic!("timed out waiting for interactive shell data"),
+        }
+    }
+}
+
+async fn expect_shell_data_contains(channel: &mut russh::Channel<client::Msg>, needle: &[u8]) {
+    let mut received = Vec::new();
+    let found = timeout(Duration::from_secs(15), async {
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => {
+                    received.extend_from_slice(data.as_ref());
+                    if received
+                        .windows(needle.len())
+                        .any(|window| window == needle)
+                    {
+                        return;
+                    }
+                }
+                Some(ChannelMsg::Close) => panic!("interactive shell closed unexpectedly"),
+                Some(_) => {}
+                None => panic!("interactive shell channel ended unexpectedly"),
+            }
+        }
+    })
+    .await;
+    assert!(
+        found.is_ok(),
+        "timed out waiting for interactive shell data containing {:?}; received={:?}",
+        String::from_utf8_lossy(needle),
+        String::from_utf8_lossy(&received)
+    );
+}
+
+/// Open the interactive shell the way `late` does: pty, shell, first frame.
+async fn open_shell(
+    addr: std::net::SocketAddr,
+    login: &str,
+    key: Arc<PrivateKey>,
+) -> (client::Handle<TestClient>, russh::Channel<client::Msg>) {
+    let mut client = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+        .await
+        .expect("connect client");
+    assert!(
+        authenticate(&mut client, login, key).await,
+        "auth should succeed"
+    );
+    let mut shell = client
+        .channel_open_session()
+        .await
+        .expect("open shell channel");
+    shell
+        .request_pty(true, "xterm-256color", 160, 40, 0, 0, &[])
+        .await
+        .expect("request pty");
+    shell.request_shell(true).await.expect("request shell");
+    expect_shell_data(&mut shell).await;
+    (client, shell)
+}
+
+/// Favoriting a synthetic entry, end to end over the wire: a returning
+/// account walks the rail to Mentions and presses `f`; the banner shows, the
+/// favorite lands in the database, and the next connection's rail opens
+/// with the Favorites section it moved into.
+#[tokio::test]
+async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let handle = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+
+    // A returning account: its key is already on file and its first-visit
+    // tour is done, so nothing swallows the rail keys after login.
+    let key = new_client_key();
+    let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let user = late_core::test_utils::create_test_user(&test_db.db, "ssh-fav-mentions").await;
+    let db_client = test_db.db.get().await.expect("db client");
+    late_core::models::user_ssh_key::UserSshKey::ensure(&db_client, user.id, &fingerprint)
+        .await
+        .expect("attach key");
+    late_core::models::user::User::set_clubhouse_tutorial_done(&db_client, user.id)
+        .await
+        .expect("mark tour done");
+    let lounge = late_core::models::chat_room::ChatRoom::ensure_lounge(&db_client)
+        .await
+        .expect("ensure lounge");
+    // A room with a slug nothing else on screen can spell: its rail row is
+    // the proof that the room list has loaded before the walk starts.
+    let probe = late_core::models::chat_room::ChatRoom::ensure_permanent(&db_client, "favprobe")
+        .await
+        .expect("ensure probe room");
+    for room in [&lounge, &probe] {
+        late_core::models::chat_room_member::ChatRoomMember::join(&db_client, room.id, user.id)
+            .await
+            .expect("join room");
+    }
+
+    // A returning account lands in the Clubhouse, whose title bar carries the
+    // page hint; Home, and its rail, is page 1.
+    let (client, mut shell) = open_shell(addr, &user.username, key.clone()).await;
+    shell.data(&b"\x1b"[..]).await.expect("dismiss splash");
+    expect_shell_data_contains(&mut shell, b"Tab/0-5 pages").await;
+    shell.data(&b"1"[..]).await.expect("open home");
+    expect_shell_data_contains(&mut shell, b"favprobe").await;
+
+    // Core reads lounge, mentions, news, browse; the probe room sits below
+    // in Channels. One step right from lounge is Mentions.
+    shell.data(&b"l"[..]).await.expect("step to mentions");
+    shell.data(&b"f"[..]).await.expect("favorite mentions");
+    expect_shell_data_contains(&mut shell, b"Added to favorites").await;
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect first session");
+
+    // The profile write is fire-and-forget on the session; the row is the
+    // witness that it landed.
+    let mentions_id = crate::app::chat::state::synthetic_favorite_id(
+        crate::app::chat::state::RoomSlot::Notifications,
+    )
+    .expect("mentions is favoritable");
+    wait_until(
+        || {
+            let db = test_db.db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                late_core::models::user::User::favorite_room_ids(&client, user.id)
+                    .await
+                    .expect("read favorites")
+                    .contains(&mentions_id)
+            }
+        },
+        "mentions favorite persisted",
+    )
+    .await;
+
+    // The Favorites section only exists while something is in it, so seeing
+    // it on a fresh connection is the round trip closing.
+    let (client, mut shell) = open_shell(addr, &user.username, key).await;
+    shell.data(&b"\x1b"[..]).await.expect("dismiss splash");
+    expect_shell_data_contains(&mut shell, b"Tab/0-5 pages").await;
+    shell.data(&b"1"[..]).await.expect("open home");
+    expect_shell_data_contains(&mut shell, b"favorites").await;
+    client
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .expect("disconnect second session");
+    handle.abort();
+}

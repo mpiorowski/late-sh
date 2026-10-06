@@ -1,8 +1,13 @@
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
+// `species` is one of [`PetSpecies`] and `mood` one of [`PetMood`], both as
+// their `as_str` and both checked by the database (migration 181); read
+// them through the typed accessors. The mood is the one the owner's session
+// last inferred, written on every change so a profile can show it while
+// the owner is away.
 crate::user_scoped_model! {
     table = "pet_companions";
     user_field = user_id;
@@ -10,23 +15,114 @@ crate::user_scoped_model! {
     struct PetCompanion {
         @data
         pub user_id: Uuid,
-        pub last_fed: Option<DateTime<Utc>>,
-        pub last_watered: Option<DateTime<Utc>>,
-        pub last_played: Option<DateTime<Utc>>,
-        pub last_treated: Option<DateTime<Utc>>,
         pub adopted_at: Option<DateTime<Utc>>,
         pub name: Option<String>,
         pub species: String,
-        pub care_streak_days: i32,
-        pub care_streak_date: Option<NaiveDate>,
+        pub mood: String,
+        pub mood_since: DateTime<Utc>,
+        // The last UTC day the owner petted it: the daily chip gate.
+        pub last_petted: Option<NaiveDate>,
     }
 }
 
 /// Maximum length of a user-set pet name.
 pub const PET_NAME_MAX_CHARS: usize = 24;
 
-pub const PET_SPECIES_CAT: &str = "cat";
-pub const PET_SPECIES_DOG: &str = "dog";
+/// What the pet is. Closed: the database checks the column against this list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetSpecies {
+    Cat,
+    Dog,
+    Bird,
+}
+
+impl PetSpecies {
+    pub const ALL: [PetSpecies; 3] = [PetSpecies::Cat, PetSpecies::Dog, PetSpecies::Bird];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PetSpecies::Cat => "cat",
+            PetSpecies::Dog => "dog",
+            PetSpecies::Bird => "bird",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "cat" => Some(PetSpecies::Cat),
+            "dog" => Some(PetSpecies::Dog),
+            "bird" => Some(PetSpecies::Bird),
+            _ => None,
+        }
+    }
+
+    /// The Shop's `t` key walks this ring.
+    pub fn next(self) -> Self {
+        match self {
+            PetSpecies::Cat => PetSpecies::Dog,
+            PetSpecies::Dog => PetSpecies::Bird,
+            PetSpecies::Bird => PetSpecies::Cat,
+        }
+    }
+}
+
+/// How the pet feels: what its owner's session has been doing, read as a
+/// creature would. Ordered by precedence, first wins (`PetMood::ALL`); the
+/// windows and the reading live in `late-ssh/src/app/pet/state.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetMood {
+    /// Just petted (a click on it).
+    Purring,
+    /// Its owner won something lately.
+    Proud,
+    /// Its owner lost something lately.
+    Sulking,
+    /// Its owner said something lately.
+    Chatty,
+    /// No key from its owner in a long while, or no owner online at all.
+    Asleep,
+    /// Music is on and nothing else is happening.
+    Vibing,
+    /// Awake, and nothing in particular going on.
+    Idle,
+}
+
+impl PetMood {
+    pub const ALL: [PetMood; 7] = [
+        PetMood::Purring,
+        PetMood::Proud,
+        PetMood::Sulking,
+        PetMood::Chatty,
+        PetMood::Asleep,
+        PetMood::Vibing,
+        PetMood::Idle,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PetMood::Purring => "purring",
+            PetMood::Proud => "proud",
+            PetMood::Sulking => "sulking",
+            PetMood::Chatty => "chatty",
+            PetMood::Vibing => "vibing",
+            PetMood::Asleep => "asleep",
+            PetMood::Idle => "idle",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "purring" => Some(PetMood::Purring),
+            "proud" => Some(PetMood::Proud),
+            "sulking" => Some(PetMood::Sulking),
+            "chatty" => Some(PetMood::Chatty),
+            "vibing" => Some(PetMood::Vibing),
+            "asleep" => Some(PetMood::Asleep),
+            "idle" => Some(PetMood::Idle),
+            _ => None,
+        }
+    }
+}
 
 /// Life stage of the pet, derived from how many days it has existed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,21 +135,20 @@ pub enum LifeStage {
 
 impl LifeStage {
     /// Species-aware display label for use in the modal title and elsewhere.
-    pub fn label(self, species: &str) -> &'static str {
-        if species == PET_SPECIES_DOG {
-            match self {
-                LifeStage::Young => "Puppy",
-                LifeStage::Junior => "Young Dog",
-                LifeStage::Adult => "Adult Dog",
-                LifeStage::Senior => "Senior Dog",
-            }
-        } else {
-            match self {
-                LifeStage::Young => "Kitten",
-                LifeStage::Junior => "Young Cat",
-                LifeStage::Adult => "Adult",
-                LifeStage::Senior => "Wise Old Cat",
-            }
+    pub fn label(self, species: PetSpecies) -> &'static str {
+        match (species, self) {
+            (PetSpecies::Cat, LifeStage::Young) => "Kitten",
+            (PetSpecies::Cat, LifeStage::Junior) => "Young Cat",
+            (PetSpecies::Cat, LifeStage::Adult) => "Adult",
+            (PetSpecies::Cat, LifeStage::Senior) => "Wise Old Cat",
+            (PetSpecies::Dog, LifeStage::Young) => "Puppy",
+            (PetSpecies::Dog, LifeStage::Junior) => "Young Dog",
+            (PetSpecies::Dog, LifeStage::Adult) => "Adult Dog",
+            (PetSpecies::Dog, LifeStage::Senior) => "Senior Dog",
+            (PetSpecies::Bird, LifeStage::Young) => "Chick",
+            (PetSpecies::Bird, LifeStage::Junior) => "Fledgling",
+            (PetSpecies::Bird, LifeStage::Adult) => "Adult Bird",
+            (PetSpecies::Bird, LifeStage::Senior) => "Old Bird",
         }
     }
 
@@ -142,67 +237,15 @@ impl PetCompanion {
         Ok(Self::from(row))
     }
 
-    pub async fn touch_fed(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions SET last_fed = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
+    /// The row's species. The database checks the column, so an unknown
+    /// value is a broken row, not a case to handle.
+    pub fn species(&self) -> PetSpecies {
+        PetSpecies::parse(&self.species).expect("pet species is checked by the database")
     }
 
-    pub async fn touch_watered(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions SET last_watered = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_played(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions SET last_played = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn record_care_completed(
-        client: &Client,
-        user_id: Uuid,
-        care_date: NaiveDate,
-    ) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions
-                 SET care_streak_days = CASE
-                         WHEN care_streak_date = $2 THEN care_streak_days
-                         WHEN care_streak_date = ($2::date - 1) THEN care_streak_days + 1
-                         ELSE 1
-                     END,
-                     care_streak_date = $2,
-                     updated = current_timestamp
-                 WHERE user_id = $1
-                   AND (care_streak_date IS NULL OR care_streak_date <= $2)",
-                &[&user_id, &care_date],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_treated(client: &Client, user_id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "UPDATE pet_companions SET last_treated = current_timestamp, updated = current_timestamp WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
+    /// The row's mood, same contract as [`PetCompanion::species`].
+    pub fn mood(&self) -> PetMood {
+        PetMood::parse(&self.mood).expect("pet mood is checked by the database")
     }
 
     pub async fn set_name(client: &Client, user_id: Uuid, name: Option<&str>) -> Result<()> {
@@ -215,11 +258,46 @@ impl PetCompanion {
         Ok(())
     }
 
-    pub async fn set_species(client: &Client, user_id: Uuid, species: &str) -> Result<()> {
+    pub async fn set_species(client: &Client, user_id: Uuid, species: PetSpecies) -> Result<()> {
         client
             .execute(
                 "UPDATE pet_companions SET species = $1, updated = current_timestamp WHERE user_id = $2",
-                &[&species, &user_id],
+                &[&species.as_str(), &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Stamp today's petting. `true` only for the first pet of the UTC day:
+    /// the one witness the daily chip bonus needs, atomic however many
+    /// sessions or clicks race for it.
+    pub async fn pet_day(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        today: NaiveDate,
+    ) -> Result<bool> {
+        let updated = client
+            .execute(
+                "UPDATE pet_companions
+                 SET last_petted = $2, updated = current_timestamp
+                 WHERE user_id = $1 AND last_petted IS DISTINCT FROM $2",
+                &[&user_id, &today],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Record the mood the owner's session inferred. `mood_since` only moves
+    /// when the mood does, so a repeated write of the same mood is a no-op.
+    pub async fn set_mood(client: &Client, user_id: Uuid, mood: PetMood) -> Result<()> {
+        client
+            .execute(
+                "UPDATE pet_companions
+                 SET mood = $1,
+                     mood_since = CASE WHEN mood = $1 THEN mood_since ELSE current_timestamp END,
+                     updated = current_timestamp
+                 WHERE user_id = $2",
+                &[&mood.as_str(), &user_id],
             )
             .await?;
         Ok(())
@@ -232,104 +310,5 @@ impl PetCompanion {
             pet_age_anchor(self.created, self.adopted_at),
             now,
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_trims_and_collapses_whitespace() {
-        assert_eq!(
-            normalize_pet_name("  Whiskers  ").as_deref(),
-            Some("Whiskers")
-        );
-        assert_eq!(
-            normalize_pet_name("Mr   Mittens").as_deref(),
-            Some("Mr Mittens")
-        );
-    }
-
-    #[test]
-    fn normalize_caps_length_to_max() {
-        let very_long = "a".repeat(200);
-        let out = normalize_pet_name(&very_long).expect("non-empty");
-        assert_eq!(out.chars().count(), PET_NAME_MAX_CHARS);
-    }
-
-    #[test]
-    fn normalize_returns_none_for_empty_or_whitespace_only() {
-        assert!(normalize_pet_name("").is_none());
-        assert!(normalize_pet_name("   ").is_none());
-    }
-
-    #[test]
-    fn life_stage_buckets() {
-        assert_eq!(LifeStage::from_age_days(0), LifeStage::Young);
-        assert_eq!(LifeStage::from_age_days(6), LifeStage::Young);
-        assert_eq!(LifeStage::from_age_days(7), LifeStage::Junior);
-        assert_eq!(LifeStage::from_age_days(29), LifeStage::Junior);
-        assert_eq!(LifeStage::from_age_days(30), LifeStage::Adult);
-        assert_eq!(LifeStage::from_age_days(179), LifeStage::Adult);
-        assert_eq!(LifeStage::from_age_days(180), LifeStage::Senior);
-        assert_eq!(LifeStage::from_age_days(10_000), LifeStage::Senior);
-    }
-
-    #[test]
-    fn life_stage_clamps_negative_days() {
-        assert_eq!(LifeStage::from_age_days(-3), LifeStage::Young);
-    }
-
-    #[test]
-    fn life_stage_label_uses_species() {
-        assert_eq!(LifeStage::Young.label(PET_SPECIES_CAT), "Kitten");
-        assert_eq!(LifeStage::Young.label(PET_SPECIES_DOG), "Puppy");
-        assert_eq!(LifeStage::Senior.label(PET_SPECIES_CAT), "Wise Old Cat");
-        assert_eq!(LifeStage::Senior.label(PET_SPECIES_DOG), "Senior Dog");
-    }
-
-    #[test]
-    fn pet_age_days_is_zero_for_future_created() {
-        use chrono::TimeZone;
-        let now = Utc.with_ymd_and_hms(2026, 5, 25, 12, 0, 0).unwrap();
-        let future = Utc.with_ymd_and_hms(2026, 5, 26, 12, 0, 0).unwrap();
-        assert_eq!(pet_age_days(future, now), 0);
-    }
-
-    #[test]
-    fn pet_age_anchor_prefers_adoption_timestamp() {
-        use chrono::TimeZone;
-        let created = Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap();
-        let adopted = Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap();
-        assert_eq!(pet_age_anchor(created, Some(adopted)), adopted);
-        assert_eq!(pet_age_anchor(created, None), created);
-    }
-
-    #[test]
-    fn pet_age_label_formats_typical_durations() {
-        use chrono::TimeZone;
-        let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
-        let cases: &[(i64, &str)] = &[
-            (0, "today"),
-            (1, "1 day"),
-            (3, "3 days"),
-            (13, "13 days"),
-            (14, "2 weeks"),
-            (21, "3 weeks"),
-            (30, "1 month"),
-            (90, "3 months"),
-            (180, "6 months"),
-            (365, "1 year"),
-            (800, "2 years"),
-        ];
-        for (days, expected) in cases {
-            let created = now - chrono::Duration::days(*days);
-            assert_eq!(
-                pet_age_label(created, now),
-                *expected,
-                "wrong label for {days} days ago"
-            );
-        }
     }
 }

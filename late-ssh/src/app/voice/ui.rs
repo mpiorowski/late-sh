@@ -8,20 +8,32 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    common::theme,
+    common::{primitives::row_with_hint, theme},
     voice::svc::{VoiceParticipant, VoiceSnapshot},
 };
 
 /// Fixed height of the inline voice strip drawn at the top of a voice-enabled
-/// room: one roster row and one controls row. Constant so
-/// the chrome below it never shifts as people join and leave.
-pub const VOICE_STRIP_HEIGHT: u16 = 2;
+/// room: who is connected on the left, the keys that act on it flushed right,
+/// on one row. Constant so the chrome below it never shifts as people join and
+/// leave.
+pub const VOICE_STRIP_HEIGHT: u16 = 1;
+
+/// ON AIR context for a stream room's voice strip: while the room's stream
+/// is live, everyone in voice is audible to anonymous watch-page listeners,
+/// and the strip must say so loudly. Voice is CLI-only with no exceptions
+/// (no browser mic exists), so `VoiceService`'s CLI roster is the complete
+/// speaker list and the strip needs nothing beyond the live flag.
+pub struct OnAirView {
+    pub live: bool,
+}
 
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
     pub room_id: Uuid,
     pub current_user_id: Uuid,
     pub paired_cli_supports_voice: bool,
+    /// Present only for rooms with a registered stream.
+    pub on_air: Option<OnAirView>,
 }
 
 impl VoiceRoomView<'_> {
@@ -44,42 +56,69 @@ impl VoiceRoomView<'_> {
     }
 }
 
-/// Draw the inline voice channel strip at the top of a voice-enabled room: the
-/// roster of who is connected and the controls line. Sized to exactly
-/// `VOICE_STRIP_HEIGHT`.
+/// Draw the inline voice channel strip at the top of a voice-enabled room.
+/// Sized to exactly `VOICE_STRIP_HEIGHT`.
 pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) {
-    let roster = if !view.snapshot.enabled {
-        Line::from(Span::styled(
-            "Voice is off on this server.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))
-    } else if view.participants().is_empty() {
-        Line::from(Span::styled(
-            "No one is in voice yet.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ))
-    } else {
-        let mut spans = Vec::new();
-        for participant in view.participants() {
-            if !spans.is_empty() {
-                spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));
-            }
-            spans.extend(participant_spans(
-                participant,
-                participant.user_id == view.current_user_id,
-            ));
-        }
-        Line::from(spans)
-    };
-
-    let controls = Line::from(Span::styled(
-        voice_controls_text(view),
-        Style::default().fg(theme::TEXT_DIM()),
-    ));
-
-    frame.render_widget(Paragraph::new(vec![roster, controls]), area);
+    frame.render_widget(
+        Paragraph::new(voice_strip_line(view, area.width as usize)),
+        area,
+    );
 }
 
+/// The voice row: who is in the channel, then the keys that act on it flushed
+/// to the right edge.
+pub fn voice_strip_line(view: &VoiceRoomView<'_>, width: usize) -> Line<'static> {
+    row_with_hint(voice_roster_spans(view), voice_control_spans(view), width)
+}
+
+/// Who is connected, or why nobody can be.
+fn voice_roster_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
+    if !view.snapshot.enabled {
+        return vec![Span::styled(
+            "Voice is off on this server.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )];
+    }
+    let mut spans = Vec::new();
+    // The ON AIR marker leads the row: joining voice here is broadcasting.
+    if view.on_air.as_ref().is_some_and(|on_air| on_air.live) {
+        spans.push(Span::styled(
+            "⦿ ON AIR ",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if view.participants().is_empty() {
+        spans.push(Span::styled(
+            "No one is in voice yet.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        return spans;
+    }
+    for participant in view.participants() {
+        if !spans.is_empty() {
+            spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));
+        }
+        spans.extend(participant_spans(
+            participant,
+            participant.user_id == view.current_user_id,
+        ));
+    }
+    spans
+}
+
+/// Your own state plus the keys for it. Dim, because it is a reminder and not
+/// the content of the room.
+fn voice_control_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
+    vec![Span::styled(
+        voice_controls_text(view),
+        Style::default().fg(theme::TEXT_DIM()),
+    )]
+}
+
+/// The body of the frame status bar's voice segment, `channel [status]`. The
+/// bar adds the `mic` label and the padding itself (`app/statusline/bar.rs`).
 pub fn global_voice_badge<F>(
     snapshot: &VoiceSnapshot,
     current_user_id: Uuid,
@@ -95,7 +134,7 @@ where
     let participant = snapshot.participant(room_id, current_user_id)?;
     let label = channel_label(room_id).unwrap_or_else(|| short_voice_room_id(room_id));
     let status = Presence::of(participant).label();
-    Some(format!(" mic {label} [{status}] "))
+    Some(format!("{label} [{status}]"))
 }
 
 fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
@@ -204,85 +243,5 @@ fn participant_spans(participant: &VoiceParticipant, current_user: bool) -> Vec<
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-    use uuid::Uuid;
-
-    fn participant(muted: bool, deafened: bool, speaking: bool) -> VoiceParticipant {
-        VoiceParticipant {
-            user_id: Uuid::nil(),
-            username: "tester".to_string(),
-            muted,
-            deafened,
-            speaking,
-            updated_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn presence_priority_is_deafened_then_muted_then_speaking() {
-        // Deafened outranks everything, even an erroneously-set speaking flag.
-        assert_eq!(
-            Presence::of(&participant(true, true, true)),
-            Presence::Deafened
-        );
-        // Muted outranks speaking.
-        assert_eq!(
-            Presence::of(&participant(true, false, true)),
-            Presence::Muted
-        );
-        // Speaking shows over plain listening.
-        assert_eq!(
-            Presence::of(&participant(false, false, true)),
-            Presence::Speaking
-        );
-        // Joined, mic on, silent => listening.
-        assert_eq!(
-            Presence::of(&participant(false, false, false)),
-            Presence::Listening
-        );
-    }
-
-    #[test]
-    fn every_presence_has_a_distinct_icon_and_label() {
-        let all = [
-            Presence::Speaking,
-            Presence::Listening,
-            Presence::Muted,
-            Presence::Deafened,
-        ];
-        for (i, a) in all.iter().enumerate() {
-            for b in all.iter().skip(i + 1) {
-                assert_ne!(a.icon(), b.icon(), "icons must be distinct");
-                assert_ne!(a.label(), b.label(), "labels must be distinct");
-            }
-        }
-    }
-
-    #[test]
-    fn global_voice_badge_uses_current_room_and_status() {
-        let room_id = Uuid::from_u128(42);
-        let user_id = Uuid::from_u128(7);
-        let snapshot = VoiceSnapshot {
-            enabled: true,
-            livekit_url: Some("wss://voice.example".to_string()),
-            rooms: [(
-                room_id,
-                vec![VoiceParticipant {
-                    user_id,
-                    username: "tester".to_string(),
-                    muted: true,
-                    deafened: false,
-                    speaking: false,
-                    updated_at: Utc::now(),
-                }],
-            )]
-            .into_iter()
-            .collect(),
-        };
-
-        let badge = global_voice_badge(&snapshot, user_id, |_| Some("#lounge".to_string()));
-        assert_eq!(badge.as_deref(), Some(" mic #lounge [muted] "));
-    }
-}
+#[path = "ui_test.rs"]
+mod ui_test;

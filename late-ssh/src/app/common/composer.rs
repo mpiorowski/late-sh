@@ -5,6 +5,7 @@
 //! refresh after the active theme changes.
 
 use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui_textarea::{TextArea, WrapMode};
 
 use super::theme;
@@ -118,59 +119,33 @@ pub fn set_themed_textarea_cursor_visible(ta: &mut TextArea<'static>, visible: b
     ta.set_cursor_style(style);
 }
 
+/// An empty input's hint, drawn with the block cursor sitting **on** its first
+/// character rather than in a cell of its own before it. A `TextArea` renders
+/// its own placeholder after the cursor cell, which reads as a stray block
+/// floating to the left of the text; every composer in the app draws the empty
+/// state itself for that reason.
+pub fn placeholder_with_cursor(text: &str) -> Line<'static> {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return Line::from(Span::styled(" ", visible_textarea_cursor_style()));
+    };
+    Line::from(vec![
+        Span::styled(first.to_string(), visible_textarea_cursor_style()),
+        Span::styled(
+            chars.collect::<String>(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
+}
+
 fn hidden_textarea_cursor_style() -> Style {
     Style::default().fg(theme::TEXT())
 }
 
+/// An inverted block of the text color. Punched through rather than painted
+/// as an explicit fg/bg pair because on the terminal palette both `TEXT()`
+/// and `BG_CANVAS()` resolve to `Color::Reset`, and that pair paints no
+/// visible cursor at all.
 fn visible_textarea_cursor_style() -> Style {
-    Style::default()
-        .fg(theme::BG_CANVAS())
-        .bg(theme::TEXT())
-        .add_modifier(Modifier::BOLD)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn composer_rows_soft_wrap_words() {
-        let rows = build_composer_rows("hello wide world", 8);
-        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
-        assert_eq!(texts, vec!["hello", "wide", "world"]);
-    }
-
-    #[test]
-    fn themed_textarea_uses_theme_text_color() {
-        let textarea = new_themed_textarea("Type a message...", WrapMode::Word, false);
-        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().bg, None);
-    }
-
-    #[test]
-    fn themed_textarea_visible_cursor_uses_explicit_theme_colors() {
-        let textarea = new_themed_textarea("Type a message...", WrapMode::Word, true);
-        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
-        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
-    }
-
-    #[test]
-    fn apply_themed_textarea_style_refreshes_existing_textarea_colors() {
-        theme::set_current_by_id("late");
-        let mut textarea = new_themed_textarea("Type a message...", WrapMode::Word, false);
-        let late_text = textarea.style().fg;
-
-        theme::set_current_by_id("contrast");
-        apply_themed_textarea_style(&mut textarea, true);
-
-        assert_ne!(textarea.style().fg, late_text);
-        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
-        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
-
-        theme::set_current_by_id("late");
-    }
+    theme::punch_through(theme::TEXT()).add_modifier(Modifier::BOLD)
 }

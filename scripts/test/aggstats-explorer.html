@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR Gate Runtime Explorer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1015;
+      --panel: #111820;
+      --panel-2: #151f29;
+      --line: #263340;
+      --line-soft: #1c2731;
+      --text: #eef4f8;
+      --muted: #8da0ad;
+      --cyan: #51d7c7;
+      --cyan-soft: rgba(81, 215, 199, .12);
+      --amber: #f7bd65;
+      --red: #ff727d;
+      --blue: #6da8ff;
+      --radius: 14px;
+      --shadow: 0 16px 48px rgba(0, 0, 0, .24);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 12% -5%, rgba(81, 215, 199, .10), transparent 30rem),
+        radial-gradient(circle at 92% 0%, rgba(109, 168, 255, .08), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+    }
+
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+
+    .shell { width: min(1540px, 100%); margin: 0 auto; padding: 26px; }
+    .eyebrow { color: var(--cyan); font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 6px 0 7px; font-size: clamp(27px, 3vw, 43px); line-height: 1; letter-spacing: -.045em; }
+    .lede { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+    .source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+    .source-pill { max-width: 360px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(17, 24, 32, .8); color: var(--muted); font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .button, .file-button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      min-height: 36px; padding: 0 13px; border: 1px solid var(--line); border-radius: 9px;
+      background: var(--panel-2); cursor: pointer; transition: border-color .15s, background .15s, transform .15s;
+      font-size: 12px; font-weight: 700;
+    }
+    .button:hover, .file-button:hover { border-color: #3e5365; background: #1a2631; }
+    .button:active, .file-button:active { transform: translateY(1px); }
+    .file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+    .summary-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .card { padding: 16px 17px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: linear-gradient(145deg, rgba(21,31,41,.94), rgba(14,21,28,.94)); box-shadow: var(--shadow); }
+    .card-label { margin-bottom: 9px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+    .card-value { font: 650 25px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.055em; }
+    .card-note { margin-top: 8px; color: var(--muted); font-size: 11px; }
+    .good { color: var(--cyan); }
+    .warn { color: var(--amber); }
+    .bad { color: var(--red); }
+
+    .filters { display: grid; grid-template-columns: minmax(240px, 1.7fr) repeat(3, minmax(150px, .65fr)) auto; gap: 10px; align-items: end; padding: 13px; margin-bottom: 16px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: rgba(17, 24, 32, .8); }
+    .field label { display: block; margin: 0 0 6px 2px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+    input[type="search"], input[type="number"], select { width: 100%; height: 37px; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; outline: none; background: #0d141b; color: var(--text); }
+    input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px var(--cyan-soft); }
+
+    .workspace { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
+    .panel { min-width: 0; border: 1px solid var(--line-soft); border-radius: var(--radius); background: rgba(17, 24, 32, .88); box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
+    .panel-title { font-size: 13px; font-weight: 750; letter-spacing: .01em; }
+    .panel-meta { color: var(--muted); font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .group-list { max-height: 430px; overflow: auto; padding: 7px; }
+    .group-row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+    .group-row:hover { background: rgba(255,255,255,.035); }
+    .group-row.active { background: var(--cyan-soft); box-shadow: inset 2px 0 var(--cyan); }
+    .group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .group-sub { margin-top: 4px; color: var(--muted); font-size: 10px; }
+    .group-value { color: var(--cyan); font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+
+    .chart-wrap { position: relative; height: 430px; padding: 10px 12px 14px; overflow: hidden; }
+    .chart-wrap.bar-mode { overflow-y: auto; }
+    #scatter { display: block; width: 100%; height: 100%; overflow: visible; }
+    .grid-line { stroke: #23303a; stroke-width: 1; }
+    .axis-label { fill: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .dot { fill: rgba(81, 215, 199, .56); stroke: rgba(150, 255, 241, .55); stroke-width: 1; cursor: pointer; transition: fill .12s; }
+    .dot:hover { fill: var(--amber); stroke: #ffe1a9; }
+    .dot.imperfect { fill: rgba(255, 114, 125, .78); stroke: #ffb0b7; }
+    .dot.selected { fill: var(--amber); stroke: #ffe1a9; stroke-width: 2; }
+    .bar { fill: rgba(81, 215, 199, .50); cursor: pointer; transition: fill .12s; }
+    .bar:hover { fill: var(--amber); }
+    .bar.selected { fill: var(--amber); stroke: #ffe1a9; stroke-width: 1.5; }
+    .bar-label { fill: var(--text); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .bar-value { fill: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .empty { height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+    .tooltip { position: fixed; z-index: 20; max-width: 380px; pointer-events: none; padding: 9px 11px; border: 1px solid #405261; border-radius: 8px; background: #0a1015; box-shadow: var(--shadow); font-size: 11px; opacity: 0; transform: translate(10px, -105%); }
+    .tooltip strong { display: block; margin-bottom: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .table-panel { margin-bottom: 28px; }
+    .table-scroll { overflow: auto; max-height: 680px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead { position: sticky; top: 0; z-index: 2; background: #131c25; }
+    th { padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; letter-spacing: .06em; text-align: right; text-transform: uppercase; white-space: nowrap; cursor: pointer; user-select: none; }
+    th:first-child, th:nth-child(2) { text-align: left; }
+    th:hover { color: var(--text); }
+    th.sorted { color: var(--cyan); }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--line-soft); text-align: right; white-space: nowrap; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: rgba(81, 215, 199, .045); }
+    td:first-child { max-width: 520px; overflow: hidden; text-overflow: ellipsis; text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    td:nth-child(2) { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); text-align: left; }
+    .pass-chip { display: inline-block; min-width: 55px; padding: 3px 6px; border-radius: 999px; background: var(--cyan-soft); color: var(--cyan); text-align: center; }
+    .pass-chip.imperfect { background: rgba(255,114,125,.12); color: var(--red); }
+    .table-note { padding: 11px 15px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 11px; }
+
+    dialog { width: min(650px, calc(100% - 28px)); padding: 0; border: 1px solid #344654; border-radius: 16px; background: #111820; color: var(--text); box-shadow: 0 30px 90px rgba(0,0,0,.6); }
+    dialog::backdrop { background: rgba(4,7,10,.72); backdrop-filter: blur(3px); }
+    .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+    .dialog-title { overflow-wrap: anywhere; font: 700 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .dialog-group { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .close { width: 30px; height: 30px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); cursor: pointer; }
+    .detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line-soft); }
+    .detail { padding: 15px 18px; background: #111820; }
+    .detail span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+    .detail strong { font: 650 16px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .detail-note { padding: 14px 20px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .drop-overlay { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: rgba(5, 9, 12, .88); backdrop-filter: blur(5px); }
+    .drop-overlay.active { display: grid; }
+    .drop-box { padding: 38px 52px; border: 2px dashed var(--cyan); border-radius: 20px; background: var(--panel); color: var(--cyan); font-weight: 750; }
+    .error { display: none; margin-bottom: 15px; padding: 12px 14px; border: 1px solid rgba(255,114,125,.35); border-radius: 10px; background: rgba(255,114,125,.09); color: #ffb3ba; font-size: 12px; }
+    .error.visible { display: block; }
+
+    @media (max-width: 1000px) {
+      .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .filters { grid-template-columns: 1fr 1fr; }
+      .workspace { grid-template-columns: 1fr; }
+      .group-list { max-height: 280px; }
+    }
+    @media (max-width: 650px) {
+      .shell { padding: 18px 12px; }
+      .topbar { flex-direction: column; }
+      .source-actions { justify-content: flex-start; }
+      .summary-grid { grid-template-columns: 1fr 1fr; }
+      .filters { grid-template-columns: 1fr; }
+      .chart-wrap { height: 340px; }
+      .detail-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="drop-overlay" id="drop-overlay"><div class="drop-box">Drop aggregate JSON here</div></div>
+  <div class="tooltip" id="tooltip"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">cargo-nextest / aggregate telemetry</div>
+        <h1>PR Gate Runtime Explorer</h1>
+        <p class="lede">Find slow, unstable, and intermittently failing tests across recent CI runs.</p>
+      </div>
+      <div class="source-actions">
+        <div class="source-pill" id="source-name" title="Current data source">Loading data.json…</div>
+        <label class="file-button">Open JSON<input id="file-input" type="file" accept="application/json,.json"></label>
+      </div>
+    </header>
+
+    <div class="error" id="error" role="alert"></div>
+
+    <section class="summary-grid" aria-label="Dataset summary">
+      <div class="card"><div class="card-label">Test cases</div><div class="card-value" id="sum-tests">—</div><div class="card-note" id="sum-groups">— groups</div></div>
+      <div class="card"><div class="card-label">Observations</div><div class="card-value" id="sum-observations">—</div><div class="card-note">final nextest results</div></div>
+      <div class="card"><div class="card-label">Weighted pass rate</div><div class="card-value" id="sum-passrate">—</div><div class="card-note" id="sum-failures">— estimated failures</div></div>
+      <div class="card"><div class="card-label">Slowest average</div><div class="card-value" id="sum-slowest">—</div><div class="card-note" id="sum-slowest-name">—</div></div>
+      <div class="card"><div class="card-label">Imperfect tests</div><div class="card-value" id="sum-imperfect">—</div><div class="card-note">pass rate below 100%</div></div>
+    </section>
+
+    <section class="filters" aria-label="Test filters">
+      <div class="field"><label for="search">Search test or group</label><input id="search" type="search" placeholder="e.g. ssh_smoke or app::input_flow"></div>
+      <div class="field"><label for="health">Pass status</label><select id="health"><option value="all">All tests</option><option value="imperfect">Imperfect only</option><option value="perfect">100% passing</option></select></div>
+      <div class="field"><label for="min-runs">Minimum runs</label><input id="min-runs" type="number" min="1" step="1" value="1"></div>
+      <div class="field"><label for="chart">Chart</label><select id="chart"><option value="test-stdev">Test runtime deviation</option><option value="test-max">Test maximum runtime</option><option value="test-passrate">Test failure rate</option><option value="group-stdev">Groups runtime deviation</option><option value="group-max">Groups maximum runtime</option><option value="group-passrate">Groups failure rate</option><option value="group-total">Groups Total Runtime</option></select></div>
+      <button class="button" id="reset" type="button">Reset filters</button>
+    </section>
+
+    <section class="workspace">
+      <div class="panel">
+        <div class="panel-head"><div class="panel-title">Groups</div><div class="panel-meta" id="group-meta">—</div></div>
+        <div class="group-list" id="group-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><div class="panel-title">Performance map</div><div class="panel-meta" id="chart-axis-summary" style="margin-top:5px">Average runtime → / test runtime deviation ↑</div></div><div class="panel-meta" id="chart-meta">—</div></div>
+        <div class="chart-wrap" id="chart-wrap"><svg id="scatter" role="img" aria-label="Test runtime scatter plot"></svg></div>
+      </div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <div><div class="panel-title">Tests</div><div class="panel-meta" id="table-meta" style="margin-top:5px">—</div></div>
+        <button class="button" id="export" type="button">Export filtered CSV</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th data-sort="name">Test</th><th data-sort="group">Group</th><th data-sort="n">Runs</th><th data-sort="avg" class="sorted">Avg ↓</th><th data-sort="median">Median</th><th data-sort="max">Max</th><th data-sort="stdev">Std dev</th><th data-sort="passrate">Pass rate</th>
+          </tr></thead>
+          <tbody id="test-rows"></tbody>
+        </table>
+      </div>
+      <div class="table-note" id="table-note">Select a row or chart point for full statistics.</div>
+    </section>
+  </main>
+
+  <dialog id="detail-dialog">
+    <div class="dialog-head"><div><div class="dialog-title" id="detail-title"></div><div class="dialog-group" id="detail-group"></div></div><button class="close" id="detail-close" aria-label="Close">×</button></div>
+    <div class="detail-grid" id="detail-grid"></div>
+    <div class="detail-note" id="detail-note"></div>
+  </dialog>
+
+  <script>
+    'use strict';
+
+    const MAX_TABLE_ROWS = 500;
+    const state = { data: null, group: '', query: '', health: 'all', minRuns: 1, sort: 'avg', direction: -1, chart: 'test-stdev' };
+    const el = id => document.getElementById(id);
+    const integer = new Intl.NumberFormat('en-US');
+    const percent = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+    function runtime(seconds) {
+      if (!Number.isFinite(seconds)) return '—';
+      if (seconds < .001) return `${(seconds * 1e6).toFixed(0)} µs`;
+      if (seconds < 1) return `${(seconds * 1e3).toFixed(seconds < .01 ? 2 : 1)} ms`;
+      if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`;
+      return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(0)}s`;
+    }
+
+    function totalRuntime(seconds) {
+      if (seconds <= 0) return '0 s';
+      if (seconds < 60) return runtime(seconds);
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
+      return `${Math.floor(seconds / 86400)}d ${Math.round((seconds % 86400) / 3600)}h`;
+    }
+
+    function validate(data) {
+      if (!data || !Array.isArray(data.groups) || !Array.isArray(data.tests)) throw new Error('Expected an object with groups and tests arrays.');
+      for (const test of data.tests) {
+        if (typeof test.name !== 'string' || typeof test.group !== 'string' || !Number.isFinite(test.n) || !test.runtime || !Number.isFinite(test.runtime.avg) || !Number.isFinite(test.passrate)) {
+          throw new Error('A test entry is missing name, group, n, runtime, or passrate data.');
+        }
+      }
+      return data;
+    }
+
+    function load(data, source) {
+      state.data = validate(data);
+      state.group = '';
+      el('source-name').textContent = source;
+      el('source-name').title = source;
+      el('error').classList.remove('visible');
+      renderSummary();
+      render();
+    }
+
+    async function loadDefault() {
+      try {
+        const [response, metadataResponse] = await Promise.all([fetch('./data.json'), fetch('./metadata.json')]);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const metadata = metadataResponse.ok ? await metadataResponse.json() : { filename: 'data.json' };
+        load(await response.json(), `${metadata.filename} · served locally`);
+      } catch (error) {
+        showError(`Could not load data.json (${error.message}). Use Open JSON or drop an aggregate file onto this page.`);
+      }
+    }
+
+    function showError(message) {
+      el('error').textContent = message;
+      el('error').classList.add('visible');
+    }
+
+    function readFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try { load(JSON.parse(reader.result), `${file.name} · local file`); }
+        catch (error) { showError(`Could not open ${file.name}: ${error.message}`); }
+      };
+      reader.onerror = () => showError(`Could not read ${file.name}.`);
+      reader.readAsText(file);
+    }
+
+    function renderSummary() {
+      const tests = state.data.tests;
+      const observations = tests.reduce((sum, item) => sum + item.n, 0);
+      const passes = tests.reduce((sum, item) => sum + item.n * item.passrate, 0);
+      const imperfect = tests.filter(item => item.passrate < 1).length;
+      const slowest = tests.length ? tests.reduce((best, item) => item.runtime.avg > best.runtime.avg ? item : best, tests[0]) : null;
+      const passrate = observations ? passes / observations : 0;
+      el('sum-tests').textContent = integer.format(tests.length);
+      el('sum-groups').textContent = `${integer.format(state.data.groups.length)} groups`;
+      el('sum-observations').textContent = integer.format(observations);
+      el('sum-passrate').textContent = percent.format(passrate);
+      el('sum-passrate').className = `card-value ${passrate === 1 ? 'good' : passrate >= .99 ? 'warn' : 'bad'}`;
+      el('sum-failures').textContent = `${integer.format(Math.round(observations - passes))} estimated failures`;
+      el('sum-slowest').textContent = runtime(slowest?.runtime.avg);
+      el('sum-slowest-name').textContent = slowest?.name || '—';
+      el('sum-slowest-name').title = slowest?.name || '';
+      el('sum-imperfect').textContent = integer.format(imperfect);
+      el('sum-imperfect').className = `card-value ${imperfect ? 'warn' : 'good'}`;
+    }
+
+    function filteredTests() {
+      if (!state.data) return [];
+      const query = state.query.trim().toLocaleLowerCase();
+      return state.data.tests.filter(test => {
+        if (state.group && test.group !== state.group) return false;
+        if (test.n < state.minRuns) return false;
+        if (state.health === 'imperfect' && test.passrate >= 1) return false;
+        if (state.health === 'perfect' && test.passrate < 1) return false;
+        return !query || test.name.toLocaleLowerCase().includes(query) || test.group.toLocaleLowerCase().includes(query);
+      });
+    }
+
+    function value(test, key) {
+      return key in test.runtime ? test.runtime[key] : test[key];
+    }
+
+    function sortedTests(tests) {
+      const direction = state.direction;
+      const key = state.sort;
+      return [...tests].sort((a, b) => {
+        const av = value(a, key), bv = value(b, key);
+        if (typeof av === 'string') return direction * av.localeCompare(bv);
+        return direction * ((av ?? 0) - (bv ?? 0)) || a.name.localeCompare(b.name);
+      });
+    }
+
+    function render() {
+      if (!state.data) return;
+      const tests = filteredTests();
+      renderGroups();
+      renderChart(tests);
+      renderTable(tests);
+    }
+
+    function renderGroups() {
+      const container = el('group-list');
+      container.replaceChildren();
+      const groups = [...state.data.groups].sort((a, b) =>
+        b.runtime.avg - a.runtime.avg || a.name.localeCompare(b.name)
+      );
+      el('group-meta').textContent = `${groups.length} total · avg runtime ↓`;
+      const all = document.createElement('button');
+      all.className = `group-row${state.group ? '' : ' active'}`;
+      all.innerHTML = `<div><div class="group-name">All groups</div><div class="group-sub">${integer.format(state.data.tests.length)} tests</div></div><div class="group-value">ALL</div>`;
+      all.onclick = () => { state.group = ''; render(); };
+      container.append(all);
+      const counts = new Map();
+      for (const test of state.data.tests) counts.set(test.group, (counts.get(test.group) || 0) + 1);
+      for (const group of groups) {
+        const row = document.createElement('button');
+        row.className = `group-row${state.group === group.name ? ' active' : ''}`;
+        const left = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'group-name'; name.textContent = group.name; name.title = group.name;
+        const sub = document.createElement('div');
+        sub.className = 'group-sub'; sub.textContent = `${integer.format(counts.get(group.name) || 0)} tests · ${percent.format(group.passrate)}`;
+        left.append(name, sub);
+        const metric = document.createElement('div');
+        metric.className = 'group-value'; metric.textContent = runtime(group.runtime.avg);
+        row.append(left, metric);
+        row.onclick = () => { state.group = state.group === group.name ? '' : group.name; render(); };
+        container.append(row);
+      }
+    }
+
+    function chartValue(item, metric) {
+      if (metric === 'passrate') return 1 - item.passrate;
+      return item.runtime[metric];
+    }
+
+    function renderChart(tests) {
+      const svg = el('scatter');
+      svg.replaceChildren();
+      const [scope, metric] = state.chart.split('-');
+      if (scope === 'group' && metric === 'total') {
+        renderGroupTotalRuntimeChart(svg);
+        return;
+      }
+      const items = scope === 'group' ? state.data.groups : tests;
+      const scopeLabel = scope === 'group' ? 'groups' : 'tests';
+      const labels = { stdev: 'runtime deviation', max: 'maximum runtime', passrate: 'failure rate' };
+      el('chart-axis-summary').textContent = `Average runtime → / ${scope === 'group' ? 'group' : 'test'} ${labels[metric]} ↑`;
+      el('chart-meta').textContent = `${integer.format(items.length)} ${scopeLabel} · log scale`;
+      svg.setAttribute('aria-label', `${scopeLabel} by average runtime and ${labels[metric]}`);
+      svg.style.height = '100%';
+      el('chart-wrap').classList.remove('bar-mode');
+      if (!items.length) {
+        el('chart-wrap').classList.add('empty');
+        const message = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        message.setAttribute('x', '50%'); message.setAttribute('y', '50%'); message.setAttribute('text-anchor', 'middle'); message.setAttribute('class', 'axis-label'); message.textContent = `No ${scopeLabel} match the filters`;
+        svg.append(message); return;
+      }
+      el('chart-wrap').classList.remove('empty');
+      const width = 900, height = 390, margin = { top: 18, right: 18, bottom: 34, left: 64 };
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      const positive = value => Math.log10(Math.max(value, 1e-6));
+      const xs = items.map(item => positive(item.runtime.avg));
+      const ys = items.map(item => positive(chartValue(item, metric)));
+      let xMin = Math.min(...xs), xMax = Math.max(...xs), yMin = Math.min(...ys), yMax = Math.max(...ys);
+      if (xMin === xMax) { xMin -= .5; xMax += .5; }
+      if (yMin === yMax) { yMin -= .5; yMax += .5; }
+      const pad = .06;
+      xMin -= (xMax - xMin) * pad; xMax += (xMax - xMin) * pad;
+      yMin -= (yMax - yMin) * pad; yMax += (yMax - yMin) * pad;
+      const x = v => margin.left + (positive(v) - xMin) / (xMax - xMin) * (width - margin.left - margin.right);
+      const y = v => height - margin.bottom - (positive(v) - yMin) / (yMax - yMin) * (height - margin.top - margin.bottom);
+      const ns = 'http://www.w3.org/2000/svg';
+      for (let i = 0; i <= 4; i++) {
+        const gx = margin.left + i / 4 * (width - margin.left - margin.right);
+        const gy = margin.top + i / 4 * (height - margin.top - margin.bottom);
+        const vertical = document.createElementNS(ns, 'line');
+        vertical.setAttribute('x1', gx); vertical.setAttribute('x2', gx); vertical.setAttribute('y1', margin.top); vertical.setAttribute('y2', height - margin.bottom); vertical.setAttribute('class', 'grid-line');
+        const horizontal = document.createElementNS(ns, 'line');
+        horizontal.setAttribute('x1', margin.left); horizontal.setAttribute('x2', width - margin.right); horizontal.setAttribute('y1', gy); horizontal.setAttribute('y2', gy); horizontal.setAttribute('class', 'grid-line');
+        const xLabel = document.createElementNS(ns, 'text');
+        xLabel.setAttribute('x', gx); xLabel.setAttribute('y', height - 11); xLabel.setAttribute('text-anchor', 'middle'); xLabel.setAttribute('class', 'axis-label'); xLabel.textContent = runtime(10 ** (xMin + i / 4 * (xMax - xMin)));
+        const rawY = 10 ** (yMax - i / 4 * (yMax - yMin));
+        const yLabel = document.createElementNS(ns, 'text');
+        yLabel.setAttribute('x', margin.left - 10); yLabel.setAttribute('y', gy + 3); yLabel.setAttribute('text-anchor', 'end'); yLabel.setAttribute('class', 'axis-label'); yLabel.textContent = metric === 'passrate' ? percent.format(rawY) : runtime(rawY);
+        svg.append(vertical, horizontal, xLabel, yLabel);
+      }
+      const ordered = [...items].sort((a, b) => b.n - a.n);
+      for (const item of ordered) {
+        const dot = document.createElementNS(ns, 'circle');
+        dot.setAttribute('cx', x(item.runtime.avg)); dot.setAttribute('cy', y(chartValue(item, metric)));
+        dot.setAttribute('r', Math.max(2.4, Math.min(7, 2 + Math.log10(item.n + 1))));
+        dot.setAttribute('class', `dot${item.passrate < 1 ? ' imperfect' : ''}${scope === 'group' && item.name === state.group ? ' selected' : ''}`);
+        dot.setAttribute('tabindex', '0');
+        const show = event => showTooltip(event, item, scope);
+        dot.addEventListener('pointerenter', show); dot.addEventListener('pointermove', show); dot.addEventListener('pointerleave', hideTooltip); dot.addEventListener('focus', show); dot.addEventListener('blur', hideTooltip); dot.addEventListener('click', () => showDetail(item, scope));
+        svg.append(dot);
+      }
+    }
+
+    function renderGroupTotalRuntimeChart(svg) {
+      const groups = [...state.data.groups].sort((a, b) =>
+        b.n * b.runtime.avg - a.n * a.runtime.avg || a.name.localeCompare(b.name)
+      );
+      const ns = 'http://www.w3.org/2000/svg';
+      const width = 900, rowHeight = 25;
+      const margin = { top: 27, right: 92, bottom: 22, left: 265 };
+      const height = Math.max(390, margin.top + margin.bottom + groups.length * rowHeight);
+      const totals = groups.map(group => group.n * group.runtime.avg);
+      const maxTotal = Math.max(...totals, 1);
+      const barWidth = value => value / maxTotal * (width - margin.left - margin.right);
+      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+      svg.setAttribute('aria-label', 'Groups ranked by total observed runtime');
+      svg.style.height = `${height}px`;
+      el('chart-wrap').classList.add('bar-mode');
+      el('chart-axis-summary').textContent = 'Total observed runtime →';
+      el('chart-meta').textContent = `${integer.format(groups.length)} groups · descending`;
+
+      for (let i = 0; i <= 4; i++) {
+        const gridX = margin.left + i / 4 * (width - margin.left - margin.right);
+        const line = document.createElementNS(ns, 'line');
+        line.setAttribute('x1', gridX); line.setAttribute('x2', gridX);
+        line.setAttribute('y1', margin.top - 8); line.setAttribute('y2', height - margin.bottom);
+        line.setAttribute('class', 'grid-line');
+        const label = document.createElementNS(ns, 'text');
+        label.setAttribute('x', gridX); label.setAttribute('y', 12);
+        label.setAttribute('text-anchor', 'middle'); label.setAttribute('class', 'axis-label');
+        label.textContent = totalRuntime(maxTotal * i / 4);
+        svg.append(line, label);
+      }
+
+      groups.forEach((group, index) => {
+        const total = totals[index];
+        const y = margin.top + index * rowHeight;
+        const name = document.createElementNS(ns, 'text');
+        name.setAttribute('x', margin.left - 10); name.setAttribute('y', y + 13);
+        name.setAttribute('text-anchor', 'end'); name.setAttribute('class', 'bar-label');
+        name.textContent = group.name.length > 38 ? `…${group.name.slice(-37)}` : group.name;
+        const bar = document.createElementNS(ns, 'rect');
+        bar.setAttribute('x', margin.left); bar.setAttribute('y', y + 3);
+        bar.setAttribute('width', Math.max(1, barWidth(total))); bar.setAttribute('height', 14);
+        bar.setAttribute('rx', 3);
+        bar.setAttribute('class', `bar${group.name === state.group ? ' selected' : ''}`);
+        bar.setAttribute('tabindex', '0');
+        const value = document.createElementNS(ns, 'text');
+        value.setAttribute('x', Math.min(width - margin.right + 7, margin.left + barWidth(total) + 7));
+        value.setAttribute('y', y + 14); value.setAttribute('class', 'bar-value');
+        value.textContent = totalRuntime(total);
+        const show = event => showGroupTotalTooltip(event, group, total);
+        bar.addEventListener('pointerenter', show); bar.addEventListener('pointermove', show);
+        bar.addEventListener('pointerleave', hideTooltip); bar.addEventListener('focus', show);
+        bar.addEventListener('blur', hideTooltip); bar.addEventListener('click', () => showDetail(group, 'group'));
+        svg.append(name, bar, value);
+      });
+    }
+
+    function showTooltip(event, item, scope) {
+      const tooltip = el('tooltip');
+      const title = document.createElement('strong');
+      title.textContent = item.name;
+      const detail = document.createElement('span');
+      detail.textContent = `${scope === 'group' ? `${integer.format(item.n)} observations` : item.group} · ${runtime(item.runtime.avg)} avg · ${percent.format(item.passrate)} pass`;
+      tooltip.replaceChildren(title, detail);
+      const rect = event.target.getBoundingClientRect();
+      tooltip.style.left = `${event.clientX || rect.left}px`; tooltip.style.top = `${event.clientY || rect.top}px`; tooltip.style.opacity = '1';
+    }
+
+    function showGroupTotalTooltip(event, group, total) {
+      const tooltip = el('tooltip');
+      const title = document.createElement('strong');
+      title.textContent = group.name;
+      const detail = document.createElement('span');
+      detail.textContent = `${totalRuntime(total)} total · ${integer.format(group.n)} observations · ${runtime(group.runtime.avg)} average`;
+      tooltip.replaceChildren(title, detail);
+      const rect = event.target.getBoundingClientRect();
+      tooltip.style.left = `${event.clientX || rect.left}px`; tooltip.style.top = `${event.clientY || rect.top}px`; tooltip.style.opacity = '1';
+    }
+    function hideTooltip() { el('tooltip').style.opacity = '0'; }
+
+    function renderTable(tests) {
+      const ordered = sortedTests(tests);
+      const visible = ordered.slice(0, MAX_TABLE_ROWS);
+      const body = el('test-rows'); body.replaceChildren();
+      for (const test of visible) {
+        const row = document.createElement('tr'); row.tabIndex = 0;
+        const values = [test.name, test.group, integer.format(test.n), runtime(test.runtime.avg), runtime(test.runtime.median), runtime(test.runtime.max), runtime(test.runtime.stdev)];
+        for (const text of values) { const cell = document.createElement('td'); cell.textContent = text; cell.title = text; row.append(cell); }
+        const passCell = document.createElement('td');
+        const chip = document.createElement('span'); chip.className = `pass-chip${test.passrate < 1 ? ' imperfect' : ''}`; chip.textContent = percent.format(test.passrate); passCell.append(chip); row.append(passCell);
+        row.onclick = () => showDetail(test); row.onkeydown = event => { if (event.key === 'Enter') showDetail(test); };
+        body.append(row);
+      }
+      el('table-meta').textContent = `${integer.format(tests.length)} matching of ${integer.format(state.data.tests.length)} tests`;
+      el('table-note').textContent = ordered.length > MAX_TABLE_ROWS ? `Showing the first ${integer.format(MAX_TABLE_ROWS)} rows. Search, filter, or export CSV to work with all ${integer.format(ordered.length)} matches.` : 'Select a row or chart point for full statistics.';
+    }
+
+    function showDetail(item, scope = 'test') {
+      el('detail-title').textContent = item.name;
+      el('detail-group').textContent = scope === 'group' ? 'Group aggregate' : item.group;
+      const metrics = [[scope === 'group' ? 'Observations' : 'Runs', integer.format(item.n)], ...(scope === 'group' ? [['Total runtime', totalRuntime(item.n * item.runtime.avg)]] : []), ['Pass rate', percent.format(item.passrate)], ['Average', runtime(item.runtime.avg)], ['Median', runtime(item.runtime.median)], ['Minimum', runtime(item.runtime.min)], ['Maximum', runtime(item.runtime.max)], ['Std deviation', runtime(item.runtime.stdev)], ['Variance', item.runtime.var.toPrecision(5)], ['Range', runtime(item.runtime.max - item.runtime.min)]];
+      const grid = el('detail-grid'); grid.replaceChildren();
+      for (const [label, metric] of metrics) { const item = document.createElement('div'); item.className = 'detail'; const span = document.createElement('span'); span.textContent = label; const strong = document.createElement('strong'); strong.textContent = metric; item.append(span, strong); grid.append(item); }
+      const cv = item.runtime.avg ? item.runtime.stdev / item.runtime.avg : 0;
+      el('detail-note').textContent = `Runtime variability is ${percent.format(cv)} of the average. Pass rate represents final results after nextest retry handling; ${scope === 'group' ? 'the group combines all test observations' : 'observations are aggregated'} across the downloaded runs.`;
+      el('detail-dialog').showModal();
+    }
+
+    function exportCsv() {
+      const tests = sortedTests(filteredTests());
+      const quote = value => `"${String(value).replaceAll('"', '""')}"`;
+      const rows = [['test','group','n','passrate','avg_s','median_s','min_s','max_s','stdev_s','variance'], ...tests.map(test => [test.name,test.group,test.n,test.passrate,test.runtime.avg,test.runtime.median,test.runtime.min,test.runtime.max,test.runtime.stdev,test.runtime.var])];
+      const csv = rows.map(row => row.map(quote).join(',')).join('\n') + '\n';
+      const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); link.download = 'aggstats-filtered.csv'; link.click(); URL.revokeObjectURL(link.href);
+    }
+
+    el('search').addEventListener('input', event => { state.query = event.target.value; render(); });
+    el('health').addEventListener('change', event => { state.health = event.target.value; render(); });
+    el('min-runs').addEventListener('input', event => { state.minRuns = Math.max(1, Number(event.target.value) || 1); render(); });
+    el('chart').addEventListener('change', event => { state.chart = event.target.value; renderChart(filteredTests()); });
+    el('reset').onclick = () => { Object.assign(state, { group: '', query: '', health: 'all', minRuns: 1, chart: 'test-stdev' }); el('search').value = ''; el('health').value = 'all'; el('min-runs').value = 1; el('chart').value = 'test-stdev'; render(); };
+    el('file-input').addEventListener('change', event => { if (event.target.files[0]) readFile(event.target.files[0]); });
+    el('export').onclick = exportCsv;
+    el('detail-close').onclick = () => el('detail-dialog').close();
+    document.querySelectorAll('th[data-sort]').forEach(header => header.onclick = () => {
+      const key = header.dataset.sort;
+      if (state.sort === key) state.direction *= -1; else { state.sort = key; state.direction = key === 'name' || key === 'group' ? 1 : -1; }
+      document.querySelectorAll('th[data-sort]').forEach(item => { item.classList.toggle('sorted', item === header); item.textContent = item.textContent.replace(/ [↑↓]$/, ''); });
+      header.textContent += state.direction === 1 ? ' ↑' : ' ↓'; renderTable(filteredTests());
+    });
+
+    let dragDepth = 0;
+    window.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; el('drop-overlay').classList.add('active'); });
+    window.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; el('drop-overlay').classList.remove('active'); } });
+    window.addEventListener('dragover', event => event.preventDefault());
+    window.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; el('drop-overlay').classList.remove('active'); if (event.dataTransfer.files[0]) readFile(event.dataTransfer.files[0]); });
+
+    loadDefault();
+  </script>
+</body>
+</html>

@@ -19,6 +19,7 @@ pub(super) type PlayedRingWriter = HeapProd<f32>;
 
 struct PlaybackOutputState {
     queue: PlaybackQueueReader,
+    /// Audible mono samples for the analyzer thread.
     played_ring: PlayedRingWriter,
     played_samples: Arc<AtomicU64>,
     source_channels: usize,
@@ -47,7 +48,6 @@ pub(super) fn build_output_stream(
     played_samples: Arc<AtomicU64>,
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
-    icecast_output_available: Arc<AtomicBool>,
     source_is_icecast: Arc<AtomicBool>,
     stream_generation: Arc<AtomicU64>,
     stream_flushed_generation: Arc<AtomicU64>,
@@ -71,9 +71,7 @@ pub(super) fn build_output_stream(
     let sample_rate = config.sample_rate().0;
     let mut stream_config = config.config();
     apply_profile_buffer_size(&mut stream_config, config.buffer_size(), profile);
-    let output_available_for_errors = Arc::clone(&icecast_output_available);
-    let err_fn = move |err| {
-        output_available_for_errors.store(false, Ordering::Relaxed);
+    let err_fn = |err| {
         eprintln!("audio output stream error: {err}");
     };
     let mut output_state = PlaybackOutputState {
@@ -260,9 +258,15 @@ where
         }
 
         if had_frame {
-            let analyzer_sample = mix_for_analyzer(&state.source_frame);
-            let analyzer_sample = if muted { 0.0 } else { analyzer_sample * volume };
-            let _ = state.played_ring.try_push(analyzer_sample);
+            // The analyzer follows what is audible: post-volume, and nothing
+            // at all while silenced, so a muted or YouTube-selected CLI sends
+            // no spectrum. A full ring means the analyzer is behind; the
+            // sample is dropped rather than blocking the callback.
+            if !muted {
+                let _ = state
+                    .played_ring
+                    .try_push(downmix_to_mono(&state.source_frame) * volume);
+            }
             state.played_samples.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -350,14 +354,14 @@ fn map_output_sample(source_frame: &[f32], output_idx: usize, output_channels: u
         (2, 1) => (source_frame[0] + source_frame[1]) * 0.5,
         (2, _) => source_frame[output_idx % 2],
         (src, n) if src == n => source_frame[output_idx],
-        (_, 1) => mix_for_analyzer(source_frame),
+        (_, 1) => downmix_to_mono(source_frame),
         (src, _) if src > output_channels => source_frame[output_idx],
         (src, _) if output_idx < src => source_frame[output_idx],
         _ => *source_frame.last().unwrap_or(&0.0),
     }
 }
 
-fn mix_for_analyzer(source_frame: &[f32]) -> f32 {
+fn downmix_to_mono(source_frame: &[f32]) -> f32 {
     if source_frame.is_empty() {
         return 0.0;
     }
@@ -383,72 +387,5 @@ fn apply_profile_buffer_size(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn maps_stereo_to_stereo_without_downmixing() {
-        assert_eq!(map_output_sample(&[0.25, -0.5], 0, 2), 0.25);
-        assert_eq!(map_output_sample(&[0.25, -0.5], 1, 2), -0.5);
-    }
-
-    #[test]
-    fn maps_stereo_to_quad_by_repeating_lr_pairs() {
-        assert_eq!(map_output_sample(&[0.25, -0.5], 0, 4), 0.25);
-        assert_eq!(map_output_sample(&[0.25, -0.5], 1, 4), -0.5);
-        assert_eq!(map_output_sample(&[0.25, -0.5], 2, 4), 0.25);
-        assert_eq!(map_output_sample(&[0.25, -0.5], 3, 4), -0.5);
-    }
-
-    #[test]
-    fn maps_stereo_to_mono_for_analyzer_mix() {
-        assert!((map_output_sample(&[0.25, -0.5], 0, 1) + 0.125).abs() < 1e-6);
-    }
-
-    #[test]
-    fn analyzer_mix_averages_channels() {
-        assert!((mix_for_analyzer(&[0.5, -0.25, 0.25]) - (1.0 / 6.0)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn preferred_output_sample_rate_uses_native_rate_when_supported() {
-        let config = cpal::SupportedStreamConfigRange::new(
-            2,
-            cpal::SampleRate(44_100),
-            cpal::SampleRate(48_000),
-            cpal::SupportedBufferSize::Unknown,
-            cpal::SampleFormat::F32,
-        );
-        assert_eq!(preferred_output_sample_rate(&config, 44_100), 44_100);
-    }
-
-    #[test]
-    fn preferred_output_sample_rate_clamps_when_native_rate_is_unsupported() {
-        let config = cpal::SupportedStreamConfigRange::new(
-            2,
-            cpal::SampleRate(48_000),
-            cpal::SampleRate(48_000),
-            cpal::SupportedBufferSize::Unknown,
-            cpal::SampleFormat::F32,
-        );
-        assert_eq!(preferred_output_sample_rate(&config, 44_100), 48_000);
-    }
-
-    #[test]
-    fn wsl_profile_requests_fixed_buffer_size() {
-        let mut config = cpal::StreamConfig {
-            channels: 2,
-            sample_rate: cpal::SampleRate(48_000),
-            buffer_size: cpal::BufferSize::Default,
-        };
-        apply_profile_buffer_size(
-            &mut config,
-            &cpal::SupportedBufferSize::Range {
-                min: 512,
-                max: 4096,
-            },
-            AudioBackendProfile::Wsl,
-        );
-        assert_eq!(config.buffer_size, cpal::BufferSize::Fixed(2048));
-    }
-}
+#[path = "output_test.rs"]
+mod output_test;

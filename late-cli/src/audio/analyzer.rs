@@ -1,3 +1,4 @@
+use ringbuf::traits::Consumer;
 use rustfft::{Fft, FftPlanner, num_complex::Complex};
 use std::{
     collections::VecDeque,
@@ -10,10 +11,36 @@ use std::{
 };
 use tokio::sync::broadcast;
 
-use ringbuf::traits::Consumer;
+use super::{PlayedRing, VIZ_BANDS, VizSample};
 
-use super::{PlayedRing, VizSample};
+/// Samples per analysis window: ~21.5 Hz per bin at 44.1 kHz, so the
+/// sixteen log bands still get separate bins near the 60 Hz bottom.
+const FFT_SIZE: usize = 2048;
+/// The window size the dB floor was fitted on. A bin's magnitude grows with
+/// the window, so a larger window is scaled back to this one's reading.
+const FITTED_FFT_SIZE: usize = 1024;
+/// Lowest and highest frequency the bands cover, log-spaced between.
+const MIN_HZ: f32 = 60.0;
+const MAX_HZ: f32 = 12_000.0;
+/// A band's mean FFT magnitude at the bottom of the meter, in dB. Fitted on
+/// captured Icecast, synthwave, and house streams: typical music at 70%
+/// volume sits around half height, leaving headroom for hits to move into.
+const BAND_FLOOR_DB: f32 = -18.0;
+/// Level span from an empty band to a full one.
+const BAND_SPAN_DB: f32 = 60.0;
+/// Lift per band, low to high: 30 dB from the lowest band to the highest.
+/// Music carries far less energy per bin in the treble than in the mids, so
+/// without it the top bands barely register.
+const BAND_TILT_DB: f32 = 2.0;
+/// RMS at the bottom of the meter, in dBFS; 0 dBFS is the top.
+const RMS_FLOOR_DB: f32 = -48.0;
+/// Frames per second sent to the TUI.
+const TARGET_HZ: u64 = 15;
 
+/// Analyzes what the output callback actually played and broadcasts one
+/// spectrum frame per tick. A tick with no newly played samples sends
+/// nothing: a muted CLI, a YouTube-selected CLI, or an underrun produces
+/// no frames, and the TUI falls back to its ambient band on its own.
 pub(super) fn spawn_playback_analyzer_thread(
     mut played_ring: PlayedRing,
     analyzer_tx: broadcast::Sender<VizSample>,
@@ -21,38 +48,24 @@ pub(super) fn spawn_playback_analyzer_thread(
     stop: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
-        let cfg = AnalyzerConfig::default();
-        let bands = log_bands(sample_rate as f32, cfg.fft_size, cfg.band_count);
-        let fft = FftPlanner::new().plan_fft_forward(cfg.fft_size);
-        let mut scratch = vec![Complex::new(0.0, 0.0); cfg.fft_size];
-        let mut samples = vec![0.0; cfg.fft_size];
-        let mut history = VecDeque::with_capacity(4096);
-        let tick = Duration::from_millis(1000 / cfg.target_hz.max(1));
+        let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+        let mut window: VecDeque<f32> = VecDeque::with_capacity(FFT_SIZE);
+        let tick = Duration::from_millis(1000 / TARGET_HZ);
 
         while !stop.load(Ordering::Relaxed) {
+            let mut fresh = false;
             while let Some(sample) = played_ring.try_pop() {
-                history.push_back(sample);
-                while history.len() > 4096 {
-                    history.pop_front();
+                if window.len() == FFT_SIZE {
+                    window.pop_front();
                 }
+                window.push_back(sample);
+                fresh = true;
             }
 
-            let frame = if history.len() < cfg.fft_size {
-                None
-            } else {
-                let start = history.len() - cfg.fft_size;
-                for (dst, sample) in samples.iter_mut().zip(history.iter().skip(start)) {
-                    *dst = *sample;
-                }
-                let (mut bands_out, mut rms) = analyze_frame(&samples, &*fft, &mut scratch, &bands);
-                normalize_bands(&mut bands_out, &mut rms, cfg.gain);
-                Some(VizSample {
-                    bands: bands_out,
-                    rms,
-                })
-            };
-
-            if let Some(frame) = frame {
+            if fresh && window.len() == FFT_SIZE {
+                let frame = analyzer.analyze(window.make_contiguous());
+                // Err means no pair socket is subscribed right now (not yet
+                // connected, or reconnecting); the frame has no audience.
                 let _ = analyzer_tx.send(frame);
             }
 
@@ -61,91 +74,86 @@ pub(super) fn spawn_playback_analyzer_thread(
     });
 }
 
-fn log_bands(sample_rate: f32, n_fft: usize, band_count: usize) -> Vec<(usize, usize)> {
+/// FFT plan, Hann window, and band layout for one output sample rate,
+/// reused across frames so analysis allocates nothing per frame.
+pub(super) struct SpectrumAnalyzer {
+    fft: Arc<dyn Fft<f32>>,
+    hann: Vec<f32>,
+    scratch: Vec<Complex<f32>>,
+    bands: [(usize, usize); VIZ_BANDS],
+}
+
+impl SpectrumAnalyzer {
+    pub(super) fn new(sample_rate: u32) -> Self {
+        let hann = (0..FFT_SIZE)
+            .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (FFT_SIZE as f32 - 1.0)).cos())
+            .collect();
+        Self {
+            fft: FftPlanner::new().plan_fft_forward(FFT_SIZE),
+            hann,
+            scratch: vec![Complex::new(0.0, 0.0); FFT_SIZE],
+            bands: log_bands(sample_rate as f32),
+        }
+    }
+
+    /// One spectrum frame for exactly [`FFT_SIZE`] mono samples.
+    pub(super) fn analyze(&mut self, samples: &[f32]) -> VizSample {
+        assert_eq!(samples.len(), FFT_SIZE, "analyzer window size");
+        for ((slot, sample), weight) in self.scratch.iter_mut().zip(samples).zip(&self.hann) {
+            *slot = Complex::new(sample * weight, 0.0);
+        }
+        self.fft.process(&mut self.scratch);
+
+        let bands = std::array::from_fn(|band| {
+            let (start, end) = self.bands[band];
+            let bins = &self.scratch[start..end];
+            let mean = bins.iter().map(|c| c.norm()).sum::<f32>() / bins.len() as f32
+                * FITTED_FFT_SIZE as f32
+                / FFT_SIZE as f32;
+            meter_level(
+                amplitude_db(mean) + BAND_TILT_DB * band as f32,
+                BAND_FLOOR_DB,
+                BAND_SPAN_DB,
+            )
+        });
+        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / FFT_SIZE as f32).sqrt();
+        VizSample {
+            bands,
+            rms: meter_level(amplitude_db(rms), RMS_FLOOR_DB, -RMS_FLOOR_DB),
+        }
+    }
+}
+
+/// Bin ranges `[start, end)` for log-spaced bands between [`MIN_HZ`] and
+/// [`MAX_HZ`] (capped at Nyquist). A bin belongs to the band its center
+/// frequency falls in, so a tone lights one band instead of bleeding into
+/// the next. Every band holds at least one bin.
+fn log_bands(sample_rate: f32) -> [(usize, usize); VIZ_BANDS] {
     let nyquist = sample_rate / 2.0;
-    let min_hz: f32 = 60.0;
-    let max_hz = nyquist.min(12000.0);
-    let log_min = min_hz.ln();
-    let log_max = max_hz.ln();
-
-    (0..band_count)
-        .map(|i| {
-            let t0 = i as f32 / band_count as f32;
-            let t1 = (i + 1) as f32 / band_count as f32;
-            let f0 = (log_min + (log_max - log_min) * t0).exp();
-            let f1 = (log_min + (log_max - log_min) * t1).exp();
-            let b0 = ((f0 / nyquist) * (n_fft as f32 / 2.0)).floor().max(1.0) as usize;
-            let b1 = ((f1 / nyquist) * (n_fft as f32 / 2.0))
-                .ceil()
-                .max(b0 as f32 + 1.0) as usize;
-            (b0, b1)
-        })
-        .collect()
+    let half_bins = (FFT_SIZE / 2) as f32;
+    let log_min = MIN_HZ.ln();
+    let log_max = MAX_HZ.min(nyquist).ln();
+    std::array::from_fn(|i| {
+        let f0 = (log_min + (log_max - log_min) * i as f32 / VIZ_BANDS as f32).exp();
+        let f1 = (log_min + (log_max - log_min) * (i + 1) as f32 / VIZ_BANDS as f32).exp();
+        let start = ((f0 / nyquist) * half_bins).ceil().max(1.0) as usize;
+        let end = ((f1 / nyquist) * half_bins).ceil().max(start as f32 + 1.0) as usize;
+        (start, end.min(FFT_SIZE / 2))
+    })
 }
 
-fn analyze_frame(
-    samples: &[f32],
-    fft: &dyn Fft<f32>,
-    scratch: &mut [Complex<f32>],
-    bands: &[(usize, usize)],
-) -> ([f32; 8], f32) {
-    let n = samples.len();
-    for (i, s) in samples.iter().enumerate() {
-        let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n as f32 - 1.0)).cos();
-        scratch[i] = Complex::new(s * w, 0.0);
-    }
-
-    fft.process(scratch);
-
-    let mut mags = vec![0.0f32; n / 2];
-    for (i, c) in scratch.iter().take(n / 2).enumerate() {
-        mags[i] = (c.re * c.re + c.im * c.im).sqrt();
-    }
-
-    let mut out = [0.0f32; 8];
-    for (bi, (b0, b1)) in bands.iter().enumerate() {
-        let start = (*b0).min(mags.len());
-        let end = (*b1).min(mags.len());
-        let mut sum = 0.0;
-        if end > start {
-            for m in &mags[start..end] {
-                sum += *m;
-            }
-            out[bi] = sum / ((end - start) as f32);
-        }
-    }
-
-    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt();
-    (out, rms)
+/// An amplitude in dB. Zero is negative infinity, which [`meter_level`]
+/// lands on the bottom of the meter.
+fn amplitude_db(amplitude: f32) -> f32 {
+    20.0 * amplitude.log10()
 }
 
-fn soft_compress(x: f32) -> f32 {
-    let k = 2.0;
-    (k * x) / (1.0 + k * x)
+/// A dB level as a 0..=1 meter height. A log scale is what keeps the meter
+/// moving: music spans tens of dB, and a linear gain pins it at the top.
+fn meter_level(db: f32, floor_db: f32, span_db: f32) -> f32 {
+    ((db - floor_db) / span_db).clamp(0.0, 1.0)
 }
 
-fn normalize_bands(bands: &mut [f32], rms: &mut f32, gain: f32) {
-    for b in bands.iter_mut() {
-        *b = soft_compress(*b * gain).clamp(0.0, 1.0);
-    }
-    *rms = soft_compress(*rms * gain).clamp(0.0, 1.0);
-}
-
-#[derive(Debug, Clone)]
-struct AnalyzerConfig {
-    fft_size: usize,
-    band_count: usize,
-    gain: f32,
-    target_hz: u64,
-}
-
-impl Default for AnalyzerConfig {
-    fn default() -> Self {
-        AnalyzerConfig {
-            fft_size: 1024,
-            band_count: 8,
-            gain: 3.0,
-            target_hz: 15,
-        }
-    }
-}
+#[cfg(test)]
+#[path = "analyzer_test.rs"]
+mod analyzer_test;

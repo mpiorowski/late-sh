@@ -1,0 +1,48 @@
+[package]
+name = "late-bashquest"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone host for the BashQuest door game. Runs Tony "Hardlygospel"
+# Hosaroygard's bashquest.sh (a native late.sh original, not a foreign
+# upstream) on a PTY and exposes it over SSH, so late-ssh reaches it as a
+# network-proxied door -- same shape as the dopewars/DCSS hosts. See
+# late-ssh/src/app/door/bashquest/CONTEXT.md.
+
+[[bin]]
+name = "late-bashquest"
+path = "src/main.rs"
+
+[features]
+# No-op: CI builds/tests the workspace with `--features otel`, which requires
+# every member to define the feature. This host has no telemetry deps of its
+# own (it logs via tracing-subscriber fmt), so `otel` is a no-op here.
+otel = []
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core Utils
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async / Runtime
+tokio = { workspace = true }
+
+# SSH transport
+russh = { workspace = true }
+
+# Identity: shared-secret -> derived ed25519 client key (mirrors the
+# dopewars/DCSS/nethack hosts)
+blake3 = { workspace = true }
+
+# Server host-key generation (matches late-ssh's RNG usage)
+getrandom = { workspace = true }
+
+# PTY allocation for the bashquest.sh child (openpty/setsid/TIOCSWINSZ).
+# Linux-only host. bashquest.sh saves continuously (after nearly every
+# state-changing action, not just on explicit exit), so there is no
+# hangup-save dance to build -- like dopewars, teardown is a plain kill.
+nix = { workspace = true, features = ["term", "process"] }

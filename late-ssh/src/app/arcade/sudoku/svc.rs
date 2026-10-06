@@ -5,6 +5,8 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::profile::fetch_username;
 use late_core::models::sudoku::{DailyWin, Game, GameParams};
 
@@ -15,6 +17,17 @@ pub struct SudokuService {
 }
 
 impl SudokuService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::Sudoku, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self { db, activity_feed }
     }
@@ -62,12 +75,24 @@ impl SudokuService {
         Ok(())
     }
 
-    /// Fire-and-forget task to record a daily win
-    pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String, score: i32) {
+    /// Fire-and-forget task to record a daily win. `puzzle_date` is the date
+    /// of the board that was actually solved, not the wall clock: a session
+    /// that crosses UTC midnight mid-board must bank the win under the
+    /// board's own day, never as today's daily.
+    pub fn record_win_task(
+        &self,
+        user_id: Uuid,
+        difficulty_key: String,
+        puzzle_date: NaiveDate,
+        score: i32,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let puzzle_date = match svc.record_win(user_id, difficulty_key.clone(), score).await {
-                Ok(puzzle_date) => puzzle_date,
+            match svc
+                .record_win(user_id, difficulty_key.clone(), puzzle_date, score)
+                .await
+            {
+                Ok(()) => {}
                 Err(e) => {
                     tracing::error!(error = ?e, "failed to record sudoku daily win");
                     return;
@@ -95,11 +120,11 @@ impl SudokuService {
         &self,
         user_id: Uuid,
         difficulty_key: String,
+        puzzle_date: NaiveDate,
         score: i32,
-    ) -> Result<NaiveDate> {
+    ) -> Result<()> {
         let client = self.db.get().await?;
-        let puzzle_date = self.today();
         DailyWin::record_win(&client, user_id, difficulty_key, puzzle_date, score).await?;
-        Ok(puzzle_date)
+        Ok(())
     }
 }

@@ -38,6 +38,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         return true;
     }
 
+    if byte == b'u' || byte == b'U' {
+        state.undo();
+        return true;
+    }
+
     match byte {
         b'k' | b'K' => {
             state.move_cursor(-1, 0);

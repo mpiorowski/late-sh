@@ -2,11 +2,13 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use late_core::db::Db;
 use late_core::models::profile::fetch_username;
-use late_core::models::rubiks_cube::DailyWin;
+use late_core::models::rubiks_cube::{DailyWin, Game, GameParams};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+use late_core::models::leaderboard::DailyPuzzle;
 
 #[derive(Clone)]
 pub struct RubiksCubeService {
@@ -15,12 +17,44 @@ pub struct RubiksCubeService {
 }
 
 impl RubiksCubeService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::RubiksCube, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self { db, activity_feed }
     }
 
     pub fn today(&self) -> NaiveDate {
         chrono::Utc::now().date_naive()
+    }
+
+    pub async fn load_game(&self, user_id: Uuid) -> Result<Option<Game>> {
+        let client = self.db.get().await?;
+        Game::find_by_user_id(&client, user_id).await
+    }
+
+    /// Fire-and-forget task to save the current cube state
+    pub fn save_game_task(&self, params: GameParams) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = svc.save_game(params).await {
+                tracing::error!(error = ?error, "failed to save Rubik's Cube game state");
+            }
+        });
+    }
+
+    async fn save_game(&self, params: GameParams) -> Result<()> {
+        let client = self.db.get().await?;
+        Game::upsert(&client, params).await?;
+        Ok(())
     }
 
     pub async fn has_won_today(&self, user_id: Uuid) -> Result<bool> {

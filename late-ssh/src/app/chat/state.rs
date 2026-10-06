@@ -7,45 +7,63 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use late_core::models::cyberspace_account::CmailThread;
 use late_core::{
     MutexRecover,
     models::{
-        article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
+        chat_message_gild::{ChatMessageGild, ChatMessageGildSummary, GildTier},
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
+        message_translation::{TRANSLATE_MAX_BODY_CHARS, TranslateLang, needs_translation},
         voice_channel::VoiceChannel,
     },
 };
 use rand_core::{OsRng, RngCore};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
+use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
-use crate::app::common::overlay::Overlay;
-use crate::app::common::theme;
+use late_core::models::chat_message::HistoryDirection;
 
-use crate::app::common::{composer, primitives::Banner};
+use crate::app::ai::ladder::MentionLadders;
+use crate::app::ai::summary::{
+    SummaryBasis, SummaryEvent, SummaryOutcome, SummaryService, SummaryWindow,
+};
+use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
+use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
+
+use crate::app::common::{
+    composer, mentions,
+    primitives::{Banner, Screen},
+};
+use crate::app::crown::svc::CrownBid;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
-use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
+use crate::metrics::HomeRoom;
+use crate::moderation::{
+    command::{RoomModAction, ServerUserAction, parse_optional_duration},
+    event::ModerationEvent,
+    service::{RoomModRequest, RoomRef},
+};
 use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
 use super::{
     commands::{RoomScopedCommand, rank_command_matches, room_owns_command},
-    discover, feeds, news, notifications,
+    cyberspace, discover, feeds,
+    gild::state::GildTarget,
+    history_modal, news, notifications,
     notifications::svc::NotificationService,
     showcase,
-    svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, RoomMemberListItem},
-    ui_text::{NewsPayload, parse_news_payload},
+    svc::{
+        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
+        ProfileSection, ReportKind, RoomMemberListItem,
+    },
+    ui_text::{NewsPayload, parse_report_payload},
     work,
 };
 
@@ -64,6 +82,18 @@ const TERMINAL_IMAGE_MAX_COLS: u32 = 200;
 const TERMINAL_IMAGE_MAX_ROWS: u32 = 60;
 const CLIPBOARD_IMAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_CURSOR_FLUSH_DELAY: Duration = Duration::from_secs(2);
+
+/// How long this session's keyboard has to stay quiet before the room on
+/// screen gets an AFK line.
+///
+/// This is a threshold for *absence*, not for reading: reading produces no
+/// input at all, so a lurker who sits silent this long collects a line they
+/// did not need. That is the deliberate direction to be wrong in. A line
+/// nobody wanted costs one glance; the failure it replaced, treating a
+/// parked terminal as a reader, silently swallowed the whole day someone
+/// missed. Long enough that a coffee run does not trip it, short enough
+/// that a real absence is caught before the conversation moves on.
+const AFK_LINE_IDLE: Duration = Duration::from_secs(10 * 60);
 
 pub(crate) type InlineImagePreview = crate::app::files::inline_image::InlineImagePreview;
 pub(crate) type InlineImageRenderSettings =
@@ -114,9 +144,19 @@ impl PendingReadCursorFlush {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
     pub name: String,
-    pub online: bool,
+    pub presence: MatchPresence,
     pub prefix: &'static str,
     pub description: Option<&'static str>,
+}
+
+/// Whether an autocomplete row's target can answer now. A user is here, away
+/// (`common/away.rs`), or offline; commands and rooms are always `Here`. The
+/// derived order is the ranking order: here, then away, then offline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MatchPresence {
+    Here,
+    Away,
+    Offline,
 }
 
 #[derive(Default)]
@@ -130,9 +170,19 @@ pub(crate) struct MentionAutocomplete {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReplyTarget {
-    pub message_id: Uuid,
+    pub to: ReplyTo,
     pub author: String,
     pub preview: String,
+}
+
+/// What a reply answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplyTo {
+    /// A chat message, stored as the reply's `reply_to_message_id`.
+    Message(Uuid),
+    /// A News article off the #lounge live strip. There is no message to
+    /// point at, so the reply carries only the quoted title.
+    Article,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,18 +196,26 @@ pub(crate) struct ModCommandOutput {
 pub(crate) struct PendingUrlUpload {
     pub url: String,
     pub room_id: Option<Uuid>,
+    /// The reply the composer was aiming at when the upload was asked for.
+    /// Submitting `/upload` clears the composer, so the target has to travel
+    /// with the request or the finished upload comes back as a plain message.
+    pub reply_target: Option<ReplyTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingClipboardImageUpload {
     pub room_id: Option<Uuid>,
+    /// See [`PendingUrlUpload::reply_target`]; `/paste-image` clears the
+    /// composer the same way.
+    pub reply_target: Option<ReplyTarget>,
     requested_at: Instant,
 }
 
 impl PendingClipboardImageUpload {
-    fn new(room_id: Option<Uuid>) -> Self {
+    fn new(room_id: Option<Uuid>, reply_target: Option<ReplyTarget>) -> Self {
         Self {
             room_id,
+            reply_target,
             requested_at: Instant::now(),
         }
     }
@@ -167,11 +225,83 @@ impl PendingClipboardImageUpload {
     }
 }
 
+/// Whether a submitted `/` draft runs as a command. The Lounge composer is
+/// plain speech (`Disabled`); every other chat composer takes commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerCommands {
+    Enabled,
+    Disabled,
+}
+
+impl ComposerCommands {
+    pub fn for_screen(screen: Screen) -> Self {
+        match screen {
+            Screen::Clubhouse | Screen::Nightcap => Self::Disabled,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::City
+            | Screen::Zen
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::Enabled,
+        }
+    }
+}
+
+/// A pending request to open the room-info form, carried until the app-level
+/// input loop opens the modal. `Create` comes from `/private`, `Edit` from
+/// `/roominfo` on a room the user may set info on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RoomInfoRequest {
+    Create {
+        slug: String,
+    },
+    Edit {
+        room_id: Uuid,
+        /// `#slug` of the room being edited, for the form's title.
+        room_label: String,
+        /// Who the form says holds this room: a username for a private room,
+        /// "moderators" for a public one. Ownership can move on its own when a
+        /// creator leaves, so the form is where it becomes visible.
+        owner_label: String,
+        topic: Option<String>,
+        rules: Option<String>,
+    },
+}
+
+/// Who may set a room's topic and rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomInfoAuthority {
+    /// This user owns the room (private rooms only).
+    Owner,
+    /// Staff standing, which carries every room.
+    Moderator,
+    /// The room has info, but not for this user to set.
+    None,
+    /// The room has no topic or rules at all (DMs, game rooms).
+    NotEditable,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
-    pub article_id: Option<Uuid>,
+    pub article_id: Uuid,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,15 +319,269 @@ pub(crate) enum VoiceCommand {
     Mute,
 }
 
+/// A stream control requested from the composer. `App` owns the stream
+/// service, so the composer just records the intent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GoLiveCommand {
+    /// `/golive [title]`: register (or re-surface) this user's stream and
+    /// show the publisher URL modal.
+    Start { title: Option<String> },
+    /// `/golive obs [title]`: register the stream with OBS as the
+    /// publisher and show the WHIP connection details modal.
+    StartObs { title: Option<String> },
+    /// `/golive stop`: tear the stream down now.
+    Stop,
+}
+
+/// `/golive` with an optional title, or the `stop` / `obs [title]`
+/// subcommands. `None` means the body is not a golive command at all.
+fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
+    let trimmed = body.trim();
+    let rest = trimmed.strip_prefix("/golive")?;
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    // Free text that ends up in the rail, the stream header, and the
+    // #lounge announcement; clamp it at the parse boundary so no downstream
+    // surface needs its own cap.
+    let clamp = |title: &str| Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect());
+    Some(match rest.trim() {
+        "" => GoLiveCommand::Start { title: None },
+        "stop" => GoLiveCommand::Stop,
+        "obs" => GoLiveCommand::StartObs { title: None },
+        text => match text.strip_prefix("obs ") {
+            Some(title) => GoLiveCommand::StartObs {
+                title: clamp(title.trim()),
+            },
+            None => GoLiveCommand::Start { title: clamp(text) },
+        },
+    })
+}
+
+/// Longest `/golive` title kept; the rest is cut at the parse boundary.
+const GOLIVE_TITLE_MAX_CHARS: usize = 80;
+
+/// The crown, requested from the composer. `App` owns the crown service, so
+/// the composer just records the intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CrownCommand {
+    /// `/crown`: who wears it, for how long, and what taking it costs.
+    Status,
+    /// `/crown take`: buy it at whatever the ladder says right now.
+    /// `/crown take N`: bid N, which the service checks against the price.
+    Take { bid: CrownBid },
+}
+
+/// `Some(Some(command))` on `/crown`, `/crown take` or `/crown take N`,
+/// `Some(None)` on anything else after `/crown` (usage banner), `None` when
+/// the line is not a crown command at all. A bid must be a positive whole
+/// number of chips; whether it beats the price is the service's call, under
+/// the lock, since the price can move between typing and landing.
+fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
+    let rest = body.trim().strip_prefix("/crown")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(Some(CrownCommand::Status));
+    }
+    if rest == "take" {
+        return Some(Some(CrownCommand::Take {
+            bid: CrownBid::AtPrice,
+        }));
+    }
+    let Some(offer) = rest.strip_prefix("take ") else {
+        return Some(None);
+    };
+    match offer.trim().parse::<i64>() {
+        Ok(offer) if offer > 0 => Some(Some(CrownCommand::Take {
+            bid: CrownBid::Offer(offer),
+        })),
+        Ok(_) | Err(_) => Some(None),
+    }
+}
+
+/// The pot, requested from the composer. `App` owns the pot service, so the
+/// composer just records the intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PotCommand {
+    /// `/pot`: size, tickets, your holding, and time to the draw.
+    Status,
+    /// `/pot buy N`: buy N tickets at the flat ticket price.
+    Buy { count: i64 },
+}
+
+/// `Some(Some(command))` on `/pot` or a well-formed `/pot buy N`,
+/// `Some(None)` on anything else after `/pot` (usage banner), `None` when the
+/// line is not a pot command at all.
+///
+/// The count is parsed here rather than in the service: a boundary that only
+/// admits 1..=(the daily cap) is what lets everything downstream trust the
+/// number; whether today still has room is the service's call.
+fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
+    use late_core::models::pot::POT_MAX_TICKETS_PER_DAY;
+    let rest = body.trim().strip_prefix("/pot")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(Some(PotCommand::Status));
+    }
+    let Some(count) = rest.strip_prefix("buy ") else {
+        return Some(None);
+    };
+    Some(
+        count
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|count| (1..=POT_MAX_TICKETS_PER_DAY).contains(count))
+            .map(|count| PotCommand::Buy { count }),
+    )
+}
+
+/// An aquarium control requested from the composer (`/aquarium`,
+/// `/aquarium feed`). `App` owns the tank state and
+/// entitlements, so the composer just records the intent and `App` carries
+/// it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AquariumCommand {
+    Feed,
+}
+
+/// The two cyberspace rows a room can be entered from, and the one leaving
+/// it goes back to.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum CyberspaceRow {
+    #[default]
+    Feeds,
+    Notifications,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CyberspaceCommand {
+    Open,
+    Post,
+    /// Their chat roster, where rooms get pinned into the rail.
+    Chat,
+    /// Their C-Mail conversations, pinned into the rail the same way.
+    Mail,
+    /// `/cs mail @user`: start (or find) a conversation and pin it. The
+    /// username is theirs, not a late.sh one, so it is taken as written.
+    MailTo(String),
+    Link,
+    Unlink,
+    Invalid,
+}
+
+/// `/cs` and `/cyberspace` with an optional subcommand. `None` means the
+/// body is not a cyberspace command at all (falls through to other handlers).
+/// Two composers parse against this: the main chat one, and the composer
+/// inside one of their rooms, where a command of ours must never be sent to
+/// their API as a message.
+pub(crate) fn parse_cyberspace_command(body: &str) -> Option<CyberspaceCommand> {
+    let trimmed = body.trim();
+    let rest = trimmed
+        .strip_prefix("/cyberspace")
+        .or_else(|| trimmed.strip_prefix("/cs"))?;
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    let rest = rest.trim();
+    if let Some(target) = rest
+        .strip_prefix("mail ")
+        .or_else(|| rest.strip_prefix("dm "))
+    {
+        let username = target.trim().trim_start_matches('@');
+        return Some(match username.is_empty() {
+            true => CyberspaceCommand::Invalid,
+            false => CyberspaceCommand::MailTo(username.to_string()),
+        });
+    }
+    Some(match rest {
+        "" => CyberspaceCommand::Open,
+        "post" => CyberspaceCommand::Post,
+        "chat" | "rooms" => CyberspaceCommand::Chat,
+        "mail" | "dms" => CyberspaceCommand::Mail,
+        "link" => CyberspaceCommand::Link,
+        "unlink" => CyberspaceCommand::Unlink,
+        _ => CyberspaceCommand::Invalid,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
     Feeds,
     News,
+    Cyberspace,
+    /// Their notification list, its own row beside `feeds`. It carries its own
+    /// badge (their counter endpoint) rather than being folded into the feed's
+    /// count: the two are read in different places and open from different
+    /// rows, so one number could only say "somewhere in cyberspace".
+    CyberspaceNotifications,
+    /// A pinned cyberspace C-Mail conversation, by its position in the pinned
+    /// list. Indexed for the same reason `CyberspaceRoom` is: the selection
+    /// state is `Copy` and their conversation id is not.
+    CyberspaceMail(usize),
+    /// A pinned cyberspace chat room, by its position in the pinned list.
+    /// Every synthetic entry before this one was a singleton picked out by a
+    /// bool; these are user-added and ordered, and the index is what fits in
+    /// the `Copy` selection state a slug could not. The pinned list changes
+    /// only where rooms are added or removed, which is the one place that has
+    /// to re-point a selection.
+    CyberspaceRoom(usize),
     Notifications,
     Discover,
     Showcase,
     Work,
+}
+
+/// Fixed ids for the synthetic Core entries a user can favorite (mentions,
+/// news, rss, browse rooms). They ride in `users.settings.favorite_room_ids`
+/// next to real room ids so the favorites list, its order, the picker sort,
+/// and the Core exclusion set stay one `Vec<Uuid>`. Real rooms are UUID v7;
+/// these carry a zero version nibble, so nothing generated can collide with
+/// them. These two functions are the only code that interprets the ids.
+const FAVORITE_ID_NOTIFICATIONS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0001);
+const FAVORITE_ID_NEWS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0002);
+const FAVORITE_ID_FEEDS: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0003);
+const FAVORITE_ID_DISCOVER: Uuid = Uuid::from_u128(0x1a7e_0000_0000_0000_0000_0000_0000_0004);
+
+/// The favorites-list id of a synthetic entry, or `None` for a real room and
+/// for the synthetic entries that cannot be favorited.
+pub(crate) fn synthetic_favorite_id(slot: RoomSlot) -> Option<Uuid> {
+    match slot {
+        RoomSlot::Notifications => Some(FAVORITE_ID_NOTIFICATIONS),
+        RoomSlot::News => Some(FAVORITE_ID_NEWS),
+        RoomSlot::Feeds => Some(FAVORITE_ID_FEEDS),
+        RoomSlot::Discover => Some(FAVORITE_ID_DISCOVER),
+        RoomSlot::Room(_)
+        | RoomSlot::Cyberspace
+        | RoomSlot::CyberspaceNotifications
+        | RoomSlot::CyberspaceMail(_)
+        | RoomSlot::CyberspaceRoom(_)
+        | RoomSlot::Showcase
+        | RoomSlot::Work => None,
+    }
+}
+
+/// The synthetic entry a favorites-list id stands for, or `None` when the id
+/// is a real room's.
+pub(crate) fn synthetic_slot_for_favorite_id(id: Uuid) -> Option<RoomSlot> {
+    if id == FAVORITE_ID_NOTIFICATIONS {
+        Some(RoomSlot::Notifications)
+    } else if id == FAVORITE_ID_NEWS {
+        Some(RoomSlot::News)
+    } else if id == FAVORITE_ID_FEEDS {
+        Some(RoomSlot::Feeds)
+    } else if id == FAVORITE_ID_DISCOVER {
+        Some(RoomSlot::Discover)
+    } else {
+        None
+    }
 }
 
 /// Collapsible groupings of the room-list rail. Each maps to one section
@@ -208,20 +592,38 @@ pub(crate) enum RoomSlot {
 pub enum RoomSection {
     Favorites,
     Core,
+    /// Registered "watch me" streams: one row per stream while any exists.
+    /// The whole section disappears when nobody is streaming.
+    Stream,
+    /// Only rendered for a linked account: the cyberspace pane plus the chat
+    /// rooms this user pinned.
+    Cyberspace,
     Channels,
-    Updates,
     Dms,
 }
 
 impl RoomSection {
+    /// Every section. Key maps and tests iterate this rather than repeating a
+    /// hand-written list: a copy of the roster somewhere else silently misses
+    /// a new section, which is how `z`-folding lost the cyberspace header.
+    pub(crate) const ALL: [RoomSection; 6] = [
+        RoomSection::Favorites,
+        RoomSection::Core,
+        RoomSection::Stream,
+        RoomSection::Cyberspace,
+        RoomSection::Channels,
+        RoomSection::Dms,
+    ];
+
     /// The header label as rendered in the rail. Used to map a clicked header
     /// row back to its section.
     pub(crate) fn label(self) -> &'static str {
         match self {
             RoomSection::Favorites => "favorites",
             RoomSection::Core => "core",
+            RoomSection::Stream => "stream",
+            RoomSection::Cyberspace => "cyberspace",
             RoomSection::Channels => "channels",
-            RoomSection::Updates => "updates",
             RoomSection::Dms => "dms",
         }
     }
@@ -230,8 +632,9 @@ impl RoomSection {
         match self {
             RoomSection::Favorites => b'f',
             RoomSection::Core => b'o',
+            RoomSection::Stream => b's',
+            RoomSection::Cyberspace => b'y',
             RoomSection::Channels => b'c',
-            RoomSection::Updates => b'u',
             RoomSection::Dms => b'd',
         }
     }
@@ -241,8 +644,9 @@ impl RoomSection {
         match label {
             "favorites" => Some(RoomSection::Favorites),
             "core" => Some(RoomSection::Core),
+            "stream" => Some(RoomSection::Stream),
+            "cyberspace" => Some(RoomSection::Cyberspace),
             "channels" => Some(RoomSection::Channels),
-            "updates" => Some(RoomSection::Updates),
             "dms" => Some(RoomSection::Dms),
             _ => None,
         }
@@ -254,6 +658,10 @@ pub(crate) struct SelectedRoomSlotState {
     pub selected_room_id: Option<Uuid>,
     pub feeds_selected: bool,
     pub news_selected: bool,
+    pub cyberspace_selected: bool,
+    pub cyberspace_notifications_selected: bool,
+    pub cyberspace_room_selected: Option<usize>,
+    pub cyberspace_mail_selected: Option<usize>,
     pub notifications_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
@@ -265,6 +673,10 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Room(room_id) => {
             !selected.feeds_selected
                 && !selected.news_selected
+                && !selected.cyberspace_selected
+                && !selected.cyberspace_notifications_selected
+                && selected.cyberspace_room_selected.is_none()
+                && selected.cyberspace_mail_selected.is_none()
                 && !selected.notifications_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
@@ -273,6 +685,10 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         }
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
+        RoomSlot::Cyberspace => selected.cyberspace_selected,
+        RoomSlot::CyberspaceNotifications => selected.cyberspace_notifications_selected,
+        RoomSlot::CyberspaceRoom(index) => selected.cyberspace_room_selected == Some(index),
+        RoomSlot::CyberspaceMail(index) => selected.cyberspace_mail_selected == Some(index),
         RoomSlot::Notifications => selected.notifications_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
@@ -283,6 +699,10 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
 fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
+        || selected.cyberspace_selected
+        || selected.cyberspace_notifications_selected
+        || selected.cyberspace_room_selected.is_some()
+        || selected.cyberspace_mail_selected.is_some()
         || selected.notifications_selected
         || selected.discover_selected
         || selected.showcase_selected
@@ -295,6 +715,18 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.news_selected {
         return Some(RoomSlot::News);
+    }
+    if state.cyberspace_selected {
+        return Some(RoomSlot::Cyberspace);
+    }
+    if state.cyberspace_notifications_selected {
+        return Some(RoomSlot::CyberspaceNotifications);
+    }
+    if let Some(index) = state.cyberspace_room_selected {
+        return Some(RoomSlot::CyberspaceRoom(index));
+    }
+    if let Some(index) = state.cyberspace_mail_selected {
+        return Some(RoomSlot::CyberspaceMail(index));
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
@@ -325,11 +757,52 @@ fn room_membership_command_target(
 }
 
 pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
-    if room.kind == "game" {
+    // The small bar out back is only ever seen from its own screen: never
+    // on the rail, in the picker, or as a Home selection.
+    if room.kind == "game" || is_nightcap_room(room) {
         return false;
     }
 
     room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
+}
+
+/// The kind of room for the Home attention metric, read off `kind` and
+/// `visibility`. A kind this match does not name is `OtherRoom`.
+pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
+    match (room.kind.as_str(), room.visibility.as_str()) {
+        ("lounge", _) => HomeRoom::Lounge,
+        ("language", _) => HomeRoom::Language,
+        ("topic", "public") => HomeRoom::PublicTopic,
+        ("topic", "private") => HomeRoom::PrivateTopic,
+        ("dm", _) => HomeRoom::Dm,
+        (late_core::models::chat_room::DEADCHANNEL_KIND, _) => HomeRoom::Deadchannel,
+        _ => HomeRoom::OtherRoom,
+    }
+}
+
+/// The haunted channel (`app/deadchannel`, GAME.md): joined by invitation
+/// only, and once joined it sits at the bottom of Core, above Discover,
+/// never in Channels. The rail builders in `ui.rs` and
+/// `visual_order_for_rooms` all key off this.
+pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
+    room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
+}
+
+/// The small bar out back of the Clubhouse (`app/clubhouse/nightcap`):
+/// auto-joined like #lounge, but hidden from every Home surface by
+/// `is_chat_list_room`. Its screen composes into it and draws its tail.
+pub(crate) fn is_nightcap_room(room: &ChatRoom) -> bool {
+    room.kind == late_core::models::chat_room::NIGHTCAP_KIND
+}
+
+/// Whether a room's message list keeps the portrait gutter and paints
+/// each author's face beside their block (`ui.rs`, `attach_portrait`).
+/// The gutter itself is room-agnostic; this is the only switch, and today
+/// it is on for #deadchannel alone (GAME.md, "V1's one visible surface").
+/// Widening the faces to other rooms means changing this predicate, not
+/// the renderer.
+pub(crate) fn room_shows_portraits(room: &ChatRoom) -> bool {
+    is_deadchannel_room(room)
 }
 
 /// Payload handed from chat to the app layer (via `take_requested_open_sheet`)
@@ -344,6 +817,15 @@ pub struct SheetOpenRequest {
     pub editable: bool,
 }
 
+/// Outcome of one chat tick: the banner to surface plus whether the tick may
+/// have changed render-visible chat state. `changed` over-reports by design
+/// (prove-clean, not prove-dirty): every queued event or snapshot counts,
+/// even ones that end up filtered out during the drain.
+pub struct ChatTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
+
 pub struct ChatState {
     pub(crate) service: ChatService,
     user_id: Uuid,
@@ -351,21 +833,54 @@ pub struct ChatState {
     is_admin: bool,
     is_moderator: bool,
     active_users: Option<ActiveUsers>,
+    /// S3/R2 upload storage; `None` means every upload feature is disabled.
+    files: Option<crate::config::FilesConfig>,
+    /// Process-global ghost-bot cooldown ladders, peeked at submit time for
+    /// the "bot is cooling down" banner. The ghost loops own stepping it.
+    mention_ladders: MentionLadders,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
+    /// Single-recipient events (tail loads, search results, discover lists)
+    /// delivered point-to-point by the service instead of over the global
+    /// broadcast; drained ahead of `event_rx` in `drain_events`.
+    targeted_event_rx: mpsc::UnboundedReceiver<ChatEvent>,
     event_rx: tokio::sync::broadcast::Receiver<ChatEvent>,
     moderation_event_rx: tokio::sync::broadcast::Receiver<ModerationEvent>,
     pub(crate) rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
+    /// Per-room message-store version, bumped on any change to that room's
+    /// stored messages or their reactions. Rendered row caches compare this
+    /// instead of hashing message bodies (`ChatRowsVersions`).
+    room_versions: HashMap<Uuid, u64>,
+    /// Author-context epoch, bumped when any map feeding chat row rendering
+    /// (usernames, countries, friends, glyphs, badges, inline images)
+    /// actually changes.
+    context_epoch: u64,
     pub(crate) active_polls: HashMap<Uuid, ActiveChatPoll>,
-    pinned_messages: Vec<ChatMessage>,
     lounge_room_id: Option<Uuid>,
+    /// Recent #lounge system-feed lines (see `activity/lounge.rs`), newest
+    /// first, capped at `ACTIVITY_TICKER_CAP`. System messages are diverted
+    /// here at every ingestion point instead of being stored as chat rows;
+    /// the UI packs these left-to-right into the one-row activity ticker
+    /// above the composer. IRC and persistence are unaffected.
+    activity_ticker: Vec<ActivityTickerEntry>,
     pub(crate) usernames: HashMap<Uuid, String>,
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     friend_user_ids: HashSet<Uuid>,
+    /// When the last `IgnoreListUpdated`/`FriendListUpdated` was applied. Both
+    /// lists also arrive on every chat snapshot, and a snapshot read that began
+    /// before this write would roll the lists back to what the database held
+    /// before it committed.
+    friend_ignore_applied_at: Option<Instant>,
+    /// Derived owner per private room, from the chat snapshot. Ownership is not
+    /// stored on the room (a creator who leaves hands it on), so this is the
+    /// session's view of who currently holds each private room.
+    room_owner_ids: HashMap<Uuid, Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
-    pinned_rx: watch::Receiver<Vec<ChatMessage>>,
-    pinned_tx: watch::Sender<Vec<ChatMessage>>,
     overlay: Option<Overlay>,
+    /// A ready `/summary` that arrived while another overlay was up. It
+    /// takes the surface in `drain_summary_events` as soon as it frees,
+    /// instead of clobbering what the user is reading.
+    pending_summary_overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
     /// Cells the open image modal can devote to an image, reported back from
@@ -373,9 +888,42 @@ pub struct ChatState {
     image_modal_capacity: Option<(u16, u16)>,
     pending_reaction_owners_message_id: Option<Uuid>,
     pub(crate) unread_counts: HashMap<Uuid, i64>,
-    pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
+    /// The AFK line per room: the instant this session's human went quiet
+    /// while that room was on screen. The `new messages` divider draws
+    /// against it and `/history` opens there. It is one of two marks, and
+    /// the other one, [`ChatState::device_left_at`], is what `/summary`
+    /// reads; they never feed each other.
+    ///
+    /// Deliberately session-local and never written to the DB. "Did the
+    /// person at this terminal step away" is a fact about this terminal;
+    /// your phone being idle says nothing about your desktop.
+    ///
+    /// Placed by [`ChatState::sync_afk_line`], removed only when a message
+    /// you wrote lands in the room. Not by coming back and touching a key
+    /// (the line exists to show you where to start reading, and clearing it
+    /// on the keystroke that returns you destroys it exactly when it is
+    /// wanted), and not by `/summary` or `/history`, which do not read it
+    /// as a catch-up cursor at all in the first case and only look in the
+    /// second.
+    pub(crate) afk_lines: HashMap<Uuid, DateTime<Utc>>,
+    /// The other mark: when you last left the app on this device, the
+    /// moment the keyboard went quiet before the previous session on this
+    /// SSH key ended (`user_ssh_keys.left_at`, taken once at boot). A bare
+    /// `/summary` always reads from here, whatever the AFK line says: the
+    /// question it answers is "what happened since I was last here", and
+    /// "here" is this device, not this room. Fixed for the session, so
+    /// asking twice reads the same stretch twice; `None` for a keyless
+    /// session or a device with no mark yet.
+    device_left_at: Option<DateTime<Utc>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
+    /// Message ids whose mentions of this user were already reported as
+    /// rendered, so a room that stays visible does not resend the same stamp
+    /// on every cursor flush. Session-local; the DB update is idempotent.
+    mention_reads_sent: HashSet<Uuid>,
+    /// The DM currently held in the promoted unread-DMs group even though its
+    /// unread count is already zero. See `note_sticky_unread_dm`.
+    pub(crate) sticky_unread_dm: Option<Uuid>,
     visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     refresh_tx: mpsc::UnboundedSender<()>,
@@ -415,6 +963,10 @@ pub struct ChatState {
     /// center, and embedded Rooms chat.
     pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
+    /// When a message of this user's last landed, in any room or DM: the
+    /// pet's "chatty" signal. Commands never count, only sends that
+    /// succeeded.
+    last_own_send_at: Option<std::time::Instant>,
     pub(crate) pending_chat_screen_switch: bool,
     pub(crate) mention_ac: MentionAutocomplete,
     pub(crate) all_usernames: Arc<Vec<String>>,
@@ -422,8 +974,45 @@ pub struct ChatState {
     pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    /// Gild markers by message. Only gilded messages have an entry, which is
+    /// almost none of them, so this stays tiny even in a busy room.
+    pub(crate) message_gilds: HashMap<Uuid, ChatMessageGildSummary>,
     pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
+    /// Translation handle + result feed (`app/ai/translate.rs`). Requests are
+    /// fire-and-forget; results land on `translation_rx` and drain in tick.
+    translation_service: TranslationService,
+    translation_rx: tokio::sync::broadcast::Receiver<TranslationEvent>,
+    /// `/summary` handle + result feed (`app/ai/summary.rs`), same
+    /// fire-and-forget contract as translation.
+    summary_service: SummaryService,
+    summary_rx: tokio::sync::broadcast::Receiver<SummaryEvent>,
+    /// This session's translations for the current target language, keyed by
+    /// message id. Cleared when the target language changes.
+    pub(crate) translations: HashMap<Uuid, TranslationDisplay>,
+    /// Messages whose shown translation was collapsed with `t`. Session-local
+    /// override; wins over auto mode and the cache at render time.
+    pub(crate) translation_hidden: HashSet<Uuid>,
+    /// Message ids this session requested via `t`, so a failure banners only
+    /// for the requester, never for auto-mode bystanders.
+    translation_manual: HashSet<Uuid>,
+    /// Message ids already sent through the bulk cache lookup, so re-entering
+    /// a room does not requery its history. Cleared when the target changes.
+    translation_cache_checked: HashSet<Uuid>,
+    /// Mirrors of the profile's translation settings, synced by `App::tick`.
+    translate_to: TranslateLang,
+    auto_translate: bool,
+    /// The viewer's account timezone, synced by `App::tick`. `None` (unset or
+    /// unparseable) means every absolute time this pane writes stays UTC.
+    viewer_tz: Option<chrono_tz::Tz>,
     pub(crate) selected_message_id: Option<Uuid>,
+    /// Row-level viewport offset inside a selected message that wraps taller
+    /// than the chat pane; see [`SelectionScroll`]. Reset whenever the
+    /// selection lands on a different message.
+    pub(crate) selection_scroll: SelectionScroll,
+    /// Armed by a first `d` press on a message; a second `d` on the same
+    /// still-selected message confirms the delete. Any selection change or
+    /// clear disarms it so a stale confirm can't reap the wrong message.
+    pub(crate) pending_delete_message_id: Option<Uuid>,
     pub(crate) reaction_leader_active: bool,
     pub(crate) highlighted_message_id: Option<Uuid>,
     pub(crate) edited_message_id: Option<Uuid>,
@@ -436,12 +1025,37 @@ pub struct ChatState {
     pub(crate) feeds_selected: bool,
     pub feeds: feeds::state::State,
     pub(crate) news: news::state::State,
+    pub(crate) cyberspace_selected: bool,
+    /// Their notification list, the row beside `feeds`.
+    pub(crate) cyberspace_notifications_selected: bool,
+    /// Which cyberspace row a room or conversation was entered from, so
+    /// leaving one goes back where the user came in rather than always
+    /// landing on `feeds`. A mention jumped to from the notifications row is
+    /// what made the difference visible.
+    pub(crate) cyberspace_return_row: CyberspaceRow,
+    /// Which pinned cyberspace chat room is selected, by position in the
+    /// pinned list. `None` whenever any other rail entry is.
+    pub(crate) cyberspace_room_selected: Option<usize>,
+    /// Which pinned C-Mail conversation is selected, same contract.
+    pub(crate) cyberspace_mail_selected: Option<usize>,
+    pub cyberspace: cyberspace::state::State,
 
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
     pub(crate) notifications: notifications::state::State,
     pub(crate) discover_selected: bool,
     pub(crate) discover: discover::state::State,
+    /// Message-search results for the Ctrl+/ modal's `?` mode. Owned here
+    /// (not on the modal) because ChatState owns the chat event receiver.
+    pub(crate) message_search: MessageSearch,
+    /// A search hit the user asked to jump to before its room tail was
+    /// loaded: `(room_id, message_id)`. Resolved when that room's tail lands,
+    /// or handed to the history modal if the message turns out to sit further
+    /// back than the tail reaches.
+    pending_search_jump: Option<(Uuid, Uuid)>,
+    /// Paginated room history. Owned here, like `message_search`, because
+    /// ChatState owns the chat event receiver its pages arrive on.
+    pub(crate) history_modal: history_modal::state::ChatHistoryModalState,
     pub(crate) showcase_selected: bool,
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
@@ -452,12 +1066,27 @@ pub struct ChatState {
     /// `App::notify_outbox`.
     notifier: Notifier,
     requested_help_topic: Option<HelpTopic>,
+    requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
+    requested_shop_modal: bool,
+    requested_onboard: bool,
+    requested_lobby_toggle: bool,
+    requested_zen_toggle: bool,
+    requested_guide: bool,
+    requested_redraw: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
+    requested_pair: Option<PairRequest>,
+    /// Set by `/brb`; `App` sends this session away until its next key.
+    requested_brb: bool,
     requested_icon_picker: bool,
+    /// Set by `/picker`; `App` opens the Ctrl+/ room picker.
+    requested_room_picker: bool,
+    /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
+    /// modal pre-filled with `?query`.
+    requested_message_search: Option<String>,
     requested_petname: Option<PetnameRequest>,
-    requested_open_profile: Option<(Uuid, String)>,
+    requested_open_profile: Option<(Uuid, String, ProfileSection)>,
     requested_open_sheet: Option<SheetOpenRequest>,
     requested_quit: bool,
     requested_audio_url: Option<String>,
@@ -466,21 +1095,78 @@ pub struct ChatState {
     /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
     /// (which owns the paired-CLI voice controls).
     requested_voice_command: Option<VoiceCommand>,
+    /// Set by /golive; consumed by `App` (which owns the stream service).
+    requested_golive: Option<GoLiveCommand>,
+    requested_crown: Option<CrownCommand>,
+    requested_pot: Option<PotCommand>,
+    /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
+    /// (which owns the whisper).
+    requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
+    /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
+    requested_paper: Option<crate::app::paper::state::PaperCommand>,
+    requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
+    /// The just-landed echo of this session's own send, and the room it
+    /// landed in, for the stage-2 name flicker; consumed by
+    /// `deadchannel::haunt::svc` every tick. The room travels with it
+    /// because a won hit is put on the wire for the rest of that room, and
+    /// by then the sender may have tabbed elsewhere.
+    own_message_landed: Option<(Uuid, Uuid)>,
+    /// A send this session submitted just succeeded (`SendSucceeded` for a
+    /// request in `pending_send_notices`, never the same user's send from
+    /// another device), for the stage-4 breakthrough; consumed by
+    /// `deadchannel::haunt::svc` every tick.
+    own_send_succeeded: bool,
+    /// A stage-2 hit off the wire (`ChatEvent::NameHit`) whose message is
+    /// on screen: the message id and the wave seed. Consumed by
+    /// `deadchannel::haunt::svc` every tick, which paints it.
+    witnessed_hit_landed: Option<(Uuid, u64)>,
+    /// Hits heard before their message reached this session, keyed by
+    /// message id: the seed and when it was heard. Only another replica
+    /// can put a beat here (this replica's own broadcast delivers the
+    /// message before the sender has even claimed the hit); the room delta
+    /// brings the message along and `push_message` promotes the beat. A
+    /// beat whose message never lands ages out at the next insert.
+    pending_name_hits: HashMap<Uuid, (u64, Instant)>,
+    /// Set by /watch @user; consumed by `App`.
+    requested_watch: Option<String>,
+    /// A stream room this session just opened; consumed by `App`, which
+    /// tells the stream service a named viewer showed up. Recorded here
+    /// rather than acted on inline because `App` owns the stream service.
+    opened_stream_room: Option<Uuid>,
+    /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
+    requested_aquarium_command: Option<AquariumCommand>,
     requested_poll_room: Option<Uuid>,
-    /// Set by /brb command; contains the custom message (empty = no message).
-    requested_brb: Option<String>,
-    /// Set when a real (non-command) chat message is sent; used to clear AFK.
-    sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     /// Room-list sections the user has collapsed. Empty = all expanded
     /// (the default). Session-only — resets on reconnect.
     pub(crate) collapsed_sections: HashSet<RoomSection>,
 
+    /// Rows the Home rail is scrolled away from where the selection would put
+    /// it (Ctrl+H / Ctrl+L, the mouse wheel over the rail), and the slot that
+    /// was selected when it was set. The offset only counts while that slot is
+    /// still selected, so any selection change snaps the rail back to the
+    /// selection without every selection path having to clear it.
+    /// Session-only.
+    rail_scroll: (Option<RoomSlot>, isize),
+
+    /// Registered "watch me" streams, copied from the stream registry watch
+    /// in `App::tick` (~1/s) so render paths read local memory only. Drives
+    /// the rail's `stream` section, the LIVE author tag (live entries only),
+    /// and the stream header block above a live room's chat.
+    pub(crate) live_streams: Vec<crate::app::stream::registry::LiveStreamView>,
+    /// Users whose stream is actually on air right now (`live` only, never
+    /// pending): the LIVE author tag reads this. Derived in
+    /// `set_live_streams`.
+    pub(crate) live_user_ids: HashSet<Uuid>,
+
     // image upload
     pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     pub(crate) image_upload_pending: bool,
     pub(crate) image_upload_target_room_id: Option<Uuid>,
+    /// The reply the in-flight upload was composed against, handed back to the
+    /// composer when the URL lands.
+    image_upload_reply_target: Option<ReplyTarget>,
     pub(crate) requested_url_upload: Option<PendingUrlUpload>,
     requested_clipboard_image_upload: Option<PendingClipboardImageUpload>,
     pending_clipboard_image_upload: Option<PendingClipboardImageUpload>,
@@ -503,13 +1189,83 @@ pub struct ChatState {
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
+/// Row-level scroll inside a selected message that wraps taller than the
+/// chat pane. Chat scroll is otherwise derived purely from message
+/// selection, which pins a too-tall message's top edge and leaves its
+/// bottom unreachable; this is the escape hatch `j`/`k` fall back to.
+///
+/// `rows` is how many rows past the message's pinned top the viewport
+/// starts; `overflow` is the renderer's measurement of how far `rows` can
+/// go (0 for a selection that fits the pane). Both are `Cell`s because the
+/// renderer writes them through the shared view's `&self`: it publishes
+/// `overflow` each frame and clamps `rows` back when a resize shrinks the
+/// range. Input reads the previous frame's measurement, the same one-frame
+/// contract as the history modal's `visible_rows`.
+#[derive(Default)]
+pub struct SelectionScroll {
+    pub(crate) rows: Cell<usize>,
+    pub(crate) overflow: Cell<usize>,
+}
+
+impl SelectionScroll {
+    fn reset(&self) {
+        self.rows.set(0);
+        self.overflow.set(0);
+    }
+
+    /// Apply a row delta against the last measured overflow. Returns whether
+    /// the viewport moved; `false` means that direction has nothing left to
+    /// reveal (or the selection fits the pane) and the caller should move
+    /// the selection instead.
+    fn step(&self, delta: isize) -> bool {
+        let overflow = self.overflow.get();
+        if overflow == 0 {
+            return false;
+        }
+        let current = self.rows.get();
+        let next = (current as isize + delta).clamp(0, overflow as isize) as usize;
+        if next == current {
+            return false;
+        }
+        self.rows.set(next);
+        true
+    }
+}
+
+/// What the UI knows about one message's translation into the session's
+/// target language. `Failed` renders nothing but lets `t` retry.
+/// `SameLanguage` renders nothing and sticks: the model already judged the
+/// message readable, so `t` answers with a banner instead of a new call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TranslationDisplay {
+    Pending,
+    Ready(String),
+    SameLanguage,
+    Failed,
+}
+
+/// The session identity a `ChatState` is built for: who is connected, under
+/// what name, with what rights.
+pub(crate) struct ChatSession {
+    pub user_id: Uuid,
+    pub username: String,
+    pub permissions: Permissions,
+    /// When you last left the app on this device (`user_ssh_keys.left_at`,
+    /// taken once at boot); `None` for a keyless session or a device with
+    /// no mark yet. See [`ChatState::device_left_at`].
+    pub device_left_at: Option<DateTime<Utc>>,
+}
+
 pub(crate) struct ChatServices {
     pub chat: ChatService,
+    pub translation: crate::app::ai::translate::TranslationService,
+    pub summary: crate::app::ai::summary::SummaryService,
     pub notifications: NotificationService,
     pub articles: news::svc::ArticleService,
     pub feeds: feeds::svc::FeedService,
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
+    pub cyberspace: cyberspace::svc::CyberspaceService,
 }
 
 impl Drop for ChatState {
@@ -521,26 +1277,35 @@ impl Drop for ChatState {
 impl ChatState {
     pub(crate) fn new(
         services: ChatServices,
-        user_id: Uuid,
-        permissions: Permissions,
+        session: ChatSession,
         active_users: Option<ActiveUsers>,
         notifier: Notifier,
+        mention_ladders: MentionLadders,
+        files: Option<crate::config::FilesConfig>,
     ) -> Self {
+        let ChatSession {
+            user_id,
+            username,
+            permissions,
+            device_left_at,
+        } = session;
         let ChatServices {
             chat: service,
+            translation: translation_service,
+            summary: summary_service,
             notifications: notification_service,
             articles: article_service,
             feeds: feed_service,
             showcases: showcase_service,
             work: work_service,
+            cyberspace: cyberspace_service,
         } = services;
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
         let username_rx = service.subscribe_usernames();
-        let (pinned_tx, pinned_rx) = watch::channel(Vec::new());
-        service.load_pinned_messages_task(pinned_tx.clone());
         let (room_tx, room_rx) = watch::channel(None);
-        let (snapshot_rx, refresh_tx, bg_task) = service.start_user_refresh_task(user_id, room_rx);
+        let (snapshot_rx, targeted_event_rx, refresh_tx, bg_task) =
+            service.start_user_refresh_task(user_id, room_rx);
 
         let (inline_image_tx, inline_image_rx) = tokio::sync::mpsc::unbounded_channel();
         let (terminal_image_tx, terminal_image_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -551,29 +1316,41 @@ impl ChatState {
             is_admin: permissions.is_admin(),
             is_moderator: permissions.is_moderator(),
             active_users,
+            files,
+            mention_ladders,
             snapshot_rx,
+            targeted_event_rx,
             event_rx,
             moderation_event_rx,
             rooms: Vec::new(),
+            room_versions: HashMap::new(),
+            context_epoch: 0,
             active_polls: HashMap::new(),
-            pinned_messages: Vec::new(),
             lounge_room_id: None,
-            usernames: HashMap::new(),
+            activity_ticker: Vec::new(),
+            // Seeded with the session's own name so self-referential features
+            // (the mention highlight, rendered-mention read stamps) work
+            // before the user has authored anything a payload would carry.
+            usernames: HashMap::from([(user_id, username)]),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
+            friend_ignore_applied_at: None,
+            room_owner_ids: HashMap::new(),
             username_rx,
-            pinned_rx,
-            pinned_tx,
             overlay: None,
+            pending_summary_overlay: None,
             news_modal: None,
             image_modal: None,
             image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
             unread_counts: HashMap::new(),
-            room_unread_markers: HashMap::new(),
+            afk_lines: HashMap::new(),
+            device_left_at,
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
+            mention_reads_sent: HashSet::new(),
+            sticky_unread_dm: None,
             visible_room_id: None,
             room_tx,
             refresh_tx,
@@ -590,6 +1367,7 @@ impl ChatState {
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
+            last_own_send_at: None,
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
             all_usernames: Arc::new(Vec::new()),
@@ -597,8 +1375,22 @@ impl ChatState {
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
+            message_gilds: HashMap::new(),
             voice_channels_by_room_id: HashMap::new(),
+            translation_rx: translation_service.subscribe(),
+            translation_service,
+            summary_rx: summary_service.subscribe(),
+            summary_service,
+            translations: HashMap::new(),
+            translation_hidden: HashSet::new(),
+            translation_manual: HashSet::new(),
+            translation_cache_checked: HashSet::new(),
+            translate_to: TranslateLang::En,
+            auto_translate: false,
+            viewer_tz: None,
             selected_message_id: None,
+            selection_scroll: SelectionScroll::default(),
+            pending_delete_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
             edited_message_id: None,
@@ -609,10 +1401,19 @@ impl ChatState {
             feeds_selected: false,
             feeds: feeds::state::State::new(feed_service, article_service.clone(), user_id),
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
+            cyberspace_selected: false,
+            cyberspace_notifications_selected: false,
+            cyberspace_return_row: CyberspaceRow::Feeds,
+            cyberspace_room_selected: None,
+            cyberspace_mail_selected: None,
+            cyberspace: cyberspace::state::State::new(cyberspace_service, user_id),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
             discover_selected: false,
             discover: discover::state::State::new(),
+            message_search: MessageSearch::default(),
+            pending_search_jump: None,
+            history_modal: history_modal::state::ChatHistoryModalState::default(),
             showcase_selected: false,
             showcase: showcase::state::State::new(
                 showcase_service,
@@ -624,26 +1425,52 @@ impl ChatState {
             favorite_room_ids: Vec::new(),
             notifier,
             requested_help_topic: None,
+            requested_room_info_modal: None,
             requested_settings_modal: false,
+            requested_shop_modal: false,
+            requested_onboard: false,
+            requested_lobby_toggle: false,
+            requested_zen_toggle: false,
+            requested_guide: false,
+            requested_redraw: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
+            requested_pair: None,
+            requested_brb: false,
             requested_icon_picker: false,
+            requested_room_picker: false,
+            requested_message_search: None,
             requested_petname: None,
             requested_open_profile: None,
             requested_open_sheet: None,
             requested_quit: false,
             requested_voice_command: None,
+            requested_golive: None,
+            requested_crown: None,
+            requested_pot: None,
+            requested_haunt: None,
+            requested_paper: None,
+            requested_jobs: None,
+            own_message_landed: None,
+            own_send_succeeded: false,
+            witnessed_hit_landed: None,
+            pending_name_hits: HashMap::new(),
+            requested_watch: None,
+            opened_stream_room: None,
+            requested_aquarium_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
             requested_poll_room: None,
-            requested_brb: None,
-            sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
+            rail_scroll: (None, 0),
+            live_streams: Vec::new(),
+            live_user_ids: HashSet::new(),
             image_upload_rx: None,
             image_upload_pending: false,
             image_upload_target_room_id: None,
+            image_upload_reply_target: None,
             requested_url_upload: None,
             requested_clipboard_image_upload: None,
             pending_clipboard_image_upload: None,
@@ -670,8 +1497,6 @@ impl ChatState {
     pub(crate) fn refresh_composer_theme(&mut self) {
         composer::apply_themed_textarea_style(&mut self.composer, self.composing);
         self.news.refresh_composer_theme();
-        self.showcase.refresh_composer_theme();
-        self.work.refresh_composer_theme();
     }
 
     pub fn is_composing(&self) -> bool {
@@ -689,6 +1514,7 @@ impl ChatState {
         self.composing = true;
         self.composer_room_id = Some(room_id);
         self.selected_message_id = None;
+        self.selection_scroll.reset();
         self.reply_target = None;
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
@@ -709,11 +1535,6 @@ impl ChatState {
         if let Some(room_id) = self.selected_room_id {
             self.request_room_tail(room_id);
         }
-    }
-
-    pub fn request_pinned_messages(&self) {
-        self.service
-            .load_pinned_messages_task(self.pinned_tx.clone());
     }
 
     pub fn request_room_tail(&mut self, room_id: Uuid) {
@@ -740,13 +1561,20 @@ impl ChatState {
             return;
         }
 
-        if let Some(selected_id) = self.selected_room_id
-            && self
+        if let Some(selected_id) = self.selected_room_id {
+            // A selected stream room survives snapshot refreshes even
+            // though it is `kind='game'` (not a chat-list room), and even
+            // before its lazy membership lands in `rooms`.
+            if self.stream_for_room(selected_id).is_some() {
+                return;
+            }
+            if self
                 .rooms
                 .iter()
                 .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
-        {
-            return;
+            {
+                return;
+            }
         }
 
         self.selected_room_id = self
@@ -756,15 +1584,76 @@ impl ChatState {
             .map(|(room, _)| room.id);
     }
 
+    /// Unread messages across every DM room, for the status bar's `mentions`
+    /// segment when the user has it counting DMs too.
+    pub fn unread_dm_count(&self) -> i64 {
+        self.rooms
+            .iter()
+            .filter(|(room, _)| room.kind == "dm")
+            .filter_map(|(room, _)| self.unread_counts.get(&room.id))
+            .sum()
+    }
+
     pub fn mark_room_read(&mut self, room_id: Uuid) {
+        self.note_sticky_unread_dm(room_id);
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
         self.pending_read_flush.queue(room_id, Instant::now());
     }
 
-    pub fn mark_room_read_at(&self, room_id: Uuid, read_at: DateTime<Utc>) {
-        self.service
-            .mark_room_read_at_task(self.user_id, room_id, read_at);
+    /// Place the AFK line for the room on screen once this session's
+    /// keyboard has been quiet for [`AFK_LINE_IDLE`]. `idle` is how long ago
+    /// the last input landed, mirrored from `App` the same way `viewer_tz`
+    /// is. Reports whether the line moved, since that is render-visible.
+    ///
+    /// Only the visible room can collect a line: a room you are not looking
+    /// at was never being attended, and its rail badge already says what is
+    /// waiting. A room that already holds a line keeps the one it has, so
+    /// the line marks when you went quiet and does not slide forward while
+    /// you stay away.
+    pub(crate) fn sync_afk_line(&mut self, idle: Duration) -> bool {
+        if idle < AFK_LINE_IDLE {
+            return false;
+        }
+        let Some(room_id) = self.visible_room_id else {
+            return false;
+        };
+        if self.afk_lines.contains_key(&room_id) {
+            return false;
+        }
+        let Ok(idle) = chrono::Duration::from_std(idle) else {
+            return false;
+        };
+        self.afk_lines.insert(room_id, Utc::now() - idle);
+        self.bump_room_version(room_id);
+        true
+    }
+
+    /// Drop the room's AFK line: this reader is in the conversation again.
+    ///
+    /// One caller, and it is an act the reader performed rather than a state
+    /// we inferred: a message of theirs landing in the room.
+    fn clear_afk_line(&mut self, room_id: Uuid) {
+        if self.afk_lines.remove(&room_id).is_some() {
+            self.bump_room_version(room_id);
+        }
+    }
+
+    /// Remember the DM being read so the promoted unread-DMs group can hold it
+    /// in place. Reading is what zeroes the unread count, so this runs before
+    /// the count is cleared.
+    fn note_sticky_unread_dm(&mut self, room_id: Uuid) {
+        let unread = self.unread_counts.get(&room_id).copied().unwrap_or(0) > 0;
+        let is_dm = self
+            .rooms
+            .iter()
+            .any(|(room, _)| room.id == room_id && room.kind == "dm");
+        self.sticky_unread_dm = next_sticky_unread_dm(NextStickyUnreadDm {
+            current: self.sticky_unread_dm,
+            room_id,
+            is_dm,
+            unread,
+        });
     }
 
     pub fn mark_selected_room_read(&mut self) {
@@ -780,10 +1669,319 @@ impl ChatState {
     }
 
     pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
-        if self.visible_room_id != room_id {
+        let changed = self.visible_room_id != room_id;
+        if changed {
             self.flush_pending_read_cursors();
         }
         self.visible_room_id = room_id;
+        if changed {
+            self.request_cached_translations_for_visible_room();
+        }
+    }
+
+    /// Sync the profile's translation settings into this session. Called from
+    /// `App::tick`; a target change drops every per-message translation state
+    /// (it all describes the old language) and invalidates row caches.
+    /// Mirror the account timezone the summary overlay dates its window in.
+    pub(crate) fn set_viewer_tz(&mut self, timezone: Option<chrono_tz::Tz>) {
+        self.viewer_tz = timezone;
+    }
+
+    pub fn set_translate_settings(&mut self, target: TranslateLang, auto: bool) -> bool {
+        let mut changed = false;
+        if self.translate_to != target {
+            self.translate_to = target;
+            self.translations.clear();
+            self.translation_hidden.clear();
+            self.translation_manual.clear();
+            self.translation_cache_checked.clear();
+            self.context_epoch += 1;
+            changed = true;
+        }
+        if self.auto_translate != auto {
+            self.auto_translate = auto;
+            changed = true;
+        }
+        if changed {
+            self.request_cached_translations_for_visible_room();
+        }
+        changed
+    }
+
+    /// `t` on the selected message: show a translation (cache or API), or
+    /// collapse/re-open one already shown. Failed entries retry.
+    pub fn toggle_translation_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let (message_id, message_room_id, body) = {
+            let message = self.selected_message_in_room(room_id)?;
+            (message.id, message.room_id, message.body.clone())
+        };
+        match self.translations.get(&message_id) {
+            Some(TranslationDisplay::Pending) => None,
+            Some(TranslationDisplay::SameLanguage) => Some(Banner::info(&format!(
+                "Already written in {}",
+                self.translate_to.prompt_name()
+            ))),
+            Some(TranslationDisplay::Ready(_)) => {
+                if !self.translation_hidden.remove(&message_id) {
+                    self.translation_hidden.insert(message_id);
+                }
+                self.bump_room_version(message_room_id);
+                None
+            }
+            Some(TranslationDisplay::Failed) | None => {
+                // Length check first: `needs_translation` also returns false
+                // for over-cap bodies, and "nothing to translate" would be a
+                // lie for a genuinely foreign wall of text. The cap judges
+                // the reply-quote-free text, same as the check itself.
+                if late_core::models::message_translation::translation_source_text(&body)
+                    .chars()
+                    .count()
+                    > TRANSLATE_MAX_BODY_CHARS
+                {
+                    return Some(Banner::info("Message too long to translate"));
+                }
+                if !needs_translation(&body, self.translate_to) {
+                    return Some(Banner::info("Nothing to translate here"));
+                }
+                self.translations
+                    .insert(message_id, TranslationDisplay::Pending);
+                self.translation_manual.insert(message_id);
+                self.translation_cache_checked.insert(message_id);
+                self.translation_service.request(
+                    message_id,
+                    message_room_id,
+                    body,
+                    self.translate_to,
+                );
+                self.bump_room_version(message_room_id);
+                None
+            }
+        }
+    }
+
+    /// Entering a room (or settings change, or the tail loading): one bulk
+    /// cache-only lookup over the translatable history already loaded. Every
+    /// session sweeps, auto mode or not; the drain decides what to display
+    /// (auto mode pre-expands all hits, everyone else gets author-shared
+    /// rows only). Misses stay collapsed until `t`, which is what keeps the
+    /// sweep free of API calls.
+    fn request_cached_translations_for_visible_room(&mut self) {
+        let Some(room_id) = self.visible_room_id else {
+            return;
+        };
+        let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == room_id) else {
+            return;
+        };
+        let ids: Vec<Uuid> = messages
+            .iter()
+            .filter(|message| {
+                message.user_id != self.user_id
+                    && !self.translations.contains_key(&message.id)
+                    && !self.translation_cache_checked.contains(&message.id)
+                    && needs_translation(&message.body, self.translate_to)
+            })
+            .map(|message| message.id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        self.translation_cache_checked.extend(ids.iter().copied());
+        self.translation_service
+            .load_cached(room_id, ids, self.translate_to);
+    }
+
+    fn drain_translation_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            let event = match self.translation_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => {
+                    // The dropped events may have carried results for entries
+                    // this session marked Pending, and nothing else ever
+                    // clears Pending (`t` on a Pending message is a no-op).
+                    // Reset them so the marker disappears and `t` can
+                    // re-request instead of reading "translating…" forever.
+                    self.reset_pending_translations();
+                    continue;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+            if event.target != self.translate_to {
+                continue;
+            }
+            let author = self.rooms.iter().find_map(|(room, messages)| {
+                if room.id != event.room_id {
+                    return None;
+                }
+                messages
+                    .iter()
+                    .find(|m| m.id == event.message_id)
+                    .map(|m| m.user_id)
+            });
+            let Some(author) = author else {
+                self.translation_manual.remove(&event.message_id);
+                continue;
+            };
+            // Author-shared results display to everyone reading the target
+            // language, except the author's own session: they wrote the
+            // original and don't need it echoed back translated.
+            let shared_for_me = event.author_shared && author != self.user_id;
+            match event.outcome {
+                TranslationOutcome::Translated(text) => {
+                    // Requested here (pending), free coverage from another
+                    // session's call while this one runs auto mode, or the
+                    // author chose to share it with this target language.
+                    let show = self.auto_translate
+                        || self.translations.contains_key(&event.message_id)
+                        || shared_for_me;
+                    if show {
+                        self.translations
+                            .insert(event.message_id, TranslationDisplay::Ready(text));
+                        self.translation_manual.remove(&event.message_id);
+                        self.bump_room_version(event.room_id);
+                    }
+                }
+                TranslationOutcome::SameLanguage => {
+                    // Remembered so the message is never re-requested; renders
+                    // as nothing. A manual `t` gets told instead of left
+                    // staring at a spinner that produced no line.
+                    let show = self.auto_translate
+                        || self.translations.contains_key(&event.message_id)
+                        || shared_for_me;
+                    if show {
+                        self.translations
+                            .insert(event.message_id, TranslationDisplay::SameLanguage);
+                        self.bump_room_version(event.room_id);
+                    }
+                    if self.translation_manual.remove(&event.message_id) {
+                        banner = Some(Banner::info(&format!(
+                            "Already written in {}",
+                            self.translate_to.prompt_name()
+                        )));
+                    }
+                }
+                TranslationOutcome::Failed => {
+                    if self.translations.get(&event.message_id)
+                        == Some(&TranslationDisplay::Pending)
+                    {
+                        self.translations
+                            .insert(event.message_id, TranslationDisplay::Failed);
+                        self.bump_room_version(event.room_id);
+                    }
+                    if self.translation_manual.remove(&event.message_id) {
+                        banner = Some(Banner::error("Translation unavailable right now"));
+                    }
+                }
+            }
+        }
+        banner
+    }
+
+    /// Drain `/summary` results. A ready summary opens the shared overlay
+    /// (the `/rules` surface); when another overlay is already up it waits
+    /// in `pending_summary_overlay` instead of clobbering it, and takes the
+    /// surface here as soon as it frees. Every other outcome banners. The
+    /// broadcast carries all users' results, so foreign events are dropped.
+    /// Returns the banner plus whether a waiting summary was promoted (a
+    /// render-visible change `tick` cannot see from the queues).
+    fn drain_summary_events(&mut self) -> (Option<Banner>, bool) {
+        use tokio::sync::broadcast::error::TryRecvError;
+        let mut promoted = false;
+        if self.overlay.is_none()
+            && let Some(overlay) = self.pending_summary_overlay.take()
+        {
+            self.overlay = Some(overlay);
+            promoted = true;
+        }
+        let mut banner = None;
+        loop {
+            let event = match self.summary_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+            if event.user_id != self.user_id {
+                continue;
+            }
+            match event.outcome {
+                SummaryOutcome::Ready {
+                    text,
+                    message_count,
+                    since,
+                    basis,
+                    capped,
+                    truncated,
+                } => {
+                    let plural = if message_count == 1 { "" } else { "s" };
+                    let stamp = crate::app::common::time::instant_for_viewer(since, self.viewer_tz);
+                    // Every arm names where the window came from, because
+                    // "since you left" and "the last 24h" are different
+                    // claims and the reader has to be able to tell which
+                    // one they got. A capped window says so rather than
+                    // presenting the cap as the moment they left.
+                    let mut head = match basis {
+                        SummaryBasis::LeftApp => {
+                            format!("{message_count} message{plural} since you left · {stamp}")
+                        }
+                        SummaryBasis::Default => format!(
+                            "{message_count} message{plural} since {stamp} · the last {}h",
+                            crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS
+                        ),
+                        SummaryBasis::Explicit => {
+                            format!("{message_count} message{plural} since {stamp}")
+                        }
+                    };
+                    if capped {
+                        head.push_str(&format!(
+                            " · capped at {}h",
+                            crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS
+                        ));
+                    }
+                    if truncated {
+                        head.push_str(" · older messages past the cap left out");
+                    }
+                    let mut lines = vec![head, String::new()];
+                    lines.extend(text.lines().map(str::to_string));
+                    let overlay = Overlay::new(format!("{} catch-up", event.room_label), lines);
+                    match self.overlay {
+                        // An overlay the user is reading is not clobbered
+                        // by an async result; the summary waits its turn.
+                        Some(_) => {
+                            self.pending_summary_overlay = Some(overlay);
+                            banner =
+                                Some(Banner::info("Summary ready, close the open panel to view"));
+                        }
+                        None => self.overlay = Some(overlay),
+                    }
+                }
+                SummaryOutcome::Empty { basis } => {
+                    banner = Some(Banner::info(match basis {
+                        SummaryBasis::LeftApp => "Nothing new since you left",
+                        SummaryBasis::Default => "Nothing said in the last 24h",
+                        SummaryBasis::Explicit => "Nothing said in that window",
+                    }));
+                }
+                SummaryOutcome::InFlight => {
+                    banner = Some(Banner::info("Summary already running"));
+                }
+                SummaryOutcome::Cooldown { remaining } => {
+                    let minutes = remaining.as_secs().div_ceil(60).max(1);
+                    banner = Some(Banner::info(&format!(
+                        "Summary cooling down, try again in {minutes}m"
+                    )));
+                }
+                SummaryOutcome::CapExhausted => {
+                    banner = Some(Banner::error("Summaries hit today's cap, back tomorrow"));
+                }
+                SummaryOutcome::Unavailable => {
+                    banner = Some(Banner::error("Summaries are not available here"));
+                }
+                SummaryOutcome::Failed => {
+                    banner = Some(Banner::error("Summary failed, try again"));
+                }
+            }
+        }
+        (banner, promoted)
     }
 
     fn flush_pending_read_cursors(&mut self) {
@@ -796,10 +1994,50 @@ impl ChatState {
         self.flush_read_cursors(room_ids);
     }
 
-    fn flush_read_cursors(&self, room_ids: Vec<Uuid>) {
-        for room_id in room_ids {
-            self.service.mark_room_read_task(self.user_id, room_id);
+    fn flush_read_cursors(&mut self, room_ids: Vec<Uuid>) {
+        for room_id in &room_ids {
+            self.service.mark_room_read_task(self.user_id, *room_id);
         }
+        self.flush_rendered_mention_reads(&room_ids);
+    }
+
+    /// Report mentions of this user whose messages are actually loaded in the
+    /// rooms being marked read, so their rail-badge entries clear. This is
+    /// deliberately narrower than the room's own read cursor: a mention
+    /// sitting above the loaded tail was never on screen and stays unread.
+    /// Runs on the same debounced flush as the cursors; every event that can
+    /// surface a mention (tail landing, a live message, the room becoming
+    /// visible) re-queues the room, so nothing is missed by collecting here.
+    fn flush_rendered_mention_reads(&mut self, room_ids: &[Uuid]) {
+        let username_lower = self
+            .usernames
+            .get(&self.user_id)
+            .map(|username| username.to_ascii_lowercase());
+        let Some(username_lower) = username_lower else {
+            return;
+        };
+        let mut rendered: Vec<Uuid> = Vec::new();
+        for room_id in room_ids {
+            let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == *room_id)
+            else {
+                continue;
+            };
+            rendered.extend(
+                messages
+                    .iter()
+                    .filter(|message| {
+                        message.user_id != self.user_id
+                            && !self.mention_reads_sent.contains(&message.id)
+                            && mentions::mentions_user(&message.body, Some(&username_lower))
+                    })
+                    .map(|message| message.id),
+            );
+        }
+        if rendered.is_empty() {
+            return;
+        }
+        self.mention_reads_sent.extend(rendered.iter().copied());
+        self.notifications.mark_read_for_messages(rendered);
     }
 
     /// Returns visible messages for the given room.
@@ -864,13 +2102,7 @@ impl ChatState {
             return false;
         };
         self.select_news();
-        if let Some(article_id) = modal.article_id {
-            self.news.select_article_by_id(article_id);
-            return true;
-        }
-        if let Some(article_id) = self.news.article_id_by_url(&modal.payload.url) {
-            self.news.select_article_by_id(article_id);
-        }
+        self.news.select_article_by_id(modal.article_id);
         true
     }
 
@@ -893,12 +2125,48 @@ impl ChatState {
         std::mem::take(&mut self.requested_settings_modal)
     }
 
+    pub fn take_requested_shop_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_shop_modal)
+    }
+
+    pub fn take_requested_onboard(&mut self) -> bool {
+        std::mem::take(&mut self.requested_onboard)
+    }
+
+    pub fn take_requested_lobby_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.requested_lobby_toggle)
+    }
+
+    pub fn take_requested_zen_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.requested_zen_toggle)
+    }
+
+    pub fn take_requested_guide(&mut self) -> bool {
+        std::mem::take(&mut self.requested_guide)
+    }
+
+    pub fn take_requested_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.requested_redraw)
+    }
+
+    pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
+        self.requested_room_info_modal.take()
+    }
+
     pub fn take_requested_mod_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_mod_modal)
     }
 
     pub fn take_requested_ultimate_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_ultimate_modal)
+    }
+
+    pub(crate) fn take_requested_pair(&mut self) -> Option<PairRequest> {
+        self.requested_pair.take()
+    }
+
+    pub(crate) fn take_requested_brb(&mut self) -> bool {
+        std::mem::take(&mut self.requested_brb)
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -909,7 +2177,15 @@ impl ChatState {
         std::mem::take(&mut self.requested_icon_picker)
     }
 
-    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String)> {
+    pub fn take_requested_room_picker(&mut self) -> bool {
+        std::mem::take(&mut self.requested_room_picker)
+    }
+
+    pub(crate) fn take_requested_message_search(&mut self) -> Option<String> {
+        self.requested_message_search.take()
+    }
+
+    pub fn take_requested_open_profile(&mut self) -> Option<(Uuid, String, ProfileSection)> {
         self.requested_open_profile.take()
     }
 
@@ -929,20 +2205,117 @@ impl ChatState {
         self.requested_audio_fallback_url.take()
     }
 
-    pub fn take_requested_brb(&mut self) -> Option<String> {
-        self.requested_brb.take()
-    }
-
-    pub fn take_sent_regular_message(&mut self) -> bool {
-        std::mem::replace(&mut self.sent_regular_message, false)
-    }
-
     pub fn take_requested_audio_skip(&mut self) -> bool {
         std::mem::take(&mut self.requested_audio_skip)
     }
 
     pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
         self.requested_voice_command.take()
+    }
+
+    pub(crate) fn take_requested_golive(&mut self) -> Option<GoLiveCommand> {
+        self.requested_golive.take()
+    }
+
+    pub(crate) fn take_requested_crown(&mut self) -> Option<CrownCommand> {
+        self.requested_crown.take()
+    }
+
+    pub(crate) fn take_requested_paper(
+        &mut self,
+    ) -> Option<crate::app::paper::state::PaperCommand> {
+        self.requested_paper.take()
+    }
+
+    pub(crate) fn take_requested_jobs(&mut self) -> Option<crate::app::jobs::state::JobsCommand> {
+        self.requested_jobs.take()
+    }
+
+    pub(crate) fn take_requested_haunt(
+        &mut self,
+    ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
+        self.requested_haunt.take()
+    }
+
+    pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
+        self.own_message_landed.take()
+    }
+
+    pub(crate) fn take_own_send_succeeded(&mut self) -> bool {
+        std::mem::take(&mut self.own_send_succeeded)
+    }
+
+    pub(crate) fn take_witnessed_hit_landed(&mut self) -> Option<(Uuid, u64)> {
+        self.witnessed_hit_landed.take()
+    }
+
+    /// A stage-2 beat off the wire. Worth nothing until the message it
+    /// corrupts is here to corrupt: handed straight to the haunting if the
+    /// message is already in the room, held for `push_message` if the room
+    /// delta has not brought it yet, dropped if this session does not hold
+    /// the room at all.
+    fn note_name_hit(&mut self, room_id: Uuid, message_id: Uuid, seed: u64) {
+        if self.find_message_in_room(room_id, message_id).is_some() {
+            self.witnessed_hit_landed = Some((message_id, seed));
+            return;
+        }
+        if !self.rooms.iter().any(|(room, _)| room.id == room_id) {
+            return;
+        }
+        let now = Instant::now();
+        self.pending_name_hits
+            .retain(|_, (_, heard)| now.duration_since(*heard) < NAME_HIT_WAIT);
+        self.pending_name_hits.insert(message_id, (seed, now));
+    }
+
+    pub(crate) fn take_requested_pot(&mut self) -> Option<PotCommand> {
+        self.requested_pot.take()
+    }
+
+    pub(crate) fn take_requested_watch(&mut self) -> Option<String> {
+        self.requested_watch.take()
+    }
+
+    pub(crate) fn take_opened_stream_room(&mut self) -> Option<Uuid> {
+        self.opened_stream_room.take()
+    }
+
+    /// Replace the live-stream copy. Returns true when it changed (the
+    /// caller bumps the row-cache epoch so LIVE tags and rail rows repaint).
+    pub(crate) fn set_live_streams(
+        &mut self,
+        streams: Vec<crate::app::stream::registry::LiveStreamView>,
+    ) -> bool {
+        if self.live_streams == streams {
+            return false;
+        }
+        self.live_streams = streams;
+        self.live_user_ids = self
+            .live_streams
+            .iter()
+            .filter(|stream| stream.live)
+            .map(|stream| stream.user_id)
+            .collect();
+        true
+    }
+
+    /// The registered stream owning `room_id`, if any.
+    pub(crate) fn stream_for_room(
+        &self,
+        room_id: Uuid,
+    ) -> Option<&crate::app::stream::registry::LiveStreamView> {
+        self.live_streams
+            .iter()
+            .find(|stream| stream.room_id == room_id)
+    }
+
+    pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
+        self.requested_aquarium_command.take()
+    }
+
+    /// When a message of this user's last landed (`SendSucceeded`).
+    pub(crate) fn last_own_send_at(&self) -> Option<std::time::Instant> {
+        self.last_own_send_at
     }
 
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
@@ -980,13 +2353,7 @@ impl ChatState {
     }
 
     fn visible_real_room_id_for_poll(&self) -> Option<Uuid> {
-        if self.feeds_selected
-            || self.news_selected
-            || self.notifications_selected
-            || self.discover_selected
-            || self.showcase_selected
-            || self.work_selected
-        {
+        if self.synthetic_entry_selected() {
             return None;
         }
         self.selected_room_id
@@ -1018,8 +2385,10 @@ impl ChatState {
 
     fn select_from_ids(&mut self, ids: &[Uuid], delta: isize) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         if ids.is_empty() {
             self.selected_message_id = None;
+            self.selection_scroll.reset();
             return;
         }
 
@@ -1034,7 +2403,24 @@ impl ChatState {
             None => 0,
         };
 
+        // A clamped move that stays on the same message keeps its row
+        // offset; landing anywhere else starts reading from the top again.
+        if self.selected_message_id != Some(ids[new_idx]) {
+            self.selection_scroll.reset();
+        }
         self.selected_message_id = Some(ids[new_idx]);
+    }
+
+    /// Scroll by rows inside the selected message when it wraps taller than
+    /// the chat pane. Positive walks toward the message's end, negative back
+    /// toward its top. Returns whether the viewport moved; `false` means
+    /// there is nothing left to reveal in that direction and the caller
+    /// should move the selection instead. The overflow measurement is the
+    /// previous frame's, so a fresh selection reads 0 until it has rendered
+    /// once; a held-down key therefore skims across messages instead of
+    /// getting stuck inside every long one.
+    pub(crate) fn scroll_selected_message_rows(&mut self, delta: isize) -> bool {
+        self.selected_message_id.is_some() && self.selection_scroll.step(delta)
     }
 
     /// Move message cursor by delta. Positive = toward older, negative = toward newer.
@@ -1051,18 +2437,19 @@ impl ChatState {
 
     pub fn clear_message_selection(&mut self) {
         self.reaction_leader_active = false;
+        self.pending_delete_message_id = None;
         self.selected_message_id = None;
+        self.selection_scroll.reset();
     }
 
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
-        self.room_jump_active = false;
-        self.feeds_selected = false;
-        self.news_selected = false;
-        self.notifications_selected = false;
-        self.discover_selected = false;
-        self.showcase_selected = false;
-        self.work_selected = false;
+        self.pending_delete_message_id = None;
+        self.selection_scroll.reset();
+        // Every synthetic entry drops, the open cyberspace room included: a
+        // jump lands on a real room, and a room nobody is looking at must not
+        // keep its stream and heartbeat running.
+        self.clear_synthetic_selection();
         self.selected_room_id = Some(room_id);
         self.selected_message_id = Some(message_id);
         self.highlighted_message_id = Some(message_id);
@@ -1113,7 +2500,7 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(message_user_id));
         self.reply_target = Some(ReplyTarget {
-            message_id: message.id,
+            to: ReplyTo::Message(message.id),
             author,
             preview: reply_preview_text(&message_body),
         });
@@ -1122,6 +2509,40 @@ impl ChatState {
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
+    }
+
+    /// Start a reply in #lounge to a News article, the one the live strip
+    /// features: the composer opens with `> @sharer: 📰 Title` to go on top.
+    /// False when the article left the snapshot or #lounge is not known yet.
+    pub(crate) fn begin_reply_to_article(&mut self, article_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some(lounge_id) = self.lounge_room_id() else {
+            return false;
+        };
+        let Some(item) = self
+            .news
+            .all_articles()
+            .iter()
+            .find(|item| item.article.id == article_id)
+        else {
+            return false;
+        };
+        let author = match item.author_username.trim() {
+            "" => short_user_id(item.article.user_id),
+            name => name.to_string(),
+        };
+        // The 📰 says what is quoted: with no card in the chat, a bare title
+        // would read as something the sharer said.
+        self.reply_target = Some(ReplyTarget {
+            to: ReplyTo::Article,
+            author,
+            preview: truncate_reply_preview(&format!("📰 {}", item.article.title.trim())),
+        });
+        self.composing = true;
+        self.composer_room_id = Some(lounge_id);
+        self.edited_message_id = None;
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
+        true
     }
 
     /// Try to jump from a selected reply message to the original message in
@@ -1185,10 +2606,18 @@ impl ChatState {
     }
 
     /// Delete the selected message if owned by user (or if admin).
-    /// Moves selection to the adjacent message (prefer the next/older one,
-    /// fall back to the previous/newer one) so pressing `d` repeatedly
-    /// cleanly reaps a run of own messages without the cursor jumping
-    /// back to the newest every time.
+    ///
+    /// Requires a confirming double-press: the first `d` arms the delete and
+    /// asks for a second press; a second `d` on the same still-selected
+    /// message goes through. Any selection change disarms it (see
+    /// `select_from_ids` / `clear_message_selection`), so after a delete the
+    /// cursor lands on the adjacent message disarmed and the next `d` re-arms
+    /// rather than reaping it — you still walk a run of own messages, just
+    /// `dd` per message instead of a single `d`.
+    ///
+    /// Selection moves to the adjacent message (prefer the next/older one,
+    /// fall back to the previous/newer one) so the cursor doesn't jump back to
+    /// the newest every time.
     pub fn delete_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
         let selected_id = self.selected_message_id?;
         let msg_user_id = self
@@ -1198,6 +2627,11 @@ impl ChatState {
         if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only delete your own messages"));
         }
+        if self.pending_delete_message_id != Some(selected_id) {
+            self.pending_delete_message_id = Some(selected_id);
+            return Some(Banner::info("Press d again to delete"));
+        }
+        self.pending_delete_message_id = None;
         self.service
             .delete_message_task(self.user_id, selected_id, self.permissions);
         self.selected_message_id = self
@@ -1205,6 +2639,7 @@ impl ChatState {
             .iter()
             .find(|(room, _)| room.id == room_id)
             .and_then(|(_, msgs)| adjacent_message_id(msgs, selected_id));
+        self.selection_scroll.reset();
         Some(Banner::success("Deleting message..."))
     }
 
@@ -1220,12 +2655,6 @@ impl ChatState {
 
     pub fn selected_message_id_in_room(&self, room_id: Uuid) -> Option<Uuid> {
         self.selected_message_in_room(room_id).map(|m| m.id)
-    }
-
-    pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
-        self.selected_message_in_room(room_id)
-            .and_then(|m| parse_news_payload(&m.body))
-            .is_some()
     }
 
     pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
@@ -1275,9 +2704,201 @@ impl ChatState {
         }
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;
+        self.pending_delete_message_id = None;
         let changed = self.selected_message_id != Some(message_id);
+        if changed {
+            self.selection_scroll.reset();
+        }
         self.selected_message_id = Some(message_id);
         changed
+    }
+
+    /// Whether a message is present in the locally loaded tail for a room.
+    pub(crate) fn message_is_loaded_in_room(&self, room_id: Uuid, message_id: Uuid) -> bool {
+        self.find_message_in_room(room_id, message_id).is_some()
+    }
+
+    /// Fire a message search through the service, superseding any in-flight
+    /// request (latest wins: stale results are dropped by request id).
+    pub(crate) fn start_message_search(&mut self, room_id: Option<Uuid>, query: String) {
+        let request_id = Uuid::now_v7();
+        self.message_search.begin(request_id, query.clone());
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.search_messages_task(
+            self.user_id,
+            request_id,
+            room_id,
+            query,
+            exclude_user_ids,
+        );
+    }
+
+    /// Remember a search hit to select once its room tail loads. Used when
+    /// jumping from the Ctrl+/ message search to a room whose history is not
+    /// loaded yet.
+    pub(crate) fn set_pending_search_jump(&mut self, room_id: Uuid, message_id: Uuid) {
+        self.pending_search_jump = Some((room_id, message_id));
+    }
+
+    /// Open the history modal at a room's newest messages (the `/history`
+    /// path for a caught-up room).
+    pub(crate) fn open_history_at_tail(&mut self, room_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.history_modal.open_at_tail(
+            room_id,
+            self.history_room_label(room_id),
+            request_id,
+            self.user_id,
+            self.history_unread_cutoff(room_id),
+        );
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_page_task(
+            self.user_id,
+            request_id,
+            room_id,
+            None,
+            HistoryDirection::Older,
+            exclude_user_ids,
+        );
+    }
+
+    /// Open the history modal centered on one message: the destination for a
+    /// search hit or mention that sits further back than the live room tail
+    /// reaches.
+    pub(crate) fn open_history_at_message(&mut self, room_id: Uuid, message_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.history_modal.open_at_message(
+            room_id,
+            self.history_room_label(room_id),
+            message_id,
+            request_id,
+            self.user_id,
+            self.history_unread_cutoff(room_id),
+        );
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_anchor_task(
+            self.user_id,
+            request_id,
+            message_id,
+            exclude_user_ids,
+        );
+    }
+
+    /// Open the history modal at the room's first unread message (the
+    /// `/history` path while the unread marker is set). The service resolves
+    /// the exact first unread even when it sits further back than the live
+    /// tail's 500; a room with nothing unread server-side falls back to a
+    /// plain tail page under the same request id.
+    pub(crate) fn open_history_at_unread(&mut self, room_id: Uuid, cutoff: DateTime<Utc>) {
+        let request_id = Uuid::now_v7();
+        self.history_modal.open_at_unread(
+            room_id,
+            self.history_room_label(room_id),
+            request_id,
+            self.user_id,
+            Some(cutoff),
+        );
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_unread_task(
+            self.user_id,
+            request_id,
+            room_id,
+            cutoff,
+            exclude_user_ids,
+        );
+    }
+
+    /// The unread cutoff the history modal's divider draws against: this
+    /// session's AFK line for the room. No line (you never stepped away, or
+    /// you have caught up since) yields no divider, mirroring the live tail.
+    ///
+    /// `/history` only reads the line, never clears it: opening scrollback
+    /// is how you go and look at the backlog, not proof you got through it,
+    /// and the anchor should still be there when you close the modal.
+    fn history_unread_cutoff(&self, room_id: Uuid) -> Option<DateTime<Utc>> {
+        self.afk_lines.get(&room_id).copied()
+    }
+
+    /// The left-app mark for the `you left` divider. Read-only here, like
+    /// `/summary`: nothing in the session moves it.
+    pub(crate) fn device_left_at(&self) -> Option<DateTime<Utc>> {
+        self.device_left_at
+    }
+
+    /// Title for the history modal. A public-room mention can point at a room
+    /// the rail has never listed, so an unknown room gets a neutral label
+    /// rather than blocking the open.
+    fn history_room_label(&self, room_id: Uuid) -> String {
+        crate::app::room_search_modal::state::hit_room_label(self, self.user_id, room_id)
+    }
+
+    /// Fetch the next page if the viewport has reached that edge. Called
+    /// after every scroll; `wants_page` owns the "is there more, and is a
+    /// fetch already running" decision.
+    pub(crate) fn request_history_page_if_needed(&mut self, direction: HistoryDirection) {
+        if !self.history_modal.wants_page(direction) {
+            return;
+        }
+        let Some(room_id) = self.history_modal.room_id() else {
+            return;
+        };
+        let cursor = match direction {
+            HistoryDirection::Older => self.history_modal.older_cursor(),
+            HistoryDirection::Newer => self.history_modal.newer_cursor(),
+        };
+        let request_id = Uuid::now_v7();
+        self.history_modal.begin_page(direction, request_id);
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_page_task(
+            self.user_id,
+            request_id,
+            room_id,
+            cursor,
+            direction,
+            exclude_user_ids,
+        );
+    }
+
+    /// Lazily fetch the context window (3 messages either side) for a search
+    /// hit if it is not cached and no other context fetch is running. Called
+    /// from the modal's tick for the currently selected hit; the single
+    /// in-flight slot makes fast scrolling converge instead of fanning out.
+    pub(crate) fn ensure_search_hit_context(&mut self, message_id: Uuid) {
+        if self.message_search.context.contains_key(&message_id)
+            || self.message_search.context_in_flight.is_some()
+        {
+            return;
+        }
+        let Some(hit) = self
+            .message_search
+            .hits
+            .iter()
+            .find(|hit| hit.message.id == message_id)
+        else {
+            return;
+        };
+        let request_id = Uuid::now_v7();
+        self.message_search.context_in_flight = Some((request_id, message_id));
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_message_context_task(
+            self.user_id,
+            request_id,
+            hit.message.room_id,
+            message_id,
+            hit.message.created,
+            exclude_user_ids,
+        );
+    }
+
+    /// Load one message as a single-hit search preview (the Mentions
+    /// fallback for messages older than the loaded history). The result
+    /// arrives through the same latest-wins search pipeline, so typing a
+    /// real `?` query afterwards simply replaces the preview.
+    pub(crate) fn start_message_preview(&mut self, message_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.message_search.begin(request_id, String::new());
+        self.service
+            .load_message_preview_task(self.user_id, request_id, message_id);
     }
 
     /// Drop the user into compose mode in `room_id` (if not already) and
@@ -1299,33 +2920,27 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
+    /// Open the article modal on a News article by id, the one the live
+    /// strip features. False when it left the snapshot (deleted).
+    pub(crate) fn open_news_modal_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
-        let Some((chat_payload, user_id, created)) =
-            self.selected_message_in_room(room_id).and_then(|m| {
-                parse_news_payload(&m.body).map(|payload| (payload, m.user_id, m.created))
-            })
+        let Some(item) = self
+            .news
+            .all_articles()
+            .iter()
+            .find(|item| item.article.id == article_id)
         else {
             return false;
         };
-
-        let (payload, author, created, article_id) = if let Some((payload, author, created, id)) =
-            news_modal_source_from_articles(self.news.all_articles(), &chat_payload.url)
-        {
-            (payload, author, created, Some(id))
-        } else {
-            let author =
-                modal_author_label(self.usernames.get(&user_id).map(String::as_str), user_id);
-            (chat_payload, author, created, None)
-        };
-        let relative = crate::app::common::primitives::format_relative_time(created);
-        let meta = format!(
-            "{author} - {relative} - {}",
-            created.format("%a %Y-%m-%d %H:%M UTC")
-        );
+        let author = modal_author_label(Some(&item.author_username), item.article.user_id);
         self.news_modal = Some(NewsModalState {
-            payload,
-            meta,
+            payload: NewsPayload {
+                title: item.article.title.clone(),
+                summary: item.article.summary.clone(),
+                url: item.article.url.clone(),
+                ascii_art: item.article.ascii_art.clone(),
+            },
+            meta: news_modal_meta(&author, item.article.created),
             article_id,
         });
         true
@@ -1355,19 +2970,47 @@ impl ChatState {
         None
     }
 
-    pub fn toggle_pin_selected_message_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
-        let message = self.selected_message_in_room(room_id)?;
-        if !self.is_admin {
-            return Some(Banner::error("Admin only: pin messages"));
-        }
-        self.service
-            .toggle_message_pin_task(message.id, self.is_admin, self.pinned_tx.clone());
-        let label = if message.pinned {
-            "Unpinning message..."
-        } else {
-            "Pinning message..."
+    /// What the gild picker needs about the selected message, or the refusal
+    /// the service would answer with anyway. The picker never opens on a
+    /// message that could only be refused: your own message, one in a DM or
+    /// private room, or one in a game or stream chat. Only the rules a room
+    /// list can answer live here; the rest (membership, bots, cooldown,
+    /// balance) stay with the service.
+    pub(crate) fn gild_target_in_room(&self, room_id: Uuid) -> Result<GildTarget, GildRefusal> {
+        let Some(message) = self.selected_message_in_room(room_id) else {
+            return Err(GildRefusal::MessageNotFound);
         };
-        Some(Banner::success(label))
+        let Some(room) = self.room_by_id(room_id) else {
+            return Err(GildRefusal::MessageNotFound);
+        };
+        if room.visibility != "public" {
+            return Err(GildRefusal::NotPublic);
+        }
+        if room.kind == "game" {
+            return Err(GildRefusal::GameRoom);
+        }
+        if message.user_id == self.user_id {
+            return Err(GildRefusal::SelfGild);
+        }
+        Ok(GildTarget {
+            message_id: message.id,
+            author_username: self.username_for(message.user_id),
+            // One line, always: the picker prints the preview in a single
+            // row, and a multi-line body would otherwise walk over the
+            // tier rows below it.
+            preview: message
+                .body
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        })
+    }
+
+    /// Ask the service to buy a gild. Fire and forget: the answer arrives as
+    /// a banner, and the marker arrives as a repaint.
+    pub fn gild_message(&self, message_id: Uuid, tier: GildTier) {
+        self.service
+            .gild_message_task(self.user_id, message_id, tier);
     }
 
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {
@@ -1381,7 +3024,42 @@ impl ChatState {
         room_slug_for(&self.rooms, room_id)
     }
 
-    fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
+    /// Who may set this room's topic and rules. Private topic rooms answer to
+    /// their derived owner, every other room with info answers to the house,
+    /// and DMs and game rooms have no info at all.
+    pub(crate) fn room_info_authority(&self, room: &ChatRoom) -> RoomInfoAuthority {
+        if room.kind == "dm" || room.kind == "game" {
+            return RoomInfoAuthority::NotEditable;
+        }
+        if room.kind == "topic"
+            && room.visibility == "private"
+            && self.room_owner_ids.get(&room.id) == Some(&self.user_id)
+        {
+            return RoomInfoAuthority::Owner;
+        }
+        if self.permissions.can_moderate() {
+            return RoomInfoAuthority::Moderator;
+        }
+        RoomInfoAuthority::None
+    }
+
+    /// The owner line the room-info form shows.
+    fn room_owner_label(&self, room: &ChatRoom) -> String {
+        if room.kind != "topic" || room.visibility != "private" {
+            return "moderators".to_string();
+        }
+        match self.room_owner_ids.get(&room.id) {
+            Some(owner) if *owner == self.user_id => "you".to_string(),
+            Some(owner) => self
+                .usernames
+                .get(owner)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            None => "unowned".to_string(),
+        }
+    }
+
+    pub(crate) fn room_by_id(&self, room_id: Uuid) -> Option<&ChatRoom> {
         self.rooms
             .iter()
             .find(|(room, _)| room.id == room_id)
@@ -1415,6 +3093,10 @@ impl ChatState {
             selected_room_id: self.selected_room_id,
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
+            cyberspace_selected: self.cyberspace_selected,
+            cyberspace_notifications_selected: self.cyberspace_notifications_selected,
+            cyberspace_room_selected: self.cyberspace_room_selected,
+            cyberspace_mail_selected: self.cyberspace_mail_selected,
             notifications_selected: self.notifications_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
@@ -1425,6 +3107,64 @@ impl ChatState {
     /// The room slot currently selected, if any.
     fn current_slot(&self) -> Option<RoomSlot> {
         current_slot_from_state(self.selected_slot_state())
+    }
+
+    /// What Home shows, for the attention metric. None while nothing is
+    /// selected or the selected room has not loaded.
+    pub(crate) fn home_room(&self) -> Option<HomeRoom> {
+        match self.current_slot() {
+            None => None,
+            Some(RoomSlot::Room(room_id)) => self.room_by_id(room_id).map(home_room_kind),
+            Some(RoomSlot::Feeds) => Some(HomeRoom::Feeds),
+            Some(RoomSlot::News) => Some(HomeRoom::News),
+            Some(
+                RoomSlot::Cyberspace
+                | RoomSlot::CyberspaceNotifications
+                | RoomSlot::CyberspaceMail(_)
+                | RoomSlot::CyberspaceRoom(_),
+            ) => Some(HomeRoom::Cyberspace),
+            Some(RoomSlot::Notifications) => Some(HomeRoom::Notifications),
+            Some(RoomSlot::Discover) => Some(HomeRoom::Discover),
+            Some(RoomSlot::Showcase) => Some(HomeRoom::Showcase),
+            Some(RoomSlot::Work) => Some(HomeRoom::Work),
+        }
+    }
+
+    /// Drop the rail scroll once the selection has left the slot it was
+    /// scrolled on. Without this, coming back to that slot later revives
+    /// the old scroll. Runs after every input event and chat tick, the only
+    /// places the selection changes.
+    pub(crate) fn forget_stale_rail_scroll(&mut self) {
+        if self.rail_scroll.0 != self.current_slot() {
+            self.rail_scroll = (None, 0);
+        }
+    }
+
+    /// Rows the Home rail is scrolled off the selection-centred position.
+    /// Zero once the selection has moved since the rail was scrolled.
+    pub(crate) fn rail_scroll_nudge(&self) -> isize {
+        let (anchor, nudge) = self.rail_scroll;
+        if anchor == self.current_slot() {
+            nudge
+        } else {
+            0
+        }
+    }
+
+    /// Set the rail's offset from the selection-centred position, anchored
+    /// to the current selection. Callers clamp it against the rail geometry
+    /// (`chat::ui::room_rail_scroll_bounds`), which state does not know.
+    pub(crate) fn set_rail_scroll_nudge(&mut self, nudge: isize) {
+        self.rail_scroll = (self.current_slot(), nudge);
+    }
+
+    /// Whether a synthetic rail entry (rss, news, cyberspace, mentions,
+    /// browse rooms, showcase, work) owns the center pane instead of a real
+    /// room. The shell asks this instead of re-deriving the list: a new
+    /// synthetic entry that misses one of those chains renders the room
+    /// behind it while the rail says otherwise.
+    pub fn synthetic_entry_selected(&self) -> bool {
+        synthetic_entry_selected(self.selected_slot_state())
     }
 
     /// Collapse/expand a room-list section. If collapsing hides the currently
@@ -1449,6 +3189,10 @@ impl ChatState {
             Some("news")
         } else if self.feeds_selected {
             Some("rss")
+        } else if self.cyberspace_selected {
+            Some("cyberspace")
+        } else if self.cyberspace_notifications_selected {
+            Some("cyberspace notifications")
         } else if self.notifications_selected {
             Some("mentions")
         } else if self.discover_selected {
@@ -1466,6 +3210,8 @@ impl ChatState {
         let label = self.selected_synthetic_entry_label()?;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
+        self.cyberspace_notifications_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -1496,6 +3242,15 @@ impl ChatState {
         })
     }
 
+    /// The nightcap room, once the snapshot carries it (auto-joined, so
+    /// every session has it after the first room load).
+    pub fn nightcap_room_id(&self) -> Option<Uuid> {
+        self.rooms
+            .iter()
+            .find(|(room, _)| is_nightcap_room(room))
+            .map(|(room, _)| room.id)
+    }
+
     pub(crate) fn set_favorite_room_ids(&mut self, favorite_room_ids: Vec<Uuid>) {
         self.favorite_room_ids = favorite_room_ids;
     }
@@ -1505,13 +3260,10 @@ impl ChatState {
     }
 
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
-        if self.feeds_selected
-            || self.news_selected
-            || self.notifications_selected
-            || self.discover_selected
-            || self.showcase_selected
-            || self.work_selected
-        {
+        if let Some(id) = self.current_slot().and_then(synthetic_favorite_id) {
+            return Some(id);
+        }
+        if self.synthetic_entry_selected() {
             return None;
         }
         let room_id = self.selected_room_id?;
@@ -1523,7 +3275,7 @@ impl ChatState {
 
     /// Build the flat visual navigation order.
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
-    /// channels, updates, DMs.
+    /// unread DMs, channels, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         visual_order_for_rooms(RoomVisualOrderInput {
             rooms: &self.rooms,
@@ -1532,9 +3284,14 @@ impl ChatState {
             unread_counts: &self.unread_counts,
             room_last_message_at: &self.room_last_message_at,
             feeds_available: self.feeds.has_feeds(),
+            cyberspace_linked: self.cyberspace.is_linked(),
+            cyberspace_rooms: self.cyberspace.pinned_rooms(),
+            cyberspace_mail: self.cyberspace.pinned_cmail(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
             ignored_user_ids: &self.ignored_user_ids,
+            sticky_unread_dm: self.sticky_unread_dm,
+            live_streams: &self.live_streams,
         })
     }
 
@@ -1556,6 +3313,7 @@ impl ChatState {
 
     pub(crate) fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
+        self.selection_scroll.reset();
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;
 
@@ -1568,6 +3326,26 @@ impl ChatState {
             RoomSlot::News => {
                 let changed = !self.news_selected;
                 self.select_news();
+                changed
+            }
+            RoomSlot::Cyberspace => {
+                let changed = !self.cyberspace_selected;
+                self.select_cyberspace();
+                changed
+            }
+            RoomSlot::CyberspaceNotifications => {
+                let changed = !self.cyberspace_notifications_selected;
+                self.select_cyberspace_notifications();
+                changed
+            }
+            RoomSlot::CyberspaceRoom(index) => {
+                let changed = self.cyberspace_room_selected != Some(index);
+                self.select_cyberspace_room(index);
+                changed
+            }
+            RoomSlot::CyberspaceMail(index) => {
+                let changed = self.cyberspace_mail_selected != Some(index);
+                self.select_cyberspace_mail(index);
                 changed
             }
             RoomSlot::Notifications => {
@@ -1591,29 +3369,48 @@ impl ChatState {
                 changed
             }
             RoomSlot::Room(next_id) => {
-                if !self
-                    .rooms
-                    .iter()
-                    .any(|(room, _)| room.id == next_id && is_chat_list_room(room))
-                {
-                    return false;
+                let is_stream_room = self.stream_for_room(next_id).is_some();
+                let in_list = self.rooms.iter().any(|(room, _)| {
+                    room.id == next_id
+                        && (is_chat_list_room(room) || (is_stream_room && room.kind == "game"))
+                });
+                if !in_list {
+                    // A stream room the user has never joined: select it
+                    // anyway and join lazily (public game-room join path);
+                    // the tail request rides the `GameRoomJoined` event.
+                    if is_stream_room {
+                        self.join_game_room_chat(next_id);
+                    } else {
+                        return false;
+                    }
                 }
                 let changed = self.feeds_selected
                     || self.news_selected
+                    || self.cyberspace_selected
+                    || self.cyberspace_notifications_selected
+                    || self.cyberspace_room_selected.is_some()
+                    || self.cyberspace_mail_selected.is_some()
                     || self.notifications_selected
                     || self.discover_selected
                     || self.showcase_selected
                     || self.work_selected
                     || self.selected_room_id != Some(next_id);
-                self.feeds_selected = false;
-                self.news_selected = false;
-                self.notifications_selected = false;
-                self.discover_selected = false;
-                self.showcase_selected = false;
-                self.work_selected = false;
+                // Clearing here also drops any open cyberspace chat room,
+                // which is what stops its stream and heartbeat: a room the
+                // user has navigated away from must not keep fetching.
+                self.clear_synthetic_selection();
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
+                }
+                if changed && is_stream_room {
+                    // Walking into someone's stream room is one of the two
+                    // identified ways into a stream (`/watch @user` is the
+                    // other). `App` turns this into the "is watching" line
+                    // and the streamer's notification; the once-per-viewer
+                    // dedupe lives in the stream registry, so re-opening the
+                    // room is free.
+                    self.opened_stream_room = Some(next_id);
                 }
                 changed
             }
@@ -1651,6 +3448,14 @@ impl ChatState {
 
         let current_item = if self.feeds_selected {
             RoomSlot::Feeds
+        } else if self.cyberspace_selected {
+            RoomSlot::Cyberspace
+        } else if self.cyberspace_notifications_selected {
+            RoomSlot::CyberspaceNotifications
+        } else if let Some(index) = self.cyberspace_room_selected {
+            RoomSlot::CyberspaceRoom(index)
+        } else if let Some(index) = self.cyberspace_mail_selected {
+            RoomSlot::CyberspaceMail(index)
         } else if self.notifications_selected {
             RoomSlot::Notifications
         } else if self.discover_selected {
@@ -1671,6 +3476,8 @@ impl ChatState {
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
         let next = wrapped_index(current, delta, order.len());
+        // Real navigation re-centres the rail, same as a space jump.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(order[next])
     }
 
@@ -1690,6 +3497,9 @@ impl ChatState {
         };
 
         self.room_jump_active = false;
+        // Real navigation re-centres the rail, even onto the room already
+        // selected: the quick way back from a scrolled rail.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(slot)
     }
 
@@ -1700,6 +3510,11 @@ impl ChatState {
         self.reaction_leader_active = false;
         self.reply_target = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, false);
+    }
+
+    /// The room an open draft was started in: where every submit goes.
+    pub(crate) fn composer_room_id(&self) -> Option<Uuid> {
+        self.composer_room_id
     }
 
     pub fn reset_composer(&mut self) {
@@ -1746,12 +3561,43 @@ impl ChatState {
         ));
     }
 
-    fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
-        if owners.is_empty() {
+    /// The `ff` overlay: gilds first, one block per tier held (best tier
+    /// first, since that is what the buyers paid for), then one block per
+    /// reaction icon. Gilds are per buyer, so a tier block's names are the
+    /// people holding exactly that tier on this message.
+    fn reaction_owner_lines(
+        &self,
+        gilds: &[ChatMessageGild],
+        owners: &[ChatMessageReactionOwners],
+    ) -> Vec<String> {
+        if gilds.is_empty() && owners.is_empty() {
             return vec!["No reactions yet".to_string()];
         }
 
         let mut lines = Vec::new();
+        for tier in GildTier::ALL.iter().rev() {
+            let buyers: Vec<Uuid> = gilds
+                .iter()
+                .filter(|gild| gild.tier == *tier)
+                .map(|gild| gild.user_id)
+                .collect();
+            if buyers.is_empty() {
+                continue;
+            }
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            let count = buyers.len();
+            let noun = if count == 1 { "gild" } else { "gilds" };
+            lines.push(format!(
+                "{} {} {} {}",
+                tier.marker(),
+                count,
+                tier.label(),
+                noun
+            ));
+            lines.extend(self.owner_name_rows(&buyers));
+        }
         for reaction in owners {
             if !lines.is_empty() {
                 lines.push(String::new());
@@ -1764,31 +3610,35 @@ impl ChatState {
                 lines.push("  unknown".to_string());
                 continue;
             }
-            let mut labels: Vec<String> = reaction
-                .user_ids
-                .iter()
-                .take(REACTION_OWNER_DISPLAY_LIMIT)
-                .map(|user_id| {
-                    self.usernames
-                        .get(user_id)
-                        .map(|name| name.trim())
-                        .filter(|name| !name.is_empty())
-                        .map(|name| format!("@{name}"))
-                        .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*user_id)))
-                })
-                .collect();
-            let hidden_count = reaction
-                .user_ids
-                .len()
-                .saturating_sub(REACTION_OWNER_DISPLAY_LIMIT);
-            if hidden_count > 0 {
-                labels.push(format!("[+{hidden_count} more]"));
-            }
-            for row in labels.chunks(REACTION_OWNER_COLUMNS) {
-                lines.push(format!("  {}", row.join(" ")));
-            }
+            lines.extend(self.owner_name_rows(&reaction.user_ids));
         }
         lines
+    }
+
+    /// `@name` labels for one block of the `ff` overlay, capped at
+    /// `REACTION_OWNER_DISPLAY_LIMIT` with a `[+N more]` tail, wrapped
+    /// `REACTION_OWNER_COLUMNS` per row.
+    fn owner_name_rows(&self, user_ids: &[Uuid]) -> Vec<String> {
+        let mut labels: Vec<String> = user_ids
+            .iter()
+            .take(REACTION_OWNER_DISPLAY_LIMIT)
+            .map(|user_id| {
+                self.usernames
+                    .get(user_id)
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*user_id)))
+            })
+            .collect();
+        let hidden_count = user_ids.len().saturating_sub(REACTION_OWNER_DISPLAY_LIMIT);
+        if hidden_count > 0 {
+            labels.push(format!("[+{hidden_count} more]"));
+        }
+        labels
+            .chunks(REACTION_OWNER_COLUMNS)
+            .map(|row| format!("  {}", row.join(" ")))
+            .collect()
     }
 
     fn ignore_list_lines(&self) -> Vec<String> {
@@ -1850,8 +3700,21 @@ impl ChatState {
         self.open_overlay("Active Users", self.active_user_lines());
     }
 
-    pub fn submit_composer(&mut self, keep_open: bool, _from_dashboard: bool) -> Option<Banner> {
+    pub fn submit_composer(
+        &mut self,
+        keep_open: bool,
+        commands: ComposerCommands,
+    ) -> Option<Banner> {
         let body = self.composer.lines().join("\n").trim_end().to_string();
+
+        match (commands, is_command_draft(&body)) {
+            (ComposerCommands::Disabled, true) => {
+                return Some(Banner::error(
+                    "Commands are off in the Lounge, use them from Home",
+                ));
+            }
+            (ComposerCommands::Disabled, false) | (ComposerCommands::Enabled, _) => {}
+        }
 
         if body.trim() == "/binds" {
             self.clear_composer_after_submit();
@@ -1863,6 +3726,109 @@ impl ChatState {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;
             return None;
+        }
+
+        if body.trim() == "/shop" {
+            self.clear_composer_after_submit();
+            self.requested_shop_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/onboard" {
+            self.clear_composer_after_submit();
+            self.requested_onboard = true;
+            return None;
+        }
+
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+R, ?), for
+        // terminals and multiplexers that swallow those keys. Each one runs
+        // exactly what its key runs.
+        if body.trim() == "/lobby" {
+            self.clear_composer_after_submit();
+            self.requested_lobby_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/zen" {
+            self.clear_composer_after_submit();
+            self.requested_zen_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/guide" {
+            self.clear_composer_after_submit();
+            self.requested_guide = true;
+            return None;
+        }
+
+        if body.trim() == "/redraw" {
+            self.clear_composer_after_submit();
+            self.requested_redraw = true;
+            return None;
+        }
+
+        if let Some(command) = parse_cyberspace_command(&body) {
+            self.clear_composer_after_submit();
+            match command {
+                // The pane belongs to linked accounts, and so does its rail
+                // entry. An unlinked user gets the link modal over the room
+                // they are already in, so nobody ends up inside a pane the
+                // rail does not list.
+                CyberspaceCommand::Open
+                | CyberspaceCommand::Post
+                | CyberspaceCommand::Chat
+                | CyberspaceCommand::Mail
+                | CyberspaceCommand::MailTo(_)
+                    if !self.cyberspace.is_linked() =>
+                {
+                    self.cyberspace.open_link_modal();
+                    return None;
+                }
+                CyberspaceCommand::Open => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    return None;
+                }
+                CyberspaceCommand::Post => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    return self.cyberspace.open_compose_modal();
+                }
+                CyberspaceCommand::Chat => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    return self.cyberspace.open_rooms_modal();
+                }
+                CyberspaceCommand::Mail => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    return self.cyberspace.open_cmail_modal();
+                }
+                // The row appears in the rail when their API answers, and
+                // the chat tick walks the user into it: a conversation
+                // started by name is one they asked to write in.
+                CyberspaceCommand::MailTo(username) => {
+                    return self.cyberspace.start_cmail(username);
+                }
+                CyberspaceCommand::Link => {
+                    self.cyberspace.open_link_modal();
+                    return None;
+                }
+                CyberspaceCommand::Unlink => {
+                    self.cyberspace.unlink();
+                    // The rail entry goes with the link, so the pane cannot
+                    // stay selected behind it.
+                    if self.cyberspace_selected || self.cyberspace_notifications_selected {
+                        self.leave_selected_synthetic_entry();
+                    }
+                    return None;
+                }
+                CyberspaceCommand::Invalid => {
+                    return Some(Banner::error(
+                        "Usage: /cs [post|chat|mail|mail @user|link|unlink]",
+                    ));
+                }
+            }
         }
 
         if body.trim() == "/mod" {
@@ -1881,6 +3847,187 @@ impl ChatState {
             self.clear_composer_after_submit();
             self.requested_icon_picker = true;
             return None;
+        }
+
+        if body.trim() == "/picker" {
+            self.clear_composer_after_submit();
+            self.requested_room_picker = true;
+            return None;
+        }
+
+        if let Some(rest) = body.trim().strip_prefix("/search")
+            && (rest.is_empty() || rest.starts_with(' '))
+        {
+            let query = rest.trim().to_string();
+            self.clear_composer_after_submit();
+            self.requested_message_search = Some(query);
+            return None;
+        }
+
+        if let Some(rest) = body.trim().strip_prefix("/summary")
+            && (rest.is_empty() || rest.starts_with(' '))
+        {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.visible_room_id else {
+                return Some(Banner::error("open a room first"));
+            };
+            let Some((room, _)) = self.rooms.iter().find(|(room, _)| room.id == room_id) else {
+                return Some(Banner::error("open a room first"));
+            };
+            // Public rooms only, checked again in the SQL; this one is for
+            // an immediate, honest banner.
+            if room.visibility != "public" {
+                return Some(Banner::error("Summaries cover public rooms only"));
+            }
+            let window = match parse_summary_arg(rest) {
+                // Always the device mark, never the room's AFK line: the
+                // catch-up answers "what happened since I was last here",
+                // and here is this device. The service only clamps it.
+                SummaryArg::CatchUp => catch_up_window(self.device_left_at),
+                SummaryArg::Window(back) => SummaryWindow::Explicit(back),
+                SummaryArg::Unparseable => {
+                    return Some(Banner::error("Use /summary, or a window like /summary 6h"));
+                }
+                SummaryArg::TooShort => {
+                    return Some(Banner::error("Summary windows start at 1m"));
+                }
+                SummaryArg::TooLong => {
+                    return Some(Banner::error(&format!(
+                        "Summaries reach back at most {}h",
+                        crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS
+                    )));
+                }
+            };
+            let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+            self.summary_service.request(
+                self.user_id,
+                room_id,
+                self.history_room_label(room_id),
+                window,
+                exclude_user_ids,
+            );
+            // The line stays: the summary says what is below it, it does
+            // not move where it is. Only speaking in the room does that.
+            return Some(Banner::info("Summarizing…"));
+        }
+
+        if body.trim() == "/history" {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.visible_room_id else {
+                return Some(Banner::error("open a room first"));
+            };
+            // With unread messages waiting, land on the first of them
+            // instead of the tail; the cutoff is the session's pre-mark
+            // unread marker, since the server cursor advanced the moment
+            // the room was opened.
+            match self.history_unread_cutoff(room_id) {
+                Some(cutoff) => self.open_history_at_unread(room_id, cutoff),
+                None => self.open_history_at_tail(room_id),
+            }
+            return None;
+        }
+
+        if let Some(parsed) = parse_pair_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                Some(request) => {
+                    self.requested_pair = Some(request);
+                    return None;
+                }
+                None => {
+                    return Some(Banner::error("Usage: /pair @user"));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_golive_command(&body) {
+            self.clear_composer_after_submit();
+            self.requested_golive = Some(parsed);
+            return None;
+        }
+
+        if let Some(parsed) = parse_crown_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /crown, /crown take, or /crown take N",
+                ));
+            };
+            self.requested_crown = Some(command);
+            return None;
+        }
+
+        // `/paper` opens The Late Edition for anyone; the press commands after it
+        // are admin-only and say so, unlike `/haunt`, which hides.
+        if let Some(parsed) = crate::app::paper::state::parse_paper_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /paper, /paper YYYY-MM-DD, or /paper print|preview|reset",
+                ));
+            };
+            if command.admin_only() && !self.is_admin {
+                return Some(Banner::error("Only admins can touch the presses"));
+            }
+            self.requested_paper = Some(command);
+            return None;
+        }
+
+        // `/jobs` opens the Jobs shelf for anyone; the press behind it is
+        // admin-only and says so.
+        if let Some(parsed) = crate::app::jobs::state::parse_jobs_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /jobs, /jobs post, or /jobs pull|release",
+                ));
+            };
+            if command.admin_only() && !self.is_admin {
+                return Some(Banner::error("Only admins can run the job press"));
+            }
+            self.requested_jobs = Some(command);
+            return None;
+        }
+
+        // Admin-only on purpose, and not an error for anyone else: for a
+        // non-admin the line falls through and posts as plain text, exactly
+        // as if the command did not exist. First contact stays a mystery.
+        if self.is_admin
+            && let Some(parsed) = crate::app::deadchannel::haunt::state::parse_haunt_command(&body)
+        {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(
+                    "Usage: /haunt, or /haunt arm|glitch|name|replay|invite|reset|welcome",
+                ));
+            };
+            self.requested_haunt = Some(command);
+            return None;
+        }
+
+        if let Some(parsed) = parse_pot_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(&format!(
+                    "Usage: /pot, or /pot buy N (1 to {})",
+                    late_core::models::pot::POT_MAX_TICKETS_PER_DAY
+                )));
+            };
+            self.requested_pot = Some(command);
+            return None;
+        }
+
+        if let Some(target) = parse_user_command(&body, "/watch") {
+            self.clear_composer_after_submit();
+            match target {
+                Some(name) => {
+                    self.requested_watch = Some(name.to_string());
+                    return None;
+                }
+                None => {
+                    return Some(Banner::error("Usage: /watch @user"));
+                }
+            }
         }
 
         if body.trim() == "/poll" {
@@ -1908,7 +4055,15 @@ impl ChatState {
             }
         }
 
-        if let Some(target) = parse_user_command(&body, "/profile") {
+        // `/profile [@user]` opens the card at the top; `/chips [@user]` is
+        // the same card scrolled to the ledger, the public chip audit.
+        for (command, section) in [
+            ("/profile", ProfileSection::Top),
+            ("/chips", ProfileSection::Chips),
+        ] {
+            let Some(target) = parse_user_command(&body, command) else {
+                continue;
+            };
             self.clear_composer_after_submit();
             match target {
                 None => {
@@ -1919,11 +4074,14 @@ impl ChatState {
                         .filter(|name| !name.is_empty())
                         .map(ToOwned::to_owned)
                         .unwrap_or_else(|| short_user_id(self.user_id));
-                    self.requested_open_profile = Some((self.user_id, username));
+                    self.requested_open_profile = Some((self.user_id, username, section));
                 }
                 Some(name) => {
-                    self.service
-                        .open_profile_by_username_task(self.user_id, name.to_string());
+                    self.service.open_profile_by_username_task(
+                        self.user_id,
+                        name.to_string(),
+                        section,
+                    );
                 }
             }
             return None;
@@ -1949,6 +4107,22 @@ impl ChatState {
         } {
             self.clear_composer_after_submit();
             self.requested_voice_command = Some(command);
+            return None;
+        }
+
+        if matches!(body.trim(), "/aquarium" | "/aq") {
+            self.clear_composer_after_submit();
+            return Some(Banner::info(
+                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
+            ));
+        }
+
+        if let Some(command) = match body.trim() {
+            "/aquarium feed" | "/aq feed" => Some(AquariumCommand::Feed),
+            _ => None,
+        } {
+            self.clear_composer_after_submit();
+            self.requested_aquarium_command = Some(command);
             return None;
         }
 
@@ -1995,17 +4169,22 @@ impl ChatState {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Some(Banner::error("/upload: URL must start with http(s)://"));
             }
-            if !crate::app::files::image_upload::is_file_upload_configured() {
+            if self.files.is_none() {
                 return Some(Banner::error("File uploads are disabled"));
             }
             let room_id = self.upload_target_room_id();
+            let reply_target = self.reply_target.clone();
             self.clear_composer_after_submit();
-            self.requested_url_upload = Some(PendingUrlUpload { url, room_id });
+            self.requested_url_upload = Some(PendingUrlUpload {
+                url,
+                room_id,
+                reply_target,
+            });
             return None;
         }
 
         if body.trim() == "/paste-image" {
-            if !crate::app::files::image_upload::is_file_upload_configured() {
+            if self.files.is_none() {
                 return Some(Banner::error("File uploads are disabled"));
             }
             self.clear_expired_pending_clipboard_image_upload();
@@ -2017,8 +4196,10 @@ impl ChatState {
                 ));
             }
             let room_id = self.upload_target_room_id();
+            let reply_target = self.reply_target.clone();
             self.clear_composer_after_submit();
-            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+            self.requested_clipboard_image_upload =
+                Some(PendingClipboardImageUpload::new(room_id, reply_target));
             return None;
         }
 
@@ -2028,27 +4209,51 @@ impl ChatState {
             return None;
         }
 
-        if let Some(msg) = parse_brb_command(&body) {
-            let chat_body = if msg.is_empty() {
-                "🌙 brb".to_string()
-            } else {
-                format!("🌙 brb — {msg}")
+        if let Some(rest) = body.trim().strip_prefix("/brb")
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let chat_body = match rest.trim() {
+                "" => "🌙 brb".to_string(),
+                reason => format!("🌙 brb: {reason}"),
             };
+            // Snapshot the composer's room before `clear_composer_after_submit`
+            // wipes it. Only the composer's room, like `/me`: a stale visible
+            // or selected room would post the announcement somewhere unseen.
             let room_id = self.composer_room_id;
-            if let Some(room_id) = room_id {
-                self.service
-                    .send_message_with_reply_task(super::svc::SendMessageTask {
-                        user_id: self.user_id,
-                        room_id,
-                        room_slug: self.room_slug(room_id),
-                        body: chat_body,
-                        reply_to_message_id: None,
-                        request_id: Uuid::now_v7(),
-                        is_admin: self.is_admin,
-                    });
-            }
-            self.requested_brb = Some(msg);
             self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Use /brb from inside a room"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: chat_body,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            // `/brb` goes away now instead of after the idle threshold, and
+            // the next key comes back.
+            self.requested_brb = true;
+            return None;
+        }
+
+        if let Some((kind, text)) = parse_report_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(text) = text else {
+                return Some(Banner::error(&format!(
+                    "Usage: {} <describe it in a few words or more>",
+                    kind.command()
+                )));
+            };
+            let request_id = Uuid::now_v7();
+            self.pending_send_notices.push_back(request_id);
+            self.service
+                .send_report_task(self.user_id, kind, text, request_id);
             return None;
         }
 
@@ -2086,6 +4291,25 @@ impl ChatState {
                         .gift_chips_task(self.user_id, username.clone(), amount, message);
                     return Some(Banner::success(&format!(
                         "Sending {amount} chips to @{username}..."
+                    )));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_grant_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("/grant is admin-only"));
+            }
+            match parsed {
+                GrantParse::Invalid => {
+                    return Some(Banner::error("Usage: /grant @user <amount>"));
+                }
+                GrantParse::Grant { username, amount } => {
+                    self.service
+                        .grant_chips_task(self.user_id, username.clone(), amount);
+                    return Some(Banner::success(&format!(
+                        "Granting {amount} chips to @{username}..."
                     )));
                 }
             }
@@ -2144,7 +4368,9 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening DM with {target}...")));
         }
 
-        if let Some(room) = parse_room_command(&body, "/public") {
+        // Public rooms are hosted, not owned: `/public` only ever opens or
+        // joins one, and a mod sets its topic and rules afterwards.
+        if let Some(room) = parse_public_room_command(&body) {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
@@ -2154,14 +4380,176 @@ impl ChatState {
             return Some(Banner::success(&format!("Opening public #{room}...")));
         }
 
+        // A private room is owned by whoever opens it, so it gets the form up
+        // front and the creator's answers are saved with the room.
         if let Some(room) = parse_room_command(&body, "/private") {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
             self.clear_composer_after_submit();
-            self.service
-                .create_private_room_task(self.user_id, room.to_string());
-            return Some(Banner::success(&format!("Creating private #{room}...")));
+            self.requested_room_info_modal = Some(RoomInfoRequest::Create {
+                slug: room.to_string(),
+            });
+            return None;
+        }
+
+        if is_room_info_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.selected_room_id else {
+                return Some(Banner::error("Select a room first"));
+            };
+            let Some(room) = self.room_by_id(room_id) else {
+                return Some(Banner::error("No room selected"));
+            };
+            match self.room_info_authority(room) {
+                RoomInfoAuthority::Owner | RoomInfoAuthority::Moderator => {}
+                RoomInfoAuthority::None => {
+                    // Private rooms have an owner who can; public ones do not.
+                    return Some(Banner::error(
+                        if room.kind == "topic" && room.visibility == "private" {
+                            "Only this room's owner can set its topic and rules"
+                        } else {
+                            "Only a moderator can set this room's topic and rules"
+                        },
+                    ));
+                }
+                RoomInfoAuthority::NotEditable => {
+                    return Some(Banner::error("This room has no topic or rules"));
+                }
+            }
+            self.requested_room_info_modal = Some(RoomInfoRequest::Edit {
+                room_id,
+                room_label: room
+                    .slug
+                    .as_deref()
+                    .map(|slug| format!("#{slug}"))
+                    .unwrap_or_else(|| "this room".to_string()),
+                owner_label: self.room_owner_label(room),
+                topic: room.topic.clone(),
+                rules: room.rules.clone(),
+            });
+            return None;
+        }
+
+        // Rules are multi-line by design, so they go in the same overlay
+        // `/active` uses (scrollable, wraps long lines) rather than a banner,
+        // which is one line and would eat the line breaks.
+        if body.trim() == "/rules" {
+            self.clear_composer_after_submit();
+            let overlay = {
+                let room = self
+                    .selected_room_id
+                    .and_then(|room_id| self.room_by_id(room_id));
+                let rules = room
+                    .and_then(|room| room.rules.as_deref())
+                    .map(str::trim)
+                    .filter(|rules| !rules.is_empty());
+                match rules {
+                    Some(rules) => {
+                        let title = match room.and_then(|room| room.slug.as_deref()) {
+                            Some(slug) => format!("#{slug} rules"),
+                            None => "Rules".to_string(),
+                        };
+                        Some((title, rules.lines().map(str::to_string).collect::<Vec<_>>()))
+                    }
+                    None => None,
+                }
+            };
+            let Some((title, lines)) = overlay else {
+                return Some(Banner::info("No rules set for this room"));
+            };
+            self.open_overlay(&title, lines);
+            return None;
+        }
+
+        // Kicking answers to the room, not the composer: a private room's owner
+        // may remove a regular from it, staff may remove anyone anywhere, and
+        // the service decides which of those applies.
+        if let Some(target) = parse_user_command(&body, "/kick") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let Some(target) = target else {
+                return Some(Banner::error("Usage: /kick @user"));
+            };
+            // A slug-less room is a DM: nothing to moderate there. The room
+            // itself travels as its id, since slugs are not globally unique.
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no members to kick"));
+            }
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Kick,
+                    room: RoomRef::Id(room_id),
+                    username: target.to_string(),
+                    duration: None,
+                    reason: String::new(),
+                },
+            );
+            return Some(Banner::success(&format!("Kicking @{target}...")));
+        }
+
+        // Banning is the same authorization path as kicking, and the one that
+        // actually holds: a public room (a streamer's, above all) can be
+        // re-entered from the rail the moment a kick lands.
+        if let Some(request) = parse_room_ban_command(&body, "/ban") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(usage) => return Some(Banner::error(usage)),
+            };
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no members to ban"));
+            }
+            let target = request.username.to_string();
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Ban,
+                    room: RoomRef::Id(room_id),
+                    username: target.clone(),
+                    duration: request.duration,
+                    reason: request.reason,
+                },
+            );
+            return Some(Banner::success(&format!("Banning @{target}...")));
+        }
+
+        if let Some(request) = parse_room_ban_command(&body, "/unban") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(_) => return Some(Banner::error("Usage: /unban @user")),
+            };
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no bans to lift"));
+            }
+            let target = request.username.to_string();
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Unban,
+                    room: RoomRef::Id(room_id),
+                    username: target.clone(),
+                    duration: None,
+                    reason: request.reason,
+                },
+            );
+            return Some(Banner::success(&format!("Unbanning @{target}...")));
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
@@ -2318,17 +4706,26 @@ impl ChatState {
             return Some(Banner::error(&format!("Unknown command: {command}")));
         }
 
+        let mut cooldown_banner = None;
         if let Some(room_id) = self.composer_room_id
             && !body.is_empty()
         {
             let request_id = Uuid::now_v7();
-            let reply_to_message_id = self.reply_target.as_ref().map(|reply| reply.message_id);
+            let reply_to_message_id = match self.reply_target.as_ref().map(|reply| reply.to) {
+                Some(ReplyTo::Message(message_id)) => Some(message_id),
+                Some(ReplyTo::Article) | None => None,
+            };
+            // Peek the ghost-bot ladders on the typed body, before the reply
+            // quote is prepended, matching what the responders react to
+            // (quoted lines never count as mentions on their side either).
+            if self.edited_message_id.is_none() {
+                cooldown_banner = self.bot_cooldown_banner(room_id, &body);
+            }
             let body = if let Some(reply) = &self.reply_target {
                 format!("> @{}: {}\n{}", reply.author, reply.preview, body)
             } else {
                 body
             };
-            self.sent_regular_message = true;
             if let Some(message_id) = self.edited_message_id {
                 self.service.edit_message_task(
                     self.user_id,
@@ -2355,6 +4752,25 @@ impl ChatState {
             self.clear_composer_after_send();
         } else {
             self.clear_composer_after_submit();
+        }
+        cooldown_banner
+    }
+
+    /// A submit-time heads-up that a mentioned ghost bot is still cooling
+    /// down for this user in this room. The message still sends; the banner
+    /// only says no reply is coming yet and when to retry.
+    fn bot_cooldown_banner(&self, room_id: Uuid, body: &str) -> Option<Banner> {
+        let mentioned = crate::app::common::mentions::extract_mentions(body);
+        for bot in MentionLadders::ALL_BOTS {
+            if mentioned.iter().any(|name| name == bot.handle())
+                && let Some(remaining) = self.mention_ladders.remaining(bot, self.user_id, room_id)
+            {
+                return Some(Banner::info(&format!(
+                    "@{} is cooling down, try again in {}",
+                    bot.handle(),
+                    format_cooldown(remaining)
+                )));
+            }
         }
         None
     }
@@ -2488,36 +4904,49 @@ impl ChatState {
         self.composer.input(input);
     }
 
+    /// Upload bytes that arrived while the composer is still open (a terminal
+    /// image paste), so whatever reply it was aiming at is still live here.
     pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
-        self.start_image_upload_in_room(bytes, self.upload_target_room_id())
+        self.start_image_upload_in_room(
+            bytes,
+            self.upload_target_room_id(),
+            self.reply_target.clone(),
+        )
     }
 
     pub(crate) fn start_image_upload_in_room(
         &mut self,
         bytes: Vec<u8>,
         room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
     ) -> Option<Banner> {
         let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
             return Some(Banner::error("Unsupported image type"));
         };
-        if !crate::app::files::image_upload::is_file_upload_configured() {
+        let Some(files) = self.files.clone() else {
             return Some(Banner::error("File uploads are disabled"));
-        }
+        };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Some(banner) = self.begin_image_upload(room_id, rx) {
+        if let Some(banner) = self.begin_image_upload(room_id, reply_target, rx) {
             return Some(banner);
         }
         let mime = mime.to_string();
 
         tokio::spawn(async move {
-            let result = crate::app::files::image_upload::upload_image_bytes(bytes, &mime)
+            let result = crate::app::files::image_upload::upload_image_bytes(&files, bytes, &mime)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
 
         None
+    }
+
+    /// Upload storage for features outside chat state (URL uploads in input
+    /// handling); `None` means uploads are disabled in this environment.
+    pub(crate) fn files_config(&self) -> Option<&crate::config::FilesConfig> {
+        self.files.as_ref()
     }
 
     pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
@@ -2529,6 +4958,7 @@ impl ChatState {
     pub(crate) fn begin_image_upload(
         &mut self,
         room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
         rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
     ) -> Option<Banner> {
         if self.image_upload_pending {
@@ -2549,12 +4979,24 @@ impl ChatState {
         self.image_upload_rx = Some(rx);
         self.image_upload_pending = true;
         self.image_upload_target_room_id = room_id;
+        self.image_upload_reply_target = reply_target;
         self.last_image_upload_at = Some(std::time::Instant::now());
         None
     }
 
     pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
         self.image_upload_target_room_id.take()
+    }
+
+    /// Put the finished upload's reply back on the composer. Reopening the
+    /// composer with the URL goes through `start_composing_in_room`, which
+    /// drops the reply target, so this runs after it.
+    pub(crate) fn restore_image_upload_reply_target(&mut self) {
+        self.reply_target = self.image_upload_reply_target.take();
+    }
+
+    pub(crate) fn clear_image_upload_reply_target(&mut self) {
+        self.image_upload_reply_target = None;
     }
 
     pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
@@ -2567,8 +5009,13 @@ impl ChatState {
         self.requested_clipboard_image_upload.take()
     }
 
-    pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
-        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+    pub(crate) fn begin_pending_clipboard_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
+    ) {
+        self.pending_clipboard_image_upload =
+            Some(PendingClipboardImageUpload::new(room_id, reply_target));
     }
 
     pub(crate) fn take_pending_clipboard_image_upload(
@@ -2642,6 +5089,7 @@ impl ChatState {
                 Ok(lines) => {
                     self.inline_image_failures.remove(&msg_id);
                     self.inline_image_cache.insert(msg_id, lines);
+                    self.context_epoch += 1;
                 }
                 Err(error) => {
                     let attempts = self
@@ -2713,15 +5161,18 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn poll_terminal_images(&mut self) {
+    /// Returns true when any fetch completed; the image modal renders from
+    /// this cache, so a completion must count as a render-visible change.
+    pub(crate) fn poll_terminal_images(&mut self) -> bool {
         let Some(rx) = self.terminal_image_rx.as_mut() else {
-            return;
+            return false;
         };
 
         let mut completed = Vec::new();
         while let Ok(result) = rx.try_recv() {
             completed.push(result);
         }
+        let any_completed = !completed.is_empty();
 
         for (msg_id, result) in completed {
             self.terminal_image_requested.remove(&msg_id);
@@ -2741,6 +5192,7 @@ impl ChatState {
             }
             self.track_inline_image_id(msg_id);
         }
+        any_completed
     }
 
     pub(crate) fn request_image_modal_terminal_image(
@@ -2808,6 +5260,9 @@ impl ChatState {
     }
 
     pub(crate) fn clear_inline_image_previews(&mut self) {
+        if !self.inline_image_cache.is_empty() {
+            self.context_epoch += 1;
+        }
         self.inline_image_cache.clear();
         self.inline_image_requested.clear();
         self.inline_image_failures.clear();
@@ -2829,7 +5284,9 @@ impl ChatState {
         while self.inline_image_tracked_order.len() > INLINE_IMAGE_TRACKED_LIMIT {
             if let Some(old_id) = self.inline_image_tracked_order.pop_front() {
                 self.inline_image_requested.remove(&old_id);
-                self.inline_image_cache.remove(&old_id);
+                if self.inline_image_cache.remove(&old_id).is_some() {
+                    self.context_epoch += 1;
+                }
                 self.inline_image_failures.remove(&old_id);
                 self.terminal_image_requested.remove(&old_id);
                 self.terminal_image_cache.remove(&old_id);
@@ -2838,54 +5295,251 @@ impl ChatState {
         }
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
+        self.forget_stale_rail_scroll();
+        // Peek every event source before draining: anything queued may change
+        // render-visible chat state (messages, unread badges, tab lists), so
+        // it must count as changed. Over-reporting here only costs a frame;
+        // a wrong "clean" freezes the UI. Snapshots are the exception: they
+        // arrive on a fixed cadence whether or not anything changed, so
+        // drain_snapshot reports real change itself instead of being peeked.
+        let changed = self.username_rx.has_changed().unwrap_or(false)
+            || !self.targeted_event_rx.is_empty()
+            || !self.event_rx.is_empty()
+            || !self.moderation_event_rx.is_empty()
+            || !self.translation_rx.is_empty()
+            || !self.summary_rx.is_empty();
         self.drain_username_directory();
-        self.drain_snapshot();
-        self.drain_pinned_messages();
-        let clipboard_banner = self.expire_pending_clipboard_image_upload();
+        let changed = self.drain_snapshot() || changed;
         let banner = self.drain_events();
+        let translation_banner = self.drain_translation_events();
+        let (summary_banner, summary_overlay_promoted) = self.drain_summary_events();
         let moderation_banner = self.drain_moderation_events();
-        let feeds_banner = self.feeds.tick();
-        let news_banner = self.news.tick();
-        let notif_banner = self.notifications.tick();
-        let showcase_banner = self.showcase.tick();
-        let work_banner = self.work.tick();
+        let feeds_tick = self.feeds.tick();
+        let news_tick = self.news.tick();
+        let notif_tick = self.notifications.tick();
+        let showcase_tick = self.showcase.tick();
+        let work_tick = self.work.tick();
+        let cyberspace_tick = self.cyberspace.tick();
+        // The pinned list can change under the rail cursor (another session
+        // of the same account pinning, unpinning, or unlinking), so the
+        // selected index is re-derived from the open room's slug instead of
+        // trusted. A room the rail can no longer name gets left, dropping
+        // its stream and heartbeat, and the user lands back on the pane.
+        if self.cyberspace_room_selected.is_some() {
+            let derived = self.cyberspace.open_circ_slug().and_then(|slug| {
+                self.cyberspace
+                    .pinned_rooms()
+                    .iter()
+                    .position(|room| room == slug)
+            });
+            match derived {
+                Some(index) => self.cyberspace_room_selected = Some(index),
+                None => {
+                    self.cyberspace.leave_room();
+                    self.cyberspace_room_selected = None;
+                    self.cyberspace_selected = true;
+                }
+            }
+        }
+        // A conversation the user started by name is one they asked to write
+        // in, so it opens rather than only appearing in the rail. Pulling
+        // them to Home matches every other `/cs` command that moves them.
+        if let Some(id) = self.cyberspace.take_started_cmail()
+            && let Some(index) = self
+                .cyberspace
+                .pinned_cmail()
+                .iter()
+                .position(|pin| pin.id == id)
+        {
+            self.select_cyberspace_mail(index);
+            self.pending_chat_screen_switch = true;
+        }
+        // Same reconcile for the pinned conversations.
+        if self.cyberspace_mail_selected.is_some() {
+            let derived = self.cyberspace.open_cmail_id().and_then(|id| {
+                self.cyberspace
+                    .pinned_cmail()
+                    .iter()
+                    .position(|thread| thread.id == id)
+            });
+            match derived {
+                Some(index) => self.cyberspace_mail_selected = Some(index),
+                None => {
+                    self.cyberspace.leave_room();
+                    self.cyberspace_mail_selected = None;
+                    self.cyberspace_selected = true;
+                }
+            }
+        }
+        // Unlinking in one session broadcasts to the others. The rail entry
+        // and the navigation order both go with the link, so a session left
+        // sitting in the pane would be on a slot neither of them has.
+        if (self.cyberspace_selected || self.cyberspace_notifications_selected)
+            && self.cyberspace.is_unlinked()
+        {
+            self.leave_selected_synthetic_entry();
+        }
         self.flush_pending_read_cursors_if_due();
-        clipboard_banner
-            .or(moderation_banner)
+        let banner = moderation_banner
             .or(banner)
-            .or(feeds_banner)
-            .or(news_banner)
-            .or(notif_banner)
-            .or(showcase_banner)
-            .or(work_banner)
+            .or(translation_banner)
+            .or(summary_banner)
+            .or(feeds_tick.banner)
+            .or(news_tick.banner)
+            .or(notif_tick.banner)
+            .or(showcase_tick.banner)
+            .or(work_tick.banner)
+            .or(cyberspace_tick.banner);
+        ChatTick {
+            banner,
+            changed: changed
+                || summary_overlay_promoted
+                || feeds_tick.changed
+                || news_tick.changed
+                || notif_tick.changed
+                || showcase_tick.changed
+                || work_tick.changed
+                || cyberspace_tick.changed,
+        }
     }
 
-    pub fn select_feeds(&mut self) {
+    /// Every Home synthetic entry is exclusive with the others, so selecting
+    /// one clears the rest in one place. A new entry that forgets a line here
+    /// would leave two panes claiming the center at once.
+    fn clear_synthetic_selection(&mut self) {
+        // Whatever the user is moving to, they are no longer in a cyberspace
+        // chat room; dropping it stops its stream, its heartbeat, and
+        // announces them out of the room on their side.
+        self.cyberspace.leave_room();
         self.room_jump_active = false;
-        self.feeds_selected = true;
+        self.feeds_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
+        self.cyberspace_notifications_selected = false;
+        self.cyberspace_room_selected = None;
+        self.cyberspace_mail_selected = None;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
+        self.selection_scroll.reset();
         self.highlighted_message_id = None;
+    }
+
+    pub fn select_feeds(&mut self) {
+        self.clear_synthetic_selection();
+        self.feeds_selected = true;
         self.feeds.list();
         self.feeds.mark_read();
     }
 
+    pub fn select_cyberspace(&mut self) {
+        // Only an actual entry loads the feed. Re-selecting the slot you are
+        // already on (clicking the row, cycling the rail back around) must not
+        // spend another authenticated call on a third-party API.
+        let entering = !self.cyberspace_selected;
+        self.clear_synthetic_selection();
+        self.cyberspace_selected = true;
+        if entering {
+            self.cyberspace.opened();
+        }
+    }
+
+    /// Their notification list, the row beside `feeds`. Same rule: only an
+    /// actual entry loads, since a load is also a read on their side.
+    pub fn select_cyberspace_notifications(&mut self) {
+        let entering = !self.cyberspace_notifications_selected;
+        self.clear_synthetic_selection();
+        self.cyberspace_notifications_selected = true;
+        if entering {
+            self.cyberspace.opened_notifications();
+        }
+    }
+
+    /// Leaving the Home surface entirely (a screen switch), not just moving
+    /// within the rail. The open room's session drops with the selection:
+    /// its stream and presence heartbeat must not outlive the user's
+    /// presence on the surface. The rail lands back on the cyberspace slot,
+    /// same as Esc, but without `select_cyberspace`'s feed load, since the
+    /// user is on their way out, not in.
+    pub fn close_cyberspace_room(&mut self) {
+        if self.cyberspace_room_selected.is_none()
+            && self.cyberspace_mail_selected.is_none()
+            && self.cyberspace.open_room_name().is_none()
+        {
+            return;
+        }
+        self.cyberspace.leave_room();
+        self.cyberspace_room_selected = None;
+        self.cyberspace_mail_selected = None;
+        self.cyberspace_selected = true;
+    }
+
+    /// Select a pinned C-Mail conversation by its position in the pinned
+    /// list. Same contract as a room: entering is what opens its stream.
+    pub fn select_cyberspace_mail(&mut self, index: usize) {
+        let Some(thread) = self.cyberspace.pinned_cmail().get(index).cloned() else {
+            return;
+        };
+        if self.cyberspace_mail_selected == Some(index)
+            && self.cyberspace.open_cmail_id() == Some(thread.id.as_str())
+        {
+            return;
+        }
+        self.remember_cyberspace_row();
+        self.clear_synthetic_selection();
+        self.cyberspace_mail_selected = Some(index);
+        self.cyberspace.enter_cmail(thread);
+    }
+
+    /// Select a pinned chat room by its position in the pinned list. Entering
+    /// the room is what opens its stream; a room nobody has selected holds
+    /// nothing open.
+    pub fn select_cyberspace_room(&mut self, index: usize) {
+        let Some(slug) = self.cyberspace.pinned_rooms().get(index).cloned() else {
+            return;
+        };
+        // Re-selecting the room you are already in (clicking its row, cycling
+        // the rail around) must not tear the stream down and reconnect.
+        if self.cyberspace_room_selected == Some(index)
+            && self.cyberspace.open_circ_slug() == Some(slug.as_str())
+        {
+            return;
+        }
+        self.remember_cyberspace_row();
+        self.clear_synthetic_selection();
+        self.cyberspace_room_selected = Some(index);
+        self.cyberspace.enter_room(slug);
+    }
+
+    /// Note which cyberspace row the user is standing on before a room takes
+    /// the selection, so `select_cyberspace_return_row` can put them back on
+    /// it. A hop straight from one room or conversation to another keeps the
+    /// recorded origin: the user never stood on a pane row in between.
+    fn remember_cyberspace_row(&mut self) {
+        if self.cyberspace_room_selected.is_some() || self.cyberspace_mail_selected.is_some() {
+            return;
+        }
+        self.cyberspace_return_row = match self.cyberspace_notifications_selected {
+            true => CyberspaceRow::Notifications,
+            false => CyberspaceRow::Feeds,
+        };
+    }
+
+    /// Leaving a room or conversation: back to the row it was entered from.
+    pub fn select_cyberspace_return_row(&mut self) {
+        match self.cyberspace_return_row {
+            CyberspaceRow::Feeds => self.select_cyberspace(),
+            CyberspaceRow::Notifications => self.select_cyberspace_notifications(),
+        }
+    }
+
     pub fn select_news(&mut self) {
-        self.room_jump_active = false;
-        self.feeds_selected = false;
+        self.clear_synthetic_selection();
         self.news_selected = true;
-        self.notifications_selected = false;
-        self.discover_selected = false;
-        self.showcase_selected = false;
-        self.work_selected = false;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
         self.news.list_articles();
         self.news.mark_read();
     }
@@ -2895,57 +5549,29 @@ impl ChatState {
     }
 
     pub fn select_notifications(&mut self) {
-        self.room_jump_active = false;
+        self.clear_synthetic_selection();
         self.notifications_selected = true;
-        self.feeds_selected = false;
-        self.news_selected = false;
-        self.discover_selected = false;
-        self.showcase_selected = false;
-        self.work_selected = false;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
         self.notifications.list();
         self.notifications.mark_read();
     }
 
     pub fn select_discover(&mut self) {
-        self.room_jump_active = false;
+        self.clear_synthetic_selection();
         self.discover_selected = true;
-        self.feeds_selected = false;
-        self.notifications_selected = false;
-        self.news_selected = false;
-        self.showcase_selected = false;
-        self.work_selected = false;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
         self.discover.start_loading();
         self.service.list_discover_rooms_task(self.user_id);
     }
 
     pub fn select_showcase(&mut self) {
-        self.room_jump_active = false;
+        self.clear_synthetic_selection();
         self.showcase_selected = true;
-        self.feeds_selected = false;
-        self.discover_selected = false;
-        self.notifications_selected = false;
-        self.news_selected = false;
-        self.work_selected = false;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
         self.showcase.list();
         self.showcase.mark_read();
     }
 
     pub fn select_work(&mut self) {
-        self.room_jump_active = false;
+        self.clear_synthetic_selection();
         self.work_selected = true;
-        self.feeds_selected = false;
-        self.showcase_selected = false;
-        self.discover_selected = false;
-        self.notifications_selected = false;
-        self.news_selected = false;
-        self.selected_message_id = None;
-        self.highlighted_message_id = None;
         self.work.list();
         self.work.mark_read();
     }
@@ -2968,7 +5594,7 @@ impl ChatState {
     pub(crate) fn username_mention_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
         let active_users = self.active_users.as_ref();
         rank_mention_matches(self.all_usernames.as_ref(), query_lower, || {
-            online_username_set(active_users)
+            username_presence(active_users)
         })
     }
 
@@ -2982,13 +5608,15 @@ impl ChatState {
         let bytes = text.as_bytes();
         let mut trigger = None;
         for i in (0..bytes.len()).rev() {
-            if matches!(bytes[i], b'@' | b'/') {
-                // Valid if at start or preceded by whitespace (space or newline)
-                if i == 0 || bytes[i - 1].is_ascii_whitespace() {
-                    trigger = Some((i, bytes[i]));
-                }
+            // Valid if at start or preceded by whitespace (space or newline)
+            let is_mention =
+                matches!(bytes[i], b'@') && (i == 0 || bytes[i - 1].is_ascii_whitespace());
+            let is_command = matches!(bytes[i], b'/') && i == 0;
+            if is_mention || is_command {
+                trigger = Some((i, bytes[i]));
                 break;
             }
+
             // Stop scanning if we hit whitespace (no @ in this word)
             if bytes[i].is_ascii_whitespace() {
                 break;
@@ -3073,8 +5701,10 @@ impl ChatState {
             .unwrap_or(&[])
     }
 
-    pub fn pinned_messages(&self) -> &[ChatMessage] {
-        &self.pinned_messages
+    /// Recent #lounge system-feed lines for the activity ticker row,
+    /// newest first.
+    pub fn activity_ticker(&self) -> &[ActivityTickerEntry] {
+        &self.activity_ticker
     }
 
     pub fn usernames(&self) -> &HashMap<Uuid, String> {
@@ -3098,27 +5728,64 @@ impl ChatState {
     }
 
     fn set_bonsai_glyph(&mut self, user_id: Uuid, glyph: Option<&str>) {
-        if let Some(glyph) = glyph.filter(|glyph| !glyph.trim().is_empty()) {
-            self.bonsai_glyphs.insert(user_id, glyph.to_string());
-        } else {
-            self.bonsai_glyphs.remove(&user_id);
+        let changed = set_context_value(&mut self.bonsai_glyphs, user_id, glyph);
+        if changed {
+            self.context_epoch += 1;
         }
     }
 
     pub fn set_chat_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
-        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
-            self.chat_badges.insert(user_id, badge.to_string());
-        } else {
-            self.chat_badges.remove(&user_id);
+        let changed = set_context_value(&mut self.chat_badges, user_id, badge);
+        if changed {
+            self.context_epoch += 1;
         }
     }
 
     fn set_profile_award_badge(&mut self, user_id: Uuid, badge: Option<&str>) {
-        if let Some(badge) = badge.filter(|badge| !badge.trim().is_empty()) {
-            self.profile_award_badges.insert(user_id, badge.to_string());
-        } else {
-            self.profile_award_badges.remove(&user_id);
+        let changed = set_context_value(&mut self.profile_award_badges, user_id, badge);
+        if changed {
+            self.context_epoch += 1;
         }
+    }
+
+    /// Insert `username` for the author, bumping the context epoch only when
+    /// the stored value actually changes.
+    fn note_username(&mut self, user_id: Uuid, username: String) {
+        match self.usernames.get(&user_id) {
+            Some(existing) if *existing == username => {}
+            _ => {
+                self.usernames.insert(user_id, username);
+                self.context_epoch += 1;
+            }
+        }
+    }
+
+    /// Merge a username map from a service payload, bumping the context
+    /// epoch only on real changes.
+    fn extend_usernames(&mut self, usernames: HashMap<Uuid, String>) {
+        if extend_changed(&mut self.usernames, usernames) {
+            self.context_epoch += 1;
+        }
+    }
+
+    /// Current message-store version for a room; part of the row cache key.
+    pub fn room_version(&self, room_id: Uuid) -> u64 {
+        self.room_versions.get(&room_id).copied().unwrap_or(0)
+    }
+
+    /// All per-room message-store versions, for surfaces that resolve the
+    /// rendered room inside the draw call.
+    pub fn room_versions(&self) -> &HashMap<Uuid, u64> {
+        &self.room_versions
+    }
+
+    /// Author-context epoch; part of the row cache key.
+    pub fn context_epoch(&self) -> u64 {
+        self.context_epoch
+    }
+
+    fn bump_room_version(&mut self, room_id: Uuid) {
+        *self.room_versions.entry(room_id).or_insert(0) += 1;
     }
 
     pub fn friend_user_ids(&self) -> &HashSet<Uuid> {
@@ -3129,52 +5796,106 @@ impl ChatState {
         &self.ignored_user_ids
     }
 
-    pub fn active_friend_names(&self) -> Vec<String> {
-        let Some(active_users) = &self.active_users else {
-            return Vec::new();
-        };
-        let active_users = active_users.lock_recover();
-        let mut friends: Vec<&ActiveUser> = self
+    /// Connected friends: here before away, then the most recent login
+    /// first, then by name. Reads a roster the caller already holds, so the
+    /// 1Hz presence edge (`tick.rs`) takes the lock once for everything.
+    pub fn active_friends(&self, active_users: &HashMap<Uuid, ActiveUser>) -> Vec<ActiveFriend> {
+        let mut friends: Vec<ActiveFriend> = self
             .friend_user_ids
             .iter()
-            .filter_map(|id| active_users.get(id))
-            .collect();
-        friends.sort_by(|left, right| {
-            right.last_login_at.cmp(&left.last_login_at).then_with(|| {
-                left.username
-                    .to_ascii_lowercase()
-                    .cmp(&right.username.to_ascii_lowercase())
+            .filter_map(|id| {
+                active_users.get(id).map(|user: &ActiveUser| ActiveFriend {
+                    user_id: *id,
+                    username: user.username.clone(),
+                    audio_source: user.audio_source,
+                    online_since: user.last_login_at,
+                    away: crate::app::common::away::user_is_away(user),
+                })
             })
+            .collect();
+        // Here before away, so the friends who can answer read first.
+        friends.sort_by(|left, right| {
+            left.away
+                .cmp(&right.away)
+                .then_with(|| right.online_since.cmp(&left.online_since))
+                .then_with(|| {
+                    left.username
+                        .bytes()
+                        .map(|b| b.to_ascii_lowercase())
+                        .cmp(right.username.bytes().map(|b| b.to_ascii_lowercase()))
+                })
         });
         friends
-            .into_iter()
-            .map(|user| user.username.clone())
-            .collect()
     }
 
     pub fn note_friend_join(&mut self, user_id: Uuid, username: &str) -> Option<Banner> {
         if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
             return None;
         }
-        self.usernames.insert(user_id, username.to_string());
+        self.note_username(user_id, username.to_string());
         self.notifier.push(Notification::friend_online(username));
         Some(Banner::success(&format!("Friend online: @{username}")))
+    }
+
+    /// A friend's stream reported its first media (the `WentLive` edge, not
+    /// `/golive` time), so the banner never points at a black screen.
+    /// `title` is the raw `/golive` title, already clamped at the composer
+    /// boundary; unlike a #lounge body it may keep its `@`, since nothing
+    /// here runs the mention pipeline.
+    pub fn note_friend_went_live(
+        &mut self,
+        user_id: Uuid,
+        username: &str,
+        title: Option<&str>,
+    ) -> Option<Banner> {
+        if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
+            return None;
+        }
+        self.note_username(user_id, username.to_string());
+        self.notifier
+            .push(Notification::friend_live(username, title));
+        Some(Banner::success(&format!(
+            "@{username} is live. /watch @{username} to open it."
+        )))
     }
 
     pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
         &self.message_reactions
     }
 
-    fn drain_snapshot(&mut self) {
+    pub fn message_gilds(&self) -> &HashMap<Uuid, ChatMessageGildSummary> {
+        &self.message_gilds
+    }
+
+    /// Returns true when applying the snapshot changed anything
+    /// render-visible. Snapshots arrive on a fixed cadence whether or not
+    /// anything changed, so every write below detects real change before
+    /// reporting; an unchanged snapshot must not invalidate caches or pay a
+    /// frame.
+    /// The friend and ignore lists have two writers: the snapshot, a database
+    /// read taken at some instant, and the list events, writes confirmed after
+    /// they commit. A read that began before the last applied write predates
+    /// it and must not win.
+    fn snapshot_lists_are_current(&self, read_started_at: Option<Instant>) -> bool {
+        match (read_started_at, self.friend_ignore_applied_at) {
+            (_, None) => true,
+            (Some(read_started_at), Some(applied_at)) => read_started_at > applied_at,
+            (None, Some(_)) => false,
+        }
+    }
+
+    fn drain_snapshot(&mut self) -> bool {
         if !self.snapshot_rx.has_changed().unwrap_or(false) {
-            return;
+            return false;
         }
 
         let snapshot = self.snapshot_rx.borrow_and_update().clone();
         if snapshot.user_id != Some(self.user_id) {
-            return;
+            return false;
         }
 
+        let mut changed = false;
+        let mut context_changed = false;
         let refreshed_author_ids = snapshot
             .chat_rooms
             .iter()
@@ -3183,32 +5904,116 @@ impl ChatState {
             .collect::<HashSet<_>>();
         for user_id in &refreshed_author_ids {
             if !snapshot.bonsai_glyphs.contains_key(user_id) {
-                self.bonsai_glyphs.remove(user_id);
+                context_changed |= self.bonsai_glyphs.remove(user_id).is_some();
             }
             if !snapshot.chat_badges.contains_key(user_id) {
-                self.chat_badges.remove(user_id);
+                context_changed |= self.chat_badges.remove(user_id).is_some();
             }
             if !snapshot.profile_award_badges.contains_key(user_id) {
-                self.profile_award_badges.remove(user_id);
+                context_changed |= self.profile_award_badges.remove(user_id).is_some();
             }
         }
 
-        self.usernames.extend(snapshot.usernames);
-        self.countries = snapshot.countries;
-        self.ignored_user_ids = snapshot.ignored_user_ids.into_iter().collect();
-        self.friend_user_ids = snapshot.friend_user_ids.into_iter().collect();
-        self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+        context_changed |= extend_changed(&mut self.usernames, snapshot.usernames);
+        if self.countries != snapshot.countries {
+            self.countries = snapshot.countries;
+            context_changed = true;
+        }
+        if self.snapshot_lists_are_current(snapshot.read_started_at) {
+            let ignored_user_ids: HashSet<Uuid> = snapshot.ignored_user_ids.into_iter().collect();
+            if self.ignored_user_ids != ignored_user_ids {
+                self.ignored_user_ids = ignored_user_ids;
+                context_changed = true;
+            }
+            let friend_user_ids: HashSet<Uuid> = snapshot.friend_user_ids.into_iter().collect();
+            if self.friend_user_ids != friend_user_ids {
+                self.friend_user_ids = friend_user_ids;
+                context_changed = true;
+            }
+        }
+        if self.room_owner_ids != snapshot.room_owner_ids {
+            self.room_owner_ids = snapshot.room_owner_ids;
+            changed = true;
+        }
+        if self.voice_channels_by_room_id != snapshot.voice_channels_by_room_id {
+            self.voice_channels_by_room_id = snapshot.voice_channels_by_room_id;
+            changed = true;
+        }
+        for (_, messages) in &snapshot.chat_rooms {
+            changed |= self.note_activity_ticker_from(messages);
+        }
+        let previous_room_signatures: HashMap<Uuid, Vec<(Uuid, DateTime<Utc>)>> = self
+            .rooms
+            .iter()
+            .map(|(room, messages)| {
+                (
+                    room.id,
+                    messages.iter().map(|m| (m.id, m.updated)).collect(),
+                )
+            })
+            .collect();
+        // Room metadata and list order matter to the room rail even when no
+        // message signature moved: compare the room structs themselves.
+        let previous_rooms_meta: Vec<ChatRoom> =
+            self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
-        self.lounge_room_id = snapshot.lounge_room_id;
-        self.unread_counts = self.merge_unread_counts(snapshot.unread_counts);
-        self.room_last_message_at = self.merge_room_last_message_at(snapshot.room_last_message_at);
-        self.active_polls = snapshot.active_polls;
-        self.bonsai_glyphs.extend(snapshot.bonsai_glyphs);
-        self.chat_badges.extend(snapshot.chat_badges);
-        self.profile_award_badges
-            .extend(snapshot.profile_award_badges);
-        self.message_reactions = self.merge_message_reactions(snapshot.message_reactions);
+        changed |= self.rooms.len() != previous_rooms_meta.len()
+            || self
+                .rooms
+                .iter()
+                .zip(&previous_rooms_meta)
+                .any(|((room, _), previous)| room != previous);
+        let changed_room_ids: Vec<Uuid> = self
+            .rooms
+            .iter()
+            .filter(|(room, messages)| {
+                let signature: Vec<(Uuid, DateTime<Utc>)> =
+                    messages.iter().map(|m| (m.id, m.updated)).collect();
+                previous_room_signatures.get(&room.id) != Some(&signature)
+            })
+            .map(|(room, _)| room.id)
+            .collect();
+        changed |= !changed_room_ids.is_empty();
+        for room_id in changed_room_ids {
+            self.bump_room_version(room_id);
+        }
+        if self.lounge_room_id != snapshot.lounge_room_id {
+            self.lounge_room_id = snapshot.lounge_room_id;
+            changed = true;
+        }
+        let merged_unread_counts = self.merge_unread_counts(snapshot.unread_counts);
+        if self.unread_counts != merged_unread_counts {
+            self.unread_counts = merged_unread_counts;
+            changed = true;
+        }
+        let merged_room_last_message_at =
+            self.merge_room_last_message_at(snapshot.room_last_message_at);
+        if self.room_last_message_at != merged_room_last_message_at {
+            self.room_last_message_at = merged_room_last_message_at;
+            changed = true;
+        }
+        if self.active_polls != snapshot.active_polls {
+            self.active_polls = snapshot.active_polls;
+            changed = true;
+        }
+        context_changed |= extend_changed(&mut self.bonsai_glyphs, snapshot.bonsai_glyphs);
+        context_changed |= extend_changed(&mut self.chat_badges, snapshot.chat_badges);
+        context_changed |= extend_changed(
+            &mut self.profile_award_badges,
+            snapshot.profile_award_badges,
+        );
+        let merged_reactions = self.merge_message_reactions(snapshot.message_reactions);
+        if self.message_reactions != merged_reactions {
+            self.message_reactions = merged_reactions;
+            context_changed = true;
+        }
+        if context_changed {
+            self.context_epoch += 1;
+        }
+        let selected_before = self.selected_room_id;
         self.sync_selection();
+        changed |= self.selected_room_id != selected_before;
+        changed || context_changed
     }
 
     fn drain_username_directory(&mut self) {
@@ -3218,25 +6023,25 @@ impl ChatState {
         self.all_usernames = self.username_rx.borrow_and_update().clone();
     }
 
-    fn drain_pinned_messages(&mut self) {
-        if !self.pinned_rx.has_changed().unwrap_or(false) {
-            return;
-        }
-        self.pinned_messages = self.pinned_rx.borrow_and_update().clone();
-    }
-
     fn drain_events(&mut self) -> Option<Banner> {
         let mut banner = None;
         loop {
-            let event = match self.event_rx.try_recv() {
+            // Point-to-point events first (they cannot lag), then the global
+            // broadcast; both feed the same match below.
+            let event = match self.targeted_event_rx.try_recv() {
                 Ok(event) => event,
-                Err(TryRecvError::Lagged(_)) => {
-                    if let Some(room_id) = self.visible_room_id {
-                        self.request_room_tail(room_id);
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                    match self.event_rx.try_recv() {
+                        Ok(event) => event,
+                        Err(TryRecvError::Lagged(_)) => {
+                            if let Some(room_id) = self.visible_room_id {
+                                self.request_room_tail(room_id);
+                            }
+                            continue;
+                        }
+                        Err(TryRecvError::Empty | TryRecvError::Closed) => break,
                     }
-                    continue;
                 }
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
             match event {
                 ChatEvent::MessageCreated {
@@ -3289,7 +6094,7 @@ impl ChatState {
                         }
                     }
                     if let Some(username) = author_username {
-                        self.usernames.insert(message.user_id, username);
+                        self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
@@ -3297,13 +6102,51 @@ impl ChatState {
                         message.user_id,
                         author_profile_award_badges.as_deref(),
                     );
+                    // Auto-translate applies to live messages in the room on
+                    // screen only; history stays on-demand (`t`). Decided
+                    // before the push (which consumes the message), fired
+                    // after it, and only if the message actually landed as a
+                    // chat row (not ignored/system/duplicate).
+                    let translate_candidate = (self.auto_translate
+                        && message.user_id != self.user_id
+                        && Some(message.room_id) == self.visible_room_id
+                        && !self.translations.contains_key(&message.id)
+                        && needs_translation(&message.body, self.translate_to))
+                    .then(|| (message.id, message.room_id, message.body.clone()));
                     self.push_message(message);
+                    if let Some((message_id, room_id, body)) = translate_candidate
+                        && self.rooms.iter().any(|(room, messages)| {
+                            room.id == room_id && messages.iter().any(|m| m.id == message_id)
+                        })
+                    {
+                        // No Pending marker here: the "translating…"
+                        // placeholder is manual-only (`t`). An auto-fired
+                        // request renders nothing until a real translation
+                        // lands, so same-language verdicts (most messages,
+                        // now that English goes to the model) never flash a
+                        // line that immediately vanishes. Duplicate requests
+                        // are the service's single-flight problem, and a `t`
+                        // pressed mid-flight just joins the same call.
+                        self.translation_cache_checked.insert(message_id);
+                        self.translation_service.request(
+                            message_id,
+                            room_id,
+                            body,
+                            self.translate_to,
+                        );
+                    }
                 }
                 ChatEvent::SendSucceeded {
                     user_id,
                     request_id,
                 } if self.user_id == user_id => {
+                    // Every session of this user hears every send; only a
+                    // request this session submitted is its own.
+                    if self.pending_send_notices.contains(&request_id) {
+                        self.own_send_succeeded = true;
+                    }
                     self.pending_send_notices.retain(|id| *id != request_id);
+                    self.last_own_send_at = Some(std::time::Instant::now());
                     banner = Some(Banner::success("Message sent"));
                 }
                 ChatEvent::DeltaSynced {
@@ -3320,48 +6163,88 @@ impl ChatState {
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,
-                    last_read_at,
                     messages,
                     message_reactions,
+                    message_gilds,
                     usernames,
                     bonsai_glyphs,
                     chat_badges,
                     profile_award_badges,
                 } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
-                    self.usernames.extend(usernames);
+                    self.extend_usernames(usernames);
+                    let mut context_changed = false;
                     for message in &messages {
                         if !bonsai_glyphs.contains_key(&message.user_id) {
-                            self.bonsai_glyphs.remove(&message.user_id);
+                            context_changed |=
+                                self.bonsai_glyphs.remove(&message.user_id).is_some();
                         }
                         if !chat_badges.contains_key(&message.user_id) {
-                            self.chat_badges.remove(&message.user_id);
+                            context_changed |= self.chat_badges.remove(&message.user_id).is_some();
                         }
                         if !profile_award_badges.contains_key(&message.user_id) {
-                            self.profile_award_badges.remove(&message.user_id);
+                            context_changed |=
+                                self.profile_award_badges.remove(&message.user_id).is_some();
                         }
                     }
-                    self.bonsai_glyphs.extend(bonsai_glyphs);
-                    self.chat_badges.extend(chat_badges);
-                    self.profile_award_badges.extend(profile_award_badges);
-                    if messages.iter().any(|message| {
-                        last_read_at.is_none_or(|read_at| message.created > read_at)
-                            && message.user_id != self.user_id
-                    }) {
-                        self.room_unread_markers.insert(room_id, last_read_at);
-                    } else {
-                        self.room_unread_markers.remove(&room_id);
+                    context_changed |= extend_changed(&mut self.bonsai_glyphs, bonsai_glyphs);
+                    context_changed |= extend_changed(&mut self.chat_badges, chat_badges);
+                    context_changed |=
+                        extend_changed(&mut self.profile_award_badges, profile_award_badges);
+                    if context_changed {
+                        self.context_epoch += 1;
                     }
                     self.merge_room_tail(room_id, messages);
+                    let mut reactions_changed = false;
                     for (message_id, reactions) in message_reactions {
-                        self.message_reactions.insert(message_id, reactions);
+                        match self.message_reactions.get(&message_id) {
+                            Some(existing) if *existing == reactions => {}
+                            _ => {
+                                self.message_reactions.insert(message_id, reactions);
+                                reactions_changed = true;
+                            }
+                        }
+                    }
+                    let mut gilds_changed = false;
+                    for (message_id, gild) in message_gilds {
+                        match self.message_gilds.get(&message_id) {
+                            Some(existing) if *existing == gild => {}
+                            _ => {
+                                self.message_gilds.insert(message_id, gild);
+                                gilds_changed = true;
+                            }
+                        }
+                    }
+                    if reactions_changed || gilds_changed {
+                        self.bump_room_version(room_id);
                     }
                     if self.visible_room_id == Some(room_id) {
                         self.mark_room_read(room_id);
+                        self.request_cached_translations_for_visible_room();
+                    }
+                    if let Some((jump_room_id, message_id)) = self.pending_search_jump
+                        && jump_room_id == room_id
+                    {
+                        self.pending_search_jump = None;
+                        if self.message_is_loaded_in_room(room_id, message_id) {
+                            self.select_message_by_id_in_room(room_id, message_id);
+                        } else {
+                            // Further back than the tail reaches. The room is
+                            // already on screen underneath, so the modal opens
+                            // over it and closing lands the user in the right
+                            // room rather than nowhere.
+                            self.open_history_at_message(room_id, message_id);
+                        }
                     }
                 }
                 ChatEvent::RoomTailLoadFailed { user_id, room_id } if self.user_id == user_id => {
                     self.loading_tail_rooms.remove(&room_id);
+                    if self
+                        .pending_search_jump
+                        .is_some_and(|(id, _)| id == room_id)
+                    {
+                        self.pending_search_jump = None;
+                    }
                 }
                 ChatEvent::SendFailed {
                     user_id,
@@ -3372,12 +6255,9 @@ impl ChatState {
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
-                    self.feeds_selected = false;
-                    self.news_selected = false;
-                    self.notifications_selected = false;
-                    self.discover_selected = false;
-                    self.showcase_selected = false;
-                    self.work_selected = false;
+                    // Every synthetic entry drops, the open cyberspace room
+                    // included: the user is being moved into a real room.
+                    self.clear_synthetic_selection();
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3390,8 +6270,9 @@ impl ChatState {
                     user_id,
                     target_user_id,
                     target_username,
+                    section,
                 } if self.user_id == user_id => {
-                    self.requested_open_profile = Some((target_user_id, target_username));
+                    self.requested_open_profile = Some((target_user_id, target_username, section));
                 }
                 ChatEvent::OpenProfileFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&sentence_case(&message)));
@@ -3420,12 +6301,9 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
-                    self.feeds_selected = false;
-                    self.news_selected = false;
-                    self.notifications_selected = false;
-                    self.discover_selected = false;
-                    self.showcase_selected = false;
-                    self.work_selected = false;
+                    // Every synthetic entry drops, the open cyberspace room
+                    // included: the user is being moved into a real room.
+                    self.clear_synthetic_selection();
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3433,6 +6311,12 @@ impl ChatState {
                 }
                 ChatEvent::GameRoomJoined { user_id, room_id } if self.user_id == user_id => {
                     self.request_list();
+                    // House tables join lazily, so the visible-room tail can be
+                    // requested before membership lands and fail the member
+                    // check, leaving room_id stuck in loading_tail_rooms. Clear
+                    // it first so this post-join request actually issues instead
+                    // of being suppressed as already-loading.
+                    self.loading_tail_rooms.remove(&room_id);
                     self.request_room_tail(room_id);
                 }
                 ChatEvent::RoomFailed { user_id, message } if self.user_id == user_id => {
@@ -3451,12 +6335,9 @@ impl ChatState {
                     room_id,
                     slug,
                 } if self.user_id == user_id => {
-                    self.feeds_selected = false;
-                    self.news_selected = false;
-                    self.notifications_selected = false;
-                    self.discover_selected = false;
-                    self.showcase_selected = false;
-                    self.work_selected = false;
+                    // Every synthetic entry drops, the open cyberspace room
+                    // included: the user is being moved into a real room.
+                    self.clear_synthetic_selection();
                     self.selected_room_id = Some(room_id);
                     self.request_list();
                     self.pending_chat_screen_switch = true;
@@ -3496,12 +6377,6 @@ impl ChatState {
                         banner = Some(Banner::success("Message deleted"));
                     }
                 }
-                ChatEvent::MessageRemoved {
-                    room_id,
-                    message_id,
-                } => {
-                    self.remove_message(room_id, message_id);
-                }
                 ChatEvent::MessageEdited {
                     message,
                     target_user_ids,
@@ -3516,7 +6391,7 @@ impl ChatState {
                         continue;
                     }
                     if let Some(username) = author_username {
-                        self.usernames.insert(message.user_id, username);
+                        self.note_username(message.user_id, username);
                     }
                     self.set_bonsai_glyph(message.user_id, author_bonsai_glyph.as_deref());
                     self.set_chat_badge(message.user_id, author_chat_badge.as_deref());
@@ -3533,8 +6408,106 @@ impl ChatState {
                     self.discover.finish_loading();
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::MessageSearchLoaded {
+                    user_id,
+                    request_id,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    if !self.message_search.is_current(request_id) {
+                        continue;
+                    }
+                    self.extend_usernames(usernames);
+                    let query = self.message_search.query.clone();
+                    let hits = messages
+                        .into_iter()
+                        .filter(|message| !self.message_is_ignored(message))
+                        .map(|message| {
+                            let (snippet_prefix, snippet_match, snippet_suffix) =
+                                build_search_snippet(&message.body, &query);
+                            MessageSearchHit {
+                                message,
+                                snippet_prefix,
+                                snippet_match,
+                                snippet_suffix,
+                            }
+                        })
+                        .collect();
+                    self.message_search.finish(hits);
+                }
+                ChatEvent::MessageSearchFailed {
+                    user_id,
+                    request_id,
+                    message,
+                } if self.user_id == user_id && self.message_search.is_current(request_id) => {
+                    self.message_search.fail(sentence_case(&message));
+                }
+                ChatEvent::HistoryPageLoaded {
+                    user_id,
+                    request_id,
+                    direction,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    self.history_modal
+                        .apply_page(request_id, direction, messages, usernames);
+                }
+                ChatEvent::HistoryPageFailed {
+                    user_id,
+                    request_id,
+                    direction,
+                } if self.user_id == user_id => {
+                    self.history_modal.apply_failed(request_id, direction);
+                }
+                ChatEvent::HistoryAnchorLoaded {
+                    user_id,
+                    request_id,
+                    anchor_id,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    self.history_modal
+                        .apply_anchor(request_id, anchor_id, messages, usernames);
+                }
+                ChatEvent::HistoryAnchorMissing {
+                    user_id,
+                    request_id,
+                } if self.user_id == user_id => {
+                    self.history_modal.apply_anchor_missing(request_id);
+                }
+                ChatEvent::MessageContextLoaded {
+                    user_id,
+                    request_id,
+                    message_id,
+                    before,
+                    after,
+                    usernames,
+                } if self.user_id == user_id => {
+                    if self.message_search.context_in_flight != Some((request_id, message_id)) {
+                        continue;
+                    }
+                    self.message_search.context_in_flight = None;
+                    self.extend_usernames(usernames);
+                    self.message_search
+                        .context
+                        .insert(message_id, MessageContext { before, after });
+                }
+                ChatEvent::MessageContextFailed {
+                    user_id,
+                    request_id,
+                    message_id,
+                } if self.user_id == user_id
+                    && self.message_search.context_in_flight == Some((request_id, message_id)) =>
+                {
+                    self.message_search.context_in_flight = None;
+                    // Cache an empty window so a persistent failure does not
+                    // refire every tick; the hit still renders alone.
+                    self.message_search
+                        .context
+                        .insert(message_id, MessageContext::default());
+                }
                 ChatEvent::MessageReactionsUpdated {
-                    room_id: _,
+                    room_id,
                     message_id,
                     reactions,
                     target_user_ids,
@@ -3545,6 +6518,68 @@ impl ChatState {
                         continue;
                     }
                     self.message_reactions.insert(message_id, reactions);
+                    self.bump_room_version(room_id);
+                }
+                ChatEvent::MessageGildsUpdated {
+                    room_id,
+                    message_id,
+                    summary,
+                } => {
+                    // Gilds only exist in public rooms, so there is no
+                    // audience to filter: what one viewer of the room sees,
+                    // every viewer sees.
+                    match summary {
+                        Some(summary) => {
+                            self.message_gilds.insert(message_id, summary);
+                        }
+                        None => {
+                            self.message_gilds.remove(&message_id);
+                        }
+                    }
+                    self.bump_room_version(room_id);
+                }
+                ChatEvent::NameHit {
+                    room_id,
+                    message_id,
+                    seed,
+                } => {
+                    self.note_name_hit(room_id, message_id, seed);
+                }
+                ChatEvent::GildSucceeded {
+                    user_id,
+                    tier,
+                    buyer_balance,
+                    ..
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Gilded {} for {} chips ({buyer_balance} left)",
+                        tier.label(),
+                        tier.price()
+                    )));
+                }
+                ChatEvent::GildSucceeded {
+                    author_user_id,
+                    tier,
+                    buyer_username,
+                    author_balance,
+                    ..
+                } if self.user_id == author_user_id => {
+                    // The author may be in another room, another tab, or away
+                    // from the terminal: the banner alone would be missed, and
+                    // a gild is the one chat event that cost someone money.
+                    self.notifier.push(Notification::gilded(
+                        &buyer_username,
+                        tier.label(),
+                        tier.author_share(),
+                    ));
+                    banner = Some(Banner::success(&format!(
+                        "@{buyer_username} gilded your message {} (+{} chips, balance {author_balance})",
+                        tier.marker(),
+                        tier.author_share()
+                    )));
+                }
+                ChatEvent::GildFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
                 }
                 ChatEvent::EditSucceeded {
                     user_id,
@@ -3570,6 +6605,7 @@ impl ChatState {
                     message,
                 } if self.user_id == user_id => {
                     self.ignored_user_ids = ignored_user_ids.into_iter().collect();
+                    self.friend_ignore_applied_at = Some(Instant::now());
                     self.refilter_local_messages();
                     self.notifications.list();
                     self.notifications.refresh_unread_count();
@@ -3585,8 +6621,13 @@ impl ChatState {
                     target_username,
                     message,
                 } if self.user_id == user_id => {
-                    self.friend_user_ids = friend_user_ids.into_iter().collect();
-                    self.usernames.insert(target_user_id, target_username);
+                    let friend_user_ids: HashSet<Uuid> = friend_user_ids.into_iter().collect();
+                    self.friend_ignore_applied_at = Some(Instant::now());
+                    if self.friend_user_ids != friend_user_ids {
+                        self.friend_user_ids = friend_user_ids;
+                        self.context_epoch += 1;
+                    }
+                    self.note_username(target_user_id, target_username);
                     banner = Some(Banner::success(&message));
                 }
                 ChatEvent::FriendFailed { user_id, message } if self.user_id == user_id => {
@@ -3635,6 +6676,30 @@ impl ChatState {
                 ChatEvent::GiftFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
+                ChatEvent::GrantSucceeded {
+                    user_id,
+                    recipient_username,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Granted {amount} chips to @{recipient_username} (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantSucceeded {
+                    recipient_id,
+                    amount,
+                    recipient_balance,
+                    ..
+                } if self.user_id == recipient_id => {
+                    banner = Some(Banner::success(&format!(
+                        "The house granted you {amount} chips (balance {recipient_balance})"
+                    )));
+                }
+                ChatEvent::GrantFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::PublicRoomsListed {
                     user_id,
                     title,
@@ -3663,14 +6728,15 @@ impl ChatState {
                 ChatEvent::ReactionOwnersListed {
                     user_id,
                     message_id,
+                    gilds,
                     owners,
                     usernames,
                 } if self.user_id == user_id
                     && self.pending_reaction_owners_message_id == Some(message_id) =>
                 {
                     self.pending_reaction_owners_message_id = None;
-                    self.usernames.extend(usernames);
-                    let lines = self.reaction_owner_lines(&owners);
+                    self.extend_usernames(usernames);
+                    let lines = self.reaction_owner_lines(&gilds, &owners);
                     self.overlay = Some(Overlay::dismissible("Reactions", lines));
                 }
                 ChatEvent::ReactionOwnersListFailed { user_id, message }
@@ -3688,6 +6754,37 @@ impl ChatState {
                 }
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
+                }
+                ChatEvent::RoomModSucceeded {
+                    user_id,
+                    room_slug,
+                    username,
+                    action,
+                } if self.user_id == user_id => {
+                    self.request_list();
+                    banner = Some(Banner::success(&match action {
+                        RoomModAction::Kick => format!("Kicked @{username} from #{room_slug}"),
+                        RoomModAction::Ban => format!("Banned @{username} from #{room_slug}"),
+                        RoomModAction::Unban => format!("Unbanned @{username} in #{room_slug}"),
+                    }));
+                }
+                ChatEvent::RoomModFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
+                // Not filtered to the editor: every session sitting in the room
+                // is showing a stale header, and the room row is what the header
+                // reads. Only the editor gets the banner.
+                ChatEvent::RoomInfoUpdated {
+                    user_id,
+                    room_id,
+                    room_slug,
+                } => {
+                    if self.rooms.iter().any(|(room, _)| room.id == room_id) {
+                        self.request_list();
+                    }
+                    if self.user_id == user_id {
+                        banner = Some(Banner::success(&format!("Updated #{room_slug}")));
+                    }
                 }
                 ChatEvent::ModCommandOutput {
                     user_id,
@@ -3769,6 +6866,43 @@ impl ChatState {
             return;
         }
 
+        // System-feed lines never become chat rows: they feed the activity
+        // ticker instead. Unread counts already exclude the system author at
+        // the SQL layer, so there is no cursor to keep aligned here.
+        if let Some(text) = system_line_text_in(&self.usernames, &message) {
+            self.note_activity_ticker(ActivityTickerEntry {
+                id: message.id,
+                text,
+                at: created,
+            });
+            return;
+        }
+
+        // Speaking in a room clears its AFK line: you are in the conversation
+        // now, whatever the keyboard was doing before. Done on the message
+        // landing rather than at each of the several submit paths (`/me`,
+        // `/roll`, `/cup`, a plain line) so there is one place to look, and
+        // it is the authoritative one: the line goes when the message that
+        // ends the silence actually exists.
+        if message.user_id == self.user_id {
+            self.clear_afk_line(room_id);
+            // First contact, stage 2 (`app/deadchannel/haunt`): the haunting
+            // rolls its dice on the landing echo of your own send. Recorded
+            // here for the same reason as the AFK clear: every submit path
+            // funnels into this one landing. Only a message that will render
+            // its own author header is a target: a grouped continuation (a
+            // fast follow-up to your own message) draws no label at all, so
+            // a hit there would spend itself invisibly.
+            let prev = self
+                .rooms
+                .iter()
+                .find(|(room, _)| room.id == room_id)
+                .and_then(|(_, messages)| messages.first());
+            if !groups_as_continuation(prev, &message) {
+                self.own_message_landed = Some((message.id, room_id));
+            }
+        }
+
         let is_viewing_room = Some(room_id) == self.visible_room_id;
         if self.message_is_ignored(&message) {
             if is_viewing_room {
@@ -3787,6 +6921,12 @@ impl ChatState {
             return;
         }
 
+        // A stage-2 beat heard from another replica before this message
+        // got here: the name corrupts as the message arrives.
+        if let Some((seed, _)) = self.pending_name_hits.remove(&message.id) {
+            self.witnessed_hit_landed = Some((message.id, seed));
+        }
+
         // Service snapshots are newest-first; keep same order for cheap appends at the front.
         messages.insert(0, message);
         if messages.len() > 500 {
@@ -3798,8 +6938,14 @@ impl ChatState {
             messages.truncate(500);
             for message_id in removed_ids {
                 self.message_reactions.remove(&message_id);
+                self.message_gilds.remove(&message_id);
+                // Evicted messages can never render again this session, so
+                // their translation state is dead weight; without this a
+                // long-lived auto-translate session grows unbounded.
+                self.forget_translation(message_id);
             }
         }
+        self.bump_room_version(room_id);
 
         if is_viewing_room {
             // Keep the DB cursor aligned with the visible live stream. Without
@@ -3810,10 +6956,67 @@ impl ChatState {
     }
 
     fn remove_message(&mut self, room_id: Uuid, message_id: Uuid) {
+        let mut changed = false;
         if let Some((_, messages)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) {
+            let before = messages.len();
             messages.retain(|m| m.id != message_id);
+            changed = messages.len() != before;
         }
-        self.message_reactions.remove(&message_id);
+        if self.message_reactions.remove(&message_id).is_some() {
+            changed = true;
+        }
+        // The gild rows went with the message (`ON DELETE CASCADE`), so the
+        // marker must go too.
+        if self.message_gilds.remove(&message_id).is_some() {
+            changed = true;
+        }
+        self.forget_translation(message_id);
+        if changed {
+            self.bump_room_version(room_id);
+        }
+    }
+
+    /// Drop every per-message translation trace: the message was deleted or
+    /// its body changed, so what we knew describes text that no longer
+    /// exists. An edit can be re-translated fresh (`t` or auto).
+    fn forget_translation(&mut self, message_id: Uuid) {
+        self.translations.remove(&message_id);
+        self.translation_hidden.remove(&message_id);
+        self.translation_manual.remove(&message_id);
+        self.translation_cache_checked.remove(&message_id);
+    }
+
+    /// Drop every Pending translation entry so `t` can re-request. Called
+    /// when the event receiver lagged: the result for a Pending entry may
+    /// have been among the dropped events, and no later event clears it.
+    fn reset_pending_translations(&mut self) {
+        let stuck: Vec<Uuid> = self
+            .translations
+            .iter()
+            .filter(|(_, display)| **display == TranslationDisplay::Pending)
+            .map(|(message_id, _)| *message_id)
+            .collect();
+        if stuck.is_empty() {
+            return;
+        }
+        let rooms: HashSet<Uuid> = stuck
+            .iter()
+            .filter_map(|message_id| {
+                self.rooms.iter().find_map(|(room, messages)| {
+                    messages
+                        .iter()
+                        .any(|message| message.id == *message_id)
+                        .then_some(room.id)
+                })
+            })
+            .collect();
+        for message_id in stuck {
+            self.translations.remove(&message_id);
+            self.translation_manual.remove(&message_id);
+        }
+        for room_id in rooms {
+            self.bump_room_version(room_id);
+        }
     }
 
     pub(crate) fn remove_room_for_moderation(&mut self, room_id: Uuid) {
@@ -3832,6 +7035,7 @@ impl ChatState {
     }
 
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
+        self.note_activity_ticker_from(&messages);
         let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
             return;
         };
@@ -3847,13 +7051,29 @@ impl ChatState {
         merged.truncate(500);
 
         let ignored = &self.ignored_user_ids;
+        let usernames = &self.usernames;
+        let before: Vec<(Uuid, DateTime<Utc>)> = stored.iter().map(|m| (m.id, m.updated)).collect();
         *stored = merged
             .into_iter()
-            .filter(|message| !message_is_ignored_in(ignored, message))
+            .filter(|message| {
+                !message_is_ignored_in(ignored, message)
+                    && system_line_text_in(usernames, message).is_none()
+            })
             .collect();
+        let changed = stored.len() != before.len()
+            || stored
+                .iter()
+                .zip(&before)
+                .any(|(m, (id, updated))| m.id != *id || m.updated != *updated);
+        if changed {
+            self.bump_room_version(room_id);
+        }
     }
 
     fn replace_message(&mut self, message: ChatMessage) {
+        let room_id = message.room_id;
+        let message_id = message.id;
+        let mut replaced = false;
         if let Some((_, messages)) = self
             .rooms
             .iter_mut()
@@ -3861,6 +7081,11 @@ impl ChatState {
             && let Some(existing) = messages.iter_mut().find(|m| m.id == message.id)
         {
             *existing = message;
+            replaced = true;
+        }
+        if replaced {
+            self.forget_translation(message_id);
+            self.bump_room_version(room_id);
         }
     }
 
@@ -3954,8 +7179,29 @@ impl ChatState {
     fn filter_messages(&self, messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         messages
             .into_iter()
-            .filter(|message| !self.message_is_ignored(message))
+            .filter(|message| {
+                !self.message_is_ignored(message)
+                    && system_line_text_in(&self.usernames, message).is_none()
+            })
             .collect()
+    }
+
+    fn note_activity_ticker(&mut self, entry: ActivityTickerEntry) -> bool {
+        note_ticker_entry(&mut self.activity_ticker, entry)
+    }
+
+    fn note_activity_ticker_from(&mut self, messages: &[ChatMessage]) -> bool {
+        let mut changed = false;
+        for message in messages {
+            if let Some(text) = system_line_text_in(&self.usernames, message) {
+                changed |= self.note_activity_ticker(ActivityTickerEntry {
+                    id: message.id,
+                    text,
+                    at: message.created,
+                });
+            }
+        }
+        changed
     }
 
     fn message_is_ignored(&self, message: &ChatMessage) -> bool {
@@ -3969,8 +7215,61 @@ impl ChatState {
         for (_, messages) in &mut self.rooms {
             messages.retain(|m| !message_is_ignored_in(ignored, m));
         }
+        // Every room may have lost rows; the epoch invalidates all row caches.
+        self.context_epoch += 1;
         self.sync_selection();
     }
+}
+
+/// One diverted #lounge system line held for the activity ticker.
+pub struct ActivityTickerEntry {
+    pub id: Uuid,
+    pub text: String,
+    pub at: DateTime<Utc>,
+}
+
+/// A connected friend, as the sidebar friends row and the Zen Friends tile
+/// draw them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveFriend {
+    pub user_id: Uuid,
+    pub username: String,
+    pub audio_source: late_core::models::user::AudioSource,
+    pub online_since: Instant,
+    /// Every session of theirs is away (`common/away.rs`).
+    pub away: bool,
+}
+
+/// The ticker queue length: enough to fill the one-row ticker on any sane
+/// width and a tall Zen Activity tile, without hoarding history.
+const ACTIVITY_TICKER_CAP: usize = 40;
+
+/// Insert into the newest-first ticker queue, deduped by message id (tails
+/// and snapshots replay the same lines), capped at `ACTIVITY_TICKER_CAP`.
+/// Returns true when the entry actually landed in the ticker (a duplicate
+/// delivery leaves it untouched).
+fn note_ticker_entry(entries: &mut Vec<ActivityTickerEntry>, entry: ActivityTickerEntry) -> bool {
+    if entries.iter().any(|existing| existing.id == entry.id) {
+        return false;
+    }
+    let pos = entries
+        .iter()
+        .position(|existing| entry.at >= existing.at)
+        .unwrap_or(entries.len());
+    entries.insert(pos, entry);
+    entries.truncate(ACTIVITY_TICKER_CAP);
+    true
+}
+
+/// The #lounge system-feed check (author is the `system` bot AND the body
+/// carries the `· ` prefix — same spoof guard as `ui.rs::is_system_author`).
+/// Returns the display text when the message is a system line.
+fn system_line_text_in(usernames: &HashMap<Uuid, String>, message: &ChatMessage) -> Option<String> {
+    usernames
+        .get(&message.user_id)
+        .filter(|name| crate::app::activity::lounge::is_system_username(name))
+        .and_then(|_| super::ui_text::parse_system_line(&message.body))
+        .map(str::to_string)
 }
 
 /// A message is ignored if its author is ignored, or if it is a bot/automated
@@ -4068,9 +7367,19 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub feeds_available: bool,
+    pub cyberspace_linked: bool,
+    /// Pinned cyberspace chat rooms, in rail order. Slots carry the index
+    /// into this list.
+    pub cyberspace_rooms: &'a [String],
+    /// Pinned C-Mail conversations, in rail order, after the rooms.
+    pub cyberspace_mail: &'a [CmailThread],
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
+    pub sticky_unread_dm: Option<Uuid>,
+    /// Registered "watch me" streams, in registry order. Each contributes a
+    /// `stream` section row whether or not this user joined its room yet.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
 }
 
 pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
@@ -4083,9 +7392,14 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         unread_counts,
         room_last_message_at,
         feeds_available,
+        cyberspace_linked,
+        cyberspace_rooms,
+        cyberspace_mail,
         favorite_room_ids,
         collapsed_sections,
         ignored_user_ids,
+        sticky_unread_dm,
+        live_streams,
     } = input;
 
     let mut order = Vec::new();
@@ -4097,6 +7411,19 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // then only appends to `order` when the section is expanded.
     let favorites_collapsed = collapsed_sections.contains(&RoomSection::Favorites);
     for favorite_id in favorite_room_ids {
+        // A favorited synthetic entry takes its slot here and is skipped by
+        // Core below through the same `pushed_rooms` set the rooms use. RSS
+        // without feeds has no row anywhere, so it is not marked pushed.
+        match synthetic_slot_for_favorite_id(*favorite_id) {
+            Some(RoomSlot::Feeds) if !feeds_available => continue,
+            Some(slot) => {
+                if pushed_rooms.insert(*favorite_id) && !favorites_collapsed {
+                    order.push(slot);
+                }
+                continue;
+            }
+            None => {}
+        }
         if rooms.iter().any(|(room, _)| {
             room.id == *favorite_id
                 && is_chat_list_room(room)
@@ -4122,14 +7449,94 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
     if !core_collapsed {
-        order.push(RoomSlot::Notifications);
-        order.push(RoomSlot::News);
-        if feeds_available {
+        if !pushed_rooms.contains(&FAVORITE_ID_NOTIFICATIONS) {
+            order.push(RoomSlot::Notifications);
+        }
+        if !pushed_rooms.contains(&FAVORITE_ID_NEWS) {
+            order.push(RoomSlot::News);
+        }
+        if feeds_available && !pushed_rooms.contains(&FAVORITE_ID_FEEDS) {
             order.push(RoomSlot::Feeds);
         }
+    }
+
+    // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
+    if let Some((room, _)) = rooms
+        .iter()
+        .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some("voice"))
+        && pushed_rooms.insert(room.id)
+        && !core_collapsed
+    {
+        order.push(RoomSlot::Room(room.id));
+    }
+    // The haunted channel, for whoever was invited in: the last room in
+    // Core, under voice, above Discover. Mirrored by both rail builders.
+    if let Some((room, _)) = rooms.iter().find(|(r, _)| is_deadchannel_room(r))
+        && pushed_rooms.insert(room.id)
+        && !core_collapsed
+    {
+        order.push(RoomSlot::Room(room.id));
+    }
+    if !core_collapsed && !pushed_rooms.contains(&FAVORITE_ID_DISCOVER) {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
     }
+
+    // Stream: one row per live "watch me" stream, directly under Core. A
+    // pending stream (`/golive` typed, no media yet) has nothing to watch and
+    // stays off the rail. The section exists only while somebody is live.
+    // Stream rooms are `kind='game'` so they can never leak into Channels/DMs
+    // below.
+    let stream_collapsed = collapsed_sections.contains(&RoomSection::Stream);
+    for stream in live_streams.iter().filter(|stream| stream.live) {
+        if pushed_rooms.insert(stream.room_id) && !stream_collapsed {
+            order.push(RoomSlot::Room(stream.room_id));
+        }
+    }
+
+    // Cyberspace: the feeds pane, their notifications, then the chat rooms
+    // and c-mail conversations this user pinned, under their own header.
+    // Linked accounts only. Everyone else reaches the pitch
+    // + login funnel through `/cs`, so the rail stays about places this user
+    // actually has. Mirrored by the rail builder in `ui.rs`.
+    if cyberspace_linked && !collapsed_sections.contains(&RoomSection::Cyberspace) {
+        order.push(RoomSlot::Cyberspace);
+        order.push(RoomSlot::CyberspaceNotifications);
+        for index in 0..cyberspace_rooms.len() {
+            order.push(RoomSlot::CyberspaceRoom(index));
+        }
+        for index in 0..cyberspace_mail.len() {
+            order.push(RoomSlot::CyberspaceMail(index));
+        }
+    }
+
+    // Unread DMs ride above Channels: at the bottom of the rail nobody was
+    // finding them. Favorited DMs keep their favorites slot instead (they are
+    // already in `pushed_rooms`), and the group ignores the DMs collapse
+    // toggle, which is what makes collapsing DMs a way to hide the read ones
+    // without losing the ones asking for an answer.
+    let mut unread_dms: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
+        .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
+        .filter(|(r, _)| !pushed_rooms.contains(&r.id))
+        .filter(|(r, _)| dm_is_promoted_unread(r.id, unread_counts, sticky_unread_dm))
+        .collect();
+    unread_dms.sort_by(|(a_room, _), (b_room, _)| {
+        compare_dm_rooms_for_nav(
+            a_room,
+            b_room,
+            user_id,
+            usernames,
+            unread_counts,
+            room_last_message_at,
+        )
+    });
+    order.extend(
+        unread_dms
+            .iter()
+            .filter_map(|(r, _)| pushed_rooms.insert(r.id).then_some(RoomSlot::Room(r.id))),
+    );
 
     // Channels: all non-DM rooms outside Core, public + private merged.
     let channels_collapsed = collapsed_sections.contains(&RoomSection::Channels);
@@ -4137,6 +7544,8 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if is_chat_list_room(room)
             && room.kind != "dm"
             && !core_order.contains(&room.slug.as_deref().unwrap_or(""))
+            && !is_deadchannel_room(room)
+            && room.slug.as_deref() != Some("voice")
             && pushed_rooms.insert(room.id)
             && !channels_collapsed
         {
@@ -4150,7 +7559,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
     let mut dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
         .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
@@ -4168,6 +7577,49 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }));
 
     order
+}
+
+pub(crate) struct NextStickyUnreadDm {
+    pub current: Option<Uuid>,
+    pub room_id: Uuid,
+    pub is_dm: bool,
+    pub unread: bool,
+}
+
+/// Which DM the promoted unread group holds after `room_id` is marked read.
+///
+/// Opening a DM zeroes its unread count on the same frame, so without this the
+/// row (and its jump key) would move out from under the cursor the instant you
+/// arrive. The DM you are reading stays put: every message landing in a
+/// visible room re-marks it read, and that must not release it. Reading
+/// anything else does release it, so the DM drops back down as soon as you
+/// open another room. Nothing else releases it: a screen with no visible chat
+/// room never marks anything read, so the DM keeps the promoted slot until you
+/// come back and open something.
+pub(crate) fn next_sticky_unread_dm(input: NextStickyUnreadDm) -> Option<Uuid> {
+    let NextStickyUnreadDm {
+        current,
+        room_id,
+        is_dm,
+        unread,
+    } = input;
+
+    match current {
+        Some(sticky) if sticky == room_id => Some(sticky),
+        _ => (is_dm && unread).then_some(room_id),
+    }
+}
+
+/// Whether a DM belongs in the promoted unread group above Channels: it has
+/// unread messages, or it is the DM being read right now (see
+/// `ChatState::note_sticky_unread_dm`). Shared by the navigation order and the
+/// rail so the two cannot disagree about which DMs got promoted.
+pub(crate) fn dm_is_promoted_unread(
+    room_id: Uuid,
+    unread_counts: &HashMap<Uuid, i64>,
+    sticky_unread_dm: Option<Uuid>,
+) -> bool {
+    unread_counts.get(&room_id).copied().unwrap_or(0) > 0 || sticky_unread_dm == Some(room_id)
 }
 
 pub(crate) fn compare_dm_rooms_for_nav(
@@ -4211,7 +7663,7 @@ fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
 /// Whether `room` is a DM whose other participant is ignored. Such DMs are
 /// hidden from every room-list section (favorites included) so an ignored peer
 /// can't resurface the DM or its unread state by sending again.
-fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+pub(crate) fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
     room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
 }
 
@@ -4312,6 +7764,36 @@ pub(crate) enum GiftParse {
     },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GrantParse {
+    Invalid,
+    Grant { username: String, amount: i64 },
+}
+
+/// `/grant @user <amount>`, the admin mint. No note: nothing is said to the
+/// recipient beyond the banner, and nothing is written down.
+pub(crate) fn parse_grant_command(input: &str) -> Option<GrantParse> {
+    let rest = input.trim().strip_prefix("/grant")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut parts = rest.split_whitespace();
+    let (Some(username), Some(amount), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Some(GrantParse::Invalid);
+    };
+    let username = username.strip_prefix('@').unwrap_or(username).trim();
+    let Ok(amount) = amount.parse::<i64>() else {
+        return Some(GrantParse::Invalid);
+    };
+    if username.is_empty() || amount <= 0 || amount > GRANT_MAX_AMOUNT {
+        return Some(GrantParse::Invalid);
+    }
+    Some(GrantParse::Grant {
+        username: username.to_string(),
+        amount,
+    })
+}
+
 pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
     let rest = input.trim().strip_prefix("/gift")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
@@ -4352,6 +7834,37 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
     })
 }
 
+/// A `/pair` request drained by `handle_post_submit_requests` (the composer
+/// has no handle on `active_users`/the scratchpad registry of its own).
+/// Only the directed form exists: `/pair` has no open/anyone-can-claim
+/// lobby, unlike the daily challenge flow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PairRequest {
+    Directed(String),
+}
+
+/// `Some(Some(PairRequest::Directed(username)))` on `/pair @user`,
+/// `Some(None)` on a malformed line (usage banner), `None` when it isn't
+/// `/pair` at all.
+fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
+    let trimmed = input.trim();
+    if trimmed == "/pair" {
+        return Some(None);
+    }
+    let rest = trimmed.strip_prefix("/pair ")?;
+    let mut tokens = rest.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return Some(None);
+    };
+    let Some(username) = first.strip_prefix('@').filter(|name| !name.is_empty()) else {
+        return Some(None);
+    };
+    if tokens.next().is_some() {
+        return Some(None);
+    }
+    Some(Some(PairRequest::Directed(username.to_string())))
+}
+
 fn parse_me_command(input: &str) -> Option<Option<String>> {
     let trimmed = input.trim();
     if trimmed == "/me" {
@@ -4364,7 +7877,7 @@ fn parse_me_command(input: &str) -> Option<Option<String>> {
 fn format_member_overlay_lines(
     members: &[RoomMemberListItem],
     active_users: Option<&ActiveUsers>,
-) -> Vec<Line<'static>> {
+) -> Vec<OverlayLine> {
     let online_ids = active_users
         .map(|users| users.lock_recover().keys().copied().collect::<HashSet<_>>())
         .unwrap_or_default();
@@ -4384,27 +7897,18 @@ fn format_member_overlay_lines(
 
     rows.into_iter()
         .map(|(online, _, label)| {
-            let (status, status_style, name_style) = if online {
-                (
-                    "[on ]",
-                    Style::default()
-                        .fg(theme::SUCCESS())
-                        .add_modifier(Modifier::BOLD),
-                    Style::default().fg(theme::TEXT()),
-                )
+            // Ink, not colour: the overlay is built here in the tick and
+            // drawn a step later, once `render` has claimed this thread for
+            // the reader's theme (see `common/overlay.rs`).
+            let (status, status_ink, name_ink) = if online {
+                ("[on ]", OverlayInk::Strong, OverlayInk::Body)
             } else {
-                (
-                    "[off]",
-                    Style::default().fg(theme::TEXT_DIM()),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )
+                ("[off]", OverlayInk::Dim, OverlayInk::Dim)
             };
-            Line::from(vec![
-                Span::raw(" "),
-                Span::styled(status, status_style),
-                Span::raw(" "),
-                Span::styled(label, name_style),
-            ])
+            vec![
+                OverlaySpan::new(format!(" {status} "), status_ink),
+                OverlaySpan::new(label, name_ink),
+            ]
         })
         .collect()
 }
@@ -4412,6 +7916,11 @@ fn format_member_overlay_lines(
 /// Parse `/leave` from the composer text.
 fn parse_leave_command(input: &str) -> bool {
     input.trim() == "/leave"
+}
+
+/// `/roominfo` (or `/roomedit`) opens the room-info form for the current room.
+fn is_room_info_command(input: &str) -> bool {
+    matches!(input.trim(), "/roominfo" | "/roomedit")
 }
 
 /// Parse `/public <slug>` or `/private <slug>` style commands.
@@ -4422,6 +7931,16 @@ fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
         return None;
     }
     Some(slug)
+}
+
+/// Parse the composer text for a command that opens a public room. `/join` is
+/// an alias for `/public`, not a second behavior: it is the name an IRC user
+/// reaches for first, and the IRC bridge already answers to it.
+fn parse_public_room_command(input: &str) -> Option<&str> {
+    match parse_room_command(input, "/public") {
+        Some(slug) => Some(slug),
+        None => parse_room_command(input, "/join"),
+    }
 }
 
 fn user_created_channel_name_too_long(slug: &str) -> bool {
@@ -4567,15 +8086,28 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
         .and_then(|(room, _)| room.slug.clone())
 }
 
-/// Parse `/brb [optional message]` from the composer.
-/// Returns `Some(message)` where message is empty if no custom text was given.
-fn parse_brb_command(input: &str) -> Option<String> {
+/// Minimum characters of report text, so `/bug lol` bounces with usage help
+/// instead of posting a useless card.
+const REPORT_MIN_CHARS: usize = 10;
+
+/// Parse `/bug <text>` or `/suggest <text>` from the composer. Outer `None`
+/// means not a report command; inner `None` means missing or too-short text
+/// (show usage).
+fn parse_report_command(input: &str) -> Option<(ReportKind, Option<String>)> {
     let trimmed = input.trim();
-    if trimmed == "/brb" {
-        return Some(String::new());
+    for kind in [ReportKind::Bug, ReportKind::Suggestion] {
+        if trimmed == kind.command() {
+            return Some((kind, None));
+        }
+        if let Some(rest) = trimmed.strip_prefix(kind.command())
+            && let Some(rest) = rest.strip_prefix(' ')
+        {
+            let text = rest.trim();
+            let text = (text.chars().count() >= REPORT_MIN_CHARS).then(|| text.to_string());
+            return Some((kind, text));
+        }
     }
-    let rest = trimmed.strip_prefix("/brb ")?.trim();
-    Some(rest.to_string())
+    None
 }
 
 /// Which cup the user asked for. Coffee gets the mug-with-handle silhouette
@@ -4623,6 +8155,17 @@ pub(crate) fn cup_art(kind: CupKind, variant: u8) -> String {
     format!("{steam}\n{cup}")
 }
 
+/// Whether a draft is a command attempt rather than speech: its first word
+/// leads with `/`. A bare `/` and a `//` aside are speech, as they are to
+/// `unknown_slash_command`. Multi-line drafts count, since several command
+/// parsers take a body that runs over lines.
+fn is_command_draft(input: &str) -> bool {
+    match input.split_whitespace().next() {
+        Some("/") | Some("//") | None => false,
+        Some(word) => word.starts_with('/'),
+    }
+}
+
 fn unknown_slash_command(input: &str) -> Option<&str> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.contains('\n') || !trimmed.starts_with('/') {
@@ -4637,25 +8180,33 @@ fn unknown_slash_command(input: &str) -> Option<&str> {
     Some(command)
 }
 
-fn online_username_set(active_users: Option<&ActiveUsers>) -> HashSet<String> {
+/// Every connected user by lowercased name, here or away. A name missing
+/// from the map is offline.
+fn username_presence(active_users: Option<&ActiveUsers>) -> HashMap<String, MatchPresence> {
     let Some(active_users) = active_users else {
-        return HashSet::new();
+        return HashMap::new();
     };
     let guard = active_users.lock_recover();
     guard
         .values()
-        .map(|u| u.username.to_ascii_lowercase())
+        .map(|user| {
+            let presence = match crate::app::common::away::user_is_away(user) {
+                true => MatchPresence::Away,
+                false => MatchPresence::Here,
+            };
+            (user.username.to_ascii_lowercase(), presence)
+        })
         .collect()
 }
 
 pub(crate) fn rank_mention_matches(
     all_usernames: &[String],
     query_lower: &str,
-    online_set: impl FnOnce() -> HashSet<String>,
+    presence_by_name: impl FnOnce() -> HashMap<String, MatchPresence>,
 ) -> Vec<MentionMatch> {
     // Lowercase each candidate once and keep it paired with the original
-    // display name; reused for the prefix filter, the online lookup, and the
-    // alphabetical tie-breaker.
+    // display name; reused for the prefix filter, the presence lookup, and
+    // the alphabetical tie-breaker.
     let mut filtered: Vec<(String, String)> = all_usernames
         .iter()
         .filter_map(|name| {
@@ -4669,16 +8220,19 @@ pub(crate) fn rank_mention_matches(
         return Vec::new();
     }
 
-    let online = online_set();
+    let presence_by_name = presence_by_name();
     let mut matches: Vec<(String, MentionMatch)> = filtered
         .drain(..)
         .map(|(lower, name)| {
-            let is_online = online.contains(&lower);
+            let presence = presence_by_name
+                .get(&lower)
+                .copied()
+                .unwrap_or(MatchPresence::Offline);
             (
                 lower,
                 MentionMatch {
                     name,
-                    online: is_online,
+                    presence,
                     prefix: "@",
                     description: None,
                 },
@@ -4686,7 +8240,9 @@ pub(crate) fn rank_mention_matches(
         })
         .collect();
     matches.sort_by(|(a_lower, a), (b_lower, b)| {
-        b.online.cmp(&a.online).then_with(|| a_lower.cmp(b_lower))
+        a.presence
+            .cmp(&b.presence)
+            .then_with(|| a_lower.cmp(b_lower))
     });
     matches.into_iter().map(|(_, m)| m).collect()
 }
@@ -4717,7 +8273,7 @@ pub(crate) fn rank_room_name_matches<'a>(
         .into_iter()
         .map(|(_, name)| MentionMatch {
             name,
-            online: true,
+            presence: MatchPresence::Here,
             prefix: "#",
             description: None,
         })
@@ -4747,13 +8303,17 @@ fn format_active_user_lines(
             } else {
                 "@"
             };
+            let away = match crate::app::common::away::user_is_away(user) {
+                true => format!(" {}", crate::app::common::away::AWAY_GLYPH),
+                false => String::new(),
+            };
             if user.connection_count > 1 {
                 format!(
-                    "{prefix}{} ({} sessions)",
+                    "{prefix}{}{away} ({} sessions)",
                     user.username, user.connection_count
                 )
             } else {
-                format!("{prefix}{}", user.username)
+                format!("{prefix}{}{away}", user.username)
             }
         })
         .collect()
@@ -4774,6 +8334,10 @@ fn adjacent_composer_room(
             RoomSlot::Room(room_id) => Some(*room_id),
             RoomSlot::Feeds
             | RoomSlot::News
+            | RoomSlot::Cyberspace
+            | RoomSlot::CyberspaceNotifications
+            | RoomSlot::CyberspaceRoom(_)
+            | RoomSlot::CyberspaceMail(_)
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
@@ -4790,29 +8354,13 @@ fn adjacent_composer_room(
     Some(rooms[wrapped_index(current, delta, rooms.len())])
 }
 
-fn news_modal_source_from_articles(
-    articles: &[ArticleFeedItem],
-    url: &str,
-) -> Option<(NewsPayload, String, chrono::DateTime<chrono::Utc>, Uuid)> {
-    let url = url.trim();
-    if url.is_empty() {
-        return None;
-    }
-
-    let item = articles
-        .iter()
-        .find(|item| item.article.url.trim() == url)?;
-    Some((
-        NewsPayload {
-            title: item.article.title.clone(),
-            summary: item.article.summary.clone(),
-            url: item.article.url.clone(),
-            ascii_art: item.article.ascii_art.clone(),
-        },
-        modal_author_label(Some(&item.author_username), item.article.user_id),
-        item.article.created,
-        item.article.id,
-    ))
+/// `mat - 2m ago - Tue 2026-09-29 21:00 UTC`, under the article modal's title.
+fn news_modal_meta(author: &str, created: chrono::DateTime<chrono::Utc>) -> String {
+    let relative = crate::app::common::primitives::format_relative_time(created);
+    format!(
+        "{author} - {relative} - {}",
+        created.format("%a %Y-%m-%d %H:%M UTC")
+    )
 }
 
 fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
@@ -4823,10 +8371,189 @@ fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
         .unwrap_or_else(|| short_user_id(user_id))
 }
 
+/// Message-search state backing the Ctrl+/ modal's `?` mode. Owned by
+/// `ChatState` because it owns the chat event receiver; the modal reads it.
+#[derive(Default)]
+pub(crate) struct MessageSearch {
+    /// In-flight or last-completed request id. Results carrying any other id
+    /// are stale and dropped (latest wins).
+    request_id: Option<Uuid>,
+    /// Query text the current request was fired with; snippets are built
+    /// against it when results land.
+    query: String,
+    pub(crate) loading: bool,
+    pub(crate) error: Option<String>,
+    pub(crate) hits: Vec<MessageSearchHit>,
+    /// Context windows (3 messages either side) keyed by hit message id,
+    /// fetched lazily as hits are selected. Bounded in practice: filled only
+    /// while the modal is open and reset with `clear()` when it closes.
+    pub(crate) context: HashMap<Uuid, MessageContext>,
+    /// The one in-flight context fetch: `(request_id, message_id)`. A single
+    /// slot, so scrolling through hits fetches sequentially instead of
+    /// fanning out one query per keypress.
+    context_in_flight: Option<(Uuid, Uuid)>,
+}
+
+/// Messages immediately around a search hit, both sides chronological.
+#[derive(Default)]
+pub(crate) struct MessageContext {
+    pub before: Vec<ChatMessage>,
+    pub after: Vec<ChatMessage>,
+}
+
+impl MessageSearch {
+    fn begin(&mut self, request_id: Uuid, query: String) {
+        self.request_id = Some(request_id);
+        self.query = query;
+        self.loading = true;
+        self.error = None;
+    }
+
+    fn is_current(&self, request_id: Uuid) -> bool {
+        self.request_id == Some(request_id)
+    }
+
+    fn finish(&mut self, hits: Vec<MessageSearchHit>) {
+        self.loading = false;
+        self.error = None;
+        self.hits = hits;
+    }
+
+    fn fail(&mut self, message: String) {
+        self.loading = false;
+        self.error = Some(message);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+pub(crate) struct MessageSearchHit {
+    pub message: ChatMessage,
+    /// Precomputed one-row snippet, split around the first case-insensitive
+    /// query match so render can highlight it without rescanning the body.
+    pub snippet_prefix: String,
+    pub snippet_match: String,
+    pub snippet_suffix: String,
+}
+
+/// Chars of context kept before the match in a snippet.
+const SNIPPET_LEAD_CHARS: usize = 24;
+/// Total snippet char budget; render truncates further by column width.
+const SNIPPET_TOTAL_CHARS: usize = 160;
+
+/// Split a message body into `(prefix, match, suffix)` around the first
+/// case-insensitive occurrence of `query`, windowed so the match stays
+/// visible in a one-row snippet. Newlines flatten to spaces and a leading
+/// `---WORD---` card marker (news/report cards) is dropped so snippets read
+/// as text. Falls back to a head-of-body snippet with an empty match part.
+pub(crate) fn build_search_snippet(body: &str, query: &str) -> (String, String, String) {
+    let flat = strip_card_marker(body).replace(['\n', '\r'], " ");
+    let chars: Vec<char> = flat.chars().collect();
+    let lower: Vec<char> = flat.to_lowercase().chars().collect();
+    let needle: Vec<char> = query.to_lowercase().chars().collect();
+
+    // `to_lowercase` can change char counts for some scripts; if the lowered
+    // text no longer lines up with the original, skip highlighting rather
+    // than slice at wrong offsets.
+    let match_at = if needle.is_empty() || lower.len() != chars.len() {
+        None
+    } else {
+        lower
+            .windows(needle.len())
+            .position(|window| window == needle.as_slice())
+    };
+
+    let Some(start) = match_at else {
+        let mut head: String = chars.iter().take(SNIPPET_TOTAL_CHARS).collect();
+        if chars.len() > SNIPPET_TOTAL_CHARS {
+            head.push('…');
+        }
+        return (head, String::new(), String::new());
+    };
+
+    let window_start = start.saturating_sub(SNIPPET_LEAD_CHARS);
+    let match_end = start + needle.len();
+    let window_end = chars
+        .len()
+        .min(match_end + SNIPPET_TOTAL_CHARS.saturating_sub(match_end - window_start));
+
+    let mut prefix: String = chars[window_start..start].iter().collect();
+    if window_start > 0 {
+        prefix.insert(0, '…');
+    }
+    let matched: String = chars[start..match_end].iter().collect();
+    let mut suffix: String = chars[match_end..window_end].iter().collect();
+    if window_end < chars.len() {
+        suffix.push('…');
+    }
+    (prefix, matched, suffix)
+}
+
+/// Drop a leading `---WORD--- ` card marker (news/bug/suggestion cards) so
+/// search snippets show the card's text instead of its wire marker.
+fn strip_card_marker(body: &str) -> &str {
+    let trimmed = body.trim_start();
+    let Some(rest) = trimmed.strip_prefix("---") else {
+        return body;
+    };
+    let Some((word, rest)) = rest.split_once("---") else {
+        return body;
+    };
+    if word.is_empty() || !word.chars().all(|ch| ch.is_ascii_uppercase()) {
+        return body;
+    }
+    rest.trim_start()
+}
+
 fn resolve_room_jump_target(targets: &[(u8, RoomSlot)], byte: u8) -> Option<RoomSlot> {
     targets
         .iter()
         .find_map(|(key, slot)| (*key == byte).then_some(*slot))
+}
+
+/// Set or clear a per-author context value, returning whether the map
+/// actually changed (so callers bump the context epoch only on real updates).
+/// Blank values clear, matching the service payload convention.
+fn set_context_value(
+    target: &mut HashMap<Uuid, String>,
+    user_id: Uuid,
+    value: Option<&str>,
+) -> bool {
+    match value.filter(|value| !value.trim().is_empty()) {
+        Some(value) => match target.get(&user_id) {
+            Some(existing) if existing == value => false,
+            _ => {
+                target.insert(user_id, value.to_string());
+                true
+            }
+        },
+        None => target.remove(&user_id).is_some(),
+    }
+}
+
+/// Merge `incoming` into `target`, returning whether anything actually
+/// changed.
+fn extend_changed<K, V>(
+    target: &mut HashMap<K, V>,
+    incoming: impl IntoIterator<Item = (K, V)>,
+) -> bool
+where
+    K: Eq + std::hash::Hash,
+    V: PartialEq,
+{
+    let mut changed = false;
+    for (key, value) in incoming {
+        match target.get(&key) {
+            Some(existing) if *existing == value => {}
+            _ => {
+                target.insert(key, value);
+                changed = true;
+            }
+        }
+    }
+    changed
 }
 
 /// Parse `/<command>` or `/<command> [@]username`. Returns:
@@ -4847,9 +8574,107 @@ fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a st
     Some((!username.is_empty()).then_some(username))
 }
 
+pub(crate) struct RoomBanRequest<'a> {
+    pub username: &'a str,
+    pub duration: Option<chrono::Duration>,
+    pub reason: String,
+}
+
+/// `/ban @user [duration] [reason...]`, and `/unban @user [reason...]`. The
+/// duration is only read from the slot right after the username and uses the
+/// same `s/m/h/d` syntax the mod surface takes, so there is one place to look
+/// for what a duration means. A word there that is not a duration starts the
+/// reason instead. Returns `None` when the body is not this command at all,
+/// and `Err(usage)` when it is but the arguments are unusable.
+fn parse_room_ban_command<'a>(
+    input: &'a str,
+    command: &str,
+) -> Option<Result<RoomBanRequest<'a>, &'static str>> {
+    let usage = "Usage: /ban @user [duration] [reason]";
+    let rest = input.strip_prefix(command)?;
+    let rest = match rest.chars().next() {
+        None => "",
+        Some(c) if c.is_whitespace() => rest.trim(),
+        Some(_) => return None,
+    };
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(Err(usage));
+    };
+    let username = username.strip_prefix('@').unwrap_or(username);
+    if username.is_empty() {
+        return Some(Err(usage));
+    }
+    let rest: Vec<&str> = parts.collect();
+    let (duration, reason_from) = match parse_optional_duration(rest.first().copied(), 0) {
+        Ok(parsed) => parsed,
+        Err(_) => return Some(Err("Duration must be positive, like 30m or 7d")),
+    };
+    Some(Ok(RoomBanRequest {
+        username,
+        duration,
+        reason: rest[reason_from..].join(" "),
+    }))
+}
+
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+/// The window a bare `/summary` opens: from when you last left the app on
+/// this device, or the default when the device has no mark. The room's AFK
+/// line is deliberately not an input; see [`ChatState::device_left_at`].
+fn catch_up_window(device_left_at: Option<DateTime<Utc>>) -> SummaryWindow {
+    match device_left_at {
+        Some(left_at) => SummaryWindow::SinceLeftApp(left_at),
+        None => SummaryWindow::Default,
+    }
+}
+
+/// What the text after `/summary` asked for. Every outcome is named so the
+/// command's match answers each one with its own banner: a typo must never
+/// silently become the default window.
+#[derive(Debug, PartialEq, Eq)]
+enum SummaryArg {
+    /// Bare `/summary`: catch up from when you last left the app here.
+    CatchUp,
+    Window(chrono::Duration),
+    /// Not a `<count><unit>` duration at all.
+    Unparseable,
+    /// Parsed, but empty (`0h`): there is no window to read.
+    TooShort,
+    /// Parsed, but past [`SUMMARY_MAX_WINDOW_HOURS`]. Refused rather than
+    /// clamped, so the answer is never narrower than the question.
+    TooLong,
+}
+
+/// Parse the argument of `/summary [<count>h|<count>m]`.
+///
+/// The unit is required (`6h`, `90m`): a bare `6` could mean either, and
+/// guessing for the user is how a catch-up quietly covers the wrong day.
+fn parse_summary_arg(rest: &str) -> SummaryArg {
+    let arg = rest.trim().to_ascii_lowercase();
+    if arg.is_empty() {
+        return SummaryArg::CatchUp;
+    }
+    let (count, minutes_per_unit) = match (arg.strip_suffix('h'), arg.strip_suffix('m')) {
+        (Some(count), _) => (count, 60),
+        (None, Some(count)) => (count, 1),
+        (None, None) => return SummaryArg::Unparseable,
+    };
+    // `u32` keeps the multiply below inside i64 whatever is typed, and
+    // refuses the sign and decimal point along with the rest of the junk.
+    let Ok(count) = count.parse::<u32>() else {
+        return SummaryArg::Unparseable;
+    };
+    match i64::from(count) * minutes_per_unit {
+        0 => SummaryArg::TooShort,
+        minutes if minutes > crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS * 60 => {
+            SummaryArg::TooLong
+        }
+        minutes => SummaryArg::Window(chrono::Duration::minutes(minutes)),
+    }
 }
 
 fn sentence_case(text: &str) -> String {
@@ -4858,6 +8683,40 @@ fn sentence_case(text: &str) -> String {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
     }
+}
+
+/// Compact retry hint for the bot cooldown banner. Minutes round up so the
+/// banner never promises an earlier retry than the ladder allows.
+fn format_cooldown(remaining: Duration) -> String {
+    let secs = remaining.as_secs().max(1);
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{} min", secs.div_ceil(60))
+    }
+}
+
+/// The renderer groups consecutive messages from one author within this
+/// window under a single header (`ui.rs`, `is_continuation`).
+pub(crate) const MESSAGE_GROUP_WINDOW_SECS: i64 = 120;
+
+/// How long a stage-2 beat waits for its message. Another replica's
+/// message reaches this session on the chat snapshot's cadence
+/// (`CHAT_REFRESH_INTERVAL`, 10s), so this has to stay comfortably above
+/// it; past it the beat is dropped rather than played late, so somebody
+/// who opens the room a minute afterwards sees a clean name.
+const NAME_HIT_WAIT: Duration = Duration::from_secs(30);
+
+/// Whether `message`, landing at the head of the room's newest-first list,
+/// will render as a grouped continuation of `prev`: same author within the
+/// grouping window, so no author header row of its own. Mirrors the
+/// renderer's `is_continuation`; the edited check there is omitted because
+/// a just-landed message is never edited.
+fn groups_as_continuation(prev: Option<&ChatMessage>, message: &ChatMessage) -> bool {
+    prev.is_some_and(|prev| {
+        prev.user_id == message.user_id
+            && (message.created - prev.created).num_seconds().abs() < MESSAGE_GROUP_WINDOW_SECS
+    })
 }
 
 /// Given a message list containing `current`, return the id of the message
@@ -4883,8 +8742,16 @@ fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Opt
 }
 
 fn reply_preview_text(body: &str) -> String {
-    if let Some(title) = news_reply_preview_text(body) {
-        return title;
+    if let Some((kind, text)) = parse_report_payload(body) {
+        let first_line = text.lines().find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+        return truncate_reply_preview(&format!(
+            "{} {}",
+            kind.icon(),
+            first_line.unwrap_or(kind.command())
+        ));
     }
 
     let body_without_reply_quote = match body.split_once('\n') {
@@ -4953,23 +8820,6 @@ fn global_char_to_line_col(text: &str, target: usize) -> (usize, usize) {
         }
     }
     (line, col)
-}
-
-fn news_reply_preview_text(body: &str) -> Option<String> {
-    let trimmed = body.trim_start();
-    if !trimmed.starts_with(NEWS_MARKER) {
-        return None;
-    }
-
-    let raw = trimmed[NEWS_MARKER.len()..].trim_start();
-    let title = raw
-        .split(" || ")
-        .next()
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("news update");
-
-    Some(truncate_reply_preview(title))
 }
 
 fn truncate_reply_preview(text: &str) -> String {
@@ -5061,1690 +8911,5 @@ fn leading_backtick_run_len(text: &str) -> Option<usize> {
     (len > 0).then_some(len)
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app::common::theme;
-
-    fn names(matches: &[MentionMatch]) -> Vec<&str> {
-        matches.iter().map(|m| m.name.as_str()).collect()
-    }
-
-    fn sorted_ids(mut ids: Vec<Uuid>) -> Vec<Uuid> {
-        ids.sort();
-        ids
-    }
-
-    #[test]
-    fn click_display_col_maps_to_char_offset_ascii() {
-        // Clicking column N over "hello" lands the caret before the Nth char,
-        // and a click past the end clamps to the char count.
-        assert_eq!(char_offset_for_display_col("hello", 0), 0);
-        assert_eq!(char_offset_for_display_col("hello", 3), 3);
-        assert_eq!(char_offset_for_display_col("hello", 99), 5);
-    }
-
-    #[test]
-    fn click_display_col_accounts_for_wide_glyphs() {
-        // '世' and '界' render two cells each: 世 spans cols 0..2, 界 2..4,
-        // '!' at col 4. A click in a glyph's left half resolves to that glyph.
-        let text = "世界!";
-        assert_eq!(char_offset_for_display_col(text, 0), 0); // before 世
-        assert_eq!(char_offset_for_display_col(text, 1), 0); // left half of 世
-        assert_eq!(char_offset_for_display_col(text, 2), 1); // before 界
-        assert_eq!(char_offset_for_display_col(text, 4), 2); // before '!'
-    }
-
-    #[test]
-    fn click_global_offset_splits_into_line_and_col() {
-        // Newlines count as one char (matching build_composer_rows), so the
-        // offset just past a '\n' is column 0 of the next logical line.
-        let text = "ab\ncde";
-        assert_eq!(global_char_to_line_col(text, 0), (0, 0));
-        assert_eq!(global_char_to_line_col(text, 2), (0, 2));
-        assert_eq!(global_char_to_line_col(text, 3), (1, 0));
-        assert_eq!(global_char_to_line_col(text, 5), (1, 2));
-    }
-
-    #[test]
-    fn parse_gift_command_accepts_at_optional_username() {
-        assert_eq!(
-            parse_gift_command("/gift @alice 500"),
-            Some(GiftParse::Gift {
-                username: "alice".to_string(),
-                amount: 500,
-                message: None,
-            })
-        );
-        assert_eq!(
-            parse_gift_command("/gift alice 500"),
-            Some(GiftParse::Gift {
-                username: "alice".to_string(),
-                amount: 500,
-                message: None,
-            })
-        );
-    }
-
-    #[test]
-    fn parse_gift_command_captures_optional_message() {
-        assert_eq!(
-            parse_gift_command("/gift @alice 500 happy birthday"),
-            Some(GiftParse::Gift {
-                username: "alice".to_string(),
-                amount: 500,
-                message: Some("happy birthday".to_string()),
-            })
-        );
-    }
-
-    #[test]
-    fn parse_gift_command_rejects_invalid_amounts_and_junk() {
-        assert_eq!(parse_gift_command("/gift"), Some(GiftParse::Invalid));
-        assert_eq!(parse_gift_command("/gift @a 0"), Some(GiftParse::Invalid));
-        assert_eq!(parse_gift_command("/gift @a -1"), Some(GiftParse::Invalid));
-        assert_eq!(
-            parse_gift_command("/gift @a 1000001"),
-            Some(GiftParse::Invalid)
-        );
-        assert_eq!(parse_gift_command("/gift @a wat"), Some(GiftParse::Invalid));
-        assert_eq!(parse_gift_command("/gifted @a 5"), None);
-    }
-
-    #[test]
-    fn read_cursor_flush_queue_coalesces_room_until_deadline() {
-        let room_id = Uuid::from_u128(1);
-        let now = Instant::now();
-        let mut pending = PendingReadCursorFlush::default();
-
-        pending.queue(room_id, now);
-        let scheduled = pending.flush_at.unwrap();
-        pending.queue(room_id, now + Duration::from_millis(250));
-
-        assert_eq!(pending.flush_at, Some(scheduled));
-        assert_eq!(pending.rooms.len(), 1);
-        assert!(
-            pending
-                .take_due(scheduled - Duration::from_millis(1))
-                .is_empty()
-        );
-        assert_eq!(pending.take_due(scheduled), vec![room_id]);
-        assert!(pending.rooms.is_empty());
-        assert_eq!(pending.flush_at, None);
-    }
-
-    #[test]
-    fn read_cursor_flush_queue_batches_unique_rooms() {
-        let room_a = Uuid::from_u128(1);
-        let room_b = Uuid::from_u128(2);
-        let now = Instant::now();
-        let mut pending = PendingReadCursorFlush::default();
-
-        pending.queue(room_a, now);
-        pending.queue(room_b, now + Duration::from_millis(50));
-        pending.queue(room_a, now + Duration::from_millis(100));
-
-        assert_eq!(
-            sorted_ids(pending.take_due(now + READ_CURSOR_FLUSH_DELAY)),
-            vec![room_a, room_b]
-        );
-        assert!(pending.rooms.is_empty());
-        assert_eq!(pending.flush_at, None);
-    }
-
-    #[test]
-    fn read_cursor_flush_take_all_flushes_before_deadline() {
-        let room_id = Uuid::from_u128(1);
-        let now = Instant::now();
-        let mut pending = PendingReadCursorFlush::default();
-
-        pending.queue(room_id, now);
-
-        assert_eq!(pending.take_all(), vec![room_id]);
-        assert!(pending.rooms.is_empty());
-        assert_eq!(pending.flush_at, None);
-    }
-
-    fn online(names: &[&str]) -> HashSet<String> {
-        names.iter().map(|n| n.to_string()).collect()
-    }
-
-    #[test]
-    fn rank_mention_matches_orders_online_before_offline() {
-        let all = vec![
-            "alice".to_string(),
-            "bob".to_string(),
-            "carol".to_string(),
-            "dave".to_string(),
-        ];
-        let ranked = rank_mention_matches(&all, "", || online(&["bob", "dave"]));
-        assert_eq!(names(&ranked), vec!["bob", "dave", "alice", "carol"]);
-        assert!(ranked[0].online && ranked[1].online);
-        assert!(!ranked[2].online && !ranked[3].online);
-    }
-
-    #[test]
-    fn rank_mention_matches_prefix_filter_groups_online_first() {
-        // "@a" with two online and one offline 'a'-prefixed users:
-        // online 'a' names come first (alphabetically), then offline.
-        let all = vec![
-            "alice".to_string(),
-            "alex".to_string(),
-            "albert".to_string(),
-            "bob".to_string(),
-        ];
-        let ranked = rank_mention_matches(&all, "a", || online(&["alice", "alex"]));
-        assert_eq!(names(&ranked), vec!["alex", "alice", "albert"]);
-        assert!(ranked[0].online && ranked[1].online);
-        assert!(!ranked[2].online);
-    }
-
-    #[test]
-    fn rank_mention_matches_applies_prefix_filter() {
-        let all = vec!["alice".to_string(), "albert".to_string(), "bob".to_string()];
-        let ranked = rank_mention_matches(&all, "al", || online(&["bob"]));
-        assert_eq!(names(&ranked), vec!["albert", "alice"]);
-    }
-
-    #[test]
-    fn rank_mention_matches_prefix_is_case_insensitive() {
-        let all = vec!["Alice".to_string(), "alBert".to_string()];
-        let ranked = rank_mention_matches(&all, "al", HashSet::new);
-        assert_eq!(names(&ranked), vec!["alBert", "Alice"]);
-    }
-
-    #[test]
-    fn rank_mention_matches_falls_back_to_alpha_when_no_online_info() {
-        let all = vec!["zed".to_string(), "alice".to_string(), "bob".to_string()];
-        let ranked = rank_mention_matches(&all, "", HashSet::new);
-        assert_eq!(names(&ranked), vec!["alice", "bob", "zed"]);
-        assert!(ranked.iter().all(|m| !m.online));
-    }
-
-    #[test]
-    fn rank_mention_matches_skips_online_set_when_prefix_excludes_all() {
-        // When the query filters everyone out, the online-set supplier must
-        // not be invoked — it's the expensive path (locks ActiveUsers).
-        let all = vec!["alice".to_string(), "bob".to_string()];
-        let ranked = rank_mention_matches(&all, "zz", || {
-            panic!("online_set should not be built when prefix filter is empty")
-        });
-        assert!(ranked.is_empty());
-    }
-
-    #[test]
-    fn rank_room_name_matches_filters_and_prefixes_non_dm_rooms() {
-        let rust = make_room(Uuid::from_u128(1), "topic", "public", false, Some("rust"));
-        let recipes = make_room(
-            Uuid::from_u128(2),
-            "topic",
-            "public",
-            false,
-            Some("recipes"),
-        );
-        let dm = make_room(Uuid::from_u128(3), "dm", "dm", false, None);
-
-        let rooms = [&rust.0, &recipes.0, &dm.0];
-        let ranked = rank_room_name_matches(rooms, "r");
-
-        assert_eq!(names(&ranked), vec!["recipes", "rust"]);
-        assert!(ranked.iter().all(|m| m.prefix == "#"));
-    }
-
-    #[test]
-    fn online_username_set_returns_empty_for_none() {
-        assert!(online_username_set(None).is_empty());
-    }
-
-    #[test]
-    fn online_username_set_lowercases_active_usernames() {
-        use crate::state::ActiveUser;
-        use std::sync::{Arc, Mutex};
-        use std::time::Instant;
-
-        let mut users: HashMap<Uuid, ActiveUser> = HashMap::new();
-        users.insert(
-            Uuid::now_v7(),
-            ActiveUser {
-                username: "Alice".to_string(),
-                fingerprint: None,
-                peer_ip: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
-                sessions: Vec::new(),
-                connection_count: 1,
-                last_login_at: Instant::now(),
-            },
-        );
-        users.insert(
-            Uuid::now_v7(),
-            ActiveUser {
-                username: "BOB".to_string(),
-                fingerprint: None,
-                peer_ip: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
-                sessions: Vec::new(),
-                connection_count: 2,
-                last_login_at: Instant::now(),
-            },
-        );
-        let active: ActiveUsers = Arc::new(Mutex::new(users));
-
-        let set = online_username_set(Some(&active));
-        assert_eq!(set, online(&["alice", "bob"]));
-    }
-
-    #[test]
-    fn reply_preview_text_uses_message_body_for_nested_replies() {
-        let preview = reply_preview_text("> @mat: original message preview\nyou like blocks?");
-        assert_eq!(preview, "you like blocks?");
-    }
-
-    #[test]
-    fn reply_preview_text_uses_news_title_for_news_messages() {
-        let preview = reply_preview_text(
-            "---NEWS--- Rust 1.95 Released || summary || https://example.com || ascii",
-        );
-        assert_eq!(preview, "Rust 1.95 Released");
-    }
-
-    #[test]
-    fn news_modal_source_uses_full_article_snapshot_payload() {
-        use late_core::models::article::{Article, ArticleFeedItem};
-
-        let created = chrono::DateTime::parse_from_rfc3339("2026-05-08T11:28:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let user_id = Uuid::from_u128(9);
-        let item = ArticleFeedItem {
-            article: Article {
-                id: Uuid::from_u128(1),
-                created,
-                updated: created,
-                user_id,
-                url: "https://example.com/full".to_string(),
-                title: "Full article title".to_string(),
-                summary: "First full bullet keeps all words for two-line modal wrapping.\nSecond full bullet also keeps all words without chat truncation.\nThird full bullet remains available."
-                    .to_string(),
-                ascii_art: ".:-".to_string(),
-            },
-            author_username: "mat".to_string(),
-        };
-
-        let (payload, author, source_created, article_id) =
-            news_modal_source_from_articles(&[item], " https://example.com/full ").unwrap();
-
-        assert_eq!(payload.title, "Full article title");
-        assert!(payload.summary.contains("without chat truncation"));
-        assert!(!payload.summary.contains("..."));
-        assert_eq!(payload.ascii_art, ".:-");
-        assert_eq!(author, "@mat");
-        assert_eq!(source_created, created);
-        assert_eq!(article_id, Uuid::from_u128(1));
-    }
-
-    #[test]
-    fn reply_preview_text_strips_markdown_markers() {
-        let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
-        assert_eq!(preview, "bold @graybeard docs");
-    }
-
-    #[test]
-    fn reply_preview_text_preserves_unmatched_backtick_in_kaomoji() {
-        let preview = reply_preview_text("(╯`Д´)╯︵ ┻━┻");
-        assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
-    }
-
-    #[test]
-    fn reply_preview_text_strips_double_backtick_code_markers() {
-        let preview = reply_preview_text("``(╯`Д´)╯︵ ┻━┻``");
-        assert_eq!(preview, "(╯`Д´)╯︵ ┻━┻");
-    }
-
-    #[test]
-    fn news_marker_detection_matches_announcement_messages() {
-        assert!(news_reply_preview_text("---NEWS--- title || summary || url || ascii").is_some());
-        assert!(news_reply_preview_text("regular chat message").is_none());
-    }
-
-    #[test]
-    fn moderation_server_toast_formats_kicks_and_bans() {
-        let base_user_id = Uuid::now_v7();
-        let kick = ModerationEvent::ServerUserAction {
-            actor_user_id: Uuid::now_v7(),
-            target_user_id: base_user_id,
-            target_username: "alice".to_string(),
-            action: ServerUserAction::Kick,
-            reason: "bye".to_string(),
-            terminated_sessions: 1,
-        };
-        let ban = ModerationEvent::ServerUserAction {
-            actor_user_id: Uuid::now_v7(),
-            target_user_id: base_user_id,
-            target_username: "bob".to_string(),
-            action: ServerUserAction::Ban,
-            reason: "spam".to_string(),
-            terminated_sessions: 2,
-        };
-
-        assert_eq!(
-            moderation_server_toast(&kick),
-            Some("@alice was kicked from the server".to_string())
-        );
-        assert_eq!(
-            moderation_server_toast(&ban),
-            Some("@bob was banned from the server".to_string())
-        );
-    }
-
-    #[test]
-    fn moderation_server_toast_ignores_unbans_and_non_server_events() {
-        let target_user_id = Uuid::now_v7();
-        let unban = ModerationEvent::ServerUserAction {
-            actor_user_id: Uuid::now_v7(),
-            target_user_id,
-            target_username: "alice".to_string(),
-            action: ServerUserAction::Unban,
-            reason: String::new(),
-            terminated_sessions: 0,
-        };
-        let room = ModerationEvent::RoomAction {
-            actor_user_id: Uuid::now_v7(),
-            target_user_id,
-            room_id: Uuid::now_v7(),
-            room_slug: "lounge".to_string(),
-            action: crate::moderation::command::RoomModAction::Kick,
-            reason: String::new(),
-            notified_sessions: 0,
-        };
-
-        assert_eq!(moderation_server_toast(&unban), None);
-        assert_eq!(moderation_server_toast(&room), None);
-    }
-
-    // --- parse_dm_command ---
-
-    #[test]
-    fn parse_dm_with_at() {
-        assert_eq!(parse_dm_command("/dm @alice"), Some("alice"));
-    }
-
-    #[test]
-    fn parse_dm_without_at() {
-        assert_eq!(parse_dm_command("/dm bob"), Some("bob"));
-    }
-
-    #[test]
-    fn parse_dm_empty_username() {
-        assert_eq!(parse_dm_command("/dm "), None);
-        assert_eq!(parse_dm_command("/dm @"), None);
-    }
-
-    #[test]
-    fn parse_dm_not_dm_command() {
-        assert_eq!(parse_dm_command("hello world"), None);
-        assert_eq!(parse_dm_command("/dms alice"), None);
-    }
-
-    #[test]
-    fn parse_dm_trims_whitespace() {
-        assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
-    }
-
-    // --- parse_roll_command ---
-
-    fn specs(items: &[(u32, u32)]) -> RollParse {
-        RollParse::Specs(
-            items
-                .iter()
-                .map(|&(count, sides)| DieSpec { count, sides })
-                .collect(),
-        )
-    }
-
-    #[test]
-    fn parse_roll_bare_defaults_to_d20() {
-        assert_eq!(parse_roll_command("/roll"), Some(specs(&[(1, 20)])));
-    }
-
-    #[test]
-    fn parse_roll_single_die_without_count() {
-        assert_eq!(parse_roll_command("/roll d6"), Some(specs(&[(1, 6)])));
-    }
-
-    #[test]
-    fn parse_roll_with_count() {
-        assert_eq!(parse_roll_command("/roll 3d6"), Some(specs(&[(3, 6)])));
-    }
-
-    #[test]
-    fn parse_roll_mixed_dice() {
-        assert_eq!(
-            parse_roll_command("/roll 3d6 2d20"),
-            Some(specs(&[(3, 6), (2, 20)]))
-        );
-    }
-
-    #[test]
-    fn parse_roll_trims_extra_whitespace() {
-        assert_eq!(
-            parse_roll_command("  /roll   3d6  2d20  "),
-            Some(specs(&[(3, 6), (2, 20)]))
-        );
-    }
-
-    #[test]
-    fn parse_roll_rejects_malformed_args() {
-        assert_eq!(parse_roll_command("/roll 3"), Some(RollParse::Invalid));
-        assert_eq!(parse_roll_command("/roll d"), Some(RollParse::Invalid));
-        assert_eq!(parse_roll_command("/roll 0d6"), Some(RollParse::Invalid));
-        assert_eq!(parse_roll_command("/roll 1d1"), Some(RollParse::Invalid));
-        assert_eq!(parse_roll_command("/roll xd6"), Some(RollParse::Invalid));
-        assert_eq!(
-            parse_roll_command("/roll 3d6 bogus"),
-            Some(RollParse::Invalid)
-        );
-    }
-
-    #[test]
-    fn parse_roll_enforces_caps() {
-        assert_eq!(parse_roll_command("/roll 101d6"), Some(RollParse::Invalid));
-        assert_eq!(parse_roll_command("/roll 1d1001"), Some(RollParse::Invalid));
-    }
-
-    #[test]
-    fn parse_roll_not_a_roll_command() {
-        assert_eq!(parse_roll_command("hello"), None);
-        assert_eq!(parse_roll_command("/rollover"), None);
-    }
-
-    #[test]
-    fn format_roll_result_single_group() {
-        let specs = vec![DieSpec { count: 3, sides: 6 }];
-        let rolls = vec![vec![1, 2, 5]];
-        assert_eq!(format_roll_result(&specs, &rolls), "3d6: [1 2 5] = 8");
-    }
-
-    #[test]
-    fn format_roll_result_single_die_omits_count() {
-        let specs = vec![DieSpec {
-            count: 1,
-            sides: 20,
-        }];
-        let rolls = vec![vec![12]];
-        assert_eq!(format_roll_result(&specs, &rolls), "d20: [12] = 12");
-    }
-
-    #[test]
-    fn format_formula_mixed() {
-        let specs = vec![
-            DieSpec {
-                count: 1,
-                sides: 20,
-            },
-            DieSpec { count: 3, sides: 6 },
-        ];
-        assert_eq!(format_formula(&specs), "d20 3d6");
-    }
-
-    #[test]
-    fn format_roll_result_mixed_groups() {
-        let specs = vec![
-            DieSpec { count: 3, sides: 6 },
-            DieSpec {
-                count: 2,
-                sides: 20,
-            },
-        ];
-        let rolls = vec![vec![2, 2, 5], vec![12, 20]];
-        assert_eq!(
-            format_roll_result(&specs, &rolls),
-            "3d6 2d20: [2 2 5] [12 20] = 41"
-        );
-    }
-
-    #[test]
-    fn roll_dice_respects_sides_and_count() {
-        let specs = vec![
-            DieSpec { count: 5, sides: 6 },
-            DieSpec {
-                count: 3,
-                sides: 20,
-            },
-        ];
-        let rolls = roll_dice(&specs, &mut rand_core::OsRng);
-        assert_eq!(rolls.len(), 2);
-        assert_eq!(rolls[0].len(), 5);
-        assert_eq!(rolls[1].len(), 3);
-        for v in &rolls[0] {
-            assert!((1..=6).contains(v));
-        }
-        for v in &rolls[1] {
-            assert!((1..=20).contains(v));
-        }
-    }
-
-    #[test]
-    fn new_chat_textarea_uses_theme_text_color() {
-        let textarea = new_chat_textarea();
-        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().bg, None);
-    }
-
-    #[test]
-    fn composer_cursor_visible_uses_explicit_theme_colors() {
-        let mut textarea = new_chat_textarea();
-        composer::set_themed_textarea_cursor_visible(&mut textarea, true);
-        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
-        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
-    }
-
-    #[test]
-    fn composer_cursor_hidden_restores_plain_text_color() {
-        let mut textarea = new_chat_textarea();
-        composer::set_themed_textarea_cursor_visible(&mut textarea, true);
-        composer::set_themed_textarea_cursor_visible(&mut textarea, false);
-        assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().bg, None);
-    }
-
-    #[test]
-    fn common_textarea_theme_refreshes_existing_chat_textarea_colors() {
-        theme::set_current_by_id("late");
-        let mut textarea = new_chat_textarea();
-        let late_text = textarea.style().fg;
-
-        theme::set_current_by_id("contrast");
-        composer::apply_themed_textarea_style(&mut textarea, true);
-
-        assert_ne!(textarea.style().fg, late_text);
-        assert_eq!(textarea.style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
-        assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
-        assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
-
-        theme::set_current_by_id("late");
-    }
-
-    #[test]
-    fn wrapped_index_wraps_forward() {
-        assert_eq!(wrapped_index(2, 1, 3), 0);
-        assert_eq!(wrapped_index(1, 5, 3), 0);
-    }
-
-    #[test]
-    fn wrapped_index_wraps_backward() {
-        assert_eq!(wrapped_index(0, -1, 3), 2);
-        assert_eq!(wrapped_index(1, -5, 3), 2);
-    }
-
-    fn make_room(
-        id: Uuid,
-        kind: &str,
-        visibility: &str,
-        permanent: bool,
-        slug: Option<&str>,
-    ) -> (ChatRoom, Vec<ChatMessage>) {
-        (
-            ChatRoom {
-                id,
-                created: chrono::Utc::now(),
-                updated: chrono::Utc::now(),
-                kind: kind.to_string(),
-                visibility: visibility.to_string(),
-                auto_join: permanent,
-                permanent,
-                slug: slug.map(str::to_string),
-                language_code: None,
-                dm_user_a: None,
-                dm_user_b: None,
-            },
-            Vec::new(),
-        )
-    }
-
-    #[test]
-    fn visual_order_matches_cozy_rail_grouping() {
-        let me = Uuid::from_u128(1);
-        let alice = Uuid::from_u128(2);
-        let bob = Uuid::from_u128(3);
-        let lounge = Uuid::from_u128(10);
-        let announcements = Uuid::from_u128(11);
-        let public_alpha = Uuid::from_u128(20);
-        let public_zeta = Uuid::from_u128(21);
-        let private_beta = Uuid::from_u128(30);
-        let game_table = Uuid::from_u128(40);
-        let dm_bob = make_dm(bob, me);
-        let dm_alice = make_dm(me, alice);
-
-        let mut usernames = HashMap::new();
-        usernames.insert(alice, "alice".to_string());
-        usernames.insert(bob, "bob".to_string());
-
-        let rooms = vec![
-            make_room(public_zeta, "topic", "public", false, Some("zeta")),
-            make_room(game_table, "game", "public", false, Some("bj-abc123")),
-            make_room(lounge, "lounge", "public", true, Some("lounge")),
-            (dm_bob.clone(), Vec::new()),
-            make_room(private_beta, "topic", "private", false, Some("beta")),
-            make_room(
-                announcements,
-                "topic",
-                "public",
-                true,
-                Some("announcements"),
-            ),
-            (dm_alice.clone(), Vec::new()),
-            make_room(public_alpha, "topic", "public", false, Some("alpha")),
-        ];
-
-        assert_eq!(
-            visual_order_for_rooms(RoomVisualOrderInput {
-                rooms: &rooms,
-                user_id: me,
-                usernames: &usernames,
-                unread_counts: &HashMap::new(),
-                room_last_message_at: &HashMap::new(),
-                feeds_available: true,
-                favorite_room_ids: &[],
-                collapsed_sections: &HashSet::new(),
-                ignored_user_ids: &HashSet::new(),
-            }),
-            vec![
-                RoomSlot::Room(lounge),
-                RoomSlot::Room(announcements),
-                RoomSlot::Notifications,
-                RoomSlot::News,
-                RoomSlot::Feeds,
-                RoomSlot::Discover,
-                RoomSlot::Room(public_zeta),
-                RoomSlot::Room(private_beta),
-                RoomSlot::Room(public_alpha),
-                RoomSlot::Room(dm_alice.id),
-                RoomSlot::Room(dm_bob.id),
-            ]
-        );
-    }
-
-    #[test]
-    fn room_section_label_round_trips() {
-        for section in [
-            RoomSection::Favorites,
-            RoomSection::Core,
-            RoomSection::Channels,
-            RoomSection::Updates,
-            RoomSection::Dms,
-        ] {
-            assert_eq!(RoomSection::from_label(section.label()), Some(section));
-        }
-        assert_eq!(RoomSection::from_label("not-a-section"), None);
-    }
-
-    #[test]
-    fn collapsed_sections_drop_their_rooms_from_visual_order() {
-        let me = Uuid::from_u128(1);
-        let bob = Uuid::from_u128(3);
-        let lounge = Uuid::from_u128(10);
-        let announcements = Uuid::from_u128(11);
-        let public_alpha = Uuid::from_u128(20);
-        let dm_bob = make_dm(bob, me);
-        let usernames = HashMap::new();
-
-        let rooms = vec![
-            make_room(lounge, "lounge", "public", true, Some("lounge")),
-            make_room(
-                announcements,
-                "topic",
-                "public",
-                true,
-                Some("announcements"),
-            ),
-            make_room(public_alpha, "topic", "public", false, Some("alpha")),
-            (dm_bob.clone(), Vec::new()),
-        ];
-        let order = |collapsed: &HashSet<RoomSection>| {
-            visual_order_for_rooms(RoomVisualOrderInput {
-                rooms: &rooms,
-                user_id: me,
-                usernames: &usernames,
-                unread_counts: &HashMap::new(),
-                room_last_message_at: &HashMap::new(),
-                feeds_available: false,
-                favorite_room_ids: &[],
-                collapsed_sections: collapsed,
-                ignored_user_ids: &HashSet::new(),
-            })
-        };
-
-        // Nothing collapsed: every section's rooms are present.
-        let full = order(&HashSet::new());
-        assert!(full.contains(&RoomSlot::Room(lounge)));
-        assert!(full.contains(&RoomSlot::Room(public_alpha)));
-        assert!(full.contains(&RoomSlot::Room(dm_bob.id)));
-
-        // Channels collapsed: the channel drops out, Core/Updates/DMs stay.
-        let channels_collapsed = HashSet::from([RoomSection::Channels]);
-        let c = order(&channels_collapsed);
-        assert!(!c.contains(&RoomSlot::Room(public_alpha)));
-        assert!(c.contains(&RoomSlot::Room(lounge)));
-        assert!(c.contains(&RoomSlot::News));
-        assert!(c.contains(&RoomSlot::Room(dm_bob.id)));
-
-        // Core collapsed: core rooms and the core synthetic slots drop out.
-        let core_collapsed = HashSet::from([RoomSection::Core]);
-        let co = order(&core_collapsed);
-        assert!(!co.contains(&RoomSlot::Room(lounge)));
-        assert!(!co.contains(&RoomSlot::Room(announcements)));
-        assert!(!co.contains(&RoomSlot::Notifications));
-        assert!(!co.contains(&RoomSlot::News));
-        // Discover now lives at the bottom of Core, so it collapses with it.
-        assert!(!co.contains(&RoomSlot::Discover));
-        assert!(co.contains(&RoomSlot::Room(public_alpha)));
-
-        // Updates is now hosted by the Directory page, not the Home rail.
-        let updates_collapsed = HashSet::from([RoomSection::Updates]);
-        let u = order(&updates_collapsed);
-        assert!(u.contains(&RoomSlot::News));
-        assert!(!u.contains(&RoomSlot::Showcase));
-        assert!(!u.contains(&RoomSlot::Work));
-        // Discover lives in Core, which is expanded here, so it stays present.
-        assert!(u.contains(&RoomSlot::Discover));
-
-        // DMs collapsed: the DM drops out.
-        let dms_collapsed = HashSet::from([RoomSection::Dms]);
-        let d = order(&dms_collapsed);
-        assert!(!d.contains(&RoomSlot::Room(dm_bob.id)));
-        assert!(d.contains(&RoomSlot::Room(lounge)));
-    }
-
-    #[test]
-    fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
-        let me = Uuid::from_u128(1);
-        let alice = Uuid::from_u128(2);
-        let bob = Uuid::from_u128(3);
-        let dm_alice = make_dm(me, alice);
-        let dm_bob = make_dm(me, bob);
-        let older = chrono::Utc::now();
-        let newer = older + chrono::Duration::minutes(1);
-        let loaded_newer = newer + chrono::Duration::minutes(1);
-
-        let mut usernames = HashMap::new();
-        usernames.insert(alice, "alice".to_string());
-        usernames.insert(bob, "bob".to_string());
-
-        let rooms = vec![
-            (
-                dm_alice.clone(),
-                vec![ChatMessage {
-                    room_id: dm_alice.id,
-                    created: loaded_newer,
-                    updated: loaded_newer,
-                    ..make_msg(Uuid::from_u128(50))
-                }],
-            ),
-            (dm_bob.clone(), Vec::new()),
-        ];
-        let mut room_last_message_at = HashMap::new();
-        room_last_message_at.insert(dm_alice.id, Some(older));
-        room_last_message_at.insert(dm_bob.id, Some(newer));
-
-        let order = visual_order_for_rooms(RoomVisualOrderInput {
-            rooms: &rooms,
-            user_id: me,
-            usernames: &usernames,
-            unread_counts: &HashMap::new(),
-            room_last_message_at: &room_last_message_at,
-            feeds_available: false,
-            favorite_room_ids: &[],
-            collapsed_sections: &HashSet::new(),
-            ignored_user_ids: &HashSet::new(),
-        });
-        let dm_order: Vec<_> = order
-            .into_iter()
-            .filter_map(|slot| match slot {
-                RoomSlot::Room(room_id) => Some(room_id),
-                _ => None,
-            })
-            .collect();
-
-        assert_eq!(dm_order, vec![dm_bob.id, dm_alice.id]);
-    }
-
-    #[test]
-    fn visual_order_hides_dm_with_ignored_peer() {
-        let me = Uuid::from_u128(1);
-        let alice = Uuid::from_u128(2);
-        let bob = Uuid::from_u128(3);
-        let dm_alice = make_dm(me, alice);
-        let dm_bob = make_dm(me, bob);
-
-        let mut usernames = HashMap::new();
-        usernames.insert(alice, "alice".to_string());
-        usernames.insert(bob, "bob".to_string());
-
-        let rooms = vec![(dm_alice.clone(), Vec::new()), (dm_bob.clone(), Vec::new())];
-        let ignored = HashSet::from([bob]);
-
-        let order = visual_order_for_rooms(RoomVisualOrderInput {
-            rooms: &rooms,
-            user_id: me,
-            usernames: &usernames,
-            unread_counts: &HashMap::new(),
-            room_last_message_at: &HashMap::new(),
-            feeds_available: false,
-            favorite_room_ids: &[],
-            collapsed_sections: &HashSet::new(),
-            ignored_user_ids: &ignored,
-        });
-
-        assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
-        // The ignored peer's DM must not resurface in the rail.
-        assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
-
-        // Even when favorited, an ignored peer's DM stays hidden from every
-        // section so it can't be jump-addressable via the favorites path.
-        let favorited = visual_order_for_rooms(RoomVisualOrderInput {
-            rooms: &rooms,
-            user_id: me,
-            usernames: &usernames,
-            unread_counts: &HashMap::new(),
-            room_last_message_at: &HashMap::new(),
-            feeds_available: false,
-            favorite_room_ids: &[dm_bob.id],
-            collapsed_sections: &HashSet::new(),
-            ignored_user_ids: &ignored,
-        });
-        assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
-    }
-
-    #[test]
-    fn message_is_ignored_in_covers_author_and_reply_target() {
-        let ignored_user = Uuid::from_u128(2);
-        let other = Uuid::from_u128(3);
-        let bot = Uuid::from_u128(4);
-        let ignored = HashSet::from([ignored_user]);
-
-        // Author ignored.
-        let mut by_author = make_msg(Uuid::from_u128(10));
-        by_author.user_id = ignored_user;
-        assert!(message_is_ignored_in(&ignored, &by_author));
-
-        // Bot reply directed at the ignored user.
-        let mut bot_reply = make_msg(Uuid::from_u128(11));
-        bot_reply.user_id = bot;
-        bot_reply.reply_to_user_id = Some(ignored_user);
-        assert!(message_is_ignored_in(&ignored, &bot_reply));
-
-        // Bot reply directed at someone else is kept.
-        let mut other_reply = make_msg(Uuid::from_u128(12));
-        other_reply.user_id = bot;
-        other_reply.reply_to_user_id = Some(other);
-        assert!(!message_is_ignored_in(&ignored, &other_reply));
-
-        // Ordinary message from a non-ignored author is kept.
-        let mut normal = make_msg(Uuid::from_u128(13));
-        normal.user_id = other;
-        assert!(!message_is_ignored_in(&ignored, &normal));
-    }
-
-    #[test]
-    fn adjacent_composer_room_skips_virtual_slots() {
-        let room_a = Uuid::from_u128(1);
-        let room_b = Uuid::from_u128(2);
-        let room_c = Uuid::from_u128(3);
-        let order = vec![
-            RoomSlot::Room(room_a),
-            RoomSlot::News,
-            RoomSlot::Showcase,
-            RoomSlot::Work,
-            RoomSlot::Notifications,
-            RoomSlot::Discover,
-            RoomSlot::Room(room_b),
-            RoomSlot::Room(room_c),
-        ];
-
-        assert_eq!(
-            adjacent_composer_room(&order, Some(room_a), 1),
-            Some(room_b)
-        );
-        assert_eq!(
-            adjacent_composer_room(&order, Some(room_b), -1),
-            Some(room_a)
-        );
-        assert_eq!(
-            adjacent_composer_room(&order, Some(room_c), 1),
-            Some(room_a)
-        );
-    }
-
-    #[test]
-    fn adjacent_composer_room_returns_none_without_real_rooms() {
-        let order = vec![
-            RoomSlot::News,
-            RoomSlot::Showcase,
-            RoomSlot::Work,
-            RoomSlot::Notifications,
-            RoomSlot::Discover,
-        ];
-        assert_eq!(adjacent_composer_room(&order, None, 1), None);
-    }
-
-    #[test]
-    fn room_membership_command_target_ignores_stale_real_room_for_synthetic_entries() {
-        let stale_room = Uuid::from_u128(1);
-        let selected = SelectedRoomSlotState {
-            selected_room_id: Some(stale_room),
-            news_selected: true,
-            ..SelectedRoomSlotState::default()
-        };
-
-        assert_eq!(room_membership_command_target(None, selected), None);
-    }
-
-    #[test]
-    fn current_slot_prefers_synthetic_entry_over_stale_room_id() {
-        let stale_room = Uuid::from_u128(1);
-        let selected = SelectedRoomSlotState {
-            selected_room_id: Some(stale_room),
-            work_selected: true,
-            ..SelectedRoomSlotState::default()
-        };
-
-        assert_eq!(current_slot_from_state(selected), Some(RoomSlot::Work));
-    }
-
-    #[test]
-    fn room_membership_command_target_prefers_active_composer_room() {
-        let stale_room = Uuid::from_u128(1);
-        let composer_room = Uuid::from_u128(2);
-        let selected = SelectedRoomSlotState {
-            selected_room_id: Some(stale_room),
-            news_selected: true,
-            ..SelectedRoomSlotState::default()
-        };
-
-        assert_eq!(
-            room_membership_command_target(Some(composer_room), selected),
-            Some(composer_room)
-        );
-    }
-
-    #[test]
-    fn room_slug_for_uses_explicit_room_id() {
-        let lounge_id = Uuid::from_u128(11);
-        let announcements_id = Uuid::from_u128(12);
-        let rooms = vec![
-            (
-                ChatRoom {
-                    id: lounge_id,
-                    created: chrono::Utc::now(),
-                    updated: chrono::Utc::now(),
-                    kind: "lounge".to_string(),
-                    visibility: "public".to_string(),
-                    auto_join: true,
-                    permanent: true,
-                    slug: Some("lounge".to_string()),
-                    language_code: None,
-                    dm_user_a: None,
-                    dm_user_b: None,
-                },
-                vec![],
-            ),
-            (
-                ChatRoom {
-                    id: announcements_id,
-                    created: chrono::Utc::now(),
-                    updated: chrono::Utc::now(),
-                    kind: "topic".to_string(),
-                    visibility: "public".to_string(),
-                    auto_join: true,
-                    permanent: true,
-                    slug: Some("announcements".to_string()),
-                    language_code: None,
-                    dm_user_a: None,
-                    dm_user_b: None,
-                },
-                vec![],
-            ),
-        ];
-
-        assert_eq!(room_slug_for(&rooms, lounge_id), Some("lounge".to_string()));
-        assert_eq!(
-            room_slug_for(&rooms, announcements_id),
-            Some("announcements".to_string())
-        );
-    }
-
-    #[test]
-    fn room_jump_keys_continue_with_uppercase_after_digits() {
-        assert_eq!(
-            ROOM_JUMP_KEYS,
-            b"asdfghjklqwertyuiopzxcvbnm1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        );
-    }
-
-    #[test]
-    fn resolve_room_jump_target_is_case_sensitive() {
-        let room_id = Uuid::from_u128(7);
-        let uppercase_room_id = Uuid::from_u128(8);
-        let targets = [
-            (b'a', RoomSlot::Room(room_id)),
-            (b'A', RoomSlot::Room(uppercase_room_id)),
-            (b's', RoomSlot::News),
-            (b'd', RoomSlot::Showcase),
-            (b'w', RoomSlot::Work),
-            (b'f', RoomSlot::Notifications),
-            (b'g', RoomSlot::Discover),
-        ];
-
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'A'),
-            Some(RoomSlot::Room(uppercase_room_id))
-        );
-        assert_eq!(
-            resolve_room_jump_target(&targets, b's'),
-            Some(RoomSlot::News)
-        );
-        assert_eq!(resolve_room_jump_target(&targets, b'D'), None);
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'w'),
-            Some(RoomSlot::Work)
-        );
-        assert_eq!(
-            resolve_room_jump_target(&targets, b'f'),
-            Some(RoomSlot::Notifications)
-        );
-        assert_eq!(resolve_room_jump_target(&targets, b'G'), None);
-        assert_eq!(resolve_room_jump_target(&targets, b'x'), None);
-    }
-
-    #[test]
-    fn parse_user_command_with_username() {
-        assert_eq!(
-            parse_user_command("/ignore @alice", "/ignore"),
-            Some(Some("alice"))
-        );
-        assert_eq!(
-            parse_user_command("/unignore bob", "/unignore"),
-            Some(Some("bob"))
-        );
-    }
-
-    #[test]
-    fn parse_user_command_lists_when_username_missing() {
-        assert_eq!(parse_user_command("/ignore", "/ignore"), Some(None));
-        assert_eq!(parse_user_command("/ignore   ", "/ignore"), Some(None));
-        assert_eq!(parse_user_command("/ignore @", "/ignore"), Some(None));
-        assert_eq!(parse_user_command("/unignore", "/unignore"), Some(None));
-    }
-
-    #[test]
-    fn parse_user_command_rejects_non_matches() {
-        assert_eq!(parse_user_command("ignore alice", "/ignore"), None);
-        assert_eq!(parse_user_command("/ignored alice", "/ignore"), None);
-        assert_eq!(parse_user_command("/unignored alice", "/unignore"), None);
-    }
-
-    #[test]
-    fn parse_public_room_with_hash() {
-        assert_eq!(
-            parse_room_command("/public #lobby", "/public"),
-            Some("lobby")
-        );
-    }
-
-    #[test]
-    fn parse_public_room_without_hash() {
-        assert_eq!(
-            parse_room_command("/public lobby", "/public"),
-            Some("lobby")
-        );
-    }
-
-    #[test]
-    fn parse_private_room_with_hash() {
-        assert_eq!(
-            parse_room_command("/private #hideout", "/private"),
-            Some("hideout")
-        );
-    }
-
-    #[test]
-    fn parse_private_room_empty() {
-        assert_eq!(parse_room_command("/private ", "/private"), None);
-        assert_eq!(parse_room_command("/private #", "/private"), None);
-    }
-
-    #[test]
-    fn parse_private_room_not_command() {
-        assert_eq!(parse_room_command("hello", "/private"), None);
-        assert_eq!(parse_room_command("/privates foo", "/private"), None);
-    }
-
-    #[test]
-    fn user_created_channel_name_length_allows_16_chars() {
-        assert!(!user_created_channel_name_too_long("1234567890123456"));
-    }
-
-    #[test]
-    fn user_created_channel_name_length_rejects_more_than_16_chars() {
-        assert!(user_created_channel_name_too_long("12345678901234567"));
-    }
-
-    #[test]
-    fn user_created_channel_name_length_counts_chars_not_bytes() {
-        let sixteen = "界".repeat(16);
-        let seventeen = "界".repeat(17);
-
-        assert!(!user_created_channel_name_too_long(&sixteen));
-        assert!(user_created_channel_name_too_long(&seventeen));
-    }
-
-    #[test]
-    fn parse_room_command_keeps_legacy_long_slugs_parseable() {
-        assert_eq!(
-            parse_room_command("/public #very-long-legacy-channel", "/public"),
-            Some("very-long-legacy-channel")
-        );
-    }
-
-    #[test]
-    fn parse_create_room_with_hash() {
-        assert_eq!(
-            parse_create_room_command("/create-room #announcements"),
-            Some("announcements")
-        );
-    }
-
-    #[test]
-    fn parse_create_room_without_hash() {
-        assert_eq!(
-            parse_create_room_command("/create-room announcements"),
-            Some("announcements")
-        );
-    }
-
-    #[test]
-    fn parse_create_room_empty() {
-        assert_eq!(parse_create_room_command("/create-room "), None);
-        assert_eq!(parse_create_room_command("/create-room #"), None);
-    }
-
-    #[test]
-    fn parse_create_room_not_command() {
-        assert_eq!(parse_create_room_command("hello"), None);
-        assert_eq!(parse_create_room_command("/create-rooms foo"), None);
-    }
-
-    #[test]
-    fn parse_delete_room_with_hash() {
-        assert_eq!(
-            parse_delete_room_command("/delete-room #announcements"),
-            Some("announcements")
-        );
-    }
-
-    #[test]
-    fn parse_delete_room_without_hash() {
-        assert_eq!(
-            parse_delete_room_command("/delete-room announcements"),
-            Some("announcements")
-        );
-    }
-
-    #[test]
-    fn parse_delete_room_empty() {
-        assert_eq!(parse_delete_room_command("/delete-room "), None);
-    }
-
-    #[test]
-    fn parse_delete_room_not_command() {
-        assert_eq!(parse_delete_room_command("hello"), None);
-    }
-
-    #[test]
-    fn parse_fill_room_with_hash() {
-        assert_eq!(
-            parse_fill_room_command("/fill-room #announcements"),
-            Some("announcements")
-        );
-    }
-
-    #[test]
-    fn parse_fill_room_without_hash() {
-        assert_eq!(
-            parse_fill_room_command("/fill-room announcements"),
-            Some("announcements")
-        );
-    }
-
-    #[test]
-    fn parse_fill_room_empty() {
-        assert_eq!(parse_fill_room_command("/fill-room "), None);
-        assert_eq!(parse_fill_room_command("/fill-room #"), None);
-    }
-
-    #[test]
-    fn parse_fill_room_not_command() {
-        assert_eq!(parse_fill_room_command("hello"), None);
-        assert_eq!(parse_fill_room_command("/fill-rooms foo"), None);
-    }
-
-    #[test]
-    fn parse_cup_command_matches_coffee_and_tea_case_insensitively() {
-        assert_eq!(parse_cup_command("/coffee"), Some(CupKind::Coffee));
-        assert_eq!(parse_cup_command("/Coffee"), Some(CupKind::Coffee));
-        assert_eq!(parse_cup_command("  /COFFEE  "), Some(CupKind::Coffee));
-        assert_eq!(parse_cup_command("/tea"), Some(CupKind::Tea));
-        assert_eq!(parse_cup_command("/TEA"), Some(CupKind::Tea));
-    }
-
-    #[test]
-    fn parse_cup_command_rejects_arguments_and_typos() {
-        // Arguments fall through so the typo handler can still flag "/coffe".
-        assert_eq!(parse_cup_command("/coffee please"), None);
-        assert_eq!(parse_cup_command("/tea time"), None);
-        assert_eq!(parse_cup_command("/coffe"), None);
-        assert_eq!(parse_cup_command("/teas"), None);
-        assert_eq!(parse_cup_command("hello"), None);
-        assert_eq!(parse_cup_command(""), None);
-    }
-
-    #[test]
-    fn cup_art_uses_kind_specific_silhouette() {
-        let coffee = cup_art(CupKind::Coffee, 0);
-        assert!(
-            coffee.ends_with("c[_]"),
-            "coffee should end with mug glyph, got {coffee:?}"
-        );
-        let tea = cup_art(CupKind::Tea, 0);
-        assert!(
-            tea.ends_with("\\___/"),
-            "tea should end with handle-less cup, got {tea:?}"
-        );
-    }
-
-    #[test]
-    fn cup_art_rotates_steam_pattern_with_variant() {
-        let v0 = cup_art(CupKind::Coffee, 0);
-        let v1 = cup_art(CupKind::Coffee, 1);
-        let v2 = cup_art(CupKind::Coffee, 2);
-        let v3 = cup_art(CupKind::Coffee, 3);
-        assert_ne!(v0, v1);
-        assert_ne!(v1, v2);
-        assert_ne!(v2, v3);
-        // CUP_VARIANT_COUNT is the period — variant 4 wraps to variant 0.
-        assert_eq!(cup_art(CupKind::Coffee, 4), v0);
-    }
-
-    #[test]
-    fn unknown_slash_command_detects_typo() {
-        assert_eq!(unknown_slash_command("/lsit"), Some("/lsit"));
-        assert_eq!(unknown_slash_command("/lsit #lounge"), Some("/lsit"));
-    }
-
-    #[test]
-    fn unknown_slash_command_ignores_regular_messages_and_multiline_text() {
-        assert_eq!(unknown_slash_command("hello"), None);
-        assert_eq!(unknown_slash_command("// not a command"), None);
-        assert_eq!(unknown_slash_command("/bin/ls\nstill talking"), None);
-    }
-
-    fn petname_request(input: &str) -> Option<PetnameRequest> {
-        match parse_petname_command(input) {
-            Some(PetnameParse::Request(r)) => Some(r),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn parse_petname_show_set_clear() {
-        assert_eq!(petname_request("/petname"), Some(PetnameRequest::Show));
-        assert_eq!(petname_request("/petname    "), Some(PetnameRequest::Show));
-        assert_eq!(
-            petname_request("/petname Whiskers"),
-            Some(PetnameRequest::Set("Whiskers".to_string()))
-        );
-        // Inner whitespace runs collapse to a single space.
-        assert_eq!(
-            petname_request("/petname Sir   Hopkins"),
-            Some(PetnameRequest::Set("Sir Hopkins".to_string()))
-        );
-        for word in ["clear", "remove", "none", "off", "CLEAR"] {
-            assert_eq!(
-                petname_request(&format!("/petname {word}")),
-                Some(PetnameRequest::Clear),
-                "{word}"
-            );
-        }
-    }
-
-    #[test]
-    fn parse_petname_ignores_non_petname_lines() {
-        assert!(parse_petname_command("/petnames").is_none());
-        assert!(parse_petname_command("/petnamer").is_none());
-        assert!(parse_petname_command("rename my pet").is_none());
-        assert!(parse_petname_command("/dm @alice").is_none());
-    }
-
-    #[test]
-    fn format_active_user_lines_sorts_and_shows_session_counts() {
-        let friend_id = Uuid::now_v7();
-        let active_users = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([
-            (
-                friend_id,
-                ActiveUser {
-                    username: "zoe".to_string(),
-                    fingerprint: None,
-                    peer_ip: None,
-                    audio_source: late_core::models::user::AudioSource::Icecast,
-                    sessions: Vec::new(),
-                    connection_count: 2,
-                    last_login_at: std::time::Instant::now(),
-                },
-            ),
-            (
-                Uuid::now_v7(),
-                ActiveUser {
-                    username: "alice".to_string(),
-                    fingerprint: None,
-                    peer_ip: None,
-                    audio_source: late_core::models::user::AudioSource::Icecast,
-                    sessions: Vec::new(),
-                    connection_count: 1,
-                    last_login_at: std::time::Instant::now(),
-                },
-            ),
-        ])));
-
-        assert_eq!(
-            format_active_user_lines(Some(&active_users), &HashSet::new()),
-            vec!["@alice".to_string(), "@zoe (2 sessions)".to_string()]
-        );
-        assert_eq!(
-            format_active_user_lines(Some(&active_users), &HashSet::from([friend_id])),
-            vec!["@alice".to_string(), "★ @zoe (2 sessions)".to_string()]
-        );
-    }
-
-    #[test]
-    fn format_active_user_lines_handles_missing_registry() {
-        assert_eq!(
-            format_active_user_lines(None, &HashSet::new()),
-            vec!["Active user list unavailable".to_string()]
-        );
-    }
-
-    // --- adjacent_message_id (delete-and-advance) ---
-
-    fn make_msg(id: Uuid) -> ChatMessage {
-        ChatMessage {
-            id,
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            pinned: false,
-            reply_to_message_id: None,
-            reply_to_user_id: None,
-            room_id: Uuid::from_u128(999),
-            user_id: Uuid::from_u128(999),
-            body: String::new(),
-        }
-    }
-
-    fn make_reply_msg(id: Uuid, reply_to_message_id: Uuid) -> ChatMessage {
-        ChatMessage {
-            reply_to_message_id: Some(reply_to_message_id),
-            ..make_msg(id)
-        }
-    }
-
-    #[test]
-    fn inline_image_url_in_body_accepts_image_url_with_query() {
-        assert_eq!(
-            inline_image_url_in_body("look https://example.com/image.webp?size=large"),
-            Some("https://example.com/image.webp?size=large".to_string())
-        );
-    }
-
-    #[test]
-    fn inline_image_request_candidates_scan_newest_messages_first() {
-        let now = Instant::now();
-        let mut messages: Vec<ChatMessage> = (1..=101)
-            .map(|idx| make_msg(Uuid::from_u128(idx)))
-            .collect();
-        messages[0].body = "https://files.example.com/newest.png".to_string();
-
-        let requests = inline_image_request_candidates(
-            &messages,
-            &HashSet::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            now,
-        );
-
-        assert_eq!(
-            requests,
-            vec![(
-                messages[0].id,
-                "https://files.example.com/newest.png".to_string()
-            )]
-        );
-    }
-
-    #[test]
-    fn inline_image_request_candidates_respect_retry_backoff() {
-        let now = Instant::now();
-        let mut message = make_msg(Uuid::from_u128(1));
-        message.body = "https://files.example.com/pending.png".to_string();
-        let messages = vec![message.clone()];
-        let mut failures = HashMap::from([(
-            message.id,
-            InlineImageFailure {
-                attempts: 1,
-                next_retry_at: now + Duration::from_secs(5),
-            },
-        )]);
-
-        assert!(
-            inline_image_request_candidates(
-                &messages,
-                &HashSet::new(),
-                &HashMap::new(),
-                &failures,
-                now,
-            )
-            .is_empty()
-        );
-
-        failures.insert(
-            message.id,
-            InlineImageFailure {
-                attempts: 1,
-                next_retry_at: now - Duration::from_secs(1),
-            },
-        );
-        assert_eq!(
-            inline_image_request_candidates(
-                &messages,
-                &HashSet::new(),
-                &HashMap::new(),
-                &failures,
-                now,
-            ),
-            vec![(
-                message.id,
-                "https://files.example.com/pending.png".to_string()
-            )]
-        );
-
-        failures.insert(
-            message.id,
-            InlineImageFailure {
-                attempts: INLINE_IMAGE_MAX_FAILURES,
-                next_retry_at: now - Duration::from_secs(1),
-            },
-        );
-        assert!(
-            inline_image_request_candidates(
-                &messages,
-                &HashSet::new(),
-                &HashMap::new(),
-                &failures,
-                now,
-            )
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn adjacent_message_id_returns_none_for_empty_list() {
-        assert_eq!(adjacent_message_id(&[], Uuid::from_u128(1)), None);
-    }
-
-    #[test]
-    fn adjacent_message_id_returns_none_when_not_in_list() {
-        let msgs = vec![make_msg(Uuid::from_u128(1))];
-        assert_eq!(adjacent_message_id(&msgs, Uuid::from_u128(99)), None);
-    }
-
-    #[test]
-    fn adjacent_message_id_prefers_next_index_older_message() {
-        // List is newest-first: [0]=newest, [1]=middle, [2]=oldest.
-        // Deleting the middle should land on the oldest (idx+1).
-        let a = Uuid::from_u128(1);
-        let b = Uuid::from_u128(2);
-        let c = Uuid::from_u128(3);
-        let msgs = vec![make_msg(a), make_msg(b), make_msg(c)];
-        assert_eq!(adjacent_message_id(&msgs, b), Some(c));
-    }
-
-    #[test]
-    fn adjacent_message_id_falls_back_to_previous_for_last_item() {
-        // Deleting the oldest (last index) should land on the previous-older
-        // message (idx-1), i.e., the next-oldest remaining.
-        let a = Uuid::from_u128(1);
-        let b = Uuid::from_u128(2);
-        let c = Uuid::from_u128(3);
-        let msgs = vec![make_msg(a), make_msg(b), make_msg(c)];
-        assert_eq!(adjacent_message_id(&msgs, c), Some(b));
-    }
-
-    #[test]
-    fn adjacent_message_id_returns_none_for_sole_item() {
-        let a = Uuid::from_u128(1);
-        let msgs = vec![make_msg(a)];
-        assert_eq!(adjacent_message_id(&msgs, a), None);
-    }
-
-    #[test]
-    fn loaded_reply_target_id_returns_loaded_target() {
-        let reply = Uuid::from_u128(1);
-        let original = Uuid::from_u128(2);
-        let msgs = vec![make_reply_msg(reply, original), make_msg(original)];
-
-        assert_eq!(loaded_reply_target_id(&msgs, reply), Some(Some(original)));
-    }
-
-    #[test]
-    fn loaded_reply_target_id_returns_none_inner_when_target_not_loaded() {
-        let reply = Uuid::from_u128(1);
-        let original = Uuid::from_u128(2);
-        let msgs = vec![make_reply_msg(reply, original)];
-
-        assert_eq!(loaded_reply_target_id(&msgs, reply), Some(None));
-    }
-
-    #[test]
-    fn loaded_reply_target_id_rejects_non_reply_messages() {
-        let message = Uuid::from_u128(1);
-        let msgs = vec![make_msg(message)];
-
-        assert_eq!(loaded_reply_target_id(&msgs, message), None);
-    }
-
-    // --- dm_sort_key (regression: nav order must match UI order) ---
-
-    fn make_dm(user_a: Uuid, user_b: Uuid) -> ChatRoom {
-        ChatRoom {
-            id: Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext)),
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            kind: "dm".to_string(),
-            visibility: "dm".to_string(),
-            auto_join: false,
-            permanent: false,
-            slug: None,
-            language_code: None,
-            dm_user_a: Some(user_a),
-            dm_user_b: Some(user_b),
-        }
-    }
-
-    #[test]
-    fn dm_sort_key_resolves_other_users_name() {
-        let me = Uuid::from_u128(1);
-        let alice = Uuid::from_u128(2);
-        let bob = Uuid::from_u128(3);
-
-        let mut usernames = HashMap::new();
-        usernames.insert(me, "me".to_string());
-        usernames.insert(alice, "alice".to_string());
-        usernames.insert(bob, "bob".to_string());
-
-        let room = make_dm(me, alice);
-        assert_eq!(dm_sort_key(&room, me, &usernames), "@alice");
-
-        // Works regardless of which slot I'm in
-        let room = make_dm(bob, me);
-        assert_eq!(dm_sort_key(&room, me, &usernames), "@bob");
-    }
-
-    #[test]
-    fn dm_sort_key_orders_alphabetically_by_display_name() {
-        let me = Uuid::from_u128(1);
-        let alice = Uuid::from_u128(2);
-        let charlie = Uuid::from_u128(3);
-        let bob = Uuid::from_u128(4);
-
-        let mut usernames = HashMap::new();
-        usernames.insert(alice, "alice".to_string());
-        usernames.insert(charlie, "charlie".to_string());
-        usernames.insert(bob, "bob".to_string());
-
-        let mut dms = [make_dm(me, charlie), make_dm(me, alice), make_dm(bob, me)];
-        dms.sort_by_key(|r| dm_sort_key(r, me, &usernames));
-
-        let names: Vec<_> = dms.iter().map(|r| dm_sort_key(r, me, &usernames)).collect();
-        assert_eq!(names, vec!["@alice", "@bob", "@charlie"]);
-    }
-
-    #[test]
-    fn parse_brb_bare_command() {
-        assert_eq!(parse_brb_command("/brb"), Some(String::new()));
-    }
-
-    #[test]
-    fn parse_brb_with_message() {
-        assert_eq!(
-            parse_brb_command("/brb grabbing coffee"),
-            Some("grabbing coffee".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_brb_trims_whitespace() {
-        assert_eq!(parse_brb_command("  /brb  "), Some(String::new()));
-        assert_eq!(
-            parse_brb_command("/brb   lots of spaces   "),
-            Some("lots of spaces".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_brb_rejects_non_command() {
-        assert_eq!(parse_brb_command("brb"), None);
-        assert_eq!(parse_brb_command("/brbx something"), None);
-        assert_eq!(parse_brb_command("hello /brb"), None);
-        assert_eq!(parse_brb_command(""), None);
-    }
-}
+#[path = "state_internal_test.rs"]
+mod state_internal_test;

@@ -1,33 +1,34 @@
 use anyhow::{Context, Result};
 use std::{
     env,
-    io::BufRead,
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 mod audio;
 mod clipboard;
 
 mod config;
 mod identity;
+mod mpris;
 mod pty;
 mod raw_mode;
 mod ssh;
 mod update;
 mod voice;
-mod webview;
 mod ws;
 
 use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
-use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
+use raw_mode::{RawModeGuard, SessionModesGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
-    PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_viz_ws,
+    MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
+    PairClientInfo, PairRetryPolicy, PairRuntime, PlaybackState, ReconnectPlan,
+    WebviewPlaybackController, client_platform_label, establish_pair_session, run_pair_session,
 };
 
 #[tokio::main]
@@ -69,6 +70,10 @@ async fn main() -> Result<()> {
         .ssh_mode
         .uses_cli_raw_mode()
         .then(RawModeGuard::enable_if_tty);
+    // Declared after the raw-mode guard so it drops first: every way out of
+    // the session below, clean or not, leaves the shell without mouse
+    // reporting or bracketed paste.
+    let _session_modes = SessionModesGuard::enable_if_tty();
 
     if config.ssh_mode == config::SshMode::OpenSsh {
         return run_openssh_mode(config, ssh_identity).await;
@@ -123,14 +128,19 @@ fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+// Windows/macOS run the webview in-process: the system webview
+// (WebView2/WKWebView) carries no load-time dependency risk, so `late`
+// stays a single binary there.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
     let video_id = args
         .first()
         .context("usage: late webview-spike <video_id>")?;
     let _ = init_logging(true)?;
-    webview::run_spike(video_id)
+    late_webview::run_spike(video_id)
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
     if !args.is_empty() {
         anyhow::bail!("usage: late webview-pair (token is read from stdin)");
@@ -139,7 +149,7 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
     let api_base_url =
         env::var("LATE_API_BASE_URL").unwrap_or_else(|_| config::DEFAULT_API_BASE_URL.to_string());
     let _ = init_logging(true)?;
-    webview::run_relay(None, move |proxy, ipc_rx| {
+    late_webview::run_relay(None, move |proxy, ipc_rx| {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -147,19 +157,22 @@ fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
             Ok(rt) => rt,
             Err(err) => {
                 error!(error = %err, "failed to build webview pair runtime");
-                let _ = proxy.send_event(webview::WebviewCommand::Shutdown);
+                let _ = proxy.send_event(late_webview::WebviewCommand::Shutdown);
                 return;
             }
         };
         rt.block_on(async move {
-            if let Err(err) = webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
+            if let Err(err) = late_webview::pair::run(&api_base_url, &token, proxy, ipc_rx).await {
                 error!(error = %err, "webview pair task ended with error");
             }
         });
     })
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn read_webview_pair_token_from_stdin() -> Result<String> {
+    use std::io::BufRead;
+
     let mut token = String::new();
     std::io::stdin()
         .lock()
@@ -173,6 +186,44 @@ fn read_webview_pair_token_from_stdin() -> Result<String> {
         anyhow::bail!("webview pair token was invalid");
     }
     Ok(token)
+}
+
+// Everywhere else `late` never links the webview stack; these subcommands
+// forward to the standalone `late-webview` helper binary (token/stdin and
+// LATE_API_BASE_URL pass through inherited stdio/env).
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn run_webview_spike_subcommand(args: &[String]) -> Result<()> {
+    let video_id = args
+        .first()
+        .context("usage: late webview-spike <video_id>")?;
+    forward_to_webview_helper(&["spike", video_id])
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn run_webview_pair_subcommand(args: &[String]) -> Result<()> {
+    if !args.is_empty() {
+        anyhow::bail!("usage: late webview-pair (token is read from stdin)");
+    }
+    forward_to_webview_helper(&[])
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn forward_to_webview_helper(args: &[&str]) -> Result<()> {
+    let program = ws::webview_helper_program();
+    let status = std::process::Command::new(&program)
+        .args(args)
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to run the webview helper at {} — is late-webview installed \
+                 next to late? (set LATE_WEBVIEW_BIN to override)",
+                program.display()
+            )
+        })?;
+    if !status.success() {
+        anyhow::bail!("webview helper exited with {status}");
+    }
+    Ok(())
 }
 
 async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBuf>) -> Result<()> {
@@ -199,7 +250,7 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
         info!("local audio disabled on this platform");
     }
     info!("starting OpenSSH interactive session");
-    let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config).await?;
+    let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config)?;
     let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
 
     audio.stop.store(true, Ordering::Relaxed);
@@ -238,7 +289,6 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
-    let icecast_output_available = Arc::clone(&audio.icecast_output_available);
     let source_is_icecast = Arc::clone(&audio.source_is_icecast);
     let native_source_selected = Arc::clone(&audio.native_source_selected);
     let stream_url = Arc::clone(&audio.stream_url);
@@ -247,16 +297,25 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let icecast_stream_url = audio.icecast_stream_url.clone();
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
-    let mut frames = audio.analyzer_tx.subscribe();
-    let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
+    let mut webview = WebviewPlaybackController::new(
+        api_base_url.clone(),
+        token.clone(),
+        audio.analyzer_tx.clone(),
+    );
     let mut voice = voice::VoiceRuntimeState::default();
+    let (mut desktop_media, mut desktop_commands) = match config.mpris {
+        true => mpris::DesktopMedia::new(mpris::AudioControls {
+            muted: Arc::clone(&muted),
+            volume_percent: Arc::clone(&volume_percent),
+        }),
+        false => mpris::DesktopMedia::disabled(),
+    };
 
     let playback = PlaybackState {
         played_samples: &played_samples,
         sample_rate,
         muted: &muted,
         volume_percent: &volume_percent,
-        icecast_output_available: &icecast_output_available,
         source_is_icecast: &source_is_icecast,
         native_source_selected: &native_source_selected,
         stream_url: &stream_url,
@@ -264,35 +323,68 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         stream_flushed_generation: &stream_flushed_generation,
         icecast_stream_url: &icecast_stream_url,
     };
-    let mut retries = 0;
-    const MAX_RETRIES: usize = 10;
+    let mut policy = PairRetryPolicy::new();
     loop {
-        if let Err(err) = run_viz_ws(
-            &api_base_url,
-            &token,
-            &client,
-            &mut frames,
-            &playback,
-            &mut webview,
-            &mut voice,
-        )
-        .await
+        let attempt = match establish_pair_session(&api_base_url, &token, &client, &playback).await
         {
-            retries += 1;
-            if retries > MAX_RETRIES {
-                error!(error = ?err, "visualizer websocket task failed {MAX_RETRIES} times consecutively; giving up");
-                // Pairing is the only way to learn the user's initial
-                // mute preference. If it never arrives, restore the
-                // historical default instead of staying silently muted.
-                muted.store(false, Ordering::Relaxed);
-                info!("pair websocket unavailable; released startup audio mute");
-                std::future::pending::<()>().await;
+            Err(err) => {
+                error!(error = ?err, "pair websocket could not be established");
+                PairAttempt::NotEstablished
             }
-            error!(error = ?err, attempt = retries, "visualizer websocket task failed; reconnecting in 2s...");
-        } else {
-            retries = 0;
-            info!("visualizer websocket closed cleanly; reconnecting in 2s...");
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok(ws) => {
+                let established = Instant::now();
+                // Subscribed per session so a reconnect starts from live
+                // frames instead of flushing a backlog from the outage.
+                let mut viz_frames = audio.analyzer_tx.subscribe();
+                let session = run_pair_session(
+                    ws,
+                    &client,
+                    &playback,
+                    PairRuntime {
+                        webview: &mut webview,
+                        voice: &mut voice,
+                        desktop_media: &mut desktop_media,
+                        desktop_commands: &mut desktop_commands,
+                        viz_frames: &mut viz_frames,
+                    },
+                )
+                .await;
+                match &session.result {
+                    Err(err) => error!(error = ?err, "pair websocket session failed"),
+                    Ok(()) => info!("pair websocket closed by the server"),
+                }
+                let attempt = session.attempt(established.elapsed());
+                if attempt == PairAttempt::NotEstablished {
+                    warn!(
+                        "pair websocket accepted but dropped before the server registered this session"
+                    );
+                }
+                attempt
+            }
+        };
+
+        // One place to look for what a dead pair socket costs this session.
+        let delay = match policy.note_attempt(attempt) {
+            ReconnectPlan::Soon => PAIR_RECONNECT_DELAY,
+            ReconnectPlan::Slow => {
+                warn!(
+                    "pair websocket unavailable after {MAX_CONSECUTIVE_FAILURES} consecutive failures; retrying slowly"
+                );
+                PAIR_SLOW_RECONNECT_DELAY
+            }
+            ReconnectPlan::ReleaseStartupMuteThenSlow => {
+                // Pairing is the only way to learn the stored device mute, and
+                // this session never reached the server, so it is still sitting
+                // on the boot mute with no answer coming. Release it rather
+                // than leave the user silently muted with no explanation. A
+                // session that did pair keeps its mute; see PairRetryPolicy.
+                muted.store(false, Ordering::Relaxed);
+                warn!(
+                    "pair websocket never established in {MAX_CONSECUTIVE_FAILURES} attempts; released startup audio mute and retrying slowly"
+                );
+                PAIR_SLOW_RECONNECT_DELAY
+            }
+        };
+        tokio::time::sleep(delay).await;
     }
 }

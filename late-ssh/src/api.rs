@@ -2,29 +2,37 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{
-        ConnectInfo, Query, State as AxumState, WebSocketUpgrade,
+        ConnectInfo, Path, Query, State as AxumState, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
+    http::HeaderMap,
     http::StatusCode,
-    http::{HeaderMap, HeaderValue},
     middleware::{self},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
+use late_core::models::user::RadioStation;
+use late_core::models::user_ssh_key::{KeyAudio, UserSshKey};
 use late_core::telemetry::http_telemetry_middleware;
-use late_core::{MutexRecover, audio::VizFrame};
-use serde::Deserialize;
-use std::net::{IpAddr, SocketAddr};
+use late_core::{
+    MutexRecover,
+    audio::{VIZ_BANDS, VizFrame},
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use tokio::{net::TcpListener, sync::broadcast};
-use tower_http::cors::Any;
-use tower_http::cors::CorsLayer;
+use uuid::Uuid;
 
 use crate::{
     app::audio::{
         client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode},
-        svc::PlayerStateReport,
+        svc::{AudioMode, PlayerStateReport, QueueItemView},
     },
     app::voice::svc::VoiceClientState,
     metrics,
@@ -37,6 +45,35 @@ struct PairParams {
     token: String,
 }
 
+const PAIR_WS_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const PAIR_SESSION_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// The spectrum bands a pair client sends. CLIs from before the 16-band
+/// analyzer send 8; any other count fails the parse.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireBands {
+    Eight([f32; 8]),
+    Sixteen([f32; VIZ_BANDS]),
+}
+
+/// Stretches an older CLI's 8 bands across [`VIZ_BANDS`], interpolating
+/// between neighbours with both ends pinned, so everything past the socket
+/// handles one shape.
+fn bands_from_wire(bands: WireBands) -> [f32; VIZ_BANDS] {
+    match bands {
+        WireBands::Sixteen(bands) => bands,
+        WireBands::Eight(bands) => std::array::from_fn(|i| {
+            let last = bands.len() - 1;
+            let position = i as f32 * last as f32 / (VIZ_BANDS - 1) as f32;
+            let low = (position.floor() as usize).min(last);
+            let high = (low + 1).min(last);
+            let t = position - low as f32;
+            bands[low] + (bands[high] - bands[low]) * t
+        }),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "event")]
 enum WsPayload {
@@ -45,7 +82,7 @@ enum WsPayload {
     #[serde(rename = "viz")]
     Viz {
         position_ms: u64,
-        bands: [f32; 8],
+        bands: WireBands,
         rms: f32,
     },
     #[serde(rename = "client_state")]
@@ -59,13 +96,30 @@ enum WsPayload {
         capabilities: Vec<String>,
         muted: bool,
         volume_percent: u8,
-        #[serde(default = "default_icecast_output_available")]
-        icecast_output_available: bool,
     },
+    /// Audio control initiated on a paired client (the CLI's desktop MPRIS
+    /// surface: a widget's play/pause, media keys, a volume slider). The
+    /// server fans it back out to every paired client on the token, exactly
+    /// like a TUI keypress, so the CLI, the webview helper, and the sidebar
+    /// all converge on the same state.
+    #[serde(rename = "set_muted")]
+    SetMuted { muted: bool },
+    #[serde(rename = "set_volume")]
+    SetVolume { volume_percent: u8 },
     #[serde(rename = "clipboard_image")]
-    ClipboardImage { data_base64: String },
+    ClipboardImage {
+        data_base64: String,
+        /// Echo of the `request_id` this payload answers. None from older
+        /// CLIs that predate the field.
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     #[serde(rename = "clipboard_image_failed")]
-    ClipboardImageFailed { message: String },
+    ClipboardImageFailed {
+        message: String,
+        #[serde(default)]
+        request_id: Option<u64>,
+    },
     #[serde(rename = "player_state")]
     PlayerState(PlayerStateReport),
     #[serde(rename = "voice_state")]
@@ -79,8 +133,82 @@ enum WsPayload {
     },
 }
 
-const fn default_icecast_output_available() -> bool {
-    true
+/// How many upcoming tracks `/api/listen` exposes. The listen page shows a
+/// short "up next" list, not the whole 50-item snapshot.
+const PUBLIC_QUEUE_LIMIT: usize = 10;
+
+/// One YouTube track on the public listen route. Deliberately a separate type
+/// from `QueueItemView`: this is a published contract, so internal fields
+/// (`submitter_id`, vote score, unskippable) stay out of it and in-app churn
+/// cannot silently reshape the response.
+#[derive(Serialize)]
+struct PublicTrack {
+    video_id: String,
+    title: Option<String>,
+    channel: Option<String>,
+    duration_ms: Option<i32>,
+    /// Wall-clock start of the current track, so a listener joining mid-song
+    /// seeks into it instead of restarting it.
+    started_at_ms: Option<i64>,
+    is_stream: bool,
+    /// The username who queued it. Drives the credit line on the listen page.
+    submitter: String,
+}
+
+impl From<QueueItemView> for PublicTrack {
+    fn from(item: QueueItemView) -> Self {
+        Self {
+            video_id: item.video_id,
+            title: item.title,
+            channel: item.channel,
+            duration_ms: item.duration_ms,
+            started_at_ms: item.started_at_ms,
+            is_stream: item.is_stream,
+            submitter: item.submitter,
+        }
+    }
+}
+
+/// What is currently on air for one house Icecast mount. The audio is
+/// served through late-web's own `/stream` proxy, so that URL belongs to
+/// late-web, not here.
+#[derive(Serialize)]
+struct PublicAir {
+    artist: Option<String>,
+    title: String,
+}
+
+/// One third-party catalogue station on air: the track, the provider's own
+/// stream URL (the client fetches that audio directly), and the credit the
+/// page owes the provider.
+#[derive(Serialize)]
+struct PublicStation {
+    label: &'static str,
+    artist: String,
+    title: String,
+    stream_url: String,
+    provider: &'static str,
+    provider_url: &'static str,
+}
+
+#[derive(Serialize)]
+struct PublicYoutube {
+    current: Option<PublicTrack>,
+    queue: Vec<PublicTrack>,
+}
+
+/// Everything the public listen page renders, in one in-memory read. Serving
+/// this as a single route keeps the page to one poll instead of fanning out
+/// across now-playing, radio-meta, and queue.
+#[derive(Serialize)]
+struct ListenResponse {
+    listeners: usize,
+    audio_mode: AudioMode,
+    /// Icecast mounts, keyed by mount name (`chill`, `classical`).
+    streams: BTreeMap<String, PublicAir>,
+    /// Third-party stations with live metadata, keyed by catalogue key.
+    stations: BTreeMap<String, PublicStation>,
+    youtube: PublicYoutube,
 }
 
 pub async fn run_api_server(
@@ -102,25 +230,31 @@ pub async fn run_api_server_with_listener(
     state: State,
     shutdown: Option<late_core::shutdown::CancellationToken>,
 ) -> Result<()> {
-    let origins = state.config.allowed_origins.clone();
-    let cors = CorsLayer::new()
-        .allow_origin(
-            origins
-                .iter()
-                .map(|s| parse_allowed_origin(s))
-                .collect::<Vec<_>>(),
-        )
-        .allow_methods(Any)
-        .allow_headers(Any);
-
+    // No CORS layer: the only browser that ever called this API directly was
+    // the connect page, and browser pairing is gone. late-web reaches these
+    // routes server-side over the internal URL, and the CLI and webview helper
+    // are not subject to CORS.
     let app = Router::new()
         .route("/api/health", get(get_health))
         .route("/api/now-playing", get(get_now_playing))
         .route("/api/radio-meta", get(get_radio_meta))
+        .route("/api/listen", get(get_listen))
         .route("/api/status", get(get_status))
+        .route("/api/stream/publish/{token}", get(get_stream_publish_grant))
+        .route(
+            "/api/stream/publish/{token}/state",
+            post(post_stream_publish_state),
+        )
+        .route("/api/stream/watch/{stream_id}", get(get_stream_watch_state))
+        .route(
+            "/api/stream/watch/{stream_id}/grant",
+            get(get_stream_watch_grant),
+        )
+        .route(
+            "/api/stream/watch/{stream_id}/heartbeat",
+            post(post_stream_watch_heartbeat),
+        )
         .route("/api/ws/pair", get(ws_handler))
-        .route("/api/ws/tunnel", get(crate::web_tunnel::ws_handler))
-        .layer(cors)
         .layer(middleware::from_fn(http_telemetry_middleware))
         .with_state(state);
 
@@ -136,12 +270,6 @@ pub async fn run_api_server_with_listener(
     .context("API server failed")?;
 
     Ok(())
-}
-
-fn parse_allowed_origin(origin: &str) -> HeaderValue {
-    origin.parse::<HeaderValue>().unwrap_or_else(|err| {
-        panic!("invalid LATE_ALLOWED_ORIGINS entry '{origin}': {err}");
-    })
 }
 
 #[derive(Deserialize)]
@@ -181,13 +309,260 @@ async fn get_now_playing(
     })
 }
 
-/// Live Nightride station metadata as `station name -> { artist, title }`.
-/// Empty map while the SSE feed is down; consumers fall back to station
-/// display names.
+/// Live third-party station metadata as `station key -> { artist, title }`.
+/// A station is absent while its provider's feed is down; consumers fall
+/// back to station display names.
 async fn get_radio_meta(
     AxumState(state): AxumState<State>,
 ) -> Json<std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>> {
     Json(state.radio_meta_rx.borrow().clone())
+}
+
+/// Everything the public listen page needs, for listeners who are not paired
+/// to an SSH session. Every field is read from an in-memory watch, so polling
+/// this route costs no DB work.
+async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> {
+    let snapshot = state.audio_service.current_snapshot();
+
+    let streams = state
+        .now_playing_rx
+        .borrow()
+        .iter()
+        .map(|(mount, np)| {
+            (
+                mount.clone(),
+                PublicAir {
+                    artist: np.track.artist.clone(),
+                    title: np.track.title.clone(),
+                },
+            )
+        })
+        .collect();
+
+    // The Nightride feed carries more stations than late.sh offers; the
+    // strict lookup drops the rest rather than listing a station with no way
+    // to play it.
+    let public_stream_base_url = format!("{}/stream", state.config.web_url.trim_end_matches('/'));
+    let stations = state
+        .radio_meta_rx
+        .borrow()
+        .iter()
+        .filter_map(|(key, meta)| {
+            let station = RadioStation::from_key(key)?;
+            let provider = station.provider();
+            Some((
+                key.clone(),
+                PublicStation {
+                    label: station.label(),
+                    artist: meta.artist.clone(),
+                    title: meta.title.clone(),
+                    stream_url: station.stream_url(&public_stream_base_url),
+                    provider: provider.label(),
+                    provider_url: provider.home_url(),
+                },
+            ))
+        })
+        .collect();
+
+    Json(ListenResponse {
+        listeners: active_user_count(&state.active_users),
+        audio_mode: snapshot.audio_mode,
+        streams,
+        stations,
+        youtube: PublicYoutube {
+            current: snapshot.current.map(PublicTrack::from),
+            queue: snapshot
+                .queue
+                .into_iter()
+                .take(PUBLIC_QUEUE_LIMIT)
+                .map(PublicTrack::from)
+                .collect(),
+        },
+    })
+}
+
+/// What the go-live console page needs to start publishing. The publish
+/// token in the URL is the whole capability: it is minted per stream from
+/// the TUI, shown only to the streamer, and dies with the stream.
+#[derive(Serialize)]
+struct StreamPublishGrantResponse {
+    livekit_url: String,
+    room: String,
+    token: String,
+    title: String,
+    streamer: String,
+    stream_id: String,
+    watch_url: String,
+}
+
+/// Go-live page state report: `publishing` is whether media is flowing
+/// right now. Sent on every transition and as a periodic heartbeat.
+/// (Unknown fields are ignored, so an older cached page still sending
+/// `mic_live` keeps working.)
+#[derive(Deserialize)]
+struct StreamPublishStateBody {
+    publishing: bool,
+}
+
+/// Everything the watch page polls: liveness, title, and the count. The
+/// LiveKit grant is fetched once, separately.
+#[derive(Serialize)]
+struct StreamWatchStateResponse {
+    live: bool,
+    title: String,
+    streamer: String,
+    watching: usize,
+}
+
+#[derive(Serialize)]
+struct StreamWatchGrantResponse {
+    livekit_url: String,
+    room: String,
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct StreamWatchHeartbeatBody {
+    watcher_id: String,
+}
+
+/// The watch page's stable per-page-load id, carried on the grant fetch so
+/// every retry from one viewer joins LiveKit under the same identity.
+#[derive(Deserialize)]
+struct StreamWatchGrantParams {
+    watcher_id: String,
+}
+
+/// Header carrying the publish-token claim secret between the late-web
+/// proxy (where it lives as an HttpOnly cookie on the console's browser)
+/// and this API.
+pub const PUBLISH_CLAIM_HEADER: &str = "x-late-publish-claim";
+
+fn publish_claim_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(PUBLISH_CLAIM_HEADER)
+        .and_then(|value| value.to_str().ok())
+}
+
+async fn get_stream_publish_grant(
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    use crate::app::stream::svc::PublishGrantAccess;
+    let claim = publish_claim_from_headers(&headers);
+    match state.stream_service.publisher_grant(&token, claim) {
+        Ok(PublishGrantAccess::Granted { grant, new_claim }) => {
+            let mut response = Json(StreamPublishGrantResponse {
+                livekit_url: grant.ticket.url,
+                room: grant.ticket.room,
+                token: grant.ticket.token,
+                title: grant.title,
+                streamer: grant.username,
+                stream_id: grant.stream_id,
+                watch_url: grant.watch_url,
+            })
+            .into_response();
+            // The claiming fetch hands the minted secret back in a header;
+            // the late-web proxy turns it into the console's cookie.
+            if let Some(secret) = new_claim
+                && let Ok(value) = axum::http::HeaderValue::from_str(&secret)
+            {
+                response.headers_mut().insert(PUBLISH_CLAIM_HEADER, value);
+            }
+            response
+        }
+        Ok(PublishGrantAccess::Denied) => StatusCode::FORBIDDEN.into_response(),
+        Ok(PublishGrantAccess::Gone) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = ?error, "failed to mint stream publish grant");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn post_stream_publish_state(
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+    AxumState(state): AxumState<State>,
+    Json(body): Json<StreamPublishStateBody>,
+) -> StatusCode {
+    use crate::app::stream::registry::PublisherReport;
+    let claim = publish_claim_from_headers(&headers);
+    match state
+        .stream_service
+        .report_publisher(&token, body.publishing, claim)
+    {
+        PublisherReport::Gone => StatusCode::NOT_FOUND,
+        PublisherReport::Denied => StatusCode::FORBIDDEN,
+        PublisherReport::Live { .. } | PublisherReport::Stopped => StatusCode::NO_CONTENT,
+    }
+}
+
+async fn get_stream_watch_state(
+    Path(stream_id): Path<String>,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    match state.stream_service.watch_view(&stream_id) {
+        Some(view) => Json(StreamWatchStateResponse {
+            live: view.live,
+            title: view.title,
+            streamer: view.username,
+            watching: view.watching,
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn get_stream_watch_grant(
+    Path(stream_id): Path<String>,
+    Query(params): Query<StreamWatchGrantParams>,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    // The watcher id becomes this viewer's LiveKit identity, so it is
+    // required and shape-checked here rather than trusted downstream.
+    if !crate::app::stream::registry::valid_watcher_id(&params.watcher_id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    match state
+        .stream_service
+        .watch_grant(&stream_id, &params.watcher_id)
+    {
+        Ok(Some(ticket)) => Json(StreamWatchGrantResponse {
+            livekit_url: ticket.url,
+            room: ticket.room,
+            token: ticket.token,
+        })
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = ?error, "failed to mint stream watch grant");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn post_stream_watch_heartbeat(
+    Path(stream_id): Path<String>,
+    AxumState(state): AxumState<State>,
+    Json(body): Json<StreamWatchHeartbeatBody>,
+) -> StatusCode {
+    // The endpoint is unauthenticated (the watch URL is the auth) and the
+    // watcher id is client-generated (a browser UUID, 36 chars). Anything
+    // off-shape is junk from a tampered client; reject it at the boundary
+    // so the registry only ever stores well-formed ids.
+    if !crate::app::stream::registry::valid_watcher_id(&body.watcher_id) {
+        return StatusCode::BAD_REQUEST;
+    }
+    if state
+        .stream_service
+        .watch_heartbeat(&stream_id, &body.watcher_id)
+    {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
 async fn get_health(AxumState(state): AxumState<State>) -> (StatusCode, &'static str) {
@@ -272,12 +647,60 @@ async fn ws_handler(
         metrics::record_ws_pair_rejected_unknown_token();
         return StatusCode::NOT_FOUND.into_response();
     }
-    ws.on_upgrade(move |socket| async move { handle_socket(socket, params.token, state).await })
+    ws.max_message_size(PAIR_WS_MAX_MESSAGE_BYTES)
+        .max_frame_size(PAIR_WS_MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| async move {
+            handle_socket(socket, params.token, state, client_ip).await
+        })
 }
 
-async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
+/// Decrements the per-IP pair socket count on drop, covering every exit path
+/// out of `handle_socket`.
+struct PairWsIpGuard {
+    state: State,
+    ip: IpAddr,
+}
+
+impl Drop for PairWsIpGuard {
+    fn drop(&mut self) {
+        let mut counts = self.state.pair_ws_counts.lock_recover();
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
+fn try_acquire_pair_ws_slot(state: &State, ip: IpAddr) -> Option<PairWsIpGuard> {
+    {
+        let mut counts = state.pair_ws_counts.lock_recover();
+        let count = counts.entry(ip).or_insert(0);
+        if *count >= state.config.max_conns_per_ip {
+            return None;
+        }
+        *count += 1;
+    }
+    Some(PairWsIpGuard {
+        state: state.clone(),
+        ip,
+    })
+}
+
+async fn handle_socket(mut socket: WebSocket, token: String, state: State, client_ip: IpAddr) {
     let token_hint = token_hint(&token);
-    let (control_tx, mut control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let Some(_ip_guard) = try_acquire_pair_ws_slot(&state, client_ip) else {
+        tracing::warn!(
+            ip = %client_ip,
+            token_hint = %token_hint,
+            limit = state.config.max_conns_per_ip,
+            "ws pair rejected: per-ip pair socket limit reached"
+        );
+        return;
+    };
+    let (control_tx, mut control_rx) =
+        tokio::sync::mpsc::channel(crate::paired_clients::PAIR_CONTROL_QUEUE_CAP);
     // The session must still be live (we just checked `has_session`). The
     // race window where the SSH session disconnects between the check and
     // this lookup is closed by giving up the WS upgrade if user_for returns
@@ -294,30 +717,47 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
         .read_audio_source(user_id)
         .await
         .unwrap_or_default();
-    let icecast_stream = state
-        .audio_service
-        .read_icecast_stream(user_id)
-        .await
-        .unwrap_or_default();
     let radio_station = state
         .audio_service
         .read_radio_station(user_id)
         .await
         .unwrap_or_default();
-    let start_with_music_muted = match state.db.get().await {
-        Ok(client) => late_core::models::user::User::start_with_music_muted(&client, user_id)
-            .await
-            .unwrap_or(false),
-        Err(_) => false,
+    // This device's stored mute/volume is the only source of truth for both.
+    // The pair WS knows a session token, so the device identity has to come
+    // from the session; a session with no known key simply cannot store audio
+    // and runs entirely in memory.
+    let fingerprint = state.session_registry.fingerprint_for(&token).await;
+    let mut audio_flow = match read_device_audio(&state, user_id, fingerprint.as_deref()).await {
+        Ok(device_audio) => {
+            state
+                .paired_client_registry
+                .note_persisted_audio(&token, device_audio.stored);
+            PairAudioFlow::new(Some(device_audio.target))
+        }
+        Err(err) => {
+            // A failed read is not an empty one: alignment and persistence
+            // stay off for this whole connection so the session keeps its own
+            // state, and the next connection retries the read. Aligning to
+            // fresh-boot defaults here would end with the client's echo
+            // overwriting the real stored value.
+            tracing::warn!(token_hint = %token_hint, error = ?err, "device audio read failed");
+            PairAudioFlow::new(None)
+        }
     };
-    let mut applied_initial_mute = false;
-    let registration_id =
+    let Some(registration_id) =
         state
             .paired_client_registry
-            .register(token.clone(), control_tx, user_id, audio_source);
+            .register(token.clone(), control_tx, user_id, audio_source)
+    else {
+        tracing::warn!(
+            token_hint = %token_hint,
+            "ws pair rejected: token at paired-client capacity"
+        );
+        return;
+    };
     state
         .paired_client_registry
-        .set_stream_preferences(user_id, icecast_stream, radio_station);
+        .set_stream_preferences(user_id, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
     metrics::record_ws_pair_success();
@@ -327,7 +767,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     let stream_selection = crate::app::audio::stations::resolve_stream_selection(
         &public_stream_base_url,
         audio_source,
-        icecast_stream,
         radio_station,
     );
 
@@ -339,10 +778,6 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                 .as_ref()
                 .map(|selection| selection.url.clone()),
             station: stream_selection.map(|selection| selection.station.to_string()),
-            web_icecast_enabled: state.paired_client_registry.web_icecast_enabled(&token),
-            embedded_webview_enabled: state
-                .paired_client_registry
-                .embedded_webview_enabled(&token),
         },
         &token_hint,
         "initial playback source",
@@ -378,7 +813,10 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
             mounts: crate::app::audio::svc::now_playing_tracks(&state.now_playing_rx.borrow()),
         },
         crate::app::audio::svc::AudioWsMessage::RadioMetaUpdate {
-            stations: state.radio_meta_rx.borrow().clone(),
+            stations: crate::app::audio::svc::pair_radio_tracks(
+                &state.radio_meta_rx.borrow(),
+                &state.now_playing_rx.borrow(),
+            ),
         },
     ];
     for msg in meta_catch_up {
@@ -426,11 +864,18 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 position_ms,
                                 bands,
                                 rms,
-                            } => SessionMessage::Viz(VizFrame {
-                                track_pos_ms: position_ms,
-                                bands,
-                                rms,
-                            }),
+                            } => {
+                                let wire_bands = match &bands {
+                                    WireBands::Eight(_) => metrics::VizWireBands::Eight,
+                                    WireBands::Sixteen(_) => metrics::VizWireBands::Sixteen,
+                                };
+                                metrics::record_pair_viz_frame(wire_bands);
+                                SessionMessage::Viz(VizFrame {
+                                    track_pos_ms: position_ms,
+                                    bands: bands_from_wire(bands),
+                                    rms,
+                                })
+                            }
                             WsPayload::ClientState {
                                 client_kind,
                                 ssh_mode,
@@ -438,9 +883,12 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                 capabilities,
                                 muted,
                                 volume_percent,
-                                icecast_output_available,
                             } => {
-                                let result = state.paired_client_registry.update_state_and_enforce_mute_policy(
+                                // No source rebroadcast here. `SetPlaybackSource`
+                                // depends only on the user's persisted source, so
+                                // who else is paired cannot change what this
+                                // client should be playing.
+                                if let Some(kind) = state.paired_client_registry.update_state_and_enforce_mute_policy(
                                     &token,
                                     registration_id,
                                     ClientAudioState {
@@ -450,48 +898,92 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                                         capabilities,
                                         muted,
                                         volume_percent,
-                                        icecast_output_available,
                                     },
-                                );
-                                if let Some(update) = result {
-                                    last_client_kind = update.new_kind;
-                                    if (update.previous_kind == ClientKind::Cli)
-                                        != (update.new_kind == ClientKind::Cli)
-                                        || update.previous_claimed_icecast_output
-                                            != update.new_claims_icecast_output
-                                    {
-                                        state
-                                            .paired_client_registry
-                                            .broadcast_playback_source_for_token(&token);
-                                    }
-                                    if update.new_kind == ClientKind::Browser
-                                        && update.previous_kind != ClientKind::Browser
-                                    {
-                                        state
-                                            .session_registry
-                                            .send_message(&token, SessionMessage::BrowserPaired)
-                                            .await;
-                                    }
+                                ) {
+                                    last_client_kind = kind;
                                 }
-                                if !applied_initial_mute
-                                    && (start_with_music_muted == muted
-                                        || send_json_ws(
-                                            &mut socket,
-                                            &crate::paired_clients::PairControlMessage::ToggleMute,
-                                            &token_hint,
-                                            "initial mute alignment",
+                                let reported = KeyAudio { muted, volume_percent };
+                                match audio_flow.on_report(client_kind, reported) {
+                                    ReportAction::Align { target } => {
+                                        let plan = align_paired_audio(
+                                            client_kind,
+                                            reported,
+                                            state.paired_client_registry.cli_muted(&token),
+                                            state
+                                                .paired_client_registry
+                                                .audio_alignment_pending(&token),
+                                            target,
+                                        );
+                                        if send_audio_alignment(&mut socket, plan, &token_hint)
+                                            .await
+                                            .is_ok()
+                                        {
+                                            audio_flow.note_alignment_sent(plan);
+                                            state
+                                                .paired_client_registry
+                                                .note_alignment_applied(&token);
+                                        }
+                                    }
+                                    ReportAction::Persist => {
+                                        persist_device_audio(
+                                            &state,
+                                            &token,
+                                            user_id,
+                                            fingerprint.as_deref(),
+                                            reported,
                                         )
-                                        .await
-                                        .is_ok())
-                                {
-                                    applied_initial_mute = true;
+                                        .await;
+                                    }
+                                    ReportAction::Ignore => {}
                                 }
                                 continue;
                             }
-                            WsPayload::ClipboardImage { data_base64 } => {
+                            WsPayload::SetMuted { muted } => {
+                                state.paired_client_registry.send_control(
+                                    &token,
+                                    crate::paired_clients::PairControlMessage::SetMuted { muted },
+                                );
+                                continue;
+                            }
+                            WsPayload::SetVolume { volume_percent } => {
+                                state.paired_client_registry.send_control(
+                                    &token,
+                                    crate::paired_clients::PairControlMessage::SetVolume {
+                                        volume_percent: volume_percent.min(100),
+                                    },
+                                );
+                                continue;
+                            }
+                            WsPayload::ClipboardImage {
+                                data_base64,
+                                request_id,
+                            } => {
+                                if !state
+                                    .paired_client_registry
+                                    .take_clipboard_request(&token, request_id)
+                                {
+                                    tracing::warn!(
+                                        token_hint = %token_hint,
+                                        "dropping unsolicited or stale clipboard image payload"
+                                    );
+                                    continue;
+                                }
                                 decode_clipboard_image_message(data_base64)
                             }
-                            WsPayload::ClipboardImageFailed { message } => {
+                            WsPayload::ClipboardImageFailed {
+                                message,
+                                request_id,
+                            } => {
+                                if !state
+                                    .paired_client_registry
+                                    .take_clipboard_request(&token, request_id)
+                                {
+                                    tracing::warn!(
+                                        token_hint = %token_hint,
+                                        "dropping unsolicited or stale clipboard image failure"
+                                    );
+                                    continue;
+                                }
                                 SessionMessage::ClipboardImageFailed {
                                     message: truncate_ws_error_message(&message),
                                 }
@@ -523,11 +1015,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
                             }
                         };
 
-                        if !state.session_registry.send_message(&token, msg).await {
-                            tracing::warn!(
-                                token_hint = %token_hint,
-                                "ws pair message could not be routed to a live session"
-                            );
+                        if !route_session_message(&state, &token, &token_hint, msg, "ws payload")
+                            .await
+                        {
                             break;
                         }
                     }
@@ -576,9 +1066,250 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State) {
     tracing::info!(token_hint = %token_hint, "websocket connection closed");
 }
 
+/// Volume a device that has never stored one starts at. Mirrors the CLI's own
+/// `AudioRuntime` default (`late-cli/src/audio/mod.rs`); the two must agree or
+/// every fresh session would open with a pointless volume alignment.
+const DEFAULT_VOLUME_PERCENT: u8 = 30;
+
+/// This device's stored audio plus the target a connecting client is aligned
+/// to. `stored` is `None` when the key has never reported any; the target then
+/// seeds from the legacy account-wide `start_with_music_muted` so an upgrade
+/// keeps the mute people had already configured. Once a device has reported
+/// anything, that account value is never read again.
+struct DeviceAudio {
+    stored: Option<KeyAudio>,
+    target: KeyAudio,
+}
+
+/// Read the connecting device's stored audio. `Err` is a failed read, not an
+/// empty one: the caller must skip alignment and persistence for the whole
+/// connection, because treating a transient DB error as "never stored" would
+/// align the client to fresh-boot defaults and then persist the client's echo
+/// of those over the user's real preference.
+async fn read_device_audio(
+    state: &State,
+    user_id: Uuid,
+    fingerprint: Option<&str>,
+) -> Result<DeviceAudio> {
+    let client = state.db.get().await.context("no db client")?;
+    let stored = match fingerprint {
+        Some(fingerprint) => UserSshKey::audio_for(&client, user_id, fingerprint)
+            .await
+            .context("reading device audio")?,
+        None => None,
+    };
+    let target = match stored {
+        Some(audio) => audio,
+        None => KeyAudio {
+            muted: late_core::models::user::User::start_with_music_muted(&client, user_id)
+                .await
+                .context("reading account mute seed")?,
+            volume_percent: DEFAULT_VOLUME_PERCENT,
+        },
+    };
+    Ok(DeviceAudio { stored, target })
+}
+
+/// What the server must push at a connecting paired client to bring it in
+/// line with the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct AudioAlignment {
+    /// Sent first, because a non-zero `SetVolume` also clears mute on both
+    /// clients; deciding the mute half against the state *after* it is the
+    /// only way a stored (muted, 60%) survives the pair.
+    volume_percent: Option<u8>,
+    toggle_mute: bool,
+}
+
+impl AudioAlignment {
+    /// How many control messages [`send_audio_alignment`] emits for this
+    /// plan. The client re-reports `client_state` once per control it
+    /// applies, so this is also the number of echo reports to expect back.
+    fn control_count(self) -> usize {
+        usize::from(self.volume_percent.is_some()) + usize::from(self.toggle_mute)
+    }
+}
+
+/// Decide that push.
+///
+/// The stored device audio describes what the CLI *process* should start
+/// with, and one SSH session token is one CLI process, so only the session's
+/// first paired client consumes it (`alignment_pending`). A pair-WS reconnect
+/// mid-session (a network change, an ingress restart, a webview helper
+/// respawn) reports the state the session is already running with, and that
+/// is the answer: re-imposing the stored value there is what used to turn a
+/// muted user's music back on behind their back.
+///
+/// A webview helper additionally prefers the live CLI entry's mute, since the
+/// CLI receives the same mute controls and is the session's audio surface of
+/// record while YouTube plays.
+fn align_paired_audio(
+    client_kind: ClientKind,
+    reported: KeyAudio,
+    session_cli_muted: Option<bool>,
+    alignment_pending: bool,
+    target: KeyAudio,
+) -> AudioAlignment {
+    let session = if alignment_pending { target } else { reported };
+    let desired_muted = match client_kind {
+        ClientKind::Webview => session_cli_muted.unwrap_or(session.muted),
+        ClientKind::Cli | ClientKind::Unknown => session.muted,
+    };
+    let volume_percent =
+        (session.volume_percent != reported.volume_percent).then_some(session.volume_percent);
+    // Only a non-zero volume write clears mute on the client; a `SetVolume(0)`
+    // leaves it exactly as it was.
+    let muted_after_volume = match volume_percent {
+        Some(volume) if volume > 0 => false,
+        Some(_) | None => reported.muted,
+    };
+    AudioAlignment {
+        volume_percent,
+        toggle_mute: desired_muted != muted_after_volume,
+    }
+}
+
+/// Deliver an [`AudioAlignment`], volume first. Returns `Err` only when the
+/// socket is dying, which is what keeps the alignment unclaimed so the
+/// client's next attempt still gets it: a session that boots silent must
+/// never stay silent because one send failed.
+async fn send_audio_alignment(
+    socket: &mut WebSocket,
+    plan: AudioAlignment,
+    token_hint: &str,
+) -> std::result::Result<(), ()> {
+    if let Some(volume_percent) = plan.volume_percent {
+        send_json_ws(
+            socket,
+            &crate::paired_clients::PairControlMessage::SetVolume { volume_percent },
+            token_hint,
+            "initial volume alignment",
+        )
+        .await?;
+    }
+    if plan.toggle_mute {
+        send_json_ws(
+            socket,
+            &crate::paired_clients::PairControlMessage::ToggleMute,
+            token_hint,
+            "initial mute alignment",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// What to do with one `client_state` report from a paired client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportAction {
+    /// First report of the connection: align the client to `target`, the
+    /// stored device audio.
+    Align { target: KeyAudio },
+    /// The report is user intent (`m`, `+`/`-`, a media key): write it to
+    /// the device row. Persisting here rather than at each keybind is what
+    /// keeps one source of truth.
+    Persist,
+    /// Nothing to do: an echo of our own alignment, a non-CLI surface, or a
+    /// connection whose stored-audio read failed.
+    Ignore,
+}
+
+/// Per-connection state machine deciding what each `client_state` report
+/// means. Pure so the persist gating is testable; the ws loop owns the I/O.
+///
+/// Three rules, each closing a way the device row gets corrupted:
+/// - A connection whose stored-audio read failed (`target: None`) neither
+///   aligns nor persists. The session keeps its own state and the next
+///   connection retries the read.
+/// - The reports echoing our own alignment are boot defaults being brought in
+///   line, not intent, and are never persisted; a stored (muted, 60%) restore
+///   would otherwise write (unmuted, 60) and then (muted, 60), with the row
+///   wrong in between.
+/// - Only the CLI persists. The webview helper diverges from the CLI on mute
+///   (its volume-up unmutes, the CLI's does not), and the CLI is the
+///   session's audio surface of record (see [`align_paired_audio`]), so a
+///   helper report must never overwrite what the CLI said. `Unknown` is an
+///   older CLI that predates `client_kind` and persists like one.
+struct PairAudioFlow {
+    target: Option<KeyAudio>,
+    aligned: bool,
+    pending_alignment_echoes: usize,
+}
+
+impl PairAudioFlow {
+    fn new(target: Option<KeyAudio>) -> Self {
+        Self {
+            target,
+            aligned: false,
+            pending_alignment_echoes: 0,
+        }
+    }
+
+    fn on_report(&mut self, client_kind: ClientKind, reported: KeyAudio) -> ReportAction {
+        let Some(target) = self.target else {
+            return ReportAction::Ignore;
+        };
+        if !self.aligned {
+            return ReportAction::Align { target };
+        }
+        if self.pending_alignment_echoes > 0 {
+            // A report matching the target means the alignment has fully
+            // landed whatever the exact echo count was; anything after it is
+            // intent.
+            if reported == target {
+                self.pending_alignment_echoes = 0;
+            } else {
+                self.pending_alignment_echoes -= 1;
+            }
+            return ReportAction::Ignore;
+        }
+        match client_kind {
+            ClientKind::Cli | ClientKind::Unknown => ReportAction::Persist,
+            ClientKind::Webview => ReportAction::Ignore,
+        }
+    }
+
+    /// Record that an alignment reached the socket; the next
+    /// [`AudioAlignment::control_count`] reports are its echoes.
+    fn note_alignment_sent(&mut self, plan: AudioAlignment) {
+        self.aligned = true;
+        self.pending_alignment_echoes = plan.control_count();
+    }
+}
+
+/// Write a paired client's reported mute/volume to its device row, unless the
+/// same value is already stored. Awaited on the socket task rather than
+/// spawned so a token's writes land in report order; a spawned write that
+/// completed out of order could leave the row on a stale value while the
+/// cache believes the newest one is stored. A failed write clears the cached
+/// value so the next report retries.
+async fn persist_device_audio(
+    state: &State,
+    token: &str,
+    user_id: Uuid,
+    fingerprint: Option<&str>,
+    audio: KeyAudio,
+) {
+    let Some(fingerprint) = fingerprint else {
+        return;
+    };
+    if !state.paired_client_registry.claim_audio_write(token, audio) {
+        return;
+    }
+    let result = match state.db.get().await {
+        Ok(client) => UserSshKey::set_audio(&client, user_id, fingerprint, audio).await,
+        Err(err) => Err(anyhow::anyhow!("no db client: {err}")),
+    };
+    if let Err(err) = result {
+        tracing::warn!(token_hint = %token_hint(token), error = ?err, "failed to persist device audio");
+        state
+            .paired_client_registry
+            .note_persisted_audio(token, None);
+    }
+}
+
 /// Drop a paired-client registration and refresh the remaining clients'
-/// playback-source view. CLI presence controls browser Icecast, and real
-/// browser presence controls the embedded CLI webview fallback.
+/// playback-source view.
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
@@ -586,6 +1317,40 @@ fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry
         .broadcast_playback_source_for_token(token);
+}
+
+async fn route_session_message(
+    state: &State,
+    token: &str,
+    token_hint: &str,
+    msg: SessionMessage,
+    label: &'static str,
+) -> bool {
+    match tokio::time::timeout(
+        PAIR_SESSION_MESSAGE_TIMEOUT,
+        state.session_registry.send_message(token, msg),
+    )
+    .await
+    {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::warn!(
+                token_hint = %token_hint,
+                label,
+                "ws pair message could not be routed to a live session"
+            );
+            false
+        }
+        Err(_) => {
+            tracing::warn!(
+                token_hint = %token_hint,
+                label,
+                timeout_ms = PAIR_SESSION_MESSAGE_TIMEOUT.as_millis() as u64,
+                "ws pair message routing timed out"
+            );
+            false
+        }
+    }
 }
 
 async fn send_json_ws<T: serde::Serialize>(
@@ -611,7 +1376,7 @@ async fn send_json_ws<T: serde::Serialize>(
 }
 
 fn decode_clipboard_image_message(data_base64: String) -> SessionMessage {
-    let max_bytes = crate::app::files::image_upload::max_upload_bytes();
+    let max_bytes = crate::config::MAX_IMAGE_BYTES;
     decode_clipboard_image_message_with_max(data_base64, max_bytes)
 }
 
@@ -673,385 +1438,5 @@ fn forwarded_for_ip(headers: &HeaderMap) -> Option<IpAddr> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::ActiveUser;
-    use ipnet::IpNet;
-    use std::{
-        collections::HashMap,
-        sync::{Arc, Mutex},
-        time::Instant,
-    };
-    use uuid::Uuid;
-
-    #[test]
-    fn parse_allowed_origin_accepts_valid_origin() {
-        let value = parse_allowed_origin("https://late.sh");
-        assert_eq!(value, HeaderValue::from_static("https://late.sh"));
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid LATE_ALLOWED_ORIGINS entry")]
-    fn parse_allowed_origin_panics_for_invalid_origin() {
-        let _ = parse_allowed_origin("bad\norigin");
-    }
-
-    #[test]
-    fn ws_payload_heartbeat_parses() {
-        let json = r#"{"event": "heartbeat"}"#;
-        let payload: WsPayload = serde_json::from_str(json).unwrap();
-        assert!(matches!(payload, WsPayload::Heartbeat { .. }));
-    }
-
-    #[test]
-    fn ws_payload_viz_parses() {
-        let json = r#"{
-            "event": "viz",
-            "position_ms": 1500,
-            "bands": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-            "rms": 0.42
-        }"#;
-        let payload: WsPayload = serde_json::from_str(json).unwrap();
-        match payload {
-            WsPayload::Viz {
-                position_ms,
-                bands,
-                rms,
-            } => {
-                assert_eq!(position_ms, 1500);
-                assert_eq!(bands.len(), 8);
-                assert!((rms - 0.42).abs() < f32::EPSILON);
-            }
-            _ => panic!("expected Viz"),
-        }
-    }
-
-    #[test]
-    fn ws_payload_client_state_parses() {
-        let json = r#"{
-            "event": "client_state",
-            "client_kind": "cli",
-            "ssh_mode": "native",
-            "platform": "macos",
-            "muted": true,
-            "volume_percent": 35
-        }"#;
-        let payload: WsPayload = serde_json::from_str(json).unwrap();
-        match payload {
-            WsPayload::ClientState {
-                client_kind,
-                ssh_mode,
-                platform,
-                capabilities,
-                muted,
-                volume_percent,
-                icecast_output_available,
-            } => {
-                assert_eq!(client_kind, ClientKind::Cli);
-                assert_eq!(ssh_mode, ClientSshMode::Native);
-                assert_eq!(platform, ClientPlatform::Macos);
-                assert!(capabilities.is_empty());
-                assert!(muted);
-                assert_eq!(volume_percent, 35);
-                assert!(icecast_output_available);
-            }
-            _ => panic!("expected ClientState"),
-        }
-    }
-
-    #[test]
-    fn ws_payload_player_transient_youtube_states_parse() {
-        use crate::app::audio::svc::PlayerPlaybackState;
-
-        for (state, expected) in [
-            ("unstarted", PlayerPlaybackState::Unstarted),
-            ("cued", PlayerPlaybackState::Cued),
-            ("future_state", PlayerPlaybackState::Unknown),
-        ] {
-            let json = format!(
-                r#"{{
-                    "event": "player_state",
-                    "item_id": "{}",
-                    "state": "{}",
-                    "offset_ms": 0,
-                    "duration_ms": null,
-                    "autoplay_blocked": false,
-                    "error": null
-                }}"#,
-                Uuid::nil(),
-                state
-            );
-            let payload: WsPayload = serde_json::from_str(&json).unwrap();
-            match payload {
-                WsPayload::PlayerState(report) => {
-                    assert_eq!(report.item_id, Uuid::nil());
-                    assert_eq!(report.state, expected);
-                }
-                _ => panic!("expected PlayerState"),
-            }
-        }
-    }
-
-    #[test]
-    fn ws_payload_android_client_state_parses() {
-        let json = r#"{
-            "event": "client_state",
-            "client_kind": "cli",
-            "ssh_mode": "native",
-            "platform": "android",
-            "muted": false,
-            "volume_percent": 30
-        }"#;
-        let payload: WsPayload = serde_json::from_str(json).unwrap();
-        match payload {
-            WsPayload::ClientState {
-                client_kind,
-                ssh_mode,
-                platform,
-                capabilities,
-                muted,
-                volume_percent,
-                icecast_output_available,
-            } => {
-                assert_eq!(client_kind, ClientKind::Cli);
-                assert_eq!(ssh_mode, ClientSshMode::Native);
-                assert_eq!(platform, ClientPlatform::Android);
-                assert!(capabilities.is_empty());
-                assert!(!muted);
-                assert_eq!(volume_percent, 30);
-                assert!(icecast_output_available);
-            }
-            _ => panic!("expected ClientState"),
-        }
-    }
-
-    #[test]
-    fn ws_payload_openssh_client_state_parses() {
-        let json = r#"{
-            "event": "client_state",
-            "client_kind": "cli",
-            "ssh_mode": "openssh",
-            "platform": "linux",
-            "muted": false,
-            "volume_percent": 30
-        }"#;
-        let payload: WsPayload = serde_json::from_str(json).unwrap();
-        match payload {
-            WsPayload::ClientState {
-                client_kind,
-                ssh_mode,
-                platform,
-                capabilities,
-                muted,
-                volume_percent,
-                icecast_output_available,
-            } => {
-                assert_eq!(client_kind, ClientKind::Cli);
-                assert_eq!(ssh_mode, ClientSshMode::OpenSsh);
-                assert_eq!(platform, ClientPlatform::Linux);
-                assert!(capabilities.is_empty());
-                assert!(!muted);
-                assert_eq!(volume_percent, 30);
-                assert!(icecast_output_available);
-            }
-            _ => panic!("expected ClientState"),
-        }
-    }
-
-    #[test]
-    fn ws_payload_unknown_event_fails() {
-        let json = r#"{"event": "unknown"}"#;
-        assert!(serde_json::from_str::<WsPayload>(json).is_err());
-    }
-
-    #[test]
-    fn ws_payload_viz_missing_fields_fails() {
-        let json = r#"{"event": "viz", "position_ms": 1000}"#;
-        assert!(serde_json::from_str::<WsPayload>(json).is_err());
-    }
-
-    #[test]
-    fn ws_payload_viz_wrong_bands_count_fails() {
-        let json = r#"{
-            "event": "viz",
-            "position_ms": 1000,
-            "bands": [0.1, 0.2],
-            "rms": 0.5
-        }"#;
-        assert!(serde_json::from_str::<WsPayload>(json).is_err());
-    }
-
-    #[test]
-    fn decode_clipboard_image_accepts_supported_image() {
-        let png_header = b"\x89PNG\r\n\x1a\n";
-        match decode_clipboard_image_message_with_max(STANDARD.encode(png_header), 1024) {
-            SessionMessage::ClipboardImage { data } => assert_eq!(data, png_header),
-            other => panic!("expected ClipboardImage, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_clipboard_image_rejects_oversize_payload_before_decode() {
-        match decode_clipboard_image_message_with_max("A".repeat(11), 1) {
-            SessionMessage::ClipboardImageFailed { message } => {
-                assert_eq!(message, "Clipboard image is too large");
-            }
-            other => panic!("expected ClipboardImageFailed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_clipboard_image_rejects_invalid_base64() {
-        match decode_clipboard_image_message_with_max("not base64!!!".to_string(), 1024) {
-            SessionMessage::ClipboardImageFailed { message } => {
-                assert_eq!(message, "Clipboard image payload was invalid");
-            }
-            other => panic!("expected ClipboardImageFailed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn decode_clipboard_image_rejects_non_image_bytes() {
-        match decode_clipboard_image_message_with_max(STANDARD.encode(b"hello"), 1024) {
-            SessionMessage::ClipboardImageFailed { message } => {
-                assert_eq!(
-                    message,
-                    "Clipboard image is not a supported PNG/JPEG/GIF/WebP image"
-                );
-            }
-            other => panic!("expected ClipboardImageFailed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn truncate_ws_error_message_defaults_and_limits_length() {
-        assert_eq!(
-            truncate_ws_error_message("  "),
-            "Clipboard image upload failed"
-        );
-        assert_eq!(truncate_ws_error_message("  no image  "), "no image");
-        assert_eq!(truncate_ws_error_message(&"x".repeat(200)).len(), 160);
-    }
-
-    #[test]
-    fn token_hint_redacts_full_value() {
-        let hint = token_hint("12345678-abcd-efgh");
-        assert_eq!(hint, "12345678..(18)");
-    }
-
-    #[test]
-    fn active_user_count_uses_unique_user_entries() {
-        let active_users: ActiveUsers = Arc::new(Mutex::new(HashMap::new()));
-        let mut users = active_users.lock().unwrap();
-        users.insert(
-            Uuid::now_v7(),
-            ActiveUser {
-                username: "alice".to_string(),
-                fingerprint: None,
-                peer_ip: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
-                sessions: Vec::new(),
-                connection_count: 2,
-                last_login_at: Instant::now(),
-            },
-        );
-        users.insert(
-            Uuid::now_v7(),
-            ActiveUser {
-                username: "bob".to_string(),
-                fingerprint: None,
-                peer_ip: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
-                sessions: Vec::new(),
-                connection_count: 1,
-                last_login_at: Instant::now(),
-            },
-        );
-        drop(users);
-
-        assert_eq!(active_user_count(&active_users), 2);
-    }
-
-    #[test]
-    fn forwarded_for_ip_uses_first_entry() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
-        );
-
-        assert_eq!(
-            forwarded_for_ip(&headers),
-            Some("203.0.113.10".parse().unwrap())
-        );
-    }
-
-    #[test]
-    fn effective_client_ip_uses_forwarded_header_for_trusted_proxy() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
-        );
-        let trusted_cidrs = test_trusted_cidrs(vec!["10.42.0.0/16"]);
-        let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
-
-        assert_eq!(
-            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
-                && let Some(ip) = forwarded_for_ip(&headers)
-            {
-                ip
-            } else {
-                peer_addr.ip()
-            },
-            "203.0.113.10".parse::<IpAddr>().unwrap()
-        );
-    }
-
-    #[test]
-    fn effective_client_ip_falls_back_for_untrusted_proxy() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("203.0.113.10, 10.42.0.89"),
-        );
-        let trusted_cidrs = test_trusted_cidrs(vec!["192.168.0.0/16"]);
-        let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
-
-        assert_eq!(
-            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
-                && let Some(ip) = forwarded_for_ip(&headers)
-            {
-                ip
-            } else {
-                peer_addr.ip()
-            },
-            "10.42.0.89".parse::<IpAddr>().unwrap()
-        );
-    }
-
-    #[test]
-    fn effective_client_ip_falls_back_when_header_missing() {
-        let headers = HeaderMap::new();
-        let trusted_cidrs = test_trusted_cidrs(vec!["10.42.0.0/16"]);
-        let peer_addr: SocketAddr = "10.42.0.89:12345".parse().unwrap();
-
-        assert_eq!(
-            if is_trusted_proxy_peer(peer_addr.ip(), &trusted_cidrs)
-                && let Some(ip) = forwarded_for_ip(&headers)
-            {
-                ip
-            } else {
-                peer_addr.ip()
-            },
-            "10.42.0.89".parse::<IpAddr>().unwrap()
-        );
-    }
-
-    fn test_trusted_cidrs(cidr_strings: Vec<&str>) -> Vec<IpNet> {
-        cidr_strings
-            .into_iter()
-            .map(|s| s.parse::<IpNet>().unwrap())
-            .collect()
-    }
-}
+#[path = "api_internal_test.rs"]
+mod api_internal_test;

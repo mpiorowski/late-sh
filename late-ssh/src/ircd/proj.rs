@@ -1,11 +1,105 @@
 //! Pure room↔channel projection helpers (no I/O).
 
+use irc_proto::message::Tag;
 use late_core::models::chat_room::ChatRoom;
+use uuid::Uuid;
 
 /// Max bytes of message body per PRIVMSG line. Conservative: leaves room for
 /// `:nick!nick@late.sh PRIVMSG #channel :` plus CRLF inside the 512-byte
 /// line limit.
 pub const PRIVMSG_CHUNK_BYTES: usize = 400;
+
+pub fn msgid(message_id: Uuid) -> String {
+    message_id.to_string()
+}
+
+pub fn server_time(created: chrono::DateTime<chrono::Utc>) -> String {
+    created.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReplyTagError {
+    MissingValue,
+    MalformedValue,
+    ConflictingValues,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReactionTagAction {
+    React,
+    Unreact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionTag {
+    pub reply_to_message_id: Uuid,
+    pub action: ReactionTagAction,
+    pub icon: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReactionTagError {
+    MissingReply,
+    InvalidReply(ReplyTagError),
+    MissingReaction,
+    ConflictingReactions,
+    MissingValue,
+}
+
+pub fn reply_tag(tags: Option<&[Tag]>) -> Result<Option<Uuid>, ReplyTagError> {
+    let Some(tags) = tags else {
+        return Ok(None);
+    };
+    let mut reply_to = None;
+    for tag in tags
+        .iter()
+        .filter(|tag| matches!(tag.0.as_str(), "+reply" | "+draft/reply"))
+    {
+        let value = tag.1.as_deref().ok_or(ReplyTagError::MissingValue)?;
+        let id = Uuid::parse_str(value).map_err(|_| ReplyTagError::MalformedValue)?;
+        match reply_to {
+            Some(existing) if existing != id => return Err(ReplyTagError::ConflictingValues),
+            Some(_) => {}
+            None => reply_to = Some(id),
+        }
+    }
+    Ok(reply_to)
+}
+
+pub fn reaction_tag(tags: Option<&[Tag]>) -> Result<Option<ReactionTag>, ReactionTagError> {
+    let Some(tags) = tags else {
+        return Ok(None);
+    };
+
+    let mut reaction = None;
+    for tag in tags {
+        let action = match tag.0.as_str() {
+            "+draft/react" => ReactionTagAction::React,
+            "+draft/unreact" => ReactionTagAction::Unreact,
+            _ => continue,
+        };
+        let value = tag.1.as_deref().ok_or(ReactionTagError::MissingValue)?;
+        if reaction.is_some() {
+            return Err(ReactionTagError::ConflictingReactions);
+        }
+        reaction = Some((action, value.to_string()));
+    }
+
+    let Some((action, icon)) = reaction else {
+        return Ok(None);
+    };
+    let Some(reply_to_message_id) =
+        reply_tag(Some(tags)).map_err(ReactionTagError::InvalidReply)?
+    else {
+        return Err(ReactionTagError::MissingReply);
+    };
+
+    Ok(Some(ReactionTag {
+        reply_to_message_id,
+        action,
+        icon,
+    }))
+}
 
 /// IRC-visible nick for a canonical late.sh username.
 ///
@@ -181,142 +275,4 @@ pub fn body_for_irc(body: &str, author: &str) -> String {
 pub fn parse_ctcp_action(text: &str) -> Option<&str> {
     text.strip_prefix("\u{1}ACTION ")
         .map(|rest| rest.trim_end_matches('\u{1}'))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use late_core::models::chat_room::ChatRoom;
-
-    fn room(kind: &str, visibility: &str, slug: Option<&str>) -> ChatRoom {
-        ChatRoom {
-            id: uuid::Uuid::new_v4(),
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            kind: kind.to_string(),
-            visibility: visibility.to_string(),
-            auto_join: false,
-            permanent: false,
-            slug: slug.map(str::to_string),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-        }
-    }
-
-    #[test]
-    fn channel_names_follow_room_kinds() {
-        assert_eq!(
-            channel_name(&room("lounge", "public", Some("lounge"))).as_deref(),
-            Some("#lounge")
-        );
-        assert_eq!(
-            channel_name(&room("topic", "private", Some("sekrit"))).as_deref(),
-            Some("#sekrit")
-        );
-        assert_eq!(channel_name(&room("game", "public", Some("poker-1"))), None);
-        assert_eq!(channel_name(&room("dm", "dm", None)), None);
-        assert_eq!(channel_name(&room("lounge", "public", None)), None);
-    }
-
-    #[test]
-    fn split_body_respects_newlines_and_utf8_boundaries() {
-        assert_eq!(split_body("a\nb", 400), vec!["a", "b"]);
-        assert_eq!(split_body("", 400), Vec::<String>::new());
-        // multi-byte chars must not be split mid-codepoint
-        let body = "é".repeat(300); // 600 bytes
-        let lines = split_body(&body, 400);
-        assert_eq!(lines.len(), 2);
-        assert!(lines.iter().all(|l| l.len() <= 400));
-        assert_eq!(lines.join(""), body);
-    }
-
-    #[test]
-    fn ctcp_action_round_trip() {
-        assert_eq!(parse_ctcp_action("\u{1}ACTION waves\u{1}"), Some("waves"));
-        assert_eq!(parse_ctcp_action("hello"), None);
-        assert_eq!(action_to_body("waves"), "\u{1}ACTION waves\u{1}");
-    }
-
-    #[test]
-    fn channel_lookup_helpers() {
-        assert_eq!(slug_for_channel("#lounge"), Some("lounge"));
-        assert_eq!(slug_for_channel("lounge"), None);
-        assert_eq!(slug_for_channel("#"), None);
-        assert_eq!(normalize_channel("#LOUNGE"), "#lounge");
-    }
-
-    #[test]
-    fn nick_projection_substitutes_dots_reversibly() {
-        assert_eq!(nick_for_username("alice.smith"), "alice^smith");
-        assert_eq!(nick_for_username(".alice."), "^alice^");
-        assert_eq!(username_for_nick("alice^smith"), "alice.smith");
-        assert_eq!(username_for_nick("^alice^"), ".alice.");
-    }
-
-    #[test]
-    fn leading_mentions_are_projected_to_irc_nicks() {
-        let usernames = ["alice.smith", "Bob.Dot"];
-        let lookup = |candidate: &str| {
-            usernames
-                .iter()
-                .find(|username| username.eq_ignore_ascii_case(candidate))
-                .map(|username| (*username).to_string())
-        };
-
-        assert_eq!(
-            rewrite_leading_mention_for_irc("@alice.smith hello", lookup),
-            "@alice^smith hello"
-        );
-        assert_eq!(
-            rewrite_leading_mention_for_irc("  Bob.Dot: hello", lookup),
-            "  Bob^Dot: hello"
-        );
-        assert_eq!(
-            rewrite_leading_mention_for_irc("alice.smith, hello", lookup),
-            "alice^smith, hello"
-        );
-    }
-
-    #[test]
-    fn leading_mentions_are_projected_to_late_usernames() {
-        let usernames = ["alice.smith", "Bob.Dot"];
-        let lookup = |candidate: &str| {
-            usernames
-                .iter()
-                .find(|username| nick_for_username(username).eq_ignore_ascii_case(candidate))
-                .map(|username| (*username).to_string())
-        };
-
-        assert_eq!(
-            rewrite_leading_mention_for_late("@alice^smith hello", lookup),
-            "@alice.smith hello"
-        );
-        assert_eq!(
-            rewrite_leading_mention_for_late("  Bob^Dot: hello", lookup),
-            "  Bob.Dot: hello"
-        );
-        assert_eq!(
-            rewrite_leading_mention_for_late("alice^smith, hello", lookup),
-            "alice.smith, hello"
-        );
-    }
-
-    #[test]
-    fn leading_mention_projection_ignores_non_matches() {
-        let lookup = |candidate: &str| (candidate == "alice.smith").then(|| candidate.to_string());
-
-        assert_eq!(
-            rewrite_leading_mention_for_irc("hello @alice.smith", lookup),
-            "hello @alice.smith"
-        );
-        assert_eq!(
-            rewrite_leading_mention_for_irc("@alice.smithsonian hello", lookup),
-            "@alice.smithsonian hello"
-        );
-        assert_eq!(
-            rewrite_leading_mention_for_irc("@missing.user hello", lookup),
-            "@missing.user hello"
-        );
-    }
 }

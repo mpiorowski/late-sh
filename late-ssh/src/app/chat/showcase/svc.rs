@@ -3,12 +3,12 @@ use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
+        profile::Profile,
         showcase::{Showcase, ShowcaseParams},
         showcase_feed_read::ShowcaseFeedRead,
-        user::User,
     },
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
@@ -24,6 +24,9 @@ pub struct ShowcaseSnapshot {
 pub struct ShowcaseFeedItem {
     pub showcase: Showcase,
     pub author_username: String,
+    /// The author's settings profile (bio, late.fetch fields), loaded with
+    /// the feed so the Profiles page can render an author card per project.
+    pub author_profile: Option<Profile>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,10 +48,6 @@ pub enum ShowcaseEvent {
         user_id: Uuid,
         unread_count: i64,
         last_read_at: Option<DateTime<Utc>>,
-    },
-    NewShowcasesAvailable {
-        user_id: Uuid,
-        unread_count: i64,
     },
 }
 
@@ -143,19 +142,7 @@ impl ShowcaseService {
                 .await;
 
                 match result {
-                    Ok(()) => {
-                        service.publish_event(ShowcaseEvent::Created { user_id });
-                        if let Err(e) = service
-                            .publish_unread_updates_for_all(true, Some(user_id))
-                            .await
-                        {
-                            late_core::error_span!(
-                                "showcase_unread_broadcast_failed",
-                                error = ?e,
-                                "failed to publish showcase unread updates after create"
-                            );
-                        }
-                    }
+                    Ok(()) => service.publish_event(ShowcaseEvent::Created { user_id }),
                     Err(e) => {
                         late_core::error_span!(
                             "showcase_create_failed",
@@ -204,16 +191,7 @@ impl ShowcaseService {
                 .await;
 
                 match result {
-                    Ok(()) => {
-                        service.publish_event(ShowcaseEvent::Updated { user_id });
-                        if let Err(e) = service.publish_unread_updates_for_all(false, None).await {
-                            late_core::error_span!(
-                                "showcase_unread_broadcast_failed",
-                                error = ?e,
-                                "failed to publish showcase unread updates after update"
-                            );
-                        }
-                    }
+                    Ok(()) => service.publish_event(ShowcaseEvent::Updated { user_id }),
                     Err(e) => {
                         late_core::error_span!(
                             "showcase_update_failed",
@@ -257,16 +235,7 @@ impl ShowcaseService {
                 .await;
 
                 match result {
-                    Ok(()) => {
-                        service.publish_event(ShowcaseEvent::Deleted { user_id });
-                        if let Err(e) = service.publish_unread_updates_for_all(false, None).await {
-                            late_core::error_span!(
-                                "showcase_unread_broadcast_failed",
-                                error = ?e,
-                                "failed to publish showcase unread updates after delete"
-                            );
-                        }
-                    }
+                    Ok(()) => service.publish_event(ShowcaseEvent::Deleted { user_id }),
                     Err(e) => {
                         late_core::error_span!(
                             "showcase_delete_failed",
@@ -298,12 +267,17 @@ impl ShowcaseService {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
-        let usernames = User::list_usernames_by_ids(&client, &user_ids).await?;
+        let author_profiles = Profile::list_by_user_ids(&client, &user_ids).await?;
         let items = items
             .into_iter()
-            .map(|showcase| ShowcaseFeedItem {
-                author_username: display_author(&usernames, showcase.user_id),
-                showcase,
+            .map(|showcase| {
+                let author_profile = author_profiles.get(&showcase.user_id).cloned();
+                let author_username = display_author(author_profile.as_ref(), showcase.user_id);
+                ShowcaseFeedItem {
+                    author_username,
+                    author_profile,
+                    showcase,
+                }
             })
             .collect();
 
@@ -336,36 +310,11 @@ impl ShowcaseService {
         });
         Ok(())
     }
-
-    async fn publish_unread_updates_for_all(
-        &self,
-        announce_new: bool,
-        actor_user_id: Option<Uuid>,
-    ) -> Result<()> {
-        let client = self.db.get().await?;
-        for user_id in User::list_ids(&client).await? {
-            let unread_count = ShowcaseFeedRead::unread_count_for_user(&client, user_id).await?;
-            let last_read_at = ShowcaseFeedRead::last_read_at(&client, user_id).await?;
-            self.publish_event(ShowcaseEvent::UnreadCountUpdated {
-                user_id,
-                unread_count,
-                last_read_at,
-            });
-            if announce_new && Some(user_id) != actor_user_id && unread_count > 0 {
-                self.publish_event(ShowcaseEvent::NewShowcasesAvailable {
-                    user_id,
-                    unread_count,
-                });
-            }
-        }
-        Ok(())
-    }
 }
 
-fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {
-    usernames
-        .get(&user_id)
-        .map(|name| name.trim())
+fn display_author(profile: Option<&Profile>, user_id: Uuid) -> String {
+    profile
+        .map(|profile| profile.username.trim())
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| user_id.to_string()[..8].to_string())
@@ -396,50 +345,5 @@ pub fn parse_tags(input: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{display_author, parse_tags};
-    use std::collections::HashMap;
-    use uuid::Uuid;
-
-    #[test]
-    fn parse_tags_normalizes_and_dedupes() {
-        let tags = parse_tags("Rust, CLI rust, web-dev");
-        assert_eq!(tags, vec!["rust", "cli", "web-dev"]);
-    }
-
-    #[test]
-    fn parse_tags_strips_hash_and_filters_invalid() {
-        let tags = parse_tags("#rust, !!!, ok");
-        assert_eq!(tags, vec!["rust", "ok"]);
-    }
-
-    #[test]
-    fn parse_tags_caps_count() {
-        let raw = (0..20)
-            .map(|i| format!("tag{i}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        assert_eq!(parse_tags(&raw).len(), 8);
-    }
-
-    #[test]
-    fn parse_tags_empty_input() {
-        assert!(parse_tags("").is_empty());
-        assert!(parse_tags("   ,  ").is_empty());
-    }
-
-    #[test]
-    fn display_author_prefers_username() {
-        let id = Uuid::now_v7();
-        let mut map = HashMap::new();
-        map.insert(id, "alice".to_string());
-        assert_eq!(display_author(&map, id), "alice");
-    }
-
-    #[test]
-    fn display_author_falls_back_to_short_id() {
-        let id = Uuid::now_v7();
-        let map = HashMap::new();
-        assert_eq!(display_author(&map, id), id.to_string()[..8]);
-    }
-}
+#[path = "svc_internal_test.rs"]
+mod svc_internal_test;

@@ -8,169 +8,30 @@
 # Build Bastion:  docker build --target runtime-bastion -t late-bastion .
 # Run:            docker run -p 2222:2222 late-ssh
 
-ARG RUST_VERSION=1.92
+ARG RUST_VERSION=1.97
 ARG DEBIAN_VERSION=bookworm
 
 # ==============================================================================
-# Stage 0a: NetHack - Build the door game binary from verified upstream source
+# Stage 0: Door game binaries - prebuilt images from docker/doors/
 # ==============================================================================
-# We compile the official NetHack release from source rather than installing the
-# distro "nethack-console" package, because the Debian package lags well behind
-# upstream (bookworm ships 3.6.6; we want 5.0.0). The source tarball's SHA-256 is
-# verified against the checksum published on nethack.org BEFORE the build runs;
-# `sha256sum -c` fails the build closed on any mismatch.
+# Each door game's upstream runtime artifact is prepared by its own Dockerfile
+# under docker/doors/ and built/published by the doors workflow
+# (.github/workflows/doors.yml). Pinning them here by tag means a door recipe
+# rebuilds only when its own Dockerfile changes, never on ordinary image
+# builds.
 #
-# URL + checksum are VERIFIED against https://www.nethack.org/v500/download-src.html
-# (tarball downloaded and hashed 2026-06-24). Build recipe follows the release's
-# own sys/unix/NewInstall.unx, and the PREFIX/HACKDIR overrides were confirmed to
-# resolve correctly via `make -pn`.
-FROM debian:${DEBIAN_VERSION}-slim AS nethack-build
-
-ARG NETHACK_VERSION=5.0.0
-ARG NETHACK_TARBALL=nethack-500-src.tgz
-ARG NETHACK_URL=https://www.nethack.org/download/5.0.0/nethack-500-src.tgz
-ARG NETHACK_SHA256=2959b7886aac76185b90aea0c9f80d14343f604de0ae96b3dd2a760f7ab3bde9
-# PREFIX holds the install tree; HACKDIR is the read-only playground: data files
-# AND the dir compiled into the binary (-DHACKDIR). We deliberately do NOT set
-# NETHACKDIR in the app, so this compile-time path MUST equal the runtime path.
-ARG NETHACK_PREFIX=/opt/nethack
-ARG NETHACK_HACKDIR=/var/games/nethack
-# VAR_PLAYGROUND splits the WRITABLE state (save/, bones, locks, record, level,
-# trouble) out of HACKDIR so the latter can stay a read-only image layer while
-# this dir is backed by a persistent volume. NetHack's own supported knob for
-# "static playground on a read-only filesystem" (include/unixconf.h). At runtime
-# unixmain.c::chdirx() points the writable prefixes here and still chdir()s to
-# HACKDIR, so read-only data files keep loading from the image. Must equal the
-# VARDIR install path and the PVC mount path in infra/nethack.tf.
-ARG NETHACK_VAR_PLAYGROUND=/var/games/nethack-var
-
-# build-essential + flex/bison + ncurses headers cover the tty/curses build;
-# groff-base lets the install build its man pages.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    build-essential \
-    flex \
-    bison \
-    libncursesw5-dev \
-    groff-base \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-RUN curl -fsSL -o "${NETHACK_TARBALL}" "${NETHACK_URL}" \
-    && echo "${NETHACK_SHA256}  ${NETHACK_TARBALL}" | sha256sum -c - \
-    && tar -xzf "${NETHACK_TARBALL}" \
-    && rm "${NETHACK_TARBALL}"
-
-# Canonical 5.0.0 unix build (see sys/unix/NewInstall.unx): configure from the
-# linux.500 hints (run from sys/unix), fetch+verify Lua, then build and install.
-# `make fetch-Lua` downloads Lua over the network but verifies it against the
-# pinned checksums in submodules/CHKSUMS (shipped inside this already-verified
-# tarball), so it is integrity-checked though not offline. PREFIX/HACKDIR are
-# passed as make overrides (the documented config mechanism); the binary + data
-# install into HACKDIR with -DHACKDIR baked to the same path.
-#
-# VAR_PLAYGROUND is NOT reachable via the PREFIX/HACKDIR make overrides, so we
-# define it directly in include/unixconf.h (the documented edit point) before
-# building, and pass VARDIR=$NETHACK_VAR_PLAYGROUND so `make install` creates and
-# seeds that dir (save/ + record/logfile/perm/...). The grep fails the build
-# closed if upstream ever moves the commented VAR_PLAYGROUND line, since a silent
-# sed miss would leave saves writing into HACKDIR. The asserts confirm both the
-# binary (HACKDIR) and the writable seed (save/ under VAR_PLAYGROUND) landed.
-#
-# We also DISABLE NetHack's in-game shell ('!') and suspend ('^Z') escapes at
-# compile time by removing their `#define`s in unixconf.h. late-ssh accepts
-# anonymous SSH and runs the game as the service user inside the app container; a
-# shell escape would hand an attacker a shell as that user (able to read the
-# parent's /proc environ, reach in-cluster services, etc.), which env-clearing the
-# child alone can't fully prevent. Removing the defines compiles the escape code
-# out entirely, so no sysconf edit or missing file can re-enable it. The `!` grep
-# fails the build closed if the defines aren't gone.
-WORKDIR /build/NetHack-${NETHACK_VERSION}
-RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_VAR_PLAYGROUND}\"|" include/unixconf.h \
-    && grep -qx "#define VAR_PLAYGROUND \"${NETHACK_VAR_PLAYGROUND}\"" include/unixconf.h \
-    && sed -i 's|^#define SHELL\b.*|/* SHELL disabled by late.sh: no in-game shell escape */|;s|^#define SUSPEND\b.*|/* SUSPEND disabled by late.sh */|' include/unixconf.h \
-    && ! grep -qE '^#define (SHELL|SUSPEND)\b' include/unixconf.h \
-    # The graceful door teardown (late-nethack host.rs) relies on NetHack's SIGHUP
-    # hangup-save: on a client disconnect or host SIGTERM the host SIGHUPs the
-    # child so NetHack writes a recoverable save AND releases its getlock slot,
-    # instead of leaking the slot via SIGKILL (leaks accumulate until all
-    # MAXPLAYERS slots are gone, wedging the whole door for everyone).
-    # SAFERHANGUP defers the hangup to a safe point in the command loop rather than
-    # saving from inside the signal handler. It ships enabled by default; the sed
-    # re-enables the single-line-commented form if a version bump flips that, then
-    # the grep asserts it is active. Fail-closed; re-verify on NetHack bumps.
-    && sed -i 's|^/\* #define SAFERHANGUP \*/|#define SAFERHANGUP|' include/unixconf.h \
-    && grep -qE '^#define SAFERHANGUP\b' include/unixconf.h \
-    && cd sys/unix && sh setup.sh hints/linux.500 && cd ../.. \
-    && make fetch-Lua \
-    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games all \
-    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games install \
-    # Raise the concurrent-game cap. sysconf ships MAXPLAYERS=10; each value is
-    # one live getlock slot, and once every slot is taken the whole door wedges
-    # ("Too many hacks running now"), so size it up from the stock default.
-    # NetHack hard-caps MAXPLAYERS at 25 (src/sys.c: values above it are rejected
-    # at startup with "Illegal value in MAXPLAYERS", which sysconf parsing does
-    # NOT fail closed on -- it just ignores the line), so 25 is the ceiling; it
-    # fits the host pod's 1Gi budget (~10-20MB/game) with room to spare. The grep
-    # only asserts the file was rewritten -- the 25 cap itself is upstream's.
-    && sed -i 's/^MAXPLAYERS=.*/MAXPLAYERS=25/' ${NETHACK_HACKDIR}/sysconf \
-    && grep -qx 'MAXPLAYERS=25' ${NETHACK_HACKDIR}/sysconf \
-    # `make install` writes sysconf as 0600 root. HACKDIR is read-only at runtime
-    # and the host runs as the unprivileged `late` user, which must READ sysconf at
-    # startup -- otherwise nethack aborts with "Unable to open SYSCF_FILE." Make it
-    # world-readable (it holds only non-secret game sysconf). This is why the door
-    # worked in dev (runs as root) but failed in the prod pod (runs as late).
-    && chmod 0644 ${NETHACK_HACKDIR}/sysconf \
-    && test -x ${NETHACK_HACKDIR}/nethack \
-    && [ "$(stat -c '%a' ${NETHACK_HACKDIR}/sysconf)" = "644" ] \
-    && test -d ${NETHACK_VAR_PLAYGROUND}/save
-
-# ==============================================================================
-# Stage 0b: dopewars - Build the door game binary from verified upstream source
-# ==============================================================================
-# Like NetHack, dopewars runs in its own SSH host (late-dopewars); this stage
-# builds the binary, which is copied into runtime-dopewars for prod (and base for
-# dev-dopewars). We build the curses client terminal-only (no GTK/SDL/sound) from
-# the verified 1.6.2 release tarball: runtime deps are just glib2 + ncursesw (+
-# libcurl, pulled in by the optional metaserver client). The binary is
-# self-contained -- drug/location data is compiled in, no data dir -- and is NOT
-# setgid, so it honors the shared `-f` high-score path the host passes.
-#
-# The tarball SHA-256 is verified BEFORE the build (downloaded + hashed 2026-06-30);
-# `sha256sum -c` fails the build closed on any mismatch.
-FROM debian:${DEBIAN_VERSION}-slim AS dopewars-build
-
-ARG DOPEWARS_VERSION=1.6.2
-ARG DOPEWARS_TARBALL=dopewars-1.6.2.tar.gz
-ARG DOPEWARS_URL=https://downloads.sourceforge.net/project/dopewars/dopewars/1.6.2/dopewars-1.6.2.tar.gz
-ARG DOPEWARS_SHA256=623b9d1d4d576f8b1155150975308861c4ec23a78f9cc2b24913b022764eaae1
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    build-essential \
-    pkg-config \
-    libglib2.0-dev \
-    libncursesw5-dev \
-    libcurl4-openssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-RUN curl -fsSL -o "${DOPEWARS_TARBALL}" "${DOPEWARS_URL}" \
-    && echo "${DOPEWARS_SHA256}  ${DOPEWARS_TARBALL}" | sha256sum -c - \
-    && tar -xzf "${DOPEWARS_TARBALL}" \
-    && rm "${DOPEWARS_TARBALL}"
-
-# Terminal-only build (GUI/server/sound disabled). The release Makefile drops
-# $(CURSES_LIBS) from dopewars_LDADD when the GTK client is disabled, so the curses
-# symbols are injected via the trailing $(LIBS) on the link line (LIBS=-lncursesw).
-# Copy the finished binary to a version-independent path for the COPY --from below.
-WORKDIR /build/dopewars-${DOPEWARS_VERSION}
-RUN ./configure --disable-gui-client --disable-gui-server --enable-curses-client \
-    && make LIBS="-lncursesw" \
-    && test -x src/dopewars \
-    && cp src/dopewars /dopewars
+# THE TAGS BELOW ARE THE SINGLE SOURCE OF TRUTH: doors.yml parses each pin out
+# of this file and publishes ghcr door-<game> at exactly that tag, so a pin
+# bump and its recipe change ship in the same commit and cannot drift apart.
+# Bump the pin whenever a door's recipe or upstream version changes; the same
+# tag must never be re-pushed with new content.
+FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r3 AS nethack-build
+FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
+FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2 AS dcss-build
+FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
+FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r3 AS brogue-build
+FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
+FROM ghcr.io/mpiorowski/late-sh/door-bashquest:v1 AS bashquest-build
 
 # ==============================================================================
 # Stage 0: Base - Common system dependencies
@@ -191,10 +52,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     libncursesw6 \
+    libncurses6 \
     libglib2.0-0 \
     libcurl4 \
+    liblua5.4-0 \
+    libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack
+    && mkdir -p /var/lib/late-nethack && chmod 0777 /var/lib/late-nethack \
+    && mkdir -p /var/lib/late-dcss && chmod 0777 /var/lib/late-dcss \
+    && mkdir -p /var/lib/late-brogue && chmod 0777 /var/lib/late-brogue \
+    && mkdir -p /var/lib/late-usurper && chmod 0777 /var/lib/late-usurper
 
 # NetHack door game: the from-source binary lives inside its read-only playground
 # (/var/games/nethack/nethack) and self-locates via its compiled-in HACKDIR; the
@@ -214,6 +81,22 @@ RUN mkdir -p /usr/games \
 # runtime libs (glib2/ncursesw/curl) are installed above. LATE_DOPEWARS_BIN
 # defaults to /usr/games/dopewars.
 COPY --from=dopewars-build /dopewars /usr/games/dopewars
+
+# BashQuest door game: served over SSH by the late-bashquest host (see late-ssh
+# bashquest proxy). It's a plain Bash script (no compilation, no extra runtime
+# deps beyond bash itself, already present in this image), pinned and
+# checksum-verified in the bashquest-build stage. Lives here so dev-bashquest
+# (which derives from `base`) can run it; prod ships it in runtime-bashquest.
+# LATE_BASHQUEST_BIN defaults to /usr/local/bin/bashquest.sh.
+COPY --from=bashquest-build /bashquest.sh /usr/local/bin/bashquest.sh
+
+# DCSS door game: served over SSH by the late-dcss host (see late-ssh dcss
+# proxy). The from-source console binary + data tree live here so dev-dcss
+# (which derives from `base`) can run it; prod ships it in runtime-dcss. Its
+# runtime libs (ncursesw/lua/sqlite) are installed above. LATE_DCSS_BIN
+# defaults to /usr/games/crawl.
+COPY --from=dcss-build /opt/dcss /opt/dcss
+RUN ln -sf /opt/dcss/bin/crawl /usr/games/crawl
 
 # Configure cargo to use mold linker
 RUN echo '[target.x86_64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]\n\n[target.aarch64-unknown-linux-gnu]\nlinker = "clang"\nrustflags = ["-C", "link-arg=-fuse-ld=mold"]' >> /usr/local/cargo/config.toml
@@ -239,62 +122,195 @@ COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-bastion/Cargo.toml late-bastion/Cargo.toml
+COPY late-codekeep/Cargo.toml late-codekeep/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
+COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
+COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
 COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
+COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
+COPY late-bashquest/Cargo.toml late-bashquest/Cargo.toml
+COPY late-webview/Cargo.toml late-webview/Cargo.toml
 COPY vendor vendor
 
-# Create dummy source files for cargo-chef to analyze
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-bastion/src late-nethack/src late-dopewars/src && \
+# Create dummy source files for cargo-chef to analyze. late-webview is never
+# built in these images (CLI-only YouTube helper), but it is a workspace member
+# and a late-cli path dependency, so its manifest and target stubs must exist
+# for `cargo metadata` to resolve the workspace.
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-bastion/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src late-webview/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "fn main() {}" > late-bastion/src/main.rs && \
+    echo "fn main() {}" > late-codekeep/src/main.rs && \
     echo "fn main() {}" > late-nethack/src/main.rs && \
-    echo "fn main() {}" > late-dopewars/src/main.rs
+    echo "fn main() {}" > late-dcss/src/main.rs && \
+    echo "fn main() {}" > late-brogue/src/main.rs && \
+    echo "fn main() {}" > late-dopewars/src/main.rs && \
+    echo "fn main() {}" > late-usurper/src/main.rs && \
+    echo "fn main() {}" > late-bashquest/src/main.rs && \
+    echo "" > late-webview/src/lib.rs && \
+    echo "fn main() {}" > late-webview/src/main.rs
 
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ==============================================================================
-# Stage 3: Builder - Build dependencies (cached), then all binaries
+# Stage 3: Builder - ssh + web only (the heavy late-core dependents)
 # ==============================================================================
+# Door hosts compile in their own builder-<door> stages below, so a door image
+# build never pays for the late-ssh/late-web compile and vice versa.
 FROM chef AS builder
 
-# Copy recipe and cook ALL dependencies (cached until any dep changes)
+# Copy recipe and cook ssh/web/bastion dependencies (cached until any dep changes)
 COPY --from=planner /app/recipe.json recipe.json
 COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-bastion -p late-nethack -p late-dopewars
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-bastion
 
-# Copy actual source code
+# Copy actual source code. The other workspace members stay manifest stubs so
+# `cargo metadata` resolves the workspace without building them.
 COPY Cargo.toml Cargo.lock ./
 COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
 COPY late-bastion late-bastion
-COPY late-nethack late-nethack
-COPY late-dopewars late-dopewars
 COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
-RUN mkdir -p late-cli/src && echo "fn main() {}" > late-cli/src/main.rs
-# Build deployable binaries only (late-cli excluded - local CLI tooling).
-# late-nethack/late-dopewars have no otel feature; they are built without the
-# workspace feature flag.
+COPY late-webview/Cargo.toml late-webview/Cargo.toml
+COPY late-codekeep/Cargo.toml late-codekeep/Cargo.toml
+COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
+COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
+COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
+COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
+COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
+COPY late-bashquest/Cargo.toml late-bashquest/Cargo.toml
+RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src && \
+    echo "fn main() {}" > late-cli/src/main.rs && \
+    echo "" > late-webview/src/lib.rs && \
+    echo "fn main() {}" > late-webview/src/main.rs && \
+    echo "fn main() {}" > late-codekeep/src/main.rs && \
+    echo "fn main() {}" > late-nethack/src/main.rs && \
+    echo "fn main() {}" > late-dcss/src/main.rs && \
+    echo "fn main() {}" > late-brogue/src/main.rs && \
+    echo "fn main() {}" > late-dopewars/src/main.rs && \
+    echo "fn main() {}" > late-usurper/src/main.rs && \
+    echo "fn main() {}" > late-bashquest/src/main.rs
+# Build deployable binaries only (late-cli and late-webview excluded - local
+# CLI tooling; the webview helper ships via deploy_cli.yml, not these images).
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --features otel -p late-ssh -p late-web -p late-bastion && \
-    cargo build --release -p late-nethack -p late-dopewars && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
     cp /app/target/release/late-web /app/late-web-bin && \
-    cp /app/target/release/late-bastion /app/late-bastion-bin && \
-    cp /app/target/release/late-nethack /app/late-nethack-bin && \
-    cp /app/target/release/late-dopewars /app/late-dopewars-bin
+    cp /app/target/release/late-bastion /app/late-bastion-bin
 
 # Build frontend assets
 RUN cd late-web && npm install && npm run tailwind:build
+
+# ==============================================================================
+# Stage 3a: Door builders - one per host crate
+# ==============================================================================
+# Each stage cooks and compiles ONLY its own door crate (no door depends on
+# late-core, verified in their manifests). The planner tree provides every
+# other member as a manifest stub, then the real source overlays its stub.
+# The doors have no otel feature; they build without the workspace flag.
+FROM chef AS door-builder-base
+COPY --from=planner /app/recipe.json recipe.json
+COPY vendor vendor
+
+FROM door-builder-base AS builder-codekeep
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-codekeep
+COPY --from=planner /app /app
+COPY late-codekeep late-codekeep
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-codekeep && \
+    cp /app/target/release/late-codekeep /app/late-codekeep-bin
+
+FROM door-builder-base AS builder-nethack
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-nethack
+COPY --from=planner /app /app
+COPY late-nethack late-nethack
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-nethack && \
+    cp /app/target/release/late-nethack /app/late-nethack-bin
+
+FROM door-builder-base AS builder-dcss
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-dcss
+COPY --from=planner /app /app
+COPY late-dcss late-dcss
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-dcss && \
+    cp /app/target/release/late-dcss /app/late-dcss-bin
+
+FROM door-builder-base AS builder-brogue
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-brogue
+COPY --from=planner /app /app
+COPY late-brogue late-brogue
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-brogue && \
+    cp /app/target/release/late-brogue /app/late-brogue-bin
+
+FROM door-builder-base AS builder-dopewars
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-dopewars
+COPY --from=planner /app /app
+COPY late-dopewars late-dopewars
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-dopewars && \
+    cp /app/target/release/late-dopewars /app/late-dopewars-bin
+
+FROM door-builder-base AS builder-usurper
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-usurper
+COPY --from=planner /app /app
+COPY late-usurper late-usurper
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-usurper && \
+    cp /app/target/release/late-usurper /app/late-usurper-bin
+
+FROM door-builder-base AS builder-bashquest
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-bashquest
+COPY --from=planner /app /app
+COPY late-bashquest late-bashquest
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-bashquest && \
+    cp /app/target/release/late-bashquest /app/late-bashquest-bin
 
 # ==============================================================================
 # Stage 3b: Dev base - Rust toolchain + dev deps
@@ -330,6 +346,43 @@ CMD ["cargo", "watch", "-w", "late-nethack", "-x", "run -p late-nethack"]
 # so the default LATE_DOPEWARS_BIN (/usr/games/dopewars) resolves here.
 FROM dev-base AS dev-dopewars
 CMD ["cargo", "watch", "-w", "late-dopewars", "-x", "run -p late-dopewars"]
+
+# BashQuest host: serves the game over SSH (see late-bashquest). dev-base
+# derives from `base`, which already has the pinned bashquest.sh, so the
+# default LATE_BASHQUEST_BIN (/usr/local/bin/bashquest.sh) resolves here.
+FROM dev-base AS dev-bashquest
+CMD ["cargo", "watch", "-w", "late-bashquest", "-x", "run -p late-bashquest"]
+
+# CodeKeep host: Bun + the lockfile-pinned npm package live only in this target.
+FROM dev-base AS dev-codekeep
+USER root
+COPY --from=codekeep-build /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=codekeep-build /usr/local/bin/codekeep /usr/local/bin/codekeep
+COPY --from=codekeep-build /opt/codekeep /opt/codekeep
+RUN mkdir -p /var/lib/late-codekeep && chmod 0777 /var/lib/late-codekeep
+CMD ["cargo", "watch", "-w", "late-codekeep", "-x", "run -p late-codekeep"]
+
+# DCSS host: serves the game over SSH (see late-dcss). dev-base derives from
+# `base`, which already has the from-source crawl binary + data tree, so the
+# default LATE_DCSS_BIN (/usr/games/crawl) resolves here.
+FROM dev-base AS dev-dcss
+CMD ["cargo", "watch", "-w", "late-dcss", "-x", "run -p late-dcss"]
+
+# Usurper host: serves the game over SSH (see late-usurper). This is the only dev
+# target that needs the x86-64 upstream binaries + seed game tree; keeping the
+# copy here prevents every other Compose service from building Usurper.
+FROM dev-base AS dev-usurper
+COPY --from=usurper-build /opt/usurper /opt/usurper
+CMD ["cargo", "watch", "-w", "late-usurper", "-x", "run -p late-usurper"]
+
+# Brogue host: serves the game over SSH (see late-brogue). This is the only dev
+# target that needs the from-source curses binary; keeping the copy here (plus
+# the /usr/games/brogue symlink for the default LATE_BROGUE_BIN) prevents every
+# other Compose service from carrying it.
+FROM dev-base AS dev-brogue
+COPY --from=brogue-build /opt/brogue /opt/brogue
+RUN mkdir -p /usr/games && ln -sf /opt/brogue/brogue /usr/games/brogue
+CMD ["cargo", "watch", "-w", "late-brogue", "-x", "run -p late-brogue"]
 
 # ==============================================================================
 # Stage 4a: Runtime base - Common runtime setup
@@ -419,7 +472,7 @@ COPY --from=nethack-build /var/games/nethack-var /var/games/nethack-var
 RUN mkdir -p /usr/games \
     && ln -sf /var/games/nethack/nethack /usr/games/nethack \
     && chown -R late:late /var/games/nethack-var
-COPY --from=builder /app/late-nethack-bin /app/late-nethack
+COPY --from=builder-nethack /app/late-nethack-bin /app/late-nethack
 USER late
 
 EXPOSE 2323
@@ -449,9 +502,142 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/late-dopewars && chown late:late /var/lib/late-dopewars
 COPY --from=dopewars-build /dopewars /usr/games/dopewars
-COPY --from=builder /app/late-dopewars-bin /app/late-dopewars
+COPY --from=builder-dopewars /app/late-dopewars-bin /app/late-dopewars
 USER late
 
 EXPOSE 2324
 
 CMD ["/app/late-dopewars"]
+
+# ==============================================================================
+# Stage 4f: Runtime CodeKeep - dedicated SSH/PTTY host
+# ==============================================================================
+FROM runtime-base AS runtime-codekeep
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=codekeep-build /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=codekeep-build /usr/local/bin/codekeep /usr/local/bin/codekeep
+COPY --from=codekeep-build /opt/codekeep /opt/codekeep
+RUN mkdir -p /var/lib/late-codekeep && chown late:late /var/lib/late-codekeep
+COPY --from=builder-codekeep /app/late-codekeep-bin /app/late-codekeep
+USER late
+
+EXPOSE 2328
+
+CMD ["/app/late-codekeep"]
+
+# ==============================================================================
+# Stage 4g: Runtime DCSS - the late-dcss host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the from-source console crawl binary + its
+# read-only data tree (/opt/dcss, DATADIR baked in at build time), the curses/
+# lua/sqlite runtime, and the writable playground HOME (/var/lib/late-dcss;
+# backed by a PVC in prod so per-player saves under $HOME/.crawl survive
+# restarts). LATE_DCSS_BIN defaults to /usr/games/crawl, LATE_DCSS_DATA_DIR to
+# that playground path.
+FROM runtime-base AS runtime-dcss
+USER root
+# libncursesw6/liblua5.4-0/libsqlite3-0: crawl's runtime deps. ncurses-term: the
+# EXTENDED terminfo DB (alacritty, rxvt, st, etc.) so clients on those terminals
+# get native terminfo rather than the xterm-256color fallback. Terminals that
+# ship their own terminfo (ghostty/kitty/wezterm) are covered by the host's TERM
+# fallback in late-dcss (effective_term), since they are not in ncurses-term.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libncursesw6 \
+    liblua5.4-0 \
+    libsqlite3-0 \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-dcss && chown late:late /var/lib/late-dcss
+COPY --from=dcss-build /opt/dcss /opt/dcss
+RUN mkdir -p /usr/games && ln -sf /opt/dcss/bin/crawl /usr/games/crawl
+COPY --from=builder-dcss /app/late-dcss-bin /app/late-dcss
+USER late
+
+# 2325: the game over SSH. 2329: the read-only crawl-file publisher for the
+# public DCSS tooling (late-dcss/src/publish.rs).
+EXPOSE 2325 2329
+
+CMD ["/app/late-dcss"]
+
+# ==============================================================================
+# Stage 4g: Runtime Usurper - the late-usurper host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the from-source statically-linked USURPER.EXE
+# + EDITOR.EXE and the seed game tree in /opt/usurper (read-only image layer),
+# plus the writable game dir /var/lib/late-usurper (backed by a PVC in prod so
+# the shared world - players, gangs, king, news - survives restarts). The host
+# copies missing seed files into the game dir at boot. No ncurses/terminfo: the
+# game emits raw CP437 ANSI which the host transcodes to UTF-8 itself.
+FROM runtime-base AS runtime-usurper
+USER root
+RUN mkdir -p /var/lib/late-usurper && chown late:late /var/lib/late-usurper
+COPY --from=usurper-build /opt/usurper /opt/usurper
+COPY --from=builder-usurper /app/late-usurper-bin /app/late-usurper
+USER late
+
+EXPOSE 2326
+
+CMD ["/app/late-usurper"]
+
+# ==============================================================================
+# Stage 4h: Runtime Brogue - the late-brogue host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the from-source curses-only brogue binary
+# (/opt/brogue, hangup-save patch applied), its runtime lib, and the writable
+# playground (/var/lib/late-brogue; backed by a PVC in prod so the per-player
+# save directories under players/ survive restarts). LATE_BROGUE_BIN defaults
+# to /usr/games/brogue, LATE_BROGUE_DATA_DIR to that playground path.
+FROM runtime-base AS runtime-brogue
+USER root
+# libncurses6: brogue's terminal build links plain -lncurses (pure-ASCII
+# display, no wide-char calls). ncurses-term: the EXTENDED terminfo DB
+# (alacritty, rxvt, st, etc.) so clients on those terminals get native
+# terminfo rather than the xterm-256color fallback; terminals that ship their
+# own terminfo (ghostty/kitty/wezterm) are covered by the host's TERM fallback
+# in late-brogue (effective_term).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libncurses6 \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-brogue && chown late:late /var/lib/late-brogue
+COPY --from=brogue-build /opt/brogue /opt/brogue
+RUN mkdir -p /usr/games && ln -sf /opt/brogue/brogue /usr/games/brogue
+COPY --from=builder-brogue /app/late-brogue-bin /app/late-brogue
+USER late
+
+EXPOSE 2327
+
+CMD ["/app/late-brogue"]
+
+# ==============================================================================
+# Stage 4i: Runtime BashQuest - the late-bashquest host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the pinned, checksum-verified bashquest.sh
+# (no runtime deps beyond bash and coreutils/ncurses-bin, already in
+# runtime-base's Debian slim image), and the writable playground HOME
+# (/var/lib/late-bashquest; backed by a PVC in prod so the shared users.db and
+# every player's save under $HOME/.bashquest survive restarts).
+# LATE_BASHQUEST_BIN defaults to /usr/local/bin/bashquest.sh,
+# LATE_BASHQUEST_DATA_DIR to that playground path.
+FROM runtime-base AS runtime-bashquest
+USER root
+# ncurses-term: the EXTENDED terminfo DB (alacritty, rxvt, st, etc.). bashquest.sh
+# writes its own ANSI escapes, but it clears the screen with `clear`, which reads
+# terminfo and clears NOTHING on a TERM it cannot resolve (printing
+# "'<term>': unknown terminal type." and stacking every redraw under the last
+# screen). Terminals that ship their own terminfo (ghostty/kitty/wezterm) are not
+# in ncurses-term and are covered by the host's TERM fallback in late-bashquest
+# (effective_term). `clear` itself comes from ncurses-bin, already in the base image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-bashquest && chown late:late /var/lib/late-bashquest
+COPY --from=bashquest-build /bashquest.sh /usr/local/bin/bashquest.sh
+COPY --from=builder-bashquest /app/late-bashquest-bin /app/late-bashquest
+USER late
+
+EXPOSE 2330
+
+CMD ["/app/late-bashquest"]

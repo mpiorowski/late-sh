@@ -19,6 +19,8 @@ crate::user_scoped_model! {
         pub current_row: i32,
         pub current_col: i32,
         pub next_kind: String,
+        pub hold_kind: Option<String>,
+        pub hold_used: bool,
         pub is_game_over: bool,
     }
 }
@@ -38,8 +40,8 @@ impl Game {
     pub async fn upsert(client: &Client, params: GameParams) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO tetris_games (user_id, score, lines, level, board, current_kind, current_rotation, current_row, current_col, next_kind, is_game_over)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                "INSERT INTO tetris_games (user_id, score, lines, level, board, current_kind, current_rotation, current_row, current_col, next_kind, hold_kind, hold_used, is_game_over)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                  ON CONFLICT (user_id) DO UPDATE SET
                     score = $2,
                     lines = $3,
@@ -50,7 +52,9 @@ impl Game {
                     current_row = $8,
                     current_col = $9,
                     next_kind = $10,
-                    is_game_over = $11,
+                    hold_kind = $11,
+                    hold_used = $12,
+                    is_game_over = $13,
                     updated = current_timestamp
                  RETURNING *",
                 &[
@@ -64,6 +68,8 @@ impl Game {
                     &params.current_row,
                     &params.current_col,
                     &params.next_kind,
+                    &params.hold_kind,
+                    &params.hold_used,
                     &params.is_game_over,
                 ],
             )
@@ -73,6 +79,9 @@ impl Game {
 }
 
 impl HighScore {
+    /// `updated` is when the best was set, not when the player last played:
+    /// the monthly board and the award snapshot window this table by it, so
+    /// a submit that does not beat the best must leave it alone.
     pub async fn update_score_if_higher(
         client: &Client,
         user_id: Uuid,
@@ -82,7 +91,12 @@ impl HighScore {
             .query_one(
                 "INSERT INTO tetris_high_scores (user_id, score)
                  VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET score = GREATEST(tetris_high_scores.score, $2), updated = current_timestamp
+                 ON CONFLICT (user_id) DO UPDATE SET
+                    score = GREATEST(tetris_high_scores.score, $2),
+                    updated = CASE
+                        WHEN $2 > tetris_high_scores.score THEN current_timestamp
+                        ELSE tetris_high_scores.updated
+                    END
                  RETURNING *",
                 &[&user_id, &new_score],
             )

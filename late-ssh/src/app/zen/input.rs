@@ -1,0 +1,446 @@
+//! Keys for the Zen page: the chat keys of the focused chat tile, the tank
+//! feed, and the layout keys. The bonsai is tended in its care modal, the
+//! same one `w` opens on every other page, so no care key is captured
+//! here. Tab and Shift+Tab are the page's: they walk the tile focus, since
+//! Zen is not in the page cycle and the global Tab would drop back to Home.
+//! Anything not owned here returns `false` so the global keys (digits,
+//! `q`, `?`, `w`, the `v` music chords) keep working.
+
+use uuid::Uuid;
+
+use super::rows::InboxRow;
+use super::state::{Dir, KindPick, MAX_TILES, TileKind};
+use crate::app::{
+    chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
+};
+
+pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    // A pressed `v` owns the next key everywhere; the page must not eat the
+    // suffix (`v x` swaps the audio source, `X` here closes a tile).
+    if app.music_prefix_armed {
+        return false;
+    }
+    // The tile picker owns every key while it is up (Esc closes it in
+    // `dispatch_escape`), so nothing under it moves.
+    if app.zen.kind_picker.is_some() {
+        handle_kind_picker(app, event);
+        return true;
+    }
+    if handle_common(app, event) {
+        return true;
+    }
+    handle_rice(app, event)
+}
+
+/// The chat keys, the Live strip's `o`, and the tank feed `a`. The chat keys belong to the
+/// focused chat tile: `[` `]` rebind it to the previous or next joined
+/// room, `i` and Enter write in its room, `j` `k` select in it, and the
+/// message actions act on its selection; with any other tile focused all
+/// of them are swallowed, so a page of several chats never scrolls one you
+/// are not looking at. The sprout is cut on its Shop row, on purpose: no
+/// page key for it. The pet has no key at all: it is petted
+/// with a click and reads the session for the rest.
+fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
+    let Some(byte) = event_byte(event) else {
+        return false;
+    };
+    if app.zen.focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
+        return true;
+    }
+    if app.zen.focused_kind() == Some(TileKind::Headlines) && handle_headlines(app, byte) {
+        return true;
+    }
+    if app.zen.focused_kind() == Some(TileKind::Live) && handle_live(app, byte) {
+        return true;
+    }
+    let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
+    // The focused chat tile's message keys, the way the house table routes
+    // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
+    // leader always; `d` `r` `e` `p` `c` `t` `G` and Enter only while a
+    // message in that room is selected, so `r` flips the tile otherwise.
+    if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
+        if crate::app::chat::input::chat_priority_key(app, byte)
+            && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+        {
+            return true;
+        }
+        if crate::app::chat::input::selected_chat_key(app, room_id, byte)
+            && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+        {
+            return true;
+        }
+    }
+    match byte {
+        // `o` opens what a Live tile on the page shows, whichever tile has
+        // the focus, as on the #lounge card. One zoomed away is not shown.
+        b'o' if app.zen.draws(TileKind::Live) => {
+            crate::app::live::input::open_from_key(app);
+            true
+        }
+        b'[' => {
+            if chat_focused {
+                cycle_room(app, -1);
+            }
+            true
+        }
+        b']' => {
+            if chat_focused {
+                cycle_room(app, 1);
+            }
+            true
+        }
+        b'i' | b'\r' | b'\n' => {
+            if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
+                app.chat.start_composing_in_room(room_id);
+            }
+            true
+        }
+        // Swallowed unless a chat is focused; then the global handler selects.
+        b'j' | b'J' | b'k' | b'K' => !chat_focused,
+        b'a' => {
+            crate::app::input::feed_aquarium_globally(app);
+            true
+        }
+        // The backtick chain, as on Home: it hops through the games waiting
+        // on you and comes home here.
+        b'`' => crate::app::workspace::cycle::cycle_game_workspace(app),
+        _ => false,
+    }
+}
+
+/// The focused Live tile: Enter opens what the strip shows, the way `o`
+/// does on the #lounge card. With nothing to open it still takes the key,
+/// as every tile but a chat does.
+fn handle_live(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'\r' | b'\n' => {
+            crate::app::live::input::open_from_key(app);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The focused Inbox tile: `j` `k` walk its rows, Enter opens the row.
+fn handle_inbox(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'j' | b'J' => {
+            let last = inbox_rows(app).len().saturating_sub(1);
+            app.zen.inbox_selected = (app.zen.inbox_selected + 1).min(last);
+            true
+        }
+        b'k' | b'K' => {
+            app.zen.inbox_selected = app.zen.inbox_selected.saturating_sub(1);
+            true
+        }
+        b'\r' | b'\n' => {
+            open_inbox_row(app);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn inbox_rows(app: &App) -> Vec<InboxRow> {
+    super::rows::inbox_rows(
+        app.user_id,
+        &app.chat.rooms,
+        &app.chat.unread_counts,
+        app.chat.usernames(),
+        app.chat.ignored_user_ids(),
+        app.chat.notifications.all_items(),
+    )
+}
+
+/// Open the selected Inbox row in the page's first chat tile and move the
+/// focus there, so `i` answers at once: a DM binds the tile to its room, a
+/// mention binds it to the mention's room and selects the message the way
+/// a `Ctrl+/` message jump does. A mention in a room the account never
+/// joined has no tile to land in and reads in the history modal instead.
+fn open_inbox_row(app: &mut App) {
+    let rows = inbox_rows(app);
+    let Some(row) = rows.get(app.zen.inbox_selected.min(rows.len().saturating_sub(1))) else {
+        return;
+    };
+    let (room_id, message_id) = match row {
+        InboxRow::Dm { room_id, .. } => (*room_id, None),
+        InboxRow::Mention {
+            room_id,
+            message_id,
+            ..
+        } => (*room_id, Some(*message_id)),
+    };
+    if let Some(message_id) = message_id
+        && !app.chat.rooms.iter().any(|(room, _)| room.id == room_id)
+    {
+        app.chat.open_history_at_message(room_id, message_id);
+        return;
+    }
+    let Some(chat_tile) = app.zen.first_tile_of(TileKind::Chat) else {
+        app.banner = Some(Banner::info("Add a chat tile to open it here"));
+        return;
+    };
+    app.zen.focus = chat_tile;
+    focus_moved(app);
+    bind_focused_chat_to_room(app, room_id);
+    let Some(message_id) = message_id else {
+        return;
+    };
+    if app.chat.message_is_loaded_in_room(room_id, message_id) {
+        app.chat.select_message_by_id_in_room(room_id, message_id);
+    } else {
+        app.chat.set_pending_search_jump(room_id, message_id);
+        app.chat.request_room_tail(room_id);
+    }
+}
+
+/// The focused Headlines tile: `j` `k` walk its items, Enter copies the
+/// selected link. The rows are the ones the tile draws, so the marked item
+/// is the one copied.
+fn handle_headlines(app: &mut App, byte: u8) -> bool {
+    match byte {
+        b'j' | b'J' => {
+            let last = headline_rows(app).len().saturating_sub(1);
+            app.zen.headlines_selected = (app.zen.headlines_selected + 1).min(last);
+            true
+        }
+        b'k' | b'K' => {
+            app.zen.headlines_selected = app.zen.headlines_selected.saturating_sub(1);
+            true
+        }
+        b'\r' | b'\n' => {
+            let rows = headline_rows(app);
+            if let Some(row) =
+                rows.get(app.zen.headlines_selected.min(rows.len().saturating_sub(1)))
+            {
+                app.pending_clipboard = Some(row.url.clone());
+                app.banner = Some(Banner::success("Link copied to clipboard!"));
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn headline_rows(app: &App) -> Vec<super::rows::Headline> {
+    super::rows::headlines(app.chat.news.all_articles(), app.chat.feeds.all_entries())
+}
+
+/// Rice: arrows, Tab, and Shift+Tab move focus and the layout keys edit
+/// the tree. Every edit marks the layout for the debounced write
+/// (`App::flush_zen_layout`).
+fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') | ParsedInput::BackTab => {
+            app.zen.focus_prev();
+            focus_moved(app);
+            return true;
+        }
+        ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'B') => {
+            app.zen.focus_next();
+            focus_moved(app);
+            return true;
+        }
+        _ => {}
+    }
+    let Some(byte) = event_byte(event) else {
+        return false;
+    };
+    let changed = match byte {
+        b'\t' => {
+            app.zen.focus_next();
+            focus_moved(app);
+            return true;
+        }
+        b' ' => {
+            app.zen.open_kind_picker();
+            return true;
+        }
+        b'S' => {
+            if app.zen.leaf_count() >= MAX_TILES {
+                app.banner = Some(Banner::info("That is every tile the page holds"));
+                return true;
+            }
+            let wide = focused_tile_is_wide(app);
+            app.zen.split_focused(wide)
+        }
+        b'X' => {
+            if app.zen.leaf_count() <= 1 {
+                app.banner = Some(Banner::info("The last tile stays"));
+                return true;
+            }
+            app.zen.close_focused()
+        }
+        b'<' | b',' => resize_or_explain(app, Dir::Row, -1),
+        b'>' | b'.' => resize_or_explain(app, Dir::Row, 1),
+        b'{' => resize_or_explain(app, Dir::Column, -1),
+        b'}' => resize_or_explain(app, Dir::Column, 1),
+        b'r' => app.zen.flip_focused(),
+        b'z' => {
+            app.zen.toggle_zoom();
+            // The zoom is a view, not a layout edit; still resizes the tank.
+            app.sync_aquarium_bounds();
+            return true;
+        }
+        b'b' => {
+            app.zen.cycle_border();
+            true
+        }
+        b'g' => {
+            app.zen.cycle_gap();
+            true
+        }
+        b't' => {
+            app.zen.toggle_titles();
+            true
+        }
+        b'R' => {
+            app.zen.reset();
+            true
+        }
+        _ => return false,
+    };
+    if changed {
+        app.sync_aquarium_bounds();
+        app.sync_visible_chat_room();
+        app.mark_zen_layout_dirty();
+    }
+    true
+}
+
+/// The tile picker: `j` `k` and the arrows move, Enter or `space` picks,
+/// everything else is swallowed. A refused row (Chat past the cap) says
+/// so in a banner and leaves the picker up.
+fn handle_kind_picker(app: &mut App, event: &ParsedInput) {
+    let byte = event_byte(event);
+    match (event, byte) {
+        (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => app.zen.move_kind_picker(-1),
+        (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => app.zen.move_kind_picker(1),
+        (_, Some(b'\r' | b'\n' | b' ')) => match app.zen.pick_kind() {
+            KindPick::Changed => {
+                app.sync_aquarium_bounds();
+                app.sync_visible_chat_room();
+                app.mark_zen_layout_dirty();
+            }
+            KindPick::Unchanged => {}
+            KindPick::ChatFull => {
+                app.banner = Some(Banner::info("That is every chat tile the page holds"));
+            }
+        },
+        _ => {}
+    }
+}
+
+/// The focus landed somewhere else: the chat that reads as visible (marked
+/// read, tail kept fresh) is the focused chat tile's, and a selection or a
+/// draft belongs to the tile it was made in. A draft written for another
+/// room is closed: every submit goes to the room the composer was opened
+/// in, and the active tile now draws the composer under its own label, so
+/// the two must never differ.
+pub(crate) fn focus_moved(app: &mut App) {
+    app.chat.clear_message_selection();
+    if app.chat.composing && app.chat.composer_room_id() != app.zen_chat_room_id() {
+        app.chat.reset_composer();
+    }
+    app.sync_visible_chat_room();
+}
+
+/// Move the focused tile's edge by `delta_cells` along `dir`, or say why
+/// nothing moved: a tile with no split of that direction above it has
+/// nothing to trade.
+fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = super::layout::rice_areas(
+        ratatui::layout::Rect::new(0, 0, cols, rows),
+        app.zen_status_row(),
+    );
+    if app.zen.resize_focused(dir, delta_cells, tiles_area) {
+        return true;
+    }
+    let axis = match dir {
+        Dir::Row => "width",
+        Dir::Column => "height",
+    };
+    app.banner = Some(Banner::info(&format!(
+        "No split to trade {axis} with; S splits, r flips"
+    )));
+    false
+}
+
+/// Whether the focused tile is wider than tall in cells (a cell is about
+/// twice as tall as wide, so width is halved before comparing).
+fn focused_tile_is_wide(app: &App) -> bool {
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = super::layout::rice_areas(
+        ratatui::layout::Rect::new(0, 0, cols, rows),
+        app.zen_status_row(),
+    );
+    let rects = super::layout::tile_rects(
+        &app.zen.rice.root,
+        tiles_area,
+        app.zen.rice.look.gap as u16,
+        None,
+    );
+    rects
+        .get(app.zen.focus)
+        .map(|(_, rect)| rect.width / 2 >= rect.height)
+        .unwrap_or(true)
+}
+
+/// Walk the rooms in rail order, top to bottom, and bind the focused chat
+/// tile to the one landed on; the binding is part of the layout, so it is
+/// saved. The rail's synthetic rows (mentions, rss, voice, browse) are not
+/// rooms a tile can show and are stepped over, and so are the rooms of a
+/// collapsed section, which the rail does not show either.
+fn cycle_room(app: &mut App, delta: isize) {
+    let ids: Vec<Uuid> = app
+        .chat
+        .visual_order()
+        .into_iter()
+        .filter_map(|slot| match slot {
+            RoomSlot::Room(room_id) => Some(room_id),
+            RoomSlot::Feeds
+            | RoomSlot::News
+            | RoomSlot::Cyberspace
+            | RoomSlot::CyberspaceNotifications
+            | RoomSlot::CyberspaceMail(_)
+            | RoomSlot::CyberspaceRoom(_)
+            | RoomSlot::Notifications
+            | RoomSlot::Discover
+            | RoomSlot::Showcase
+            | RoomSlot::Work => None,
+        })
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let current = app
+        .zen_chat_room_id()
+        .and_then(|id| ids.iter().position(|room_id| *room_id == id))
+        .unwrap_or(0);
+    let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
+    bind_focused_chat_to_room(app, ids[next]);
+}
+
+/// Bind the focused chat tile to `room_id` (a layout edit, saved) and drop
+/// the draft and selection that belonged to its old room. `false` when the
+/// focus is not on a chat tile, so the caller can fall back to Home's
+/// selection; the `Ctrl+/` picker and `[` `]` both land here.
+pub(crate) fn bind_focused_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
+    if !app.zen.bind_focused_chat_room(Some(room_id)) {
+        return false;
+    }
+    app.chat.reset_composer();
+    app.chat.clear_message_selection();
+    app.sync_visible_chat_room();
+    app.mark_zen_layout_dirty();
+    true
+}
+
+fn event_byte(event: &ParsedInput) -> Option<u8> {
+    match event {
+        ParsedInput::Byte(byte) => Some(*byte),
+        ParsedInput::Char(ch) if ch.is_ascii() => Some(*ch as u8),
+        _ => None,
+    }
+}

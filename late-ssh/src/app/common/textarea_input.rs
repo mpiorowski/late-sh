@@ -130,6 +130,77 @@ pub fn handle_multiline_edit(
     EditOutcome::Handled
 }
 
+/// One level of indentation for [`handle_freeform_edit`]. Spaces, not a
+/// literal tab: the buffer is shared verbatim and a tab renders at a
+/// different width on each side's terminal.
+const FREEFORM_INDENT: &str = "    ";
+
+/// Keystroke handling for a free-typing surface (scratchpad convention:
+/// Enter inserts a newline like a real editor rather than submitting, and
+/// Esc is left for the caller to interpret as "leave" rather than "cancel").
+///
+/// Two more departures from the composer keymaps. Tab indents instead of
+/// falling through to the global page cycle, which on a full-screen editor
+/// would look like the screen changing under you. Undo is absent: the
+/// surface this serves replaces its whole buffer whenever the other side
+/// publishes, so the undo stack contains remote edits and one undo would
+/// rewind work that was never yours.
+pub fn handle_freeform_edit(
+    ta: &mut TextArea<'static>,
+    event: &ParsedInput,
+    max_chars: usize,
+) -> EditOutcome {
+    match event {
+        ParsedInput::Byte(0x1B) => return EditOutcome::Cancel,
+        ParsedInput::Byte(b'\r') | ParsedInput::AltEnter | ParsedInput::Byte(b'\n') => {
+            push_char_limited(ta, '\n', max_chars)
+        }
+        ParsedInput::Byte(0x09) => insert_multiline_limited(ta, FREEFORM_INDENT, max_chars),
+        ParsedInput::Byte(0x15) => clear(ta),
+        ParsedInput::Byte(0x19) => {
+            let yank = ta.yank_text();
+            insert_multiline_limited(ta, &yank, max_chars);
+        }
+        ParsedInput::Byte(0x17) => {
+            ta.delete_word();
+        }
+        ParsedInput::Byte(0x7F | 0x08) => {
+            ta.delete_char();
+        }
+        ParsedInput::Delete => {
+            ta.delete_next_char();
+        }
+        ParsedInput::CtrlBackspace => {
+            ta.delete_word();
+        }
+        ParsedInput::CtrlDelete => {
+            ta.delete_next_word();
+        }
+        ParsedInput::Arrow(b'A') => ta.move_cursor(CursorMove::Up),
+        ParsedInput::Arrow(b'B') => ta.move_cursor(CursorMove::Down),
+        ParsedInput::Arrow(b'C') => ta.move_cursor(CursorMove::Forward),
+        ParsedInput::Arrow(b'D') => ta.move_cursor(CursorMove::Back),
+        ParsedInput::CtrlArrow(b'C') | ParsedInput::AltArrow(b'C') => {
+            ta.move_cursor(CursorMove::WordForward)
+        }
+        ParsedInput::CtrlArrow(b'D') | ParsedInput::AltArrow(b'D') => {
+            ta.move_cursor(CursorMove::WordBack)
+        }
+        ParsedInput::Home => ta.move_cursor(CursorMove::Head),
+        ParsedInput::End => ta.move_cursor(CursorMove::End),
+        ParsedInput::Paste(pasted) => {
+            let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(pasted));
+            insert_multiline_limited(ta, &cleaned, max_chars);
+        }
+        ParsedInput::Char(ch) if !ch.is_control() => push_char_limited(ta, *ch, max_chars),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || *byte == b' ' => {
+            push_char_limited(ta, *byte as char, max_chars)
+        }
+        _ => return EditOutcome::Ignored,
+    }
+    EditOutcome::Handled
+}
+
 /// Total character count, counting newlines between rows. This is the
 /// accounting the `max_chars` limits use; callers (e.g. char counters in
 /// modal UIs) can share it to stay consistent.
@@ -171,140 +242,4 @@ fn insert_multiline_limited(ta: &mut TextArea<'static>, text: &str, max_chars: u
 fn clear(ta: &mut TextArea<'static>) {
     ta.select_all();
     ta.cut();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ta(text: &str) -> TextArea<'static> {
-        let mut ta = TextArea::default();
-        ta.insert_str(text);
-        ta
-    }
-
-    fn text(ta: &TextArea<'static>) -> String {
-        ta.lines().join("\n")
-    }
-
-    #[test]
-    fn single_line_submits_on_enter_and_cancels_on_escape() {
-        let mut input = ta("abc");
-        assert_eq!(
-            handle_single_line_edit(&mut input, &ParsedInput::Byte(b'\r'), 10),
-            EditOutcome::Submit
-        );
-        assert_eq!(
-            handle_single_line_edit(&mut input, &ParsedInput::Byte(0x1B), 10),
-            EditOutcome::Cancel
-        );
-        assert_eq!(text(&input), "abc", "submit/cancel must not mutate text");
-    }
-
-    #[test]
-    fn single_line_inserts_chars_up_to_the_limit() {
-        let mut input = ta("");
-        for ch in ['a', 'b', 'c', 'd'] {
-            assert_eq!(
-                handle_single_line_edit(&mut input, &ParsedInput::Char(ch), 3),
-                EditOutcome::Handled
-            );
-        }
-        assert_eq!(text(&input), "abc");
-    }
-
-    #[test]
-    fn single_line_accepts_raw_printable_bytes() {
-        let mut input = ta("");
-        handle_single_line_edit(&mut input, &ParsedInput::Byte(b'x'), 8);
-        handle_single_line_edit(&mut input, &ParsedInput::Byte(b' '), 8);
-        assert_eq!(text(&input), "x ");
-    }
-
-    #[test]
-    fn single_line_backspace_delete_and_home() {
-        let mut input = ta("ab");
-        handle_single_line_edit(&mut input, &ParsedInput::Byte(0x7F), 8);
-        assert_eq!(text(&input), "a");
-        handle_single_line_edit(&mut input, &ParsedInput::Byte(0x01), 8);
-        handle_single_line_edit(&mut input, &ParsedInput::Delete, 8);
-        assert_eq!(text(&input), "");
-    }
-
-    #[test]
-    fn single_line_paste_strips_newlines_and_clamps() {
-        let mut input = ta("");
-        let pasted = ParsedInput::Paste(b"he\nllo world".to_vec());
-        assert_eq!(
-            handle_single_line_edit(&mut input, &pasted, 5),
-            EditOutcome::Handled
-        );
-        assert_eq!(text(&input), "hello");
-    }
-
-    #[test]
-    fn single_line_ctrl_u_clears() {
-        let mut input = ta("abc");
-        assert_eq!(
-            handle_single_line_edit(&mut input, &ParsedInput::Byte(0x15), 8),
-            EditOutcome::Handled
-        );
-        assert_eq!(text(&input), "");
-    }
-
-    #[test]
-    fn single_line_ignores_non_editing_keys() {
-        let mut input = ta("abc");
-        assert_eq!(
-            handle_single_line_edit(&mut input, &ParsedInput::FocusGained, 8),
-            EditOutcome::Ignored
-        );
-        assert_eq!(
-            handle_single_line_edit(&mut input, &ParsedInput::PageUp, 8),
-            EditOutcome::Ignored
-        );
-        assert_eq!(text(&input), "abc");
-    }
-
-    #[test]
-    fn multiline_alt_enter_inserts_newline_and_enter_submits() {
-        let mut input = ta("ab");
-        assert_eq!(
-            handle_multiline_edit(&mut input, &ParsedInput::AltEnter, 10),
-            EditOutcome::Handled
-        );
-        assert_eq!(
-            handle_multiline_edit(&mut input, &ParsedInput::Char('c'), 10),
-            EditOutcome::Handled
-        );
-        assert_eq!(text(&input), "ab\nc");
-        assert_eq!(
-            handle_multiline_edit(&mut input, &ParsedInput::Byte(b'\r'), 10),
-            EditOutcome::Submit
-        );
-    }
-
-    #[test]
-    fn multiline_paste_normalizes_and_keeps_newlines() {
-        let mut input = ta("");
-        handle_multiline_edit(&mut input, &ParsedInput::Paste(b"a\r\nb\rc".to_vec()), 16);
-        assert_eq!(text(&input), "a\nb\nc");
-    }
-
-    #[test]
-    fn multiline_char_limit_counts_newlines() {
-        // "a\nb" is 3 chars (newline included); the trailing "\nc" is dropped.
-        let mut input = ta("");
-        handle_multiline_edit(&mut input, &ParsedInput::Paste(b"a\nb\nc".to_vec()), 3);
-        assert_eq!(text(&input), "a\nb");
-    }
-
-    #[test]
-    fn multiline_escape_reports_cancel() {
-        let mut input = ta("abc");
-        assert_eq!(
-            handle_multiline_edit(&mut input, &ParsedInput::Byte(0x1B), 8),
-            EditOutcome::Cancel
-        );
-    }
 }

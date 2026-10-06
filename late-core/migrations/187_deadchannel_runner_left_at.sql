@@ -1,0 +1,11 @@
+-- Leaving #deadchannel closes the door, it does not burn the character.
+-- `/leave #deadchannel` stamps `left_at`; the runner keeps its row, its id,
+-- and its look, and an invited rejoin clears the stamp and gets the same
+-- face back (GAME.md, Phase 2).
+--
+-- A stamp rather than a DELETE is also what keeps the directory honest
+-- across replicas: the trigger from migration 172 fires on INSERT OR UPDATE,
+-- so a leave fans out on `deadchannel_runner_changed` like any other change
+-- and every replica drops the runner from its looks map. A delete would fire
+-- nothing and leave the gate open on every replica that missed it.
+ALTER TABLE deadchannel_runners ADD COLUMN left_at TIMESTAMPTZ;

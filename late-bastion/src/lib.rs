@@ -10,4 +10,6 @@
 pub mod config;
 pub mod handshake;
 pub mod proxy;
+#[cfg(test)]
+mod proxy_test;
 pub mod ssh;

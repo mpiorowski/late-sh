@@ -1,10 +1,18 @@
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::user::RightSidebarMode;
+use late_core::models::user_ssh_key::KeyLayout;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
 use crate::app::common::{primitives::Banner, theme};
+
+/// Outcome of one profile tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed render-visible state (theme, sidebar
+/// layout, favorites).
+pub struct ProfileTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
 
 pub struct ProfileState {
     profile_service: ProfileService,
@@ -26,7 +34,6 @@ impl ProfileState {
         let snapshot_rx = profile_service.subscribe_snapshot(user_id);
         let event_rx = profile_service.subscribe_events();
         profile_service.find_profile(user_id);
-        profile_service.check_birthdays_task(user_id);
         let profile = Profile {
             theme_id: Some(theme::normalize_id(&initial_theme_id).to_string()),
             ..Profile::default()
@@ -90,29 +97,21 @@ impl ProfileState {
         true
     }
 
-    /// Advance both sidebars through the 4-state layout cycle (the Home `\`
-    /// key): both on -> left off -> right off -> both off -> both on. `left`
-    /// is the room-list sidebar, `right` the info sidebar (its mode is kept in
-    /// step with the visibility flag). Persists and returns the new
-    /// `(left, right)` visibility.
-    pub fn cycle_sidebars(&mut self) -> (bool, bool) {
-        const CYCLE: [(bool, bool); 4] =
-            [(true, true), (false, true), (true, false), (false, false)];
-        let current = (
-            self.profile.show_room_list_sidebar,
-            self.profile.show_right_sidebar,
-        );
-        let idx = CYCLE.iter().position(|&s| s == current).unwrap_or(0);
-        let (left, right) = CYCLE[(idx + 1) % CYCLE.len()];
-        self.profile.show_room_list_sidebar = left;
-        self.profile.show_right_sidebar = right;
-        self.profile.right_sidebar_mode = if right {
-            RightSidebarMode::On
-        } else {
-            RightSidebarMode::Off
-        };
-        self.save_profile();
-        (left, right)
+    /// Store the home rail layout for one device (one SSH key). Fire and
+    /// forget, like every other profile write; the caller already applied the
+    /// change to session state. Deliberately does *not* touch the account
+    /// profile: that is what makes the layout per device.
+    pub fn set_device_rails(&self, fingerprint: String, layout: KeyLayout) {
+        self.profile_service
+            .set_key_layout(self.user_id, fingerprint, layout);
+    }
+
+    /// Persist when this device's session went quiet before ending, fire and
+    /// forget like every other profile write. Per device for the same reason
+    /// the rails are: it is a fact about this terminal.
+    pub fn set_device_left_at(&self, fingerprint: String, left_at: chrono::DateTime<chrono::Utc>) {
+        self.profile_service
+            .set_key_left_at(self.user_id, fingerprint, left_at);
     }
 
     fn save_profile(&self) {
@@ -121,9 +120,15 @@ impl ProfileState {
     }
 
     // Tick
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> ProfileTick {
+        // Peek before draining: anything queued may change render-visible
+        // state, so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        self.drain_events()
+        ProfileTick {
+            banner: self.drain_events(),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {
@@ -161,9 +166,6 @@ impl ProfileState {
                     ProfileEvent::Error { user_id, message } if self.user_id == user_id => {
                         banner = Some(Banner::error(&message));
                     }
-                    ProfileEvent::BirthdayAlert { user_id, message } if self.user_id == user_id => {
-                        banner = Some(Banner::success(&message));
-                    }
                     _ => (),
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,
@@ -177,7 +179,7 @@ impl ProfileState {
     }
 }
 
-fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
+pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
     ProfileParams {
         username: profile.username.clone(),
         bio: profile.bio.clone(),
@@ -199,16 +201,24 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         ),
         enable_background_color: profile.enable_background_color,
         text_brightness_adjustment: profile.text_brightness_adjustment,
-        show_dashboard_header: profile.show_dashboard_header,
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
+        statusline_components: profile.statusline_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
+        room_list_mode: profile.room_list_mode,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
-        land_on_home: profile.land_on_home,
+        landing_page: profile.landing_page,
+        paper_at_login: profile.paper_at_login,
+        art_splash_mode: profile.art_splash_mode,
+        terminal_images: profile.terminal_images,
+        hidden_award_categories: profile.hidden_award_categories.clone(),
         show_flag_fallback: profile.show_flag_fallback,
+        translate_to: profile.translate_to,
+        auto_translate: profile.auto_translate,
+        translate_mine_to_en: profile.translate_mine_to_en,
         favorite_room_ids: profile.favorite_room_ids.clone(),
-        birthday: profile.birthday.clone(),
+        favorite_theme_ids: profile.favorite_theme_ids.clone(),
     }
 }

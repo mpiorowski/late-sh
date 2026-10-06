@@ -1,0 +1,7 @@
+{
+  "name": "late-codekeep-runtime",
+  "private": true,
+  "dependencies": {
+    "codekeep": "1.0.9"
+  }
+}

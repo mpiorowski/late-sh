@@ -6,11 +6,11 @@
 // username (the account-derived `-u` playname), authorized by a shared-secret
 // key.
 //
+// Boards, badges, and death/win feed events come from the host's xlogfile and
+// livelog over the door log pipe (`app/door/ingest/`), never from the screen.
+//
 // nethack: https://www.nethack.org/
-pub mod award;
 pub mod identity;
-pub mod milestone;
 pub mod proxy;
 pub mod render;
 pub mod state;
-pub mod status;

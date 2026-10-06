@@ -1,34 +1,583 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, ensure};
-use chrono::NaiveDate;
-use deadpool_postgres::GenericClient;
-use tokio_postgres::Client;
+use anyhow::{Result, bail, ensure};
+use chrono::{DateTime, NaiveDate, Utc};
+use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
-pub const CHIP_GIFT_SENT_REASON: &str = "chip_gift_sent";
-pub const CHIP_GIFT_RECEIVED_REASON: &str = "chip_gift_received";
-pub const DRINK_PURCHASE_REASON: &str = "drink_purchase";
-pub const DRINK_PURCHASE_SOURCE_KIND: &str = "bartender";
+/// SQL for the start of the current UTC month, the window every monthly
+/// chip figure shares: the Top Chips board, the award snapshot, and the
+/// "earned this month" line on a profile.
+pub const MONTH_TS_FILTER: &str =
+    "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
+/// How many ledger rows a profile shows.
+pub const PROFILE_LEDGER_ROWS: i64 = 100;
 
-pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!("LISTEN {CHIP_USER_CHANGED_CHANNEL};"))
-        .await?;
-    Ok(())
+/// The three daily-puzzle difficulty tiers. One enum owns both reward
+/// scales: the chip bonus a daily win pays (mirrored in seeded
+/// `reward_templates` rows) and the Arcade Wins leaderboard points, so the
+/// two can never drift apart in string-matched copies. Solitaire's draw
+/// modes are not tiers: draw-1 pays [`Difficulty::Medium`] chips but scores
+/// [`Difficulty::Easy`] points, so its mapping lives at each consumer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Difficulty {
+    Easy,
+    Medium,
+    Hard,
 }
 
-/// Map a difficulty key to its chip bonus.
-pub fn difficulty_bonus(key: &str) -> i64 {
-    match key {
-        "easy" => 100,
-        "medium" | "mid" | "draw-1" => 250,
-        "hard" | "draw-3" => 500,
-        _ => 100,
+impl Difficulty {
+    pub const ALL: &'static [Self] = &[Self::Easy, Self::Medium, Self::Hard];
+
+    /// The persisted `difficulty_key` value.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Medium => "medium",
+            Self::Hard => "hard",
+        }
     }
+
+    /// Chip bonus for a daily win at this tier.
+    pub const fn chips(self) -> i64 {
+        match self {
+            Self::Easy => 100,
+            Self::Medium => 250,
+            Self::Hard => 500,
+        }
+    }
+
+    /// Monthly Arcade Wins leaderboard points for a daily win at this tier.
+    pub const fn points(self) -> i64 {
+        match self {
+            Self::Easy => 1,
+            Self::Medium => 3,
+            Self::Hard => 5,
+        }
+    }
+}
+
+/// Defines [`ChipMove`] and its `ALL` roster from one variant list: a
+/// variant cannot exist without an `ALL` entry, so roster-derived lists
+/// (like the earnings exclusions) can never silently skip one.
+macro_rules! chip_moves {
+    ($($(#[$doc:meta])* $variant:ident),+ $(,)?) => {
+        /// Every way chips move. Adding a variant forces a decision in each
+        /// match below: the persisted ledger reason, the direction and floor
+        /// guard, the source kind, and whether the move counts toward the
+        /// monthly chip-earner leaderboard. Call sites name their move
+        /// instead of passing raw strings, and the `user_chips` triggers
+        /// (migration 128) own the `chip_user_changed` notify, so no move
+        /// can forget it.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum ChipMove {
+            $($(#[$doc])* $variant,)+
+        }
+
+        impl ChipMove {
+            /// Every variant in declaration order, generated from the same
+            /// list as the enum itself.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+        }
+    };
+}
+
+chip_moves!(
+    /// Retired: the shared house-table payout reason (`chip_credit`) that
+    /// poker and blackjack wrote before each game had its own. Rows with it
+    /// still exist, so the variant stays to keep them off the Top Chips
+    /// board; [`UserChips::apply`] refuses to write it.
+    LegacyTableCredit,
+    /// Retired: the shared house-table wager reason (`chip_debit`). Same
+    /// story as [`ChipMove::LegacyTableCredit`].
+    LegacyTableDebit,
+    /// A blackjack wager, including the double-down top-up. May drain the
+    /// balance to zero (a losing settlement restores the floor afterwards).
+    /// `source_ref` is the round id, shared by every row of that round.
+    BlackjackBet,
+    /// A blackjack settlement that paid something: the stake back on a push,
+    /// or the stake plus winnings. `source_ref` is the round id.
+    BlackjackPayout,
+    /// A poker commit: blinds, calls, raises. Floor 0 like blackjack.
+    /// `source_ref` is the hand id, shared by every row of that hand.
+    PokerBet,
+    /// A poker pot, or a share of a split pot, reaching a seat.
+    /// `source_ref` is the hand id.
+    PokerPayout,
+    /// The flat bonus for the first watering of the day. `source_ref` is
+    /// the UTC date it was paid for, which is also what makes it daily.
+    BonsaiWatered,
+    /// The flat bonus for the first pet feeding of the day. `source_ref` is
+    /// the UTC date it was paid for, which is also what makes it daily.
+    PetFed,
+    /// The flat bonus for the first aquarium feeding of the day. Same
+    /// `source_ref` story as [`ChipMove::PetFed`].
+    AquariumFed,
+    /// The flat bonus for the first pet of the day (a click on the pet).
+    /// Same `source_ref` story as [`ChipMove::PetFed`].
+    PetPetted,
+    /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
+    /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
+    /// `source_ref` is the round or hand id whose settlement emptied the
+    /// balance, so the top-up sits next to the bet that caused it.
+    FloorRestore,
+    /// Chips handed to another player with `/gift`. `source_ref` is the
+    /// recipient's user id.
+    GiftSent,
+    /// The other side of a gift. `source_ref` is the sender's user id.
+    GiftReceived,
+    /// The stipend a brand-new chips row starts with, written once by
+    /// [`UserChips::ensure`] in the same statement that creates the row, so
+    /// a user's ledger always sums to their balance. `source_ref` is the
+    /// user id.
+    InitialBalance,
+    /// Chips paid to gild someone else's chat message. Floor-guarded like a
+    /// gift; `source_ref` is the gild row id (`chat_message_gilds.id`), which
+    /// names one buyer and one author, so either side of the pair resolves
+    /// to exactly the other. Rows written before 2026-09-06 carry the
+    /// gilded message id instead.
+    GildSent,
+    /// Two thirds of a gild reaching the message's author. The other third
+    /// has no ledger row at all: that gap is the burn. Same `source_ref` as
+    /// [`ChipMove::GildSent`].
+    GildReceived,
+    /// Chips paid to take the crown. Floor-guarded, and burned whole: there
+    /// is no matching credit anywhere, so every take shrinks the supply by
+    /// the full price. `source_ref` is the reign id.
+    CrownTaken,
+    /// Chips paid for pot tickets. Floor-guarded like a gift; `source_ref` is
+    /// the pot id, and one row per buy rather than per ticket.
+    PotTicket,
+    /// The pot's payout to the one ticket that was drawn: 80% of what the
+    /// tickets paid in. The other fifth has no ledger row at all, the way a
+    /// gild's third has none: that gap is the burn.
+    PotWon,
+    /// Publishing a News article, from the News composer or from an RSS
+    /// entry shared with `s`. One flat credit, minted rather than moved.
+    /// `source_ref` is the shared URL, not an article id: the ledger row is
+    /// what caps the reward at one per URL per user, and it has to outlive
+    /// the article being deleted (see [`crate::models::article::Article::create_shared`]).
+    NewsShared,
+    /// The Artboard gallery's monthly prize: last month's top three by
+    /// their best piece's applause, paid once when the `artboard` profile
+    /// award row is written (`profile_award.rs`). Minted rather than moved;
+    /// `source_ref` is the award row id, which is what makes a re-run of
+    /// the snapshot unable to pay twice.
+    ArtboardPrize,
+    /// Queueing a YouTube track, from the booth, a pasted URL, or the history
+    /// list. One flat credit, minted rather than moved, for the first few
+    /// tracks a person queues each UTC day and nothing after that. The track
+    /// itself is never a gate: a repeat pays like anything else.
+    /// `source_ref` is the video id as provenance, so a ledger row says what
+    /// it paid for; nothing reads it back
+    /// (see [`crate::models::media_queue_item::MediaQueueItem::insert_youtube`]).
+    SongQueued,
+    /// Chips paid to buy the house a round: one price per credit the round
+    /// actually granted, floor-guarded, and burned whole like the crown.
+    /// Nothing is credited to the patrons, who get a
+    /// [`crate::models::drink_round::DrinkCredit`] rather than chips.
+    /// `source_ref` is the round id.
+    RoundPurchase,
+    /// Chips paid to leave one drink on a named patron's tab
+    /// (`@bartender buy @user a drink`): a one-credit `drink_rounds` row at
+    /// `GIFT_DRINK_PRICE`, floor-guarded and burned whole like a round. Its
+    /// own reason so the ledger can say who it was for and the round
+    /// dashboards never count it. `source_ref` is the round id; the
+    /// recipient is that round's single `drink_credits` row.
+    DrinkGift,
+    DrinkPurchase,
+    ShopPurchase,
+    QuestReward,
+    DailyQuestStreakReward,
+    DailyPuzzleWin,
+    AsterionEscape,
+    DailyChessWin,
+    DailyChess960Win,
+    DailyBattleshipWin,
+    DailyConnectFourWin,
+    DailyReversiWin,
+    DailyCheckersWin,
+    DailyBackgammonWin,
+    DailyBriscolaWin,
+    DailyCribbageWin,
+    DailyGinWin,
+    DailyEightBallWin,
+    DailyNineBallWin,
+    DailySnookerWin,
+    TronWin,
+    /// A Super Snake seat that came out ahead, banked when the player stands
+    /// up. The arena keeps the running total in memory: one row per visit,
+    /// not one per bite. `source_ref` is the visit id, minted when the seat
+    /// is taken.
+    SsnakeArenaEarned,
+    /// The same, for a seat whose crashes outran its food.
+    SsnakeArenaLost,
+    GreendragonDragonSlain,
+    DarkroomEscape,
+    DarkroomBeaconEscape,
+    NethackAmuletAcquired,
+    NethackAscension,
+    DcssOrbFound,
+    DcssOrbEscape,
+    BrogueEscape,
+    BrogueMastery,
+    LateaniaArchdemonDefeat,
+    LateaniaFrontierKingDefeat,
+    LateaniaSunderingDeepDefeat,
+    LateaniaKaethyrAscendantDefeat,
+    /// The Old Signal put down in the undercity (`deadchannel`): the one
+    /// milestone the fight pays, once per mark and at most once every 30
+    /// days per account, through the same two-gate grant as the door
+    /// milestones. `source_ref` is the `game_payout_claims` row id.
+    OldSignalSlain,
+    /// The inviter's side of a referral that turned into a regular, paid
+    /// once per invitee when the sweeper settles the `referrals` row
+    /// (`late-ssh/src/app/referral`). Minted rather than moved. `source_ref`
+    /// is the invitee's user id, which is also the referral's key.
+    ReferralReward,
+    /// The invitee's welcome bonus, paid in the same transaction as
+    /// [`ChipMove::ReferralReward`]. `source_ref` is the inviter's user id.
+    ReferralWelcome,
+);
+
+/// Which way a move touches the balance, and under what guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChipDirection {
+    Credit,
+    /// The debit only succeeds while `balance - amount >= floor`.
+    Debit {
+        floor: i64,
+    },
+    /// Not a delta at all; handled by [`UserChips::restore_floor`].
+    Restore,
+    /// A reason nothing writes any more; [`UserChips::apply`] refuses it.
+    Retired,
+}
+
+impl ChipMove {
+    /// The persisted `chip_ledger.reason` value.
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::LegacyTableCredit => "chip_credit",
+            Self::LegacyTableDebit => "chip_debit",
+            Self::BlackjackBet => "blackjack_bet",
+            Self::BlackjackPayout => "blackjack_payout",
+            Self::PokerBet => "poker_bet",
+            Self::PokerPayout => "poker_payout",
+            Self::BonsaiWatered => "bonsai_watered",
+            Self::PetFed => "pet_fed",
+            Self::AquariumFed => "aquarium_fed",
+            Self::PetPetted => "pet_petted",
+            Self::FloorRestore => "floor_restore",
+            Self::GiftSent => "chip_gift_sent",
+            Self::GiftReceived => "chip_gift_received",
+            Self::InitialBalance => "initial_balance",
+            Self::GildSent => "chip_gild_sent",
+            Self::GildReceived => "chip_gild_received",
+            Self::CrownTaken => "chip_crown_taken",
+            Self::PotTicket => "pot_ticket",
+            Self::PotWon => "pot_won",
+            Self::NewsShared => "news_shared",
+            Self::ArtboardPrize => "artboard_prize",
+            Self::SongQueued => "song_queued",
+            Self::RoundPurchase => "round_purchase",
+            Self::DrinkGift => "drink_gift",
+            Self::DrinkPurchase => "drink_purchase",
+            Self::ShopPurchase => "shop_purchase",
+            Self::QuestReward => "quest_reward",
+            Self::DailyQuestStreakReward => "daily_quest_streak_reward",
+            Self::DailyPuzzleWin => "daily_puzzle_win",
+            Self::AsterionEscape => "asterion_escape",
+            Self::DailyChessWin => "daily_chess_win",
+            Self::DailyChess960Win => "daily_chess960_win",
+            Self::DailyBattleshipWin => "daily_battleship_win",
+            Self::DailyConnectFourWin => "daily_connect4_win",
+            Self::DailyReversiWin => "daily_reversi_win",
+            Self::DailyCheckersWin => "daily_checkers_win",
+            Self::DailyBackgammonWin => "daily_backgammon_win",
+            Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::DailyCribbageWin => "daily_cribbage_win",
+            Self::DailyGinWin => "daily_gin_win",
+            Self::DailyEightBallWin => "daily_eightball_win",
+            Self::DailyNineBallWin => "daily_nineball_win",
+            Self::DailySnookerWin => "daily_snooker_win",
+            Self::TronWin => "tron_win",
+            Self::SsnakeArenaEarned => "ssnake_arena_earned",
+            Self::SsnakeArenaLost => "ssnake_arena_lost",
+            Self::GreendragonDragonSlain => "greendragon_dragon_slain",
+            Self::DarkroomEscape => "darkroom_escape",
+            Self::DarkroomBeaconEscape => "darkroom_beacon_escape",
+            Self::NethackAmuletAcquired => "nethack_amulet_acquired",
+            Self::NethackAscension => "nethack_ascension",
+            Self::DcssOrbFound => "dcss_orb_found",
+            Self::DcssOrbEscape => "dcss_orb_escape",
+            Self::BrogueEscape => "brogue_escape",
+            Self::BrogueMastery => "brogue_mastery",
+            Self::LateaniaArchdemonDefeat => "lateania_archdemon_defeat",
+            Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
+            Self::LateaniaSunderingDeepDefeat => "lateania_sundering_deep_defeat",
+            Self::LateaniaKaethyrAscendantDefeat => "lateania_kaethyr_ascendant_defeat",
+            Self::OldSignalSlain => "old_signal_slain",
+            Self::ReferralReward => "referral_reward",
+            Self::ReferralWelcome => "referral_welcome",
+        }
+    }
+
+    /// The persisted `chip_ledger.source_kind` value.
+    pub const fn source_kind(self) -> &'static str {
+        match self {
+            Self::LegacyTableCredit | Self::LegacyTableDebit => "user_chips",
+            Self::BlackjackBet | Self::BlackjackPayout => "blackjack_rounds",
+            Self::PokerBet | Self::PokerPayout => "poker_hands",
+            Self::FloorRestore => "house_rounds",
+            Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
+            Self::ReferralReward | Self::ReferralWelcome => "referrals",
+            Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
+            Self::BonsaiWatered => "bonsai_trees",
+            Self::PetFed | Self::PetPetted => "pet_companions",
+            Self::AquariumFed => "user_aquarium_care",
+            Self::GildSent | Self::GildReceived => "chat_message_gilds",
+            Self::CrownTaken => "crown_reigns",
+            Self::PotTicket | Self::PotWon => "pots",
+            Self::NewsShared => "articles",
+            Self::ArtboardPrize => "profile_awards",
+            Self::SongQueued => "media_queue_items",
+            Self::RoundPurchase | Self::DrinkGift => "drink_rounds",
+            Self::DrinkPurchase => "bartender",
+            Self::ShopPurchase => "marketplace_item",
+            Self::QuestReward => "quest_assignment",
+            Self::DailyQuestStreakReward => "daily_quest_streak",
+            Self::DailyPuzzleWin
+            | Self::AsterionEscape
+            | Self::DailyChessWin
+            | Self::DailyChess960Win
+            | Self::DailyBattleshipWin
+            | Self::DailyConnectFourWin
+            | Self::DailyReversiWin
+            | Self::DailyCheckersWin
+            | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
+            | Self::TronWin
+            | Self::GreendragonDragonSlain
+            | Self::DarkroomEscape
+            | Self::DarkroomBeaconEscape
+            | Self::NethackAmuletAcquired
+            | Self::NethackAscension
+            | Self::DcssOrbFound
+            | Self::DcssOrbEscape
+            | Self::BrogueEscape
+            | Self::BrogueMastery
+            | Self::LateaniaArchdemonDefeat
+            | Self::LateaniaFrontierKingDefeat
+            | Self::LateaniaSunderingDeepDefeat
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => "game_payout_claims",
+        }
+    }
+
+    pub const fn direction(self) -> ChipDirection {
+        match self {
+            Self::LegacyTableCredit | Self::LegacyTableDebit => ChipDirection::Retired,
+            Self::BlackjackPayout
+            | Self::PokerPayout
+            | Self::BonsaiWatered
+            | Self::PetFed
+            | Self::AquariumFed
+            | Self::PetPetted
+            | Self::GiftReceived
+            | Self::InitialBalance
+            | Self::GildReceived
+            | Self::PotWon
+            | Self::NewsShared
+            | Self::ArtboardPrize
+            | Self::SongQueued
+            | Self::QuestReward
+            | Self::DailyQuestStreakReward
+            | Self::DailyPuzzleWin
+            | Self::AsterionEscape
+            | Self::DailyChessWin
+            | Self::DailyChess960Win
+            | Self::DailyBattleshipWin
+            | Self::DailyConnectFourWin
+            | Self::DailyReversiWin
+            | Self::DailyCheckersWin
+            | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
+            | Self::TronWin
+            | Self::SsnakeArenaEarned
+            | Self::GreendragonDragonSlain
+            | Self::DarkroomEscape
+            | Self::DarkroomBeaconEscape
+            | Self::NethackAmuletAcquired
+            | Self::NethackAscension
+            | Self::DcssOrbFound
+            | Self::DcssOrbEscape
+            | Self::BrogueEscape
+            | Self::BrogueMastery
+            | Self::LateaniaArchdemonDefeat
+            | Self::LateaniaFrontierKingDefeat
+            | Self::LateaniaSunderingDeepDefeat
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain
+            | Self::ReferralReward
+            | Self::ReferralWelcome => ChipDirection::Credit,
+            Self::BlackjackBet | Self::PokerBet | Self::ShopPurchase | Self::SsnakeArenaLost => {
+                ChipDirection::Debit { floor: 0 }
+            }
+            Self::GiftSent
+            | Self::GildSent
+            | Self::CrownTaken
+            | Self::PotTicket
+            | Self::RoundPurchase
+            | Self::DrinkGift
+            | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
+            Self::FloorRestore => ChipDirection::Restore,
+        }
+    }
+
+    /// Whether the move counts toward the monthly Top Chips board and the
+    /// permanent monthly award snapshot.
+    ///
+    /// The board ranks what a player earned, so only credits can count and
+    /// a debit never does: spending (the Shop, the bar, the pot, the crown,
+    /// a gild) costs nobody their place, and an arena visit that ended in
+    /// the red is simply not an earning. Of the credits, three stay out:
+    /// the two house tables, because a table can fold every hand to one
+    /// seat and walk it up the board; gifts, because a group can funnel
+    /// chips into one player at no cost to the board; and the starting
+    /// stipend, which everyone gets once. Referral payouts stay out too:
+    /// one is worth a month of anything else, so a single invite would
+    /// decide the board. Monthly prizes stay out, every one, today's
+    /// gallery prize and any added later: a prize is the result of a
+    /// month's board, never an earning on Top Chips, and one first place
+    /// would decide the next month. Gilds received stay in: a gild
+    /// burns a third on the way, so it cannot funnel for free, and it is
+    /// paid for a message other people rated. The pot stays in: the house
+    /// mints it. Admin grants never reach the ledger at all
+    /// ([`UserChips::admin_grant`]), so the board never sees them.
+    pub const fn counts_as_earnings(self) -> bool {
+        match self {
+            Self::LegacyTableCredit
+            | Self::LegacyTableDebit
+            | Self::BlackjackBet
+            | Self::BlackjackPayout
+            | Self::PokerBet
+            | Self::PokerPayout
+            | Self::FloorRestore
+            | Self::GiftSent
+            | Self::GiftReceived
+            | Self::InitialBalance
+            | Self::GildSent
+            | Self::CrownTaken
+            | Self::PotTicket
+            | Self::RoundPurchase
+            | Self::DrinkGift
+            | Self::DrinkPurchase
+            | Self::ShopPurchase
+            | Self::SsnakeArenaLost
+            | Self::ReferralReward
+            | Self::ReferralWelcome
+            | Self::ArtboardPrize => false,
+            Self::BonsaiWatered
+            | Self::PetFed
+            | Self::AquariumFed
+            | Self::PetPetted
+            | Self::GildReceived
+            | Self::PotWon
+            | Self::NewsShared
+            | Self::SongQueued
+            | Self::QuestReward
+            | Self::DailyQuestStreakReward
+            | Self::DailyPuzzleWin
+            | Self::AsterionEscape
+            | Self::DailyChessWin
+            | Self::DailyChess960Win
+            | Self::DailyBattleshipWin
+            | Self::DailyConnectFourWin
+            | Self::DailyReversiWin
+            | Self::DailyCheckersWin
+            | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
+            | Self::DailyEightBallWin
+            | Self::DailyNineBallWin
+            | Self::DailySnookerWin
+            | Self::TronWin
+            | Self::SsnakeArenaEarned
+            | Self::GreendragonDragonSlain
+            | Self::DarkroomEscape
+            | Self::DarkroomBeaconEscape
+            | Self::NethackAmuletAcquired
+            | Self::NethackAscension
+            | Self::DcssOrbFound
+            | Self::DcssOrbEscape
+            | Self::BrogueEscape
+            | Self::BrogueMastery
+            | Self::LateaniaArchdemonDefeat
+            | Self::LateaniaFrontierKingDefeat
+            | Self::LateaniaSunderingDeepDefeat
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => true,
+        }
+    }
+
+    /// The variant behind a persisted `chip_ledger.reason`, or `None` for a
+    /// reason nothing in the roster ever wrote (seed data, hand-written
+    /// rows). Derived from `ALL`, so a new variant is parseable the moment
+    /// it exists.
+    pub fn from_reason(reason: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|mv| mv.reason() == reason)
+    }
+
+    /// The `chip_ledger.reason` values excluded from earnings queries.
+    /// Both consumers (monthly leaderboard, monthly award snapshot) build
+    /// their exclusion list here, so they can never drift apart.
+    pub fn excluded_earning_reasons() -> Vec<&'static str> {
+        Self::ALL
+            .iter()
+            .filter(|mv| !mv.counts_as_earnings())
+            .map(|mv| mv.reason())
+            .collect()
+    }
+}
+
+/// One `chip_ledger` row as a profile shows it. `reason` stays the persisted
+/// string so a row nothing in the roster wrote still renders, as "other".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChipLedgerEntry {
+    pub delta: i64,
+    pub reason: String,
+    pub source_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl ChipLedgerEntry {
+    pub fn chip_move(&self) -> Option<ChipMove> {
+        ChipMove::from_reason(&self.reason)
+    }
+}
+
+/// A user's chips this UTC month, from [`UserChips::month_figures`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MonthChips {
+    /// The Top Chips sum: counting credits only.
+    pub earned: i64,
+    /// Every row, both sides: what the balance actually did.
+    pub net: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -49,21 +598,62 @@ impl From<tokio_postgres::Row> for UserChips {
 }
 
 impl UserChips {
-    /// Ensure a chips row exists for the user. Called on SSH login.
-    pub async fn ensure(client: &Client, user_id: Uuid) -> Result<Self> {
+    /// Load the user's chips row without creating one, `None` if they have no
+    /// chip account yet. Chip rows are created lazily on the first chip
+    /// operation, not on profile access, so callers verifying that invariant
+    /// need a read that never inserts.
+    pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {
         let row = client
-            .query_one(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO NOTHING
-                 RETURNING *",
-                &[&user_id, &INITIAL_CHIP_BALANCE],
+            .query_opt("SELECT * FROM user_chips WHERE user_id = $1", &[&user_id])
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    /// Ensure a chips row exists for the user. Called on SSH login; see
+    /// [`Self::ensure_in`] for the transactional twin.
+    pub async fn ensure(client: &Client, user_id: Uuid) -> Result<Self> {
+        Self::ensure_in(client, user_id).await
+    }
+
+    /// [`Self::ensure`] on any client, so the paths that may touch a user
+    /// who has never logged in (gifts, gilds, the Shop, an admin grant) can
+    /// run it inside their own transaction. The first call writes the
+    /// [`ChipMove::InitialBalance`] ledger row in the same statement as the
+    /// row itself; later calls only read.
+    pub async fn ensure_in(client: &impl GenericClient, user_id: Uuid) -> Result<Self> {
+        let row = client
+            .query_opt(
+                "WITH inserted AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING *
+                 ),
+                 ledger AS (
+                    INSERT INTO chip_ledger
+                      (user_id, delta, reason, source_kind, source_ref)
+                    SELECT user_id, $2, $3, $4, $5
+                    FROM inserted
+                 )
+                 SELECT * FROM inserted
+                 UNION ALL
+                 SELECT * FROM user_chips
+                 WHERE user_id = $1 AND NOT EXISTS (SELECT 1 FROM inserted)",
+                &[
+                    &user_id,
+                    &INITIAL_CHIP_BALANCE,
+                    &ChipMove::InitialBalance.reason(),
+                    &ChipMove::InitialBalance.source_kind(),
+                    &user_id.to_string(),
+                ],
             )
-            .await;
+            .await?;
         match row {
-            Ok(row) => Ok(Self::from(row)),
-            Err(_) => {
-                // Row already existed, fetch it
+            Some(row) => Ok(Self::from(row)),
+            // A concurrent first insert: `ON CONFLICT` waited for it to
+            // commit, but the fallback branch above read this statement's
+            // pre-wait snapshot and saw no row. A second statement does.
+            None => {
                 let row = client
                     .query_one("SELECT * FROM user_chips WHERE user_id = $1", &[&user_id])
                     .await?;
@@ -72,126 +662,130 @@ impl UserChips {
         }
     }
 
-    /// Add bonus chips (e.g. from completing a daily puzzle).
-    pub async fn add_bonus(client: &Client, user_id: Uuid, amount: i64) -> Result<Self> {
+    /// The single write path for delta chip moves: one guarded balance
+    /// update plus its ledger row, in one statement. Credits upsert (a
+    /// missing row starts at the credited amount); debits enforce the floor
+    /// from [`ChipMove::direction`] and return `None` when the balance
+    /// cannot cover the move. The `chip_user_changed` notify comes from the
+    /// `user_chips` triggers, never from here.
+    ///
+    /// `source_ref` is required: every ledger row says what it paid for
+    /// (see each [`ChipMove`] variant for what its ref is).
+    pub async fn apply(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        mv: ChipMove,
+        amount: i64,
+        source_ref: &str,
+    ) -> Result<Option<Self>> {
+        ensure!(amount > 0, "chip move amount must be positive");
+        ensure!(
+            !source_ref.is_empty(),
+            "chip move source_ref must name its source"
+        );
+        match mv.direction() {
+            ChipDirection::Credit => {
+                let row = client
+                    .query_one(
+                        "WITH upserted AS (
+                            INSERT INTO user_chips (user_id, balance)
+                            VALUES ($1, $2)
+                            ON CONFLICT (user_id) DO UPDATE SET
+                              balance = user_chips.balance + $2,
+                              updated = current_timestamp
+                            RETURNING *
+                         ),
+                         ledger AS (
+                            INSERT INTO chip_ledger
+                              (user_id, delta, reason, source_kind, source_ref)
+                            SELECT user_id, $2, $3, $4, $5
+                            FROM upserted
+                         )
+                         SELECT * FROM upserted",
+                        &[
+                            &user_id,
+                            &amount,
+                            &mv.reason(),
+                            &mv.source_kind(),
+                            &source_ref,
+                        ],
+                    )
+                    .await?;
+                Ok(Some(Self::from(row)))
+            }
+            ChipDirection::Debit { floor } => {
+                let row = client
+                    .query_opt(
+                        "WITH updated AS (
+                            UPDATE user_chips
+                            SET balance = balance - $2, updated = current_timestamp
+                            WHERE user_id = $1 AND balance - $2 >= $3
+                            RETURNING *
+                         ),
+                         ledger AS (
+                            INSERT INTO chip_ledger
+                              (user_id, delta, reason, source_kind, source_ref)
+                            SELECT user_id, -$2, $4, $5, $6
+                            FROM updated
+                         )
+                         SELECT * FROM updated",
+                        &[
+                            &user_id,
+                            &amount,
+                            &floor,
+                            &mv.reason(),
+                            &mv.source_kind(),
+                            &source_ref,
+                        ],
+                    )
+                    .await?;
+                Ok(row.map(Self::from))
+            }
+            ChipDirection::Restore => {
+                bail!("floor restore has a dedicated write path, use restore_floor")
+            }
+            ChipDirection::Retired => {
+                bail!(
+                    "chip move {} is retired and can no longer be written",
+                    mv.reason()
+                )
+            }
+        }
+    }
+
+    /// An admin handing chips to a player with `/grant`. By decision
+    /// (2026-09-06) this is the one balance change with no ledger row: the
+    /// ledger records what players did, and a grant is the house's doing.
+    /// The row is ensured first so a player who has never logged in lands
+    /// on the stipend plus the grant, and the stipend's own row is written
+    /// as usual. The `chip_user_changed` notify still fires from the
+    /// `user_chips` trigger.
+    pub async fn admin_grant(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        amount: i64,
+    ) -> Result<Self> {
+        ensure!(amount > 0, "admin grant amount must be positive");
+        Self::ensure_in(client, user_id).await?;
         let row = client
             .query_one(
-                "WITH upserted AS (
-                    INSERT INTO user_chips (user_id, balance)
-                    VALUES ($1, $2)
-                    ON CONFLICT (user_id) DO UPDATE SET
-                      balance = user_chips.balance + $2,
-                      updated = current_timestamp
-                    RETURNING *
-                 ),
-                 ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, $2, 'chip_credit', 'user_chips'
-                    FROM upserted
-                    WHERE $2 <> 0
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($3, user_id::text)
-                    FROM upserted
-                    WHERE $2 <> 0
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
-                 )
-                 SELECT upserted.*
-                 FROM upserted, chip_notified",
-                &[&user_id, &amount, &CHIP_USER_CHANGED_CHANNEL],
+                "UPDATE user_chips
+                 SET balance = balance + $2, updated = current_timestamp
+                 WHERE user_id = $1
+                 RETURNING *",
+                &[&user_id, &amount],
             )
             .await?;
         Ok(Self::from(row))
     }
 
-    /// Deduct chips (for betting). The floor is restored after losing settlements,
-    /// so a user can wager their visible balance.
-    /// Returns None if the user doesn't have enough chips for the bet.
-    pub async fn deduct(client: &Client, user_id: Uuid, amount: i64) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
-                "WITH updated AS (
-                    UPDATE user_chips
-                    SET balance = balance - $2, updated = current_timestamp
-                    WHERE user_id = $1 AND balance >= $2
-                    RETURNING *
-                 ),
-                 ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, -$2, 'chip_debit', 'user_chips'
-                    FROM updated
-                    WHERE $2 <> 0
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($3, user_id::text)
-                    FROM updated
-                    WHERE $2 <> 0
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
-                 )
-                 SELECT updated.*
-                 FROM updated, chip_notified",
-                &[&user_id, &amount, &CHIP_USER_CHANGED_CHANNEL],
-            )
-            .await?;
-        Ok(row.map(Self::from))
-    }
-
-    /// Deduct chips for a bartender drink. Unlike [`Self::deduct`], the
-    /// gift-style guard applies: the pour only succeeds when the balance
-    /// stays at or above [`CHIP_FLOOR`], so the bar can't leave a user broke.
-    /// The ledger row carries the drink name so the tab is auditable.
-    /// Returns None if the user can't cover the drink and keep the floor.
-    pub async fn deduct_for_drink(
-        client: &impl GenericClient,
-        user_id: Uuid,
-        amount: i64,
-        drink: &str,
-    ) -> Result<Option<Self>> {
-        ensure!(amount > 0, "drink price must be positive");
-        let row = client
-            .query_opt(
-                "WITH updated AS (
-                    UPDATE user_chips
-                    SET balance = balance - $2, updated = current_timestamp
-                    WHERE user_id = $1 AND balance - $2 >= $3
-                    RETURNING *
-                 ),
-                 ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-                    SELECT user_id, -$2, $4, $5, $6
-                    FROM updated
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($7, user_id::text)
-                    FROM updated
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
-                 )
-                 SELECT updated.*
-                 FROM updated, chip_notified",
-                &[
-                    &user_id,
-                    &amount,
-                    &CHIP_FLOOR,
-                    &DRINK_PURCHASE_REASON,
-                    &DRINK_PURCHASE_SOURCE_KIND,
-                    &drink,
-                    &CHIP_USER_CHANGED_CHANNEL,
-                ],
-            )
-            .await?;
-        Ok(row.map(Self::from))
-    }
-
-    pub async fn restore_floor(client: &Client, user_id: Uuid) -> Result<Self> {
+    /// Top the balance back up to [`CHIP_FLOOR`] after a losing house-table
+    /// settlement. `source_ref` is the round or hand id that emptied it.
+    pub async fn restore_floor(client: &Client, user_id: Uuid, source_ref: &str) -> Result<Self> {
+        ensure!(
+            !source_ref.is_empty(),
+            "floor restore source_ref must name its round"
+        );
         let row = client
             .query_one(
                 "WITH prior AS (
@@ -212,30 +806,33 @@ impl UserChips {
                     SELECT GREATEST($2 - COALESCE((SELECT balance FROM prior), $2), 0)::bigint AS delta
                  ),
                  ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT $1, delta, 'floor_restore', 'user_chips'
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
+                    SELECT $1, delta, $3, $4, $5
                     FROM restored
                     WHERE delta > 0
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($3, $1::text)
-                    FROM restored
-                    WHERE delta > 0
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
                  )
                  SELECT upserted.*
-                 FROM upserted, chip_notified",
-                &[&user_id, &CHIP_FLOOR, &CHIP_USER_CHANGED_CHANNEL],
+                 FROM upserted",
+                &[
+                    &user_id,
+                    &CHIP_FLOOR,
+                    &ChipMove::FloorRestore.reason(),
+                    &ChipMove::FloorRestore.source_kind(),
+                    &source_ref,
+                ],
             )
             .await?;
         Ok(Self::from(row))
     }
 
+    /// Move chips from sender to recipient: a [`ChipMove::GiftSent`] debit
+    /// (floor-guarded) and a [`ChipMove::GiftReceived`] credit, each carrying
+    /// the other party's id as `source_ref`. The debit and credit are
+    /// separate statements, so this takes the transaction that makes them
+    /// atomic. Returns `None` when the sender cannot cover the gift and keep
+    /// the floor.
     pub async fn transfer_gift(
-        client: &impl GenericClient,
+        tx: &Transaction<'_>,
         sender_id: Uuid,
         recipient_id: Uuid,
         amount: i64,
@@ -243,89 +840,136 @@ impl UserChips {
         ensure!(amount > 0, "gift amount must be positive");
         ensure!(sender_id != recipient_id, "cannot gift yourself");
 
-        // Ensure both chip rows exist as a separate statement. Data-modifying
-        // CTEs in a single statement all run against one snapshot, so an inline
-        // upsert would not be visible to the debit/credit UPDATEs that follow,
-        // and gifting to a user without a pre-existing row would spuriously fail
-        // as "insufficient chips".
-        client
-            .execute(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $3), ($2, $3)
-                 ON CONFLICT (user_id) DO NOTHING",
-                &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
+        // Ensure both chip rows exist first, so gifting to a user without a
+        // pre-existing row credits on top of the initial balance instead of
+        // spuriously failing.
+        Self::ensure_in(tx, sender_id).await?;
+        Self::ensure_in(tx, recipient_id).await?;
+
+        let Some(sender) = Self::apply(
+            tx,
+            sender_id,
+            ChipMove::GiftSent,
+            amount,
+            &recipient_id.to_string(),
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        let Some(recipient) = Self::apply(
+            tx,
+            recipient_id,
+            ChipMove::GiftReceived,
+            amount,
+            &sender_id.to_string(),
+        )
+        .await?
+        else {
+            bail!("gift credit returned no row");
+        };
+        Ok(Some((sender, recipient)))
+    }
+
+    /// A gild's chip movement: the buyer pays `price` under the floor guard,
+    /// the message's author is credited `author_share`, and the difference is
+    /// simply never minted. Same shape as [`Self::transfer_gift`] (both
+    /// statements, so the caller owns the transaction), with the split.
+    /// `gild_id` (the `chat_message_gilds` row the caller just placed or
+    /// raised) is the `source_ref` on both ledger rows, so the pair is
+    /// auditable from either side and each row names exactly one
+    /// counterparty. `None` when the buyer cannot pay and keep the floor.
+    pub async fn transfer_gild(
+        tx: &Transaction<'_>,
+        sender_id: Uuid,
+        author_id: Uuid,
+        price: i64,
+        author_share: i64,
+        gild_id: Uuid,
+    ) -> Result<Option<(Self, Self)>> {
+        ensure!(price > 0, "gild price must be positive");
+        ensure!(
+            author_share > 0 && author_share < price,
+            "gild author share must burn something and pay something"
+        );
+        ensure!(sender_id != author_id, "cannot gild yourself");
+
+        // Both chip rows must exist first, for the same reason gifting needs
+        // it: an author with no row yet would otherwise fail the credit.
+        Self::ensure_in(tx, sender_id).await?;
+        Self::ensure_in(tx, author_id).await?;
+
+        let source_ref = gild_id.to_string();
+        let Some(sender) =
+            Self::apply(tx, sender_id, ChipMove::GildSent, price, &source_ref).await?
+        else {
+            return Ok(None);
+        };
+        let Some(author) = Self::apply(
+            tx,
+            author_id,
+            ChipMove::GildReceived,
+            author_share,
+            &source_ref,
+        )
+        .await?
+        else {
+            bail!("gild credit returned no row");
+        };
+        Ok(Some((sender, author)))
+    }
+
+    /// A user's newest ledger rows, newest first. Owner-scoped in the query.
+    pub async fn recent_ledger(
+        client: &Client,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<ChipLedgerEntry>> {
+        let rows = client
+            .query(
+                "SELECT delta, reason, source_ref, created_at
+                 FROM chip_ledger
+                 WHERE user_id = $1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT $2",
+                &[&user_id, &limit],
             )
             .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ChipLedgerEntry {
+                delta: row.get("delta"),
+                reason: row.get("reason"),
+                source_ref: row.get("source_ref"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
 
+    /// This UTC month's two figures in one scan: what the user earned by
+    /// the Top Chips rule ([`ChipMove::counts_as_earnings`], the same sum
+    /// the board ranks, so the profile figure and the board never
+    /// disagree), and the net of every ledger row, which is what actually
+    /// happened to the balance.
+    pub async fn month_figures(client: &Client, user_id: Uuid) -> Result<MonthChips> {
+        let excluded = ChipMove::excluded_earning_reasons();
         let row = client
-            .query_opt(
-                "WITH debited AS (
-                    UPDATE user_chips
-                    SET balance = balance - $3, updated = current_timestamp
-                    WHERE user_id = $1 AND balance - $3 >= $4
-                    RETURNING *
-                 ),
-                 credited AS (
-                    UPDATE user_chips
-                    SET balance = balance + $3, updated = current_timestamp
-                    WHERE user_id = $2 AND EXISTS (SELECT 1 FROM debited)
-                    RETURNING *
-                 ),
-                 sent_ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, -$3, $5, 'user_chips'
-                    FROM debited
-                    RETURNING 1
-                 ),
-                 received_ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, $3, $6, 'user_chips'
-                    FROM credited
-                    RETURNING 1
-                 ),
-                 notify_sender AS (
-                    SELECT pg_notify($7, $1::text)
-                    WHERE EXISTS (SELECT 1 FROM debited)
-                 ),
-                 notify_recipient AS (
-                    SELECT pg_notify($7, $2::text)
-                    WHERE EXISTS (SELECT 1 FROM credited)
-                 )
-                 SELECT
-                    d.user_id AS sender_user_id,
-                    d.balance AS sender_balance,
-                    d.last_stipend_date AS sender_last_stipend_date,
-                    c.user_id AS recipient_user_id,
-                    c.balance AS recipient_balance,
-                    c.last_stipend_date AS recipient_last_stipend_date
-                 FROM debited d
-                 JOIN credited c ON true",
-                &[
-                    &sender_id,
-                    &recipient_id,
-                    &amount,
-                    &CHIP_FLOOR,
-                    &CHIP_GIFT_SENT_REASON,
-                    &CHIP_GIFT_RECEIVED_REASON,
-                    &CHIP_USER_CHANGED_CHANNEL,
-                ],
+            .query_one(
+                &format!(
+                    "SELECT COALESCE(SUM(delta) FILTER (WHERE reason <> ALL($2)), 0)::bigint
+                              AS earned,
+                            COALESCE(SUM(delta), 0)::bigint AS net
+                     FROM chip_ledger
+                     WHERE user_id = $1
+                       AND created_at >= {MONTH_TS_FILTER}"
+                ),
+                &[&user_id, &excluded],
             )
             .await?;
-
-        Ok(row.map(|row| {
-            (
-                Self {
-                    user_id: row.get("sender_user_id"),
-                    balance: row.get("sender_balance"),
-                    last_stipend_date: row.get("sender_last_stipend_date"),
-                },
-                Self {
-                    user_id: row.get("recipient_user_id"),
-                    balance: row.get("recipient_balance"),
-                    last_stipend_date: row.get("recipient_last_stipend_date"),
-                },
-            )
-        }))
+        Ok(MonthChips {
+            earned: row.get("earned"),
+            net: row.get("net"),
+        })
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).
@@ -337,57 +981,5 @@ impl UserChips {
             .into_iter()
             .map(|row| (row.get("user_id"), row.get("balance")))
             .collect())
-    }
-
-    /// Top chip balances for the leaderboard.
-    pub async fn top_balances(client: &Client, limit: i64) -> Result<Vec<ChipLeader>> {
-        let rows = client
-            .query(
-                "SELECT u.username, c.user_id, c.balance
-                 FROM user_chips c
-                 JOIN users u ON u.id = c.user_id
-                 WHERE c.balance > 0
-                 ORDER BY c.balance DESC
-                 LIMIT $1",
-                &[&limit],
-            )
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| ChipLeader {
-                username: row.get("username"),
-                user_id: row.get("user_id"),
-                balance: row.get("balance"),
-            })
-            .collect())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChipLeader {
-    pub username: String,
-    pub user_id: Uuid,
-    pub balance: i64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn difficulty_bonus_mapping() {
-        assert_eq!(difficulty_bonus("easy"), 100);
-        assert_eq!(difficulty_bonus("medium"), 250);
-        assert_eq!(difficulty_bonus("mid"), 250);
-        assert_eq!(difficulty_bonus("hard"), 500);
-        assert_eq!(difficulty_bonus("draw-1"), 250);
-        assert_eq!(difficulty_bonus("draw-3"), 500);
-        assert_eq!(difficulty_bonus("unknown"), 100);
-    }
-
-    #[test]
-    fn constants() {
-        assert_eq!(CHIP_FLOOR, 100);
-        assert_eq!(INITIAL_CHIP_BALANCE, 1_000);
     }
 }

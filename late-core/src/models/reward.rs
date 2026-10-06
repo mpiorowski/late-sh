@@ -10,13 +10,37 @@ pub const REWARD_CLAIM_POLICY_COOLDOWN: &str = "cooldown";
 pub const REWARD_CLAIM_POLICY_PER_EVENT: &str = "per_event";
 pub const REWARD_CLAIM_POLICY_UTC_DAY: &str = "utc_day";
 
+// `chess_win_payout` and `sshattrick_win_payout` used to live here. Their
+// games are gone (rooms-era chess table, ssHattrick) and migration 127
+// deactivated the templates, so there is no key left to look up.
 pub const ASTERION_DAILY_ESCAPE_REWARD_KEY: &str = "asterion_daily_escape";
-pub const CHESS_WIN_REWARD_KEY: &str = "chess_win_payout";
+pub const DAILY_BACKGAMMON_WIN_REWARD_KEY: &str = "daily_backgammon_win_payout";
+pub const DAILY_BATTLESHIP_WIN_REWARD_KEY: &str = "daily_battleship_win_payout";
+pub const DAILY_BRISCOLA_WIN_REWARD_KEY: &str = "daily_briscola_win_payout";
+pub const DAILY_CHECKERS_WIN_REWARD_KEY: &str = "daily_checkers_win_payout";
+pub const DAILY_CHESS_WIN_REWARD_KEY: &str = "daily_chess_win_payout";
+pub const DAILY_CHESS960_WIN_REWARD_KEY: &str = "daily_chess960_win_payout";
+pub const DAILY_CONNECT4_WIN_REWARD_KEY: &str = "daily_connect4_win_payout";
+pub const DAILY_CRIBBAGE_WIN_REWARD_KEY: &str = "daily_cribbage_win_payout";
+pub const DAILY_EIGHTBALL_WIN_REWARD_KEY: &str = "daily_eightball_win_payout";
+pub const DAILY_GIN_WIN_REWARD_KEY: &str = "daily_gin_win_payout";
+pub const DAILY_SNOOKER_WIN_REWARD_KEY: &str = "daily_snooker_win_payout";
+pub const DAILY_NINEBALL_WIN_REWARD_KEY: &str = "daily_nineball_win_payout";
+pub const DAILY_REVERSI_WIN_REWARD_KEY: &str = "daily_reversi_win_payout";
+pub const DARKROOM_ESCAPE_REWARD_KEY: &str = "darkroom_escape";
+pub const DARKROOM_BEACON_REWARD_KEY: &str = "darkroom_beacon_escape";
 pub const LATEANIA_ARCHDEMON_REWARD_KEY: &str = "lateania_archdemon_defeat";
 pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defeat";
+pub const LATEANIA_SUNDERING_DEEP_REWARD_KEY: &str = "lateania_sundering_deep_defeat";
+pub const LATEANIA_KAETHYR_ASCENDANT_REWARD_KEY: &str = "lateania_kaethyr_ascendant_defeat";
+pub const GREENDRAGON_DRAGON_REWARD_KEY: &str = "greendragon_dragon_slain";
+pub const DEADCHANNEL_OLD_SIGNAL_REWARD_KEY: &str = "deadchannel_old_signal_slain";
 pub const NETHACK_AMULET_REWARD_KEY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_REWARD_KEY: &str = "nethack_ascension";
-pub const SSHATTRICK_WIN_REWARD_KEY: &str = "sshattrick_win_payout";
+pub const DCSS_ORB_REWARD_KEY: &str = "dcss_orb";
+pub const DCSS_WIN_REWARD_KEY: &str = "dcss_win";
+pub const BROGUE_ESCAPE_REWARD_KEY: &str = "brogue_escape";
+pub const BROGUE_MASTERY_REWARD_KEY: &str = "brogue_mastery";
 pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";
 pub const TRON_WIN_4P_REWARD_KEY: &str = "tron_win_4p";
@@ -27,6 +51,7 @@ pub enum DailyPuzzleRewardGame {
     Minesweeper,
     Nonogram,
     RubiksCube,
+    SlidingPuzzle,
     Solitaire,
     Sudoku,
 }
@@ -38,6 +63,7 @@ impl DailyPuzzleRewardGame {
             Self::Minesweeper => "minesweeper",
             Self::Nonogram => "nonogram",
             Self::RubiksCube => "rubiks_cube",
+            Self::SlidingPuzzle => "sliding_puzzle",
             Self::Solitaire => "solitaire",
             Self::Sudoku => "sudoku",
         }
@@ -137,26 +163,5 @@ pub fn tron_win_reward_key(round_rider_count: usize) -> Option<&'static str> {
         3 => Some(TRON_WIN_3P_REWARD_KEY),
         count if count >= 4 => Some(TRON_WIN_4P_REWARD_KEY),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn daily_puzzle_reward_key_uses_typed_game_and_normalized_difficulty() {
-        assert_eq!(
-            daily_puzzle_reward_key(DailyPuzzleRewardGame::Solitaire, "draw-3"),
-            "solitaire_daily_draw_3_win"
-        );
-        assert_eq!(
-            daily_puzzle_reward_key(DailyPuzzleRewardGame::LeWord, "daily"),
-            "le_word_daily_daily_win"
-        );
-        assert_eq!(
-            daily_puzzle_reward_key(DailyPuzzleRewardGame::RubiksCube, "daily"),
-            "rubiks_cube_daily_daily_win"
-        );
     }
 }

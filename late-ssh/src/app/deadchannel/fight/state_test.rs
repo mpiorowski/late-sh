@@ -1,0 +1,1410 @@
+use chrono::NaiveDate;
+use late_core::models::deadchannel_runner::DeadchannelRunner;
+use rand::{SeedableRng, rngs::StdRng};
+use uuid::Uuid;
+
+use super::{
+    Applied, Command, Drink, Fight, News, Outcome, Pick, Quarry, Refusal, Sheet, SheetError, Slot,
+};
+use crate::app::deadchannel::fight::data::{
+    BRIGHT_LINE, CRYSTAL_LINE, FOES, HEARD_LINE, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL,
+    RATIONS_PER_DAY, START_BITS, bright_steps, exp_to_advance, exp_to_seek, title,
+};
+use crate::app::deadchannel::fight::state::MAX_TIER;
+
+fn day(d: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(2026, 9, d).expect("a september day")
+}
+
+fn fresh() -> Sheet {
+    Sheet::fresh(Uuid::nil(), day(24))
+}
+
+#[test]
+fn stepping_in_spends_a_ration_and_meets_the_glyph_of_your_level() {
+    let mut sheet = fresh();
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let outcome = sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Fair });
+    assert_eq!(outcome.lines, vec![FOES[0].arrives.to_string()]);
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
+    let fight = sheet.fight.as_ref().expect("a fight on the row");
+    assert_eq!(fight.foe().name, "flicker");
+    assert_eq!(fight.foe_signal, fight.foe_max_signal);
+    assert_eq!(fight.log, outcome.lines);
+
+    // A second step in with a fight waiting spends nothing and resumes it.
+    let again = sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert_eq!(again.applied, Applied::Resumed);
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
+}
+
+#[test]
+fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
+    let mut sheet = fresh();
+    let mut rng = StdRng::seed_from_u64(7);
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+
+    let mut rounds = 0;
+    let ended = loop {
+        rounds += 1;
+        assert!(rounds < 200, "a fight always ends");
+        let outcome = sheet.apply(Command::Attack, &mut rng);
+        match outcome.applied {
+            Applied::Round => continue,
+            ended => break ended,
+        }
+    };
+
+    // Whole state: the dice are fixed, so the sheet after the fight is
+    // one exact thing. A change here is a rules change; read it.
+    assert_eq!(sheet.fight, None, "the fight leaves the row when it ends");
+    match ended {
+        Applied::Won {
+            foe,
+            bits,
+            garnished,
+            exp,
+            leveled,
+            bright: false,
+            crystals,
+        } => {
+            assert_eq!(sheet.crystals, crystals, "what it left is on the sheet");
+            // LoGD's flicker pays 36 bits and 14 exp; `PAY_BITS_PERCENT` and `PAY_EXP_PERCENT` triple it.
+            assert_eq!(
+                (foe, bits, garnished, exp, leveled),
+                ("flicker", 108, 0, 42, None)
+            );
+            assert_eq!(sheet.bits, START_BITS + 108);
+            assert_eq!(sheet.exp, 42);
+            assert!(sheet.signal > 0);
+            assert_eq!(
+                (sheet.kills, sheet.kills_today, sheet.runs_today),
+                (1, 1, 0)
+            );
+        }
+        Applied::Lost { bits_lost } => {
+            assert_eq!(bits_lost, START_BITS);
+            assert_eq!(sheet.bits, 0);
+            assert_eq!(sheet.signal, 0);
+            assert!(sheet.is_down());
+            assert_eq!(
+                (sheet.kills, sheet.kills_today, sheet.runs_today),
+                (0, 0, 0)
+            );
+        }
+        other => panic!("a fight ends won or lost, not {other:?}"),
+    }
+    assert_eq!(sheet.level, 1);
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
+}
+
+#[test]
+fn winning_past_the_threshold_levels_up() {
+    let mut sheet = fresh();
+    sheet.exp = 90;
+    // A foe that cannot hurt you and cannot survive you.
+    sheet.weapon_tier = 50;
+    sheet.fight = Some(Fight {
+        quarry: Quarry::Glyph(0),
+        foe_signal: 1,
+        foe_max_signal: 1,
+        foe_attack: 0,
+        foe_defense: 0,
+        foe_bits: 36,
+        foe_exp: 14,
+        log: Vec::new(),
+        bright: false,
+    });
+    let mut rng = StdRng::seed_from_u64(3);
+
+    let mut rounds = 0;
+    let outcome = loop {
+        rounds += 1;
+        assert!(rounds < 50);
+        let outcome = sheet.apply(Command::Attack, &mut rng);
+        if outcome.applied != Applied::Round {
+            break outcome;
+        }
+    };
+
+    assert_eq!(
+        outcome.applied,
+        Applied::Won {
+            foe: "flicker",
+            bits: 36,
+            garnished: 0,
+            exp: 14,
+            leveled: Some(2),
+            bright: false,
+            crystals: sheet.crystals,
+        }
+    );
+    assert_eq!(sheet.level, 2);
+    assert_eq!(sheet.exp, 104);
+    assert_eq!(sheet.max_signal(), 20);
+    assert_eq!(sheet.signal, 20, "the new level's signal comes with it");
+    assert!(
+        outcome
+            .lines
+            .last()
+            .expect("a line")
+            .starts_with("you are level 2.")
+    );
+}
+
+#[test]
+fn running_gets_away_or_takes_a_free_strike() {
+    let mut escaped = 0;
+    let mut caught = 0;
+    for seed in 0..30u64 {
+        let mut sheet = fresh();
+        let mut rng = StdRng::seed_from_u64(seed);
+        sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+        let outcome = sheet.apply(Command::Run, &mut rng);
+        match outcome.applied {
+            Applied::Escaped => {
+                escaped += 1;
+                assert_eq!(sheet.fight, None);
+                assert_eq!(outcome.lines.len(), 1);
+                assert_eq!(sheet.bits, START_BITS, "running earns nothing");
+                assert_eq!(sheet.runs_today, 1);
+            }
+            Applied::Round => {
+                caught += 1;
+                assert!(sheet.fight.is_some(), "caught: the fight is still on");
+                assert_eq!(outcome.lines.len(), 2, "the catch line and the strike");
+            }
+            Applied::Lost { .. } => {
+                caught += 1;
+                assert_eq!(sheet.fight, None);
+            }
+            other => panic!("a run escapes or is caught, not {other:?}"),
+        }
+        assert_eq!(
+            sheet.rations_left,
+            RATIONS_PER_DAY - 1,
+            "the ration stays spent"
+        );
+    }
+    assert!(
+        escaped > 0 && caught > 0,
+        "both outcomes happen: {escaped} / {caught}"
+    );
+}
+
+#[test]
+fn spent_or_down_is_refused_and_changes_nothing() {
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let mut spent = fresh();
+    spent.rations_left = 0;
+    let before = spent.clone();
+    let outcome = spent.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NoRations));
+    assert_eq!(spent, before);
+
+    let mut down = fresh();
+    down.signal = 0;
+    let before = down.clone();
+    let outcome = down.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::SignalDown));
+    assert_eq!(down, before);
+
+    let mut idle = fresh();
+    let outcome = idle.apply(Command::Attack, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NoFight));
+    assert_eq!(idle, fresh());
+}
+
+#[test]
+fn the_day_roll_refills_everything_and_drops_a_hanging_fight() {
+    let mut sheet = fresh();
+    sheet.level = 3;
+    sheet.signal = 0;
+    sheet.rations_left = 0;
+    sheet.kills = 12;
+    sheet.kills_today = 7;
+    sheet.runs_today = 2;
+    sheet.fight = Some(Fight {
+        quarry: Quarry::Glyph(2),
+        foe_signal: 5,
+        foe_max_signal: 32,
+        foe_attack: 5,
+        foe_defense: 4,
+        foe_bits: 148,
+        foe_exp: 34,
+        log: vec!["it hits you for 9.".to_string()],
+        bright: false,
+    });
+
+    assert!(!sheet.settle(day(24)), "the same day rolls nothing");
+    assert!(sheet.is_down());
+
+    assert!(sheet.settle(day(25)));
+    assert_eq!(sheet.day, day(25));
+    assert_eq!(sheet.signal, 30);
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY);
+    assert_eq!(sheet.fight, None);
+    assert_eq!(
+        (sheet.kills_today, sheet.runs_today),
+        (0, 0),
+        "the day's tally rolls"
+    );
+    assert_eq!(sheet.kills, 12, "the lifetime count does not");
+    assert!(!sheet.is_down());
+    assert!(!sheet.settle(day(25)));
+}
+
+#[test]
+fn the_wire_hears_only_the_results_worth_a_story() {
+    let won_as = |leveled, bright| Applied::Won {
+        foe: "hiss",
+        bits: 1,
+        garnished: 0,
+        exp: 1,
+        leveled,
+        bright,
+        crystals: i32::from(bright),
+    };
+    let won = |leveled| won_as(leveled, false);
+
+    // An ordinary kill mid-day: nothing.
+    let mut sheet = fresh();
+    sheet.kills = 4;
+    sheet.rations_left = 5;
+    assert_eq!(sheet.news(&won(None)), vec![]);
+    assert_eq!(sheet.news(&Applied::Escaped), vec![]);
+    assert_eq!(sheet.news(&Applied::Round), vec![]);
+
+    // The first glyph ever.
+    sheet.kills = 1;
+    assert_eq!(
+        sheet.news(&won(None)),
+        vec![News::FirstBlood { foe: "hiss" }]
+    );
+
+    // A bright glyph put down outranks a near miss; a level outranks it.
+    sheet.kills = 4;
+    sheet.signal = 2;
+    assert_eq!(
+        sheet.news(&won_as(None, true)),
+        vec![News::BrightDown { foe: "hiss" }]
+    );
+    assert_eq!(
+        sheet.news(&won_as(Some(2), true)),
+        vec![News::Leveled { level: 2 }]
+    );
+
+    // A win on the last of the signal; a level outranks it.
+    assert_eq!(
+        sheet.news(&won(None)),
+        vec![News::NearMiss {
+            foe: "hiss",
+            signal: 2
+        }]
+    );
+    assert_eq!(sheet.news(&won(Some(2))), vec![News::Leveled { level: 2 }]);
+
+    // The last ration's fight, won or escaped, closes the day with the
+    // card, after whatever story the win itself was.
+    sheet.rations_left = 0;
+    sheet.kills_today = 7;
+    sheet.runs_today = 2;
+    let card = News::LastRation {
+        kills: 7,
+        runs: 2,
+        signal: 2,
+        max_signal: 10,
+    };
+    assert_eq!(
+        sheet.news(&won(None)),
+        vec![
+            News::NearMiss {
+                foe: "hiss",
+                signal: 2
+            },
+            card.clone()
+        ]
+    );
+    assert_eq!(sheet.news(&Applied::Escaped), vec![card]);
+
+    // A dropped signal is its own line and the day's last word.
+    sheet.signal = 0;
+    assert_eq!(
+        sheet.news(&Applied::Lost { bits_lost: 30 }),
+        vec![News::Dropped { bits_lost: 30 }]
+    );
+}
+
+#[test]
+fn the_armorer_trades_up_and_refuses_down_or_short() {
+    let mut rng = StdRng::seed_from_u64(1);
+    let at_four = || {
+        let mut sheet = fresh();
+        sheet.level = 4;
+        sheet.signal = 40;
+        sheet
+    };
+    let mut sheet = at_four();
+    sheet.bits = 2000;
+
+    // Tier 2 off bare hands: the full price on the wall.
+    let bought = sheet.apply(
+        Command::Outfit {
+            slot: Slot::Weapon,
+            tier: 2,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        bought.applied,
+        Applied::Outfitted {
+            slot: Slot::Weapon,
+            tier: 2,
+            paid: 506
+        }
+    );
+    assert_eq!(
+        bought.lines,
+        vec!["the armorer hands over the box cutter. 506 bits.".to_string()]
+    );
+
+    // Tier 3 with the box cutter handed back: 1316 less 75% of 506 (379).
+    let traded = sheet.apply(
+        Command::Outfit {
+            slot: Slot::Weapon,
+            tier: 3,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        traded.applied,
+        Applied::Outfitted {
+            slot: Slot::Weapon,
+            tier: 3,
+            paid: 937
+        }
+    );
+    assert_eq!(
+        traded.lines,
+        vec![
+            "the armorer hands over the tire iron. the box cutter goes back on the wall. 937 bits."
+                .to_string()
+        ]
+    );
+    let mut expected = at_four();
+    expected.bits = 2000 - 506 - 937;
+    expected.weapon_tier = 3;
+    assert_eq!(sheet, expected, "the whole sheet after two trades");
+    assert_eq!(sheet.attack(), 7);
+    assert_eq!(sheet.gear_name(Slot::Weapon), Some("tire iron"));
+    assert_eq!(sheet.gear_name(Slot::Armor), None);
+
+    // Down, sideways, or off the wall: nothing moves.
+    for tier in [3, 1, 0, 16] {
+        let refused = sheet.apply(
+            Command::Outfit {
+                slot: Slot::Weapon,
+                tier,
+            },
+            &mut rng,
+        );
+        assert_eq!(
+            refused.applied,
+            Applied::Refused(Refusal::NotAnUpgrade),
+            "tier {tier}"
+        );
+        assert_eq!(sheet, expected);
+    }
+
+    // Short: the refusal names the gap, and the trade-in counts toward it.
+    let short = sheet.apply(
+        Command::Outfit {
+            slot: Slot::Weapon,
+            tier: 4,
+        },
+        &mut rng,
+    );
+    // 2227 less 75% of 1316 (987) is 1240; 557 on hand.
+    assert_eq!(short.applied, Applied::Refused(Refusal::Short { by: 683 }));
+    assert_eq!(
+        short.lines,
+        vec!["you are 683 bits short of the rebar club.".to_string()]
+    );
+    assert_eq!(sheet, expected);
+
+    // The other slot has its own ladder.
+    let armor = sheet.apply(
+        Command::Outfit {
+            slot: Slot::Armor,
+            tier: 1,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        armor.applied,
+        Applied::Outfitted {
+            slot: Slot::Armor,
+            tier: 1,
+            paid: 108
+        }
+    );
+    assert_eq!(sheet.armor_tier, 1);
+    assert_eq!(sheet.defense(), 5);
+    assert_eq!(sheet.bits, 557 - 108);
+}
+
+/// A sheet on a step of its day a bright glyph waits behind.
+fn on_a_bright_step() -> Sheet {
+    let mut sheet = fresh();
+    sheet.rations_left = RATIONS_PER_DAY - (bright_steps(sheet.day)[0] - 1);
+    sheet
+}
+
+/// A sheet on a step of its day no bright glyph waits behind.
+fn on_a_plain_step() -> Sheet {
+    let mut sheet = fresh();
+    let plain = (1..=RATIONS_PER_DAY)
+        .find(|step| !bright_steps(sheet.day).contains(step))
+        .expect("eight plain steps a day");
+    sheet.rations_left = RATIONS_PER_DAY - (plain - 1);
+    sheet
+}
+
+#[test]
+fn two_steps_of_every_day_have_a_bright_glyph_behind_them() {
+    for offset in 0..400 {
+        let day = day(1) + chrono::Days::new(offset);
+        let [first, second] = bright_steps(day);
+        assert!(
+            1 <= first && first < second && second <= RATIONS_PER_DAY,
+            "{day}: steps {first} and {second}"
+        );
+    }
+    // The steps move with the date: a year does not sit on one pair.
+    let pairs: std::collections::HashSet<[i32; 2]> = (0..400)
+        .map(|offset| bright_steps(day(1) + chrono::Days::new(offset)))
+        .collect();
+    assert!(pairs.len() > 30, "{} distinct pairs", pairs.len());
+}
+
+#[test]
+fn the_bright_glyph_is_harder_pays_double_bits_and_leaves_a_crystal() {
+    let mut rng = StdRng::seed_from_u64(1);
+
+    // Not on a plain step: refused, and the ration is kept.
+    let mut plain = on_a_plain_step();
+    let before = plain.clone();
+    let refused = plain.apply(Command::Start { pick: Pick::Bright }, &mut rng);
+    assert_eq!(refused.applied, Applied::Refused(Refusal::NoBrightGlyph));
+    assert_eq!(plain, before);
+
+    let mut sheet = on_a_bright_step();
+    sheet.level = 8;
+    sheet.signal = 80;
+    assert!(sheet.bright_waits());
+    let rations = sheet.rations_left;
+    let outcome = sheet.apply(Command::Start { pick: Pick::Bright }, &mut rng);
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Bright });
+    assert_eq!(sheet.rations_left, rations - 1);
+    assert_eq!(
+        outcome.lines,
+        vec![FOES[7].arrives.to_string(), BRIGHT_LINE.to_string()]
+    );
+    let fight = sheet.fight.clone().expect("a fight on the row");
+    assert_eq!(fight.name(), "bright dead pixels");
+    // Dead pixels are 84 / 15 / 11 paying 906 bits and 267 exp: a third
+    // more signal, 15% more attack and defense rounded up, twice the bits,
+    // the same exp.
+    assert_eq!(
+        (
+            fight.foe_max_signal,
+            fight.foe_attack,
+            fight.foe_defense,
+            fight.foe_bits,
+            fight.foe_exp
+        ),
+        (113, 18, 13, 1812, 267)
+    );
+
+    // Put down, it always leaves one, and the wire hears.
+    sheet.kills = 40;
+    sheet.weapon_tier = 500;
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    let won = win_out(&mut sheet, &mut rng);
+    assert_eq!(
+        won.applied,
+        Applied::Won {
+            foe: "dead pixels",
+            bits: 1812,
+            garnished: 0,
+            exp: 267,
+            leveled: None,
+            bright: true,
+            crystals: 1,
+        }
+    );
+    assert_eq!(sheet.crystals, 1);
+    assert_eq!(won.lines.last().map(String::as_str), Some(CRYSTAL_LINE));
+    assert_eq!(
+        sheet.news(&won.applied),
+        vec![News::BrightDown { foe: "dead pixels" }]
+    );
+}
+
+#[test]
+fn a_fair_kill_leaves_a_crystal_now_and_then_and_a_step_down_never() {
+    let mut rng = StdRng::seed_from_u64(11);
+    let kills = 1200;
+
+    let mut fair = fresh();
+    for _ in 0..kills {
+        a_sure_kill(&mut fair, 0);
+        win_out(&mut fair, &mut rng);
+        fair.exp = 0;
+    }
+    // One in twelve: a hundred of twelve hundred, give or take the dice.
+    assert!(
+        (70..=130).contains(&fair.crystals),
+        "{} crystals from {kills} fair kills",
+        fair.crystals
+    );
+
+    // The same glyph met from a level above is a step down: nothing.
+    let mut above = fresh();
+    above.level = 2;
+    above.signal = 20;
+    for _ in 0..kills {
+        a_sure_kill(&mut above, 0);
+        win_out(&mut above, &mut rng);
+        above.exp = 0;
+    }
+    assert_eq!(above.crystals, 0);
+}
+
+#[test]
+fn dead_air_pours_one_glass_a_day_for_a_crystal() {
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut sheet = fresh();
+    sheet.level = 8;
+    sheet.signal = 31;
+
+    // No crystal, no glass.
+    let dry = sheet.apply(
+        Command::Drink {
+            drink: Drink::StaticOnIce,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        dry.applied,
+        Applied::Refused(Refusal::ShortCrystals { by: 1 })
+    );
+    assert_eq!(sheet.drink, None);
+
+    sheet.crystals = 3;
+    let poured = sheet.apply(
+        Command::Drink {
+            drink: Drink::StaticOnIce,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        poured.applied,
+        Applied::Drank {
+            drink: Drink::StaticOnIce
+        }
+    );
+    assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::StaticOnIce)));
+    // Level 8, bare hands: 8, and the glass's 1 + 8 / 4.
+    assert_eq!((sheet.attack(), sheet.defense()), (11, 8));
+    assert_eq!(sheet.signal, 31, "only the test pattern fills");
+
+    // One a day.
+    let second = sheet.apply(
+        Command::Drink {
+            drink: Drink::DeadAirNeat,
+        },
+        &mut rng,
+    );
+    assert_eq!(second.applied, Applied::Refused(Refusal::GlassPoured));
+    assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::StaticOnIce)));
+
+    // The roll takes it.
+    assert!(sheet.settle(day(25)));
+    assert_eq!(sheet.drink, None);
+    assert_eq!((sheet.attack(), sheet.signal), (8, 80));
+
+    // The other two: defense, and the bars.
+    sheet.apply(
+        Command::Drink {
+            drink: Drink::DeadAirNeat,
+        },
+        &mut rng,
+    );
+    assert_eq!((sheet.attack(), sheet.defense()), (8, 11));
+    sheet.settle(day(26));
+    sheet.signal = 5;
+    sheet.apply(
+        Command::Drink {
+            drink: Drink::TestPattern,
+        },
+        &mut rng,
+    );
+    assert_eq!((sheet.signal, sheet.max_signal()), (96, 96));
+    assert_eq!(sheet.crystals, 0);
+
+    // Not with the signal down, a glyph waiting, or the day spent.
+    let mut down = fresh();
+    down.crystals = 1;
+    down.signal = 0;
+    let mut waiting = fresh();
+    waiting.crystals = 1;
+    waiting.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    let mut spent = fresh();
+    spent.crystals = 1;
+    spent.rations_left = 0;
+    for (mut sheet, refusal) in [
+        (down, Refusal::SignalDown),
+        (waiting, Refusal::FightWaiting),
+        (spent, Refusal::NoRations),
+    ] {
+        let refused = sheet.apply(
+            Command::Drink {
+                drink: Drink::TestPattern,
+            },
+            &mut rng,
+        );
+        assert_eq!(refused.applied, Applied::Refused(refusal));
+        assert_eq!((sheet.crystals, sheet.drink), (1, None));
+    }
+}
+
+#[test]
+fn the_blade_cart_sells_the_next_tier_up_for_crystals_alone() {
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut sheet = fresh();
+    sheet.weapon_tier = 3;
+    sheet.bits = 7;
+    sheet.crystals = 2;
+
+    let short = sheet.apply(Command::Cart { slot: Slot::Weapon }, &mut rng);
+    assert_eq!(
+        short.applied,
+        Applied::Refused(Refusal::ShortCrystals { by: 1 })
+    );
+    assert_eq!((sheet.weapon_tier, sheet.bits, sheet.crystals), (3, 7, 2));
+
+    // The next tier up from the one carried, and not a bit changes hands.
+    sheet.crystals = 7;
+    let sold = sheet.apply(Command::Cart { slot: Slot::Weapon }, &mut rng);
+    assert_eq!(
+        sold.applied,
+        Applied::Carted {
+            slot: Slot::Weapon,
+            tier: 4,
+            crystals: 3
+        }
+    );
+    assert_eq!((sheet.weapon_tier, sheet.bits, sheet.crystals), (4, 7, 4));
+
+    // Each slot climbs its own ladder, a tier a visit.
+    let armor = sheet.apply(Command::Cart { slot: Slot::Armor }, &mut rng);
+    assert_eq!(
+        armor.applied,
+        Applied::Carted {
+            slot: Slot::Armor,
+            tier: 1,
+            crystals: 3
+        }
+    );
+    assert_eq!((sheet.armor_tier, sheet.crystals), (1, 1));
+
+    // At the top of the ladder there is nothing past the wall.
+    let mut top = at_the_top(0);
+    top.crystals = 9;
+    let past = top.apply(Command::Cart { slot: Slot::Weapon }, &mut rng);
+    assert_eq!(past.applied, Applied::Refused(Refusal::PastTheWall));
+}
+
+/// Patch sells the whole gap at half a bit a point times the level, and turns
+/// away a dropped signal (the roll's business), a fight left waiting on
+/// the row, a full signal, and a short purse, changing nothing each time.
+#[test]
+fn patch_buys_the_signal_back_and_refuses_down_waiting_full_or_short() {
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let mut sheet = fresh();
+    sheet.level = 3;
+    sheet.signal = 12;
+    sheet.bits = 100;
+    assert_eq!(sheet.patch_price(), 27);
+    let patched = sheet.apply(Command::Patch, &mut rng);
+    assert_eq!(
+        patched.applied,
+        Applied::Patched {
+            restored: 18,
+            paid: 27
+        }
+    );
+    assert_eq!(
+        patched.lines,
+        vec!["patch works fast. +18 signal, back to full. 27 bits.".to_string()]
+    );
+    assert_eq!((sheet.signal, sheet.bits), (30, 73));
+    assert!(sheet.news(&patched.applied).is_empty());
+
+    let full = sheet.apply(Command::Patch, &mut rng);
+    assert_eq!(full.applied, Applied::Refused(Refusal::NothingToPatch));
+    assert_eq!((sheet.signal, sheet.bits), (30, 73));
+
+    let mut down = fresh();
+    down.signal = 0;
+    let before = down.clone();
+    let outcome = down.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::SignalDown));
+    assert_eq!(down, before);
+
+    let mut waiting = fresh();
+    waiting.signal = 4;
+    waiting.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert!(waiting.fight.is_some());
+    let before = waiting.clone();
+    let outcome = waiting.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::FightWaiting));
+    assert_eq!(waiting, before);
+
+    let mut short = fresh();
+    short.signal = 1;
+    short.bits = 1;
+    let before = short.clone();
+    let outcome = short.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::Short { by: 4 }));
+    assert_eq!(
+        outcome.lines,
+        vec!["you are 4 bits short of a patch.".to_string()]
+    );
+    assert_eq!(short, before);
+
+    // Spent for the day with no glyph waiting: nothing can spend the
+    // signal before the roll refills it for free, so patch sells nothing.
+    let mut spent = fresh();
+    spent.signal = 4;
+    spent.rations_left = 0;
+    let before = spent.clone();
+    let outcome = spent.apply(Command::Patch, &mut rng);
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NoRations));
+    assert_eq!(
+        outcome.lines,
+        vec!["you are spent for today. the roll brings the signal back for nothing.".to_string()]
+    );
+    assert_eq!(spent, before);
+}
+
+#[test]
+fn a_carried_weapon_is_named_in_the_hit_line() {
+    let mut sheet = fresh();
+    sheet.weapon_tier = 3;
+    sheet.fight = Some(Fight {
+        quarry: Quarry::Glyph(0),
+        foe_signal: 1,
+        foe_max_signal: 1,
+        foe_attack: 0,
+        foe_defense: 0,
+        foe_bits: 36,
+        foe_exp: 14,
+        log: Vec::new(),
+        bright: false,
+    });
+    let mut rng = StdRng::seed_from_u64(3);
+    let outcome = sheet.apply(Command::Attack, &mut rng);
+    assert!(
+        outcome.lines[0].starts_with("your tire iron hits the flicker for "),
+        "{:?}",
+        outcome.lines
+    );
+}
+
+#[test]
+fn a_row_naming_an_unknown_glyph_is_rejected() {
+    let now = chrono::Utc::now();
+    let row = DeadchannelRunner {
+        id: Uuid::nil(),
+        created: now,
+        updated: now,
+        left_at: None,
+        guide_seen_at: None,
+        level: 1,
+        exp: 0,
+        signal: 10,
+        weapon_tier: 0,
+        armor_tier: 0,
+        bits: 50,
+        rations_left: 9,
+        day: day(24),
+        kills: 0,
+        kills_today: 0,
+        runs_today: 0,
+        peak_level: 1,
+        marks: 0,
+        unpaid_mark: None,
+        stash: 0,
+        debt: 0,
+        crystals: 2,
+        drink: Some("dead_air_neat".to_string()),
+        reset_generation: 0,
+        fight: Some(serde_json::json!({
+            "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
+            "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []
+        })),
+        user_id: Uuid::nil(),
+        look: serde_json::json!({}),
+    };
+    assert_eq!(
+        Sheet::from_row(&row),
+        Err(SheetError::Fight("unknown glyph kind 99".to_string()))
+    );
+
+    // A fight stored before the crystal pass has no `bright`: it reads
+    // as a plain one. The glass and the crystals round-trip.
+    let ok = DeadchannelRunner {
+        fight: Some(serde_json::json!({
+            "quarry": {"glyph": 1}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
+            "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []
+        })),
+        ..row
+    };
+    let sheet = Sheet::from_row(&ok).expect("a sheet");
+    assert!(!sheet.fight.as_ref().expect("the fight").bright);
+    assert_eq!(sheet.rations_left, 9);
+    assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::DeadAirNeat)));
+    let write = sheet.to_write();
+    assert_eq!(
+        (write.crystals, write.drink.as_deref()),
+        (2, Some("dead_air_neat"))
+    );
+
+    // A glass the menu does not have is the row being wrong, not a blank.
+    let off_menu = DeadchannelRunner {
+        fight: None,
+        drink: Some("moonshine".to_string()),
+        ..ok
+    };
+    assert_eq!(
+        Sheet::from_row(&off_menu),
+        Err(SheetError::Drink("moonshine".to_string()))
+    );
+}
+
+#[test]
+fn every_glyph_wears_a_five_by_three_face() {
+    for foe in FOES.iter() {
+        assert_eq!(foe.portrait.len(), 3, "{}", foe.name);
+        for row in foe.portrait {
+            assert_eq!(row.chars().count(), 5, "{}: {row:?}", foe.name);
+            for ch in row.chars() {
+                assert!(
+                    unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) <= 1,
+                    "{}: wide glyph {ch:?}",
+                    foe.name
+                );
+            }
+        }
+    }
+}
+
+/// A level-15 runner at the top of the armorer's wall, full signal, with
+/// the exp that makes the Old Signal hear them.
+fn at_the_top(marks: i32) -> Sheet {
+    let mut sheet = fresh();
+    sheet.level = MAX_LEVEL;
+    sheet.peak_level = MAX_LEVEL;
+    sheet.marks = marks;
+    sheet.exp = exp_to_seek(marks);
+    sheet.weapon_tier = MAX_TIER;
+    sheet.armor_tier = MAX_TIER;
+    sheet.signal = sheet.max_signal();
+    sheet.bits = 1234;
+    sheet
+}
+
+/// Attack until the fight ends; the ending.
+fn fight_out(sheet: &mut Sheet, rng: &mut StdRng) -> Applied {
+    for _ in 0..500 {
+        match sheet.apply(Command::Attack, rng).applied {
+            Applied::Round => continue,
+            ended => return ended,
+        }
+    }
+    panic!("a fight always ends");
+}
+
+/// The balance target, through the real rules: a runner at the top of the
+/// wall with full signal who only attacks puts the Old Signal down about
+/// two times in five on the first try, and about four in five with the
+/// mark bonus at its cap. A change here is a balance change; read it.
+#[test]
+fn the_old_signal_is_a_real_fight_that_marks_make_easier() {
+    let win_rate = |marks: i32| {
+        let mut wins = 0;
+        for seed in 0..2000 {
+            let mut sheet = at_the_top(marks);
+            let mut rng = StdRng::seed_from_u64(seed);
+            sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+            if matches!(fight_out(&mut sheet, &mut rng), Applied::Slain { .. }) {
+                wins += 1;
+            }
+        }
+        wins * 100 / 2000
+    };
+    let first = win_rate(0);
+    let capped = win_rate(MARK_BONUS_CAP);
+    assert!((33..=45).contains(&first), "first kill wins {first}%");
+    assert!((72..=86).contains(&capped), "capped marks win {capped}%");
+    assert_eq!(
+        win_rate(MARK_BONUS_CAP + 3),
+        capped,
+        "the bonus stops at the cap"
+    );
+}
+
+#[test]
+fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let mut short = at_the_top(0);
+    short.exp -= 1;
+    assert!(!short.signal_hears());
+    short.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert_eq!(
+        short.fight.as_ref().map(|fight| fight.quarry),
+        Some(Quarry::Glyph(14))
+    );
+
+    let mut ready = at_the_top(0);
+    let outcome = ready.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    let fight = ready.fight.as_ref().expect("a fight on the row");
+    assert_eq!(fight.quarry, Quarry::OldSignal);
+    assert_eq!(fight.foe().name, "Old Signal");
+    assert_eq!(outcome.lines, vec![OLD_SIGNAL.arrives.to_string()]);
+
+    // Marks scale the exp it takes: last time's threshold is not enough.
+    let mut again = at_the_top(1);
+    again.exp = exp_to_seek(0);
+    assert!(!again.signal_hears());
+}
+
+/// Whole state: the kill leaves a mark and a fresh runner's sheet with an
+/// empty locker, and keeps the peak, the kill count, today's rations, and
+/// the debt.
+#[test]
+fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
+    let mut sheet = at_the_top(0);
+    let mut rng = StdRng::seed_from_u64(1);
+    sheet.stash = 4000;
+    sheet.debt = 120;
+    sheet.crystals = 3;
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    sheet.kills = 900;
+    sheet.kills_today = 4;
+
+    let outcome = sheet.apply(Command::Attack, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Slain { marks: 1 });
+    let expected = Sheet {
+        user_id: Uuid::nil(),
+        level: 1,
+        exp: 0,
+        signal: 10,
+        weapon_tier: 0,
+        armor_tier: 0,
+        bits: START_BITS,
+        rations_left: RATIONS_PER_DAY - 1,
+        day: day(24),
+        fight: None,
+        kills: 901,
+        kills_today: 5,
+        runs_today: 0,
+        peak_level: MAX_LEVEL,
+        marks: 1,
+        unpaid_mark: Some(1),
+        stash: 0,
+        debt: 120,
+        crystals: 0,
+        drink: None,
+    };
+    assert_eq!(sheet, expected);
+    assert_eq!(outcome.lines.len(), 4, "{:?}", outcome.lines);
+    assert!(outcome.lines[2].contains("mark 1"), "{:?}", outcome.lines);
+    assert!(
+        outcome.lines[3].contains("4000 bits"),
+        "{:?}",
+        outcome.lines
+    );
+    assert_eq!(sheet.news(&outcome.applied), vec![News::Slain { marks: 1 }]);
+    assert_eq!(
+        (sheet.attack(), sheet.defense()),
+        (2, 2),
+        "level 1 plus the mark"
+    );
+}
+
+#[test]
+fn marks_scale_the_ladder_and_the_peak_only_climbs() {
+    assert_eq!(exp_to_advance(1, 0), Some(100));
+    assert_eq!(exp_to_advance(1, 4), Some(200));
+    assert_eq!(exp_to_advance(MAX_LEVEL, 4), None);
+    assert_eq!(exp_to_seek(4), 43930 + 1500);
+    assert_eq!(title(0), None);
+    assert_eq!(title(1), Some("heard"));
+    assert_eq!(title(99), Some("old voice"));
+
+    let mut sheet = fresh();
+    sheet.peak_level = 9;
+    sheet.marks = 1;
+    sheet.exp = exp_to_advance(1, 1).expect("a threshold") - 1;
+    sheet.apply(
+        Command::Start { pick: Pick::Fair },
+        &mut StdRng::seed_from_u64(2),
+    );
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    let mut rng = StdRng::seed_from_u64(2);
+    let outcome = loop {
+        let outcome = sheet.apply(Command::Attack, &mut rng);
+        if outcome.applied != Applied::Round {
+            break outcome;
+        }
+    };
+    assert!(
+        matches!(
+            outcome.applied,
+            Applied::Won {
+                leveled: Some(2),
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(sheet.peak_level, 9, "a climb under the peak leaves it");
+}
+
+/// A glyph at the top that cannot hurt you and cannot survive you, worth
+/// one exp: the step that crosses the seek threshold, and no more.
+fn harmless_glyph_at_the_top() -> Fight {
+    Fight {
+        quarry: Quarry::Glyph(14),
+        foe_signal: 1,
+        foe_max_signal: 1,
+        foe_attack: 0,
+        foe_defense: 0,
+        foe_bits: 0,
+        foe_exp: 1,
+        log: Vec::new(),
+        bright: false,
+    }
+}
+
+/// The glyph kill that lifts a level-15 runner over the seek threshold
+/// says so, once: the kill that crosses it prints the heard line, the
+/// next glyph kill past it does not.
+#[test]
+fn the_kill_that_crosses_the_seek_threshold_says_so_once() {
+    let mut sheet = at_the_top(0);
+    sheet.exp = exp_to_seek(0) - 1;
+    sheet.weapon_tier = 50;
+    assert!(!sheet.signal_hears());
+    let mut rng = StdRng::seed_from_u64(4);
+
+    sheet.fight = Some(harmless_glyph_at_the_top());
+    let crossing = win_out(&mut sheet, &mut rng);
+    assert!(
+        matches!(crossing.applied, Applied::Won { leveled: None, .. }),
+        "{crossing:?}"
+    );
+    assert_eq!(sheet.exp, exp_to_seek(0));
+    assert!(sheet.signal_hears());
+    assert_eq!(
+        crossing
+            .lines
+            .iter()
+            .filter(|line| *line == HEARD_LINE)
+            .count(),
+        1,
+        "{:?}",
+        crossing.lines
+    );
+
+    sheet.fight = Some(harmless_glyph_at_the_top());
+    let past = win_out(&mut sheet, &mut rng);
+    assert!(matches!(past.applied, Applied::Won { .. }), "{past:?}");
+    assert!(
+        sheet.signal_hears(),
+        "still heard, one exp past the threshold"
+    );
+    assert!(
+        !past.lines.iter().any(|line| *line == HEARD_LINE),
+        "{:?}",
+        past.lines
+    );
+}
+
+/// Attack until the fight ends; the ending outcome, lines and all.
+fn win_out(sheet: &mut Sheet, rng: &mut StdRng) -> Outcome {
+    for _ in 0..500 {
+        let outcome = sheet.apply(Command::Attack, rng);
+        if outcome.applied != Applied::Round {
+            return outcome;
+        }
+    }
+    panic!("a fight always ends");
+}
+
+/// A foe that cannot hurt you and cannot survive you, paying `bits`.
+fn a_sure_kill(sheet: &mut Sheet, bits: i64) {
+    sheet.weapon_tier = 50;
+    sheet.fight = Some(Fight {
+        quarry: Quarry::Glyph(0),
+        foe_signal: 1,
+        foe_max_signal: 1,
+        foe_attack: 0,
+        foe_defense: 0,
+        foe_bits: bits,
+        foe_exp: 1,
+        log: Vec::new(),
+        bright: false,
+    });
+}
+
+#[test]
+fn stepping_down_meets_the_glyph_a_level_below_at_half_pay() {
+    let mut sheet = fresh();
+    sheet.level = 3;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let outcome = sheet.apply(Command::Start { pick: Pick::Lower }, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Started { pick: Pick::Lower });
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY - 1);
+    let fight = sheet.fight.as_ref().expect("a fight on the row");
+    // The hiss, level 2: LoGD's 97 bits and 24 exp, tripled, then halved.
+    assert_eq!(fight.foe().name, "hiss");
+    assert_eq!(fight.foe_level(), Some(2));
+    assert_eq!((fight.foe_bits, fight.foe_exp), (145, 36));
+    assert_eq!(outcome.lines.len(), 2, "the step down is said");
+
+    // Nothing is below the flicker, and asking spends nothing.
+    let mut first = fresh();
+    let refused = first.apply(Command::Start { pick: Pick::Lower }, &mut rng);
+    assert_eq!(refused.applied, Applied::Refused(Refusal::NoLowerGlyph));
+    assert_eq!(first.rations_left, RATIONS_PER_DAY);
+    assert_eq!(first.fight, None);
+}
+
+#[test]
+fn the_locker_takes_its_cut_going_in_and_keeps_the_rest_from_the_street() {
+    let mut sheet = fresh();
+    sheet.bits = 101;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let deposit = sheet.apply(Command::Deposit, &mut rng);
+
+    // A tenth of 101, rounded up: no deposit is free.
+    assert_eq!(
+        deposit.applied,
+        Applied::Deposited {
+            stored: 90,
+            fee: 11
+        }
+    );
+    assert_eq!((sheet.bits, sheet.stash), (0, 90));
+    assert_eq!(
+        sheet.apply(Command::Deposit, &mut rng).applied,
+        Applied::Refused(Refusal::NothingOnHand)
+    );
+
+    // A drop takes what is on hand, never what is locked up.
+    sheet.bits = 30;
+    sheet.signal = 1;
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    let fight = sheet.fight.as_mut().expect("a fight");
+    fight.foe_attack = 500;
+    fight.foe_signal = 500;
+    fight.foe_max_signal = 500;
+    assert!(matches!(
+        fight_out(&mut sheet, &mut rng),
+        Applied::Lost { bits_lost: 30 }
+    ));
+    assert_eq!((sheet.bits, sheet.stash), (0, 90));
+
+    // Out is free, and not with a glyph waiting.
+    sheet.signal = 10;
+    sheet.apply(Command::Start { pick: Pick::Fair }, &mut rng);
+    assert_eq!(
+        sheet.apply(Command::Withdraw, &mut rng).applied,
+        Applied::Refused(Refusal::FightWaiting)
+    );
+    sheet.fight = None;
+    assert_eq!(
+        sheet.apply(Command::Withdraw, &mut rng).applied,
+        Applied::Withdrew { amount: 90 }
+    );
+    assert_eq!((sheet.bits, sheet.stash), (90, 0));
+    assert_eq!(
+        sheet.apply(Command::Withdraw, &mut rng).applied,
+        Applied::Refused(Refusal::LockerEmpty)
+    );
+
+    // A single bit is all cut: the locker refuses it instead of keeping it
+    // for nothing.
+    let mut poor = fresh();
+    poor.bits = 1;
+    let before = poor.clone();
+    assert_eq!(
+        poor.apply(Command::Deposit, &mut rng).applied,
+        Applied::Refused(Refusal::DepositAllCut)
+    );
+    assert_eq!(poor, before);
+}
+
+#[test]
+fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() {
+    let mut sheet = fresh();
+    sheet.bits = 0;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let loan = sheet.apply(Command::Borrow, &mut rng);
+
+    // A tenth of the loan on top, charged when it lends.
+    assert_eq!(loan.applied, Applied::Borrowed { amount: 50, fee: 5 });
+    assert_eq!((sheet.bits, sheet.debt), (50, 55));
+    assert_eq!(
+        sheet.apply(Command::Borrow, &mut rng).applied,
+        Applied::Refused(Refusal::LoanCapped)
+    );
+
+    // A level up opens the cap by what the debt has not taken of it, the
+    // fee included, and the fee on the new loan rounds up.
+    sheet.level = 2;
+    let more = sheet.apply(Command::Borrow, &mut rng);
+    assert_eq!(more.applied, Applied::Borrowed { amount: 45, fee: 5 });
+    assert_eq!((sheet.bits, sheet.debt), (95, 105));
+
+    // The debt never grows by itself: a roll adds nothing, however many.
+    sheet.settle(day(25));
+    sheet.settle(day(30));
+    assert_eq!(sheet.debt, 105);
+
+    // A kill pays half its bits to the machine first.
+    sheet.bits = 0;
+    a_sure_kill(&mut sheet, 60);
+    let won = fight_out(&mut sheet, &mut rng);
+    assert!(
+        matches!(
+            won,
+            Applied::Won {
+                bits: 60,
+                garnished: 30,
+                ..
+            }
+        ),
+        "{won:?}"
+    );
+    assert_eq!((sheet.bits, sheet.debt), (30, 75));
+
+    // Repaying takes what the hand holds, up to the debt.
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Repaid { amount: 30 }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (0, 45));
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Refused(Refusal::NothingOnHand)
+    );
+    sheet.bits = 500;
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Repaid { amount: 45 }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (455, 0));
+    assert_eq!(
+        sheet.apply(Command::Repay, &mut rng).applied,
+        Applied::Refused(Refusal::NoDebt)
+    );
+
+    // Paid off, a kill is the runner's own again.
+    a_sure_kill(&mut sheet, 60);
+    assert!(matches!(
+        fight_out(&mut sheet, &mut rng),
+        Applied::Won { garnished: 0, .. }
+    ));
+    assert_eq!(sheet.bits, 515);
+}
+
+/// Whole state: a step off the ledge wipes the climb, the purse, and the
+/// locker, and keeps the marks, the peak, the kills, today's rations, and
+/// the debt.
+#[test]
+fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
+    let mut sheet = at_the_top(2);
+    sheet.stash = 900;
+    sheet.debt = 70;
+    sheet.crystals = 2;
+    sheet.kills = 300;
+    sheet.rations_left = 4;
+    sheet.signal = 12;
+    let mut rng = StdRng::seed_from_u64(1);
+
+    let outcome = sheet.apply(Command::Reset, &mut rng);
+
+    assert_eq!(outcome.applied, Applied::Reset);
+    let expected = Sheet {
+        user_id: Uuid::nil(),
+        level: 1,
+        exp: 0,
+        signal: 10,
+        weapon_tier: 0,
+        armor_tier: 0,
+        bits: 0,
+        rations_left: 4,
+        day: day(24),
+        fight: None,
+        kills: 300,
+        kills_today: 0,
+        runs_today: 0,
+        peak_level: MAX_LEVEL,
+        marks: 2,
+        unpaid_mark: None,
+        stash: 0,
+        debt: 70,
+        crystals: 0,
+        drink: None,
+    };
+    assert_eq!(sheet, expected);
+    assert!(
+        outcome.lines[2].contains("70 bits owed"),
+        "{:?}",
+        outcome.lines
+    );
+    assert_eq!(sheet.news(&outcome.applied), vec![News::SteppedOff]);
+
+    // A runner with nothing to lose has no fall to take: the second step
+    // changes nothing and the wire hears nothing.
+    let before = sheet.clone();
+    let again = sheet.apply(Command::Reset, &mut rng);
+    assert_eq!(again.applied, Applied::Refused(Refusal::NothingToLose));
+    assert_eq!(sheet, before);
+    assert_eq!(sheet.news(&again.applied), Vec::new());
+
+    // Not as a way back on the wire before the roll.
+    let mut down = fresh();
+    down.signal = 0;
+    assert_eq!(
+        down.apply(Command::Reset, &mut rng).applied,
+        Applied::Refused(Refusal::SignalDown)
+    );
+}

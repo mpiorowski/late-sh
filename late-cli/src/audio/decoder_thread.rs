@@ -6,7 +6,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ringbuf::traits::{Observer, Producer};
@@ -15,6 +15,12 @@ use super::{AudioSpec, PlaybackQueue, StreamingLinearResampler, SymphoniaStreamD
 
 const STARTUP_DECODER_RETRIES: usize = 3;
 const STARTUP_DECODER_RETRY_DELAY: Duration = Duration::from_millis(750);
+/// How often a parked decoder thread re-checks whether output is audible.
+const SILENCED_POLL: Duration = Duration::from_millis(50);
+/// How long after launch the decoder ignores silence (`boot_grace`): long
+/// enough for the pair socket to connect and deliver the user's real mute
+/// state and source on a slow link.
+pub(super) const BOOT_GRACE: Duration = Duration::from_secs(10);
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_decoder_thread(
@@ -23,14 +29,22 @@ pub(super) fn spawn_decoder_thread(
     stream_flushed_generation: Arc<AtomicU64>,
     source_is_icecast: Arc<AtomicBool>,
     native_source_selected: Arc<AtomicBool>,
+    muted: Arc<AtomicBool>,
     mut queue: PlaybackQueue,
     source_spec: AudioSpec,
     output_sample_rate: u32,
     stop: Arc<AtomicBool>,
     ready_tx: mpsc::SyncSender<Result<()>>,
     prebuffer_samples: usize,
+    boot_grace: Duration,
 ) {
     thread::spawn(move || {
+        // The CLI boots muted as a placeholder until the server aligns it,
+        // and the server sends nothing when the placeholder already matches.
+        // Parking on it would close the stream startup just opened and
+        // empty the prebuffered queue moments before the first unmute, so
+        // nothing parks until the pair handshake has had time to land.
+        let park_allowed_at = Instant::now() + boot_grace;
         let mut current_stream_url = desired_stream_url(&stream_url);
         let mut current_generation = stream_generation.load(Ordering::Relaxed);
         let mut decoder_opt = match create_startup_decoder(&current_stream_url) {
@@ -56,9 +70,61 @@ pub(super) fn spawn_decoder_thread(
         );
         let mut retries = 0;
         const MAX_RETRIES: usize = 10;
+        // True while the stream is closed because nothing would be heard.
+        let mut parked = false;
 
         while !stop.load(Ordering::Relaxed) {
+            // A silenced CLI (muted, or a source it cannot play natively)
+            // holds no connection: an open stream downloads at full bitrate
+            // whether or not anyone hears it. Startup is exempt until the
+            // runtime has been told the decoder is ready and the boot grace
+            // has run out.
+            let silenced = ready_tx.is_none()
+                && Instant::now() >= park_allowed_at
+                && (muted.load(Ordering::Relaxed)
+                    || !native_source_selected.load(Ordering::Relaxed));
             let desired = desired_stream_url(&stream_url);
+            if silenced {
+                if decoder_opt.take().is_some() {
+                    tracing::info!("audio output silenced; closing stream");
+                }
+                // A station change while parked is only recorded; the
+                // connection is made when output becomes audible again.
+                if desired != current_stream_url {
+                    current_stream_url = desired;
+                    current_generation = stream_generation.load(Ordering::Relaxed);
+                }
+                parked = true;
+                thread::sleep(SILENCED_POLL);
+                continue;
+            }
+            if parked {
+                parked = false;
+                retries = 0;
+                match SymphoniaStreamDecoder::new_http(&current_stream_url) {
+                    Ok(decoder) => {
+                        tracing::info!("audio output audible; stream reopened");
+                        decoder_opt = Some(decoder);
+                        // A station change made while parked left output
+                        // disabled; it flushes the old audio, then this
+                        // re-enables it unless the target moved again.
+                        wait_for_output_flush(
+                            current_generation,
+                            &stream_flushed_generation,
+                            &stop,
+                        );
+                        if native_source_selected.load(Ordering::Relaxed)
+                            && stream_generation.load(Ordering::SeqCst) == current_generation
+                        {
+                            source_is_icecast.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    // The reconnect path below retries.
+                    Err(err) => {
+                        tracing::error!(error = ?err, "failed to reopen audio stream");
+                    }
+                }
+            }
             if desired != current_stream_url {
                 let desired_generation = stream_generation.load(Ordering::Relaxed);
                 tracing::info!(
@@ -220,3 +286,7 @@ fn wait_for_output_flush(
         thread::sleep(Duration::from_millis(5));
     }
 }
+
+#[cfg(test)]
+#[path = "decoder_thread_test.rs"]
+mod decoder_thread_test;

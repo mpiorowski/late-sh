@@ -5,7 +5,7 @@ use late_core::models::rss_entry::RssEntryView;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -51,15 +51,10 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
         let idx = start + row;
         let item = &view.entries[idx];
         let selected = idx == selected_index;
-        let bg = if selected {
-            theme::BG_SELECTION()
-        } else {
-            Color::Reset
-        };
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
-            .style(Style::default().bg(bg));
+            .style(theme::row_style(selected));
         let content = item_block.inner(area);
         frame.render_widget(item_block, area);
         let is_unread = view

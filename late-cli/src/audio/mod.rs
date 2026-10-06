@@ -15,21 +15,30 @@ mod decoder;
 
 use decoder::{SymphoniaStreamDecoder, probe_stream_spec};
 
+/// Spectrum bands per `viz` frame, low to high. The server's
+/// `late_core::audio::VIZ_BANDS` matches it, and still accepts the 8 older
+/// CLIs send.
+pub(super) const VIZ_BANDS: usize = 16;
+
+/// One spectrum frame of what the output device actually played, sent to
+/// the TUI as the pair-WS `viz` event.
 #[derive(Debug, Clone)]
 pub(super) struct VizSample {
-    pub(super) bands: [f32; 8],
+    pub(super) bands: [f32; VIZ_BANDS],
     pub(super) rms: f32,
 }
 
 pub(super) struct AudioRuntime {
     _stream: Option<cpal::Stream>,
+    /// Spectrum frames from the playback analyzer. The runtime holds this
+    /// sender for its whole life, so a subscriber never sees the channel
+    /// close while the runtime is borrowed.
     pub(super) analyzer_tx: broadcast::Sender<VizSample>,
     pub(super) played_samples: Arc<AtomicU64>,
     pub(super) sample_rate: u32,
     pub(super) stop: Arc<AtomicBool>,
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
-    pub(super) icecast_output_available: Arc<AtomicBool>,
     /// True when the user's audio_source preference is a direct stream the
     /// CLI can decode locally (Icecast or Radio). False when the user picked
     /// YouTube, so we silence the output without touching the user-controlled
@@ -64,6 +73,11 @@ use ringbuf::{HeapRb, traits::Split};
 
 const AUDIO_STARTUP_RETRIES: usize = 3;
 const AUDIO_STARTUP_RETRY_DELAY: Duration = Duration::from_millis(750);
+/// Played mono samples buffered for the analyzer between its ticks: one
+/// 15 Hz tick at 48 kHz is 3200 samples.
+const ANALYZER_RING_SAMPLES: usize = 4096;
+/// Spectrum frames a slow pair socket may fall behind before it skips.
+const ANALYZER_CHANNEL_FRAMES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AudioBackendProfile {
@@ -93,13 +107,13 @@ impl AudioRuntime {
                 if profile == AudioBackendProfile::Wsl {
                     eprintln!(
                         "late: local WSL audio could not start; continuing without CLI audio.\n\
-                         late: use browser pairing or the Windows-native late.exe for audio.\n\
+                         late: use the Windows-native late.exe, or listen at late.sh/listen.\n\
                          late: {err:#}\n\n{hint}"
                     );
                 } else {
                     eprintln!(
                         "late: local audio could not start; continuing without CLI audio.\n\
-                         late: use browser pairing for audio.\n\
+                         late: listen at late.sh/listen instead.\n\
                          late: {err:#}\n\n{hint}"
                     );
                 }
@@ -124,7 +138,8 @@ impl AudioRuntime {
             output_sample_rate_for(source_spec, audio_output_device.as_deref())?;
         let queue_capacity = output_sample_rate as usize * source_spec.channels * 2;
         let (queue_tx, queue_rx) = HeapRb::<f32>::new(queue_capacity).split();
-        let (played_tx, played_rx) = HeapRb::<f32>::new(4096).split();
+        let (played_tx, played_rx) = HeapRb::<f32>::new(ANALYZER_RING_SAMPLES).split();
+        let (analyzer_tx, _) = broadcast::channel(ANALYZER_CHANNEL_FRAMES);
         let played_samples = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         // Boot silent. The cpal output stream is started before the pair-WS
@@ -134,7 +149,6 @@ impl AudioRuntime {
         // unmutes us if the user's preference is "play on connect".
         let muted = Arc::new(AtomicBool::new(true));
         let volume_percent = Arc::new(AtomicU8::new(30));
-        let icecast_output_available = Arc::new(AtomicBool::new(true));
         // Default to Icecast (play). The server's pair-WS connect always
         // sends SetPlaybackSource right after register, which flips this if
         // the user's persisted preference is Youtube.
@@ -143,7 +157,6 @@ impl AudioRuntime {
         let stream_url = Arc::new(Mutex::new(audio_base_url.clone()));
         let stream_generation = Arc::new(AtomicU64::new(0));
         let stream_flushed_generation = Arc::new(AtomicU64::new(0));
-        let (analyzer_tx, _) = broadcast::channel(32);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
         let stream = build_output_stream(
@@ -153,7 +166,6 @@ impl AudioRuntime {
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
-            Arc::clone(&icecast_output_available),
             Arc::clone(&source_is_icecast),
             Arc::clone(&stream_generation),
             Arc::clone(&stream_flushed_generation),
@@ -168,12 +180,14 @@ impl AudioRuntime {
             Arc::clone(&stream_flushed_generation),
             Arc::clone(&source_is_icecast),
             Arc::clone(&native_source_selected),
+            Arc::clone(&muted),
             queue_tx,
             source_spec,
             output_sample_rate,
             Arc::clone(&stop),
             ready_tx,
             prebuffer_samples(profile, output_sample_rate, source_spec.channels),
+            decoder_thread::BOOT_GRACE,
         );
         spawn_playback_analyzer_thread(
             played_rx,
@@ -196,7 +210,6 @@ impl AudioRuntime {
             stop,
             muted,
             volume_percent,
-            icecast_output_available,
             source_is_icecast,
             native_source_selected,
             stream_url,
@@ -208,7 +221,7 @@ impl AudioRuntime {
     }
 
     fn disabled() -> Self {
-        let (analyzer_tx, _) = broadcast::channel(32);
+        let (analyzer_tx, _) = broadcast::channel(ANALYZER_CHANNEL_FRAMES);
         Self {
             _stream: None,
             analyzer_tx,
@@ -217,7 +230,6 @@ impl AudioRuntime {
             stop: Arc::new(AtomicBool::new(false)),
             muted: Arc::new(AtomicBool::new(false)),
             volume_percent: Arc::new(AtomicU8::new(0)),
-            icecast_output_available: Arc::new(AtomicBool::new(false)),
             source_is_icecast: Arc::new(AtomicBool::new(true)),
             native_source_selected: Arc::new(AtomicBool::new(true)),
             stream_url: Arc::new(Mutex::new(String::new())),
@@ -315,49 +327,8 @@ mod analyzer;
 
 use analyzer::spawn_playback_analyzer_thread;
 
+#[cfg(target_os = "linux")]
+pub(super) mod loopback;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn env_var_missing_or_blank_treats_missing_and_blank_as_missing() {
-        let key = "LATE_TEST_AUDIO_HINT_ENV";
-
-        unsafe { env::remove_var(key) };
-        assert!(env_var_missing_or_blank(key));
-
-        unsafe { env::set_var(key, "   ") };
-        assert!(env_var_missing_or_blank(key));
-
-        unsafe { env::set_var(key, "set") };
-        assert!(!env_var_missing_or_blank(key));
-
-        unsafe { env::remove_var(key) };
-    }
-
-    #[test]
-    fn disabled_runtime_uses_zeroed_playback_state() {
-        let runtime = AudioRuntime::disabled();
-
-        assert!(!runtime.enabled);
-        assert_eq!(runtime.sample_rate, 1);
-        assert_eq!(
-            runtime
-                .played_samples
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
-        assert_eq!(
-            runtime
-                .volume_percent
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
-        assert!(!runtime.muted.load(std::sync::atomic::Ordering::Relaxed));
-        assert!(
-            !runtime
-                .icecast_output_available
-                .load(std::sync::atomic::Ordering::Relaxed)
-        );
-    }
-}
+mod audio_test;

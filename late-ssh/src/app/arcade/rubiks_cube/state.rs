@@ -1,7 +1,9 @@
 use chrono::{NaiveDate, Utc};
+use late_core::models::rubiks_cube::{Game, GameParams};
 use uuid::Uuid;
 
 use super::svc::RubiksCubeService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
 pub const DAILY_WIN_REWARD_CHIPS: i64 = 500;
 
@@ -59,8 +61,23 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(user_id: Uuid, svc: RubiksCubeService) -> Self {
-        Self::new_for_date(user_id, svc, Utc::now().date_naive())
+    pub fn new(user_id: Uuid, svc: RubiksCubeService, saved_game: Option<Game>) -> Self {
+        let today = Utc::now().date_naive();
+        let mut state = Self::new_for_date(user_id, svc, today);
+        // Restore a saved cube only for today's scramble: stale rows are from
+        // an older daily and the fresh scramble already replaced them.
+        if let Some(game) = saved_game
+            && game.puzzle_date == today
+            && let Some(stickers) = stickers_from_string(&game.stickers)
+        {
+            state.stickers = stickers;
+            state.user_moves = game.user_moves.max(0) as u32;
+            state.solved_reported = state.is_solved();
+            if state.has_started() {
+                state.message = format!("Daily cube {} restored.", state.daily_label());
+            }
+        }
+        state
     }
 
     fn new_for_date(user_id: Uuid, svc: RubiksCubeService, puzzle_date: NaiveDate) -> Self {
@@ -82,6 +99,14 @@ impl State {
 
     pub fn stickers(&self) -> &[[Sticker; 9]; 6] {
         &self.stickers
+    }
+
+    pub fn puzzle_date(&self) -> NaiveDate {
+        self.puzzle_date
+    }
+
+    pub fn user_moves(&self) -> u32 {
+        self.user_moves
     }
 
     pub fn has_started(&self) -> bool {
@@ -108,7 +133,16 @@ impl State {
         self.reset_pending
     }
 
+    /// Arm the reset on the first press, perform it on the second. A solved
+    /// daily is finished: re-scrambling it would put the day's cube back on
+    /// the board with the win already banked, so the key is refused outright
+    /// rather than armed.
     pub fn request_reset(&mut self) -> bool {
+        if self.is_solved() {
+            self.reset_pending = false;
+            self.message = format!("Daily cube {} is already solved.", self.daily_label());
+            return false;
+        }
         if self.reset_pending {
             self.reset_pending = false;
             return true;
@@ -128,26 +162,32 @@ impl State {
             .all(|face| face.iter().all(|sticker| *sticker == face[0]))
     }
 
+    /// Today's cube has at least one player move on it and is not yet solved.
+    pub fn has_unfinished_daily(&self) -> bool {
+        self.puzzle_date == Utc::now().date_naive() && self.has_started() && !self.is_solved()
+    }
+
     pub fn reset(&mut self) {
         self.reset_pending = false;
         self.apply_daily_scramble();
         self.message = format!("Daily cube {} reset.", self.daily_label());
+        self.save_async();
     }
 
-    pub fn ensure_current_daily(&mut self) {
+    /// Roll the cube forward when the UTC date changes under a live session.
+    /// Returns true when it moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
         let today = Utc::now().date_naive();
         if self.puzzle_date == today {
-            return;
+            return false;
         }
         *self = Self::new_for_date(self.user_id, self.svc.clone(), today);
+        true
     }
 
     fn apply_daily_scramble(&mut self) {
-        self.stickers = solved_stickers();
+        self.stickers = scrambled_stickers(self.puzzle_date);
         self.user_moves = 0;
-        for cube_move in daily_scramble(self.puzzle_date) {
-            self.apply_move_internal(cube_move);
-        }
     }
 
     pub fn turn_view(&mut self, turn: ViewTurn) {
@@ -187,6 +227,21 @@ impl State {
         } else {
             format!("Move {label}")
         };
+        self.save_async();
+    }
+
+    fn save_async(&self) {
+        // Pure unit tests drive moves without a tokio runtime; skip the
+        // fire-and-forget save there instead of panicking in spawn.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.svc.save_game_task(GameParams {
+            user_id: self.user_id,
+            puzzle_date: self.puzzle_date,
+            stickers: stickers_to_string(&self.stickers),
+            user_moves: self.user_moves.min(i32::MAX as u32) as i32,
+        });
     }
 
     fn record_solved(&mut self) {
@@ -194,44 +249,107 @@ impl State {
             return;
         }
         self.solved_reported = true;
+        self.svc.record_finish(
+            ArcadeMode::Daily,
+            ArcadeDifficulty::Single,
+            ArcadeFinish::Won,
+        );
         self.svc.record_win_task(self.user_id, self.puzzle_date);
     }
 
     fn apply_move_internal(&mut self, cube_move: CubeMove) {
-        let (axis, layer, normal_sign) = move_axis(cube_move.face);
-        let mut quarter_turns = if cube_move.inverse {
-            normal_sign
-        } else {
-            -normal_sign
-        };
-        while quarter_turns < 0 {
-            quarter_turns += 4;
+        apply_move(&mut self.stickers, cube_move);
+    }
+}
+
+/// Serialize the cube as 54 face chars (U D L R F B faces in `Face::index`
+/// order, 9 stickers each), the format stored in `rubiks_cube_games`.
+fn stickers_to_string(stickers: &[[Sticker; 9]; 6]) -> String {
+    stickers
+        .iter()
+        .flat_map(|face| face.iter().map(|sticker| sticker.as_char()))
+        .collect()
+}
+
+fn stickers_from_string(value: &str) -> Option<[[Sticker; 9]; 6]> {
+    let mut chars = value.chars();
+    let mut stickers = solved_stickers();
+    for face in &mut stickers {
+        for slot in face.iter_mut() {
+            *slot = Sticker::from_char(chars.next()?)?;
         }
-        for _ in 0..quarter_turns {
-            self.rotate_layer_positive(axis, layer);
+    }
+    chars.next().is_none().then_some(stickers)
+}
+
+impl Sticker {
+    fn as_char(self) -> char {
+        match self {
+            Sticker::White => 'W',
+            Sticker::Yellow => 'Y',
+            Sticker::Orange => 'O',
+            Sticker::Red => 'R',
+            Sticker::Green => 'G',
+            Sticker::Blue => 'B',
         }
     }
 
-    fn rotate_layer_positive(&mut self, axis: Axis, layer: i8) {
-        let old = self.stickers;
-        let mut next = old;
-        for face in FACES {
-            for row in 0..3 {
-                for col in 0..3 {
-                    let (position, normal) = sticker_coord(face, row, col);
-                    if coord_axis(position, axis) != layer {
-                        continue;
-                    }
-                    let new_position = rotate_coord_positive(position, axis);
-                    let new_normal = rotate_coord_positive(normal, axis);
-                    let (new_face, new_row, new_col) = face_row_col(new_normal, new_position);
-                    next[new_face.index()][new_row * 3 + new_col] =
-                        old[face.index()][row * 3 + col];
+    fn from_char(value: char) -> Option<Self> {
+        match value {
+            'W' => Some(Sticker::White),
+            'Y' => Some(Sticker::Yellow),
+            'O' => Some(Sticker::Orange),
+            'R' => Some(Sticker::Red),
+            'G' => Some(Sticker::Green),
+            'B' => Some(Sticker::Blue),
+            _ => None,
+        }
+    }
+}
+
+/// Today's cube as the player first sees it: a solved cube with the daily
+/// scramble applied. Pure, so the share card can draw the start.
+pub fn scrambled_stickers(puzzle_date: NaiveDate) -> [[Sticker; 9]; 6] {
+    let mut stickers = solved_stickers();
+    for cube_move in daily_scramble(puzzle_date) {
+        apply_move(&mut stickers, cube_move);
+    }
+    stickers
+}
+
+fn apply_move(stickers: &mut [[Sticker; 9]; 6], cube_move: CubeMove) {
+    let (axis, layer, normal_sign) = move_axis(cube_move.face);
+    let mut quarter_turns = if cube_move.inverse {
+        normal_sign
+    } else {
+        -normal_sign
+    };
+    while quarter_turns < 0 {
+        quarter_turns += 4;
+    }
+    for _ in 0..quarter_turns {
+        rotate_layer_positive(stickers, axis, layer);
+    }
+}
+
+fn rotate_layer_positive(stickers: &mut [[Sticker; 9]; 6], axis: Axis, layer: i8) {
+    let old = *stickers;
+    let mut next = old;
+    for face in FACES {
+        for row in 0..3 {
+            for col in 0..3 {
+                let (position, normal) = sticker_coord(face, row, col);
+                if coord_axis(position, axis) != layer {
+                    continue;
                 }
+                let new_position = rotate_coord_positive(position, axis);
+                let new_normal = rotate_coord_positive(normal, axis);
+                let (new_face, new_row, new_col) = face_row_col(new_normal, new_position);
+                next[new_face.index()][new_row * 3 + new_col] = old[face.index()][row * 3 + col];
             }
         }
-        self.stickers = next;
     }
+    *stickers = next;
 }
 
 fn daily_scramble(puzzle_date: NaiveDate) -> Vec<CubeMove> {
@@ -601,128 +719,5 @@ fn dot(a: Coord, b: Coord) -> i8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use late_core::db::{Db, DbConfig};
-    use tokio::sync::broadcast;
-    use uuid::Uuid;
-
-    fn solved_state() -> State {
-        let (activity_feed, _) = broadcast::channel(1);
-        let svc = RubiksCubeService::new(
-            Db::new(&DbConfig::default()).expect("test db pool"),
-            activity_feed,
-        );
-        State {
-            user_id: Uuid::now_v7(),
-            stickers: solved_stickers(),
-            user_moves: 0,
-            view: CubeView::default(),
-            puzzle_date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
-            solved_reported: true,
-            reset_pending: false,
-            message: String::new(),
-            svc,
-        }
-    }
-
-    #[test]
-    fn four_turns_restore_cube() {
-        for face in FACES {
-            let mut state = solved_state();
-            for _ in 0..4 {
-                state.apply_move(CubeMove {
-                    face,
-                    inverse: false,
-                });
-            }
-            assert!(state.is_solved(), "{face:?} did not restore");
-        }
-    }
-
-    #[test]
-    fn move_and_inverse_restore_cube() {
-        for face in FACES {
-            let mut state = solved_state();
-            state.apply_move(CubeMove {
-                face,
-                inverse: false,
-            });
-            state.apply_move(CubeMove {
-                face,
-                inverse: true,
-            });
-            assert!(state.is_solved(), "{face:?} inverse did not restore");
-        }
-    }
-
-    #[test]
-    fn view_arrows_rotate_in_requested_direction() {
-        let view = CubeView::default();
-        assert_eq!(
-            view.turned(ViewTurn::Right).visible_faces(),
-            (Face::Up, Face::Right, Face::Back)
-        );
-        assert_eq!(
-            view.turned(ViewTurn::Left).visible_faces(),
-            (Face::Up, Face::Left, Face::Front)
-        );
-        assert_eq!(
-            view.turned(ViewTurn::Up).visible_faces(),
-            (Face::Back, Face::Up, Face::Right)
-        );
-        assert_eq!(
-            view.turned(ViewTurn::Down).visible_faces(),
-            (Face::Front, Face::Down, Face::Right)
-        );
-    }
-
-    #[test]
-    fn resolve_face_follows_the_view() {
-        // Default view: slots map straight onto their like-named faces.
-        let view = CubeView::default();
-        for slot in FACES {
-            assert_eq!(view.resolve_face(slot), slot, "default {slot:?}");
-        }
-
-        // After turning right, the old right face is now the front slot, so the
-        // viewer-relative `f` control acts on it instead of the absolute front.
-        let turned = view.turned(ViewTurn::Right);
-        let (top, front, right) = turned.visible_faces();
-        assert_eq!(turned.resolve_face(Face::Up), top);
-        assert_eq!(turned.resolve_face(Face::Front), front);
-        assert_eq!(turned.resolve_face(Face::Right), right);
-        assert_eq!(turned.resolve_face(Face::Down), opposite(top));
-        assert_eq!(turned.resolve_face(Face::Back), opposite(front));
-        assert_eq!(turned.resolve_face(Face::Left), opposite(right));
-    }
-
-    #[test]
-    fn net_slots_are_pinned_to_the_view() {
-        // The front slot is always labeled F regardless of which face occupies it.
-        let stickers = solved_stickers();
-        let view = CubeView::default().turned(ViewTurn::Right);
-        let net = net_view(&stickers, view);
-        assert_eq!(net.up.slot, "U");
-        assert_eq!(net.down.slot, "D");
-        assert_eq!(net.left.slot, "L");
-        assert_eq!(net.right.slot, "R");
-        assert_eq!(net.front.slot, "F");
-        assert_eq!(net.back.slot, "B");
-        // ...even though the front slot now holds the absolute Right face.
-        assert_eq!(net.front.face, Face::Right);
-    }
-
-    #[test]
-    fn opposite_view_turns_restore_orientation() {
-        for (first, second) in [
-            (ViewTurn::Right, ViewTurn::Left),
-            (ViewTurn::Left, ViewTurn::Right),
-            (ViewTurn::Up, ViewTurn::Down),
-            (ViewTurn::Down, ViewTurn::Up),
-        ] {
-            let view = CubeView::default().turned(first).turned(second);
-            assert_eq!(view, CubeView::default());
-        }
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

@@ -1,0 +1,44 @@
+[package]
+name = "late-brogue"
+version = "0.1.0"
+edition = "2024"
+
+# Standalone host for the Brogue CE door game. Runs the real upstream brogue
+# curses binary on a PTY and exposes it over SSH, so late-ssh reaches it as a
+# network-proxied door (the same shape as the dcss and nethack hosts).
+# See late-ssh/src/app/door/brogue/CONTEXT.md.
+
+[[bin]]
+name = "late-brogue"
+path = "src/main.rs"
+
+[features]
+# No-op: CI builds/tests the workspace with `--features otel`, which requires
+# every member to define the feature. This host has no telemetry deps of its own
+# (it logs via tracing-subscriber fmt), so `otel` is a no-op here. Wire real OTLP
+# exporters in if host-side traces/metrics are ever wanted.
+otel = []
+
+[dependencies]
+# Core Utils
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Async / Runtime
+tokio = { workspace = true }
+
+# SSH transport
+russh = { workspace = true }
+
+# Identity: shared-secret -> derived ed25519 client key (mirrors the dcss host)
+blake3 = { workspace = true }
+
+# Server host-key generation (matches late-ssh's RNG usage)
+getrandom = { workspace = true }
+
+# PTY allocation for the brogue child (openpty/setsid/TIOCSWINSZ) plus `signal`
+# for the SIGHUP graceful-save on teardown (our brogue build hangup-saves via
+# the scripts/brogue_hangup_save.patch applied in the Dockerfile build stage).
+# Linux-only host, so nix is an unconditional dep.
+nix = { workspace = true, features = ["term", "process", "signal"] }

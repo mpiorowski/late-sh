@@ -1,20 +1,27 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
+use super::message_translation::TranslateLang;
+use super::statusline::{
+    StatusComponentSetting, default_statusline_components, statusline_components_json,
+};
 use super::user::{
-    RightSidebarComponentSetting, RightSidebarMode, User, extract_bio, extract_birthday,
-    extract_country, extract_enable_background_color, extract_favorite_room_ids, extract_ide,
-    extract_keep_composer_focused, extract_land_on_home, extract_langs, extract_notify_bell,
+    ArtSplashMode, LandingPage, RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
+    TerminalImagesMode, User, extract_art_splash_mode, extract_auto_translate, extract_bio,
+    extract_country, extract_enable_background_color, extract_favorite_room_ids,
+    extract_favorite_theme_ids, extract_hidden_award_categories, extract_ide,
+    extract_keep_composer_focused, extract_landing_page, extract_langs, extract_notify_bell,
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
-    extract_right_sidebar_components, extract_right_sidebar_mode, extract_show_dashboard_header,
-    extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
-    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
-    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
-    normalize_text_brightness_adjustment,
+    extract_paper_at_login, extract_right_sidebar_components, extract_right_sidebar_mode,
+    extract_room_list_mode, extract_show_flag_fallback, extract_show_right_sidebar,
+    extract_show_room_list_sidebar, extract_start_with_music_muted, extract_statusline_components,
+    extract_terminal, extract_terminal_images, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, extract_translate_mine_to_en, extract_translate_to,
+    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -36,29 +43,46 @@ pub struct Profile {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
-    /// Controls the lounge top info boxes.
-    pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     /// Ordered list of sidebar panels with their on/off state. List order is
     /// the render order (top to bottom); the clock is pinned above it.
     pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
+    /// Ordered list of user-configurable bottom status bar segments with their
+    /// per-component dials. List order is the paint order, left to right along
+    /// the app frame's bottom border row. The top bar (pot, chips) is fixed UI
+    /// policy and is not stored here.
+    pub statusline_components: Vec<StatusComponentSetting>,
+    /// Legacy mirror of `room_list_mode`, kept in sync on write so an older
+    /// binary rolled back onto new data still shows the right rail.
     pub show_room_list_sidebar: bool,
+    pub room_list_mode: RoomListMode,
     /// Tweak: pressing Enter in the chat composer sends without closing it.
     /// While on, the Alt+S shortcut becomes a no-op.
     pub keep_composer_focused: bool,
     /// Tweak: silently mute the first paired audio client on each new SSH
     /// session so music does not auto-play.
     pub start_with_music_muted: bool,
-    /// Tweak: land on Home (page 1) instead of the Clubhouse (page 0) when a
-    /// session starts.
-    pub land_on_home: bool,
+    /// Tweak: the page a session starts on (Clubhouse by default).
+    pub landing_page: LandingPage,
+    /// Tweak: open The Late Edition once a day at login.
+    pub paper_at_login: bool,
+    pub art_splash_mode: ArtSplashMode,
+    pub terminal_images: TerminalImagesMode,
+    pub hidden_award_categories: Vec<String>,
     /// Tweak: show text labels instead of flag emoji in the shop Flags tab.
     pub show_flag_fallback: bool,
+    /// Target language for chat message translation (`t` and auto mode).
+    pub translate_to: TranslateLang,
+    /// Tweak: auto-translate foreign-script messages in the viewed room.
+    pub auto_translate: bool,
+    /// Tweak: pre-translate own outgoing messages to English at send time,
+    /// warming the shared cache for English readers.
+    pub translate_mine_to_en: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
-    /// Year-less `MM-DD` birthday, or `None` if unset.
-    pub birthday: Option<String>,
+    /// Theme ids starred in the theme browser, newest last.
+    pub favorite_theme_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,17 +110,25 @@ impl Default for Profile {
             theme_id: None,
             enable_background_color: true,
             text_brightness_adjustment: 0,
-            show_dashboard_header: true,
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: super::user::default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
+            room_list_mode: RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
-            land_on_home: false,
+            landing_page: LandingPage::Clubhouse,
+            paper_at_login: true,
+            art_splash_mode: ArtSplashMode::Sfw,
+            terminal_images: TerminalImagesMode::Auto,
+            hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
+            translate_to: TranslateLang::En,
+            auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
-            birthday: None,
+            favorite_theme_ids: Vec::new(),
         }
     }
 }
@@ -118,18 +150,25 @@ pub struct ProfileParams {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
-    pub show_dashboard_header: bool,
     pub show_right_sidebar: bool,
     pub right_sidebar_mode: RightSidebarMode,
     pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
+    pub statusline_components: Vec<StatusComponentSetting>,
     pub show_room_list_sidebar: bool,
+    pub room_list_mode: RoomListMode,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
-    pub land_on_home: bool,
+    pub landing_page: LandingPage,
+    pub paper_at_login: bool,
+    pub art_splash_mode: ArtSplashMode,
+    pub terminal_images: TerminalImagesMode,
+    pub hidden_award_categories: Vec<String>,
     pub show_flag_fallback: bool,
+    pub translate_to: TranslateLang,
+    pub auto_translate: bool,
+    pub translate_mine_to_en: bool,
     pub favorite_room_ids: Vec<Uuid>,
-    /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
-    pub birthday: Option<String>,
+    pub favorite_theme_ids: Vec<String>,
 }
 
 impl Profile {
@@ -185,9 +224,8 @@ impl Profile {
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/text_brightness_adjustment/
-    /// show_dashboard_header/show_right_sidebar/
-    /// right_sidebar_mode/right_sidebar_components/
-    /// show_room_list_sidebar/keep_composer_focused/
+    /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
+    /// show_room_list_sidebar/room_list_mode/keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
@@ -200,6 +238,8 @@ impl Profile {
                 .map(Uuid::to_string)
                 .collect::<Vec<_>>(),
         )?;
+        let favorite_theme_ids_json = serde_json::to_value(&params.favorite_theme_ids)?;
+        let hidden_award_categories_json = serde_json::to_value(&params.hidden_award_categories)?;
         let right_sidebar_components_json = serde_json::to_value(
             normalize_right_sidebar_components(&params.right_sidebar_components)
                 .into_iter()
@@ -211,6 +251,7 @@ impl Profile {
                 })
                 .collect::<Vec<_>>(),
         )?;
+        let statusline_components_json = statusline_components_json(&params.statusline_components);
         let cooldown = params.notify_cooldown_mins.max(0);
         let bio = params.bio.trim().to_string();
         let country = params
@@ -228,12 +269,8 @@ impl Profile {
         let ide = normalize_profile_text(params.ide.as_deref());
         let terminal = normalize_profile_text(params.terminal.as_deref());
         let os = normalize_profile_text(params.os.as_deref());
-        let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
+        let langs = crate::vocab::normalize_langs(params.langs.iter().map(String::as_str));
         let langs_json = serde_json::to_value(&langs)?;
-        let birthday = params
-            .birthday
-            .as_deref()
-            .and_then(crate::models::birthday::normalize_birthday);
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -269,24 +306,32 @@ impl Profile {
                          'enable_background_color', $9::bool,
                          'text_brightness_adjustment', $10::int,
                          'notify_format', $11::text,
-                         'show_dashboard_header', $12::bool,
-                         'show_right_sidebar', $13::bool,
-                         'right_sidebar_mode', $14::text,
-                         'right_sidebar_components', $15::jsonb,
-                         'show_room_list_sidebar', $16::bool,
+                         'show_right_sidebar', $12::bool,
+                         'right_sidebar_mode', $13::text,
+                         'right_sidebar_components', $14::jsonb,
+                         'show_room_list_sidebar', $15::bool,
+                         'room_list_mode', $16::text,
                          'favorite_room_ids', $17::jsonb,
                          'ide', $18::text,
                          'terminal', $19::text,
                          'os', $20::text,
                          'langs', $21::jsonb,
-                         'birthday', $22::text,
-                         'keep_composer_focused', $23::bool,
-                         'start_with_music_muted', $24::bool,
-                         'show_flag_fallback', $25::bool,
-                         'land_on_home', $26::bool
+                         'keep_composer_focused', $22::bool,
+                         'start_with_music_muted', $23::bool,
+                         'show_flag_fallback', $24::bool,
+                         'landing_page', $25::text,
+                         'translate_to', $26::text,
+                         'auto_translate', $27::bool,
+                         'translate_mine_to_en', $28::bool,
+                         'favorite_theme_ids', $29::jsonb,
+                         'paper_at_login', $30::bool,
+                         'terminal_images', $31::text,
+                         'hidden_award_categories', $32::jsonb,
+                         'statusline_components', $33::jsonb,
+                         'art_splash_mode', $34::text
                      ),
                      updated = current_timestamp
-                 WHERE id = $27
+                 WHERE id = $35
                  RETURNING *",
                 &[
                     &params.username,
@@ -300,21 +345,29 @@ impl Profile {
                     &params.enable_background_color,
                     &normalize_text_brightness_adjustment(params.text_brightness_adjustment),
                     &notify_format,
-                    &params.show_dashboard_header,
                     &params.show_right_sidebar,
                     &params.right_sidebar_mode.as_str(),
                     &right_sidebar_components_json,
                     &params.show_room_list_sidebar,
+                    &params.room_list_mode.as_str(),
                     &favorite_room_ids_json,
                     &ide,
                     &terminal,
                     &os,
                     &langs_json,
-                    &birthday,
                     &params.keep_composer_focused,
                     &params.start_with_music_muted,
                     &params.show_flag_fallback,
-                    &params.land_on_home,
+                    &params.landing_page.as_str(),
+                    &params.translate_to.as_str(),
+                    &params.auto_translate,
+                    &params.translate_mine_to_en,
+                    &favorite_theme_ids_json,
+                    &params.paper_at_login,
+                    &params.terminal_images.as_str(),
+                    &hidden_award_categories_json,
+                    &statusline_components_json,
+                    &params.art_splash_mode.as_str(),
                     &user_id,
                 ],
             )
@@ -341,17 +394,25 @@ impl Profile {
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
-            show_dashboard_header: extract_show_dashboard_header(&user.settings),
             show_right_sidebar: extract_show_right_sidebar(&user.settings),
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
             right_sidebar_components: extract_right_sidebar_components(&user.settings),
+            statusline_components: extract_statusline_components(&user.settings),
             show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
+            room_list_mode: extract_room_list_mode(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
-            land_on_home: extract_land_on_home(&user.settings),
+            landing_page: extract_landing_page(&user.settings),
+            paper_at_login: extract_paper_at_login(&user.settings),
+            art_splash_mode: extract_art_splash_mode(&user.settings),
+            terminal_images: extract_terminal_images(&user.settings),
+            hidden_award_categories: extract_hidden_award_categories(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
+            translate_to: extract_translate_to(&user.settings),
+            auto_translate: extract_auto_translate(&user.settings),
+            translate_mine_to_en: extract_translate_mine_to_en(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
-            birthday: extract_birthday(&user.settings),
+            favorite_theme_ids: extract_favorite_theme_ids(&user.settings),
         }
     }
 }
@@ -361,30 +422,6 @@ fn normalize_profile_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-pub fn normalize_profile_tags<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for value in values {
-        for raw in value.split(|c: char| c == ',' || c.is_whitespace()) {
-            let tag: String = raw
-                .trim()
-                .trim_matches('#')
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
-                .collect();
-            if tag.is_empty() || tag.len() > 24 || !seen.insert(tag.clone()) {
-                continue;
-            }
-            out.push(tag);
-            if out.len() >= 8 {
-                return out;
-            }
-        }
-    }
-    out
 }
 
 /// Look up a user's display name by user_id. Returns "someone" on failure.

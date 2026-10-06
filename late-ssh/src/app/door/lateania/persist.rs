@@ -4,8 +4,8 @@
 // carried and banked gold, vitals, and gear. It serializes to the JSON blob
 // stored in the mud_characters table (see late_core::models::mud_character).
 // Transient combat state (current target, active effects, cooldowns, respawn
-// timers) is deliberately NOT saved - a character reloads at full readiness in
-// a safe room.
+// timers) is deliberately NOT saved - a character reloads out of combat, in the
+// room it logged out in.
 //
 // The struct is versioned. Unknown/missing fields fall back to defaults via
 // serde, so adding fields later never breaks an old save.
@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 21;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -28,10 +28,12 @@ pub struct SavedCharacterInit {
     pub banked_gold: i64,
     pub hp: i32,
     pub room: RoomId,
+    pub waypoint: Option<RoomId>,
     pub visited: Vec<RoomId>,
     pub inventory: Vec<u32>,
     pub equipped: Vec<(String, u32)>,
     pub scores: AbilityScores,
+    pub score_points_spent: i32,
     pub titles: Vec<String>,
     pub title_levels: Vec<i32>,
     pub active_title: Option<usize>,
@@ -42,9 +44,32 @@ pub struct SavedCharacterInit {
     pub archetype: Option<String>,
     pub pet: Option<String>,
     pub pet_loyalty: i64,
+    /// Kennelled companions as (species key, loyalty) pairs.
+    pub kennel: Vec<(String, i64)>,
+    /// A won-over stray companion (Genesys): the WILDLIFE index.
+    pub stray: Option<u32>,
+    /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
+    /// last day fed as a Unix day number).
+    pub stray_bond: Option<(u32, u32, u64)>,
+    pub pet_meals: (u64, u32),
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
     pub appearance: Vec<u8>,
+    pub skills: Vec<(String, i64)>,
+    pub craft_skills: Vec<(String, i64)>,
+    pub taming_xp: i64,
+    pub rpg_mode: bool,
+    /// Lifetime adventurers slain in the Wildbound Waste's pvp rooms.
+    pub pvp_kills: i64,
+    /// Index of the next uncompleted starter-chain quest (== chain length once
+    /// the chain is done).
+    pub starter_stage: u8,
+    /// Kills counted toward the current starter-chain stage, if it is a slay
+    /// stage.
+    pub starter_kills: u32,
+    /// The player's ability-bar order as ability ids. Empty means the natural
+    /// unlock order (see `abilities::ordered_for`).
+    pub ability_order: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,6 +93,10 @@ pub struct SavedCharacter {
     /// Room the character logged out in; reloaded here if it still exists.
     #[serde(default = "start_room")]
     pub room: RoomId,
+    /// A personal waypoint the player has marked (see `svc::set_waypoint`);
+    /// None for pre-waypoint saves or characters who have never set one.
+    #[serde(default)]
+    pub waypoint: Option<RoomId>,
     /// Rooms the character has visited, for the overhead map. Empty for pre-v3
     /// saves, which simply start the map from wherever they reload.
     #[serde(default)]
@@ -80,6 +109,10 @@ pub struct SavedCharacter {
     /// Rolled D&D ability scores; default (all 10s) for pre-v2 saves.
     #[serde(default)]
     pub scores: AbilityScores,
+    /// Attribute points placed on the scores; 0 for saves from before points
+    /// existed, which then have every earned point still to place.
+    #[serde(default)]
+    pub score_points_spent: i32,
     /// Titles earned by slaying notable foes (most recent last).
     #[serde(default)]
     pub titles: Vec<String>,
@@ -113,6 +146,22 @@ pub struct SavedCharacter {
     /// The companion's accumulated loyalty (drives its level); 0 if no pet.
     #[serde(default)]
     pub pet_loyalty: i64,
+    /// Companions resting in the kennel, as (species key, loyalty) pairs; empty
+    /// for pre-kennel (schema < 20) saves, which released a pet on every new one.
+    #[serde(default)]
+    pub kennel: Vec<(String, i64)>,
+    /// A won-over stray companion (Genesys), by WILDLIFE index; None for
+    /// pre-Genesys saves or characters who haven't won one over yet.
+    #[serde(default)]
+    pub stray: Option<u32>,
+    /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
+    /// last day fed as a Unix day number).
+    #[serde(default)]
+    pub stray_bond: Option<(u32, u32, u64)>,
+    /// The companion's loyalty-raising meals: (Unix day number, meals that
+    /// day). (0, 0) for saves from before the daily meal cap.
+    #[serde(default)]
+    pub pet_meals: (u64, u32),
     /// The housing plot (tier index) this character holds the deed to, if any.
     #[serde(default)]
     pub owned_plot: Option<u32>,
@@ -122,6 +171,39 @@ pub struct SavedCharacter {
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     #[serde(default)]
     pub appearance: Vec<u8>,
+    /// Gathering-skill xp as (skill key, total xp) pairs (see `skills`); empty
+    /// for pre-gathering saves, which simply start every trade at level 1.
+    #[serde(default)]
+    pub skills: Vec<(String, i64)>,
+    /// Crafting-skill xp as (skill key, total xp) pairs; empty for pre-crafting
+    /// saves.
+    #[serde(default)]
+    pub craft_skills: Vec<(String, i64)>,
+    /// Total Animal Taming xp (the beastmaster trade; see `taming.rs`); its level
+    /// is a pure function of this. 0 for pre-taming (schema < 14) saves, which
+    /// simply start the trade untrained at level 1.
+    #[serde(default)]
+    pub taming_xp: i64,
+    /// The live-map RPG view preference. Defaults on, so saves from before this
+    /// field come back with the map enabled.
+    #[serde(default = "enabled")]
+    pub rpg_mode: bool,
+    /// Lifetime adventurers slain in the Wildbound Waste's pvp rooms; 0 for
+    /// pre-Wildbound-Waste (schema < 18) saves.
+    #[serde(default)]
+    pub pvp_kills: i64,
+    /// Index of the next uncompleted starter-chain quest; 0 for pre-v19 saves
+    /// (hydration marks the chain complete for characters past level 10, so
+    /// veterans are not handed the tutorial chain).
+    #[serde(default)]
+    pub starter_stage: u8,
+    /// Kill progress within the current starter-chain stage; 0 for pre-v19 saves.
+    #[serde(default)]
+    pub starter_kills: u32,
+    /// The player's ability-bar order as ability ids; empty for pre-v21 saves,
+    /// which simply use the natural unlock order.
+    #[serde(default)]
+    pub ability_order: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -157,10 +239,21 @@ pub struct SavedMobDot {
     pub owner: Uuid,
     pub damage: i32,
     pub remaining_ticks: u8,
+    /// True for a weapon-coat wound, which keeps one refreshing stack per
+    /// attacker rather than stacking (see `svc::DotSource`). Defaulting to
+    /// false hydrates pre-coat saves as ability stacks, which is what they
+    /// were; without it a reload would untag a live coat and let a second
+    /// stack open beside it.
+    #[serde(default)]
+    pub from_coat: bool,
 }
 
 fn one() -> i32 {
     1
+}
+
+fn enabled() -> bool {
+    true
 }
 
 fn world_schema_version() -> u32 {
@@ -182,10 +275,12 @@ impl SavedCharacter {
             banked_gold: init.banked_gold,
             hp: init.hp,
             room: init.room,
+            waypoint: init.waypoint,
             visited: init.visited,
             inventory: init.inventory,
             equipped: init.equipped,
             scores: init.scores,
+            score_points_spent: init.score_points_spent,
             titles: init.titles,
             title_levels: init.title_levels,
             active_title: init.active_title,
@@ -196,9 +291,21 @@ impl SavedCharacter {
             archetype: init.archetype,
             pet: init.pet,
             pet_loyalty: init.pet_loyalty,
+            kennel: init.kennel,
+            stray: init.stray,
+            stray_bond: init.stray_bond,
+            pet_meals: init.pet_meals,
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
             appearance: init.appearance,
+            skills: init.skills,
+            craft_skills: init.craft_skills,
+            taming_xp: init.taming_xp,
+            rpg_mode: init.rpg_mode,
+            pvp_kills: init.pvp_kills,
+            starter_stage: init.starter_stage,
+            starter_kills: init.starter_kills,
+            ability_order: init.ability_order,
         }
     }
 
@@ -244,117 +351,5 @@ impl SavedWorld {
         }
         let saved: Self = serde_json::from_value(value.clone()).ok()?;
         (saved.version == WORLD_SCHEMA_VERSION).then_some(saved)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_through_json() {
-        let scores = AbilityScores {
-            dexterity: 16,
-            ..Default::default()
-        };
-        let c = SavedCharacter::new_for(SavedCharacterInit {
-            class: Some(Class::Rogue),
-            xp: 1234,
-            level: 7,
-            gold: 560,
-            banked_gold: 1400,
-            hp: 42,
-            room: 18,
-            visited: vec![1, 5, 18],
-            inventory: vec![1300, 1301],
-            equipped: vec![("weapon".to_string(), 1004)],
-            scores,
-            titles: vec!["Wyrmbane".to_string()],
-            title_levels: vec![12],
-            active_title: Some(0),
-            completed_quests: vec![2],
-            board_progress: vec![(4, 2)],
-            board_done: vec![1],
-            quest_cooldowns: vec![(1, 1_700_000_000)],
-            archetype: Some("assassin".to_string()),
-            pet: Some("dire_wolf".to_string()),
-            pet_loyalty: 250,
-            owned_plot: Some(3),
-            house_furniture: vec![(9040, "feather_bed".to_string())],
-            appearance: vec![1, 2, 3, 4, 5],
-        });
-        let json = c.to_json();
-        let back = SavedCharacter::from_json(&json).expect("parses");
-        assert_eq!(back.class(), Some(Class::Rogue));
-        assert_eq!(back.xp, 1234);
-        assert_eq!(back.level, 7);
-        assert_eq!(back.gold, 560);
-        assert_eq!(back.banked_gold, 1400);
-        assert_eq!(back.visited, vec![1, 5, 18]);
-        assert_eq!(back.inventory, vec![1300, 1301]);
-        assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
-        assert_eq!(back.scores.dexterity, 16);
-        assert_eq!(back.titles, vec!["Wyrmbane".to_string()]);
-        assert_eq!(back.board_progress, vec![(4, 2)]);
-        assert_eq!(back.board_done, vec![1]);
-        assert_eq!(back.quest_cooldowns, vec![(1, 1_700_000_000)]);
-        assert_eq!(back.archetype.as_deref(), Some("assassin"));
-        assert_eq!(back.pet.as_deref(), Some("dire_wolf"));
-        assert_eq!(back.pet_loyalty, 250);
-        assert_eq!(back.owned_plot, Some(3));
-        assert_eq!(
-            back.house_furniture,
-            vec![(9040, "feather_bed".to_string())]
-        );
-        assert_eq!(back.appearance, vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn empty_blob_is_treated_as_no_save() {
-        assert!(SavedCharacter::from_json(&serde_json::json!({})).is_none());
-        assert!(SavedCharacter::from_json(&serde_json::Value::Null).is_none());
-    }
-
-    #[test]
-    fn missing_fields_fall_back_to_defaults() {
-        // A minimal/old blob with only a class should still load.
-        let json = serde_json::json!({ "class": "mage" });
-        let c = SavedCharacter::from_json(&json).expect("parses partial");
-        assert_eq!(c.class(), Some(Class::Mage));
-        assert_eq!(c.level, 1);
-        assert_eq!(c.gold, 0);
-        assert_eq!(c.banked_gold, 0);
-        assert_eq!(c.room, 1);
-        assert!(c.visited.is_empty());
-        assert!(c.inventory.is_empty());
-    }
-
-    #[test]
-    fn world_state_round_trips_through_json() {
-        let owner = Uuid::nil();
-        let world = SavedWorld::new(
-            vec![SavedMob {
-                id: 42,
-                hp: 3,
-                alive: false,
-                respawn_remaining_secs: Some(17),
-            }],
-            vec![SavedMobStun {
-                mob_id: 42,
-                remaining_ticks: 2,
-            }],
-            vec![SavedMobDot {
-                mob_id: 42,
-                owner,
-                damage: 5,
-                remaining_ticks: 3,
-            }],
-        );
-        let json = world.to_json();
-        let back = SavedWorld::from_json(&json).expect("parses");
-        assert_eq!(back.mobs[0].id, 42);
-        assert_eq!(back.mobs[0].respawn_remaining_secs, Some(17));
-        assert_eq!(back.mob_stuns[0].remaining_ticks, 2);
-        assert_eq!(back.mob_dots[0].owner, owner);
     }
 }

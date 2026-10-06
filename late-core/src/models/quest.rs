@@ -1,20 +1,16 @@
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde_json::Value;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
-use super::chips::{CHIP_USER_CHANGED_CHANNEL, INITIAL_CHIP_BALANCE};
+use super::chips::{ChipMove, UserChips};
 
-pub const QUEST_REWARD_REASON: &str = "quest_reward";
-pub const QUEST_SOURCE_KIND: &str = "quest_assignment";
-pub const DAILY_QUEST_STREAK_REWARD_REASON: &str = "daily_quest_streak_reward";
-pub const DAILY_QUEST_STREAK_SOURCE_KIND: &str = "daily_quest_streak";
 pub const QUEST_USER_CHANGED_CHANNEL: &str = "quest_user_changed";
 pub const QUEST_ASSIGNMENTS_CHANGED_CHANNEL: &str = "quest_assignments_changed";
 pub const MAX_DAILY_QUEST_STREAK_BONUS_LEVEL: i32 = 5;
@@ -40,62 +36,6 @@ pub struct QuestTemplate {
     pub active: bool,
     pub starts_at: Option<DateTime<Utc>>,
     pub ends_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RewardTemplateAdminRow {
-    pub id: Uuid,
-    pub key: String,
-    pub title: String,
-    pub description: String,
-    pub cadence: Option<String>,
-    pub bucket: Option<String>,
-    pub domain: String,
-    pub difficulty: Option<String>,
-    pub kind: String,
-    pub params: Value,
-    pub target: i32,
-    pub reward_chips: i64,
-    pub weight: i32,
-    pub is_quest: bool,
-    pub claim_policy: String,
-    pub cooldown_seconds: Option<i32>,
-    pub active: bool,
-}
-
-impl From<tokio_postgres::Row> for RewardTemplateAdminRow {
-    fn from(row: tokio_postgres::Row) -> Self {
-        Self {
-            id: row.get("id"),
-            key: row.get("key"),
-            title: row.get("title"),
-            description: row.get("description"),
-            cadence: row.get("cadence"),
-            bucket: row.get("bucket"),
-            domain: row.get("domain"),
-            difficulty: row.get("difficulty"),
-            kind: row.get("kind"),
-            params: row.get("params"),
-            target: row.get("target"),
-            reward_chips: row.get("reward_chips"),
-            weight: row.get("weight"),
-            is_quest: row.get("is_quest"),
-            claim_policy: row.get("claim_policy"),
-            cooldown_seconds: row.get("cooldown_seconds"),
-            active: row.get("active"),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RewardTemplateAdminUpdate {
-    pub id: Uuid,
-    pub title: String,
-    pub description: String,
-    pub target: i32,
-    pub reward_chips: i64,
-    pub weight: i32,
-    pub active: bool,
 }
 
 impl From<tokio_postgres::Row> for QuestTemplate {
@@ -234,93 +174,6 @@ pub struct DailyQuestStreakReward {
     pub reward_chips: i64,
 }
 
-pub async fn listen_for_quest_changes(client: &Client) -> Result<()> {
-    client
-        .batch_execute(&format!(
-            "LISTEN {QUEST_USER_CHANGED_CHANNEL};
-             LISTEN {QUEST_ASSIGNMENTS_CHANGED_CHANNEL};"
-        ))
-        .await?;
-    Ok(())
-}
-
-pub async fn list_reward_templates_for_admin(
-    client: &impl deadpool_postgres::GenericClient,
-) -> Result<Vec<RewardTemplateAdminRow>> {
-    let rows = client
-        .query(
-            "SELECT
-                 id, key, title, description, cadence, bucket, domain,
-                 difficulty, kind, params, target, reward_chips, weight,
-                 is_quest, claim_policy, cooldown_seconds, active
-             FROM reward_templates
-             ORDER BY
-                 CASE
-                     WHEN is_quest = true AND cadence = 'daily' THEN 0
-                     WHEN is_quest = true AND cadence = 'weekly' THEN 1
-                     WHEN is_quest = false AND domain = 'puzzle' THEN 2
-                     ELSE 3
-                 END,
-                 domain ASC,
-                 key ASC",
-            &[],
-        )
-        .await?;
-    Ok(rows.into_iter().map(RewardTemplateAdminRow::from).collect())
-}
-
-pub async fn update_reward_template_for_admin(
-    client: &impl deadpool_postgres::GenericClient,
-    update: RewardTemplateAdminUpdate,
-) -> Result<RewardTemplateAdminRow> {
-    ensure!(!update.title.trim().is_empty(), "title cannot be empty");
-    ensure!(
-        !update.description.trim().is_empty(),
-        "description cannot be empty"
-    );
-    ensure!(update.target > 0, "target must be greater than 0");
-    ensure!(update.reward_chips >= 0, "reward must be 0 or greater");
-    ensure!(update.weight > 0, "weight must be greater than 0");
-
-    let row = client
-        .query_opt(
-            "UPDATE reward_templates
-             SET
-                 title = $2,
-                 description = $3,
-                 target = $4,
-                 reward_chips = $5,
-                 weight = $6,
-                 active = $7,
-                 updated = current_timestamp
-             WHERE id = $1
-             RETURNING
-                 id, key, title, description, cadence, bucket, domain,
-                 difficulty, kind, params, target, reward_chips, weight,
-                 is_quest, claim_policy, cooldown_seconds, active",
-            &[
-                &update.id,
-                &update.title.trim(),
-                &update.description.trim(),
-                &update.target,
-                &update.reward_chips,
-                &update.weight,
-                &update.active,
-            ],
-        )
-        .await?;
-    let row = row
-        .map(RewardTemplateAdminRow::from)
-        .with_context(|| format!("reward template {} not found", update.id))?;
-    client
-        .execute(
-            "SELECT pg_notify($1, $2)",
-            &[&QUEST_ASSIGNMENTS_CHANGED_CHANNEL, &row.key],
-        )
-        .await?;
-    Ok(row)
-}
-
 pub fn daily_period(date: NaiveDate) -> (NaiveDate, NaiveDate) {
     (
         date,
@@ -378,19 +231,16 @@ async fn ensure_period_assignments(
 
     let rows = client
         .query(
-            "SELECT a.*, t.domain
-             FROM quest_assignments a
-             JOIN reward_templates t ON t.id = a.template_id
-             WHERE a.cadence = $1 AND a.period_start = $2",
+            "SELECT template_id, slot
+             FROM quest_assignments
+             WHERE cadence = $1 AND period_start = $2",
             &[&cadence, &period_start],
         )
         .await?;
     let mut selected_templates: Vec<Uuid> = Vec::new();
-    let mut selected_domains: Vec<String> = Vec::new();
     let mut existing_slots: Vec<i32> = Vec::new();
     for row in rows {
         selected_templates.push(row.get("template_id"));
-        selected_domains.push(row.get("domain"));
         existing_slots.push(row.get("slot"));
     }
 
@@ -405,7 +255,6 @@ async fn ensure_period_assignments(
             period_start,
             *slot,
             &selected_templates,
-            &selected_domains,
         ) else {
             continue;
         };
@@ -421,7 +270,6 @@ async fn ensure_period_assignments(
             .await?;
         if inserted > 0 {
             selected_templates.push(template.id);
-            selected_domains.push(template.domain.clone());
             changed = true;
         }
     }
@@ -455,57 +303,42 @@ fn choose_template<'a>(
     period_start: NaiveDate,
     slot: i32,
     selected_templates: &[Uuid],
-    selected_domains: &[String],
 ) -> Option<&'a QuestTemplate> {
-    let buckets = slot_bucket_preferences(cadence, slot);
+    let difficulty = slot_difficulty_preference(cadence, slot);
     let source = slot_source_preference(cadence, slot);
-    let mut pool = filtered_pool(
-        templates,
-        buckets,
-        source,
-        selected_templates,
-        selected_domains,
-        true,
-    );
+    let mut pool = filtered_pool(templates, difficulty, source, selected_templates);
     if pool.is_empty() {
-        pool = filtered_pool(
-            templates,
-            buckets,
-            source,
-            selected_templates,
-            selected_domains,
-            false,
-        );
-    }
-    if pool.is_empty() {
-        pool = templates
-            .iter()
-            .filter(|template| !selected_templates.contains(&template.id))
-            .filter(|template| source.is_none_or(|source| quest_source(template) == source))
-            .collect();
+        pool = filtered_pool(templates, None, source, selected_templates);
     }
     weighted_pick(&pool, cadence, period_start, slot)
 }
 
-fn slot_bucket_preferences(cadence: &str, slot: i32) -> &'static [&'static str] {
+/// Assigned quests are arcade-only for now (owner decision 2026-07-13, see
+/// `devdocs/FRD-LOBBY-CONSOLIDATION.md`): the daily slots draw an easy and
+/// a medium quest, the weekly slot a hard one — all from the arcade page
+/// (score/level runs plus the daily puzzles). The room-game templates were
+/// deactivated by migration 110; the Rooms demolition (phase 3) deletes
+/// their events. Each slot rolls from the full difficulty bucket; there is no
+/// cross-slot domain avoidance, so an easy and a medium puzzle of the same
+/// family can both appear on the same day.
+fn slot_difficulty_preference(cadence: &str, slot: i32) -> Option<&'static str> {
     match (cadence, slot) {
-        ("daily", 1) => &["quick", "skill"],
-        ("daily", 2) => &["skill", "casino"],
-        _ => &[],
+        ("daily", 1) => Some("easy"),
+        ("daily", 2) => Some("medium"),
+        ("weekly", 1) => Some("hard"),
+        _ => None,
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuestSource {
     Arcade,
-    Multiplayer,
     Other,
 }
 
 fn slot_source_preference(cadence: &str, slot: i32) -> Option<QuestSource> {
     match (cadence, slot) {
-        ("daily", 1) => Some(QuestSource::Arcade),
-        ("daily", 2) => Some(QuestSource::Multiplayer),
+        ("daily", 1) | ("daily", 2) | ("weekly", 1) => Some(QuestSource::Arcade),
         _ => None,
     }
 }
@@ -515,25 +348,21 @@ fn quest_source(template: &QuestTemplate) -> QuestSource {
         "daily_puzzle_win" | "arcade_puzzle_solved" | "arcade_score" | "arcade_level" => {
             QuestSource::Arcade
         }
-        "room_rounds_played" | "room_wins" => QuestSource::Multiplayer,
         _ => QuestSource::Other,
     }
 }
 
 fn filtered_pool<'a>(
     templates: &'a [QuestTemplate],
-    buckets: &[&str],
+    difficulty: Option<&str>,
     source: Option<QuestSource>,
     selected_templates: &[Uuid],
-    selected_domains: &[String],
-    avoid_domains: bool,
 ) -> Vec<&'a QuestTemplate> {
     templates
         .iter()
         .filter(|template| !selected_templates.contains(&template.id))
-        .filter(|template| buckets.is_empty() || buckets.contains(&template.bucket.as_str()))
+        .filter(|template| difficulty.is_none_or(|difficulty| template.difficulty == difficulty))
         .filter(|template| source.is_none_or(|source| quest_source(template) == source))
-        .filter(|template| !avoid_domains || !selected_domains.contains(&template.domain))
         .collect()
 }
 
@@ -562,6 +391,30 @@ fn weighted_pick<'a>(
         roll -= weight;
     }
     pool.first().copied()
+}
+
+/// The title of the quest behind each assignment id, keyed by id: one
+/// primary-key scan joined to its template. Ids matching nothing are absent.
+pub async fn assignment_titles(
+    client: &impl GenericClient,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, String>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = client
+        .query(
+            "SELECT a.id, t.title
+             FROM quest_assignments a
+             JOIN reward_templates t ON t.id = a.template_id
+             WHERE a.id = ANY($1)",
+            &[&ids],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get("id"), row.get("title")))
+        .collect())
 }
 
 pub async fn list_active_snapshot_rows(
@@ -799,8 +652,7 @@ pub async fn apply_progress_event(
             &tx,
             user_id,
             rewarded_chips,
-            QUEST_REWARD_REASON,
-            QUEST_SOURCE_KIND,
+            ChipMove::QuestReward,
             &assignment_id.to_string(),
         )
         .await?;
@@ -896,8 +748,7 @@ async fn record_daily_quest_streak_if_complete(
             client,
             user_id,
             advance.reward_chips,
-            DAILY_QUEST_STREAK_REWARD_REASON,
-            DAILY_QUEST_STREAK_SOURCE_KIND,
+            ChipMove::DailyQuestStreakReward,
             &completion_date.to_string(),
         )
         .await?;
@@ -915,40 +766,13 @@ async fn credit_chip_reward(
     client: &impl GenericClient,
     user_id: Uuid,
     amount: i64,
-    reason: &str,
-    source_kind: &str,
+    chip_move: ChipMove,
     source_ref: &str,
 ) -> Result<()> {
-    client
-        .execute(
-            "INSERT INTO user_chips (user_id, balance)
-             VALUES ($1, $2)
-             ON CONFLICT (user_id) DO NOTHING",
-            &[&user_id, &INITIAL_CHIP_BALANCE],
-        )
-        .await?;
-    client
-        .execute(
-            "UPDATE user_chips
-             SET balance = balance + $2, updated = current_timestamp
-             WHERE user_id = $1",
-            &[&user_id, &amount],
-        )
-        .await?;
-    client
-        .execute(
-            "INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-             VALUES ($1, $2, $3, $4, $5)",
-            &[&user_id, &amount, &reason, &source_kind, &source_ref],
-        )
-        .await?;
-    client
-        .execute(
-            "SELECT pg_notify($1, $2)",
-            &[&CHIP_USER_CHANGED_CHANNEL, &user_id.to_string()],
-        )
-        .await?;
-    Ok(())
+    match UserChips::apply(client, user_id, chip_move, amount, source_ref).await? {
+        Some(_) => Ok(()),
+        None => anyhow::bail!("quest chip credit returned no row"),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1013,90 +837,5 @@ impl QuestProgressUpdate {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn template(key: &str, bucket: &str, domain: &str, kind: &str) -> QuestTemplate {
-        QuestTemplate {
-            id: Uuid::now_v7(),
-            created: DateTime::<Utc>::UNIX_EPOCH,
-            updated: DateTime::<Utc>::UNIX_EPOCH,
-            key: key.to_string(),
-            title: key.to_string(),
-            description: key.to_string(),
-            cadence: "daily".to_string(),
-            bucket: bucket.to_string(),
-            domain: domain.to_string(),
-            difficulty: "medium".to_string(),
-            kind: kind.to_string(),
-            params: json!({}),
-            target: 1,
-            reward_chips: 100,
-            weight: 100,
-            active: true,
-            starts_at: None,
-            ends_at: None,
-        }
-    }
-
-    #[test]
-    fn daily_slots_split_arcade_and_multiplayer_sources() {
-        let period_start = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
-        let templates = vec![
-            template("arcade", "skill", "arcade", "arcade_score"),
-            template("room", "skill", "strategy", "room_rounds_played"),
-        ];
-
-        let slot_one = choose_template(&templates, "daily", period_start, 1, &[], &[]).unwrap();
-        let slot_two = choose_template(&templates, "daily", period_start, 2, &[], &[]).unwrap();
-
-        assert_eq!(slot_one.key, "arcade");
-        assert_eq!(slot_two.key, "room");
-    }
-
-    #[test]
-    fn daily_streak_bonus_starts_on_second_consecutive_full_daily_and_caps() {
-        let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
-        let next_day = day.checked_add_signed(Duration::days(1)).unwrap();
-        let sixth_day = day.checked_add_signed(Duration::days(5)).unwrap();
-        let skipped_day = day.checked_add_signed(Duration::days(7)).unwrap();
-
-        assert_eq!(
-            next_daily_streak_advance(None, day),
-            Some(DailyStreakAdvance {
-                consecutive_days: 1,
-                bonus_level: 0,
-                reward_chips: 0
-            })
-        );
-        assert_eq!(
-            next_daily_streak_advance(Some((day, 1)), next_day),
-            Some(DailyStreakAdvance {
-                consecutive_days: 2,
-                bonus_level: 1,
-                reward_chips: 100
-            })
-        );
-        assert_eq!(
-            next_daily_streak_advance(Some((sixth_day, 6)), sixth_day),
-            None
-        );
-        assert_eq!(
-            next_daily_streak_advance(Some((day, 5)), skipped_day),
-            Some(DailyStreakAdvance {
-                consecutive_days: 1,
-                bonus_level: 0,
-                reward_chips: 0
-            })
-        );
-        assert_eq!(
-            next_daily_streak_advance(Some((sixth_day, 6)), sixth_day.succ_opt().unwrap()),
-            Some(DailyStreakAdvance {
-                consecutive_days: 7,
-                bonus_level: 5,
-                reward_chips: 500
-            })
-        );
-    }
-}
+#[path = "quest_test.rs"]
+mod quest_test;

@@ -14,7 +14,7 @@ Embed a minimal-yet-client-satisfying ircd inside `late-ssh` that exposes late.s
 
 "Minimal yet client-satisfying" means: we implement only what we need, but enough of the protocol that major IRC clients connect, register, join, list, query, and chat without hanging, erroring, or misrendering. We do **not** aim for RFC-complete or IRCv3-complete behavior.
 
-The protocol layer (parsing/serialization, command and numeric types, modes, CTCP framing) is provided by `irc-proto` (upstream: `~/p/gh/irc-rs/irc-proto/`), **vendored into this repo** (e.g. `vendor/irc-proto`, following the `vendor/potatis` precedent) as a path dependency so we can patch it directly whenever that is the cleanest implementation path. The "d" — listener, connection state machine, registration, channel/session bridging — is written by us inside `late-ssh`.
+The protocol layer (parsing/serialization, command and numeric types, modes, CTCP framing) is provided by `irc-proto` (upstream: `~/p/gh/irc-rs/irc-proto/`), **vendored into this repo** (`vendor/irc-proto`) as a path dependency so we can patch it directly whenever that is the cleanest implementation path. The "d" — listener, connection state machine, registration, channel/session bridging — is written by us inside `late-ssh`.
 
 ## 2. Goals
 
@@ -57,6 +57,11 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 - A2: A connection that completes `NICK`+`USER` without a valid `PASS` is rejected with `464 ERR_PASSWDMISMATCH` followed by `ERROR` and a close. No anonymous or wrong-token access, ever.
 - A3: SASL PLAIN may be added later as an alternative carrier for the same token (some clients/networks prefer it); not required for v1 (§13).
 - A4: Because tokens carry ≥128 bits of entropy (T4), online brute force is computationally infeasible; auth rate limiting exists to curb abuse/log-spam, **not** as a security boundary, and must not burden legitimate users. Limits are per-IP on *failed* attempts only (reuse `late_core::rate_limit` sliding-window limiter), generous enough that client auto-reconnect loops and post-restart reconnect storms (§10 L3) never lock out a user with a valid token; sustained failure floods get a tarpit/disconnect.
+- A4.1: Behind a TCP proxy, client IPs come only from PROXY v1 headers sent by
+  configured trusted transport peers and consumed before in-process TLS. A
+  missing/`UNKNOWN` header yields no client IP; the proxy transport address must
+  never be used for IP-ban matching or persisted into active-session ban
+  snapshots.
 - A5: TLS: tokens must not transit plaintext in production. Production exposes **TLS only** (standard port 6697, terminated **in-process via rustls** — v1 default; IRC is raw TCP so ingress termination would need TCP passthrough anyway, and in-process keeps chain/SNI under our control; cert/key mounted from the cluster's cert-manager secret). Local dev may use plaintext 6667.
 - A6: Certificate requirements — major clients (WeeChat, irssi 1.2+, HexChat, Textual, Halloy, Igloo) verify the chain against the OS trust store **and enforce hostname matching** by default; mIRC and Quassel interrupt with an accept/pin dialog on untrusted certs. Therefore production must serve: a publicly trusted CA cert (Let's Encrypt is fine), the **full chain including intermediates** (IRC clients do not fetch missing intermediates via AIA), a subject covering the exact advertised connect hostname (e.g. `irc.late.sh`), and SNI. Met, every target client connects with zero prompts; self-signed certs are not acceptable even short-term.
 
@@ -199,7 +204,7 @@ This is the bar for "client-satisfying": the following must work with irssi, Wee
 
 - New domain: `late-ssh/src/ircd/` (peer of `ssh.rs`/`api.rs`, not under `app/` — it is a network frontend, not a TUI screen): `mod.rs`, `listener.rs`, `conn.rs` (per-connection state machine: registration → registered), `proj.rs` (room/channel projection + fan-out), `auth.rs`, `motd.rs`, plus `token` model in `late-core/src/models/` and a migration for `irc_tokens`.
 - Framing/parsing: `irc-proto`'s `IrcCodec` (tokio feature) over the TCP/TLS stream; `Command`/`Response`/`Mode`/`Prefix` types for all message construction. We write zero protocol parsing by hand.
-- Vendoring: `irc-proto` is copied into `vendor/irc-proto` and consumed as a workspace path dependency (same pattern as `vendor/potatis`), so server-side needs (missing numerics, mode quirks, codec tweaks) are patched in-tree rather than worked around. Keep upstream provenance (source URL + commit) in the vendored crate's README; like Potatis, vendored code is excluded from `make check`'s first-party fmt scope.
+- Vendoring: `irc-proto` is copied into `vendor/irc-proto` and consumed as a workspace path dependency, so server-side needs (missing numerics, mode quirks, codec tweaks) are patched in-tree rather than worked around. Keep upstream provenance (source URL + commit) in the vendored crate's README; vendored code is excluded from `make check`'s first-party fmt scope.
 - Bridging: each registered connection subscribes to the same service channels the TUI uses (`ChatService` snapshots/events, presence/activity as needed) and translates events → IRC lines; inbound commands call the same service methods the TUI input layer calls. The ircd must **never** write chat/moderation state through a side door.
 - The settings-modal token UI follows the existing Account-tab dialog pattern (cf. LinkAccounts flow) and calls a small token service.
 - Tests per repo policy: pure protocol/translation logic (channel-name mapping, line splitting, command disposition) as inline unit tests; anything touching DB/services (auth, message round-trip, ban enforcement) as `late-ssh/tests/ircd/` integration tests with testcontainers. Agents do not run `cargo test`/`clippy` here; note expected commands in handoff.

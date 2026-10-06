@@ -2,7 +2,7 @@
 
 ## Scope
 
-`late-ssh/src/app/artboard` implements the interactive shared ASCII Artboard page for late.sh. It owns per-session UI state, keyboard/mouse routing, rendering overlays, local editor integration, snapshot browsing, attribution display, and edit-ban display/activation integration; the actual ban gate lives in `App::activate_artboard_interaction`.
+`late-ssh/src/app/artboard` implements the interactive shared ASCII Artboard page for late.sh. It owns per-session UI state, keyboard/mouse routing, rendering overlays, local editor integration, archive browsing from the rail, attribution display, and edit-ban display/activation integration; the actual ban gate lives in `App::activate_artboard_interaction`.
 
 It does not own the process-wide board server or the durable persistence loop. Those live in `late-ssh/src/dartboard.rs`, but they are documented here because the Artboard page depends on their lifecycle.
 
@@ -16,7 +16,8 @@ Naming note: `Artboard` is the user-facing name. Code and upstream crates still 
 - Session connection: created lazily when the user enters Artboard; dropped when leaving Artboard.
 - Initial mode: `view`; `i`, `I`, `Enter`, or canvas left-click enters active edit mode.
 - Persistence: JSONB rows in `artboard_snapshots` through `late_core::models::artboard::Snapshot`.
-- Public gallery: `late-web/src/pages/gallery/`, read-only over saved DB snapshots, not live server memory.
+- Public gallery: `late-web/src/pages/gallery/`, read-only over saved DB snapshots, not live server memory. It does not list pieces yet.
+- The gallery (`gallery/`): pieces hung off the live board, applause, the monthly `artboard` award, the page rail. See §Gallery below.
 
 Only canvas mutations are shared. Editor affordances stay local to the current SSH session.
 
@@ -33,17 +34,28 @@ Local state:
 - Selection anchor and shape
 - Floating brush / floating selection preview
 - Swatches and pin state
-- Selected local paint color
+- Selected local paint color (a preset, or a custom RGB from the picker)
+- Colour picker state (`ColorPicker`: the working colour, the focused row, the hex field)
 - Temporary sampled glyph brush
 - Help tab and scroll
 - Glyph picker search state
-- Snapshot browser state
+- Archive browser state (`ArchiveBrowser`: per-kind key lists, the wanted/in-flight/active archive, a small decoded cache)
 - Private notices
 
 ## File Map
 
 - `late-ssh/src/app/artboard/mod.rs`
-  - Public module declarations only: `data`, `input`, `page`, `provenance`, `state`, `svc`, `ui`.
+  - Public module declarations only: `data`, `gallery`, `input`, `page`, `provenance`, `state`, `svc`, `ui`.
+
+- `late-ssh/src/app/artboard/gallery/` (the gallery subdomain, same file roles)
+  - `frame.rs`: pure. `frame_piece(canvas, provenance, bounds, username)` crops the frame into a `FramedPiece` (own canvas, cropped provenance, glyph count, own share, credits, content hash) or a `FrameError` with its notice.
+  - `svc.rs`: `GalleryService` (db, `None` in a `disabled()` service, + the process-wide splash canvas `watch`), spawned listing/hang/applause/content-rating tasks reporting `GalleryResult`, `refresh_splash` / `start_splash_refresh_task` (assigns and caches the day's piece), `splash_piece_for_mode` (fresh classification, day and removal check at authenticated login; see §Gallery). Owns the gallery's logs and metrics.
+  - `state.rs`: `GalleryState`: rail rows and focus, the four listings, the hang flow (`HangFlow`), notices, the draw-published rects for hit tests, `tick()` draining results.
+  - `input.rs`: keys and mouse while the gallery claims input, the archive list in the rail included; returns `GalleryAction` (`FocusBoard` / `BeginHang` / `OpenArchive(kind)` go back to `page.rs`).
+  - `ui.rs`: the rail, the listing pane (list + preview), the full-frame piece, the content-rating dialog, the hang modal, the framing bar, `draw_splash_piece`.
+
+- `late-ssh/src/app/artboard/color_picker.rs`
+  - Pure state machine for the paint colour picker (`Ctrl+K`): `ColorPicker { color, row, hex, preset }`, rows `Red` / `Green` / `Blue` / `Hex` / `Presets`, `move_row`, `adjust`, `jump`, `set_channel`, `select_preset`, `type_hex`, `hex_backspace`. Edits a working copy; `State::apply_color_picker` makes it the paint colour. Drawing and hit tests are in `ui.rs`, keys in `input.rs`.
 
 - `late-ssh/src/app/artboard/data.rs`
   - Static help text for the Artboard help overlay.
@@ -64,16 +76,16 @@ Local state:
     - `broadcast::Receiver<DartboardEvent>` for ack/reject/peer/connect events.
     - `submit_op(CanvasOp)` for local edits.
   - Stores rejected connections on `DartboardSnapshot.connect_rejected` because rejection can happen before subscribers exist.
-  - `ArtboardSnapshotService` and `ArtboardArchiveLoader` list daily, monthly, and curated archive snapshots asynchronously from DB; `main` is represented by the browser's live row, not loaded as an archive item.
-  - Archive rows decode into `ArtboardArchiveSnapshot { board_key, kind, label, canvas, provenance }`.
+  - `ArtboardSnapshotService` and `ArtboardArchiveLoader` serve the rail's archive lists in two cheap steps: `request_list(kind)` fetches one kind's keys (`Snapshot::list_summaries_by_board_key_prefix`, no JSON) as `ArtboardArchiveEntry { board_key, kind, label, updated }`; `request_load(kind, key)` fetches and decodes one row into `ArtboardArchiveSnapshot { board_key, kind, label, canvas, provenance }` off the render path. Results arrive as `ArtboardArchiveResult::{Listed, ListFailed, Loaded, LoadFailed}`; failures are logged in the task.
 
 - `late-ssh/src/app/artboard/state.rs`
   - Main per-session Artboard state.
   - Wraps `dartboard_editor::EditorSession` for cursor, viewport, selection, swatches, floating brush, edit actions, and pointer behavior.
-  - Maintains local-only state: brush, drag brush, paint color, help overlay, glyph picker, hover position, snapshot browser, swatch preview suppression.
+  - Maintains local-only state: brush, drag brush, paint color (`Option<RgbColor>`, `None` is the peer colour; `select_palette_color` / `cycle_paint_color` pick a preset, `apply_color_picker` any RGB), the colour picker, help overlay, glyph picker, hover position, the archive browser, swatch preview suppression.
   - `tick()` drains archive loader results, live `watch` snapshots, and service events.
   - Local mutations use `edit_canvas` or `submit_canvas_diff`: diff local canvas changes into `CanvasOp`, update local/shared provenance, then submit to the service.
-  - Archive view is read-only; edit paths refuse to submit while `snapshot_browser.active` is set.
+  - Archive view is read-only; edit paths refuse to submit while `archives.active` is set.
+  - Archive browsing (`open_archive_list`, `archive_move`, `close_archive_list`, `exit_archive_view`): the cursor in the rail's list sets `wanted`; `request_wanted_archive` serves it from the board, then the cache (`ARCHIVE_CACHE_SIZE` = 8), then one fetch at a time; a landed fetch re-checks `wanted` so a cursor that moved on is caught up with. Esc keeps the archive on the board; the Board row (`exit_archive_view`) restores live.
   - Owner overlay renders a derived canvas replacing each glyph with owner initials/colors.
 
 - `late-ssh/src/app/artboard/input.rs`
@@ -82,20 +94,21 @@ Local state:
   - Returns `InputAction::{Ignored, Handled, Copy, Leave}` for app-level integration.
   - Mouse hit testing routes swatch/info overlays before canvas pointer dispatch.
   - Double-clicking a canvas glyph arms a temporary glyph brush.
-  - Glyph picker owns input while open.
+  - Glyph picker owns input while open; so does the colour picker (`Ctrl+K`: arrows walk rows and nudge, Shift+arrows by 16, hex digits type the hex field, Enter applies, Esc discards, a click on a bar or a preset sets it).
+  - A left click on a palette cell in the info block selects that preset (`palette_hit`), in edit and view mode alike. `Alt+K` (`ParsedInput::AltK`, parsed in `app/input.rs` next to the other Alt chords) is the eyedropper: `State::sample_color_at_cursor`.
 
 - `late-ssh/src/app/artboard/page.rs`
   - Page-level integration with `crate::app::state::App`.
   - Distinguishes view mode from active Artboard interaction.
-  - View mode supports cursor movement, page/home/end, Alt-arrow panning, right-drag pan, `?` local help, `g` snapshot browser, and `i`/Enter activation.
-  - Active/help/glyph modes delegate to `input.rs`.
-  - Snapshot browser has its own key/event routing.
+  - View mode supports cursor movement (arrows or `h`/`j`/`k`/`l`; edit mode spends the letters on paint), page/home/end, Alt-arrow panning, right-drag pan, `Ctrl+P` local help (`?` is the global guide), Esc to the rail, and `i`/Enter activation.
+  - Active/help/glyph modes delegate to `input.rs`; the rail, listings, archive lists, and the hang flow to `gallery/input.rs`, whose `Ignored` falls through to the view-mode keys so `i` and the Ctrl keys work from the rail; framing and the title prompt let Ctrl+P through too.
   - Converts `InputAction::Copy` into `app.pending_clipboard` and `InputAction::Leave` into edit-mode deactivation.
 
 - `late-ssh/src/app/artboard/ui.rs`
-  - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, owner overlay, floating preview, selection, and snapshot browser.
+  - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, the colour picker modal (`draw_color_picker`, `color_picker_hit`, `palette_hit` for the info block's palette rows), owner overlay, floating preview, and selection; `draw_game` lays the rail and the gallery pane around them in view mode.
   - Uses `ratatui`, `dartboard_tui`, and app theme helpers.
-  - `canvas_area_for_screen` must match Artboard frame layout; hit tests depend on it.
+  - `canvas_area_for_state(size, rail_visible)` must match the frame layout; hit tests and the editor viewport depend on it. The rail's visibility is published by the draw path (`GalleryState::set_rail_visible`), so input math follows the last frame.
+  - `render_piece_canvas` draws any piece canvas in the board's style; every gallery surface goes through it.
   - Custom canvas rendering preserves wide glyph behavior and avoids cursor/overlay collisions.
 
 - `late-ssh/src/dartboard.rs`
@@ -155,17 +168,136 @@ Gallery behavior:
 - The web page does not expose raw DB JSON to JS. It decodes `Canvas`/provenance server-side and emits compact snapshot JSON: `cells` entries are `[x, y, ch, width, fg, author_index]`, with wide continuations mapped client-side for hover; `authors` is a de-duplicated username array.
 - The `main` gallery entry is the latest saved DB row, not a live `ServerHandle` stream, so it can lag active drawing by the persistence interval.
 
+## Gallery
+
+What it is: a piece is an immutable crop of the live board, taken when the hanger frames it. The monthly wipe and the next vandal cannot touch it. Pieces gather applause; the month's best pieces win the `artboard` profile award and chips.
+
+The rail (view mode): `Board` (the live board or the archive being viewed), a GALLERY group (`Latest` newest first across months, `Ranking` this month's pieces by applause, `Hall of fame`, `Mine`), `Hang a piece`, then an ARCHIVES group last (`Daily`, `Monthly`, `Curated`), in a `RAIL_WIDTH + 1` column whose right edge is the full-height rule every page rail has. The gallery rows and `Hang a piece` exist only when the service has a database (`GalleryService::is_enabled`). The rail shows while it, a listing, a piece, or an archive list has focus, and folds away when the board takes the keys (Enter on `Board`, `i`, a board click, framing); Esc on the board brings it back. The page lands on the rail with `Board` selected. The numbers next to the rows are there on entry: `ArtboardPiece::listing_counts` (one query, no canvases; refreshed after a hang) for the gallery rows until a listing loads and its own length takes over, and the archive key lists, requested for all three kinds in `State::new`.
+
+Focus (`gallery::state::Focus`): `Rail` (the landing), `Canvas` (the board cursor), `List` (a listing's pieces), `Piece` (one piece full frame), `Archive` (an archive kind's key list drawn in the rail's place). Esc on the board focuses the rail; Enter on a gallery row moves into its list; Enter on an archive row turns the rail into that kind's list; Esc walks back out to the rail; Esc on the rail is not the page's (global Esc); Tab backs out of a pane to the rail (on the rail and the board Tab stays the page switch). There is no `g` key. Arrow keys follow focus. Mouse: a click on a rail row selects and activates it, a click on a list row selects it, the wheel scrolls the list.
+
+Archives from the rail: the list shows keys only (one summary query per kind, fired on entry, newest first, the count on the rail row); the key under the cursor loads in the background and replaces the board as it lands (`Mode` reads `snapshot`, the Board row's tail reads `archive`, the list marks the loading key with `…` and the one on the board with `•`). Enter on a key moves focus to the board with the archive up; Esc goes back to the rail rows and leaves the archive up; the Board row returns to live.
+
+Hanging (`HangFlow`): `Hang a piece` (the rail is the only way in) runs `App::begin_artboard_hang`: the artboard ban gate, a database behind the gallery, and "not an archive". Then `Framing`: Shift+arrows or a left drag select on the board, Enter runs `State::frame_selection_for_hang` (`frame_piece`), Esc cancels. A refused frame stays in framing with the reason on the framing bar. Then `Confirm`: the modal shows the crop, its numbers, and the credits; type a title (`PIECE_TITLE_MAX_CHARS` = 40), Enter hangs, Esc cancels. `Submitting` waits for the row. A landed hang selects `Mine` and says so in the pane's notice line.
+
+Local rails (`frame.rs`, from `late_core::models::artboard_piece` constants): at least `PIECE_MIN_GLYPHS` = 40 non-blank glyphs, at most `PIECE_MAX_WIDTH` x `PIECE_MAX_HEIGHT` = 120 x 50, at least `PIECE_MIN_OWN_SHARE_PERCENT` = 75 of the glyphs painted by the hanger per cell provenance (wide glyphs count once, at their origin; one whose second half is outside the frame is not in it). SQL rails (`ArtboardPiece::hang`): `PIECE_DAILY_CAP` = 3 per UTC day, counted in the insert's own guard, and `UNIQUE (content_hash, period_month)`: the same glyphs at the same relative positions, colours ignored, cannot hang twice in a month. Copy theft beyond that is a mod's call (`/mod artboard remove`).
+
+Applause: `v` on a piece in a list or full frame. One per person per piece (`artboard_piece_votes` PK), free, `v` again withdraws it, never on your own piece (CHECK on the denormalized `author_user_id`, and the state refuses before the round trip). One applause in flight per session. **A month closes at the rollover**: `toggle_applause` refuses applause and withdrawals alike on a piece whose `period_month` is past (`ApplauseOutcome::Closed`), so the counts the award was minted from never move again; the hall of fame reads live applause and stays in step with `ART1`-`ART3` because of it. `gallery::state::applause_refusal` says the same thing locally first.
+
+Content rating: `n` on a piece in a list or full frame opens the rating dialog. It fetches the latest verdict, its source, counts at every tier, the owner's flag and the viewer's vote. Non-owners choose `Vote SFW`, `Vote NSFW` or `Withdraw my vote`; the hanger can only toggle their NSFW flag. `j/k` or arrows select, Enter applies, mouse clicks apply, Esc/q close. The dialog owns printable keys and reserved global chords. Only successful responses update the loaded piece copies; generation checks discard superseded results and listings. An in-flight write still lands after the dialog closes. NSFW pieces carry a badge in listings and captions.
+
+`ContentRatingSummary::determination` (`late-core/src/models/artboard_piece_rating.rs`, migration 216) is the shared resolver:
+
+| Priority | Determination |
+| --- | --- |
+| Admin | Any admin NSFW mark means NSFW; otherwise any admin mark means SFW. |
+| Moderator | Majority of stored moderator marks; ties mean NSFW. |
+| Hanger | Their boolean NSFW flag means NSFW; clearing it falls through. |
+| Community | At least two NSFW votes and strictly more NSFW than SFW means NSFW; otherwise SFW. |
+| Unmarked | SFW. |
+
+Community votes are independent of applause, remain open after month end and under every override, and are replaceable or withdrawable. Artists cannot vote on their own pieces (model check and SQL CHECK). Expected refusals are outcomes, not errors: `VoteOutcome::{OwnPiece, NotFound}` and `OwnerFlagOutcome::{NotYours, NotFound}` from the model, `ContentRatingOutcome` (those plus `Closed` for a service with no database) from `content_rating_task`; `gallery::state` owns the refusal copy, and a real failure shows fixed copy, never the error text. `artboard_piece_content_votes` is keyed by piece/user; the owner flag lives on `artboard_pieces`. Staff marks (`artboard_piece_staff_marks`) have one row per piece/actor, with the actor's authority captured when the mark is written. Authority and marks survive later role changes or actor deletion; replacing a mark records the actor's current tier. All writes lock the piece and refuse removed pieces. The aggregate view `artboard_piece_content_ratings` supplies identical counts to listings and the lightweight login query.
+
+Taking a piece down: `x` on your own piece in a list or full frame asks (`take_down_asked`), `x` again on the same piece sends `ArtboardPiece::take_down`, any other key withdraws the question (`forget_take_down_question` at the top of the gallery's key dispatch; moving the cursor or leaving the pane does too). Owner and month are in the row's own `UPDATE`: only the hanger, only while the piece's month runs (`TakeDownOutcome::{NotYours, Closed}` otherwise, `gallery::state::take_down_refusal` locally first). Soft delete (`removed_at`, migration 175): the row stays, so the daily cap still counts it and `UNIQUE (content_hash, period_month)` still refuses the same cells this month; `PIECE_VIEW_SQL` and the count queries see only rows with `removed_at IS NULL`, the award arm filters it too. A landed take-down drops the piece from every loaded listing, asks again for any listing still in flight (its answer may have been read before the piece came down), and refreshes the rail's counts. Every listing request carries the section's `generation` counter and `tick()` lands only the answer to the latest request, so a slow listing can never put a taken-down piece back. Only a mod takes down somebody else's piece, or a settled month's.
+
+Month end (`late-core/src/models/profile_award.rs`): the `artboard` category ranks hangers by their best piece's applause over their pieces of the month (`period_month`, the UTC month hung), only pieces at or over `GALLERY_AWARD_MIN_APPLAUSE` (3). The rank is `ROW_NUMBER` over applause then earliest hang, never `RANK`: this is the one arm that mints chips, and a tie must not pay two first prizes; the tiebreak is the one the hall of fame uses. Ranks 1-3 print `ART1`-`ART3` and pay `gallery_prize_chips` (40,000 / 15,000 / 10,000) as `ChipMove::ArtboardPrize` (off Top Chips, like every monthly prize: `counts_as_earnings`) inside the snapshot transaction, keyed off the insert's `RETURNING` rows. **The month is settled once**: this is the arm that pays, so it must complete exactly once however many passes run (the 24h fallback, a restart, another replica). `toggle_applause` closes the month at the rollover, but a mod removal still moves the ranking afterwards, and `ON CONFLICT DO NOTHING` alone would let a hanger who climbed into the top 3 on a later pass get a fresh row and a fresh prize; the snapshot insert carries `NOT EXISTS (row for this category and period)` for every board, so once any `artboard` row exists a later pass inserts nothing and pays nothing. Applause is therefore counted once, by the first pass within the hour after the rollover.
+
+Where a piece shows up beyond the page:
+- The splash. The wall still assigns every hung piece one UTC day, in hang order, the day after it was hung at the earliest (`ArtboardPiece::splash_for_day`, migration 195). The partial unique index on `splash_on` handles concurrent claims; a removal leaves its assigned day empty. `GalleryService::refresh_splash` fills a process-wide canvas `watch` at startup and hourly and records queue depth. Both authenticated session builders (`session_bootstrap.rs` and `ssh.rs`) call `splash_piece_for_mode` with the saved `art_splash_mode`. Settings → Tweaks → `Show Gallery Art on Splash` cycles `SFW` (default for missing/invalid values), `Always`, `Never`. SFW permits unmarked art but filters art determined NSFW; Always permits either; Never uses the coffee cup. A lightweight fresh DB read checks today's stamp, removal and classification before exposing cached art, so committed votes/marks affect the next login without waiting for a refresh. Yesterday's cached art never shows today: when the cache still holds an earlier day's piece (the hourly refresh has not crossed UTC midnight yet), the login runs `refresh_splash` for today first, which assigns and publishes today's piece, so the first login of the day shows the new piece and not the cup. Filtering preserves assignments and queue order. An unavailable cache, failed DB check, empty day, small terminal or held haunt door falls back to the cup. The splash remains post-authentication. Its caption counts days since hanging; the monthly awards and hall of fame are independent.
+- Sliding Puzzle's tiles: the most applauded piece not yet featured, hung before the day, claimed once per UTC day by the first board opened (`ArtboardPiece::feature_for_day` stamps `featured_on`, migration 188, unique among pieces still up, so a removal frees the day and pieces hung the same day queue one per day). `/mod artboard feature <id-prefix>` pins a piece for today at once (`ArtboardPiece::feature_now`), skipping the queue and the hung-before-today rule, which is how a piece is checked on the board the day it was hung. The cut and the fallbacks are the Arcade's (`arcade/CONTEXT.md`).
+- The profile's Artboard gallery line (`ArtboardPiece::counts_for_user`); chat labels and the badge legends through the award machinery.
+
+Moderation: `/mod artboard remove <id-prefix> [reason]` (`RESTORE_ARTBOARD` cap; the first 13 characters of the id are printed on the key line of the full-frame view, `gallery::ui::piece_id_prefix`; at least `PIECE_ID_PREFIX_MIN_CHARS` = 8 characters; must match exactly one piece still up; the same soft delete as the hanger's, any owner, any month; applause rows stay, audit row keeps the title).
+
+Staff content commands run inside the `/mod` console and use the same unambiguous 8+ character piece-prefix lookup.
+Moderators and admins can press `m`/`M` from a gallery list or full-piece view with a selected piece.
+The shortcut and its `m moderate` hint use the same mod-surface permission check; regular users get neither.
+Opening starts a fresh visible console section with styled `artboard safety` help, then submits
+`artboard safety view <full UUID>` through the ordinary asynchronous command path. Earlier output remains
+scrollable and the command draft is preserved. Escape returns to the same gallery focus and selection.
+The shortcut does not apply inside the rating dialog, rail, archives or hang flow.
+
+- `artboard safety help` opens focused NSFW/SFW command help, advertised in default `/mod` help and `help artboard`; `help artboard safety` is an unadvertised alternative.
+- `artboard safety view [@user|piece-id-prefix]` reads safety data. No target shows hanging-piece counts, today's splash and up to 20 review candidates (staff disagreement or owner/community NSFW signals with no staff mark). `@user` lists their newest 20 hanging pieces and safety counts. An ID prefix shows the effective verdict, source, counts, the community voters by name (`ArtboardPieceRating::content_votes`; other users only ever see counts, and the gallery help says staff can see who voted) and all staff marks, including reasons and actor IDs. Removed pieces are excluded.
+  Review rows are a table with `art id`, `state`, `reason`, `summary`, `user`, and `art title`.
+  Sources use `admin`/`mod`/`owner`/`commu.`, summaries are abbreviated, usernames omit `@`,
+  and displayed IDs retain the usable first 13 characters of the piece UUID. Per-piece records print
+  the full UUID on a dedicated `Art id:` line for copying into commands.
+- `artboard safety <nsfw|sfw|none> <piece> [reason...]` writes/replaces a moderator-tier mark, including for admin callers; `none` removes the caller's moderator-tier mark. Staff may mark their own pieces.
+- `artboard safety admin <nsfw|sfw|none> <piece> [reason...]` is admin-only and selects the admin tier; `none` removes the caller's admin-tier mark. Each account has one staff mark per piece, so marking at a different tier replaces the previous mark. Explicit SFW overrides lower tiers; removing a mark restores their determination.
+- `artboard safety none <piece> by <@user|user-id> [reason...]` is admin-only and removes that actor's stored mark at whichever tier it holds, another admin's included, so a mark left by a demoted or deleted admin can always be cleared. Moderators cannot remove anyone else's mark.
+
+Mutations and their audit rows commit atomically. The write transaction checks the actor's current database role (plus infrastructure force-admin), so a stale session cannot continue marking after demotion.
+
+Telemetry: `record_gallery_hang(GalleryHangResult)` (hung / daily_cap / duplicate / failed), `record_gallery_applause(GalleryApplauseResult)` (applauded / withdrawn / own_piece / not_found / closed / failed), `record_gallery_take_down(GalleryTakeDownResult)` (taken_down / not_found / not_yours / closed / failed), `record_gallery_content_rating(GalleryContentRatingResult)` (viewed / voted / vote_withdrawn / flagged / unflagged / own_piece / not_yours / not_found / closed / failed), and `record_gallery_splash_queue_depth` (gauge `late_ssh_artboard_gallery_splash_queue_depth`, pieces waiting for a day on the splash wall, from the hourly refresh), all from `gallery/svc.rs`; failures log through `late_core::error_span!`. Time and arrivals on the page split by `place`: `canvas` (the board) or `gallery` (a section's list or one piece, `GalleryState::shows_gallery_pane`), in `late_ssh_attention_seconds_total` and `late_ssh_place_visits_total` (`tick.rs::attention_place`).
+
+Tests: `gallery/frame_test.rs` (crop, credits, hash, the three local rails), `gallery/state_test.rs` (rail rows and focus, the hang flow's title rule), `gallery/ui_test.rs` (the splash caption's day count), `late-core/src/models/artboard_piece_test.rs` (applause rules, daily cap and duplicate in SQL, mod lookup and soft removal, the hanger's take-down scoped by owner and month with the cap and the duplicate rail still counting the row, the closed month refusing applause, the splash wall's claim: hang order, one per day, two replicas, a removal leaving the gap), `gallery/state_test.rs::applause_and_take_down_refuse_before_the_round_trip`, `gallery/svc_test.rs` (the refresh publishes the day's piece, every login shows it, a service with no database publishes nothing), `late-core/src/models/profile_award_test.rs::the_gallery_award_ranks_best_pieces_and_pays_once`, `app/input_flow_test.rs::artboard_gallery_hangs_a_framed_piece_from_the_rail` (paint, rail, frame by drag, a title made of global hotkeys, hang, `v` applause reaching the gallery, `x` asking then taking the piece down, `m` not reaching the paired client, back out), `moderation/command_test.rs::parses_artboard_gallery_commands`.
+
+Not done: the web `/gallery` page does not list pieces.
+
+Content-rating coverage: `artboard_piece_rating_test.rs` tests all count matrices, overrides and fallback, vote replacement/withdrawal, self-vote refusal, old months, concurrency, authority retention and removal. `gallery/svc_test.rs` tests fresh classification/removal/day/fuse checks, the first login after UTC midnight refreshing the wall, each refusal outcome, and failure fallback with fixed copy; `gallery/state_test.rs` covers dialog actions, failure, close and stale results. App input tests cover small-terminal setting persistence and keyboard/mouse rating flows. `session_bootstrap_test.rs` and `ssh_test.rs` exercise saved modes through both session builders; moderation parser/service tests cover permissions and atomic audit rollback.
+
+### Local gallery fixtures
+
+`make seed-artboard` uses `scripts/seed_artboard_test_data.{sh,sql}` against the
+local Compose Postgres, after the current app has applied its migrations. It
+reuses the leaderboard seeder's namespaced-account convention without invoking
+the game-stat seeder. Eleven accounts have stable `seed:artboard:v1:` identities
+and retained SSH keys under the gitignored `tmp/artboard-seed-keys/`: artists
+`art_artist1`–`art_artist3`, voters `art_voter1`–`art_voter4`, moderators
+`art_mod1/2`, and admins `art_admin1/2`. Account preferences survive reruns.
+The tutorial is marked completed on initial creation and every rerun so test
+sessions skip the first-visit walkthrough.
+The seeder also joins each fixture account to public auto-join rooms, including
+`#lounge`, using signup's active-ban exclusion and preserving existing read
+cursors. This makes the Home chat composer and `/mod` available to fixtures.
+
+The twelve numbered 32×12 canvases have distinct ASCII patterns, full artist
+provenance, actual content hashes, and enough glyphs to pass framing. Pieces
+01–11 predate today UTC; 12 is freshly hung. The first three have 6, 5, and 4
+applause. All drawings are harmless, including those with synthetic NSFW marks.
+
+| Piece | Expected determination | Scenario |
+| --- | --- | --- |
+| 01 Checkerboard | SFW, unmarked | Default splash; clean voting slate |
+| 02 Diagonal | SFW, community | One NSFW vote is below the threshold |
+| 03 Rings | NSFW, community | Two NSFW votes against one SFW |
+| 04 Bars | SFW, community | Two votes each, community tie |
+| 05 Steps | NSFW, owner | Owner flag over three SFW votes |
+| 06 Diamond | SFW, moderator | Explicit SFW mark over owner and NSFW votes |
+| 07 Target | NSFW, moderator | One SFW and one NSFW staff mark |
+| 08 Waves | SFW, admin | Admin SFW over moderator/community NSFW |
+| 09 X Cross | NSFW, admin | Conflicting admin marks |
+| 10 Grid | SFW, community | Three SFW votes |
+| 11 Rocket | SFW, unmarked | Clean voting slate |
+| 12 Fresh Ladder | SFW, unmarked | Ineligible for today's splash |
+
+`ART_SPLASH_PIECE=1` (1–11) selects the day's fixture while preserving any
+non-fixture holder, even if taken down. For a filtered splash, use
+`make seed-artboard ART_SPLASH_PIECE=3`. A rerun restores fixture pieces,
+applause, votes, marks, owner flags and roles, including TUI test changes;
+other users, pieces and their ratings are untouched. Reopen the gallery after
+a seed. Restart `service-ssh` and reconnect to load the selected splash canvas;
+later rating changes alone take effect on the next login. The dev profile
+forces admin privileges, so testing role-based permission checks requires
+setting `Config::dev`'s `force_admin` to `false` locally before rebuilding.
+Plain `artboard safety` mutations still write moderator-tier marks; only
+`artboard safety admin` selects the admin tier.
+
 ## Input Model
 
 Artboard has two main interaction modes plus archive viewing:
 
 - `view`: inspect board, move cursor/viewport, keep global page switching (`1-7`, `Tab`, `Shift+Tab`) available.
 - `active`: edit board; single-key globals and reserved global control chords are suppressed so typing/control input goes to the canvas/editor.
-- `snapshot`: read-only historical daily/monthly/curated archive view. `g` opens the browser in view mode; selecting an archive replaces the local snapshot until returning live.
+- `snapshot`: read-only historical daily/monthly/curated archive view. Reached from the rail's ARCHIVES rows; the key under the list cursor replaces the local snapshot until the Board row returns live.
 
 Important routing:
-- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in active mode, then returns to view mode. `q` also closes the Artboard help guide and snapshot browser before global quit handling can run.
-- `q` closes the snapshot browser when it is open; active Artboard editing blocks global quit.
+- `Esc` closes transient Artboard overlays first, then clears floating brush / sampled brush / selection in active mode, then returns to view mode. `q` also closes the Artboard help guide, a full-frame piece, and an archive list before global quit handling can run.
+- Active Artboard editing blocks global quit.
+- The Artboard owns its letters: the paired-client hotkeys (`m` mute, `+`/`-` volume, the `v` music prefix) and `w` (Bonsai Care) are off this page entirely, the way the voice chords already are, so `v` reaches the gallery as the applause key (`global_letter_keys` in `app/input.rs`). Only `q`, the page switches, and `?` stay global here.
+- While the hang flow or content-rating dialog captures typing (framing, a title in the confirm modal, or rating actions) no global single-key hotkey and no reserved chord (`Ctrl+O`, `Ctrl+G`, `Ctrl+F`, `Ctrl+R`) fires: `app/input.rs::artboard_owns_keys` gates both `handle_global_key` and `handle_reserved_global_chord`, so every printable key reaches the title.
+- Left clicks on the top-left screen numbers switch pages before Artboard handlers consume mouse input, including during active editing, framing, title entry, and content rating. Leaving cancels the local hang flow and closes its rating dialog; keyboard-only interaction mode ignores these clicks.
 - View mode does not claim global page switching unless help/glyph picker/active interaction is open.
 - Archive views cannot enter active mode and edit paths refuse to submit changes.
 
@@ -177,9 +309,16 @@ Keyboard reference:
 | Move in view mode | Arrows, `Home`, `End`, `PgUp`, `PgDn`, mouse wheel | Inspect/pan without drawing |
 | Pan viewport in view mode | `Alt+arrows`, right-drag | Moves viewport without moving the cursor for Alt-arrows |
 | Enter active mode | `i`, `I`, `Enter`, canvas left-click | Disabled for archive snapshots |
-| Snapshot browser | `g` | `j/k` or arrows move, `Enter` selects, top row returns live |
+| The rail | landing, `Esc` from the board | `j/k` or arrows move, `Enter` opens (Board, a listing, an archive list, hang), `Esc` from a pane or the board back to the rail, `Tab` from a pane back to the rail; the rail folds while the board has the keys |
+| Archives | rail rows `Daily` / `Monthly` / `Curated` | The rail becomes the key list; `j/k`, arrows, wheel, `PgUp`/`PgDn`, `Home`/`End` move and the board shows the key under the cursor; `Enter` to the board, `Esc` back to the rail (archive stays up), Board row returns live |
+| Hang a piece | rail row `Hang a piece` | Shift+arrows or left drag frame the board, `Enter` names it, `Enter` hangs, `Esc` cancels |
+| Applaud a piece | `v` | In a gallery list or full frame; `v` again withdraws; refused on a past month's piece. `v` is not the music prefix on this page |
+| Moderate a piece | `m` / `M` | Staff only, in a gallery list or full frame; opens safety help and the selected piece's record |
+| Take your piece down | `x`, `x` | Your own piece, this month only; the first `x` asks, the second sends, any other key keeps it |
 | Draw / erase active mode | printable chars, `Space`, `Backspace`, `Delete` | Plain typing edits the shared canvas |
-| Paint color | `Ctrl+U`, `Ctrl+Y` | Local 16-color palette; separate from peer color |
+| Paint color | `Ctrl+U`, `Ctrl+Y` | Steps the 16 presets; separate from peer color; a custom colour steps back onto the presets |
+| Eyedropper | `Alt+K` | The colour under the cursor becomes the paint colour, in view and edit mode; inside the picker it sets the working colour; a blank cell says so in the notice row |
+| Paint color picker | `Ctrl+K` | Modal: R/G/B bars, hex field, presets; `↑↓` row, `←→` ±1, `Shift+←→` ±16, `Home`/`End`, hex digits type, `Enter` applies, `Esc` or `Ctrl+K` discards; opens from view mode too |
 | Select | `Shift+arrows`, mouse drag | Local selection only |
 | Shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip selection corner, draw border, smart-fill |
 | Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
@@ -188,43 +327,46 @@ Keyboard reference:
 | Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
 | Toggle brush transparency | activate same swatch again | Floating preview reflects transparency |
 | Glyph picker | `Ctrl+]` | Searchable emoji / Unicode picker |
-| Help | `Ctrl+P` or `?` in view mode | Four tabs: Overview / Drawing / Brushes / Session |
+| Help | `Ctrl+P` | Four tabs: Overview / Drawing / Brushes / Session; `?` is the global guide in view mode, a glyph in edit mode |
 | Ownership overlay | `Ctrl+\` | Renders owner initials with deterministic colors |
 | Leave edit mode | `Esc` | Also closes help/glyph picker/local transient state first |
 | Leave Artboard page | `1-7`, `Tab`, `Shift+Tab` | Available from view mode; blocked while active/help/glyph picker is open |
 
 Mouse-specific extras:
+- Click a palette cell in the info block to select that preset.
+- In the colour picker, click a channel bar to set it or a preset to take it.
 - Click swatch pin icon to pin/unpin a swatch.
 - `Ctrl+click` a swatch body clears that swatch slot.
-- Double-click a non-space canvas glyph samples it into a temporary one-glyph brush.
+- Double-click a non-space canvas glyph samples it into a temporary one-glyph brush and takes its colour as the paint colour.
 - Mouse wheel over the info overlay is swallowed so it does not pan the board underneath.
 
 ## Rendering Notes
 
 - Artboard has a dedicated renderer; it does not use the generic arcade game frame/sidebar.
-- `ui.rs` renders the canvas, info sidebar, swatches, notices, help overlay, glyph picker, and snapshot browser.
-- The info sidebar shows mode, cursor/cell, owner, local paint color, brush status, selection, and peers.
+- `ui.rs` renders the canvas, info sidebar, swatches, notices, help overlay, and glyph picker; `gallery/ui.rs` the rail (rows or an archive list), the listing pane, the piece, and the hang surfaces.
+- The info sidebar shows mode, cursor/cell, owner, local paint color with its keys (`^U ^Y ^K` right under the palette cells), brush status, selection, and peers.
 - The ownership overlay changes only canvas rendering. `Owner` / `Cell` rows stay visible in the info sidebar either way.
 - Cursor rendering uses the wide glyph origin for continuation cells.
 - Swatch layout deliberately keeps the bottom canvas row visible and avoids overlapping the info block/notice row.
 
 ## Tests
 
-Primary integration tests:
-- `late-ssh/tests/artboard/main.rs` contains shared helpers.
-- `late-ssh/tests/artboard/svc.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
-- `late-ssh/tests/artboard/state.rs` covers multiline paste and archive browser read-only/return-to-live behavior, including curated snapshots in the browser.
+Primary DB-backed tests (adjacent `_test.rs` files in this directory):
+- `test_support.rs` contains shared cfg(test) helpers.
+- `svc_test.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
+- `state_test.rs` covers multiline paste and the archive browser: keys list newest first without canvases, the cursor loads one board, read-only, the cache on the way back, Esc versus the Board row, curated names.
 
-Related integration tests:
-- `late-ssh/tests/app_input_flow.rs` covers Artboard screen switching, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, and active `?` drawing behavior.
-- `late-core/tests/artboard_snapshot.rs` covers snapshot upsert replacement, uniqueness, special/daily/monthly archive listing, insert-if-absent, prefix listing, and delete by board key.
+Related tests:
+- `late-ssh/src/app/input_flow_test.rs` covers Artboard screen switching, the rail landing, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, active `?` drawing behavior, and `artboard_archives_time_travel_from_the_rail` (Daily from the rail, the key lands on the board, Tab and the Board row bring live back).
+- `late-core/src/models/artboard_test.rs` covers snapshot upsert replacement, uniqueness, special/daily/monthly archive listing, insert-if-absent, prefix listing, and delete by board key.
 
 Inline module tests:
+- `color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking.
 - `provenance.rs`: paint/clear provenance and replace retagging.
-- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior.
-- `input.rs`: mouse routing, raw control mapping, swatch interactions, double-click glyph brush, help/glyph picker routing, selection, paste/stamp behavior.
+- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior, the picker applying or discarding a colour.
+- `input.rs`: mouse routing, raw control mapping, swatch interactions, double-click glyph brush, help/glyph picker routing, the colour picker keys and the palette click, selection, paste/stamp behavior.
 - `page.rs`: view-mode right-drag pan, non-canvas right-click handling, Alt-arrow pan.
-- `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, swatch boxes, wide glyph cursor origin, snapshot/browser rendering helpers.
+- `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker's hit tests and rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.
 
 ## Key Invariants
 
@@ -239,8 +381,9 @@ Inline module tests:
 - Unknown actor `CanvasOp::Replace` does not invent attribution; it reloads cloned shared provenance.
 - Archive view is read-only and must not be overwritten by live watch updates during `State::tick()`.
 - Active artboard bans block editing through `App::activate_artboard_interaction` and show an error banner while the ban is active; viewing and archive browsing remain available.
-- Snapshot browser selection index `0` means live; archive items are offset by one.
+- One archive fetch is in flight per session; `wanted` is the only thing the cursor writes, and `request_wanted_archive` is the only reader.
 - Swatch slot `0` is the primary clipboard slot and is not pinnable.
+- Swatches and floating brushes store glyphs only (`dartboard_editor::Clipboard`); stamping paints in the current paint colour. The eyedropper reads colour from the canvas, never from a swatch.
 - Local paint palette is separate from the server-assigned peer color.
 - Connection rejection lives on `DartboardSnapshot.connect_rejected`, not only on events.
 
@@ -250,7 +393,8 @@ Inline module tests:
 - Monthly rollover uses system user/client IDs `0`; actor lookup can fail intentionally and should fall back to cloned shared provenance.
 - Wide glyph handling affects cursor rendering, selection coverage, double-click sampling, provenance, swatches, and ownership overlay.
 - `diff_canvas_op` abstracts many editor mutations into server ops; editor changes can affect sync granularity and provenance application.
-- Snapshot archive listing decodes full canvas/provenance JSON for every daily/monthly/curated row; expanding retention may require pagination or summaries.
+- Archive lists are keys only and one canvas loads at a time, so retention can grow without the page paying for it; the per-session cache is bounded (`ARCHIVE_CACHE_SIZE`).
 - UI hit testing depends on exact layout math shared by `ui.rs`, `input.rs`, and `page.rs`.
 - SGR mouse coordinates are 1-based at the parser boundary; Artboard hit tests assume normalized coordinates from app input.
-- Global input integration can regress if `artboard_blocks_global_page_switch` stops considering active/help/glyph states.
+- Global input integration can regress if `artboard_blocks_global_page_switch` stops considering active/help/glyph/colour picker states, or the gallery's `captures_typing` (a title being typed, a frame being drawn). `handle_global_key` runs before `dispatch_screen_key`, so any new single-key global is stolen from the board and from a piece title unless it is gated the same way.
+- The rail shifts the board 21 columns right while it is up; anything that computes a board cell from a screen point must go through `canvas_area_for_state` with the last draw's rail visibility, never `canvas_area_for_screen`.

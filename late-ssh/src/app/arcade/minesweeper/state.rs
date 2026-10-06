@@ -5,12 +5,21 @@ use rand_core::{OsRng, RngCore};
 use uuid::Uuid;
 
 use super::svc::MinesweeperService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::minesweeper::{Game, GameParams};
 
 const CELL_HIDDEN: u8 = 0;
 const CELL_REVEALED: u8 = 1;
 const CELL_FLAGGED: u8 = 2;
 const CELL_MINE_HIT: u8 = 3;
+
+/// One click as the share card tells it. Session-local, never saved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Click {
+    Safe,
+    Flag,
+    Boom,
+}
 
 pub const MAX_LIVES: u8 = 3;
 
@@ -33,6 +42,13 @@ pub const DIFFICULTIES: [DifficultyConfig; 3] = [
         cols: 16,
         mines: 40,
     },
+];
+/// The metric label of each row of `DIFFICULTIES`, in the same order.
+/// Sized by the table, so a new difficulty must be labeled to build.
+const DIFFICULTY_METRICS: [ArcadeDifficulty; DIFFICULTIES.len()] = [
+    ArcadeDifficulty::Easy,
+    ArcadeDifficulty::Medium,
+    ArcadeDifficulty::Hard,
 ];
 
 #[derive(Clone, Copy)]
@@ -65,6 +81,7 @@ struct BoardSnapshot {
     player_grid: Vec<Vec<u8>>,
     lives: u8,
     is_game_over: bool,
+    click_log: Vec<Click>,
 }
 
 pub struct State {
@@ -77,10 +94,14 @@ pub struct State {
     player_grid: Vec<Vec<u8>>,
     pub lives: u8,
     pub is_game_over: bool,
+    click_log: Vec<Click>,
     pub use_dot_style: bool,
     pub scroll_offset: u16,
     pub reset_pending: bool,
     daily_snapshots: HashMap<String, BoardSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     pub svc: MinesweeperService,
 }
@@ -122,15 +143,41 @@ impl State {
             player_grid: Vec::new(),
             lives: MAX_LIVES,
             is_game_over: false,
+            click_log: Vec::new(),
             use_dot_style: true,
             scroll_offset: 0,
             reset_pending: false,
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_difficulty();
         state
+    }
+
+    /// Roll the daily boards forward when the UTC date changes under a live
+    /// session. Reconnecting rebuilds them in `new`, so a client left running
+    /// overnight was the only one still being handed yesterday's boards, and
+    /// saving one wrote yesterday's progress under today's puzzle date.
+    /// Returns true when the boards moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for diff in &DIFFICULTIES {
+            self.daily_snapshots.insert(
+                diff.key.to_string(),
+                generate_snapshot(Mode::Daily, diff, &self.svc),
+            );
+        }
+        if self.mode == Mode::Daily {
+            self.reset_pending = false;
+            self.load_mode_snapshot_for_selected_difficulty();
+        }
+        true
     }
 
     pub fn difficulty(&self) -> &DifficultyConfig {
@@ -139,6 +186,15 @@ impl State {
 
     pub fn difficulty_key(&self) -> &'static str {
         DIFFICULTIES[self.selected_difficulty].key
+    }
+
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
+    }
+
+    /// This session's clicks on the active board, oldest first.
+    pub fn click_log(&self) -> &[Click] {
+        &self.click_log
     }
 
     pub fn mine_map(&self) -> &[Vec<bool>] {
@@ -194,6 +250,37 @@ impl State {
     }
 
     // --- Mode / difficulty switching ---
+
+    /// Index of the first daily difficulty with revealed or flagged cells and
+    /// no finish yet: the live board when it is the active daily, the stored
+    /// snapshot otherwise.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES.iter().enumerate().find_map(|(index, diff)| {
+            let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                !self.is_game_over && grid_has_player_marks(&self.player_grid)
+            } else {
+                self.daily_snapshots.get(diff.key).is_some_and(|snapshot| {
+                    !snapshot.is_game_over && grid_has_player_marks(&snapshot.player_grid)
+                })
+            };
+            started.then_some(index)
+        })
+    }
+
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_difficulty();
+    }
 
     pub fn show_personal(&mut self) {
         self.clear_reset_pending();
@@ -271,7 +358,14 @@ impl State {
         }
         match self.player_grid[row][col] {
             CELL_REVEALED => {
+                let lives_before = self.lives;
+                let revealed_before = self.revealed_count();
                 self.chord_reveal(row, col, &diff);
+                if self.lives < lives_before {
+                    self.click_log.push(Click::Boom);
+                } else if self.revealed_count() > revealed_before {
+                    self.click_log.push(Click::Safe);
+                }
                 self.store_active_snapshot();
                 self.save_async();
                 return;
@@ -287,10 +381,12 @@ impl State {
 
         if self.mine_map[row][col] {
             // Hit a mine
+            self.click_log.push(Click::Boom);
             self.player_grid[row][col] = CELL_MINE_HIT;
             self.lives = self.lives.saturating_sub(1);
             if self.lives == 0 {
                 self.is_game_over = true;
+                self.record_finish(ArcadeFinish::Lost);
                 // Reveal all mines on game over
                 for r in 0..diff.rows {
                     for c in 0..diff.cols {
@@ -302,6 +398,7 @@ impl State {
             }
         } else {
             flood_reveal(&self.mine_map, &mut self.player_grid, row, col);
+            self.click_log.push(Click::Safe);
             self.check_win();
         }
 
@@ -342,6 +439,7 @@ impl State {
                 self.lives = self.lives.saturating_sub(1);
                 if self.lives == 0 {
                     self.is_game_over = true;
+                    self.record_finish(ArcadeFinish::Lost);
                     for rr in 0..diff.rows {
                         for cc in 0..diff.cols {
                             if self.mine_map[rr][cc] && self.player_grid[rr][cc] == CELL_HIDDEN {
@@ -369,6 +467,9 @@ impl State {
             return;
         }
 
+        if self.player_grid[row][col] == CELL_HIDDEN {
+            self.click_log.push(Click::Flag);
+        }
         self.player_grid[row][col] = match self.player_grid[row][col] {
             CELL_HIDDEN => CELL_FLAGGED,
             CELL_FLAGGED => CELL_HIDDEN,
@@ -391,16 +492,28 @@ impl State {
         self.reset_pending = false;
     }
 
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = DIFFICULTY_METRICS[self.selected_difficulty];
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_win(&mut self) {
         if self.is_game_over {
             return;
         }
         if self.revealed_count() == self.safe_cell_count() {
             self.is_game_over = true;
+            self.record_finish(ArcadeFinish::Won);
             if self.mode == Mode::Daily {
                 self.svc.record_win_task(
                     self.user_id,
                     self.difficulty_key().to_string(),
+                    self.daily_date,
                     self.lives as i32,
                 );
             }
@@ -415,6 +528,7 @@ impl State {
         self.player_grid = snapshot.player_grid;
         self.lives = snapshot.lives;
         self.is_game_over = snapshot.is_game_over;
+        self.click_log = snapshot.click_log;
         self.cursor = (0, 0);
         self.scroll_offset = 0;
     }
@@ -426,6 +540,7 @@ impl State {
             player_grid: self.player_grid.clone(),
             lives: self.lives,
             is_game_over: self.is_game_over,
+            click_log: self.click_log.clone(),
         };
         let dk = self.difficulty_key().to_string();
         match self.mode {
@@ -474,7 +589,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_seed: self.seed as i64,
             mine_map: serde_json::to_value(&self.mine_map).unwrap_or_default(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),
@@ -505,6 +623,7 @@ fn generate_snapshot(
         player_grid,
         lives: MAX_LIVES,
         is_game_over: false,
+        click_log: Vec::new(),
     }
 }
 
@@ -642,6 +761,7 @@ fn snapshot_from_game(game: &Game, diff: &DifficultyConfig) -> BoardSnapshot {
         player_grid,
         lives: game.lives as u8,
         is_game_over: game.is_game_over,
+        click_log: Vec::new(),
     }
 }
 
@@ -650,6 +770,11 @@ fn lcg_next(state: u64) -> u64 {
     state
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407)
+}
+
+fn grid_has_player_marks(grid: &[Vec<u8>]) -> bool {
+    grid.iter()
+        .any(|row| row.iter().any(|cell| *cell != CELL_HIDDEN))
 }
 
 fn is_current_daily_game(puzzle_date: Option<NaiveDate>, today: NaiveDate) -> bool {
@@ -699,321 +824,5 @@ fn accounted_mine_count(player_grid: &[Vec<u8>], mine_count: usize) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── Generation ──
-
-    #[test]
-    fn same_seed_generates_same_mines() {
-        let a = generate_mine_map(42, 9, 9, 10);
-        let b = generate_mine_map(42, 9, 9, 10);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn different_seeds_generate_different_mines() {
-        let a = generate_mine_map(42, 9, 9, 10);
-        let b = generate_mine_map(43, 9, 9, 10);
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn mine_count_matches_requested() {
-        for diff in &DIFFICULTIES {
-            let map = generate_mine_map(99, diff.rows, diff.cols, diff.mines);
-            let count: usize = map.iter().flatten().filter(|&&m| m).count();
-            assert_eq!(count, diff.mines, "difficulty: {}", diff.key);
-        }
-    }
-
-    #[test]
-    fn zero_mines_produces_empty_map() {
-        let map = generate_mine_map(42, 5, 5, 0);
-        assert!(map.iter().flatten().all(|&m| !m));
-    }
-
-    #[test]
-    fn map_dimensions_match_requested() {
-        let map = generate_mine_map(42, 13, 16, 30);
-        assert_eq!(map.len(), 13);
-        assert!(map.iter().all(|row| row.len() == 16));
-    }
-
-    // ── First-click safety ──
-
-    #[test]
-    fn first_click_safety_clears_center_and_neighbors() {
-        let mut map = generate_mine_map(42, 9, 9, 10);
-        ensure_safe_first_click(&mut map, 4, 4, 42);
-        for dr in -1..=1i32 {
-            for dc in -1..=1i32 {
-                assert!(
-                    !map[(4i32 + dr) as usize][(4i32 + dc) as usize],
-                    "cell ({}, {}) should be safe",
-                    4i32 + dr,
-                    4i32 + dc
-                );
-            }
-        }
-        let count: usize = map.iter().flatten().filter(|&&m| m).count();
-        assert_eq!(count, 10);
-    }
-
-    #[test]
-    fn first_click_safety_at_corner() {
-        let mut map = generate_mine_map(42, 9, 9, 10);
-        ensure_safe_first_click(&mut map, 0, 0, 42);
-        // Corner has only 3 neighbors + itself = 4 safe cells
-        for &(r, c) in &[(0, 0), (0, 1), (1, 0), (1, 1)] {
-            assert!(!map[r][c], "cell ({r}, {c}) should be safe");
-        }
-        let count: usize = map.iter().flatten().filter(|&&m| m).count();
-        assert_eq!(count, 10);
-    }
-
-    #[test]
-    fn first_click_safety_noop_when_already_safe() {
-        // 5x5 grid, mines only in bottom row
-        let mut map = vec![
-            vec![false, false, false, false, false],
-            vec![false, false, false, false, false],
-            vec![false, false, false, false, false],
-            vec![false, false, false, false, false],
-            vec![true, true, true, false, false],
-        ];
-        let before = map.clone();
-        ensure_safe_first_click(&mut map, 1, 1, 42);
-        assert_eq!(map, before, "no mines near click, map should be unchanged");
-    }
-
-    #[test]
-    fn first_click_safety_preserves_count_with_dense_mines() {
-        // 5x5 with 15 mines — very dense, click in center
-        let mut map = generate_mine_map(77, 5, 5, 15);
-        ensure_safe_first_click(&mut map, 2, 2, 77);
-        let count: usize = map.iter().flatten().filter(|&&m| m).count();
-        assert_eq!(count, 15, "mine count must be preserved");
-        // Center + 8 neighbors all safe
-        for dr in -1..=1i32 {
-            for dc in -1..=1i32 {
-                assert!(!map[(2 + dr) as usize][(2 + dc) as usize]);
-            }
-        }
-    }
-
-    // ── Adjacent mine count ──
-
-    #[test]
-    fn adjacent_count_correct() {
-        let mine_map = vec![
-            vec![true, false, false],
-            vec![false, false, false],
-            vec![false, false, true],
-        ];
-        assert_eq!(adjacent_mine_count(&mine_map, 1, 1), 2);
-        assert_eq!(adjacent_mine_count(&mine_map, 0, 0), 0); // mine itself not counted
-        assert_eq!(adjacent_mine_count(&mine_map, 0, 1), 1);
-        assert_eq!(adjacent_mine_count(&mine_map, 2, 2), 0);
-    }
-
-    #[test]
-    fn adjacent_count_corner_cell() {
-        // Mine at every position except (0,0)
-        let mine_map = vec![
-            vec![false, true, true],
-            vec![true, true, true],
-            vec![true, true, true],
-        ];
-        // (0,0) has 3 neighbors, all mines
-        assert_eq!(adjacent_mine_count(&mine_map, 0, 0), 3);
-    }
-
-    #[test]
-    fn adjacent_count_surrounded_by_mines() {
-        let mine_map = vec![
-            vec![true, true, true],
-            vec![true, false, true],
-            vec![true, true, true],
-        ];
-        assert_eq!(adjacent_mine_count(&mine_map, 1, 1), 8);
-    }
-
-    #[test]
-    fn adjacent_count_no_mines() {
-        let mine_map = vec![
-            vec![false, false, false],
-            vec![false, false, false],
-            vec![false, false, false],
-        ];
-        for r in 0..3 {
-            for c in 0..3 {
-                assert_eq!(adjacent_mine_count(&mine_map, r, c), 0);
-            }
-        }
-    }
-
-    // ── Flood reveal ──
-
-    #[test]
-    fn flood_reveal_opens_empty_region() {
-        let mine_map = vec![
-            vec![true, false, false],
-            vec![false, false, false],
-            vec![false, false, false],
-        ];
-        let mut player_grid = vec![vec![CELL_HIDDEN; 3]; 3];
-        flood_reveal(&mine_map, &mut player_grid, 2, 2);
-        assert_eq!(player_grid[2][2], CELL_REVEALED);
-        assert_eq!(player_grid[2][1], CELL_REVEALED);
-        assert_eq!(player_grid[2][0], CELL_REVEALED);
-        assert_eq!(player_grid[1][2], CELL_REVEALED);
-        assert_eq!(player_grid[1][1], CELL_REVEALED);
-        assert_eq!(player_grid[0][1], CELL_REVEALED);
-        // Mine itself stays hidden
-        assert_eq!(player_grid[0][0], CELL_HIDDEN);
-    }
-
-    #[test]
-    fn flood_reveal_stops_at_numbered_cells() {
-        // Mines at (0,0) and (0,4) — row 1 has numbers, row 2+ is open
-        let mine_map = vec![
-            vec![true, false, false, false, true],
-            vec![false, false, false, false, false],
-            vec![false, false, false, false, false],
-        ];
-        let mut player_grid = vec![vec![CELL_HIDDEN; 5]; 3];
-        flood_reveal(&mine_map, &mut player_grid, 2, 2);
-        // Row 2 should all be revealed (0 adjacent mines for center cells)
-        for (c, cell) in player_grid[2].iter().enumerate() {
-            assert_eq!(*cell, CELL_REVEALED, "row 2, col {c}");
-        }
-        // Row 1 cells adjacent to mines are numbered → revealed but don't propagate
-        assert_eq!(player_grid[1][0], CELL_REVEALED); // adj=1, reached from flood
-        assert_eq!(player_grid[1][1], CELL_REVEALED); // adj=1
-        assert_eq!(player_grid[1][2], CELL_REVEALED); // adj=0, floods
-        assert_eq!(player_grid[1][3], CELL_REVEALED); // adj=1
-        assert_eq!(player_grid[1][4], CELL_REVEALED); // adj=1
-        // Row 0 numbered cells next to mines — reached via row 1
-        assert_eq!(player_grid[0][1], CELL_REVEALED); // adj=1
-        assert_eq!(player_grid[0][2], CELL_REVEALED); // adj=0
-        assert_eq!(player_grid[0][3], CELL_REVEALED); // adj=1
-        // Mines stay hidden
-        assert_eq!(player_grid[0][0], CELL_HIDDEN);
-        assert_eq!(player_grid[0][4], CELL_HIDDEN);
-    }
-
-    #[test]
-    fn flood_reveal_skips_flagged_cells() {
-        let mine_map = vec![
-            vec![false, false, false],
-            vec![false, false, false],
-            vec![false, false, false],
-        ];
-        let mut player_grid = vec![vec![CELL_HIDDEN; 3]; 3];
-        player_grid[1][1] = CELL_FLAGGED;
-        flood_reveal(&mine_map, &mut player_grid, 0, 0);
-        // All cells revealed except the flagged one
-        for (r, row) in player_grid.iter().enumerate() {
-            for (c, cell) in row.iter().enumerate() {
-                if r == 1 && c == 1 {
-                    assert_eq!(*cell, CELL_FLAGGED);
-                } else {
-                    assert_eq!(*cell, CELL_REVEALED, "({r},{c})");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn flood_reveal_no_mines_reveals_entire_board() {
-        let mine_map = vec![vec![false; 5]; 5];
-        let mut player_grid = vec![vec![CELL_HIDDEN; 5]; 5];
-        flood_reveal(&mine_map, &mut player_grid, 0, 0);
-        assert!(
-            player_grid.iter().flatten().all(|&c| c == CELL_REVEALED),
-            "entire board should be revealed when there are no mines"
-        );
-    }
-
-    #[test]
-    fn flood_reveal_single_cell_with_adjacent_mine() {
-        // Click on a cell with adjacent mines — only that cell revealed
-        let mine_map = vec![vec![true, false], vec![false, false]];
-        let mut player_grid = vec![vec![CELL_HIDDEN; 2]; 2];
-        flood_reveal(&mine_map, &mut player_grid, 0, 1);
-        assert_eq!(player_grid[0][1], CELL_REVEALED);
-        // Others not flood-revealed since (0,1) has adj=1
-        assert_eq!(player_grid[1][0], CELL_HIDDEN);
-        assert_eq!(player_grid[1][1], CELL_HIDDEN);
-    }
-
-    // ── Snapshot round-trip ──
-
-    #[test]
-    fn snapshot_from_game_round_trip() {
-        let diff = &DIFFICULTIES[0]; // easy 9x9
-        let mine_map = generate_mine_map(123, diff.rows, diff.cols, diff.mines);
-        let mut player_grid = vec![vec![CELL_HIDDEN; diff.cols]; diff.rows];
-        player_grid[0][0] = CELL_REVEALED;
-        player_grid[1][1] = CELL_FLAGGED;
-        player_grid[2][2] = CELL_MINE_HIT;
-
-        let game = Game {
-            id: Uuid::nil(),
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            user_id: Uuid::nil(),
-            mode: "daily".to_string(),
-            difficulty_key: "easy".to_string(),
-            puzzle_date: None,
-            puzzle_seed: 123,
-            mine_map: serde_json::to_value(&mine_map).unwrap(),
-            player_grid: serde_json::to_value(&player_grid).unwrap(),
-            lives: 2,
-            is_game_over: false,
-            score: 2,
-        };
-
-        let snapshot = snapshot_from_game(&game, diff);
-        assert_eq!(snapshot.seed, 123);
-        assert_eq!(snapshot.lives, 2);
-        assert!(!snapshot.is_game_over);
-        assert_eq!(snapshot.mine_map, mine_map);
-        assert_eq!(snapshot.player_grid[0][0], CELL_REVEALED);
-        assert_eq!(snapshot.player_grid[1][1], CELL_FLAGGED);
-        assert_eq!(snapshot.player_grid[2][2], CELL_MINE_HIT);
-        assert_eq!(snapshot.player_grid[3][3], CELL_HIDDEN);
-    }
-
-    // ── Date helpers ──
-
-    #[test]
-    fn puzzle_date_only_exists_for_daily() {
-        let today = NaiveDate::from_ymd_opt(2026, 4, 2).expect("date");
-        assert_eq!(puzzle_date_for_mode(Mode::Daily, today), Some(today));
-        assert_eq!(puzzle_date_for_mode(Mode::Personal, today), None);
-    }
-
-    #[test]
-    fn current_daily_game_must_match_today() {
-        let today = NaiveDate::from_ymd_opt(2026, 4, 2).expect("date");
-        assert!(is_current_daily_game(Some(today), today));
-        assert!(!is_current_daily_game(
-            NaiveDate::from_ymd_opt(2026, 4, 1),
-            today
-        ));
-        assert!(!is_current_daily_game(None, today));
-    }
-
-    #[test]
-    fn accounted_mines_include_hit_mines() {
-        let mut player_grid = vec![vec![CELL_HIDDEN; 13]; 13];
-        player_grid[0][0] = CELL_FLAGGED;
-        player_grid[0][1] = CELL_FLAGGED;
-        player_grid[1][0] = CELL_MINE_HIT;
-        player_grid[1][1] = CELL_MINE_HIT;
-
-        assert_eq!(accounted_mine_count(&player_grid, 30), 4);
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

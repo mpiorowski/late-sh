@@ -1,8 +1,57 @@
+use std::time::{Duration, Instant};
+
 use chrono::{DateTime, Utc};
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
 
-use crate::app::chat::state::{ChatState, RoomSlot, is_chat_list_room, room_activity_at};
+use crate::app::chat::state::{
+    ChatState, RoomSlot, is_chat_list_room, room_activity_at, synthetic_favorite_id,
+};
+use crate::app::chat::svc::SEARCH_MIN_CHARS;
+use crate::app::common::primitives::Screen;
+
+/// Quiet time after the last keystroke before a message search fires.
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// Which rail entries the picker offers. Zen chat tiles draw real rooms
+/// only, so a synthetic entry (Mentions, News, feeds...) picked there would
+/// land nowhere visible; everywhere else the whole rail is on offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerScope {
+    AllSlots,
+    RoomsOnly,
+}
+
+impl PickerScope {
+    pub(crate) fn for_screen(screen: Screen) -> Self {
+        match screen {
+            Screen::Zen => Self::RoomsOnly,
+            Screen::Dashboard
+            | Screen::Arcade
+            | Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Artboard
+            | Screen::Profiles
+            | Screen::Leaderboard
+            | Screen::Clubhouse
+            | Screen::Nightcap
+            | Screen::City
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Scratchpad => Self::AllSlots,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RoomSearchItem {
@@ -19,6 +68,15 @@ pub(crate) struct RoomSearchModalState {
     open: bool,
     query: String,
     selected: usize,
+    /// Time of the last query edit; message searches fire only after
+    /// `SEARCH_DEBOUNCE` of quiet.
+    last_edit: Option<Instant>,
+    /// The `(scope, text)` of the last fired search, so an unchanged query
+    /// never refires.
+    last_fired_key: Option<(Option<Uuid>, String)>,
+    /// Screen-y → item index for each result row drawn this frame, so a click
+    /// can select the room under the pointer. Interior-mutable (render has `&`).
+    item_rows: std::cell::RefCell<Vec<(u16, usize)>>,
 }
 
 impl RoomSearchModalState {
@@ -26,12 +84,28 @@ impl RoomSearchModalState {
         self.open = true;
         self.query.clear();
         self.selected = 0;
+        self.last_edit = None;
+        self.last_fired_key = None;
+    }
+
+    /// Open pre-filled (the `/search` command path). The debounce timestamp
+    /// is set so the search fires on its own shortly after the modal opens.
+    pub(crate) fn open_with_query(&mut self, query: String) {
+        self.open();
+        self.query = query;
+        self.last_edit = Some(
+            Instant::now()
+                .checked_sub(SEARCH_DEBOUNCE)
+                .unwrap_or_else(Instant::now),
+        );
     }
 
     pub(crate) fn close(&mut self) {
         self.open = false;
         self.query.clear();
         self.selected = 0;
+        self.last_edit = None;
+        self.last_fired_key = None;
     }
 
     pub(crate) fn is_open(&self) -> bool {
@@ -46,16 +120,41 @@ impl RoomSearchModalState {
         self.selected
     }
 
+    pub(crate) fn set_selected(&mut self, index: usize) {
+        self.selected = index;
+    }
+
+    /// Clear last frame's clickable rows (call before recording this frame's).
+    pub(crate) fn clear_item_rows(&self) {
+        self.item_rows.borrow_mut().clear();
+    }
+
+    /// Record that a result row for `index` is drawn at screen row `y`.
+    pub(crate) fn record_item_row(&self, y: u16, index: usize) {
+        self.item_rows.borrow_mut().push((y, index));
+    }
+
+    /// The item index drawn at screen row `y`, if a click landed on one.
+    pub(crate) fn item_at(&self, y: u16) -> Option<usize> {
+        self.item_rows
+            .borrow()
+            .iter()
+            .find(|(row_y, _)| *row_y == y)
+            .map(|(_, index)| *index)
+    }
+
     pub(crate) fn push(&mut self, ch: char) {
         if !ch.is_control() {
             self.query.push(ch);
             self.selected = 0;
+            self.last_edit = Some(Instant::now());
         }
     }
 
     pub(crate) fn backspace(&mut self) {
         self.query.pop();
         self.selected = 0;
+        self.last_edit = Some(Instant::now());
     }
 
     pub(crate) fn delete_word_left(&mut self) {
@@ -70,6 +169,20 @@ impl RoomSearchModalState {
             self.query.pop();
         }
         self.selected = 0;
+        self.last_edit = Some(Instant::now());
+    }
+
+    fn debounce_elapsed(&self) -> bool {
+        self.last_edit
+            .is_some_and(|at| at.elapsed() >= SEARCH_DEBOUNCE)
+    }
+
+    /// Whether the query was edited within the debounce window, meaning a
+    /// search is about to fire. Render uses this to show "Searching..."
+    /// instead of a premature "No matching messages".
+    pub(crate) fn query_recently_edited(&self) -> bool {
+        self.last_edit
+            .is_some_and(|at| at.elapsed() < SEARCH_DEBOUNCE)
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize, len: usize) {
@@ -90,34 +203,57 @@ impl RoomSearchModalState {
     }
 }
 
-pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomSearchItem> {
+pub(crate) fn search_items(
+    chat: &ChatState,
+    current_user_id: Uuid,
+    scope: PickerScope,
+) -> Vec<RoomSearchItem> {
     let mut items = Vec::new();
     for slot in chat.visual_order() {
         match slot {
-            RoomSlot::Room(room_id) => {
-                let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id) else {
-                    continue;
-                };
-                if !is_chat_list_room(room) {
-                    continue;
-                }
-                items.push(RoomSearchItem {
+            RoomSlot::Room(room_id) => match chat.stream_for_room(room_id) {
+                // The rail order carries a stream room only while it is live.
+                // It is `kind='game'` and may not be joined yet, so the row is
+                // built from the stream; the pick joins lazily.
+                Some(stream) => items.push(RoomSearchItem {
                     slot,
-                    label: room_label(room, current_user_id, &chat.usernames),
-                    meta: room_meta(room),
-                    unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
-                    last_message_at: room_activity_at(room.id, &chat.room_last_message_at),
-                    favorite: chat.favorite_room_ids().contains(&room.id),
-                });
-            }
+                    label: format!("#{}-live", stream.username),
+                    meta: format!("live stream: {}", stream.title),
+                    unread_count: chat.unread_counts.get(&room_id).copied().unwrap_or(0),
+                    last_message_at: room_activity_at(room_id, &chat.room_last_message_at),
+                    favorite: false,
+                }),
+                None => {
+                    let Some((room, _)) = chat.rooms.iter().find(|(room, _)| room.id == room_id)
+                    else {
+                        continue;
+                    };
+                    if !is_chat_list_room(room) {
+                        continue;
+                    }
+                    items.push(RoomSearchItem {
+                        slot,
+                        label: room_label(room, current_user_id, &chat.usernames),
+                        meta: room_meta(room),
+                        unread_count: chat.unread_counts.get(&room.id).copied().unwrap_or(0),
+                        last_message_at: room_activity_at(room.id, &chat.room_last_message_at),
+                        favorite: chat.favorite_room_ids().contains(&room.id),
+                    });
+                }
+            },
             RoomSlot::Feeds
             | RoomSlot::News
+            | RoomSlot::Cyberspace
+            | RoomSlot::CyberspaceNotifications
+            | RoomSlot::CyberspaceRoom(_)
+            | RoomSlot::CyberspaceMail(_)
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
-            | RoomSlot::Work => {
-                items.push(synthetic_item(slot, chat));
-            }
+            | RoomSlot::Work => match scope {
+                PickerScope::AllSlots => items.push(synthetic_item(slot, chat)),
+                PickerScope::RoomsOnly => {}
+            },
         }
     }
     sort_picker_items(&mut items);
@@ -127,10 +263,11 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
 pub(crate) fn filtered_items(
     chat: &ChatState,
     current_user_id: Uuid,
+    scope: PickerScope,
     query: &str,
 ) -> Vec<RoomSearchItem> {
     let query = SearchQuery::parse(query);
-    let mut all = search_items(chat, current_user_id);
+    let mut all = search_items(chat, current_user_id, scope);
     if query.kind == SearchQueryKind::All && query.text.is_empty() {
         return all;
     }
@@ -168,9 +305,55 @@ fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {
 }
 
 fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
+    // The pinned cyberspace rooms and conversations are the synthetic entries
+    // with names of their own rather than fixed labels, so they are resolved
+    // before the roster below.
+    if let RoomSlot::CyberspaceRoom(index) = slot {
+        let label = match chat.cyberspace.pinned_rooms().get(index) {
+            Some(slug) => format!("#{slug}"),
+            None => "#room".to_string(),
+        };
+        return RoomSearchItem {
+            slot,
+            label,
+            meta: "cyberspace chat".to_string(),
+            unread_count: 0,
+            last_message_at: None,
+            favorite: false,
+        };
+    }
+    if let RoomSlot::CyberspaceMail(index) = slot {
+        let label = match chat.cyberspace.pinned_cmail().get(index) {
+            Some(thread) => format!("@{}", thread.username),
+            None => "@?".to_string(),
+        };
+        return RoomSearchItem {
+            slot,
+            label,
+            meta: "cyberspace c-mail".to_string(),
+            unread_count: chat
+                .cyberspace
+                .cmail_unread_counts()
+                .get(index)
+                .copied()
+                .unwrap_or(0),
+            last_message_at: None,
+            favorite: false,
+        };
+    }
     let (label, meta, unread_count) = match slot {
         RoomSlot::Feeds => ("rss", "rss inbox", chat.feeds.unread_count()),
         RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
+        RoomSlot::Cyberspace => (
+            "feeds",
+            "cyberspace.online",
+            chat.cyberspace.unread_entries(),
+        ),
+        RoomSlot::CyberspaceNotifications => (
+            "notifications",
+            "cyberspace.online",
+            chat.cyberspace.unread_notifications(),
+        ),
         RoomSlot::Notifications => (
             "mentions",
             "notifications",
@@ -179,8 +362,8 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),
-        RoomSlot::Room(_) => {
-            unreachable!("real rooms are built from ChatRoom")
+        RoomSlot::Room(_) | RoomSlot::CyberspaceRoom(_) | RoomSlot::CyberspaceMail(_) => {
+            unreachable!("real rooms are built from ChatRoom, pinned entries just above")
         }
     };
 
@@ -190,7 +373,8 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         meta: meta.to_string(),
         unread_count,
         last_message_at: None,
-        favorite: false,
+        favorite: synthetic_favorite_id(slot)
+            .is_some_and(|id| chat.favorite_room_ids().contains(&id)),
     }
 }
 
@@ -281,121 +465,144 @@ fn normalize_text(input: &str) -> String {
     input.trim().trim_start_matches(['#', '@']).to_lowercase()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
+/// What the modal's query line currently means. A leading `?` flips from
+/// room jumping to message search; inside message search, the familiar `#`
+/// and `@` prefixes scope to one room or one DM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ModalQuery {
+    Rooms,
+    Messages(MessageQuery),
+}
 
-    fn room(kind: &str, visibility: &str, slug: Option<&str>) -> ChatRoom {
-        ChatRoom {
-            id: Uuid::from_u128(1),
-            created: Utc::now(),
-            updated: Utc::now(),
-            kind: kind.to_string(),
-            visibility: visibility.to_string(),
-            auto_join: false,
-            permanent: false,
-            slug: slug.map(str::to_string),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-        }
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MessageQuery {
+    pub scope: Option<MessageScope>,
+    pub text: String,
+}
 
-    fn item(label: &str, meta: &str, unread_count: i64) -> RoomSearchItem {
-        RoomSearchItem {
-            slot: RoomSlot::Room(Uuid::from_u128(1)),
-            label: label.to_string(),
-            meta: meta.to_string(),
-            unread_count,
-            last_message_at: None,
-            favorite: false,
-        }
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MessageScope {
+    Room(String),
+    Dm(String),
+}
 
-    #[test]
-    fn query_ignores_room_prefixes() {
-        assert_eq!(SearchQuery::parse("#lounge").text, "lounge");
-        assert_eq!(SearchQuery::parse("@alice").text, "alice");
-    }
+pub(crate) fn parse_modal_query(input: &str) -> ModalQuery {
+    let Some(rest) = input.trim_start().strip_prefix('?') else {
+        return ModalQuery::Rooms;
+    };
+    let rest = rest.trim_start();
+    let (scope, text) = if let Some(rest) = rest.strip_prefix('#') {
+        let (token, text) = split_first_token(rest);
+        (Some(MessageScope::Room(token.to_lowercase())), text)
+    } else if let Some(rest) = rest.strip_prefix('@') {
+        let (token, text) = split_first_token(rest);
+        (Some(MessageScope::Dm(token.to_lowercase())), text)
+    } else {
+        (None, rest)
+    };
+    ModalQuery::Messages(MessageQuery {
+        scope,
+        text: text.trim().to_string(),
+    })
+}
 
-    #[test]
-    fn bare_at_filters_to_dms() {
-        assert_eq!(
-            SearchQuery::parse("@"),
-            SearchQuery {
-                kind: SearchQueryKind::Dms,
-                text: String::new()
-            }
-        );
-    }
-
-    #[test]
-    fn prefixed_queries_select_room_kind() {
-        assert_eq!(SearchQuery::parse("@alice").kind, SearchQueryKind::Dms);
-        assert_eq!(SearchQuery::parse("#lounge").kind, SearchQueryKind::Rooms);
-        assert_eq!(SearchQuery::parse("lounge").kind, SearchQueryKind::All);
-    }
-
-    #[test]
-    fn bare_at_matches_all_dms() {
-        let query = SearchQuery::parse("@");
-        assert!(item_matches_query(
-            &item("@alice", "direct message", 2),
-            &query
-        ));
-        assert!(item_matches_query(
-            &item("@bob", "direct message", 0),
-            &query
-        ));
-        assert!(!item_matches_query(
-            &item("#lounge", "core room", 3),
-            &query
-        ));
-    }
-
-    #[test]
-    fn named_at_matches_dms_by_name_or_meta() {
-        let query = SearchQuery::parse("@ali");
-        assert!(item_matches_query(
-            &item("@alice", "direct message", 0),
-            &query
-        ));
-        assert!(!item_matches_query(
-            &item("#alice", "public room", 0),
-            &query
-        ));
-        assert!(!item_matches_query(
-            &item("@bob", "direct message", 0),
-            &query
-        ));
-    }
-
-    #[test]
-    fn delete_word_left_stops_at_room_prefix() {
-        let mut state = RoomSearchModalState {
-            query: "#lounge chat".to_string(),
-            ..RoomSearchModalState::default()
-        };
-        state.delete_word_left();
-        assert_eq!(state.query, "#lounge ");
-        state.delete_word_left();
-        assert_eq!(state.query, "#");
-    }
-
-    #[test]
-    fn room_labels_prefix_rooms_and_dms() {
-        let current = Uuid::from_u128(1);
-        let peer = Uuid::from_u128(2);
-        let mut usernames = std::collections::HashMap::new();
-        usernames.insert(peer, "alice".to_string());
-
-        let public = room("topic", "public", Some("rust"));
-        assert_eq!(room_label(&public, current, &usernames), "#rust");
-
-        let mut dm = room("dm", "dm", None);
-        dm.dm_user_a = Some(current);
-        dm.dm_user_b = Some(peer);
-        assert_eq!(room_label(&dm, current, &usernames), "@alice");
+fn split_first_token(input: &str) -> (&str, &str) {
+    match input.find(char::is_whitespace) {
+        Some(at) => (&input[..at], input[at..].trim_start()),
+        None => (input, ""),
     }
 }
+
+/// Resolve a `#slug` / `@user` search scope against the user's joined rooms.
+/// `None` means the token does not name a joined room/DM (yet), so the
+/// search must not fire.
+pub(crate) fn resolve_message_scope(
+    chat: &ChatState,
+    current_user_id: Uuid,
+    scope: &MessageScope,
+) -> Option<Uuid> {
+    match scope {
+        MessageScope::Room(slug) => {
+            if slug.is_empty() {
+                return None;
+            }
+            chat.rooms.iter().find_map(|(room, _)| {
+                (room.kind != "dm"
+                    && is_chat_list_room(room)
+                    && room_label(room, current_user_id, &chat.usernames)
+                        .trim_start_matches('#')
+                        .eq_ignore_ascii_case(slug))
+                .then_some(room.id)
+            })
+        }
+        MessageScope::Dm(name) => {
+            if name.is_empty() {
+                return None;
+            }
+            chat.rooms.iter().find_map(|(room, _)| {
+                (room.kind == "dm"
+                    && dm_peer_label(room, current_user_id, &chat.usernames)
+                        .eq_ignore_ascii_case(name))
+                .then_some(room.id)
+            })
+        }
+    }
+}
+
+/// Display label (`#slug` / `@peer`) for a search hit's room, resolved from
+/// the user's joined-room list.
+pub(crate) fn hit_room_label(chat: &ChatState, current_user_id: Uuid, room_id: Uuid) -> String {
+    chat.rooms
+        .iter()
+        .find(|(room, _)| room.id == room_id)
+        .map(|(room, _)| room_label(room, current_user_id, &chat.usernames))
+        .unwrap_or_else(|| "#?".to_string())
+}
+
+/// Per-frame driver for the modal's message-search mode: once the query has
+/// sat unchanged for `SEARCH_DEBOUNCE`, is long enough, and any scope token
+/// resolves, fire one search through `ChatState` (latest wins; an unchanged
+/// query never refires). Called from `App::tick`.
+pub(crate) fn tick_message_search(app: &mut crate::app::state::App) {
+    if !app.room_search_modal_state.is_open() {
+        return;
+    }
+    let ModalQuery::Messages(query) = parse_modal_query(app.room_search_modal_state.query()) else {
+        return;
+    };
+    // Context window for the selected hit, independent of the query gates
+    // below so it also covers the Mentions single-message preview (empty
+    // query text).
+    let hits = &app.chat.message_search.hits;
+    if !hits.is_empty() {
+        let selected = app
+            .room_search_modal_state
+            .selected()
+            .min(hits.len().saturating_sub(1));
+        let message_id = hits[selected].message.id;
+        app.chat.ensure_search_hit_context(message_id);
+    }
+    if query.text.chars().count() < SEARCH_MIN_CHARS {
+        return;
+    }
+    let scope_room_id = match &query.scope {
+        Some(scope) => match resolve_message_scope(&app.chat, app.user_id, scope) {
+            Some(room_id) => Some(room_id),
+            None => return,
+        },
+        None => None,
+    };
+    if !app.room_search_modal_state.debounce_elapsed() {
+        return;
+    }
+    let key = (scope_room_id, query.text.clone());
+    if app.room_search_modal_state.last_fired_key.as_ref() == Some(&key) {
+        return;
+    }
+    app.chat.start_message_search(scope_room_id, query.text);
+    app.room_search_modal_state.last_fired_key = Some(key);
+}
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

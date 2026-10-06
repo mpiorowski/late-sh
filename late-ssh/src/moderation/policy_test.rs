@@ -1,0 +1,122 @@
+use super::{Caps, Permissions, Tier};
+
+#[test]
+fn tier_from_flags() {
+    assert_eq!(Permissions::new(false, false).tier(), Tier::Regular);
+    assert_eq!(Permissions::new(false, true).tier(), Tier::Moderator);
+    assert_eq!(Permissions::new(true, false).tier(), Tier::Admin);
+    assert_eq!(Permissions::new(true, true).tier(), Tier::Admin);
+}
+
+#[test]
+fn moderators_have_staff_caps_without_admin_caps() {
+    let permissions = Permissions::new(false, true);
+    assert!(permissions.has(Caps::OPEN_MOD_SURFACE));
+    assert!(permissions.has(Caps::TEMP_BAN_USER));
+    assert!(permissions.has(Caps::RENAME_ROOM));
+    assert!(permissions.has(Caps::RENAME_USER));
+    assert!(permissions.has(Caps::RESTORE_ARTBOARD));
+    assert!(permissions.has(Caps::DELETE_AUDIO_TRACK));
+    assert!(!permissions.has(Caps::PERMA_BAN_USER));
+    assert!(!permissions.has(Caps::GRANT_MOD));
+}
+
+#[test]
+fn targeted_actions_require_higher_tier() {
+    let moderator = Permissions::new(false, true);
+    let admin = Permissions::new(true, false);
+
+    assert!(moderator.can(Caps::BAN_FROM_ROOM, Tier::Regular));
+    assert!(!moderator.can(Caps::BAN_FROM_ROOM, Tier::Moderator));
+    assert!(!moderator.can(Caps::BAN_FROM_ROOM, Tier::Admin));
+    assert!(moderator.can_delete_audio_track(false));
+    assert!(admin.can(Caps::BAN_FROM_ROOM, Tier::Moderator));
+    assert!(!admin.can(Caps::BAN_FROM_ROOM, Tier::Admin));
+    assert!(admin.can_delete_audio_track(false));
+    assert!(Permissions::default().can_delete_audio_track(true));
+    assert!(!Permissions::default().can_delete_audio_track(false));
+}
+
+#[test]
+fn audit_only_privileged_actions_against_others() {
+    assert!(!Permissions::default().should_audit(false));
+    assert!(!Permissions::new(false, true).should_audit(true));
+    assert!(Permissions::new(false, true).should_audit(false));
+    assert!(Permissions::new(true, false).should_audit(false));
+}
+
+#[test]
+fn a_room_owner_may_kick_regulars_from_their_room_and_nothing_more() {
+    let owner = Permissions::new(false, false).as_room_owner();
+
+    assert!(
+        owner.can(Caps::KICK_FROM_ROOM, Tier::Regular),
+        "an owner keeps the door of the room they own"
+    );
+    assert!(
+        !owner.can(Caps::KICK_FROM_ROOM, Tier::Moderator),
+        "ownership carries no rank, so staff are untouchable"
+    );
+    assert!(!owner.can(Caps::KICK_FROM_ROOM, Tier::Admin));
+    assert!(
+        !owner.can(Caps::BAN_FROM_ROOM, Tier::Regular),
+        "kicking is the whole grant: banning stays with staff"
+    );
+    assert!(!owner.has(Caps::OPEN_MOD_SURFACE));
+    assert!(!owner.can_moderate());
+    assert_eq!(owner.tier(), Tier::Regular);
+    assert!(
+        owner.should_audit(false),
+        "an owner removing someone is still recorded"
+    );
+
+    let plain = Permissions::new(false, false);
+    assert!(
+        !plain.can(Caps::KICK_FROM_ROOM, Tier::Regular),
+        "without the grant a regular kicks nobody"
+    );
+}
+
+#[test]
+fn a_stream_owner_may_ban_regulars_from_their_room_and_nothing_more() {
+    let streamer = Permissions::new(false, false).as_stream_owner();
+
+    assert!(
+        streamer.can(Caps::BAN_FROM_ROOM, Tier::Regular),
+        "a public room needs the lock: a kicked viewer walks back in"
+    );
+    assert!(streamer.can(Caps::UNBAN_FROM_ROOM, Tier::Regular));
+    assert!(streamer.can(Caps::KICK_FROM_ROOM, Tier::Regular));
+    assert!(
+        !streamer.can(Caps::BAN_FROM_ROOM, Tier::Moderator),
+        "ownership carries no rank, so staff are untouchable"
+    );
+    assert!(!streamer.can(Caps::BAN_FROM_ROOM, Tier::Admin));
+    assert!(
+        !streamer.can(Caps::KICK_FROM_VOICE, Tier::Regular),
+        "the grant stops at the streamer's own room"
+    );
+    assert!(!streamer.can(Caps::BAN_FROM_STREAM, Tier::Regular));
+    assert!(!streamer.has(Caps::OPEN_MOD_SURFACE));
+    assert!(!streamer.can_moderate());
+    assert_eq!(streamer.tier(), Tier::Regular);
+    assert!(
+        streamer.should_audit(false),
+        "an owner banning someone is still recorded"
+    );
+}
+
+#[test]
+fn ownership_never_widens_a_moderators_reach() {
+    let moderator = Permissions::new(false, true).as_stream_owner();
+
+    assert!(
+        !moderator.can(Caps::BAN_FROM_ROOM, Tier::Moderator),
+        "owning the room does not let a mod act on a peer"
+    );
+    assert!(
+        !moderator.can(Caps::BAN_FROM_ROOM, Tier::Admin),
+        "owning the room does not let a mod act on an admin"
+    );
+    assert!(moderator.can(Caps::BAN_FROM_ROOM, Tier::Regular));
+}

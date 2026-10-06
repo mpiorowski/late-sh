@@ -1,0 +1,805 @@
+use chrono::{Datelike, Duration, NaiveDate, Utc};
+use serde_json::json;
+use uuid::Uuid;
+
+use crate::{
+    models::{
+        chips::{ChipMove, Difficulty, UserChips},
+        drink_round::Bar,
+        drinks::{UserDrinks, WELCOME_DRINK_POINTS},
+        le_word,
+        leaderboard::{
+            DailyPuzzle, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
+            OnlineTimeIncrement, RankedEntry, ScoreGame, apply_online_time_batch,
+            fetch_leaderboard_data,
+        },
+        mud_character::MudCharacter,
+        rubiks_cube, sliding_puzzle, snake, sudoku, tetris, twenty_forty_eight,
+    },
+    test_utils::{create_test_user, roll_high_scores_back_a_month, test_db},
+};
+
+fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
+    entries
+        .iter()
+        .find(|entry| entry.user_id == user_id)
+        .expect("user on board")
+}
+
+#[tokio::test]
+async fn online_time_batches_are_idempotent_and_rank_both_windows() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let alice = create_test_user(&test_db.db, "lb_online_alice").await;
+    let bob = create_test_user(&test_db.db, "lb_online_bob").await;
+    let deleted = create_test_user(&test_db.db, "lb_online_deleted").await;
+    client
+        .execute("DELETE FROM users WHERE id = $1", &[&deleted.id])
+        .await
+        .expect("delete user before batch");
+
+    let first_flush = Uuid::now_v7();
+    let today = Utc::now().date_naive();
+    let current_month =
+        NaiveDate::from_ymd_opt(today.year(), today.month(), 1).expect("current month");
+    let previous_day = current_month - Duration::days(1);
+    let previous_month = NaiveDate::from_ymd_opt(previous_day.year(), previous_day.month(), 1)
+        .expect("previous month");
+    let increment = |user_id, month_start, milliseconds| OnlineTimeIncrement {
+        user_id,
+        month_start,
+        milliseconds,
+    };
+    let increments = [
+        increment(alice.id, current_month, 60_000),
+        increment(alice.id, current_month, 40_000),
+        increment(bob.id, current_month, 90_000),
+        increment(deleted.id, current_month, 500_000),
+    ];
+    assert_eq!(
+        apply_online_time_batch(&client, first_flush, &increments)
+            .await
+            .expect("apply first batch"),
+        2,
+        "duplicate input users are folded and deleted users are skipped"
+    );
+    apply_online_time_batch(&client, first_flush, &increments)
+        .await
+        .expect("retry first batch");
+    apply_online_time_batch(
+        &client,
+        Uuid::now_v7(),
+        &[increment(alice.id, current_month, 10_000)],
+    )
+    .await
+    .expect("apply later batch");
+    apply_online_time_batch(
+        &client,
+        Uuid::now_v7(),
+        &[
+            increment(alice.id, previous_month, 50_000),
+            increment(bob.id, previous_month, 200_000),
+        ],
+    )
+    .await
+    .expect("apply previous-month batch");
+
+    let alice_total: i64 = client
+        .query_one(
+            "SELECT total_milliseconds FROM user_online_time WHERE user_id = $1",
+            &[&alice.id],
+        )
+        .await
+        .expect("alice online time")
+        .get(0);
+    assert_eq!(alice_total, 160_000, "retry must not add the batch twice");
+
+    let alice_monthly: i64 = client
+        .query_one(
+            "SELECT total_milliseconds
+             FROM user_online_time_monthly
+             WHERE month_start = $1 AND user_id = $2",
+            &[&current_month, &alice.id],
+        )
+        .await
+        .expect("alice monthly online time")
+        .get(0);
+    assert_eq!(alice_monthly, 110_000);
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    assert_eq!(entry_for(&data.online_time.monthly, alice.id).rank, 1);
+    assert_eq!(
+        entry_for(&data.online_time.monthly, alice.id).value,
+        110_000
+    );
+    assert_eq!(entry_for(&data.online_time.monthly, bob.id).rank, 2);
+    assert_eq!(entry_for(&data.online_time.all_time, bob.id).rank, 1);
+    assert_eq!(entry_for(&data.online_time.all_time, bob.id).value, 290_000);
+    assert_eq!(entry_for(&data.online_time.all_time, alice.id).rank, 2);
+    assert!(
+        !data
+            .online_time
+            .monthly
+            .iter()
+            .any(|entry| entry.user_id == deleted.id)
+    );
+    assert!(
+        !data
+            .online_time
+            .all_time
+            .iter()
+            .any(|entry| entry.user_id == deleted.id)
+    );
+}
+
+/// One fixture exercises the whole roster-generated pipeline: the per-puzzle
+/// win-count boards in both windows, and the Arcade Wins points where every
+/// weight comes from `Difficulty` (Le Word fixed 1, Rubik's fixed 3, Sudoku
+/// by difficulty key), so the old `'medium'`-string hack cannot come back.
+#[tokio::test]
+async fn daily_boards_and_arcade_points_follow_the_roster() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let solver = create_test_user(&test_db.db, "lb_solver").await;
+    let rival = create_test_user(&test_db.db, "lb_rival").await;
+
+    let today = Utc::now().date_naive();
+    let month_start =
+        NaiveDate::from_ymd_opt(today.year(), today.month(), 1).expect("first of month");
+    let day = |offset: i64| month_start + Duration::days(offset);
+
+    // Solver: five Le Word wins this month plus one from last month, and one
+    // hard Sudoku win. Monthly points: 5 * 1 + 5 = 10.
+    for offset in [0, 1, 2, 5, 6] {
+        le_word::DailyWin::record_win(&client, solver.id, day(offset), 4)
+            .await
+            .expect("record solver win");
+    }
+    le_word::DailyWin::record_win(&client, solver.id, month_start - Duration::days(10), 3)
+        .await
+        .expect("record solver history");
+    sudoku::DailyWin::record_win(&client, solver.id, "hard".to_string(), day(0), 100)
+        .await
+        .expect("record solver sudoku win");
+
+    // Rival: two Le Word wins and today's Rubik's Cube. Monthly points:
+    // 2 * 1 + 3 = 5.
+    for offset in [1, 2] {
+        le_word::DailyWin::record_win(&client, rival.id, day(offset), 5)
+            .await
+            .expect("record rival win");
+    }
+    rubiks_cube::DailyWin::record_win(&client, rival.id, today)
+        .await
+        .expect("record rival rubiks win");
+    sliding_puzzle::DailyWin::record_win(&client, rival.id, Difficulty::Hard, today, 50)
+        .await
+        .expect("record rival sliding puzzle win");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+
+    let le_word_board = data
+        .daily_board(DailyPuzzle::LeWord)
+        .expect("le word board present");
+    let monthly = entry_for(&le_word_board.monthly, solver.id);
+    assert_eq!(monthly.value, 5, "last month's win must not count");
+    assert_eq!(monthly.rank, 1);
+    assert_eq!(entry_for(&le_word_board.monthly, rival.id).value, 2);
+
+    let all_time = entry_for(&le_word_board.all_time, solver.id);
+    assert_eq!(all_time.value, 6, "all-time counts the older win too");
+    assert_eq!(all_time.rank, 1);
+
+    let rubiks_board = data
+        .daily_board(DailyPuzzle::RubiksCube)
+        .expect("rubiks board present");
+    assert_eq!(entry_for(&rubiks_board.monthly, rival.id).value, 1);
+    assert!(
+        !rubiks_board
+            .monthly
+            .iter()
+            .any(|entry| entry.user_id == solver.id),
+        "no rubiks win, no rubiks row"
+    );
+
+    let solver_points = entry_for(&data.arcade_champions, solver.id);
+    assert_eq!(solver_points.value, 10, "5 le word + 1 hard sudoku");
+    assert_eq!(solver_points.rank, 1);
+    let rival_points = entry_for(&data.arcade_champions, rival.id);
+    assert_eq!(
+        rival_points.value, 10,
+        "2 le word + rubiks at medium weight + hard sliding puzzle"
+    );
+    assert_eq!(rival_points.rank, 1);
+
+    let sliding_board = data
+        .daily_board(DailyPuzzle::SlidingPuzzle)
+        .expect("sliding puzzle board present");
+    assert_eq!(entry_for(&sliding_board.monthly, rival.id).value, 1);
+    let rival_status = data
+        .user_daily_statuses
+        .get(&rival.id)
+        .expect("rival has a daily status");
+    assert!(rival_status.completed(DailyPuzzle::RubiksCube));
+    assert!(rival_status.completed_difficulty(DailyPuzzle::RubiksCube, "daily"));
+    assert!(rival_status.completed(DailyPuzzle::SlidingPuzzle));
+    assert!(rival_status.completed_difficulty(DailyPuzzle::SlidingPuzzle, "hard"));
+}
+
+/// Same-day replays upsert the win row (keep-best-score), so they must not
+/// inflate the `daily_win_totals` rollup the all-time boards read: the bump
+/// fires only on a fresh insert.
+#[tokio::test]
+async fn replayed_daily_win_does_not_double_count_all_time() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let solver = create_test_user(&test_db.db, "lb_replayer").await;
+    let today = Utc::now().date_naive();
+
+    sudoku::DailyWin::record_win(&client, solver.id, "hard".to_string(), today, 100)
+        .await
+        .expect("record first win");
+    sudoku::DailyWin::record_win(&client, solver.id, "hard".to_string(), today, 250)
+        .await
+        .expect("record same-day replay");
+    sudoku::DailyWin::record_win(&client, solver.id, "easy".to_string(), today, 90)
+        .await
+        .expect("record second tier win");
+
+    // Raw witness on the rollup itself: two fresh wins, no replay bump.
+    let wins: i64 = client
+        .query_one(
+            "SELECT wins FROM daily_win_totals WHERE game = 'sudoku' AND user_id = $1",
+            &[&solver.id],
+        )
+        .await
+        .expect("rollup row present")
+        .get(0);
+    assert_eq!(wins, 2);
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    let board = data
+        .daily_board(DailyPuzzle::Sudoku)
+        .expect("sudoku board present");
+    assert_eq!(entry_for(&board.all_time, solver.id).value, 2);
+}
+
+/// The Lateania boards read the game-owned character blobs. Adventurers ranks
+/// by level with experience as the tiebreak and the class as the row note, and
+/// keeps counting past the level cap: every `LATEANIA_XP_PER_PARAGON_LEVEL` of
+/// xp beyond the cap's threshold is one more level on the board, so capped
+/// characters still separate. PvP ranks lifetime Wildbound Waste kills. A
+/// pre-class-select shell, or a character that never killed a rival, stays off.
+#[tokio::test]
+async fn lateania_boards_rank_living_characters() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let paragon = create_test_user(&test_db.db, "lb_lateania_paragon").await;
+    let capped = create_test_user(&test_db.db, "lb_lateania_capped").await;
+    let hero = create_test_user(&test_db.db, "lb_lateania_hero").await;
+    let rival = create_test_user(&test_db.db, "lb_lateania_rival").await;
+    let shell = create_test_user(&test_db.db, "lb_lateania_shell").await;
+
+    let save = |user_id: Uuid, data: serde_json::Value| {
+        let client = &client;
+        async move {
+            MudCharacter::save(client, user_id, 0, data)
+                .await
+                .expect("save character");
+        }
+    };
+    // 37 paragon levels and a bit past the cap's threshold.
+    save(
+        paragon.id,
+        json!({
+            "version": 17, "class": "warrior", "level": 100,
+            "xp": LATEANIA_XP_AT_LEVEL_CAP + 37 * LATEANIA_XP_PER_PARAGON_LEVEL + 10,
+            "pvp_kills": 3,
+        }),
+    )
+    .await;
+    // Exactly at the cap: level 100, no paragon levels yet.
+    save(
+        capped.id,
+        json!({
+            "version": 17, "class": "druid", "level": 100,
+            "xp": LATEANIA_XP_AT_LEVEL_CAP + LATEANIA_XP_PER_PARAGON_LEVEL - 1,
+            "pvp_kills": 12,
+        }),
+    )
+    .await;
+    // Hero and rival share level 42; the hero's higher experience breaks the
+    // tie. The rival never killed anyone.
+    save(
+        hero.id,
+        json!({ "version": 17, "class": "runemaster", "level": 42, "xp": 900_000, "pvp_kills": 3 }),
+    )
+    .await;
+    save(
+        rival.id,
+        json!({ "version": 17, "class": "warrior", "level": 42, "xp": 800_000, "pvp_kills": 0 }),
+    )
+    .await;
+    save(
+        shell.id,
+        json!({ "version": 17, "class": null, "level": 1, "xp": 0, "pvp_kills": 5 }),
+    )
+    .await;
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+
+    let adventurers = &data.lateania_adventurers;
+    assert_eq!(entry_for(adventurers, paragon.id).value, 137);
+    assert_eq!(entry_for(adventurers, paragon.id).rank, 1);
+    assert_eq!(entry_for(adventurers, capped.id).value, 100);
+    assert_eq!(entry_for(adventurers, capped.id).rank, 2);
+    let hero_row = entry_for(adventurers, hero.id);
+    assert_eq!(hero_row.rank, 3, "experience breaks the level tie");
+    assert_eq!(hero_row.value, 42);
+    assert_eq!(hero_row.note.as_deref(), Some("Runemaster"));
+    assert_eq!(entry_for(adventurers, rival.id).rank, 4);
+    assert!(
+        !adventurers.iter().any(|entry| entry.user_id == shell.id),
+        "a character without a chosen class stays off the board"
+    );
+
+    let pvp = &data.lateania_pvp;
+    assert_eq!(entry_for(pvp, capped.id).value, 12);
+    assert_eq!(entry_for(pvp, capped.id).rank, 1);
+    assert_eq!(entry_for(pvp, paragon.id).rank, 2);
+    assert_eq!(entry_for(pvp, hero.id).rank, 2, "equal kills share a rank");
+    assert!(
+        !pvp.iter()
+            .any(|entry| entry.user_id == rival.id || entry.user_id == shell.id),
+        "no kills, or no class, no PvP row"
+    );
+}
+
+/// One fixture covers the whole door-board triple over the log-pipe fact
+/// tables: all-time wins counting only win results, best score in both
+/// windows, and the dive board taking its depth from milestone marks when
+/// they outreach the end-of-run depth (a winner ends at the surface).
+#[tokio::test]
+async fn door_boards_rank_wins_depth_and_score() {
+    use crate::models::door_milestone::{DoorMilestone, DoorMilestoneKind, NewDoorMilestone};
+    use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    use crate::models::leaderboard::DoorGame;
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let winner = create_test_user(&test_db.db, "lb_door_winner").await;
+    let diver = create_test_user(&test_db.db, "lb_door_diver").await;
+
+    let now = Utc::now();
+    let run = |user_id, result, score, depth, offset| NewDoorRun {
+        game: DoorGame::Dcss.key(),
+        user_id,
+        ended_at: now,
+        result,
+        score: Some(score),
+        depth: Some(depth),
+        turns: Some(1000),
+        raw: json!({}),
+        source_file: "logfile".to_string(),
+        source_offset: offset,
+    };
+
+    // Winner: one old death at depth 8, then a win ending at the surface
+    // whose Orb milestone carries the real dive depth (27).
+    let mut old_death = run(winner.id, DoorRunResult::Death, 5_000, 8, 100);
+    old_death.ended_at = now - Duration::days(45);
+    for new_run in [
+        &old_death,
+        &run(winner.id, DoorRunResult::Win, 2_000_000, 1, 200),
+    ] {
+        assert!(
+            DoorRun::insert_ignore(&client, new_run)
+                .await
+                .expect("insert run")
+        );
+    }
+    assert!(
+        DoorMilestone::insert_ignore(
+            &client,
+            &NewDoorMilestone {
+                game: DoorGame::Dcss.key(),
+                user_id: winner.id,
+                kind: DoorMilestoneKind::Orb,
+                occurred_at: now,
+                raw: json!({"absdepth": "27"}),
+                source_file: "milestones".to_string(),
+                source_offset: 300,
+            },
+        )
+        .await
+        .expect("insert milestone")
+    );
+
+    // A milestone with a malformed depth and one with none at all: neither
+    // may rank, and neither may error the whole pass (the query casts the
+    // raw string to int only after a numeric guard).
+    for (raw, offset) in [(json!({"absdepth": "garbage"}), 310), (json!({}), 320)] {
+        assert!(
+            DoorMilestone::insert_ignore(
+                &client,
+                &NewDoorMilestone {
+                    game: DoorGame::Dcss.key(),
+                    user_id: winner.id,
+                    kind: DoorMilestoneKind::Rune,
+                    occurred_at: now,
+                    raw,
+                    source_file: "milestones".to_string(),
+                    source_offset: offset,
+                },
+            )
+            .await
+            .expect("insert hostile milestone")
+        );
+    }
+
+    // Diver: deep death this month, no win; quits never count as wins.
+    for new_run in [
+        &run(diver.id, DoorRunResult::Death, 90_000, 24, 400),
+        &run(diver.id, DoorRunResult::Quit, 999_999_999, 1, 500),
+    ] {
+        assert!(
+            DoorRun::insert_ignore(&client, new_run)
+                .await
+                .expect("insert run")
+        );
+    }
+    // A replayed line lands nothing.
+    assert!(
+        !DoorRun::insert_ignore(
+            &client,
+            &run(diver.id, DoorRunResult::Death, 90_000, 24, 400)
+        )
+        .await
+        .expect("replay run")
+    );
+
+    // A NetHack ascension for the diver: the boards partition by game, so it
+    // must rank on the nethack triple and leak nothing into the DCSS one.
+    let mut ascension = run(diver.id, DoorRunResult::Win, 3_000_000, 50, 600);
+    ascension.game = DoorGame::Nethack.key();
+    ascension.source_file = "xlogfile".to_string();
+    assert!(
+        DoorRun::insert_ignore(&client, &ascension)
+            .await
+            .expect("insert nethack run")
+    );
+
+    // A Brogue escape and a mastery for the winner: both results count on
+    // the wins board (WINS = win + mastery).
+    for (result, offset) in [(DoorRunResult::Win, 700), (DoorRunResult::Mastery, 800)] {
+        let mut brogue_run = run(winner.id, result, 20_000, 26, offset);
+        brogue_run.game = DoorGame::Brogue.key();
+        brogue_run.source_file = "players/lb_door_winner/BrogueRunHistory.txt".to_string();
+        assert!(
+            DoorRun::insert_ignore(&client, &brogue_run)
+                .await
+                .expect("insert brogue run")
+        );
+    }
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+
+    let nethack = data
+        .door_board(DoorGame::Nethack)
+        .expect("nethack boards present");
+    assert_eq!(nethack.wins.len(), 1);
+    assert_eq!(entry_for(&nethack.wins, diver.id).value, 1);
+    assert_eq!(entry_for(&nethack.depth.all_time, diver.id).value, 50);
+
+    let brogue = data
+        .door_board(DoorGame::Brogue)
+        .expect("brogue boards present");
+    assert_eq!(brogue.wins.len(), 1);
+    assert_eq!(entry_for(&brogue.wins, winner.id).value, 2);
+
+    let boards = data
+        .door_board(DoorGame::Dcss)
+        .expect("dcss boards present");
+    // The nethack win/depth/score stayed off the DCSS boards.
+    assert!(boards.depth.all_time.iter().all(|entry| entry.value != 50));
+
+    // Wins: only the winner's one win row; the quit pays nothing.
+    assert_eq!(boards.wins.len(), 1);
+    assert_eq!(entry_for(&boards.wins, winner.id).value, 1);
+
+    // Dive: the winner's depth comes from the Orb milestone mark, not the
+    // surface exit; the diver's from the death row.
+    assert_eq!(entry_for(&boards.depth.all_time, winner.id).value, 27);
+    assert_eq!(entry_for(&boards.depth.all_time, winner.id).rank, 1);
+    assert_eq!(entry_for(&boards.depth.all_time, diver.id).value, 24);
+    // Monthly window: the winner's 45-day-old death is out, the milestone in.
+    assert_eq!(entry_for(&boards.depth.monthly, winner.id).value, 27);
+
+    // Score: best per player; the quit's absurd score still counts as a
+    // score (crawl scored the run), and only the monthly window drops the
+    // winner's old death score.
+    assert_eq!(
+        entry_for(&boards.score.all_time, diver.id).value,
+        999_999_999
+    );
+    assert_eq!(
+        entry_for(&boards.score.all_time, winner.id).value,
+        2_000_000
+    );
+    assert_eq!(entry_for(&boards.score.monthly, winner.id).value, 2_000_000);
+}
+
+/// Top Chips ranks what a player earned. Spending is a debit and never
+/// counts, whatever it bought, so a heavy spender who out-earns everyone
+/// tops the board instead of vanishing under a negative net; the tables
+/// and gifts stay off it too. `month_figures` is the
+/// same sum, so the profile figure agrees with the board; its net is every
+/// row, stipend included.
+#[tokio::test]
+async fn top_chips_counts_earnings_and_never_spending() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let spender = create_test_user(&test_db.db, "lb_chip_spender").await;
+    let saver = create_test_user(&test_db.db, "lb_chip_saver").await;
+    let apply = |user_id, mv, amount| UserChips::apply(&**client, user_id, mv, amount, "lb-test");
+    // Balances big enough that every move below is affordable; the stipend
+    // row `ensure` writes on the way in is not an earning either.
+    UserChips::ensure(&client, spender.id)
+        .await
+        .expect("spender chips");
+    UserChips::ensure(&client, saver.id)
+        .await
+        .expect("saver chips");
+    client
+        .execute(
+            "UPDATE user_chips SET balance = 100000 WHERE user_id = ANY($1)",
+            &[&vec![spender.id, saver.id]],
+        )
+        .await
+        .expect("fund accounts");
+
+    // Spender: 3,200 earned, 12,300 spent, plus every excluded credit.
+    apply(spender.id, ChipMove::DailyPuzzleWin, 500)
+        .await
+        .expect("puzzle win")
+        .expect("affordable");
+    apply(spender.id, ChipMove::QuestReward, 750)
+        .await
+        .expect("quest reward")
+        .expect("affordable");
+    apply(spender.id, ChipMove::GildReceived, 750)
+        .await
+        .expect("gild received")
+        .expect("affordable");
+    apply(spender.id, ChipMove::PotWon, 1_000)
+        .await
+        .expect("pot won")
+        .expect("affordable");
+    apply(spender.id, ChipMove::PotTicket, 1_000)
+        .await
+        .expect("pot ticket")
+        .expect("affordable");
+    apply(spender.id, ChipMove::ShopPurchase, 8_000)
+        .await
+        .expect("shop")
+        .expect("affordable");
+    apply(spender.id, ChipMove::RoundPurchase, 1_600)
+        .await
+        .expect("round")
+        .expect("affordable");
+    apply(spender.id, ChipMove::DrinkPurchase, 100)
+        .await
+        .expect("drink")
+        .expect("affordable");
+    apply(spender.id, ChipMove::GildSent, 500)
+        .await
+        .expect("gild sent")
+        .expect("affordable");
+    apply(spender.id, ChipMove::CrownTaken, 1_000)
+        .await
+        .expect("crown")
+        .expect("affordable");
+    apply(spender.id, ChipMove::SsnakeArenaLost, 100)
+        .await
+        .expect("arena lost")
+        .expect("affordable");
+    apply(spender.id, ChipMove::PokerPayout, 5_000)
+        .await
+        .expect("poker payout")
+        .expect("affordable");
+    apply(spender.id, ChipMove::BlackjackPayout, 5_000)
+        .await
+        .expect("blackjack payout")
+        .expect("affordable");
+    apply(spender.id, ChipMove::GiftReceived, 5_000)
+        .await
+        .expect("gift received")
+        .expect("affordable");
+    apply(spender.id, ChipMove::BonsaiWatered, 200)
+        .await
+        .expect("bonsai")
+        .expect("affordable");
+    // Saver: 2,000 earned, nothing spent.
+    apply(saver.id, ChipMove::DailyPuzzleWin, 2_000)
+        .await
+        .expect("saver win")
+        .expect("affordable");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    let board = &data.monthly_chip_earners;
+    let spender_row = entry_for(board, spender.id);
+    assert_eq!(spender_row.value, 3_200, "spending must not subtract");
+    assert_eq!(entry_for(board, saver.id).value, 2_000);
+    assert!(
+        spender_row.rank < entry_for(board, saver.id).rank,
+        "the bigger earner ranks first however much they spent"
+    );
+    let month = UserChips::month_figures(&client, spender.id)
+        .await
+        .expect("month figures");
+    assert_eq!(
+        month.earned, 3_200,
+        "the profile figure is the board figure"
+    );
+    // 1,000 stipend + 18,200 credited - 12,300 spent.
+    assert_eq!(month.net, 6_900, "the net is every row");
+}
+
+/// A best score belongs to the month it was set in. Playing again without
+/// beating it must not carry the old best onto this month's board: the
+/// monthly window reads the best-score tables by `updated`, so `updated`
+/// may only move when the best does.
+#[tokio::test]
+async fn an_old_best_stays_off_the_monthly_board_when_the_player_plays_again() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let veteran = create_test_user(&test_db.db, "score-veteran").await;
+
+    tetris::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("lateris best");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("2048 best");
+    snake::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("snake best");
+    for table in [
+        "tetris_high_scores",
+        "twenty_forty_eight_high_scores",
+        "snake_high_scores",
+    ] {
+        roll_high_scores_back_a_month(&client, table).await;
+    }
+
+    // This month: a run still in progress, nowhere near the old best.
+    tetris::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("lateris run");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("2048 run");
+    snake::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("snake run");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    for game in [
+        ScoreGame::Lateris,
+        ScoreGame::TwentyFortyEight,
+        ScoreGame::Snake,
+    ] {
+        let board = data.score_board(game).expect("score board");
+        let monthly: Vec<i64> = board
+            .monthly
+            .iter()
+            .filter(|entry| entry.user_id == veteran.id)
+            .map(|entry| entry.value)
+            .collect();
+        assert_eq!(
+            monthly,
+            Vec::<i64>::new(),
+            "{game:?}: last month's best is not this month's score"
+        );
+        assert_eq!(entry_for(&board.all_time, veteran.id).value, 9_000);
+    }
+}
+
+/// Top Drinkers sums the buzz of every drink taken: paid or comped, either
+/// bar, past the buzz cap, this month and this year. The welcome pour is not
+/// a drink anybody took, and last year's drinks are off both windows.
+#[tokio::test]
+async fn top_drinkers_sums_buzz_by_month_and_year() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let binger = create_test_user(&test_db.db, "drinkers-binger").await;
+    let steady = create_test_user(&test_db.db, "drinkers-steady").await;
+    let newcomer = create_test_user(&test_db.db, "drinkers-newcomer").await;
+    let lapsed = create_test_user(&test_db.db, "drinkers-lapsed").await;
+
+    // Three big pours: the stored buzz caps at 4000, the board does not.
+    for _ in 0..3 {
+        UserDrinks::record_purchase(&client, binger.id, Bar::Tavern, 2_000)
+            .await
+            .expect("pour");
+    }
+    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 250)
+        .await
+        .expect("pour");
+    UserDrinks::record_comped_pour(&client, steady.id, Bar::Tavern, 400)
+        .await
+        .expect("round credit");
+    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 1_000)
+        .await
+        .expect("pour");
+    UserDrinks::record_welcome_pour(&client, newcomer.id, WELCOME_DRINK_POINTS)
+        .await
+        .expect("welcome");
+    UserDrinks::record_purchase(&client, lapsed.id, Bar::Tavern, 1_000)
+        .await
+        .expect("pour");
+
+    // steady's top shelf was the first night of the year; lapsed drank last
+    // year. Only drink_pours is moved: it is the table the board reads.
+    client
+        .execute(
+            "UPDATE drink_pours
+             SET created = date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+             WHERE user_id = $1 AND points = 1000",
+            &[&steady.id],
+        )
+        .await
+        .expect("backdate to new year");
+    client
+        .execute(
+            "UPDATE drink_pours
+             SET created = date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                 - interval '1 day'
+             WHERE user_id = $1",
+            &[&lapsed.id],
+        )
+        .await
+        .expect("backdate to last year");
+
+    let data = fetch_leaderboard_data(&client).await.expect("data");
+    let monthly: Vec<(Uuid, i64, i64)> = data
+        .top_drinkers
+        .monthly
+        .iter()
+        .map(|entry| (entry.user_id, entry.rank, entry.value))
+        .collect();
+    let yearly: Vec<(Uuid, i64, i64)> = data
+        .top_drinkers
+        .yearly
+        .iter()
+        .map(|entry| (entry.user_id, entry.rank, entry.value))
+        .collect();
+
+    // In January the first night of the year is also this month.
+    let steady_monthly = match Utc::now().month() {
+        1 => 1_650,
+        _ => 650,
+    };
+    assert_eq!(
+        monthly,
+        vec![(binger.id, 1, 6_000), (steady.id, 2, steady_monthly)]
+    );
+    assert_eq!(yearly, vec![(binger.id, 1, 6_000), (steady.id, 2, 1_650)]);
+}

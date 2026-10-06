@@ -4,7 +4,7 @@ use late_core::models::notification::NotificationView;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -46,16 +46,10 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         let idx = start_index + row;
         let item = &view.items[idx];
 
-        let bg_color = if idx == selected_index {
-            theme::BG_SELECTION()
-        } else {
-            Color::Reset
-        };
-
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
-            .style(Style::default().bg(bg_color));
+            .style(theme::row_style(idx == selected_index));
 
         let content_area = item_block.inner(item_area);
         frame.render_widget(item_block, item_area);
@@ -66,10 +60,13 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
             .map(|s| format!("#{s}"))
             .unwrap_or_else(|| "DM".to_string());
 
+        // Either clears the dot: the feed watermark frozen on entry (so the
+        // dots survive the visit that read them) or the mention's own read
+        // stamp, set when its message was rendered in its room.
         let is_unread = view
             .marker_read_at
-            .map(|last_read_at| item.created > last_read_at)
-            .unwrap_or(true);
+            .is_none_or(|last_read_at| item.created > last_read_at)
+            && item.read_at.is_none();
         let read_indicator = if is_unread {
             Span::styled("● ", Style::default().fg(theme::MENTION()))
         } else {
@@ -188,40 +185,5 @@ fn finalize_preview_rows(mut rows: Vec<String>, max_rows: usize, truncated: bool
 }
 
 #[cfg(test)]
-mod tests {
-    use super::preview_rows;
-
-    #[test]
-    fn preview_rows_wraps_into_two_rows() {
-        let rows = preview_rows(
-            "@mat this is a long mention preview that should use both rows in the mentions panel",
-            24,
-            2,
-        );
-
-        assert_eq!(rows.len(), 2);
-        assert!(rows[0].starts_with('"'));
-        assert!(rows[1].ends_with('"'));
-    }
-
-    #[test]
-    fn preview_rows_drops_leading_reply_quote() {
-        let rows = preview_rows("> quoted line\nactual reply line", 40, 2);
-
-        assert_eq!(rows, vec!["\"actual reply line\"".to_string()]);
-    }
-
-    #[test]
-    fn preview_rows_keeps_body_when_all_quoted() {
-        let rows = preview_rows("> only a quote", 40, 2);
-
-        assert_eq!(rows, vec!["\"> only a quote\"".to_string()]);
-    }
-
-    #[test]
-    fn preview_rows_handles_empty_preview() {
-        let rows = preview_rows("", 20, 2);
-
-        assert_eq!(rows, vec!["\"\"".to_string()]);
-    }
-}
+#[path = "ui_test.rs"]
+mod ui_test;

@@ -1,6 +1,6 @@
 //! Message construction helpers for server-originated IRC lines.
 
-use irc_proto::{Command, Message, Prefix, Response};
+use irc_proto::{Command, Message, Prefix, Response, message::Tag};
 
 /// Name this server identifies as in prefixes and numerics.
 pub const SERVER_NAME: &str = "irc.late.sh";
@@ -44,6 +44,31 @@ pub fn from_user(nick: &str, command: Command) -> Message {
     }
 }
 
+pub fn from_user_with_tags(nick: &str, command: Command, tags: Vec<Tag>) -> Message {
+    Message {
+        tags: (!tags.is_empty()).then_some(tags),
+        prefix: Some(user_prefix(nick)),
+        command,
+    }
+}
+
+/// 332 with the topic, or 331 when the room has none. Same shape whether it
+/// answers a JOIN burst or a `TOPIC` query.
+pub fn topic(nick: &str, channel: &str, topic: Option<&str>) -> Message {
+    match topic.map(str::trim).filter(|topic| !topic.is_empty()) {
+        Some(topic) => numeric(
+            nick,
+            Response::RPL_TOPIC,
+            vec![channel.to_string(), topic.to_string()],
+        ),
+        None => numeric(
+            nick,
+            Response::RPL_NOTOPIC,
+            vec![channel.to_string(), "No topic is set".to_string()],
+        ),
+    }
+}
+
 pub fn server_notice(nick: &str, text: impl Into<String>) -> Message {
     server_msg(Command::NOTICE(nick.to_string(), text.into()))
 }
@@ -54,40 +79,5 @@ pub fn error(text: impl Into<String>) -> Message {
         tags: None,
         prefix: None,
         command: Command::ERROR(text.into()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn numeric_puts_nick_first_and_prefixes_server() {
-        let msg = numeric(
-            "alice",
-            Response::RPL_WELCOME,
-            vec!["Welcome to late.sh, alice".to_string()],
-        );
-        assert_eq!(
-            msg.to_string().trim_end(),
-            ":irc.late.sh 001 alice :Welcome to late.sh, alice"
-        );
-    }
-
-    #[test]
-    fn from_user_builds_full_prefix() {
-        let msg = from_user("alice", Command::JOIN("#lounge".to_string(), None, None));
-        assert_eq!(
-            msg.to_string().trim_end(),
-            ":alice!alice@late.sh JOIN #lounge"
-        );
-    }
-
-    #[test]
-    fn error_has_no_prefix() {
-        assert_eq!(
-            error("Closing Link").to_string().trim_end(),
-            "ERROR :Closing Link"
-        );
     }
 }

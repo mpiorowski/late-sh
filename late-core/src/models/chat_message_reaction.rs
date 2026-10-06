@@ -37,7 +37,32 @@ pub struct ChatMessageReactionOwners {
     pub user_ids: Vec<Uuid>,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum ChatMessageReactionAction {
+    React,
+    Unreact,
+    Replace,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ChatMessageReactionToggle {
+    pub action: ChatMessageReactionAction,
+    pub icon: String,
+    pub previous_icon: Option<String>,
+}
+
 impl ChatMessageReaction {
+    fn clean_icon(icon: &str) -> Result<&str> {
+        let icon = icon.trim();
+        if icon.is_empty() {
+            bail!("reaction icon must not be empty");
+        }
+        if icon.chars().count() > 64 {
+            bail!("reaction icon is too long");
+        }
+        Ok(icon)
+    }
+
     pub async fn get_by_user_and_message(
         client: &Client,
         message_id: Uuid,
@@ -59,17 +84,11 @@ impl ChatMessageReaction {
         message_id: Uuid,
         user_id: Uuid,
         icon: &str,
-    ) -> Result<()> {
-        let icon = icon.trim();
-        if icon.is_empty() {
-            bail!("reaction icon must not be empty");
-        }
-        if icon.chars().count() > 64 {
-            bail!("reaction icon is too long");
-        }
+    ) -> Result<ChatMessageReactionToggle> {
+        let icon = Self::clean_icon(icon)?;
 
         let existing = Self::get_by_user_and_message(client, message_id, user_id).await?;
-        match existing {
+        let result = match existing {
             Some(reaction) if reaction.icon == icon => {
                 client
                     .execute(
@@ -78,8 +97,13 @@ impl ChatMessageReaction {
                         &[&message_id, &user_id],
                     )
                     .await?;
+                ChatMessageReactionToggle {
+                    action: ChatMessageReactionAction::Unreact,
+                    icon: icon.to_string(),
+                    previous_icon: Some(reaction.icon),
+                }
             }
-            Some(_) => {
+            Some(reaction) => {
                 client
                     .execute(
                         "UPDATE chat_message_reactions
@@ -88,6 +112,11 @@ impl ChatMessageReaction {
                         &[&message_id, &user_id, &icon],
                     )
                     .await?;
+                ChatMessageReactionToggle {
+                    action: ChatMessageReactionAction::Replace,
+                    icon: icon.to_string(),
+                    previous_icon: Some(reaction.icon),
+                }
             }
             None => {
                 client
@@ -97,10 +126,45 @@ impl ChatMessageReaction {
                         &[&message_id, &user_id, &icon],
                     )
                     .await?;
+                ChatMessageReactionToggle {
+                    action: ChatMessageReactionAction::React,
+                    icon: icon.to_string(),
+                    previous_icon: None,
+                }
             }
+        };
+
+        Ok(result)
+    }
+
+    pub async fn unreact_matching(
+        client: &Client,
+        message_id: Uuid,
+        user_id: Uuid,
+        icon: &str,
+    ) -> Result<Option<ChatMessageReactionToggle>> {
+        let icon = Self::clean_icon(icon)?;
+        let Some(reaction) = Self::get_by_user_and_message(client, message_id, user_id).await?
+        else {
+            return Ok(None);
+        };
+        if reaction.icon != icon {
+            return Ok(None);
         }
 
-        Ok(())
+        client
+            .execute(
+                "DELETE FROM chat_message_reactions
+                 WHERE message_id = $1 AND user_id = $2",
+                &[&message_id, &user_id],
+            )
+            .await?;
+
+        Ok(Some(ChatMessageReactionToggle {
+            action: ChatMessageReactionAction::Unreact,
+            icon: icon.to_string(),
+            previous_icon: Some(reaction.icon),
+        }))
     }
 
     pub async fn list_summaries_for_messages(

@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: embedded IRC server for late.sh chat
 - Primary audience: LLM agents working in `late-ssh/src/ircd`, IRC token auth, or IRC/chat integration paths
-- Last updated: 2026-06-17
 - Status: Active
 - Parent context: `../../../CONTEXT.md`
 - Related context: `../app/chat/CONTEXT.md`
@@ -44,6 +43,9 @@ late-ssh/src/ircd/
 `-- motd.rs         # MOTD response text
 ```
 
+`late-ssh/src/proxy_protocol.rs` owns the shared SSH/IRC PROXY v1 parser. IRC
+must consume a trusted proxy header before rustls sees the stream.
+
 Core model touchpoints:
 - `late-core/src/models/irc_token.rs` stores one hashed IRC token per user.
 - `chat_room.rs`, `chat_room_member.rs`, and `chat_message.rs` back channel/DM access and message delivery.
@@ -51,7 +53,7 @@ Core model touchpoints:
 
 App/service touchpoints:
 - `late-ssh/src/main.rs` creates one `IrcRegistry`, injects it into `ChatService` and `ProfileService`, and spawns `ircd::serve::run` when `state.config.irc.enabled`.
-- `late-ssh/src/config.rs` owns `LATE_IRC_*` parsing.
+- `late-ssh/src/config.rs` owns `IrcConfig` as profile literals (no `LATE_IRC_*` env vars).
 - `late-ssh/src/app/chat/svc.rs` is the authoritative send/moderation/event service. IRC must use it instead of duplicating write paths.
 - `late-ssh/src/app/profile/svc.rs` mints/revokes IRC tokens and disconnects live IRC sessions when token/account state changes.
 - `late-ssh/src/moderation/session_effects.rs` disconnects IRC sessions for server kick/ban effects.
@@ -81,16 +83,22 @@ If IRC is split later, the split must include a cross-process event/control desi
 ## 4. Config And Listener
 
 Config:
-- `IrcConfig::default()` is disabled by default.
-- The root Makefile opts local dev in with `LATE_IRC_ENABLED=1` and plaintext `LATE_IRC_PORT=6667`.
+- Every profile sets `irc.enabled = true`; there is no `Default` impl.
+- The dev profiles enable plaintext IRC on 6667 (6668 for dev2); the Makefile only keeps the matching compose port mapping.
 - Docker Compose publishes the IRC port on `service-ssh`.
-- TLS is enabled only when both `LATE_IRC_TLS_CERT` and `LATE_IRC_TLS_KEY` are set.
-- When IRC is enabled with TLS cert/key and `LATE_IRC_PORT` is unset, the default port is 6697; otherwise the default is 6667.
-- Partial TLS cert/key env is validated only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
+- TLS is enabled only when the profile sets both `tls_cert_path` and `tls_key_path` (prod: the mounted `irc-tls` secret, port 6697; dev: none, plaintext).
+- A partial TLS cert/key pair is rejected by `Config::validate()` only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
 
 Listener behavior:
 - `serve.rs` binds `0.0.0.0:{port}`.
 - If TLS config is present, each accepted socket is wrapped with rustls before registration.
+- The profile's `irc.proxy_protocol` enables trusted PROXY v1 client-IP resolution before
+  rustls. Only transport peers in `irc.proxy_trusted_cidrs` may supply a
+  header; untrusted peers are treated as direct clients.
+- A trusted peer that sends `PROXY UNKNOWN` or omits a header may still
+  authenticate by account, but its transport address is not treated as a
+  client address. This keeps ingress rollouts available without allowing a
+  shared pod/node IP to enter active sessions or server bans.
 - The accept loop enforces `max_conns_global` with a semaphore before TLS/auth/registration work. Pre-auth sockets count toward the cap.
 - Draining or shutdown rejects/ends connections quickly with IRC `ERROR`; there is no graceful drain for IRC clients.
 - Auth failure limiting is IP-scoped and intentionally adds delay before returning auth errors.
@@ -120,7 +128,9 @@ Registration rules:
 - Clients must send PASS, NICK, and USER before registration completes.
 - The requested IRC nick is ignored except as a registration signal.
 - The registered nick is locked to the late.sh username projected for IRC; `.` is displayed as `^`. IRC `NICK` changes are refused.
-- Auth rejects bad tokens, deleted users, user server bans, and active IP server bans.
+- Auth rejects bad tokens, deleted users, user server bans, and active IP server
+  bans. IP bans are checked only when the listener has a verified direct or
+  trusted-PROXY client IP.
 
 Do not add alternate IRC-only identities. IRC should remain another view of the same late.sh account.
 
@@ -142,6 +152,7 @@ Not exposed as normal IRC channels:
 
 Behavior:
 - `#lounge` is force-joined on IRC session start. If join fails because of room-level restrictions, the IRC session stays up and receives the refusal.
+- The JOIN burst is JOIN, then the topic (`replies::topic`: 332 with `chat_rooms.topic`, 331 when unset), then NAMES. A `TOPIC #room` query answers the same way. `TOPIC #room :text` still refuses with 482: a private room's topic answers to its owner and a public one to the mods, and that authority lives in the chat service, not in the IRC layer.
 - Joining a public channel calls the normal room membership path.
 - Joining a private channel requires existing membership; IRC presents private rooms as invite-only.
 - PART detaches the IRC view for normal rooms but does not leave late.sh room membership.
@@ -200,6 +211,12 @@ Presence projection:
 - Arrivals render as `JOIN` only for channels shared with the current IRC session.
 - Avoid per-arrival/per-room DB loops. Batch membership lookups for arrivals against joined rooms.
 
+Away (`app/common/away.rs`, shared with the TUI):
+- Each IRC connection is an `ActiveSession` on the roster with its own `away` flag. It is away on `AWAY :msg` (until a bare `AWAY`), or after `AWAY_AFTER` (30 min) without a PRIVMSG or NOTICE from it; PINGs and client polls do not count. A user reads as away only when every session, TUI or IRC, is.
+- `Session::sync_away` writes the flag to the roster on a change: at once on `AWAY` and on every PRIVMSG/NOTICE, and on the presence poll for the idle threshold.
+- `WHO` flags an away user `G` instead of `H`; `WHOIS` and a PRIVMSG to an away user's DM answer `RPL_AWAY` (301). The away message is the glyph `💤`: late.sh away carries no text.
+- The `away-notify` capability sends `AWAY` (with the glyph) and bare `AWAY` for users sharing a joined channel whose flag moved since the last poll, one batched membership lookup per poll, and right after the JOIN of an arrival who is already away. Latency is the presence poll (30s).
+
 `IrcRegistry` is not durable and does not need to be. On process restart, IRC clients reconnect and re-register with their token.
 
 ---
@@ -216,7 +233,9 @@ Expected cost:
 Current performance guardrails:
 - Global socket cap before TLS/auth/registration.
 - Per-user registered connection cap.
-- IP auth-failure limiter.
+- IP auth-failure limiter. It uses the verified client IP when available and
+  falls back to the transport IP only for rate limiting; that fallback is never
+  persisted or used for ban matching.
 - Post-registration expensive commands are rate-limited per IRC connection over a 10-second window; NOTICE is rate-limited but does not generate rate-limit error replies.
 - `/LIST` uses one query for IRC-visible rooms plus member counts.
 - Presence arrivals batch `chat_room_members` lookups for all new online users against the session's joined rooms.
@@ -236,7 +255,9 @@ Unit tests:
 - Unit tests must not touch DB, services, sockets, or async process orchestration.
 
 Integration tests:
-- Registration/auth, DB-backed channel membership, message delivery through `ChatService`, moderation mapping, and listener behavior belong under `late-ssh/tests/`.
+- Registration/auth, DB-backed channel membership, message delivery through `ChatService`, moderation mapping, and listener behavior belong in the adjacent `serve_test.rs` (real IRC client over TCP, via `crate::test_helpers`).
+- PROXY regressions cover a banned shared transport IP with a different
+  projected client IP, `PROXY UNKNOWN`, and the no-header rollout transition.
 - Use shared DB helpers for any DB-backed test.
 
 Agent command policy:
@@ -255,3 +276,5 @@ Agent command policy:
 - Do not let token reset/revoke close the Settings dialog while the one-time plaintext token is still pending display.
 - Do not add hidden IRC-only moderation state. Everything should map to existing room/server moderation rows and commands.
 - Keep shutdown behavior fast-disconnect; IRC clients are expected to reconnect.
+- Never pass a trusted proxy's transport address into IRC auth or active-session
+  state when the client address is unavailable.

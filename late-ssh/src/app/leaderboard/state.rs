@@ -1,0 +1,345 @@
+use std::cell::{Cell, RefCell};
+
+use ratatui::layout::{Position, Rect};
+
+use late_core::models::{
+    chips::Difficulty,
+    leaderboard::{
+        DailyPuzzle, DoorGame, LATEANIA_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL, LeaderboardData,
+        RankedEntry, ScoreGame,
+    },
+};
+
+use crate::app::common::primitives::thousands;
+
+const EMPTY: &[RankedEntry] = &[];
+
+/// One selectable board on the Leaderboards page. The four bespoke boards
+/// lead (Top Drinkers first), then every game board; the per-game boards come straight off the
+/// late-core rosters, so a game added there appears here without a page
+/// change. `BadgeGuide` trails every ranked board: it carries no standings,
+/// `draw_detail` special-cases it before touching `standings`/`format_value`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Board {
+    LateaniaAdventurers,
+    LateaniaPvp,
+    DoorWins(DoorGame),
+    DoorDepth(DoorGame),
+    DoorScore(DoorGame),
+    TopChips,
+    ArcadeWins,
+    TimeOnline,
+    TopDrinkers,
+    Daily(DailyPuzzle),
+    Score(ScoreGame),
+    BadgeGuide,
+}
+
+/// What the detail pane shows for one board. Every board answers with
+/// exactly one of these; the renderer matches every arm, so a new shape
+/// cannot fall through to a wrong heading.
+pub(crate) enum Standings<'a> {
+    /// One window of month-scoped standings, headed "this month".
+    MonthlyOnly(&'a [RankedEntry]),
+    /// One window over all recorded history, headed "all time" (the door
+    /// wins boards: a win is forever).
+    AllTimeOnly(&'a [RankedEntry]),
+    /// One window ranking a current state of the world, headed "right now"
+    /// (the Lateania boards: living characters, not history).
+    Snapshot(&'a [RankedEntry]),
+    /// The default paired monthly and all-time windows.
+    Paired {
+        monthly: &'a [RankedEntry],
+        all_time: &'a [RankedEntry],
+    },
+    /// Paired monthly and current-year windows, for a race that resets
+    /// every year rather than one kept forever (Top Drinkers).
+    MonthlyYearly {
+        monthly: &'a [RankedEntry],
+        yearly: &'a [RankedEntry],
+    },
+}
+
+impl Board {
+    /// Page order: the bespoke boards, then the Games group (the Lateania
+    /// snapshot boards, then each door's board triple), then daily puzzles,
+    /// then score games, each roster in its declaration order.
+    pub(crate) fn all() -> Vec<Self> {
+        let mut boards = vec![
+            Self::TopDrinkers,
+            Self::TopChips,
+            Self::ArcadeWins,
+            Self::TimeOnline,
+            Self::LateaniaAdventurers,
+            Self::LateaniaPvp,
+        ];
+        for &game in DoorGame::ALL {
+            boards.push(Self::DoorWins(game));
+            boards.push(Self::DoorDepth(game));
+            boards.push(Self::DoorScore(game));
+        }
+        boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
+        boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
+        boards.push(Self::BadgeGuide);
+        boards
+    }
+
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::LateaniaAdventurers => "Lateania Adventurers",
+            Self::LateaniaPvp => "Lateania PvP",
+            Self::DoorWins(DoorGame::Dcss) => "DCSS Wins",
+            Self::DoorDepth(DoorGame::Dcss) => "DCSS Deepest Dive",
+            Self::DoorScore(DoorGame::Dcss) => "DCSS Top Score",
+            Self::DoorWins(DoorGame::Nethack) => "NetHack Wins",
+            Self::DoorDepth(DoorGame::Nethack) => "NetHack Deepest Dive",
+            Self::DoorScore(DoorGame::Nethack) => "NetHack Top Score",
+            Self::DoorWins(DoorGame::Brogue) => "Brogue Wins",
+            Self::DoorDepth(DoorGame::Brogue) => "Brogue Deepest Dive",
+            Self::DoorScore(DoorGame::Brogue) => "Brogue Top Score",
+            Self::TopChips => "Top Chips",
+            Self::ArcadeWins => "Arcade Wins",
+            Self::TimeOnline => "Late Time",
+            Self::TopDrinkers => "Top Drinkers",
+            Self::Daily(puzzle) => puzzle.title(),
+            Self::Score(game) => game.title(),
+            Self::BadgeGuide => "Badge Guide",
+        }
+    }
+
+    /// One line under the board title saying what the numbers are. The
+    /// ArcadeWins arm is formatted from [`Difficulty::points`] so the copy
+    /// cannot drift from the SQL the points come from.
+    pub(crate) fn hint(self) -> String {
+        match self {
+            Self::LateaniaAdventurers => format!(
+                "living characters by level, past {LATEANIA_LEVEL_CAP} one more per {}k xp",
+                LATEANIA_XP_PER_PARAGON_LEVEL / 1000
+            ),
+            Self::LateaniaPvp => "rivals slain in the Wildbound Waste".to_string(),
+            Self::DoorWins(DoorGame::Dcss) => "games escaped with the Orb of Zot".to_string(),
+            Self::DoorDepth(DoorGame::Dcss) => "deepest dungeon depth ever reached".to_string(),
+            Self::DoorScore(DoorGame::Dcss) => "best final score".to_string(),
+            Self::DoorWins(DoorGame::Nethack) => "games ascended to demigodhood".to_string(),
+            Self::DoorDepth(DoorGame::Nethack) => "deepest dungeon level ever reached".to_string(),
+            Self::DoorScore(DoorGame::Nethack) => "best final score".to_string(),
+            Self::DoorWins(DoorGame::Brogue) => "games escaped or mastered".to_string(),
+            Self::DoorDepth(DoorGame::Brogue) => "deepest dungeon depth ever reached".to_string(),
+            Self::DoorScore(DoorGame::Brogue) => "best final score".to_string(),
+            Self::TopChips => "monthly chips earned, spending never counts".to_string(),
+            Self::ArcadeWins => format!(
+                "daily puzzle points: easy {} · medium {} · hard {}",
+                Difficulty::Easy.points(),
+                Difficulty::Medium.points(),
+                Difficulty::Hard.points(),
+            ),
+            Self::TimeOnline => "total connected time".to_string(),
+            Self::TopDrinkers => "buzz from every drink taken, whoever paid".to_string(),
+            Self::Daily(_) => "daily wins".to_string(),
+            Self::Score(_) => "best score".to_string(),
+            Self::BadgeGuide => "what each three-letter award code means".to_string(),
+        }
+    }
+
+    /// A board value formatted for a standings row. Kept next to `hint` so a
+    /// board's copy and its number format live in one place.
+    pub(crate) fn format_value(self, value: i64) -> String {
+        match self {
+            Self::LateaniaAdventurers => match value > LATEANIA_LEVEL_CAP {
+                true => format!("lvl {LATEANIA_LEVEL_CAP} +{}", value - LATEANIA_LEVEL_CAP),
+                false => format!("lvl {value}"),
+            },
+            Self::LateaniaPvp => format!("{} kills", thousands(value)),
+            Self::DoorWins(_) => format!("{} wins", thousands(value)),
+            Self::DoorDepth(_) => format!("depth {value}"),
+            Self::DoorScore(_) => thousands(value),
+            Self::TopChips => format!("{} chips", thousands(value)),
+            Self::ArcadeWins => format!("{} pts", thousands(value)),
+            Self::TimeOnline => format_online_time(value),
+            Self::TopDrinkers => format!("{} buzz", thousands(value)),
+            Self::Daily(_) => format!("{} wins", thousands(value)),
+            Self::Score(_) => thousands(value),
+            // Unreachable: BadgeGuide has no ranked entries, so nothing ever
+            // calls format_value with it. draw_detail renders the guide
+            // directly and returns before reaching entry formatting.
+            Self::BadgeGuide => String::new(),
+        }
+    }
+
+    pub(crate) fn standings(self, data: &LeaderboardData) -> Standings<'_> {
+        match self {
+            Self::LateaniaAdventurers => Standings::Snapshot(&data.lateania_adventurers),
+            Self::LateaniaPvp => Standings::Snapshot(&data.lateania_pvp),
+            Self::DoorWins(game) => {
+                Standings::AllTimeOnly(data.door_board(game).map_or(EMPTY, |board| &board.wins))
+            }
+            Self::DoorDepth(game) => {
+                let windows = data.door_board(game).map(|board| &board.depth);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
+            Self::DoorScore(game) => {
+                let windows = data.door_board(game).map(|board| &board.score);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
+            Self::TopChips => Standings::MonthlyOnly(&data.monthly_chip_earners),
+            Self::ArcadeWins => Standings::MonthlyOnly(&data.arcade_champions),
+            Self::TimeOnline => Standings::Paired {
+                monthly: &data.online_time.monthly,
+                all_time: &data.online_time.all_time,
+            },
+            Self::TopDrinkers => Standings::MonthlyYearly {
+                monthly: &data.top_drinkers.monthly,
+                yearly: &data.top_drinkers.yearly,
+            },
+            Self::Daily(puzzle) => {
+                let windows = data.daily_board(puzzle);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
+            Self::Score(game) => {
+                let windows = data.score_board(game);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
+            // Unreachable: draw_detail special-cases BadgeGuide before
+            // calling standings.
+            Self::BadgeGuide => Standings::Snapshot(EMPTY),
+        }
+    }
+}
+
+fn format_online_time(milliseconds: i64) -> String {
+    let seconds = milliseconds.max(0) / 1_000;
+    if seconds == 0 {
+        return "<1s".to_string();
+    }
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{}m {}s", minutes, seconds % 60);
+    }
+
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{}h {}m", hours, minutes % 60);
+    }
+
+    let days = hours / 24;
+    format!("{}d {}h", days, hours % 24)
+}
+
+pub(crate) struct LeaderboardPageState {
+    boards: Vec<Board>,
+    selected: usize,
+    scroll: Cell<u16>,
+    max_scroll: Cell<u16>,
+    rail_area: Cell<Rect>,
+    content_area: Cell<Rect>,
+    board_rows: RefCell<Vec<(Rect, usize)>>,
+}
+
+impl LeaderboardPageState {
+    pub(crate) fn new() -> Self {
+        Self {
+            boards: Board::all(),
+            selected: 0,
+            scroll: Cell::new(0),
+            max_scroll: Cell::new(0),
+            rail_area: Cell::new(Rect::default()),
+            content_area: Cell::new(Rect::default()),
+            board_rows: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn boards(&self) -> &[Board] {
+        &self.boards
+    }
+
+    pub(crate) fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    pub(crate) fn selected_board(&self) -> Board {
+        self.boards[self.selected]
+    }
+
+    pub(crate) fn select_next(&mut self) {
+        self.select((self.selected + 1) % self.boards.len());
+    }
+
+    pub(crate) fn select_previous(&mut self) {
+        self.select((self.selected + self.boards.len() - 1) % self.boards.len());
+    }
+
+    pub(crate) fn select(&mut self, index: usize) {
+        if index < self.boards.len() && index != self.selected {
+            self.selected = index;
+            self.scroll.set(0);
+            // The new board's extent is unknown until it draws.
+            self.max_scroll.set(0);
+        }
+    }
+
+    pub(crate) fn wheel_select(&mut self, delta: i16) {
+        let index =
+            (self.selected as isize + delta as isize).clamp(0, self.boards.len() as isize - 1);
+        self.select(index as usize);
+    }
+
+    pub(crate) fn scroll(&self) -> u16 {
+        self.scroll.get()
+    }
+
+    pub(crate) fn scroll_by(&self, delta: i16) {
+        self.scroll.set(
+            (i32::from(self.scroll.get()) + i32::from(delta))
+                .clamp(0, i32::from(self.max_scroll.get())) as u16,
+        );
+    }
+
+    pub(crate) fn set_content_area(&self, area: Rect, max_scroll: usize) {
+        self.content_area.set(area);
+        self.max_scroll
+            .set(u16::try_from(max_scroll).unwrap_or(u16::MAX));
+        self.scroll_by(0);
+    }
+
+    pub(crate) fn set_rail_rows(&self, area: Rect, rows: Vec<(Rect, usize)>) {
+        self.rail_area.set(area);
+        *self.board_rows.borrow_mut() = rows;
+    }
+
+    pub(crate) fn clear_hit_regions(&self) {
+        self.rail_area.set(Rect::default());
+        self.content_area.set(Rect::default());
+        self.board_rows.borrow_mut().clear();
+    }
+
+    pub(crate) fn board_at(&self, point: Position) -> Option<usize> {
+        self.board_rows
+            .borrow()
+            .iter()
+            .find_map(|(rect, index)| rect.contains(point).then_some(*index))
+    }
+
+    pub(crate) fn over_rail(&self, point: Position) -> bool {
+        self.rail_area.get().contains(point)
+    }
+
+    pub(crate) fn over_content(&self, point: Position) -> bool {
+        self.content_area.get().contains(point)
+    }
+}

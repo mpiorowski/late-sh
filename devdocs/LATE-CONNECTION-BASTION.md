@@ -6,6 +6,10 @@
 
 Long-lived SSH frontend that keeps the user's `ssh late.sh` session alive across `late-ssh` (TUI backend) deploys by terminating SSH at a stable bastion process and tunneling the shell byte stream over a WebSocket to the backend, with explicit user agency over reconnect during upgrades.
 
+The backend tunnel listener is compiled into the `late-ssh` profile: port `4002` in `dev`/`dev2` (the API uses `4001`), and port `4001` in `prod` (the API uses `4000`). Production trusts bastion peers in `10.42.0.0/16`; dev profiles accept local Compose peers. `LATE_TUNNEL_SHARED_SECRET` is required in every profile. Compose maps the tunnel to host port `4002` for instance 1 and `4003` for instance 2, and maps bastion SSH to `5222`/`5223`. The bastion's configuration stays in `LATE_BASTION_*` environment variables.
+
+Release tags ending in `-bastion` use `deploy_service.yml` to roll the bastion image. Terraform's `IMAGE_TAGS["bastion"]` seeds its initial image; subsequent infrastructure applies preserve the deployed image.
+
 ---
 
 ## 1. Goal & non-goals

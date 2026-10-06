@@ -19,6 +19,9 @@ path = "src/main.rs"
 # exporters in if host-side traces/metrics are ever wanted.
 otel = []
 
+[lints]
+workspace = true
+
 [dependencies]
 # Core Utils
 anyhow = { workspace = true }

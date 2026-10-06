@@ -1,15 +1,33 @@
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::{
+    audio::VizFrame,
+    models::user::{AudioSource, RadioStation},
+};
+use std::time::Instant;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use super::svc::{AudioEvent, AudioService, QueueSnapshot};
-use crate::app::common::primitives::Banner;
+use super::{
+    svc::{AudioEvent, AudioService, QueueSnapshot},
+    thumbnail::Thumbnail,
+    viz::{LiveBands, Spectrum},
+};
+use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
+
+pub struct AudioTick {
+    pub banner: Option<Banner>,
+    /// True when the shared queue snapshot moved this tick: the booth modal
+    /// and the sidebar music stage draw straight from it.
+    pub changed: bool,
+}
 
 pub struct AudioState {
     pub(crate) service: AudioService,
     user_id: Uuid,
     event_rx: broadcast::Receiver<AudioEvent>,
     snapshot_rx: watch::Receiver<QueueSnapshot>,
+    /// The paired client's latest spectrum; `None` while no client is
+    /// streaming one.
+    spectrum: Option<Spectrum>,
 }
 
 impl AudioState {
@@ -21,7 +39,54 @@ impl AudioState {
             user_id,
             event_rx,
             snapshot_rx,
+            spectrum: None,
         }
+    }
+
+    /// Folds a paired client's `viz` frame into the eq's spectrum. Not a
+    /// paint on its own: the eq repaints on the anim_half edge it already
+    /// pays while visible, and picks up whatever landed since.
+    pub fn apply_viz_frame(&mut self, frame: &VizFrame, now: Instant) {
+        self.spectrum = Some(Spectrum::next(self.spectrum, frame, now));
+    }
+
+    /// Drops a spectrum the client stopped refreshing, so the eq falls back
+    /// to the ambient band.
+    pub fn expire_spectrum(&mut self, now: Instant) {
+        match self.spectrum {
+            Some(spectrum) if spectrum.is_stale(now) => self.spectrum = None,
+            Some(_) | None => {}
+        }
+    }
+
+    pub(crate) fn live_bands(&self) -> Option<LiveBands> {
+        self.spectrum.as_ref().map(Spectrum::bands)
+    }
+
+    /// The booth's tracks as the live strip weighs them.
+    pub fn live_candidates(&self) -> Vec<LiveCandidate> {
+        super::booth::live::candidates(&self.snapshot_rx.borrow())
+    }
+
+    /// Whether a track is still in the booth, playing or queued.
+    pub fn in_booth(&self, item_id: Uuid) -> bool {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .any(|item| item.id == item_id)
+    }
+
+    /// The thumbnail of one track in the booth, once it has been fetched.
+    pub fn queue_thumbnail(&self, item_id: Uuid) -> Option<Thumbnail> {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .find(|item| item.id == item_id)
+            .and_then(|item| item.thumbnail.clone())
     }
 
     pub fn queue_snapshot(&self) -> QueueSnapshot {
@@ -30,10 +95,6 @@ impl AudioState {
 
     pub fn youtube_source_count(&self) -> usize {
         self.service.youtube_source_count()
-    }
-
-    pub fn icecast_source_count(&self) -> usize {
-        self.service.icecast_source_count()
     }
 
     pub fn radio_source_count(&self) -> usize {
@@ -89,15 +150,6 @@ impl AudioState {
         self.service.toggle_unskippable_task(self.user_id, item_id);
     }
 
-    pub fn booth_history_vote(&self, item_id: Uuid, value: i16) {
-        self.service
-            .cast_history_vote_task(self.user_id, item_id, value);
-    }
-
-    pub fn booth_history_clear_vote(&self, item_id: Uuid) {
-        self.service.clear_history_vote_task(self.user_id, item_id);
-    }
-
     pub fn booth_history_requeue(&self, item_id: Uuid) {
         self.service
             .requeue_history_item_task(self.user_id, item_id);
@@ -114,9 +166,9 @@ impl AudioState {
         self.service.persist_audio_source_task(self.user_id, source);
     }
 
-    pub fn persist_icecast_stream(&self, stream: IcecastStream) {
+    pub fn persist_radio_slot(&self, index: usize, slot: Option<RadioStation>) {
         self.service
-            .persist_icecast_stream_task(self.user_id, stream);
+            .persist_radio_slot_task(self.user_id, index, slot);
     }
 
     pub fn persist_radio_station(&self, station: RadioStation) {
@@ -124,18 +176,26 @@ impl AudioState {
             .persist_radio_station_task(self.user_id, station);
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> AudioTick {
+        // Mark the queue snapshot seen so the peek only fires once per
+        // publish; renders keep reading it through `queue_snapshot()`.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        if changed {
+            let _ = self.snapshot_rx.borrow_and_update();
+        }
         let mut banner = None;
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
-                AudioEvent::TrustedSubmitQueued { user_id, position }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(if position == 0 {
-                        Banner::success("Queued audio - up next")
-                    } else {
-                        Banner::success(&format!("Queued audio - #{position} in line"))
-                    });
+                AudioEvent::TrustedSubmitQueued {
+                    user_id,
+                    position,
+                    reward_chips,
+                } if user_id == self.user_id => {
+                    banner = Some(Banner::success(&submitted_line(
+                        "Queued audio",
+                        position,
+                        reward_chips,
+                    )));
                 }
                 AudioEvent::TrustedSubmitFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
@@ -154,12 +214,16 @@ impl AudioState {
                 AudioEvent::TrustedSkipFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
-                AudioEvent::BoothSubmitQueued { user_id, position } if user_id == self.user_id => {
-                    banner = Some(if position == 0 {
-                        Banner::success("Submitted - up next")
-                    } else {
-                        Banner::success(&format!("Submitted - #{position} in line"))
-                    });
+                AudioEvent::BoothSubmitQueued {
+                    user_id,
+                    position,
+                    reward_chips,
+                } if user_id == self.user_id => {
+                    banner = Some(Banner::success(&submitted_line(
+                        "Submitted",
+                        position,
+                        reward_chips,
+                    )));
                 }
                 AudioEvent::BoothSubmitFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
@@ -205,26 +269,16 @@ impl AudioState {
                         "Skip vote registered ({votes}/{threshold})"
                     )));
                 }
-                AudioEvent::BoothHistoryVoteApplied { user_id, score }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(Banner::success(&format!(
-                        "History vote registered (score {score})"
+                AudioEvent::BoothHistoryRequeued {
+                    user_id,
+                    position,
+                    reward_chips,
+                } if user_id == self.user_id => {
+                    banner = Some(Banner::success(&submitted_line(
+                        "Queued from history",
+                        position,
+                        reward_chips,
                     )));
-                }
-                AudioEvent::BoothHistoryVoteFailed { user_id, message }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(Banner::error(&message));
-                }
-                AudioEvent::BoothHistoryRequeued { user_id, position }
-                    if user_id == self.user_id =>
-                {
-                    banner = Some(if position == 0 {
-                        Banner::success("Queued from history - up next")
-                    } else {
-                        Banner::success(&format!("Queued from history - #{position} in line"))
-                    });
                 }
                 AudioEvent::BoothHistoryRequeueFailed { user_id, message }
                     if user_id == self.user_id =>
@@ -247,6 +301,25 @@ impl AudioState {
                 _ => {}
             }
         }
-        banner
+        AudioTick { banner, changed }
     }
 }
+
+/// The banner a submission gets: where it landed in the queue, and what
+/// bringing it paid. The chips half is dropped entirely when nothing was
+/// minted, which only happens past the day's cap, because a "+0 chips" is
+/// worse than silence.
+fn submitted_line(verb: &str, position: i64, reward_chips: i64) -> String {
+    let place = match position {
+        0 => "up next".to_string(),
+        n => format!("#{n} in line"),
+    };
+    match reward_chips {
+        0 => format!("{verb} - {place}"),
+        chips => format!("{verb} - {place} (+{chips} chips)"),
+    }
+}
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

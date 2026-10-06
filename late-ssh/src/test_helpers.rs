@@ -1,0 +1,1227 @@
+#![allow(dead_code)]
+
+use crate::app::activity::event::ActivityEvent;
+use crate::app::activity::publisher::ActivityPublisher;
+use crate::app::ai::svc::AiService;
+use crate::app::arcade::le_word::svc::LeWordService;
+use crate::app::arcade::minesweeper::svc::MinesweeperService;
+use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
+use crate::app::arcade::nonogram::svc::NonogramService;
+use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
+use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
+use crate::app::arcade::snake::svc::SnakeService;
+use crate::app::arcade::solitaire::svc::SolitaireService;
+use crate::app::arcade::sudoku::svc::SudokuService;
+use crate::app::arcade::tetris::svc::LaterisService;
+use crate::app::arcade::traffic::svc::TrafficService;
+use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
+use crate::app::artboard::provenance::ArtboardProvenance;
+use crate::app::bonsai::svc::BonsaiService;
+use crate::app::chat::news::svc::ArticleService;
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::ChatService;
+use crate::app::games::chips::svc::ChipService;
+use crate::app::lobby::house::blackjack::player::BlackjackPlayerDirectory;
+use crate::app::pet::svc::PetService;
+use crate::app::profile::svc::ProfileService;
+use crate::app::state::{App, SessionConfig};
+use crate::app::voice::svc::{VoiceConfig, VoiceService};
+use crate::app::{LeaderboardService, QuestService, ShopService};
+use crate::authz::Permissions;
+use crate::config::{AiConfig, Config};
+use crate::paired_clients::{PairControlMessage, PairedClientRegistry};
+use crate::session::SessionRegistry;
+use crate::state::State;
+use late_core::{
+    api_types::NowPlaying,
+    db::Db,
+    rate_limit::IpRateLimiter,
+    test_utils::{TestDb, test_db},
+};
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{Semaphore, broadcast, watch};
+use tokio::time::{Duration, Instant, sleep};
+use uuid::Uuid;
+
+/// Watchdog for exact asynchronous test conditions backed by real Postgres.
+/// CI runs several migration-heavy test databases concurrently, so startup
+/// can legitimately take longer than the condition itself needs once ready.
+const ASYNC_TEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub async fn new_test_db() -> TestDb {
+    test_db().await
+}
+
+fn test_sudoku_games(user_id: Uuid) -> Vec<late_core::models::sudoku::Game> {
+    let today = chrono::Utc::now().date_naive();
+    // App flow tests do not exercise Sudoku; preloading daily boards keeps
+    // app construction from spawning expensive date-dependent generators.
+    [
+        (
+            "easy",
+            "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
+        ),
+        (
+            "medium",
+            "000260701680070090190004500820100040004602900050003028009300074040050036703018000",
+        ),
+        (
+            "hard",
+            "000000907000420180000705026100904000050000040000507009920108000034059000507000000",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(idx, (difficulty_key, puzzle))| {
+        let mut grid = [[0u8; 9]; 9];
+        let mut fixed_mask = [[false; 9]; 9];
+        for (cell, byte) in puzzle.as_bytes().iter().copied().enumerate().take(81) {
+            let value = byte.saturating_sub(b'0').min(9);
+            let row = cell / 9;
+            let col = cell % 9;
+            grid[row][col] = value;
+            fixed_mask[row][col] = value != 0;
+        }
+
+        late_core::models::sudoku::Game {
+            id: Uuid::now_v7(),
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            user_id,
+            mode: "daily".to_string(),
+            difficulty_key: difficulty_key.to_string(),
+            puzzle_date: Some(today),
+            puzzle_seed: idx as i64,
+            grid: serde_json::to_value(grid).expect("sudoku grid json"),
+            fixed_mask: serde_json::to_value(fixed_mask).expect("sudoku fixed mask json"),
+            notes: serde_json::to_value([[0u16; 9]; 9]).expect("sudoku notes json"),
+            is_game_over: false,
+            score: 0,
+        }
+    })
+    .collect()
+}
+
+fn test_dartboard_server() -> dartboard_local::ServerHandle {
+    crate::dartboard::spawn_server()
+}
+
+fn test_dartboard_provenance() -> crate::app::artboard::provenance::SharedArtboardProvenance {
+    ArtboardProvenance::default().shared()
+}
+
+fn test_house_registry(db: Db) -> crate::app::lobby::house::registry::HouseTableRegistry {
+    let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
+    crate::app::lobby::house::registry::HouseTableRegistry::new(
+        ChipService::new(db.clone()),
+        BlackjackPlayerDirectory::new(db.clone()),
+        ActivityPublisher::new(db.clone(), activity_tx),
+        db,
+    )
+}
+
+/// Inert IRC factory defaults for tests; production profiles spell their
+/// IrcConfig out in `config.rs` and there is no `Default` impl to lean on.
+pub fn test_irc_config() -> crate::config::IrcConfig {
+    crate::config::IrcConfig {
+        enabled: false,
+        port: 6667,
+        tls_cert_path: None,
+        tls_key_path: None,
+        proxy_protocol: false,
+        proxy_trusted_cidrs: Vec::new(),
+        max_conns_global: 200,
+        max_conns_per_user: 3,
+        max_auth_failures_per_ip: 20,
+        auth_failure_window_secs: 300,
+    }
+}
+
+/// Session-scoped `StreamService` for app tests. Every session has one, in
+/// tests as in production; what tests lack is LiveKit, so `/golive` here fails
+/// the voice check inside `prepare_go_live` rather than the service missing.
+fn test_stream_service(
+    db: Db,
+    activity_tx: broadcast::Sender<ActivityEvent>,
+) -> crate::app::stream::svc::StreamService {
+    crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        VoiceService::new(VoiceConfig::disabled()),
+        ActivityPublisher::new(db, activity_tx),
+        "http://localhost:3000".to_string(),
+    )
+}
+
+pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
+    Config {
+        env: crate::config::Env::Dev,
+        ssh_port: 0,
+        api_port: 0,
+        icecast_url: "http://localhost:8000".to_string(),
+        web_url: "http://localhost:3000".to_string(),
+        open_access: true,
+        force_admin: false,
+        db: db_config,
+        max_conns_global: 100,
+        max_conns_per_ip: 3,
+        ssh_idle_timeout: 60,
+        server_key_path: std::env::temp_dir().join(format!("late-ssh-test-key-{}", Uuid::now_v7())),
+        frame_drop_log_every: 100,
+        ssh_max_attempts_per_ip: 30,
+        ssh_rate_limit_window_secs: 60,
+        ssh_proxy_protocol: false,
+        ssh_proxy_trusted_cidrs: vec![],
+        ws_pair_max_attempts_per_ip: 30,
+        ws_pair_rate_limit_window_secs: 60,
+        tunnel_port: 0,
+        tunnel_shared_secret: "test-secret".to_string(),
+        tunnel_trusted_cidrs: vec![],
+        ai: AiConfig {
+            enabled: false,
+            api_key: None,
+        },
+        youtube_api_key: None,
+        voice: VoiceConfig::disabled(),
+        irc: test_irc_config(),
+        files: None,
+        rebels_enabled: true,
+        rebels_host: "frittura.org".to_string(),
+        rebels_port: 3788,
+        rebels_secret: "test-secret".to_string(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
+        dcss_enabled: false,
+        dcss_host: String::new(),
+        dcss_port: 2325,
+        dcss_secret: String::new(),
+        brogue_enabled: false,
+        brogue_host: String::new(),
+        brogue_port: 2327,
+        brogue_secret: String::new(),
+        usurper_enabled: false,
+        usurper_host: String::new(),
+        usurper_port: 2326,
+        usurper_secret: String::new(),
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
+        bashquest_enabled: false,
+        bashquest_host: String::new(),
+        bashquest_port: 2330,
+        bashquest_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
+    }
+}
+
+pub fn test_app_state(db: Db, config: Config) -> State {
+    let active_users = Arc::new(Mutex::new(HashMap::new()));
+    let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
+    let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
+    let session_registry = SessionRegistry::new();
+    let notification_service = NotificationService::new(db.clone());
+    let chat_service = ChatService::new_with_active_users(
+        db.clone(),
+        notification_service.clone(),
+        active_users.clone(),
+    )
+    .with_username_directory(username_directory.clone())
+    .with_session_registry(session_registry.clone());
+    let ai_service = AiService::new(false, None);
+    let translation_service =
+        crate::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
+    let summary_service =
+        crate::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
+    let paper_service = crate::app::paper::svc::PaperService::new(db.clone(), ai_service.clone());
+    let jobs_service = crate::app::jobs::svc::JobsService::new(db.clone(), ai_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone());
+    let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
+    let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
+    let work_service = crate::app::chat::work::svc::WorkService::new(db.clone());
+    let ssh_attempt_limiter = IpRateLimiter::new(
+        config.ssh_max_attempts_per_ip,
+        config.ssh_rate_limit_window_secs,
+    );
+    let ws_pair_limiter = IpRateLimiter::new(
+        config.ws_pair_max_attempts_per_ip,
+        config.ws_pair_rate_limit_window_secs,
+    );
+    let (_, now_playing_rx) =
+        watch::channel::<std::collections::HashMap<String, NowPlaying>>(Default::default());
+    let (_, radio_meta_rx) = watch::channel::<
+        std::collections::HashMap<String, crate::app::audio::radio_meta::svc::ArtistTitle>,
+    >(Default::default());
+    let irc_registry = crate::ircd::registry::IrcRegistry::new();
+    let profile_service = ProfileService::new(db.clone(), active_users.clone())
+        .with_username_directory(username_directory.clone())
+        .with_session_registry(session_registry.clone())
+        .with_irc_registry(irc_registry.clone());
+    let twenty_forty_eight_service = TwentyFortyEightService::new(db.clone());
+    let tetris_service = LaterisService::new(db.clone());
+    let snake_service = SnakeService::new(db.clone());
+    let traffic_service = TrafficService::new(db.clone());
+    let le_word_service = LeWordService::new(db.clone(), activity_tx.clone());
+    let rubiks_cube_service = RubiksCubeService::new(db.clone(), activity_tx.clone());
+    let sliding_puzzle_service = SlidingPuzzleService::new(db.clone(), activity_tx.clone());
+    let chip_service = ChipService::new(db.clone());
+    let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
+    let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
+    let nonogram_service = NonogramService::new(db.clone(), activity_tx.clone());
+    let solitaire_service = SolitaireService::new(db.clone(), activity_tx.clone());
+    let minesweeper_service = MinesweeperService::new(db.clone(), activity_tx.clone());
+    let bonsai_service = BonsaiService::new(db.clone(), activity_tx.clone());
+    let pet_service = PetService::new(db.clone(), activity_tx.clone());
+    let aquarium_service =
+        crate::app::hub::aquarium::svc::AquariumService::new(db.clone(), activity_tx.clone());
+    let dartboard_server = crate::dartboard::spawn_server();
+    let leaderboard_service = LeaderboardService::new(db.clone());
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let shop_service = ShopService::new(db.clone());
+    let ultimate_service = crate::app::UltimateService::new(db.clone());
+    let voice_service = VoiceService::new(config.voice.clone());
+    let stream_service = crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        voice_service.clone(),
+        activity_publisher.clone(),
+        config.web_url.clone(),
+    );
+    State {
+        conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
+        conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
+        pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
+        active_users,
+        drunk_map: crate::app::clubhouse::drunk::DrunkMap::new(),
+        nightcap_house: crate::app::clubhouse::nightcap::svc::NightcapHouse::new(
+            db.clone(),
+            crate::app::clubhouse::nightcap::wall::SharedWall::new(),
+        ),
+        mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
+        runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
+        presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        username_directory,
+        flair_directory: crate::app::common::username_effect::new_directory(),
+        crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
+        pot_service: crate::app::pot::svc::PotService::new(db.clone()),
+        referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
+        config,
+        db: db.clone(),
+        audio_service: crate::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            crate::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
+        voice_service,
+        stream_service,
+        chat_service,
+        notification_service,
+        ai_service,
+        translation_service,
+        summary_service,
+        paper_service,
+        jobs_service,
+        article_service,
+        feed_service,
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
+        showcase_service,
+        work_service,
+        profile_service,
+        twenty_forty_eight_service,
+        tetris_service,
+        snake_service,
+        traffic_service,
+        le_word_service,
+        rubiks_cube_service,
+        sliding_puzzle_service,
+        sudoku_service,
+        nonogram_service,
+        solitaire_service,
+        minesweeper_service,
+        bonsai_service,
+        pet_service,
+        aquarium_service,
+        nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
+        lateania_service: crate::app::door::lateania::svc::LateaniaService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: crate::app::door::greendragon::svc::GreenDragonService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        daily_service: crate::app::lobby::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        ),
+        house_registry: test_house_registry(db.clone()),
+        dartboard_server,
+        dartboard_provenance: test_dartboard_provenance(),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        leaderboard_service,
+        quest_service,
+        shop_service,
+        ultimate_service,
+        now_playing_rx,
+        radio_meta_rx,
+        activity_feed: activity_tx,
+        session_registry,
+        irc_registry,
+        paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
+        ssh_attempt_limiter,
+        ws_pair_limiter,
+        is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        tunnel_sessions: crate::state::TunnelSessions::default(),
+    }
+}
+
+pub fn make_app(db: Db, user_id: Uuid, session_token: &str) -> App {
+    make_app_with_chat_service(db, user_id, session_token).0
+}
+
+pub fn make_app_with_permissions(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+    permissions: Permissions,
+) -> App {
+    make_app_with_chat_service_and_permissions(
+        db,
+        user_id,
+        session_token,
+        permissions,
+        SessionWorld::default(),
+    )
+    .0
+}
+
+pub fn make_app_with_chat_service(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+) -> (App, ChatService) {
+    make_app_with_chat_service_and_permissions(
+        db,
+        user_id,
+        session_token,
+        Permissions::default(),
+        SessionWorld::default(),
+    )
+}
+
+/// The process-global handles a test shares between two apps when it needs
+/// them to see each other. `make_app` leaves all of these unset, which keeps
+/// a single-app test session-local; a cross-session test (`/pair`, presence
+/// lookups) hands the same `SessionWorld` to both apps.
+#[derive(Clone, Default)]
+pub struct SessionWorld {
+    pub username: Option<String>,
+    pub active_users: Option<crate::state::ActiveUsers>,
+    pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
+    /// A leaderboard snapshot the session should find already published, as
+    /// `LeaderboardService` leaves one for every session after its first
+    /// refresh. Unset means the session gets no leaderboard channel at all.
+    pub leaderboard_rx:
+        Option<watch::Receiver<Arc<late_core::models::leaderboard::LeaderboardData>>>,
+    /// The account's "Land on" tweak. Unset lands in the Clubhouse, the
+    /// production default.
+    pub landing_page: Option<late_core::models::user::LandingPage>,
+    /// A first-ever session, which always starts in the Clubhouse.
+    pub is_new_user: bool,
+    /// One replica's chat service, shared the way production shares it:
+    /// every session on it hears every other's `ChatEvent`s. Unset gives
+    /// the session its own. Mention notifications ride the app's own
+    /// `NotificationService`, which this does not share.
+    pub chat_service: Option<ChatService>,
+}
+
+pub fn make_app_in_world(db: Db, user_id: Uuid, session_token: &str, world: SessionWorld) -> App {
+    make_app_with_chat_service_and_permissions(
+        db,
+        user_id,
+        session_token,
+        Permissions::default(),
+        world,
+    )
+    .0
+}
+
+fn make_app_with_chat_service_and_permissions(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+    permissions: Permissions,
+    world: SessionWorld,
+) -> (App, ChatService) {
+    // One shared instance between ChatService and SessionConfig, mirroring
+    // main.rs: mention events broadcast on the instance's channel, so a second
+    // instance would never deliver them to the app.
+    let notification_service = NotificationService::new(db.clone());
+    let chat_service = match world.chat_service.clone() {
+        Some(shared) => shared,
+        None => ChatService::new(db.clone(), notification_service.clone()),
+    };
+    let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
+    let shop_service = ShopService::new(db.clone());
+    let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = crate::app::UltimateService::new(db.clone());
+    let chip_service = ChipService::new(db.clone());
+    let mut app = App::new(SessionConfig {
+        cols: 100,
+        rows: 32,
+        term: "xterm-256color".to_string(),
+        audio_service: crate::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            crate::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
+        voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
+        chat_service: chat_service.clone(),
+        translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        summary_service: crate::app::ai::summary::SummaryService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        paper_service: crate::app::paper::svc::PaperService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        jobs_service: crate::app::jobs::svc::JobsService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        notification_service: notification_service.clone(),
+        article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
+        showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+        work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
+        profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
+        twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
+        initial_2048_game: None,
+        initial_2048_high_score: None,
+        tetris_service: LaterisService::new(db.clone()),
+        snake_service: SnakeService::new(db.clone()),
+        traffic_service: TrafficService::new(db.clone()),
+        initial_tetris_game: None,
+        initial_snake_game: None,
+        initial_tetris_high_score: None,
+        initial_snake_high_score: None,
+        initial_traffic_track_scores: Vec::new(),
+        initial_traffic_high_score: None,
+        le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
+        initial_rubiks_cube_game: None,
+        sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
+        initial_sliding_puzzle_games: Vec::new(),
+        initial_le_word_daily_word: None,
+        initial_le_word_game: None,
+        sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        initial_sudoku_games: test_sudoku_games(user_id),
+        nonogram_service: NonogramService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_nonogram_games: Vec::new(),
+        solitaire_service: SolitaireService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_solitaire_games: Vec::new(),
+        minesweeper_service: MinesweeperService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_minesweeper_games: Vec::new(),
+        lateania_service: crate::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: crate::app::door::greendragon::svc::GreenDragonService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        daily_service: crate::app::lobby::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        ),
+        house_registry: test_house_registry(db.clone()),
+        dartboard_server: test_dartboard_server(),
+        dartboard_provenance: test_dartboard_provenance(),
+        artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
+            db.clone(),
+        ),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        username: world.username.unwrap_or_else(|| "test-user".to_string()),
+        bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        fight_service: crate::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            chat_service.clone(),
+            chip_service.clone(),
+        ),
+        tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
+        guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
+        initial_bonsai_tree: None,
+        initial_bonsai_decay_protection: None,
+        pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        initial_pet: None,
+        aquarium_service: crate::app::hub::aquarium::svc::AquariumService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_aquarium_care: Default::default(),
+        quest_service,
+        quest_snapshot_rx,
+        shop_service,
+        shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
+        nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
+        initial_chip_balance: 0,
+        leaderboard_rx: world.leaderboard_rx,
+        web_url: "http://localhost:3000".to_string(),
+        rebels_enabled: true,
+        rebels_host: "frittura.org".to_string(),
+        rebels_port: 3788,
+        rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
+        nethack_activity: None,
+        arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        initial_door_rcs: Vec::new(),
+        dcss_enabled: false,
+        dcss_host: String::new(),
+        dcss_port: 2325,
+        dcss_secret: String::new(),
+        brogue_enabled: false,
+        brogue_host: String::new(),
+        brogue_port: 2327,
+        brogue_secret: String::new(),
+        usurper_enabled: false,
+        usurper_host: String::new(),
+        usurper_port: 2326,
+        usurper_secret: String::new(),
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
+        bashquest_enabled: false,
+        bashquest_host: String::new(),
+        bashquest_port: 2330,
+        bashquest_secret: String::new(),
+        bashquest_awards: None,
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
+        session_token: session_token.to_string(),
+        session_registry: None,
+        paired_client_registry: None,
+        session_rx: None,
+        now_playing_rx: None,
+        radio_meta_rx: None,
+        user_id,
+        permissions,
+        artboard_banned: false,
+        splash_piece: None,
+        artboard_ban_expires_at: None,
+        active_users: world.active_users,
+        drunk_map: crate::app::clubhouse::drunk::DrunkMap::new(),
+        nightcap_house: None,
+        mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        files: None,
+        scratchpad_registry: world.scratchpad_registry,
+        clubhouse_tutorial_done: true,
+        // Everything already spent: no first-contact stage can fire inside
+        // a test app unless a test arms one on purpose.
+        first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
+        first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate::closed(),
+        runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
+            std::collections::HashMap::new(),
+        ),
+        presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        zen_layout: None,
+        // No SSH key: test apps follow the account default and persist no
+        // per-device layout, which is also what ghost bot sessions do.
+        key_fingerprint: None,
+        key_layout: None,
+        key_left_at: None,
+        username_directory: None,
+        flair_directory: None,
+        crown_service: None,
+        pot_service: None,
+        referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
+        newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
+        activity_feed_rx: None,
+        is_new_user: world.is_new_user,
+        landing_page: match world.landing_page {
+            Some(page) => page,
+            None => late_core::models::user::LandingPage::Clubhouse,
+        },
+        paper_at_login: false,
+        is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        supports_reconnect_on_drain: false,
+        reconnect_reason: None,
+        initial_theme_id: "contrast".to_string(),
+        initial_interaction_mode: None,
+        initial_audio_source: late_core::models::user::AudioSource::default(),
+        initial_radio_station: late_core::models::user::RadioStation::default(),
+        initial_radio_slots: late_core::models::user::RadioSlots::default(),
+    })
+    .expect("app");
+    let landed = app.screen;
+    app.skip_splash_for_tests();
+    // The suite starts on Home, but a test that sets the landing inputs is
+    // asserting where the session landed, so it keeps that screen.
+    if world.landing_page.is_some() || world.is_new_user {
+        app.screen = landed;
+        app.sync_visible_chat_room();
+    }
+    (app, chat_service)
+}
+
+pub fn make_app_with_paired_client(
+    db: Db,
+    user_id: Uuid,
+    session_token: &str,
+) -> (App, tokio::sync::mpsc::Receiver<PairControlMessage>) {
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
+    let (tx, rx) = tokio::sync::mpsc::channel(crate::paired_clients::PAIR_CONTROL_QUEUE_CAP);
+    registry
+        .register(
+            session_token.to_string(),
+            tx,
+            uuid::Uuid::now_v7(),
+            late_core::models::user::AudioSource::default(),
+        )
+        .expect("paired register");
+    let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
+    let quest_service = QuestService::new(db.clone(), activity_tx.clone());
+    let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
+    let shop_service = ShopService::new(db.clone());
+    let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
+    let ultimate_service = crate::app::UltimateService::new(db.clone());
+    let chip_service = ChipService::new(db.clone());
+    // One shared instance between ChatService and SessionConfig, mirroring
+    // main.rs (see make_app_with_chat_service_and_permissions).
+    let notification_service = NotificationService::new(db.clone());
+
+    let mut app = App::new(SessionConfig {
+        cols: 100,
+        rows: 32,
+        term: "xterm-256color".to_string(),
+        audio_service: crate::app::audio::svc::AudioService::new(
+            db.clone(),
+            None,
+            crate::paired_clients::PairedClientRegistry::new("https://audio.late.sh"),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
+        voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
+        chat_service: ChatService::new(db.clone(), notification_service.clone()),
+        translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        summary_service: crate::app::ai::summary::SummaryService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        paper_service: crate::app::paper::svc::PaperService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        jobs_service: crate::app::jobs::svc::JobsService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        notification_service: notification_service.clone(),
+        article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
+        showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+        work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
+        profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
+        twenty_forty_eight_service: TwentyFortyEightService::new(db.clone()),
+        initial_2048_game: None,
+        initial_2048_high_score: None,
+        tetris_service: LaterisService::new(db.clone()),
+        snake_service: SnakeService::new(db.clone()),
+        traffic_service: TrafficService::new(db.clone()),
+        initial_tetris_game: None,
+        initial_snake_game: None,
+        initial_tetris_high_score: None,
+        initial_snake_high_score: None,
+        initial_traffic_track_scores: Vec::new(),
+        initial_traffic_high_score: None,
+        le_word_service: LeWordService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        rubiks_cube_service: RubiksCubeService::new(db.clone(), activity_tx.clone()),
+        initial_rubiks_cube_game: None,
+        sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
+        initial_sliding_puzzle_games: Vec::new(),
+        initial_le_word_daily_word: None,
+        initial_le_word_game: None,
+        sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        initial_sudoku_games: test_sudoku_games(user_id),
+        nonogram_service: NonogramService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_nonogram_games: Vec::new(),
+        solitaire_service: SolitaireService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_solitaire_games: Vec::new(),
+        minesweeper_service: MinesweeperService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_minesweeper_games: Vec::new(),
+        lateania_service: crate::app::door::lateania::svc::LateaniaService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        greendragon_service: crate::app::door::greendragon::svc::GreenDragonService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
+        daily_service: crate::app::lobby::daily::svc::DailyService::new(
+            db.clone(),
+            chip_service.clone(),
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        ),
+        house_registry: test_house_registry(db.clone()),
+        dartboard_server: test_dartboard_server(),
+        dartboard_provenance: test_dartboard_provenance(),
+        artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
+            db.clone(),
+        ),
+        gallery_service: crate::app::artboard::gallery::svc::GalleryService::new(db.clone()),
+        username: "test-user".to_string(),
+        bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        fight_service: crate::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            ChatService::new(db.clone(), notification_service.clone()),
+            chip_service.clone(),
+        ),
+        tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
+        guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
+        initial_bonsai_tree: None,
+        initial_bonsai_decay_protection: None,
+        pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+        initial_pet: None,
+        aquarium_service: crate::app::hub::aquarium::svc::AquariumService::new(
+            db.clone(),
+            broadcast::channel::<ActivityEvent>(64).0,
+        ),
+        initial_aquarium_care: Default::default(),
+        quest_service,
+        quest_snapshot_rx,
+        shop_service,
+        shop_snapshot_rx,
+        ultimate_service,
+        initial_ultimate_cooldowns: Vec::new(),
+        nonogram_library: NonogramLibrary::default(),
+        chip_service: chip_service.clone(),
+        initial_chip_balance: 0,
+        leaderboard_rx: None,
+        web_url: "http://localhost:3000".to_string(),
+        rebels_enabled: true,
+        rebels_host: "frittura.org".to_string(),
+        rebels_port: 3788,
+        rebels_secret: String::new(),
+        nethack_enabled: false,
+        nethack_host: String::new(),
+        nethack_port: 2323,
+        nethack_secret: String::new(),
+        nethack_activity: None,
+        arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        initial_door_rcs: Vec::new(),
+        dcss_enabled: false,
+        dcss_host: String::new(),
+        dcss_port: 2325,
+        dcss_secret: String::new(),
+        brogue_enabled: false,
+        brogue_host: String::new(),
+        brogue_port: 2327,
+        brogue_secret: String::new(),
+        usurper_enabled: false,
+        usurper_host: String::new(),
+        usurper_port: 2326,
+        usurper_secret: String::new(),
+        dopewars_enabled: false,
+        dopewars_host: String::new(),
+        dopewars_port: 2324,
+        dopewars_secret: String::new(),
+        bashquest_enabled: false,
+        bashquest_host: String::new(),
+        bashquest_port: 2330,
+        bashquest_secret: String::new(),
+        bashquest_awards: None,
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
+        session_token: session_token.to_string(),
+        session_registry: None,
+        paired_client_registry: Some(registry),
+        session_rx: None,
+        now_playing_rx: None,
+        radio_meta_rx: None,
+        user_id,
+        permissions: Permissions::default(),
+        artboard_banned: false,
+        splash_piece: None,
+        artboard_ban_expires_at: None,
+        active_users: None,
+        drunk_map: crate::app::clubhouse::drunk::DrunkMap::new(),
+        nightcap_house: None,
+        mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        files: None,
+        scratchpad_registry: None,
+        clubhouse_tutorial_done: true,
+        // Everything already spent: no first-contact stage can fire inside
+        // a test app unless a test arms one on purpose.
+        first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
+        first_contact_gate: crate::app::deadchannel::haunt::state::FirstContactGate::closed(),
+        runner_looks_rx: crate::app::deadchannel::runner::svc::fixed_looks_rx(
+            std::collections::HashMap::new(),
+        ),
+        presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        zen_layout: None,
+        // No SSH key: test apps follow the account default and persist no
+        // per-device layout, which is also what ghost bot sessions do.
+        key_fingerprint: None,
+        key_layout: None,
+        key_left_at: None,
+        username_directory: None,
+        flair_directory: None,
+        crown_service: None,
+        pot_service: None,
+        referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
+        newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
+        activity_feed_rx: None,
+        is_new_user: false,
+        landing_page: late_core::models::user::LandingPage::Clubhouse,
+        paper_at_login: false,
+        is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        supports_reconnect_on_drain: false,
+        reconnect_reason: None,
+        initial_radio_station: late_core::models::user::RadioStation::default(),
+        initial_radio_slots: late_core::models::user::RadioSlots::default(),
+        initial_theme_id: "contrast".to_string(),
+        initial_interaction_mode: None,
+        initial_audio_source: late_core::models::user::AudioSource::default(),
+    })
+    .expect("app");
+    app.skip_splash_for_tests();
+    (app, rx)
+}
+
+/// Give a test app a device identity: the SSH key a real session would have
+/// authenticated with. Without it an app is keyless, so per-device settings
+/// apply for the session but persist nowhere. The caller must have created the
+/// matching `user_ssh_keys` row (as `auth_publickey` does) for writes to land.
+pub fn with_session_key(mut app: App, fingerprint: &str) -> App {
+    app.key_fingerprint = Some(fingerprint.to_string());
+    app
+}
+
+/// Walk every `game_payout_claims` row this account holds `days` into the
+/// past, so a test crosses a template's lockout window without sleeping.
+/// The one place the tests reach into that table: the window is read off
+/// `created`, and nothing in the app moves it.
+pub async fn age_payout_claims(db: &Db, user_id: Uuid, days: i32) {
+    let client = db.get().await.expect("db client");
+    client
+        .execute(
+            "UPDATE game_payout_claims
+             SET created = created - make_interval(days => $2)
+             WHERE user_id = $1",
+            &[&user_id, &days],
+        )
+        .await
+        .expect("age payout claims");
+}
+
+pub async fn wait_until<F, Fut>(mut predicate: F, label: &str)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
+    while Instant::now() < deadline {
+        if predicate().await {
+            return;
+        }
+        sleep(Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for condition: {label}");
+}
+
+/// Returns [`TestDb`] alongside the app so the Postgres container outlives
+/// the test body.
+pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
+    use late_core::models::{chat_room::ChatRoom, chat_room_member::ChatRoomMember};
+    use late_core::test_utils::create_test_user;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, &format!("{name}-it")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+
+    let mut app = make_app(test_db.db.clone(), user.id, &format!("{name}-flow-it"));
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+    (test_db, app)
+}
+
+pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
+    let mut last_plain = String::new();
+    while Instant::now() < deadline {
+        app.tick();
+        app.reset_render();
+        let frame = app.render().expect("render");
+        let plain = strip_ansi(&String::from_utf8_lossy(&frame));
+        if plain.contains(needle) {
+            return;
+        }
+        last_plain = plain;
+        sleep(Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for render to contain {needle:?}; last render:\n{last_plain}");
+}
+
+/// Tick until `ready` holds; panics at the timeout. The state counterpart of
+/// [`wait_for_render_contains`], for async state no frame prints.
+pub async fn wait_for_app(app: &mut App, label: &str, ready: impl Fn(&App) -> bool) {
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
+    while Instant::now() < deadline {
+        app.tick();
+        if ready(app) {
+            return;
+        }
+        sleep(Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for {label}");
+}
+
+/// Tick and render until `needle` disappears from the frame; panics at the
+/// timeout if it is still there. The absence counterpart of
+/// [`wait_for_render_contains`], for state that clears asynchronously.
+pub async fn wait_for_render_not_contains(app: &mut App, needle: &str) {
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
+    let mut last_plain = String::new();
+    while Instant::now() < deadline {
+        app.tick();
+        app.reset_render();
+        let frame = app.render().expect("render");
+        let plain = strip_ansi(&String::from_utf8_lossy(&frame));
+        if !plain.contains(needle) {
+            return;
+        }
+        last_plain = plain;
+        sleep(Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for render to drop {needle:?}; last render:\n{last_plain}");
+}
+
+pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        app.tick();
+        app.reset_render();
+        let frame = app.render().expect("render");
+        let plain = strip_ansi(&String::from_utf8_lossy(&frame));
+        assert!(
+            !plain.contains(needle),
+            "render unexpectedly contained {needle:?}: {plain:?}"
+        );
+        sleep(Duration::from_millis(30)).await;
+    }
+}
+
+/// Render one frame, tick once beforehand so async state drains, strip ANSI,
+/// and return the plain-text buffer for substring/line assertions.
+pub fn render_plain(app: &mut App) -> String {
+    app.tick();
+    app.reset_render();
+    let frame = app.render().expect("render");
+    strip_ansi(&String::from_utf8_lossy(&frame))
+}
+
+/// The text a client terminal would show for one frame: escape sequences
+/// are dropped and every printed glyph lands where the cursor moves put it,
+/// so the result reads as the screen's rows in order. Positioning matters
+/// because the SSH backend (`app/terminal_backend.rs`) re-anchors the
+/// cursor after every non-ASCII glyph and blanks a wide glyph's cells
+/// before drawing it; a plain strip of the wire bytes would show those
+/// blanks as gaps inside CJK and emoji text. Cells a frame never writes
+/// contribute nothing, and rows are concatenated without separators, which
+/// is what a straight strip of a full repaint produced.
+pub fn strip_ansi(input: &str) -> String {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut cells: std::collections::BTreeMap<(u16, u16), String> =
+        std::collections::BTreeMap::new();
+    let (mut x, mut y) = (0u16, 0u16);
+    let mut last_written: Option<(u16, u16)> = None;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1B}' => match chars.peek() {
+                Some('[') => {
+                    chars.next();
+                    let mut params = String::new();
+                    let mut final_byte = None;
+                    for c in chars.by_ref() {
+                        if matches!(c, '\u{40}'..='\u{7E}') {
+                            final_byte = Some(c);
+                            break;
+                        }
+                        params.push(c);
+                    }
+                    // The cursor moves are the sequences that place text;
+                    // colors, clears, and mode switches leave no glyph. The
+                    // backend uses both: row and column (`H`), and column
+                    // only (`G`) after a single-codepoint glyph.
+                    match final_byte {
+                        Some('H') => {
+                            let (row, col) = params.split_once(';').unwrap_or(("1", "1"));
+                            y = row.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                            x = col.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                        }
+                        Some('G') => {
+                            x = params.parse::<u16>().unwrap_or(1).saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                }
+                Some(']') | Some('P') | Some('X') | Some('^') | Some('_') => {
+                    // OSC / DCS / SOS / PM / APC: a string terminated by BEL
+                    // or ST; nothing in it is screen text.
+                    chars.next();
+                    let mut prev = '\0';
+                    for c in chars.by_ref() {
+                        if c == '\u{07}' || (prev == '\u{1B}' && c == '\\') {
+                            break;
+                        }
+                        prev = c;
+                    }
+                }
+                _ => {}
+            },
+            '\r' => x = 0,
+            '\n' => {
+                x = 0;
+                y = y.saturating_add(1);
+            }
+            _ => match ch.width().unwrap_or(0) {
+                0 => {
+                    // A combining mark, VS16 or ZWJ belongs to the glyph
+                    // before it.
+                    if let Some(pos) = last_written
+                        && let Some(cell) = cells.get_mut(&pos)
+                    {
+                        cell.push(ch);
+                    }
+                }
+                width => {
+                    cells.insert((y, x), ch.to_string());
+                    for extra in 1..width as u16 {
+                        cells.insert((y, x.saturating_add(extra)), String::new());
+                    }
+                    last_written = Some((y, x));
+                    x = x.saturating_add(width as u16);
+                }
+            },
+        }
+    }
+    cells.into_values().collect()
+}
+
+/// Hang yesterday's canvas and publish it as today's login splash.
+pub async fn publish_test_splash(state: &State) -> Uuid {
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+    let owner = late_core::test_utils::create_test_user(&state.db, "login-splash-artist").await;
+    let client = state.db.get().await.unwrap();
+    let HangOutcome::Hung(piece) = ArtboardPiece::hang(&client, HangParams {
+        user_id: owner.id, title: "login splash fixture".to_string(), width: 12, height: 4,
+        canvas: serde_json::json!({"width":12,"height":4,"cells":[[{"x":0,"y":0},{"Narrow":"#"}]],"colors":[]}),
+        provenance: serde_json::json!({"cells":[[{"x":0,"y":0},"painter"]]}), glyph_count: 40,
+        own_share_percent: 100, content_hash: "login-splash-fixture".to_string(),
+    }).await.unwrap() else { panic!("hang"); };
+    client.execute("UPDATE artboard_pieces SET created = CURRENT_TIMESTAMP - INTERVAL '1 day' WHERE id = $1", &[&piece.id]).await.unwrap();
+    state
+        .gallery_service
+        .refresh_splash(chrono::Utc::now().date_naive())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.gallery_service.splash_piece().unwrap().piece.id,
+        piece.id
+    );
+    piece.id
+}

@@ -35,12 +35,13 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       spec {
         termination_grace_period_seconds = 21600
 
-        # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
-        # which owns the nethack-save PVC + seed init_container. service-ssh only
-        # needs network reach to it (LATE_NETHACK_HOST below).
+        # Every door game runs in its own late-<game> pod (doors.tf), which
+        # owns that game's save PVC + seed init_container. service-ssh only
+        # needs network reach to them; the host addresses are late-ssh
+        # config.rs prod-profile literals (late-<game>-sv).
 
         container {
-          image = var.SSH_IMAGE_TAG
+          image = local.image_tags["ssh"]
           name  = "service-ssh"
 
           port {
@@ -70,11 +71,11 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           resources {
             limits = {
               cpu    = "8000m"
-              memory = "4Gi"
+              memory = "8Gi"
             }
             requests = {
               cpu    = "1000m"
-              memory = "512Mi"
+              memory = "2Gi"
             }
           }
 
@@ -115,21 +116,27 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
             value = "http://otel-collector.monitoring.svc.cluster.local:4317"
           }
+          # Per-pod telemetry identity: without service.instance.id every pod
+          # exports the same otel series and they clobber each other on scrape
+          # (fatal once service-ssh runs multiple replicas). $(POD_NAME) is the
+          # downward-API pod name; the SDK's env resource detector reads
+          # OTEL_RESOURCE_ATTRIBUTES, the collector turns it into a metric label.
           env {
-            name  = "LATE_SSH_PORT"
-            value = "2222"
+            name = "POD_NAME"
+            value_from {
+              field_ref {
+                field_path = "metadata.name"
+              }
+            }
           }
           env {
-            name  = "LATE_API_PORT"
-            value = "4000"
+            name  = "OTEL_RESOURCE_ATTRIBUTES"
+            value = "service.instance.id=$(POD_NAME)"
           }
+          # Selects the config.rs profile; every non-secret value lives there.
           env {
-            name  = "LATE_TUNNEL_PORT"
-            value = "4001"
-          }
-          env {
-            name  = "LATE_TUNNEL_TRUSTED_CIDRS"
-            value = var.BASTION_TUNNEL_TRUSTED_CIDRS
+            name  = "LATE_ENV"
+            value = "prod"
           }
           env {
             name = "LATE_TUNNEL_SHARED_SECRET"
@@ -141,15 +148,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Database (CloudNativePG) ---
-          env {
-            name  = "LATE_DB_HOST"
-            value = "postgres-rw"
-          }
-          env {
-            name  = "LATE_DB_PORT"
-            value = "5432"
-          }
+          # --- Database (CloudNativePG operator-generated credentials) ---
           env {
             name = "LATE_DB_NAME"
             value_from {
@@ -178,44 +177,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Audio ---
-          env {
-            name  = "LATE_ICECAST_URL"
-            value = "http://icecast-sv:8000"
-          }
-
-          # --- Web / CORS ---
-          env {
-            name  = "LATE_WEB_URL"
-            value = "https://${var.DOMAIN}"
-          }
-          env {
-            name  = "LATE_ALLOWED_ORIGINS"
-            value = "https://${var.DOMAIN}"
-          }
-          env {
-            name = "LATE_WEB_TUNNEL_TOKEN"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret_v1.web_tunnel_token.metadata[0].name
-                key  = "token"
-              }
-            }
-          }
-
-          # --- Door games ---
-          env {
-            name  = "LATE_REBELS_ENABLED"
-            value = local.rebels_enabled
-          }
-          env {
-            name  = "LATE_REBELS_HOST"
-            value = local.rebels_host
-          }
-          env {
-            name  = "LATE_REBELS_PORT"
-            value = local.rebels_port
-          }
+          # --- Door games (shared identity secrets; targets live in config.rs) ---
           env {
             name = "LATE_REBELS_SECRET"
             value_from {
@@ -226,73 +188,77 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # NetHack is served by the late-nethack host pod (service-nethack.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_NETHACK_ENABLED"
-            value = local.nethack_enabled
-          }
-          env {
-            name  = "LATE_NETHACK_HOST"
-            value = local.nethack_service_host
-          }
-          env {
-            name  = "LATE_NETHACK_PORT"
-            value = local.nethack_port
-          }
           env {
             name = "LATE_NETHACK_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.nethack_identity_secret.metadata[0].name
+                name = module.door["nethack"].identity_secret_name
                 key  = "secret"
               }
             }
           }
 
-          # dopewars is served by the late-dopewars host pod (service-dopewars.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_DOPEWARS_ENABLED"
-            value = local.dopewars_enabled
-          }
-          env {
-            name  = "LATE_DOPEWARS_HOST"
-            value = local.dopewars_service_host
-          }
-          env {
-            name  = "LATE_DOPEWARS_PORT"
-            value = local.dopewars_port
-          }
           env {
             name = "LATE_DOPEWARS_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.dopewars_identity_secret.metadata[0].name
+                name = module.door["dopewars"].identity_secret_name
                 key  = "secret"
               }
             }
           }
 
-          # --- Files / uploads ---
           env {
-            name  = "LATE_FILES_S3_ENDPOINT"
-            value = var.S3_ENDPOINT
+            name = "LATE_CODEKEEP_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["codekeep"].identity_secret_name
+                key  = "secret"
+              }
+            }
           }
+
           env {
-            name  = "LATE_FILES_S3_BUCKET"
-            value = var.FILES_BUCKET
+            name = "LATE_DCSS_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["dcss"].identity_secret_name
+                key  = "secret"
+              }
+            }
           }
+
           env {
-            name  = "LATE_FILES_PUBLIC_BASE_URL"
-            value = var.FILES_PUBLIC_BASE_URL
+            name = "LATE_BASHQUEST_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["bashquest"].identity_secret_name
+                key  = "secret"
+              }
+            }
           }
+
           env {
-            name  = "LATE_FILES_S3_REGION"
-            value = var.FILES_S3_REGION
+            name = "LATE_BROGUE_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["brogue"].identity_secret_name
+                key  = "secret"
+              }
+            }
           }
+
+          env {
+            name = "LATE_USURPER_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["usurper"].identity_secret_name
+                key  = "secret"
+              }
+            }
+          }
+
+          # --- Files / uploads (R2 credentials; endpoint and bucket live in config.rs) ---
           env {
             name = "LATE_FILES_S3_ACCESS_KEY_ID"
             value_from {
@@ -312,106 +278,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- SSH ---
-          env {
-            name  = "LATE_SSH_KEY_PATH"
-            value = "/app/keys/server_key"
-          }
-          env {
-            name  = "LATE_SSH_OPEN"
-            value = var.SSH_OPEN
-          }
-          env {
-            name  = "LATE_FORCE_ADMIN"
-            value = "0"
-          }
-          env {
-            name  = "LATE_MAX_CONNS_GLOBAL"
-            value = "1000"
-          }
-          env {
-            name  = "LATE_MAX_CONNS_PER_IP"
-            value = var.MAX_CONNS_PER_IP
-          }
-          env {
-            name  = "LATE_SSH_IDLE_TIMEOUT"
-            value = var.SSH_IDLE_TIMEOUT
-          }
-          env {
-            name  = "LATE_FRAME_DROP_LOG_EVERY"
-            value = var.FRAME_DROP_LOG_EVERY
-          }
-          env {
-            name  = "LATE_SSH_MAX_ATTEMPTS_PER_IP"
-            value = var.SSH_MAX_ATTEMPTS_PER_IP
-          }
-          env {
-            name  = "LATE_SSH_RATE_LIMIT_WINDOW_SECS"
-            value = var.SSH_RATE_LIMIT_WINDOW_SECS
-          }
-          env {
-            name  = "LATE_SSH_PROXY_PROTOCOL"
-            value = var.SSH_PROXY_PROTOCOL
-          }
-          env {
-            name  = "LATE_SSH_PROXY_TRUSTED_CIDRS"
-            value = var.SSH_PROXY_TRUSTED_CIDRS
-          }
-          env {
-            name  = "LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP"
-            value = var.WS_PAIR_MAX_ATTEMPTS_PER_IP
-          }
-          env {
-            name  = "LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS"
-            value = var.WS_PAIR_RATE_LIMIT_WINDOW_SECS
-          }
-          env {
-            name  = "LATE_DB_POOL_SIZE"
-            value = var.DB_POOL_SIZE
-          }
-
-          # --- IRC ---
-          env {
-            name  = "LATE_IRC_ENABLED"
-            value = local.irc_enabled
-          }
-          env {
-            name  = "LATE_IRC_PORT"
-            value = tostring(local.irc_port)
-          }
-          env {
-            name  = "LATE_IRC_MAX_CONNS_GLOBAL"
-            value = local.irc_max_conns_global
-          }
-          env {
-            name  = "LATE_IRC_MAX_CONNS_PER_USER"
-            value = local.irc_max_conns_per_user
-          }
-          env {
-            name  = "LATE_IRC_MAX_AUTH_FAILURES_PER_IP"
-            value = local.irc_max_auth_failures_per_ip
-          }
-          env {
-            name  = "LATE_IRC_AUTH_FAILURE_WINDOW_SECS"
-            value = local.irc_auth_failure_window_secs
-          }
-          dynamic "env" {
-            for_each = local.irc_enabled_bool ? {
-              LATE_IRC_TLS_CERT = "${local.irc_tls_mount_path}/tls.crt"
-              LATE_IRC_TLS_KEY  = "${local.irc_tls_mount_path}/tls.key"
-            } : {}
-
-            content {
-              name  = env.key
-              value = env.value
-            }
-          }
-
           # --- AI ---
-          env {
-            name  = "LATE_AI_ENABLED"
-            value = var.AI_ENABLED
-          }
           env {
             name = "LATE_AI_API_KEY"
             value_from {
@@ -421,11 +288,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               }
             }
           }
-          env {
-            name  = "LATE_AI_MODEL"
-            value = var.AI_MODEL
-          }
-
           # --- YouTube Data API ---
           env {
             name = "LATE_YOUTUBE_API_KEY"
@@ -437,15 +299,9 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Voice / LiveKit ---
-          env {
-            name  = "LATE_VOICE_ENABLED"
-            value = local.voice_enabled
-          }
-          env {
-            name  = "LATE_LIVEKIT_URL"
-            value = local.livekit_url
-          }
+          # --- Voice / LiveKit (credentials only; both URLs and the room name
+          # are prod-profile literals in late-ssh/src/config.rs, including the
+          # cluster-internal Twirp base http://livekit-sv) ---
           env {
             name = "LATE_LIVEKIT_API_KEY"
             value_from {
@@ -463,10 +319,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
                 key  = "api_secret"
               }
             }
-          }
-          env {
-            name  = "LATE_VOICE_ROOM"
-            value = local.voice_room
           }
 
           # --- SSH host key volume ---
@@ -519,6 +371,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
         }
       }
     }
+  }
+
+  # Images are deployed with `kubectl set image` (deploy_service.yml), never
+  # by terraform applies, so a full apply must not roll the service back to
+  # whatever tag it was created with.
+  lifecycle {
+    ignore_changes = [
+      spec[0].template[0].spec[0].container[0].image,
+    ]
   }
 }
 

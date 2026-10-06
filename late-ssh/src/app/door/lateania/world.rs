@@ -19,8 +19,12 @@
 // the planned full design target remains 200.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{LazyLock, OnceLock};
 
-use super::damage::{DamageProfile, DamageType};
+use super::damage::{DamageProfile, DamageType, ZoneTheme};
+use super::skills::{CraftSkill, GatherSkill};
+
+// ---- Core world types: directions, rooms, spawns, behaviour --------------
 
 /// Compass and vertical directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -78,9 +82,47 @@ impl Dir {
             Self::Up | Self::Down => return None,
         })
     }
+
+    /// A single compass-arrow glyph for this direction, distinct from the
+    /// `⇑`/`⇓`/`⇕` stair markers (those mean "a staircase is here"; this means
+    /// "go this way") so the two never read as the same thing on screen.
+    pub fn compass_glyph(self) -> char {
+        match self {
+            Self::North => '\u{2191}', // ↑
+            Self::South => '\u{2193}', // ↓
+            Self::East => '\u{2192}',  // →
+            Self::West => '\u{2190}',  // ←
+            Self::Up => '\u{2B06}',    // ⬆
+            Self::Down => '\u{2B07}',  // ⬇
+        }
+    }
 }
 
 pub type RoomId = u32;
+
+/// One authored zone row shared by every continent's `*_ZONES_DATA` table:
+/// (zone, adjective, ground, landmark, creatures, three mob names, boss).
+type ZoneData = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    [&'static str; 3],
+    &'static str,
+);
+
+/// Aelunor's glade row: same shape as [`ZoneData`], except the three mob slots
+/// are indices into the shared affixed-beast table rather than names.
+type GladeData = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    [usize; 3],
+    &'static str,
+);
 
 /// A single location in the world: a node in the room graph.
 #[derive(Clone, Debug)]
@@ -92,6 +134,10 @@ pub struct Room {
     pub exits: HashMap<Dir, RoomId>,
     /// True for towns and other no-combat zones.
     pub safe: bool,
+    /// True for a Wildbound-style contested zone where adventurers can fight
+    /// each other, not just mobs (see `svc::engage_player`). Never true
+    /// together with `safe` - a room is either a haven or a battleground.
+    pub pvp: bool,
 }
 
 /// A mob template that spawns at a home room.
@@ -115,10 +161,23 @@ pub struct MobSpawn {
 }
 
 impl MobSpawn {
-    /// A displayed level, derived from the mob's vitality and bite so it scales
-    /// naturally across the whole roster without authoring a level per spawn.
+    /// The displayed level: "come at this level". A crown reads the target
+    /// it is tuned to fall at (`CROWNS`). Everything else reads by its bite:
+    /// the level of the prepared character whose crown hits like this,
+    /// discounted because a crown is tuned to out-hit its land (a regular's
+    /// damage is derived for a 20-tick kill, a zone boss's for 14, the crown's
+    /// for 11: `TRASH_BITE_PCT` / `BOSS_BITE_PCT`). Health does not enter it:
+    /// a sponge is a longer fight, not a deadlier one. See `level_for_bite`.
     pub fn level(&self) -> i32 {
-        ((self.max_hp + self.damage * 4) / 14).clamp(1, 60)
+        if let Some(crown) = CROWNS.iter().find(|c| c.name == self.name) {
+            return crown.level;
+        }
+        let share = if self.boss {
+            BOSS_BITE_PCT
+        } else {
+            TRASH_BITE_PCT
+        };
+        level_for_bite(self.damage * 100 / share)
     }
 
     /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
@@ -177,7 +236,234 @@ pub struct World {
     pub start_room: RoomId,
     /// Spawn id -> behavior. Missing entries are [`MobBehavior::Sentinel`].
     pub behaviors: HashMap<u32, MobBehavior>,
+    /// Zone name -> (min, max) displayed level of the mobs homed there, derived
+    /// once at seed time from the spawns themselves so it can never drift from
+    /// the real danger. Zones with no mobs (towns, havens) have no entry.
+    zone_bands: HashMap<&'static str, (i32, i32)>,
 }
+
+// ---- The atlas regions: what counts as a land, and how deep --------------
+
+/// One region's exploration line in the world atlas.
+#[derive(Clone, Copy, Debug)]
+pub struct RegionProgress {
+    pub name: &'static str,
+    /// A short danger/kind tag, e.g. "safe", "wilds", "endgame", "sea".
+    pub tier: &'static str,
+    /// How to reach it, e.g. "the roads", "portal".
+    pub note: &'static str,
+    /// Rooms in the region that currently exist.
+    pub total: usize,
+    /// Of those, how many the player has set foot in.
+    pub explored: usize,
+    /// Whether the player currently stands in this region.
+    pub here: bool,
+    /// Named bosses lairing in the region (where the great loot is).
+    pub bosses: usize,
+    /// The (min, max) displayed level of the mobs homed in the region, or None
+    /// where nothing hostile lives.
+    pub levels: Option<(i32, i32)>,
+    /// For a region built as a chain of zones (`LAND_CHAINS`): how many of its
+    /// zones the player has set foot in, and how many there are. `None` for a
+    /// region with no chain, which the land map then draws as a single node.
+    /// This is depth, not room count: a land can be 3 zones deep on 2% of its
+    /// rooms, and depth is the number that tells a player how far they are.
+    pub chain: Option<(usize, usize)>,
+}
+
+/// The world's major regions for the atlas, each `(name, id-lo, id-hi, tier,
+/// how-to-reach)`. Ranges match the id blocks the generators use; the atlas
+/// counts real rooms and visited rooms within each, so it stays correct as
+/// regions grow. Ordered roughly by the journey outward.
+const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
+    (
+        "Embergate & the King's Road",
+        1,
+        600,
+        "safe / low",
+        "your home",
+    ),
+    ("The Overworld & Capitals", 600, 2000, "wilds", "the roads"),
+    ("City Districts", 3000, 3100, "safe", "off the capitals"),
+    (
+        "The Sunken Catacombs",
+        5000,
+        5200,
+        "endgame",
+        "off Tasmania",
+    ),
+    ("Thornwood Hollows", 5200, 5400, "endgame", "off Melvanala"),
+    (
+        "The Drowned Caverns",
+        5400,
+        5600,
+        "endgame",
+        "off Matlatesh",
+    ),
+    (
+        "Hearthward Close",
+        super::housing::HOUSING_BASE,
+        super::housing::HOUSING_BASE + 1000,
+        "safe / home",
+        "off Market Row",
+    ),
+    ("The Frontier", 2000, 3000, "brutal", "the sealed stair"),
+    (
+        "The Sundered Reaches",
+        10_000,
+        11_000,
+        "brutal",
+        "the Matlatesh sea-gate",
+    ),
+    (
+        "Kaelmyr, the Ashen Reach",
+        KAELMYR_BASE,
+        KAELMYR_BASE + KAELMYR_ZONES as RoomId * KAELMYR_ZONE_STRIDE,
+        "endgame",
+        "the Yssgar ash-gate",
+    ),
+    (
+        "The Sunderlakes",
+        16_000,
+        18_000,
+        "peaceful / fishing",
+        "off the Melvanala lake",
+    ),
+    (
+        "Broceliande, the Greenwood",
+        22_000,
+        24_000,
+        "moderate / taming",
+        "off the Verdant Highlands",
+    ),
+    (
+        "Aelunor, the Faewood",
+        AELUNOR_BASE,
+        AELUNOR_BASE + AELUNOR_ZONES as RoomId * AELUNOR_ZONE_STRIDE,
+        "moderate / taming",
+        "off the Amber Savanna",
+    ),
+    (
+        "Silvael",
+        SILVAEL_BASE,
+        SILVAEL_BASE + SILVAEL_ROOM_COUNT,
+        "safe / city",
+        "the Faewood's own threshold",
+    ),
+    (
+        "Thornveil Falls",
+        THORNVEIL_BASE,
+        THORNVEIL_BASE + THORNVEIL_ZONES_DATA.len() as RoomId * THORNVEIL_ZONE_STRIDE,
+        "endgame",
+        "off the World-Oak Crown",
+    ),
+    (
+        "Portal Villages",
+        super::archipelago::VILLAGE_BASE,
+        super::archipelago::VILLAGE_BASE + 1000,
+        "safe",
+        "portal",
+    ),
+    (
+        "The Shattered Archipelago",
+        super::archipelago::ARCH_BASE,
+        super::archipelago::ARCH_BASE
+            + super::archipelago::ISLAND_COUNT as RoomId * super::archipelago::ARCH_STRIDE,
+        "deadly",
+        "portal",
+    ),
+    (
+        "The Wildbound Waste",
+        WILDBOUND_BASE,
+        WILDBOUND_BASE + 3 * WILDBOUND_BIOME_STRIDE,
+        "pvp",
+        "the Sand-Wyrm's Maw",
+    ),
+    (
+        "Wayfarer's Hollow",
+        TUTORIAL_BASE,
+        TUTORIAL_BASE + 5,
+        "safe / tutorial",
+        "Embergate's square",
+    ),
+];
+
+/// Every atlas region name, in the order the atlas lists them (roughly the
+/// journey outward). The land map lays its tree out in this order, so the two
+/// views read in the same sequence.
+pub fn region_names() -> Vec<&'static str> {
+    REGIONS.iter().map(|&(name, ..)| name).collect()
+}
+
+/// The regions built as a chain of zones, each `(region name, first room,
+/// rooms reserved per zone, zone count)`. Only the name is written out here;
+/// every number comes from the generator's own consts, so a land that grows a
+/// zone grows here too. A land absent from this table draws as a single node.
+const LAND_CHAINS: &[(&str, RoomId, RoomId, usize)] = &[
+    (
+        "The Frontier",
+        FRONTIER_BASE,
+        FRONTIER_W * FRONTIER_H,
+        FRONTIER_ZONES,
+    ),
+    (
+        "The Sundered Reaches",
+        REACHES_BASE,
+        REACHES_ZONE_STRIDE,
+        REACHES_ZONES,
+    ),
+    (
+        "Kaelmyr, the Ashen Reach",
+        KAELMYR_BASE,
+        KAELMYR_ZONE_STRIDE,
+        KAELMYR_ZONES,
+    ),
+    (
+        "The Sunderlakes",
+        LAKES_BASE,
+        LAKES_ZONE_STRIDE,
+        LAKES_ZONES,
+    ),
+    (
+        "Broceliande, the Greenwood",
+        BROCELIANDE_BASE,
+        BROCELIANDE_ZONE_STRIDE,
+        BROCELIANDE_ZONES,
+    ),
+    (
+        "Aelunor, the Faewood",
+        AELUNOR_BASE,
+        AELUNOR_ZONE_STRIDE,
+        AELUNOR_ZONES,
+    ),
+    (
+        "The Wildbound Waste",
+        WILDBOUND_BASE,
+        WILDBOUND_BIOME_STRIDE,
+        3,
+    ),
+    (
+        "Thornveil Falls",
+        THORNVEIL_BASE,
+        THORNVEIL_ZONE_STRIDE,
+        THORNVEIL_ZONES,
+    ),
+];
+
+/// How deep into a chained land the player has walked: zones with at least one
+/// visited room, out of the land's zone count. `None` for an unchained land.
+fn chain_depth(region: &str, visited: &HashSet<RoomId>) -> Option<(usize, usize)> {
+    let &(_, base, stride, zones) = LAND_CHAINS.iter().find(|(name, ..)| *name == region)?;
+    let entered = (0..zones)
+        .filter(|z| {
+            let lo = base + (*z as RoomId) * stride;
+            visited.iter().any(|id| (lo..lo + stride).contains(id))
+        })
+        .count();
+    Some((entered, zones))
+}
+
+// ---- World queries: rooms, zones, and atlas progress ---------------------
 
 impl World {
     /// The behavior assigned to a spawn id, defaulting to `Sentinel`.
@@ -191,156 +477,55 @@ impl World {
         self.rooms.get(&id)
     }
 
-    /// Build an overhead minimap centred on `current`, spanning `hr` rooms east
-    /// and west and `vr` rooms north and south. Visited rooms are drawn solid;
-    /// an unvisited room one step from a drawn room becomes a faint frontier
-    /// marker so the player can see where there is still to explore. Up/down
-    /// exits can't be placed on a flat plane, so they're reported as flags.
-    pub fn minimap(
-        &self,
-        current: RoomId,
-        previous: Option<RoomId>,
-        visited: &HashSet<RoomId>,
-        hr: i32,
-        vr: i32,
-    ) -> MiniMap {
-        // 1. Lay visited rooms onto an integer grid by walking exits out from the
-        //    current room. BFS, so the shortest path to each room wins any clash
-        //    that the world's non-Euclidean geometry might otherwise create.
-        let mut coords: HashMap<RoomId, (i32, i32)> = HashMap::new();
-        coords.insert(current, (0, 0));
-        let mut queue = VecDeque::from([current]);
-        while let Some(rid) = queue.pop_front() {
-            let (x, y) = coords[&rid];
-            let Some(room) = self.room(rid) else { continue };
-            for (dir, &dest) in &room.exits {
-                let Some((dx, dy)) = dir.delta_2d() else {
-                    continue;
-                };
-                let (nx, ny) = (x + dx, y + dy);
-                if nx.abs() > hr || ny.abs() > vr {
-                    continue;
-                }
-                if !visited.contains(&dest) || coords.contains_key(&dest) {
-                    continue;
-                }
-                coords.insert(dest, (nx, ny));
-                queue.push_back(dest);
-            }
-        }
-
-        // 2. Paint rooms, corridors, and frontier markers. The char grid
-        //    interleaves room cells (even indices) with connector cells (odd),
-        //    so a (2hr+1) x (2vr+1) room viewport becomes a (4hr+1) x (4vr+1) grid.
-        let gw = (2 * hr + 1) as usize * 2 - 1;
-        let gh = (2 * vr + 1) as usize * 2 - 1;
-        let mut grid = vec![vec![MapCell::Empty; gw]; gh];
-        let to_cell = |x: i32, y: i32| (((y + vr) * 2) as usize, ((x + hr) * 2) as usize);
-
-        for (&rid, &(x, y)) in &coords {
-            let (r, c) = to_cell(x, y);
-            grid[r][c] = if rid == current {
-                MapCell::Current
-            } else if Some(rid) == previous {
-                MapCell::Previous
-            } else {
-                MapCell::Visited
-            };
-        }
-
-        for (&rid, &(x, y)) in &coords {
-            let Some(room) = self.room(rid) else { continue };
-            let (r, c) = to_cell(x, y);
-            for (dir, &dest) in &room.exits {
-                let Some((dx, dy)) = dir.delta_2d() else {
-                    continue;
-                };
-                let (nx, ny) = (x + dx, y + dy);
-                if nx.abs() > hr || ny.abs() > vr {
-                    continue;
-                }
-                let (nr, nc) = to_cell(nx, ny);
-                draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
-                // A corridor leaving the visited set points at somewhere new.
-                if !coords.contains_key(&dest) && grid[nr][nc] == MapCell::Empty {
-                    grid[nr][nc] = MapCell::Frontier;
-                }
-            }
-        }
-
-        if let Some(previous) = previous
-            && let Some(&(px, py)) = coords.get(&previous)
-            && (px, py) != (0, 0)
-            && px.abs() <= 1
-            && py.abs() <= 1
-        {
-            let (pr, pc) = to_cell(px, py);
-            let (cr, cc) = to_cell(0, 0);
-            draw_trail_connector(&mut grid[(pr + cr) / 2][(pc + cc) / 2], -px, -py);
-        }
-
-        let exits = self.room(current).map(|room| &room.exits);
-        MiniMap {
-            grid,
-            up: exits.is_some_and(|e| e.contains_key(&Dir::Up)),
-            down: exits.is_some_and(|e| e.contains_key(&Dir::Down)),
-        }
+    /// The (min, max) displayed level of the mobs homed in a zone, or None for
+    /// zones without mobs (towns, havens). One glance answers "do I belong
+    /// here" - the whole world is self-labelling, no authored data to drift.
+    pub fn zone_band(&self, zone: &str) -> Option<(i32, i32)> {
+        self.zone_bands.get(zone).copied()
     }
-}
 
-/// What a single char-cell of the overhead minimap shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MapCell {
-    /// Nothing drawn here.
-    Empty,
-    /// The room the player is standing in.
-    Current,
-    /// A room the player has already visited.
-    Visited,
-    /// The room the player just came from.
-    Previous,
-    /// An unvisited room one step from somewhere visited - left to explore.
-    Frontier,
-    /// A horizontal corridor (`-`).
-    ConnH,
-    /// A vertical corridor (`|`).
-    ConnV,
-    /// Highlighted connector from the previous room to the current room.
-    TrailH,
-    TrailV,
-}
-
-/// A small overhead map of the explored neighbourhood, ready to paint in the
-/// side panel. `grid[row][col]` is a char-cell; `up`/`down` flag vertical exits
-/// from the current room that a flat map cannot draw.
-#[derive(Clone, Debug, Default)]
-pub struct MiniMap {
-    pub grid: Vec<Vec<MapCell>>,
-    pub up: bool,
-    pub down: bool,
-}
-
-/// Lay a corridor glyph into a connector cell. Room cells and matching prior
-/// corridors are left untouched.
-fn draw_connector(cell: &mut MapCell, dx: i32, _dy: i32) {
-    let drawn = if dx == 0 {
-        MapCell::ConnV
-    } else {
-        MapCell::ConnH
-    };
-    *cell = match (*cell, drawn) {
-        (MapCell::Empty, glyph) => glyph,
-        (existing, _) => existing,
-    };
-}
-
-fn draw_trail_connector(cell: &mut MapCell, dx: i32, _dy: i32) {
-    let drawn = if dx == 0 {
-        MapCell::TrailV
-    } else {
-        MapCell::TrailH
-    };
-    *cell = drawn;
+    /// The whole-world atlas: exploration progress for every major region. For
+    /// each region it reports how many of its rooms you've set foot in versus how
+    /// many exist, how many named bosses lair there (where the great loot is),
+    /// and a danger tier. A region you've never entered reads as undiscovered.
+    pub fn region_progress(
+        &self,
+        visited: &HashSet<RoomId>,
+        current: RoomId,
+    ) -> Vec<RegionProgress> {
+        REGIONS
+            .iter()
+            .map(|&(name, lo, hi, tier, note)| {
+                let total = self.rooms.keys().filter(|id| (lo..hi).contains(id)).count();
+                let explored = visited.iter().filter(|id| (lo..hi).contains(id)).count();
+                let bosses = self
+                    .spawns
+                    .iter()
+                    .filter(|s| s.boss && (lo..hi).contains(&s.home))
+                    .count();
+                let levels = self
+                    .spawns
+                    .iter()
+                    .filter(|s| (lo..hi).contains(&s.home))
+                    .map(|s| s.level())
+                    .fold(None, |band: Option<(i32, i32)>, l| match band {
+                        Some((min, max)) => Some((min.min(l), max.max(l))),
+                        None => Some((l, l)),
+                    });
+                RegionProgress {
+                    name,
+                    tier,
+                    note,
+                    total,
+                    explored: explored.min(total),
+                    here: (lo..hi).contains(&current),
+                    bosses,
+                    levels,
+                    chain: chain_depth(name, visited),
+                }
+            })
+            .collect()
+    }
 }
 
 // ---- Lookable room features (the "look at things" layer) ------------------
@@ -357,6 +542,19 @@ pub const TASMANIA_SQUARE: RoomId = 620;
 pub const MELVANALA_SQUARE: RoomId = 660;
 pub const MATLATESH_SQUARE: RoomId = 720;
 
+/// Wayfarer's Hollow, the new-player tutorial zone: a five-room hub (hollow
+/// plus one room per core system) hung off Embergate's square. Every
+/// brand-new character spawns here (`svc::join` calls [`tutorial_start_room`]
+/// instead of using `World::start_room`, which stays Embergate's square so
+/// map anchoring, recall, and every other "home is room 1" assumption is
+/// untouched); a returning character's saved room is unaffected.
+pub const TUTORIAL_BASE: RoomId = 40_000;
+
+/// Where a brand-new character first stands. See [`TUTORIAL_BASE`].
+pub fn tutorial_start_room() -> RoomId {
+    TUTORIAL_BASE
+}
+
 /// What kind of lookable thing a feature is. Fountains restore vitals in a safe
 /// capital, banks protect gold, and the rest are pure description revealed on look.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -366,12 +564,22 @@ pub enum FeatureKind {
     Bank,
     Plaque,
     Vista,
-    /// A quest board: examine it to accept the next bounty or claim a finished one.
+    /// A quest board: examine it to read it and open its picker, where you
+    /// accept an open bounty or claim a finished one.
     Board,
     /// A beast stable/menagerie: examine it to open the companion vendor.
     Stable,
     /// A housing clerk: examine it to buy a deed and furnish a home.
     Housing,
+    /// A crafting station (forge/workbench/tannery/alchemy lab/cooking fire):
+    /// stand here and press the craft key to work its recipes.
+    CraftStation(CraftSkill),
+    /// A waystone portal: examine it to open the fast-travel network (villages
+    /// and the isles of the Shattered Archipelago).
+    Portal,
+    /// A talking villager (Genesys): examine it to ask them a question and
+    /// hear their one line back, sometimes plain color, sometimes a real clue.
+    Villager,
 }
 
 impl FeatureKind {
@@ -386,6 +594,9 @@ impl FeatureKind {
             Self::Board => "board",
             Self::Stable => "stable",
             Self::Housing => "clerk",
+            Self::CraftStation(skill) => skill.station(),
+            Self::Portal => "portal",
+            Self::Villager => "villager",
         }
     }
 }
@@ -422,6 +633,15 @@ const DEDICATION: &str = "A broad bronze plaque, gone green with the years and p
 const BOARD_DESC: &str = "A weathered board of pinned notices and bounties stands in the \
     square, scrawled by frightened hands and countersigned by the town. Examine it again to \
     take up the next posting, or - if you have earned it - to claim a finished one.";
+
+/// Kaelmyr keeps no towns; its only board is a cairn of scorched stones at the
+/// ashen shore, where the survivors of the drowned Reaches and the tribes' few
+/// deserters scratch their needs. The runtime offers and claims the same way.
+const KAELMYR_BOARD_DESC: &str = "A cairn of scorched stones stands at the ash-gate, hung \
+    with charms of bone and glass and scratched all over with the needs of the desperate: \
+    survivors washed up from the drowned Reaches, deserters of the tribes, and hunters who \
+    mean to walk deeper than sense allows. Examine it again to take up the next posting, or - \
+    if you have earned it - to claim a finished one.";
 
 /// Every capital keeps a stable/menagerie; the runtime opens the companion
 /// vendor when one is examined, where adventurers buy and feed beasts of war.
@@ -477,6 +697,15 @@ pub const FEATURES: &[Feature] = &[
         FeatureKind::Board,
         BOARD_DESC,
     ),
+    // Kaelmyr's only safe hold: an ashland cairn-board at the Cinderfall Shore
+    // ash-gate, where the continent's postings hang. Gated behind the Bane of
+    // Yssgar, so only the deepest veterans ever read it.
+    feat(
+        KAELMYR_BASE,
+        "the ash-cairn board",
+        FeatureKind::Board,
+        KAELMYR_BOARD_DESC,
+    ),
     // ---- Stables (one per capital: the companion vendor) ----------------
     feat(1, "the war-stable", FeatureKind::Stable, STABLE_DESC),
     feat(
@@ -519,6 +748,48 @@ pub const FEATURES: &[Feature] = &[
         "the banker's grille",
         FeatureKind::Bank,
         EMBERGATE_BANK_DESC,
+    ),
+    // ---- Embergate crafters' row (Market Row, room 3): the craft stations ----
+    feat(
+        3,
+        "the public forge",
+        FeatureKind::CraftStation(CraftSkill::Smithing),
+        "A great stone forge roars at the head of Market Row, its coals kept lit \
+         for any traveller with ore to smelt and the arm to swing a hammer. Anvils, \
+         tongs, and quenching-troughs stand ready; smelt ore into ingots here, then \
+         beat them into blades and plate.",
+    ),
+    feat(
+        3,
+        "the carpenter's workbench",
+        FeatureKind::CraftStation(CraftSkill::Woodworking),
+        "A long, scarred workbench under an awning, hung with saws, drawknives and \
+         clamps and drifted deep in fragrant shavings. Season your logs into planks \
+         here, and shape them into bows and hafts.",
+    ),
+    feat(
+        3,
+        "the tannery",
+        FeatureKind::CraftStation(CraftSkill::Leatherworking),
+        "A row of stretching-frames and reeking tan-pits behind the market, where \
+         raw hides are cured into supple leather. Not a place to linger downwind - \
+         but the only place to turn a kill's hide into armor.",
+    ),
+    feat(
+        3,
+        "the alchemy lab",
+        FeatureKind::CraftStation(CraftSkill::Alchemy),
+        "A cramped stall of bubbling retorts, hanging bunches of dried herbs, and \
+         shelves of stoppered vials in every colour of harm and healing. Brew \
+         draughts to mend yourself here - or poisons to coat a waiting blade.",
+    ),
+    feat(
+        3,
+        "the cooking fire",
+        FeatureKind::CraftStation(CraftSkill::Cooking),
+        "A broad communal cook-fire with spits, griddles and a blackened stockpot, \
+         where the market's traders take their meals. Cook your catch into hot food \
+         that restores far more than raw fish ever could.",
     ),
     // ---- Tasmania (harbor capital) --------------------------------------
     feat(
@@ -586,11 +857,1384 @@ pub const FEATURES: &[Feature] = &[
          road leaves the gate and dwindles toward it; the desert is wide, but every dune you \
          can see has a path across it.",
     ),
+    // ---- Wayfarer's Hollow's Tinker's Hall: one scaled-down copy of every
+    // craft station, so a newcomer can open the crafting panel immediately. --
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice forge",
+        FeatureKind::CraftStation(CraftSkill::Smithing),
+        "A small forge, banked low - just hot enough to smelt a first bar of ore and \
+         see how the recipe list actually works.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice workbench",
+        FeatureKind::CraftStation(CraftSkill::Woodworking),
+        "A modest bench with one of every tool, none of them worn in yet.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice tannery",
+        FeatureKind::CraftStation(CraftSkill::Leatherworking),
+        "A single stretching-frame, kept well clear of the real tannery's smell.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice alchemy stall",
+        FeatureKind::CraftStation(CraftSkill::Alchemy),
+        "A tidy little rack of retorts, none of them bubbling with anything dangerous yet.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice cook-fire",
+        FeatureKind::CraftStation(CraftSkill::Cooking),
+        "A small, well-tended fire with a spit and a single pot - enough to learn on.",
+    ),
+];
+
+/// Every named villager in the world, keyed to the room they stand in - the
+/// Genesys sub-expansion: a living, breathing world. Each carries one line of
+/// dialogue, sometimes plain color, sometimes a real clue about where
+/// something in the world can be found. Rendered as a `FeatureKind::Villager`
+/// so they slot into the existing Examine (`o`) mechanism, but always
+/// announced up front in the room description - a villager never hides.
+pub const VILLAGERS: &[Feature] = &[
+    feat(
+        1,
+        "a footsore town crier",
+        FeatureKind::Villager,
+        "New to Lateania? Market Row's south of here for the smithy and outfitter, and the temple keeps the Dawn's own healers on hand.",
+    ),
+    feat(
+        2,
+        "a barkeep wiping down the counter",
+        FeatureKind::Villager,
+        "The Gilded Flagon never waters its ale, whatever you've heard. Board's by the door if you're after coin work.",
+    ),
+    feat(
+        3,
+        "an apprentice smith, soot to the elbows",
+        FeatureKind::Villager,
+        "Bruna's Ember Forge is right through there. Ask nice and she'll tell you which blade suits your arm.",
+    ),
+    feat(
+        4,
+        "a novice of the Dawn",
+        FeatureKind::Villager,
+        "The Temple keeps the recall fountain lit day and night. Speak the word (r) and you'll always find your way home.",
+    ),
+    feat(
+        5,
+        "a gate-warden leaning on her spear",
+        FeatureKind::Villager,
+        "South Gate's the quiet way out of town. The Greatroad proper starts a few steps past the arch.",
+    ),
+    feat(
+        201,
+        "a tailor's boy with pins in his sleeve",
+        FeatureKind::Villager,
+        "Tomas keeps the Outfitter's Stall stocked past what you'd think - legs and boots too, these days, not just the usual.",
+    ),
+    feat(
+        202,
+        "an old woman grinding herbs",
+        FeatureKind::Villager,
+        "Mirela's Apothecary always has a Phoenix Tonic tucked away for adventurers who've gone in over their heads.",
+    ),
+    feat(
+        203,
+        "a sharp-eyed pickpocket, reformed (mostly)",
+        FeatureKind::Villager,
+        "Pell the Magpie's Curio Cart turns up rings and charms nobody else stocks. Mind your purse near him all the same.",
+    ),
+    feat(
+        204,
+        "a bank clerk counting coin",
+        FeatureKind::Villager,
+        "Bank your gold here before you go anywhere dangerous. Dying with a full purse is a special kind of foolish.",
+    ),
+    feat(
+        205,
+        "a watchman pacing the wall",
+        FeatureKind::Villager,
+        "From up here you can see clean out to the King's Road. Long way to the Frontier stair, longer back.",
+    ),
+    feat(
+        620,
+        "a harbor porter hauling crates",
+        FeatureKind::Villager,
+        "Ships in from three ports today. If you're hunting fish, the Sunderlakes treat a rod kinder than the open sea does.",
+    ),
+    feat(
+        621,
+        "a chandler weighing rope",
+        FeatureKind::Villager,
+        "The Saltwind Wharves are just down the way, if you want a proper look at the harbour district.",
+    ),
+    feat(
+        622,
+        "a fishwife crying the day's catch",
+        FeatureKind::Villager,
+        "Best bream in Tasmania, fresh off the boat. Mind the gulls, they've no manners at all.",
+    ),
+    feat(
+        623,
+        "a acolyte lighting storm-candles",
+        FeatureKind::Villager,
+        "The Cathedral keeps a candle burning for every sailor lost to the deep. Quiet a place as you'll find in this city.",
+    ),
+    feat(
+        624,
+        "a lighthouse-keeper's apprentice",
+        FeatureKind::Villager,
+        "Climb the stair some evening - on a clear night you can just make out the Sundered Reaches on the horizon.",
+    ),
+    feat(
+        625,
+        "a clerk with an armful of ledgers",
+        FeatureKind::Villager,
+        "The Governor's business is her own, but the Terrace view is free to anyone who climbs it.",
+    ),
+    feat(
+        626,
+        "a watch-captain scanning the bay",
+        FeatureKind::Villager,
+        "From the Watchtower Crown you can see every mast in harbour. Nothing gets in or out of Tasmania I don't know about.",
+    ),
+    feat(
+        660,
+        "a coppersmith's apprentice",
+        FeatureKind::Villager,
+        "Melvanala's high and cold, but the Lakeshore Square never freezes over. Something about the hot springs below.",
+    ),
+    feat(
+        661,
+        "a coppersmith hammering a kettle",
+        FeatureKind::Villager,
+        "The Coppersmith's Steps have been in my family three generations. Mind the wet stone in the rain.",
+    ),
+    feat(
+        662,
+        "a pilgrim resting on the stair",
+        FeatureKind::Villager,
+        "Long climb to the monastery. Worth it, they say, if you've a question only the quiet can answer.",
+    ),
+    feat(
+        663,
+        "a gardener pruning terrace vines",
+        FeatureKind::Villager,
+        "The Hanging Gardens bloom even in the frost. Nobody's quite explained how.",
+    ),
+    feat(
+        664,
+        "a monk sweeping the gate",
+        FeatureKind::Villager,
+        "The monastery takes in anyone who knocks, adventurer or not. Just leave your blade at the door.",
+    ),
+    feat(
+        665,
+        "a bell-ringer counting the hours",
+        FeatureKind::Villager,
+        "The Bell Tower rings the watches for the whole city. You get used to it. Eventually.",
+    ),
+    feat(
+        666,
+        "an old sky-priest at the ledge",
+        FeatureKind::Villager,
+        "The Sky-Burial Ledge is sacred ground. Melvanala sends its dead to the wind up here, not the earth.",
+    ),
+    feat(
+        720,
+        "a caravan guide counting camels",
+        FeatureKind::Villager,
+        "Matlatesh runs on the caravan trade. Miss the Oasis Square at dawn and you'll miss half the city's business.",
+    ),
+    feat(
+        721,
+        "a spice trader weighing saffron",
+        FeatureKind::Villager,
+        "The Spice Souk sells things you won't find anywhere else in Lateania. Ask about the frost-bloom, if you dare the price.",
+    ),
+    feat(
+        722,
+        "a caravanserai keeper",
+        FeatureKind::Villager,
+        "Beds and water for man and beast alike. The desert doesn't forgive travelers who skip a night here.",
+    ),
+    feat(
+        723,
+        "a young astronomer squinting at charts",
+        FeatureKind::Villager,
+        "The College maps the stars over Kaelmyr too, when the ash-clouds allow it. Strange skies out that way.",
+    ),
+    feat(
+        724,
+        "a gardener tending the water-garden",
+        FeatureKind::Villager,
+        "The Sultana's Garden is the coolest place in the city come midday. Even the guards linger here.",
+    ),
+    feat(
+        725,
+        "a potter shaping wet clay",
+        FeatureKind::Villager,
+        "Every jar in the Potter's Quarter is thrown by hand. Buy one before you head into the wastes; you'll want the water.",
+    ),
+    feat(
+        726,
+        "a muezzin descending the minaret",
+        FeatureKind::Villager,
+        "From the High Minaret you can see clear to the Ashen Wastes. Cold comfort, that view.",
+    ),
+    feat(
+        2000,
+        "a haggard veteran adventurer",
+        FeatureKind::Villager,
+        "The Frontier proper starts past this rise. Twenty zones deep and every one meaner than the last. Go in ready or don't go in at all.",
+    ),
+    feat(
+        3000,
+        "a lamplighter making his rounds",
+        FeatureKind::Villager,
+        "The Lamplit Quarter never really goes dark. Guildhall's just through there if you're after work.",
+    ),
+    feat(
+        3001,
+        "an off-duty guard soaking sore feet",
+        FeatureKind::Villager,
+        "The baths are the one place in Embergate nobody talks business. Come in swinging a sword and they'll throw you right back out.",
+    ),
+    feat(
+        3002,
+        "a scarred veteran nursing bad ale",
+        FeatureKind::Villager,
+        "Every company that's ever mattered started at that guildhall bar. Most of them didn't end well. Still worth a look at the boards.",
+    ),
+    feat(
+        3003,
+        "a tinker haggling over a broken lock",
+        FeatureKind::Villager,
+        "Tinker's Row will fix anything for the right coin, no questions asked about where it came from.",
+    ),
+    feat(
+        3004,
+        "a mourner tending the shrine garden",
+        FeatureKind::Villager,
+        "Folk come here to grieve or give thanks, adventurer or not. Even the noise of the square goes quiet at the gate.",
+    ),
+    feat(
+        3010,
+        "a net-mender squinting at torn twine",
+        FeatureKind::Villager,
+        "The Saltwind Wharves smell of brine and money changing hands. Mind the harbour cats, they run their own commerce down here.",
+    ),
+    feat(
+        3011,
+        "a fishmonger stacking crushed ice",
+        FeatureKind::Villager,
+        "Freshest catch in Tasmania, right here at the Fishmarket. Come early or come empty-handed.",
+    ),
+    feat(
+        3012,
+        "a cartographer inking a new coastline",
+        FeatureKind::Villager,
+        "Every chart in this loft is hand-drawn. Ask nicely and they might show you a corner of the map you haven't walked yet.",
+    ),
+    feat(
+        3013,
+        "a harbourmaster's clerk with tar on his hands",
+        FeatureKind::Villager,
+        "Nothing crosses this water the harbourmaster hasn't already written down. Best source in the city if you need to know a ship's business.",
+    ),
+    feat(
+        3014,
+        "a sailor lighting a candle before departure",
+        FeatureKind::Villager,
+        "The Storm-Chapel keeps a candle burning for every soul that goes down to the sea. Wind through that door sounds like a hymn some nights.",
+    ),
+    feat(
+        3020,
+        "a terrace gardener trimming frost-vines",
+        FeatureKind::Villager,
+        "The Hightarn Terraces catch the last of the sun before the mountain swallows it. Best view in Melvanala, and free.",
+    ),
+    feat(
+        3021,
+        "a lamplighter walking the Mirrorlake Walk",
+        FeatureKind::Villager,
+        "Water's so still up here it doubles the peaks. Whole terrace feels like it's floating between two skies at dusk.",
+    ),
+    feat(
+        3022,
+        "a stonecutter with dust in his beard",
+        FeatureKind::Villager,
+        "The Stonecutters' Court has been chipping away at that mountain for longer than the city's had a name. Watch your step, the ground's uneven with old spoil.",
+    ),
+    feat(
+        3023,
+        "a longhall regular, three drinks deep",
+        FeatureKind::Villager,
+        "Come in cold, leave as kin. That's the Alewife's rule, and she's never broken it once in forty years.",
+    ),
+    feat(
+        3024,
+        "a pilgrim filling a waterskin",
+        FeatureKind::Villager,
+        "The Snowmelt Spring never runs dry, not even in high summer. They say a sip carries off whatever's ailing you.",
+    ),
+    feat(
+        3030,
+        "a rug merchant calling out prices",
+        FeatureKind::Villager,
+        "The Sunbaked Bazaar never truly closes. Come at night if you want the honest prices, not the tourist ones.",
+    ),
+    feat(
+        3031,
+        "a spice-seller fanning away flies",
+        FeatureKind::Villager,
+        "Real frost-bloom, real saffron, real everything - the Spice Bazaar doesn't deal in the cheap stuff.",
+    ),
+    feat(
+        3032,
+        "a glassblower shaping molten sand",
+        FeatureKind::Villager,
+        "Every piece in the Glassblowers' Souk is one of a kind. Drop one and it's gone for good, so mind your elbows.",
+    ),
+    feat(
+        3033,
+        "a caravan master counting his camels twice",
+        FeatureKind::Villager,
+        "The desert doesn't forgive a caravan that leaves short a water-skin. Stock up here before you head anywhere past the walls.",
+    ),
+    feat(
+        3034,
+        "a botanist misting rare blooms",
+        FeatureKind::Villager,
+        "The Oasis Conservatory grows things that shouldn't survive this far from water. Nobody's quite explained how, same as the terraces up north.",
+    ),
+    feat(
+        5000,
+        "a grim-faced gravedigger",
+        FeatureKind::Villager,
+        "The Sunken Catacombs took my brother. Whatever's down there, it's not resting easy. Go in armed, and go in ready to leave family behind you.",
+    ),
+    feat(
+        5200,
+        "a woodcutter refusing to go further",
+        FeatureKind::Villager,
+        "Thornwood Hollows past this gate. My axe won't touch those brambles - they bleed something that isn't sap.",
+    ),
+    feat(
+        5416,
+        "a half-drowned fisherman, shivering",
+        FeatureKind::Villager,
+        "The Drowned Caverns pulled me under once and spat me back up. I don't go past the Tide Mouth anymore. You'd be wise to think twice yourself.",
+    ),
+    feat(
+        10000,
+        "a scarred sea-captain staring at the horizon",
+        FeatureKind::Villager,
+        "The Sundered Reaches lie past this shallows. Whatever's out there rides harder than the Frontier ever did. The King Who Was Promised Nothing was only the beginning.",
+    ),
+    feat(
+        12000,
+        "an ash-caked pilgrim at the gate",
+        FeatureKind::Villager,
+        "Kaelmyr keeps no towns past this shore, only ash and worse. If you're going in, go in remembering the way back out.",
+    ),
+    feat(
+        8000,
+        "a lamp-keeper trimming wicks",
+        FeatureKind::Villager,
+        "Lantern Cove's the quiet end of Hearthward Close. Good place to settle, if you've earned a home yet.",
+    ),
+    feat(
+        8001,
+        "a retired adventurer tending a garden",
+        FeatureKind::Villager,
+        "Emberfall Rest is where the old companies come to put their feet up. Nobody fights here. Nobody has to anymore.",
+    ),
+    feat(
+        8002,
+        "a mist-wrapped groundskeeper",
+        FeatureKind::Villager,
+        "Hollowmere's always a little foggy, even at noon. Folk say it's peaceful. I say it's just cold.",
+    ),
+    feat(
+        8003,
+        "a kite-flyer watching the wind",
+        FeatureKind::Villager,
+        "Best view in Hearthward Close from up here at Skyreach Landing. Worth the climb on a clear day.",
+    ),
+    feat(
+        9000,
+        "a housing clerk with a ledger under one arm",
+        FeatureKind::Villager,
+        "Buy a deed here whenever you're ready to plant roots - a wattle hut to start, a wizard's tower if you've the coin for it.",
+    ),
+    feat(
+        16000,
+        "a reed-cutter with wet hands",
+        FeatureKind::Villager,
+        "Forty species of fish swim these waters, if you've the patience for a rod and line.",
+    ),
+    feat(
+        16088,
+        "an old angler mending a net",
+        FeatureKind::Villager,
+        "The lakes are gentle water, not the wilds - good country to fish, rest, and not get yourself killed.",
+    ),
+    feat(
+        16176,
+        "a lantern-keeper at the dock",
+        FeatureKind::Villager,
+        "Every landing along these reed-mazes carries its own band of fish. Work your way through all fourteen and you'll have quite a collection.",
+    ),
+    feat(
+        16264,
+        "a heron-watcher, quiet as the water",
+        FeatureKind::Villager,
+        "Peaceful out here, compared to the Frontier. Nobody's come to any harm on these waters in longer than I can remember.",
+    ),
+    feat(
+        16352,
+        "a basket-weaver working reeds",
+        FeatureKind::Villager,
+        "The deep spring further in is said to hold something worth the effort of finding it. Bring more than a fishing rod.",
+    ),
+    feat(
+        16453,
+        "a ferry-hand poling a flat boat",
+        FeatureKind::Villager,
+        "Mind the fog on the caverns further along - easy to lose the path if you're not watching your step.",
+    ),
+    feat(
+        16528,
+        "a mist-wrapped hermit",
+        FeatureKind::Villager,
+        "A quiet trade, fishing. No monsters worth mentioning, just patience and good bait.",
+    ),
+    feat(
+        16616,
+        "a young net-mender",
+        FeatureKind::Villager,
+        "The lake-notables mostly keep to themselves. Leave them be and they'll do the same for you.",
+    ),
+    feat(
+        16704,
+        "a lake-warden counting boats",
+        FeatureKind::Villager,
+        "Forty species of fish swim these waters, if you've the patience for a rod and line.",
+    ),
+    feat(
+        16792,
+        "a duck-caller with a battered pipe",
+        FeatureKind::Villager,
+        "The lakes are gentle water, not the wilds - good country to fish, rest, and not get yourself killed.",
+    ),
+    feat(
+        16880,
+        "a water-witch reading ripples",
+        FeatureKind::Villager,
+        "Every landing along these reed-mazes carries its own band of fish. Work your way through all fourteen and you'll have quite a collection.",
+    ),
+    feat(
+        16982,
+        "a boat-builder planing wood",
+        FeatureKind::Villager,
+        "Peaceful out here, compared to the Frontier. Nobody's come to any harm on these waters in longer than I can remember.",
+    ),
+    feat(
+        17056,
+        "an eel-trapper checking his lines",
+        FeatureKind::Villager,
+        "The deep spring further in is said to hold something worth the effort of finding it. Bring more than a fishing rod.",
+    ),
+    feat(
+        17144,
+        "a still-water fisherman",
+        FeatureKind::Villager,
+        "Mind the fog on the caverns further along - easy to lose the path if you're not watching your step.",
+    ),
+    feat(
+        20000,
+        "a shipwrecked sailor, still shaking",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20050,
+        "a portal-warden clutching her waystone",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        20100,
+        "a scavenger sorting driftwood",
+        FeatureKind::Villager,
+        "Every island's got its own boss, its own name, its own way of trying to kill you. Come prepared or come to grief.",
+    ),
+    feat(
+        20150,
+        "a marooned cartographer",
+        FeatureKind::Villager,
+        "I've seen adventurers turn back at this very landing more times than I can count. No shame in it.",
+    ),
+    feat(
+        20200,
+        "a nervous lookout",
+        FeatureKind::Villager,
+        "The deadliest ground in Lateania, they call it. I believe them. I've not left this landing in months.",
+    ),
+    feat(
+        20250,
+        "a salt-crusted hermit",
+        FeatureKind::Villager,
+        "Whatever you find out on these isles, it'll be worth more than anything the Reaches or Kaelmyr ever offered. If you survive to carry it home.",
+    ),
+    feat(
+        20300,
+        "a survivor of the last landing party",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20350,
+        "a bone-collector",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        20400,
+        "a tide-reader murmuring to herself",
+        FeatureKind::Villager,
+        "Every island's got its own boss, its own name, its own way of trying to kill you. Come prepared or come to grief.",
+    ),
+    feat(
+        20450,
+        "a lantern-keeper who won't say why she stays",
+        FeatureKind::Villager,
+        "I've seen adventurers turn back at this very landing more times than I can count. No shame in it.",
+    ),
+    feat(
+        20500,
+        "a shipwrecked sailor, still shaking",
+        FeatureKind::Villager,
+        "The deadliest ground in Lateania, they call it. I believe them. I've not left this landing in months.",
+    ),
+    feat(
+        20550,
+        "a portal-warden clutching her waystone",
+        FeatureKind::Villager,
+        "Whatever you find out on these isles, it'll be worth more than anything the Reaches or Kaelmyr ever offered. If you survive to carry it home.",
+    ),
+    feat(
+        20600,
+        "a scavenger sorting driftwood",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20650,
+        "a marooned cartographer",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        20700,
+        "a nervous lookout",
+        FeatureKind::Villager,
+        "Every island's got its own boss, its own name, its own way of trying to kill you. Come prepared or come to grief.",
+    ),
+    feat(
+        20750,
+        "a salt-crusted hermit",
+        FeatureKind::Villager,
+        "I've seen adventurers turn back at this very landing more times than I can count. No shame in it.",
+    ),
+    feat(
+        20800,
+        "a survivor of the last landing party",
+        FeatureKind::Villager,
+        "The deadliest ground in Lateania, they call it. I believe them. I've not left this landing in months.",
+    ),
+    feat(
+        20850,
+        "a bone-collector",
+        FeatureKind::Villager,
+        "Whatever you find out on these isles, it'll be worth more than anything the Reaches or Kaelmyr ever offered. If you survive to carry it home.",
+    ),
+    feat(
+        20900,
+        "a tide-reader murmuring to herself",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20950,
+        "a lantern-keeper who won't say why she stays",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        22000,
+        "a beast-tamer resting against a mossy stone",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        22099,
+        "a forester with a hound at heel",
+        FeatureKind::Villager,
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        22198,
+        "a druid tending a circle of stones",
+        FeatureKind::Villager,
+        "Sixty beasts call this Greenwood home, small and mythical alike. Spend a season here and you'll have met most of them.",
+    ),
+    feat(
+        22297,
+        "a woodward marking trees for the season",
+        FeatureKind::Villager,
+        "The deeper you go, the harder the taming and the stranger the company. The World-Oak's crown holds the oldest of them all.",
+    ),
+    feat(
+        22396,
+        "a ranger stringing a new bow",
+        FeatureKind::Villager,
+        "Broceliande's a moderate wood, not a brutal one - but don't mistake that for safe. Something in every zone can still put you on your back.",
+    ),
+    feat(
+        22495,
+        "a beekeeper smoking a wild hive",
+        FeatureKind::Villager,
+        "A tamed beast strong enough to ride will carry you leagues in a single stride, if you earn its trust.",
+    ),
+    feat(
+        22594,
+        "an old huntress sharpening a knife",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        22693,
+        "a herbalist gathering dew",
+        FeatureKind::Villager,
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        22807,
+        "a stablehand leading a skittish colt",
+        FeatureKind::Villager,
+        "Sixty beasts call this Greenwood home, small and mythical alike. Spend a season here and you'll have met most of them.",
+    ),
+    feat(
+        22891,
+        "a green-robed acolyte of the Greenwood",
+        FeatureKind::Villager,
+        "The deeper you go, the harder the taming and the stranger the company. The World-Oak's crown holds the oldest of them all.",
+    ),
+    feat(
+        22990,
+        "a beast-tamer resting against a mossy stone",
+        FeatureKind::Villager,
+        "Broceliande's a moderate wood, not a brutal one - but don't mistake that for safe. Something in every zone can still put you on your back.",
+    ),
+    feat(
+        23103,
+        "a forester with a hound at heel",
+        FeatureKind::Villager,
+        "A tamed beast strong enough to ride will carry you leagues in a single stride, if you earn its trust.",
+    ),
+    feat(
+        23188,
+        "a druid tending a circle of stones",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        23287,
+        "a woodward marking trees for the season",
+        FeatureKind::Villager,
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        23386,
+        "a ranger stringing a new bow",
+        FeatureKind::Villager,
+        "Sixty beasts call this Greenwood home, small and mythical alike. Spend a season here and you'll have met most of them.",
+    ),
+    feat(
+        23485,
+        "a beekeeper smoking a wild hive",
+        FeatureKind::Villager,
+        "The deeper you go, the harder the taming and the stranger the company. The World-Oak's crown holds the oldest of them all.",
+    ),
+    feat(
+        23584,
+        "an old huntress sharpening a knife",
+        FeatureKind::Villager,
+        "Broceliande's a moderate wood, not a brutal one - but don't mistake that for safe. Something in every zone can still put you on your back.",
+    ),
+    feat(
+        23707,
+        "a herbalist gathering dew",
+        FeatureKind::Villager,
+        "A tamed beast strong enough to ride will carry you leagues in a single stride, if you earn its trust.",
+    ),
+    feat(
+        23782,
+        "a stablehand leading a skittish colt",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        23881,
+        "a green-robed acolyte of the Greenwood",
+        FeatureKind::Villager,
+        "The great beasts roam deep in this wood. Hares and foxes near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        600,
+        "a footsore pilgrim",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        601,
+        "a peddler with a heavy pack",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        602,
+        "a shepherd counting his flock",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        603,
+        "a wandering minstrel",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        604,
+        "a tired courier",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        605,
+        "a farmer leading a cart",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    feat(
+        606,
+        "a road-warden on patrol",
+        FeatureKind::Villager,
+        "The road's safe enough by daylight. Make camp before dark if you can help it.",
+    ),
+    feat(
+        607,
+        "a tinker's apprentice",
+        FeatureKind::Villager,
+        "Every capital's got its own character. Tasmania smells of salt, Melvanala of cold stone, Matlatesh of spice and sand.",
+    ),
+    feat(
+        608,
+        "a traveling preacher",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        640,
+        "a lost-looking merchant's clerk",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        641,
+        "a footsore pilgrim",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        642,
+        "a peddler with a heavy pack",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        643,
+        "a shepherd counting his flock",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        644,
+        "a wandering minstrel",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    feat(
+        645,
+        "a tired courier",
+        FeatureKind::Villager,
+        "The road's safe enough by daylight. Make camp before dark if you can help it.",
+    ),
+    feat(
+        646,
+        "a farmer leading a cart",
+        FeatureKind::Villager,
+        "Every capital's got its own character. Tasmania smells of salt, Melvanala of cold stone, Matlatesh of spice and sand.",
+    ),
+    feat(
+        647,
+        "a road-warden on patrol",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        648,
+        "a tinker's apprentice",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        649,
+        "a traveling preacher",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        650,
+        "a lost-looking merchant's clerk",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        680,
+        "a footsore pilgrim",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        681,
+        "a peddler with a heavy pack",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    feat(
+        682,
+        "a shepherd counting his flock",
+        FeatureKind::Villager,
+        "The road's safe enough by daylight. Make camp before dark if you can help it.",
+    ),
+    feat(
+        683,
+        "a wandering minstrel",
+        FeatureKind::Villager,
+        "Every capital's got its own character. Tasmania smells of salt, Melvanala of cold stone, Matlatesh of spice and sand.",
+    ),
+    feat(
+        684,
+        "a tired courier",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        685,
+        "a farmer leading a cart",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        686,
+        "a road-warden on patrol",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        687,
+        "a tinker's apprentice",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        688,
+        "a traveling preacher",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        689,
+        "a lost-looking merchant's clerk",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    // ---- Thornveil Falls' twelve falls-gates (rooms 34000+) ---------------
+    // Every zone is a braided maze (see `thornveil_zone_is_cavern`), so its
+    // entrance is always cell 0 and these ids are exact and stable.
+    feat(
+        THORNVEIL_BASE,
+        "a fog-wrapped ranger keeping the mist-line",
+        FeatureKind::Villager,
+        "Thornveil Falls lies hidden past the World-Oak's own roots. Once you're through the mist, there's no path back but the one you make.",
+    ),
+    feat(
+        THORNVEIL_BASE + THORNVEIL_ZONE_STRIDE,
+        "a rain-soaked forager sheltering under a dripping bough",
+        FeatureKind::Villager,
+        "The Weeping Boughs never dry. Neither do the things that hunt beneath them.",
+    ),
+    feat(
+        THORNVEIL_BASE + 2 * THORNVEIL_ZONE_STRIDE,
+        "a deaf old fisher who's stopped noticing the roar",
+        FeatureKind::Villager,
+        "Six falls meet in that basin ahead. Shout if you need me, though I doubt I'll hear you over it.",
+    ),
+    feat(
+        THORNVEIL_BASE + 3 * THORNVEIL_ZONE_STRIDE,
+        "a root-cutter eyeing the flooded hollow warily",
+        FeatureKind::Villager,
+        "Drownroot's water never rises and never falls. I don't ask why. I just don't wade in past my knees.",
+    ),
+    feat(
+        THORNVEIL_BASE + 4 * THORNVEIL_ZONE_STRIDE,
+        "a cliff-guide coiling wet rope",
+        FeatureKind::Villager,
+        "The Hanging Spray will soak you to the bone before you're halfway across. Mind your footing; the stone forgets nothing.",
+    ),
+    feat(
+        THORNVEIL_BASE + 5 * THORNVEIL_ZONE_STRIDE,
+        "a step-warden counting the falls under their breath",
+        FeatureKind::Villager,
+        "Nine steps down to the last pool, each one meaner than the last. I've counted them a thousand times and never once enjoyed it.",
+    ),
+    feat(
+        THORNVEIL_BASE + 6 * THORNVEIL_ZONE_STRIDE,
+        "a chorister listening to the cavern's echo",
+        FeatureKind::Villager,
+        "Behind the falls the water sings. Some say it's just the echo. I've heard it answer back.",
+    ),
+    feat(
+        THORNVEIL_BASE + 7 * THORNVEIL_ZONE_STRIDE,
+        "a wind-burnt scout eyeing the broken cliff",
+        FeatureKind::Villager,
+        "Something tore this cliff clean through, long before any of us were born. Whatever did it, I hope it stays gone.",
+    ),
+    feat(
+        THORNVEIL_BASE + 8 * THORNVEIL_ZONE_STRIDE,
+        "a root-priest kneeling by the plunging roots",
+        FeatureKind::Villager,
+        "These are the World-Oak's own roots, still reaching down after all these ages. I come here to remember how old this wood really is.",
+    ),
+    feat(
+        THORNVEIL_BASE + 9 * THORNVEIL_ZONE_STRIDE,
+        "a storm-scarred lookout lashed to the canopy walk",
+        FeatureKind::Villager,
+        "The storms up here never break. Rope yourself in, or the wind will decide where you're going next.",
+    ),
+    feat(
+        THORNVEIL_BASE + 10 * THORNVEIL_ZONE_STRIDE,
+        "a pilgrim shouting to be heard over the greatest fall",
+        FeatureKind::Villager,
+        "THE LAST CATARACT, THEY CALL IT! LOUDEST THING IN THE WORLD, I'D WAGER! MIND THE SPRAY!",
+    ),
+    feat(
+        THORNVEIL_BASE + 11 * THORNVEIL_ZONE_STRIDE,
+        "a silent watcher at the sanctum's still black water",
+        FeatureKind::Villager,
+        "Every fall in Thornveil ends here, and here the water finally stops. Something old enough to remember why is still listening.",
+    ),
+    // ---- The Wildbound Waste's three gate towns (rooms 30000+) -----------
+    feat(
+        WILDBOUND_BASE,
+        "a grim-faced muster sergeant",
+        FeatureKind::Villager,
+        "Everyone past that gate is fair game, friend or not. Watch the ones who watch you back a little too long.",
+    ),
+    feat(
+        WILDBOUND_BASE + 1,
+        "a bandaged veteran of the Wood",
+        FeatureKind::Villager,
+        "Went in a party of six. Came out alone. The Wood took the others; I couldn't tell you which ones were mobs.",
+    ),
+    feat(
+        WILDBOUND_BASE + 2,
+        "a scarred scavenger",
+        FeatureKind::Villager,
+        "Bring me anything with teeth still attached and I'll make it worth your while. Coin's no good where you're headed anyway.",
+    ),
+    feat(
+        WILDBOUND_BASE + 3,
+        "a watchman who won't meet your eyes",
+        FeatureKind::Villager,
+        "Last Watch is the last honest ground you'll stand on for a while. Past this gate, trust nothing that smiles.",
+    ),
+    feat(
+        WILDBOUND_BASE + WILDBOUND_BIOME_STRIDE,
+        "a gravedigger with too much work",
+        FeatureKind::Villager,
+        "The Hollowdeep doesn't care if what killed you had a pulse. Dead's dead, down there.",
+    ),
+    feat(
+        WILDBOUND_BASE + WILDBOUND_BIOME_STRIDE + 1,
+        "a vigil-keeper counting candles",
+        FeatureKind::Villager,
+        "We keep the lights burning so the ones still down there have something to find their way back to. Some do.",
+    ),
+    feat(
+        WILDBOUND_BASE + WILDBOUND_BIOME_STRIDE + 2,
+        "a thin man buying grave-goods",
+        FeatureKind::Villager,
+        "I don't ask what it used to be attached to, and you don't ask why I pay so well. Barrowgate manners.",
+    ),
+    feat(
+        WILDBOUND_BASE + WILDBOUND_BIOME_STRIDE + 3,
+        "a stair-warden with a cold brazier",
+        FeatureKind::Villager,
+        "No door's ever been needed here. Nothing in the Hollowdeep has once knocked politely.",
+    ),
+    feat(
+        WILDBOUND_BASE + 2 * WILDBOUND_BIOME_STRIDE,
+        "a leather-faced outrider",
+        FeatureKind::Villager,
+        "Ashhold's the last word before the Flats. Past here it's just you, the heat, and whatever else came looking for a fight.",
+    ),
+    feat(
+        WILDBOUND_BASE + 2 * WILDBOUND_BIOME_STRIDE + 1,
+        "a woman who stopped counting the days",
+        FeatureKind::Villager,
+        "Nobody remembers what drove them out here. The Flats have a way of burning your old life off you along with everything else.",
+    ),
+    feat(
+        WILDBOUND_BASE + 2 * WILDBOUND_BIOME_STRIDE + 2,
+        "a one-armed glasswright",
+        FeatureKind::Villager,
+        "Every blade I sell came out of something bigger than you. Try not to think about that part too hard.",
+    ),
+    feat(
+        WILDBOUND_BASE + 2 * WILDBOUND_BIOME_STRIDE + 3,
+        "a sentry watching the heat-shimmer",
+        FeatureKind::Villager,
+        "You can see it moving out there sometimes, if the light's wrong. Don't point. It notices pointing.",
+    ),
+    // ---- Wayfarer's Hollow: the new-player tutorial zone ------------------
+    feat(
+        TUTORIAL_BASE,
+        "a weathered instructor",
+        FeatureKind::Villager,
+        "Take your time. Nothing here can truly hurt you, and Embergate isn't going anywhere - press r whenever you're ready to see the real town.",
+    ),
+    feat(
+        TUTORIAL_BASE + 2,
+        "a patient trade-keeper",
+        FeatureKind::Villager,
+        "Press y and you'll take from whatever's here you're able to work. Every trade in the world starts exactly this simply.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "a soot-streaked tinker",
+        FeatureKind::Villager,
+        "Stand at any station and press u. You'll see every recipe it knows, and which ones you can actually make right now.",
+    ),
+    feat(
+        TUTORIAL_BASE + 4,
+        "an old archivist",
+        FeatureKind::Villager,
+        "Whatever you chose, you chose well. But it never hurts to know what everyone else in the tavern can do.",
+    ),
+    // ---- Aelunor's Wood-Gates: a warden or watcher at every zone's one safe
+    // threshold, each with a line about their own glade and its boss. ----
+    feat(
+        25_012,
+        "a sun-freckled elf ranger restringing her bow",
+        FeatureKind::Villager,
+        "Silverleaf Eaves is gentle enough for a first walk in the wood, but the Hollow-Elf Warlord doesn't share that opinion. Mind yourself past the willow arch.",
+    ),
+    feat(
+        25_083,
+        "a hooded druid listening to the standing stones",
+        FeatureKind::Villager,
+        "The Boughs don't just whisper, they warn. Thistlewitch keeps her bramble court somewhere past them - best not go looking for her unready.",
+    ),
+    feat(
+        25_156,
+        "a moss-flecked hermit sunk waist-deep in his garden",
+        FeatureKind::Villager,
+        "The moss out here grows a little too fast for my liking. The Ancient sleeps somewhere deep in it, and I mean to let it stay asleep.",
+    ),
+    feat(
+        25_237,
+        "a high elf huntsman polishing an old horn",
+        FeatureKind::Villager,
+        "Follow the light and you'll find the Erlking's Huntsman's altar. Follow it too far and you'll find him.",
+    ),
+    feat(
+        25_300,
+        "a fae child chasing drifting thistledown",
+        FeatureKind::Villager,
+        "The down never settles here, and neither does the Nightshade Nymph-Queen's temper. Watch your step past the hollow.",
+    ),
+    feat(
+        25_372,
+        "a warden who never once steps inside the fae-ring",
+        FeatureKind::Villager,
+        "Nothing grows in the circle, and nothing that walks in ever quite walks the same way out. The Ringmother minds it close.",
+    ),
+    feat(
+        25_443,
+        "a night-blooming druid tending petals by lamplight",
+        FeatureKind::Villager,
+        "These blossoms only open after dark, same as what stalks them. Best not linger past sundown.",
+    ),
+    feat(
+        25_515,
+        "a fen-wisp catcher with jars of pale light",
+        FeatureKind::Villager,
+        "The water mirrors the sky too well out there. The Seer-Queen's said to read futures in it, if you're brave or foolish enough to ask her.",
+    ),
+    feat(
+        25_587,
+        "a root-cutter missing two fingers",
+        FeatureKind::Villager,
+        "Wychroot's less a place than a tangle. The Revenant-Lord's been dead longer than the roots, and minds the deeps just the same.",
+    ),
+    feat(
+        25_661,
+        "a silver-fingered weaver untangling gossamer",
+        FeatureKind::Villager,
+        "Loom-fae mind their threads close. Pull one wrong and the Loomweaver herself comes to see who's meddling.",
+    ),
+    feat(
+        25_732,
+        "a moonlit warden bathing an old wound in the spring",
+        FeatureKind::Villager,
+        "The Moonwell only ever shows the moon, whatever the hour. Its Warden's kinder than most out here, but kind isn't the same as safe.",
+    ),
+    feat(
+        25_804,
+        "an ancient elf keeper bowed low before the great tree",
+        FeatureKind::Villager,
+        "The Heartwood's older than Aelunor's own name. The Erlqueen keeps its heart, and precious few who go to meet her come back to tell it.",
+    ),
+    // ---- Silvael, the Faewood's own city -------------------------------
+    feat(
+        SILVAEL_BASE,
+        "a high elf herald reading out the day's tidings",
+        FeatureKind::Villager,
+        "Silvael keeps no wall and charges no toll - the wood itself decides who's welcome, and so far it's decided that's near everyone. Mind the Wildwood Gate after dark all the same.",
+    ),
+    feat(
+        SILVAEL_BASE + 1,
+        "a warden of the Wildwood Gate, spear planted root-deep",
+        FeatureKind::Villager,
+        "Silverleaf Eaves is gentle by Faewood standards. Every glade deeper in gets less so. Ask after a zone's own boss before you walk in past its wood-gate, if you'd rather not meet it by surprise.",
+    ),
+    feat(
+        SILVAEL_BASE + 2,
+        "Aelwen Songleaf's apprentice, sorting charms by colour",
+        FeatureKind::Villager,
+        "Aelwen prices by whether she likes you, not by what a thing's worth. Compliment the weave and you'll do better than haggling.",
+    ),
+    feat(
+        SILVAEL_BASE + 3,
+        "a druid's apprentice grinding dried moonwell-root",
+        FeatureKind::Villager,
+        "Branwen's tinctures aren't sold so much as earned. Bring her something interesting out of the wood and she'll usually trade fair.",
+    ),
+    feat(
+        SILVAEL_BASE + 4,
+        "an elf child skipping stones that never quite sink",
+        FeatureKind::Villager,
+        "They say the Moonwell shows you something true if you look long enough. Mostly it's just shown me my own tired face.",
+    ),
+    feat(
+        SILVAEL_BASE + 5,
+        "a druid novice tending the standing stones",
+        FeatureKind::Villager,
+        "The Circle's kept its watch over Aelunor longer than Silvael's had a name. Whatever's out there, they'd know first.",
+    ),
+    feat(
+        SILVAEL_BASE + 6,
+        "a high elf archivist glaring at anyone who touches the shelves",
+        FeatureKind::Villager,
+        "Every bark-bound book on these terraces came out of the wood itself, one way or another. Ask nicely and I might actually let you read one.",
+    ),
+    feat(
+        SILVAEL_BASE + 7,
+        "a beastkeeper hung with bells and half-chewed tame-charms",
+        FeatureKind::Villager,
+        "Aelunor's fae beasts aren't for sale, not here, not anywhere in Silvael. Earn the wood's trust in Animal Taming out past the gate, and one will come to you on its own.",
+    ),
 ];
 
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
-    FEATURES.iter().filter(|f| f.room == room).collect()
+    // Indexed once: this is called per map cell per frame (via the field's
+    // service glyph) and per snapshot, and a linear scan of FEATURES plus 146
+    // villagers plus the waystones was the hottest part of both.
+    static BY_ROOM: OnceLock<HashMap<RoomId, Vec<&'static Feature>>> = OnceLock::new();
+    let by_room = BY_ROOM.get_or_init(|| {
+        let mut by_room: HashMap<RoomId, Vec<&'static Feature>> = HashMap::new();
+        for f in FEATURES
+            .iter()
+            .chain(VILLAGERS.iter())
+            .chain(waystone_features().iter())
+            .chain(tome_feature().iter())
+        {
+            by_room.entry(f.room).or_default().push(f);
+        }
+        by_room
+    });
+    by_room.get(&room).cloned().unwrap_or_default()
 }
+
+// ---- Waystones: the Ways menu, and what it will carry you to -------------
+
+const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
+    inside it rippling like a heat-haze over water. Step through and it will carry you in a \
+    breath to any other waystone you know of - the far villages, the drowned isles of the \
+    Shattered Archipelago, or the gate of a far country. Press i to open the ways.";
+
+/// The mainland waystones: Embergate's square plus each far country's safe
+/// gate room, so a recall to town never means re-walking a whole gate chain.
+/// These carry no progression rules of their own. A title is permission to
+/// *enter* a land and is checked exactly once, where you walk in
+/// (`svc::can_cross_progression_gate`); a waystone is permission to *skip the
+/// trip*, and opens only once the player has stood in it (`waystone_is_known`).
+/// The sealed continents need no second check here: a visited set cannot hold
+/// a Reaches or Kaelmyr room unless the walking gate already let the player by.
+pub const CONTINENT_WAYSTONES: &[(&str, RoomId)] = &[
+    ("Embergate, the Town Square", 1),
+    ("the Sunderlakes landing", LAKES_BASE),
+    ("Broceliande, the forest gate", BROCELIANDE_BASE),
+    ("the Sundered Reaches sea-gate", REACHES_BASE),
+    ("Cinderfall Shore, Kaelmyr", KAELMYR_BASE),
+    ("Last Watch, the Wildbound Waste", WILDBOUND_BASE),
+];
+
+/// Every destination the Ways can offer: the mainland continent gates first,
+/// then the archipelago villages and island landings. Filter with
+/// `waystone_is_known` before showing or honouring one.
+pub fn waystone_destinations() -> Vec<(&'static str, RoomId)> {
+    let mut out: Vec<(&'static str, RoomId)> = CONTINENT_WAYSTONES.to_vec();
+    out.extend(super::archipelago::portal_destinations());
+    out
+}
+
+/// Whether the Ways will carry this player to `dest`. A mainland gate answers
+/// only once they have stood in it, so fast travel shortens a road already
+/// walked instead of replacing the walk. The archipelago is always open: its
+/// villages and island landings have no directional exits at all, so a
+/// visited rule would orphan the whole region, and nothing in progression
+/// routes through it.
+pub fn waystone_is_known(dest: RoomId, visited: &HashSet<RoomId>) -> bool {
+    if CONTINENT_WAYSTONES.iter().any(|(_, room)| *room == dest) {
+        visited.contains(&dest)
+    } else {
+        true
+    }
+}
+
+/// Portal (and, for the villages, fountain) features for the runtime-generated
+/// fast-travel network - the Embergate waystone, the villages, and every island
+/// landing. Built once and leaked into a `'static` so they read like any other
+/// authored feature.
+fn waystone_features() -> &'static [Feature] {
+    static F: OnceLock<Vec<Feature>> = OnceLock::new();
+    F.get_or_init(|| {
+        let mut v = Vec::new();
+        // The mainland gateways into the network: Embergate's square plus each
+        // far country's safe gate room.
+        for (_, room) in CONTINENT_WAYSTONES {
+            let name = if *room == 1 {
+                "the town waystone"
+            } else {
+                "the gate waystone"
+            };
+            v.push(feat(*room, name, FeatureKind::Portal, PORTAL_DESC));
+        }
+        for i in 0..super::archipelago::VILLAGES.len() {
+            let room = super::archipelago::village_room(i);
+            v.push(feat(
+                room,
+                "the village waystone",
+                FeatureKind::Portal,
+                PORTAL_DESC,
+            ));
+            v.push(feat(
+                room,
+                "the village fountain",
+                FeatureKind::Fountain,
+                FOUNTAIN_DESC,
+            ));
+        }
+        for i in 0..super::archipelago::ISLAND_COUNT {
+            v.push(feat(
+                super::archipelago::island_entrance(i),
+                "the island waystone",
+                FeatureKind::Portal,
+                PORTAL_DESC,
+            ));
+        }
+        v
+    })
+}
+
+/// Wayfarer's Hollow's Hall of Callings: one lookable tome summarising every
+/// playable class, built from the same canonical `Class::tagline`/`resource`/
+/// `trait_name` data the character sheet and class-select screen already use,
+/// so the tutorial can never drift out of sync with what a class actually
+/// does. Generated once and leaked to `'static`, same as `waystone_features`.
+fn tome_feature() -> &'static [Feature] {
+    static F: OnceLock<Vec<Feature>> = OnceLock::new();
+    F.get_or_init(|| {
+        use std::fmt::Write;
+        let mut body = String::from(
+            "Its pages turn themselves to whatever calling draws your eye. Each carries \
+             its resource, its defining trait, and a line on how it fights:\n\n",
+        );
+        for class in super::classes::Class::ALL {
+            let _ = writeln!(
+                body,
+                "{} ({}, {}): {}",
+                class.name(),
+                class.resource().label(),
+                class.trait_name(),
+                class.tagline()
+            );
+        }
+        body.push_str(
+            "\nNo entry runs longer than this - the tome believes the doing teaches \
+             better than the reading ever could.",
+        );
+        vec![feat(
+            TUTORIAL_BASE + 4,
+            "the Tome of the Seventeen Callings",
+            FeatureKind::Plaque,
+            Box::leak(body.into_boxed_str()),
+        )]
+    })
+}
+
+/// The crafting skills whose stations stand in a room (empty if none). Used to
+/// gate crafting and to build the craft panel.
+pub fn craft_stations_at(room: RoomId) -> Vec<CraftSkill> {
+    FEATURES
+        .iter()
+        .filter(|f| f.room == room)
+        .filter_map(|f| match f.kind {
+            FeatureKind::CraftStation(skill) => Some(skill),
+            _ => None,
+        })
+        .collect()
+}
+
+// ---- Wildlife: critters you can feed, and the perks they leave -----------
 
 /// A small benefit a Boon creature confers while you share its room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -635,6 +2279,30 @@ pub struct CritterSpawn {
     pub note: &'static str,
     /// Reward for hunting, for `Game` critters.
     pub xp: i32,
+    /// An alternate line for when the creature is grounded instead of aloft
+    /// (Genesys): a bird mostly wheels overhead, but sometimes it's perched
+    /// nearby instead. `None` for critters that don't fly.
+    pub perch_note: Option<&'static str>,
+    /// A creature out of legend rather than the mundane world (Genesys):
+    /// shown with its own colour in the Wildlife list.
+    pub mythical: bool,
+    /// Can be won over as a stray companion (Genesys) - fed and looked after
+    /// over several consecutive days, it joins you on top of any other
+    /// companion you already keep. See `svc::feed_wild_critter`.
+    pub adoptable: bool,
+}
+
+impl CritterSpawn {
+    /// The line to show right now: a bird with a `perch_note` alternates
+    /// between wheeling overhead and perched nearby, toggling every few
+    /// minutes (real time, bucketed) so it isn't the same read every visit.
+    /// Everything else always shows its one `note`.
+    pub fn display_note(&self, moment_bucket: u64) -> &'static str {
+        match self.perch_note {
+            Some(perched) if (moment_bucket ^ self.home as u64).is_multiple_of(3) => perched,
+            _ => self.note,
+        }
+    }
 }
 
 const fn critter(
@@ -650,6 +2318,35 @@ const fn critter(
         kind,
         note,
         xp,
+        perch_note: None,
+        mythical: false,
+        adoptable: false,
+    }
+}
+
+/// A Genesys wildlife entry: same shape as `critter`, plus a perch/mythical/
+/// adoptable trio. `perch_note` is `Some` for birds that are sometimes seen
+/// grounded instead of aloft.
+#[allow(clippy::too_many_arguments)]
+const fn genesys_critter(
+    home: RoomId,
+    name: &'static str,
+    kind: CritterKind,
+    note: &'static str,
+    xp: i32,
+    perch_note: Option<&'static str>,
+    mythical: bool,
+    adoptable: bool,
+) -> CritterSpawn {
+    CritterSpawn {
+        home,
+        name,
+        kind,
+        note,
+        xp,
+        perch_note,
+        mythical,
+        adoptable,
     }
 }
 
@@ -771,6 +2468,407 @@ pub const WILDLIFE: &[CritterSpawn] = &[
         "trotting the hedgerow",
         0,
     ),
+    // ---- Genesys: birds aloft/perched, and adoptable strays --------------
+    genesys_critter(
+        1,
+        "a flock of starlings",
+        CritterKind::Skittish,
+        "wheeling in tight loops over the well",
+        0,
+        Some("lined up along the guildhall eaves"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        3,
+        "a kestrel",
+        CritterKind::Skittish,
+        "hanging on the wind above the forge chimney",
+        0,
+        Some("gripping the smithy's weathervane, dead still"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        5,
+        "a pair of ravens",
+        CritterKind::Skittish,
+        "circling South Gate, croaking to each other",
+        0,
+        Some("hunched together on the gatehouse rail"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        620,
+        "a wheeling albatross",
+        CritterKind::Skittish,
+        "riding the harbour thermals on locked wings",
+        0,
+        Some("resting on the lighthouse rail, folded and huge"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        624,
+        "a cormorant",
+        CritterKind::Skittish,
+        "skimming low over the harbour swell",
+        0,
+        Some("drying its wings on the lighthouse stair"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        660,
+        "a golden eagle",
+        CritterKind::Skittish,
+        "circling the high crags on a rising thermal",
+        0,
+        Some("perched on the bell tower's very peak"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        665,
+        "a flock of mountain doves",
+        CritterKind::Skittish,
+        "wheeling white against the grey stone",
+        0,
+        Some("crowded along the bell tower's ledge"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        720,
+        "a desert falcon",
+        CritterKind::Skittish,
+        "hunting the thermals over the dunes",
+        0,
+        Some("hooded and still on the minaret's shoulder"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        600,
+        "a barn swallow",
+        CritterKind::Skittish,
+        "cutting low arcs over the roadside grass",
+        0,
+        Some("lined up with its kin along a fence rail"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        601,
+        "a flock of starlings",
+        CritterKind::Skittish,
+        "turning as one dark cloud over the verge",
+        0,
+        Some("settled thick in a roadside hedge"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        3010,
+        "a wheeling gull",
+        CritterKind::Skittish,
+        "screaming over the Saltwind masts",
+        0,
+        Some("standing one-legged on a mooring post"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        3030,
+        "a desert lark",
+        CritterKind::Skittish,
+        "singing high over the Sunbaked Bazaar",
+        0,
+        Some("hopping between the rug-stalls, unbothered"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        2000,
+        "a storm-hawk",
+        CritterKind::Skittish,
+        "riding the Frontier's own bad weather like it was nothing",
+        0,
+        Some("gripping a dead tree at the rise, feathers crackling faintly with static"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        5000,
+        "an ash-wraith crow",
+        CritterKind::Skittish,
+        "circling the Catacombs' mouth in dead silence, no wingbeat at all",
+        0,
+        Some("sitting on a headstone, watching you with eyes like coals"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        5200,
+        "a bramble-owl",
+        CritterKind::Skittish,
+        "gliding silent between the Thornwood's black branches",
+        0,
+        Some("perched low in the bramble gate, feathers grown through with thorn"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        5416,
+        "a tide-wraith gull",
+        CritterKind::Skittish,
+        "wheeling over the Tide Mouth, crying with a human voice",
+        0,
+        Some("standing dead still on the waterline, not a feather wet"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        10000,
+        "a storm-petrel of the Reaches",
+        CritterKind::Skittish,
+        "skimming the shallows just ahead of a squall that isn't there yet",
+        0,
+        Some("riding a half-sunk piling, utterly unbothered by the swell"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        12000,
+        "a cinder-swift",
+        CritterKind::Skittish,
+        "cutting through the ash-fall too fast to properly see",
+        0,
+        Some("resting on a scorched stone, wings smouldering faintly at the tips"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        16000,
+        "a moon-heron",
+        CritterKind::Skittish,
+        "gliding low over the reed-maze in dead silence",
+        0,
+        Some("standing one-legged in the shallows, feathers faintly silvered"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        22000,
+        "a fae-wren",
+        CritterKind::Skittish,
+        "flitting between the eaves faster than the eye follows",
+        0,
+        Some("perched on a low branch, glowing faintly green at the throat"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        1,
+        "a scruffy stray dog",
+        CritterKind::Skittish,
+        "trotting hopeful circles around anyone eating lunch by the well",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        2,
+        "a one-eyed tavern cat",
+        CritterKind::Skittish,
+        "sprawled across the warmest flagstone by the Gilded Flagon's hearth",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3,
+        "a soot-streaked forge cat",
+        CritterKind::Skittish,
+        "dozing on a pile of scrap iron, utterly unbothered by the hammering",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        4,
+        "a temple hound",
+        CritterKind::Skittish,
+        "lying at the Dawn's threshold, head on its paws, watching everyone who passes",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        5,
+        "a gate-watch mutt",
+        CritterKind::Skittish,
+        "trotting the wall with the guards like it's on shift too",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        620,
+        "a salt-crusted wharf dog",
+        CritterKind::Skittish,
+        "nosing through the fish-crates, hoping nobody's watching",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        660,
+        "a shaggy mountain dog",
+        CritterKind::Skittish,
+        "curled against the cold stone of the Lakeshore Square",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        720,
+        "a lean desert cat",
+        CritterKind::Skittish,
+        "stretched in a strip of shade, tail flicking at the flies",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3000,
+        "a guildhall cat",
+        CritterKind::Skittish,
+        "asleep on the noticeboard, using an old bounty notice as a pillow",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3010,
+        "a fishmonger's cat",
+        CritterKind::Skittish,
+        "working the Fishmarket stalls like it owns every one of them",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3020,
+        "a terrace-garden cat",
+        CritterKind::Skittish,
+        "stalking something invisible through the frost-vines",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3030,
+        "a bazaar puppy",
+        CritterKind::Skittish,
+        "tangled in a rug merchant's spare cloth, tail going nonstop",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        8000,
+        "an old lantern-dog",
+        CritterKind::Skittish,
+        "keeping the lamp-keeper company on his slow rounds of Lantern Cove",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        9000,
+        "a hearthward tabby",
+        CritterKind::Skittish,
+        "sunning itself on the clerk's windowsill, ledger be damned",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        2000,
+        "a scarred ash-wolf pup",
+        CritterKind::Skittish,
+        "watching the Frontier stair with eyes too old for its size",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        22000,
+        "a moon-hound kit",
+        CritterKind::Skittish,
+        "padding silent circles at the forest gate, coat like poured moonlight",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        16000,
+        "a reed-cat",
+        CritterKind::Skittish,
+        "crouched in the shallows, dry as a bone despite the water",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        10000,
+        "a storm-touched sea-pup",
+        CritterKind::Skittish,
+        "shaking off spray that never quite lands on it",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        12000,
+        "a cinder-kit",
+        CritterKind::Skittish,
+        "curled on warm ash, smoke curling harmlessly off its whiskers",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        5416,
+        "a barrow-hound",
+        CritterKind::Skittish,
+        "sitting patient at the Tide Mouth, exactly where the light doesn't reach",
+        0,
+        None,
+        true,
+        true,
+    ),
 ];
 
 pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
@@ -782,6 +2880,883 @@ pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
 pub fn critter_index(c: &CritterSpawn) -> Option<usize> {
     WILDLIFE.iter().position(|w| std::ptr::eq(w, c))
 }
+
+// ---- Resource nodes: what you chop, mine, fish, forage, and skin ---------
+
+/// A harvestable resource node fixed to a room: a tree stand, an ore vein, a
+/// fishing spot, or a herb/skinning patch. Modelled exactly like wildlife -
+/// static data keyed to a home room, with a per-node respawn cooldown tracked on
+/// the service (`gathered`). Harvesting one grants its raw material plus skill
+/// xp, gated behind a minimum skill level so higher tiers stay out of reach
+/// until the trade is trained up.
+#[derive(Clone, Copy, Debug)]
+pub struct ResourceNode {
+    pub home: RoomId,
+    pub skill: GatherSkill,
+    /// What the player sees and acts on, e.g. "an old oak wood".
+    pub name: &'static str,
+    /// Short flavour shown in the Resources list.
+    pub note: &'static str,
+    /// Tier 0..5, low to high; sets the material and the difficulty band.
+    pub tier: u8,
+    /// Minimum skill level required to work it.
+    pub level_req: i32,
+    /// Item id granted on a successful harvest (derived from skill + tier).
+    pub yield_item: u32,
+    /// Skill xp granted per harvest.
+    pub xp: i32,
+}
+
+const fn node(
+    home: RoomId,
+    skill: GatherSkill,
+    name: &'static str,
+    note: &'static str,
+    tier: u8,
+    level_req: i32,
+    xp: i32,
+) -> ResourceNode {
+    ResourceNode {
+        home,
+        skill,
+        name,
+        note,
+        tier,
+        level_req,
+        // The yield is fixed by the node's skill and tier, so the material can
+        // never drift out of sync with its source.
+        yield_item: super::items::material_id(skill.index(), tier as u32),
+        xp,
+    }
+}
+
+/// A resource node whose harvest yields an *explicit* item rather than the
+/// tiered material derived from `(skill, tier)`. This lets a gathering spot hand
+/// out a specific catalog item - e.g. one of the forty Sunderlakes fish - while
+/// still training its skill and respawning exactly like any other node (the
+/// gather flow in `svc.rs` reads `yield_item` directly, so no new mechanic is
+/// needed). The tier still sets the difficulty band; `level_req` gates it.
+#[allow(clippy::too_many_arguments)]
+const fn node_yielding(
+    home: RoomId,
+    skill: GatherSkill,
+    name: &'static str,
+    note: &'static str,
+    tier: u8,
+    level_req: i32,
+    yield_item: u32,
+    xp: i32,
+) -> ResourceNode {
+    ResourceNode {
+        home,
+        skill,
+        name,
+        note,
+        tier,
+        level_req,
+        yield_item,
+        xp,
+    }
+}
+
+/// Every harvestable node in the world, keyed to its home room. Tiers climb with
+/// distance/difficulty from Embergate: roadside starters near town, mid materials
+/// out in the overworld wings, and the best materials deep in the harder zones.
+pub const NODES: &[ResourceNode] = &[
+    // ---- Woodcutting: birch -> oak -> ash -> yew -> ironbark ------------
+    node(
+        600,
+        GatherSkill::Woodcutting,
+        "a stand of roadside birch",
+        "slim white birches along the verge",
+        0,
+        1,
+        12,
+    ),
+    node(
+        680,
+        GatherSkill::Woodcutting,
+        "an old oak wood",
+        "gnarled oaks on the hillside",
+        1,
+        8,
+        30,
+    ),
+    node(
+        684,
+        GatherSkill::Woodcutting,
+        "a grove of mountain ash",
+        "straight ash on the high slopes",
+        2,
+        16,
+        70,
+    ),
+    node(
+        688,
+        GatherSkill::Woodcutting,
+        "an ancient yew",
+        "a black, age-twisted yew",
+        3,
+        26,
+        150,
+    ),
+    node(
+        803,
+        GatherSkill::Woodcutting,
+        "ironbark rooted in the dark",
+        "iron-hard trunks in the fungal deep",
+        4,
+        38,
+        320,
+    ),
+    // ---- Mining: copper -> tin -> iron -> silver -> mithril -------------
+    node(
+        601,
+        GatherSkill::Mining,
+        "a weathered copper outcrop",
+        "green-streaked stone by the road",
+        0,
+        1,
+        12,
+    ),
+    node(
+        740,
+        GatherSkill::Mining,
+        "a tin-streaked rockface",
+        "pale ore in the desert rock",
+        1,
+        8,
+        30,
+    ),
+    node(
+        743,
+        GatherSkill::Mining,
+        "a deep iron seam",
+        "red iron banding the cliff",
+        2,
+        16,
+        70,
+    ),
+    node(
+        748,
+        GatherSkill::Mining,
+        "a glinting silver vein",
+        "silver threading the deep rock",
+        3,
+        26,
+        150,
+    ),
+    node(
+        750,
+        GatherSkill::Mining,
+        "a mithril lode",
+        "the fabled blue-white ore",
+        4,
+        38,
+        320,
+    ),
+    // ---- Fishing: bream -> trout -> pike -> sturgeon -> moonscale -------
+    node(
+        620,
+        GatherSkill::Fishing,
+        "the harbor shallows",
+        "small fish in the clear shallows",
+        0,
+        1,
+        12,
+    ),
+    node(
+        720,
+        GatherSkill::Fishing,
+        "the oasis pool",
+        "fish rising in the still oasis",
+        0,
+        1,
+        12,
+    ),
+    node(
+        660,
+        GatherSkill::Fishing,
+        "the high lake shore",
+        "trout holding in the cold lake",
+        1,
+        8,
+        30,
+    ),
+    node(
+        641,
+        GatherSkill::Fishing,
+        "a tidal cove",
+        "pike hunting the running cove",
+        2,
+        16,
+        70,
+    ),
+    node(
+        701,
+        GatherSkill::Fishing,
+        "a black fen pool",
+        "something big turns in the dark water",
+        3,
+        26,
+        150,
+    ),
+    node(
+        650,
+        GatherSkill::Fishing,
+        "the kraken's deep",
+        "pale shapes in the abyssal water",
+        4,
+        38,
+        320,
+    ),
+    // ---- Foraging: marsh sage -> redleaf -> bloodthistle -> frostbloom -> sunmoss
+    node(
+        603,
+        GatherSkill::Foraging,
+        "a verge of marsh sage",
+        "grey-green sage along the ditch",
+        0,
+        1,
+        12,
+    ),
+    node(
+        682,
+        GatherSkill::Foraging,
+        "a redleaf meadow",
+        "red-veined leaves in the meadow",
+        1,
+        8,
+        30,
+    ),
+    node(
+        700,
+        GatherSkill::Foraging,
+        "a bloodthistle bog",
+        "dark thistles standing in the mire",
+        2,
+        16,
+        70,
+    ),
+    node(
+        690,
+        GatherSkill::Foraging,
+        "a cold high meadow",
+        "pale blooms rimed with frost",
+        3,
+        26,
+        150,
+    ),
+    node(
+        801,
+        GatherSkill::Foraging,
+        "a cavern lit by sunmoss",
+        "moss that glows faintly in the dark",
+        4,
+        38,
+        320,
+    ),
+    // ---- Skinning: rough -> thick -> boar -> bear -> direhide -----------
+    node(
+        604,
+        GatherSkill::Skinning,
+        "fresh boar sign under the oaks",
+        "trampled ground and shed bristles",
+        0,
+        1,
+        12,
+    ),
+    node(
+        760,
+        GatherSkill::Skinning,
+        "a well-worn game trail",
+        "hoof-churned earth on the savanna",
+        1,
+        8,
+        30,
+    ),
+    node(
+        762,
+        GatherSkill::Skinning,
+        "a razorback wallow",
+        "a muddy wallow, still warm",
+        2,
+        16,
+        70,
+    ),
+    node(
+        765,
+        GatherSkill::Skinning,
+        "a cave-bear's kill",
+        "a fresh kill dragged half-eaten",
+        3,
+        26,
+        150,
+    ),
+    node(
+        767,
+        GatherSkill::Skinning,
+        "a dire-beast lair",
+        "old bones and a rank, huge musk",
+        4,
+        38,
+        320,
+    ),
+    // ---- Fishing: the forty Sunderlakes fish, spread across the maze zones
+    // by prestige (four per zone), gated by rising Fishing level (see
+    // extend_lakes / lakes_fish_for_zone). Homes sit on always-present maze
+    // cells, so every node room is real. Yields are explicit fish items.
+    node_yielding(
+        16005,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Silver Minnow",
+        0,
+        1,
+        4600,
+        15,
+    ),
+    node_yielding(
+        16027,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Reed Perch",
+        0,
+        2,
+        4601,
+        18,
+    ),
+    node_yielding(
+        16049,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Mudsnout Carp",
+        0,
+        3,
+        4602,
+        21,
+    ),
+    node_yielding(
+        16071,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Copperscale Roach",
+        0,
+        4,
+        4603,
+        24,
+    ),
+    node_yielding(
+        16093,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Marsh Bream",
+        0,
+        6,
+        4604,
+        27,
+    ),
+    node_yielding(
+        16115,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Bristle Loach",
+        0,
+        7,
+        4605,
+        30,
+    ),
+    node_yielding(
+        16137,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Fenwater Tench",
+        0,
+        8,
+        4606,
+        33,
+    ),
+    node_yielding(
+        16159,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Islet Rudd",
+        0,
+        9,
+        4607,
+        36,
+    ),
+    node_yielding(
+        16269,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Blue Mere Trout",
+        1,
+        11,
+        4608,
+        39,
+    ),
+    node_yielding(
+        16291,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Ghost Grayling",
+        1,
+        12,
+        4609,
+        42,
+    ),
+    node_yielding(
+        16313,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Cavern Blindfish",
+        1,
+        13,
+        4610,
+        45,
+    ),
+    node_yielding(
+        16335,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Reedmace Pike",
+        1,
+        14,
+        4611,
+        48,
+    ),
+    node_yielding(
+        16357,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Sunken Char",
+        1,
+        16,
+        4612,
+        51,
+    ),
+    node_yielding(
+        16379,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Drowned Valley Eel",
+        1,
+        17,
+        4613,
+        54,
+    ),
+    node_yielding(
+        16401,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Lanternjaw",
+        1,
+        18,
+        4614,
+        57,
+    ),
+    node_yielding(
+        16423,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Silt-Gilded Barbel",
+        1,
+        19,
+        4615,
+        60,
+    ),
+    node_yielding(
+        16533,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Moonpale Salmon",
+        2,
+        21,
+        4616,
+        63,
+    ),
+    node_yielding(
+        16555,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Glasswater Sturgeon",
+        2,
+        22,
+        4617,
+        66,
+    ),
+    node_yielding(
+        16577,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Meregleam Tench",
+        2,
+        23,
+        4618,
+        69,
+    ),
+    node_yielding(
+        16599,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Stormfin Bass",
+        2,
+        24,
+        4619,
+        72,
+    ),
+    node_yielding(
+        16621,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Hollow-Cavern Ray",
+        2,
+        26,
+        4620,
+        75,
+    ),
+    node_yielding(
+        16643,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Bittern's Bane",
+        2,
+        27,
+        4621,
+        78,
+    ),
+    node_yielding(
+        16665,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Amberweed Golden",
+        2,
+        28,
+        4622,
+        81,
+    ),
+    node_yielding(
+        16687,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Frostmere Whitefish",
+        2,
+        29,
+        4623,
+        84,
+    ),
+    node_yielding(
+        16797,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Kingfisher's Prize",
+        3,
+        31,
+        4624,
+        87,
+    ),
+    node_yielding(
+        16819,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Deep Meregold",
+        3,
+        32,
+        4625,
+        90,
+    ),
+    node_yielding(
+        16841,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Silverback Salmon",
+        3,
+        33,
+        4626,
+        93,
+    ),
+    node_yielding(
+        16863,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Drowned-God Carp",
+        3,
+        34,
+        4627,
+        96,
+    ),
+    node_yielding(
+        16885,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Voidmere Sturgeon",
+        3,
+        36,
+        4628,
+        99,
+    ),
+    node_yielding(
+        16907,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for Ghostlight Pike",
+        3,
+        37,
+        4629,
+        102,
+    ),
+    node_yielding(
+        16929,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Tempest Marlin",
+        3,
+        38,
+        4630,
+        105,
+    ),
+    node_yielding(
+        16951,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Abyss Anglerfish",
+        3,
+        39,
+        4631,
+        108,
+    ),
+    node_yielding(
+        17061,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Sunderlake Leviathan",
+        4,
+        41,
+        4632,
+        111,
+    ),
+    node_yielding(
+        17083,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for The Mere-Mother",
+        4,
+        42,
+        4633,
+        114,
+    ),
+    node_yielding(
+        17105,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Moonscale Royal",
+        4,
+        43,
+        4634,
+        117,
+    ),
+    node_yielding(
+        17127,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for Drowned Crown Bass",
+        4,
+        44,
+        4635,
+        120,
+    ),
+    node_yielding(
+        17149,
+        GatherSkill::Fishing,
+        "a reed-fringed fishing stand",
+        "cast a line from the worn planks for Heartglow Trout",
+        4,
+        46,
+        4636,
+        123,
+    ),
+    node_yielding(
+        17171,
+        GatherSkill::Fishing,
+        "a quiet backwater pool",
+        "a slow eddy where the big ones hold for The Fathom-King",
+        4,
+        47,
+        4637,
+        126,
+    ),
+    node_yielding(
+        17193,
+        GatherSkill::Fishing,
+        "a deep-channel angling spot",
+        "dark water dropping away to the deep for Weeping Silverfin",
+        4,
+        48,
+        4638,
+        129,
+    ),
+    node_yielding(
+        17215,
+        GatherSkill::Fishing,
+        "a still lily-shadowed pool",
+        "fish rise among the floating pads for The First Fish",
+        4,
+        49,
+        4639,
+        132,
+    ),
+    // ---- Wildbound (tier 6): the trades' summit, out in the far lands ----
+    node(
+        BROCELIANDE_BASE + 3,
+        GatherSkill::Woodcutting,
+        "a worldtree sapling",
+        "impossibly old for a sapling; the grain hums under a hand",
+        5,
+        55,
+        600,
+    ),
+    node(
+        BROCELIANDE_BASE + 41,
+        GatherSkill::Woodcutting,
+        "a fallen worldtree bough",
+        "a limb the storms brought down whole",
+        5,
+        55,
+        600,
+    ),
+    node(
+        KAELMYR_BASE + 5,
+        GatherSkill::Mining,
+        "a starmetal seam",
+        "ore that fell burning from the sky, long ago",
+        5,
+        55,
+        600,
+    ),
+    node(
+        KAELMYR_BASE + 52,
+        GatherSkill::Mining,
+        "a sky-iron crater",
+        "the walls still glitter where the star broke",
+        5,
+        55,
+        600,
+    ),
+    node(
+        LAKES_BASE + 7,
+        GatherSkill::Fishing,
+        "an abyssal spring",
+        "the water goes down further than light does",
+        5,
+        55,
+        600,
+    ),
+    node(
+        LAKES_BASE + 44,
+        GatherSkill::Fishing,
+        "a drowned sinkhole",
+        "something vast keeps the eels fat down there",
+        5,
+        55,
+        600,
+    ),
+    node(
+        BROCELIANDE_BASE + 77,
+        GatherSkill::Foraging,
+        "a dreamlotus pool",
+        "the blooms only open for those patient enough to watch",
+        5,
+        55,
+        600,
+    ),
+    node(
+        LAKES_BASE + 91,
+        GatherSkill::Foraging,
+        "a dreamlotus shallows",
+        "petals drift on water that never ripples",
+        5,
+        55,
+        600,
+    ),
+    node(
+        REACHES_BASE + 9,
+        GatherSkill::Skinning,
+        "a wyrm kill-site",
+        "whatever brought it down did not stay to feed",
+        5,
+        55,
+        600,
+    ),
+    node(
+        KAELMYR_BASE + 88,
+        GatherSkill::Skinning,
+        "a wyrm moulting-ground",
+        "shed scale and hide, acres of it",
+        5,
+        55,
+        600,
+    ),
+    // ---- Wayfarer's Hollow's Gathering Glade: one tier-0 node per trade,
+    // all in one room, purely so `y` can be tried immediately by anyone. ----
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Woodcutting,
+        "a sapling stand",
+        "young trees planted for practising hands",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Mining,
+        "a shallow ore seam",
+        "soft ore breaking the surface",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Fishing,
+        "a stocked practice pool",
+        "slow, obliging fish",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Foraging,
+        "a patch of hardy herbs",
+        "common roadside herbs",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Skinning,
+        "a practice hide-rack",
+        "cured hides set out to learn on",
+        0,
+        1,
+        12,
+    ),
+];
+
+pub fn nodes_at(room: RoomId) -> Vec<&'static ResourceNode> {
+    NODES.iter().filter(|n| n.home == room).collect()
+}
+
+/// Stable global index of a node (its position in `NODES`), used to key
+/// per-world harvest cooldowns.
+pub fn node_index(n: &ResourceNode) -> Option<usize> {
+    NODES.iter().position(|x| std::ptr::eq(x, n))
+}
+
+// ---- seed_world: the authored core, then every extension wing ------------
 
 fn room(
     id: RoomId,
@@ -797,6 +3772,7 @@ fn room(
         desc,
         zone,
         safe,
+        pvp: false,
         exits: exits.iter().copied().collect(),
     }
 }
@@ -835,8 +3811,10 @@ pub fn seed_world() -> World {
              candle-wax and carved initials. Adventurers swap tall tales over tankards, \
              a card game simmers toward a brawl in the corner, and the barkeep polishes \
              a horn cup that will never come clean. It is warm, loud, and safe - the \
-             last of those rarer than the others. The square lies south.",
-            &[(Dir::South, 1)],
+             last of those rarer than the others. A side door out back leads north to \
+             Wayfarer's Hollow, where the newest faces in the room learned their trade; \
+             the square lies south.",
+            &[(Dir::South, 1), (Dir::North, TUTORIAL_BASE)],
         ),
         room(
             3,
@@ -879,6 +3857,89 @@ pub fn seed_world() -> World {
              the road is safe only as far as he can see it. The square lies north; \
              the open road runs south.",
             &[(Dir::North, 1), (Dir::South, 6)],
+        ),
+        // ---- Wayfarer's Hollow (safe, rooms 40000+): the new-player tutorial
+        // zone. Every brand-new character spawns here (see `join`/`tutorial_
+        // start_room`), never dangerous, one room per core system, hung off
+        // the Gilded Flagon (room 2) by a normal walk north - room 1 itself
+        // has no free direction left (Down is Frontier, Up is the city
+        // district). `r` (recall) already works from anywhere in the game, so
+        // leaving for the real Embergate is always just a keypress away - the
+        // join-time message says so.
+        room(
+            TUTORIAL_BASE,
+            "Wayfarer's Hollow",
+            "Wayfarer's Hollow",
+            true,
+            "A round, sheltered yard behind the Gilded Flagon, floored in raked sand \
+             and ringed by low benches, built for exactly one purpose: teaching \
+             newcomers the shape of the world before it teaches them the hard way. \
+             A weathered instructor in a patched coat watches over the yard, \
+             unhurried, ready to point anyone in whatever direction they're curious \
+             about. A training yard for the sword lies north, a gathering glade east, \
+             the Hall of Callings west, steps lead down to a tinker's hall, and the \
+             tavern's side door leads back south to Embergate proper.",
+            &[
+                (Dir::North, TUTORIAL_BASE + 1),
+                (Dir::East, TUTORIAL_BASE + 2),
+                (Dir::South, 2),
+                (Dir::West, TUTORIAL_BASE + 4),
+                (Dir::Down, TUTORIAL_BASE + 3),
+            ],
+        ),
+        room(
+            TUTORIAL_BASE + 1,
+            "Wayfarer's Hollow - the Training Yard",
+            "Wayfarer's Hollow",
+            false,
+            "A ring of packed earth, scuffed pale by countless practice bouts, holds a \
+             stuffed straw dummy lashed to a stout post at its center - patched, \
+             re-patched, and clearly none the worse for it. It swings back with a \
+             padded fist when struck, just hard enough to teach without ever really \
+             hurting: a fair place to learn to close for the attack, work an ability \
+             off the bar, and flee before real harm ever finds you. The Hollow lies \
+             south.",
+            &[(Dir::South, TUTORIAL_BASE)],
+        ),
+        room(
+            TUTORIAL_BASE + 2,
+            "Wayfarer's Hollow - the Gathering Glade",
+            "Wayfarer's Hollow",
+            true,
+            "A tidy little clearing planted, a touch too conveniently, with one of \
+             everything: a stand of saplings, a vein of soft ore breaking the surface, \
+             a stocked fishing pool, a patch of hardy herbs, and the hide-strewn \
+             remains of a hunter's practice runs. Every gathering trade can be tried \
+             here at once, tools or none - the glade wants you to learn the reach of \
+             `y`, not to make you go looking for it. The Hollow lies west.",
+            &[(Dir::West, TUTORIAL_BASE)],
+        ),
+        room(
+            TUTORIAL_BASE + 3,
+            "Wayfarer's Hollow - the Tinker's Hall",
+            "Wayfarer's Hollow",
+            true,
+            "A small covered hall below the Hollow's yard, holding a scaled-down copy \
+             of every craft station Market Row has to offer - forge, workbench, \
+             tannery, alchemy lab, and cooking fire, all cold and quiet and waiting. \
+             Nothing here is rare or valuable; it exists purely so a newcomer can open \
+             the crafting panel, see what each trade actually makes, and understand \
+             the shape of the gather-then-craft chain before it matters. Steps lead \
+             back up to the Hollow.",
+            &[(Dir::Up, TUTORIAL_BASE)],
+        ),
+        room(
+            TUTORIAL_BASE + 4,
+            "Wayfarer's Hollow - the Hall of Callings",
+            "Wayfarer's Hollow",
+            true,
+            "Portraits line this quiet round room, one for each calling a soul might \
+             answer in Lateania, painted in a style too old for any of these young \
+             instructors to have made themselves. A great iron-bound tome rests open \
+             on a lectern at the room's heart, its pages turning slowly on their own \
+             to whichever calling a reader's attention settles on. It is a place for \
+             reading, not fighting - the Hollow lies east.",
+            &[(Dir::East, TUTORIAL_BASE)],
         ),
         // ---- Embergate shop district (safe) -----------------------------
         room(
@@ -1431,8 +4492,8 @@ pub fn seed_world() -> World {
             "You descend into a flooded hall where black water laps at carved \
              sarcophagi like moored boats. The cold is total and intimate, the kind \
              that settles in the marrow and stays. Up returns to the caverns; the \
-             crypt runs south.",
-            &[(Dir::Up, 50), (Dir::South, 52)],
+             crypt drops away below.",
+            &[(Dir::Up, 50), (Dir::Down, 52)],
         ),
         room(
             52,
@@ -1441,8 +4502,8 @@ pub fn seed_world() -> World {
             false,
             "Stone coffins line both walls, their lids carved with the serene faces \
              of the long-dead. Several lids lie aside in the water. The faces beneath \
-             are no longer serene. Ways lead north, south, and east.",
-            &[(Dir::North, 51), (Dir::South, 53), (Dir::East, 54)],
+             are no longer serene. Ways lead up, south, and east.",
+            &[(Dir::Up, 51), (Dir::South, 53), (Dir::East, 54)],
         ),
         room(
             53,
@@ -1515,8 +4576,8 @@ pub fn seed_world() -> World {
             false,
             "Stalactites of crystallized brine hang in ranks like organ pipes, and \
              when the slow current stirs the flood they keen a single sustained note \
-             that you feel in your teeth more than hear. North and south.",
-            &[(Dir::North, 57), (Dir::South, 60)],
+             that you feel in your teeth more than hear. North, and down.",
+            &[(Dir::North, 57), (Dir::Down, 60)],
         ),
         room(
             60,
@@ -1525,8 +4586,8 @@ pub fn seed_world() -> World {
             false,
             "Submerged steps lead up onto a broad landing where three flooded halls \
              converge, their arches reflected in the still water until you cannot \
-             tell stone from its double. Ways lead north, south, and east.",
-            &[(Dir::North, 59), (Dir::South, 61), (Dir::East, 62)],
+             tell stone from its double. Ways lead up, south, and east.",
+            &[(Dir::Up, 59), (Dir::South, 61), (Dir::East, 62)],
         ),
         room(
             61,
@@ -1575,11 +4636,11 @@ pub fn seed_world() -> World {
             "Drowned Crypts - The Ember Stair",
             "Drowned Crypts",
             false,
-            "The flood drains away up a stair cut from raw red stone, and the air \
+            "The flood drains away down a stair cut from raw red stone, and the air \
              changes utterly: drier, sharper, carrying the faraway tang of smoke and \
              hot metal. Something deep in the rock is awake and burning. North \
-             returns to the crypts; up climbs toward the heat.",
-            &[(Dir::North, 64), (Dir::Up, 66)],
+             returns to the crypts; the stair drops toward the heat.",
+            &[(Dir::North, 64), (Dir::Down, 66)],
         ),
         // ---- Emberpeak Mines (fire & dwarven ruin, tier 5-6) ------------
         room(
@@ -1587,10 +4648,10 @@ pub fn seed_world() -> World {
             "Emberpeak Mines - The Cinder Gate",
             "Emberpeak Mines",
             false,
-            "You climb into a hewn hall where the very walls hold a sullen red \
+            "You descend into a hewn hall where the very walls hold a sullen red \
              warmth, and runes carved by long-vanished dwarves still glow faintly in \
-             the heat. Down leads back to the cold crypts; the mines open north.",
-            &[(Dir::Down, 65), (Dir::North, 67)],
+             the heat. Up leads back to the cold crypts; the mines open north.",
+            &[(Dir::Up, 65), (Dir::North, 67)],
         ),
         room(
             67,
@@ -1746,8 +4807,9 @@ pub fn seed_world() -> World {
             false,
             "You emerge onto a mountainside of blue glacial ice, and the cold takes \
              your breath as a physical theft. Wind screams past, carrying snow like \
-             ground glass. Down returns to the warm dark; the ascent climbs north.",
-            &[(Dir::Down, 80), (Dir::North, 82)],
+             ground glass. Down returns to the warm dark; the ascent climbs up \
+             from here.",
+            &[(Dir::Down, 80), (Dir::Up, 82)],
         ),
         room(
             82,
@@ -1756,8 +4818,8 @@ pub fn seed_world() -> World {
             false,
             "The path threads a pass where the wind has sculpted the ice into a \
              gallery of blades and figures, frozen courtiers bowing eternally to a \
-             gale that never tires of them. Ways lead south, north, and east.",
-            &[(Dir::South, 81), (Dir::North, 83), (Dir::East, 84)],
+             gale that never tires of them. Ways lead down, north, and east.",
+            &[(Dir::Down, 81), (Dir::North, 83), (Dir::East, 84)],
         ),
         room(
             83,
@@ -1892,7 +4954,7 @@ pub fn seed_world() -> World {
              lintel carved with a citadel that should not be here, on a peak, at the \
              top of the world. The way in leads down, into stone, into the past. \
              South returns to the snow.",
-            &[(Dir::South, 94), (Dir::Up, 96)],
+            &[(Dir::South, 94), (Dir::Down, 96)],
         ),
         // ---- The Sunken Citadel (megadungeon, tier 7-8) -----------------
         room(
@@ -1902,9 +4964,9 @@ pub fn seed_world() -> World {
             false,
             "You pass from ice into a hall of black stone so vast the lantern cannot \
              find its roof, and the cold here is not winter's cold but something \
-             older and more deliberate. The gate is down and behind; the citadel \
+             older and more deliberate. The gate is up and behind; the citadel \
              opens north.",
-            &[(Dir::Down, 95), (Dir::North, 97)],
+            &[(Dir::Up, 95), (Dir::North, 97)],
         ),
         room(
             97,
@@ -2415,6 +5477,11 @@ pub fn seed_world() -> World {
             ),
         },
         // ---- The Sunken Citadel (tier 7-8) ------------------------------
+        // Bloodless citadel constructs: they shrug off venom, not steel. A
+        // Physical resist on a regular is a zone-wide tax on the seven
+        // Physical-locked classes with no counterplay, so it lives on bosses
+        // only (the world resist/weak pass, rule 2 - enforced globally by
+        // `no_regular_resists_physical_and_nothing_is_weak_to_physical`).
         MobSpawn {
             id: 60,
             name: "a faceless sentinel",
@@ -2427,7 +5494,7 @@ pub fn seed_world() -> World {
             boss: false,
             profile: DamageProfile::new(
                 DamageType::Physical,
-                Some(DamageType::Physical),
+                Some(DamageType::Poison),
                 Some(DamageType::Arcane),
             ),
         },
@@ -2443,7 +5510,7 @@ pub fn seed_world() -> World {
             boss: false,
             profile: DamageProfile::new(
                 DamageType::Physical,
-                Some(DamageType::Physical),
+                Some(DamageType::Poison),
                 Some(DamageType::Arcane),
             ),
         },
@@ -2529,13 +5596,18 @@ pub fn seed_world() -> World {
                 Some(DamageType::Holy),
             ),
         },
-        // Final boss
+        // Final boss of the authored core (the Frontier and the continents were
+        // hung past him later). Damage sits at ~1.6x the trash of his approach,
+        // matching every other boss on this ladder: at the old 48 he was the
+        // only one you could out-tank rather than out-play, a sponge players
+        // walked through. `Spawn::level()` is unchanged by this (he stays Lv61
+        // until 1140 power, i.e. damage 85), so the ladder's numbers hold.
         MobSpawn {
             id: 73,
             name: "the Archdemon Mal'gareth",
             home: 110,
             max_hp: 800,
-            damage: 48,
+            damage: 58,
             xp: 1500,
             respawn_secs: 600,
             loot: &[1009, 1119, 1205, 1401],
@@ -2545,6 +5617,21 @@ pub fn seed_world() -> World {
                 Some(DamageType::Shadow),
                 Some(DamageType::Holy),
             ),
+        },
+        // Wayfarer's Hollow's training dummy: generous hp so a fight lasts a
+        // few rounds, near-nothing damage so it can never actually kill a
+        // fresh level-1 character, fast respawn so the yard is never empty.
+        MobSpawn {
+            id: 40_000,
+            name: "a straw training dummy",
+            home: TUTORIAL_BASE + 1,
+            max_hp: 60,
+            damage: 1,
+            xp: 5,
+            respawn_secs: 15,
+            loot: &[],
+            boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
     ];
 
@@ -2579,6 +5666,50 @@ pub fn seed_world() -> World {
     // gateway search avoids the cavern portal.
     extend_reaches(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append Kaelmyr, the Ashen Reach: a third ~1900-room continent (rooms
+    // 12000+), a burnt ash-land of braided mazes and organic calderas hung off
+    // Yssgar's chamber in the Reaches and gated behind the Bane of Yssgar. Runs
+    // after the Reaches so its sea-gate search can find Yssgar's home room.
+    extend_kaelmyr(&mut rooms, &mut spawns, &mut behaviors);
+
+    // Append the Sunderlakes: a large, peaceful ~1200-room water country (rooms
+    // 16000+) of reed-mazes and flooded caverns hung off the Melvanala high lake
+    // by a normal walk. Mid-game friendly; the draw is the fishing (forty fish
+    // species caught at Fishing-gated resource nodes).
+    extend_lakes(&mut rooms, &mut spawns, &mut behaviors);
+
+    // Append Broceliande, the Greenwood: a fourth ~2000-room continent (rooms
+    // 22000+) of deep-green oakwoods and steaming jungles, druid circles and
+    // briar mazes, hung off the Verdant Highlands (the Faerie Hollow) by a normal
+    // walk. A moderate green country and the home of the fifty tameable beasts of
+    // the animal-taming trade (whose roaming spots are seeded in `taming.rs`).
+    extend_broceliande(&mut rooms, &mut spawns, &mut behaviors);
+
+    // Append Aelunor, the Faewood: a twelve-zone sprawling forest (rooms
+    // 25000+) of elves, high elves, druids, and fae, every zone an organic
+    // cavern-carved glade (never a maze, never a grid), hung off the Amber
+    // Savanna's terminal room by a normal walk east. Home of the Aelunor
+    // hundred-creature roster and its own city, Silvael.
+    extend_aelunor(&mut rooms, &mut spawns, &mut behaviors);
+    extend_silvael(&mut rooms);
+
+    // Append Thornveil Falls: a ~1150-room forest/waterfall continent (rooms
+    // 34000+), hung off Broceliande's own deepest chamber (the World-Oak
+    // Crown) so it reads as a hidden second wood beyond the known Greenwood.
+    // A parallel endgame track to Kaelmyr, not a sequel to it: its tier band
+    // overlaps Kaelmyr's own lower half, so players have a real second choice
+    // once they reach that point instead of only ever grinding the Ashen
+    // Reach. Runs after Broceliande so its gateway search finds the World-Oak
+    // Crown boss room.
+    extend_thornveil(&mut rooms, &mut spawns, &mut behaviors);
+
+    // Append the Wildbound Waste: a Felucca-style pvp continent (rooms
+    // 30000+) of three chained biomes - Duskmire Wood, the Hollowdeep, and
+    // the Scorched Flats - hung off the Sahra Wastes' Sand-Wyrm's Maw. Every
+    // field room here is `pvp: true`; only its three small gate towns are
+    // safe. Runs after Broceliande so its gateway search finds room 751.
+    extend_wildbound(&mut rooms, &mut spawns, &mut behaviors);
+
     // Flesh out the four capitals with a district of new safe rooms each.
     extend_cities(&mut rooms);
 
@@ -2587,13 +5718,346 @@ pub fn seed_world() -> World {
     // homes are safe. Ownership and furnishings are runtime side-state.
     extend_housing(&mut rooms);
 
+    // Append the Shattered Archipelago: safe portal-linked villages (rooms 8000+)
+    // and a thousand rooms of maze/cavern islands (rooms 20000+), each with a
+    // boss. Reached by waystone portals, not by walking (see `svc.rs`).
+    extend_villages(&mut rooms);
+    extend_archipelago(&mut rooms, &mut spawns, &mut behaviors);
+
     tune_spawn_balance(&mut spawns);
+    tune_crowns(&mut spawns);
+
+    // Per-zone level bands, read off the tuned spawns so the numbers players
+    // see ("King's Road · Lv 2-5") always reflect what actually prowls there.
+    let mut zone_bands: HashMap<&'static str, (i32, i32)> = HashMap::new();
+    for s in &spawns {
+        let Some(room) = rooms.get(&s.home) else {
+            continue;
+        };
+        let level = s.level();
+        zone_bands
+            .entry(room.zone)
+            .and_modify(|(lo, hi)| {
+                *lo = (*lo).min(level);
+                *hi = (*hi).max(level);
+            })
+            .or_insert((level, level));
+    }
 
     World {
         rooms,
         spawns,
         start_room: 1,
         behaviors,
+        zone_bands,
+    }
+}
+
+// ---- The Shattered Archipelago: villages + island isles (rooms 8000/20000+) --
+
+/// Build the safe portal villages (rooms 8000+). Each is a single flavourful
+/// haven with a waystone (and a fountain, via `waystone_features`); they are
+/// reached only by portal, so they carry no directional exits.
+fn extend_villages(rooms: &mut HashMap<RoomId, Room>) {
+    for (i, (name, blurb)) in super::archipelago::VILLAGES.iter().enumerate() {
+        let id = super::archipelago::village_room(i);
+        rooms.insert(
+            id,
+            Room {
+                id,
+                name,
+                desc: blurb,
+                zone: name,
+                safe: true,
+                pvp: false,
+                exits: HashMap::new(),
+            },
+        );
+    }
+}
+
+/// Build the twenty islands (rooms 20000+). Each island is carved as a braided
+/// maze or an organic cavern - never a grid - with its own scenery and a named
+/// boss in the deepest room. Islands are independent (reached by portal), so
+/// each landing is always safe.
+/// Archipelago mobs live above the Reaches so they ride the same balance
+/// multipliers (their authored base stats sit on that curve). Clear of the
+/// Reaches' actual ids.
+const ARCH_SPAWN_ID_START: u32 = 970_000;
+
+/// An island boss's loot: the Archipelago's own catalog for that island (see
+/// `items::archipelago_loot`, no longer a Reaches repeat), plus its two
+/// signature finds. The finds are backloaded toward the back of the chain -
+/// islands 0..10 carry one copy (baseline odds), 10..15 carry two, and the
+/// last quarter (15..20) carry four - so the toughest islands are also the
+/// likeliest to pay out the Archipelago's own top-of-curve gear.
+fn archipelago_boss_loot(isle: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..super::archipelago::ISLAND_COUNT)
+            .map(|i| {
+                let mut v = super::items::archipelago_loot(i).to_vec();
+                let finds = super::items::archipelago_find_ids(i);
+                let weight = if i * 4 >= super::archipelago::ISLAND_COUNT * 3 {
+                    4
+                } else if i * 2 >= super::archipelago::ISLAND_COUNT {
+                    2
+                } else {
+                    1
+                };
+                for _ in 0..weight {
+                    v.extend(finds);
+                }
+                v
+            })
+            .collect()
+    });
+    tables[isle.min(super::archipelago::ISLAND_COUNT - 1)].as_slice()
+}
+
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_archipelago(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    use super::archipelago::{ARCH_H, ARCH_SEED, ARCH_W, ISLANDS, island_entrance};
+    let (w, h) = (ARCH_W, ARCH_H);
+    let n = w * h;
+    let mut spawn_id: u32 = ARCH_SPAWN_ID_START;
+
+    for (isle, &(iname, adj, ground, feature, creature, mob_names, boss)) in
+        ISLANDS.iter().enumerate()
+    {
+        let ibase = island_entrance(isle);
+        let isle_n = isle as i32;
+        // The isles are the true endgame: a ramp that starts one notch past
+        // Kaelmyr's deepest zone and climbs to the level cap, so the twenty
+        // islands are a ladder rather than one flat wall. There is no `tier`
+        // here on purpose. A tier is a generator input that the band row then
+        // rescales, and the Archipelago's row is 1:1 (see
+        // `tune_spawn_balance`), so these numbers are what is actually
+        // fielded and can be read against the crown ladder directly:
+        //
+        //   island  0: trash Lv80-87, boss Lv82, boss bite 348
+        //   island 19: trash Lv93-100, boss Lv100, boss bite 443
+        //
+        // Kaethyr Ascendant, the last crown, is Lv80 at 397. The shallow
+        // islands therefore hit softer than he does and the deep ones harder:
+        // the Archipelago is off-road content that runs past the end of the
+        // road, not a rung on it. See CONTEXT.md §9 for the full ladder.
+        let apex = isle + 3 >= super::archipelago::ISLAND_COUNT;
+        let mut rng = MazeRng::new(ARCH_SEED ^ (isle as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Every third island is an organic cavern; the rest are braided mazes. A
+        // cavern that comes out too sparse falls back to a maze so none is empty.
+        let cavern_floor = if isle % 3 == 2 {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 20).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut ev = Vec::new();
+                    if !reachable[c] {
+                        return ev;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, ev: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                ev.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut ev);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut ev);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut ev);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut ev);
+                    ev
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut ev = Vec::new();
+                    if !reachable[c] {
+                        return ev;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            ev.push((DIRS[d], nb));
+                        }
+                    }
+                    ev
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = leak(iname.to_string());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = ibase + cell as RoomId;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, ibase + *nb as RoomId))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                leak(format!("{iname} - the Waystone Landing"))
+            } else if is_boss {
+                leak(format!("{iname} - the Wild Heart"))
+            } else {
+                leak(format!("{iname} - {}", FRONTIER_PLACES[cell % 10]))
+            };
+            let desc: &'static str =
+                leak(frontier_desc(adj, ground, feature, creature, cell as u32));
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    safe: is_entrance, // every landing is a safe haven with a portal
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // xp rides in the tuple beside the health it is paid for. The two
+            // regular kinds sit on different health curves, so one shared xp
+            // line would pay them at different rates; what the Archipelago
+            // sells is xp per point of health, and that is the number this
+            // keeps honest (~1.41 for a regular, ~1.05 for a boss, against
+            // Kaelmyr's 0.93 and 0.68). This is the region's whole draw: it is
+            // the fastest ground in the game to climb to the cap on, which it
+            // was not before, being both the slowest and the deadliest.
+            let (mob_name, behavior, boss_mob, hp, dmg, xp) = if is_boss {
+                // One displayed level per island, Lv82 up to the cap. The apex
+                // islands are a longer, richer fight rather than a bigger one:
+                // they take the health and the xp, never the bite. Widening
+                // the bite there instead would put a cliff in the middle of
+                // the ramp, and past Lv80 `level_for_bite` extrapolates on the
+                // slope between the last two crowns, so a cliff in damage is a
+                // cliff in displayed level.
+                let base_hp = 15_000 + isle_n * 470;
+                let base_xp = 15_750 + isle_n * 495;
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    if apex { base_hp * 5 / 4 } else { base_hp },
+                    348 + isle_n * 5,
+                    if apex { base_xp * 5 / 4 } else { base_xp },
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    4600 + isle_n * 130 + depth * 14,
+                    278 + isle_n * 3 + depth * 3 / 4,
+                    6400 + isle_n * 182 + depth * 20,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    4900 + isle_n * 140 + depth * 14,
+                    286 + isle_n * 3 + depth * 3 / 4,
+                    6900 + isle_n * 196 + depth * 20,
+                )
+            } else {
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(DamageType::Frost),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    4600 + isle_n * 130 + depth * 14,
+                    278 + isle_n * 3 + depth * 3 / 4,
+                    6400 + isle_n * 182 + depth * 20,
+                )
+            };
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            // The boss wears the island's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = super::archipelago::ISLAND_THEMES[isle];
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, theme.weak())
+            } else {
+                DamageProfile::new(attack, theme.resist(), theme.weak())
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp,
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: if boss_mob {
+                    archipelago_boss_loot(isle)
+                } else {
+                    super::items::archipelago_loot(isle)
+                },
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
     }
 }
 
@@ -2878,6 +6342,7 @@ fn extend_catacombs(
                 desc,
                 zone,
                 safe: is_entrance,
+                pvp: false,
                 exits,
             },
         );
@@ -3144,6 +6609,7 @@ fn extend_thornwood(
                 desc,
                 zone,
                 safe: is_entrance,
+                pvp: false,
                 exits,
             },
         );
@@ -3537,6 +7003,7 @@ fn extend_caverns(
                 desc,
                 zone,
                 safe: is_entrance,
+                pvp: false,
                 exits,
             },
         );
@@ -3677,28 +7144,275 @@ fn is_living_dark_spawn(id: u32) -> bool {
         || (CAVERNS_SPAWN_ID_START..CAVERNS_SPAWN_ID_START + 10_000).contains(&id)
 }
 
+/// A regular bites at about this share of its land's crown, a zone boss at
+/// about this share (see `MobSpawn::level`).
+const TRASH_BITE_PCT: i32 = 70;
+const BOSS_BITE_PCT: i32 = 85;
+
+/// The level of the prepared character whose crown hits for `bite`, read off
+/// the `CROWNS` ladder: linear between neighbouring crowns, extrapolated
+/// past either end, clamped to the level range.
+fn level_for_bite(bite: i32) -> i32 {
+    let first = CROWNS[0];
+    if bite <= first.damage {
+        return (first.level * bite / first.damage).clamp(1, first.level);
+    }
+    for w in CROWNS.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if bite <= b.damage {
+            if b.damage == a.damage {
+                return b.level;
+            }
+            return a.level + (b.level - a.level) * (bite - a.damage) / (b.damage - a.damage);
+        }
+    }
+    let (a, b) = (CROWNS[CROWNS.len() - 2], CROWNS[CROWNS.len() - 1]);
+    let past = (bite - b.damage) * (b.level - a.level) / (b.damage - a.damage).max(1);
+    (b.level + past).clamp(1, super::classes::Class::MAX_LEVEL)
+}
+
+/// One of the fourteen bosses on the road players actually walk, with the
+/// numbers it is fielded at. See [`CROWNS`].
+#[derive(Clone, Copy, Debug)]
+pub struct Crown {
+    pub name: &'static str,
+    /// The level a prepared character takes it at; also its displayed level.
+    pub level: i32,
+    pub max_hp: i32,
+    pub damage: i32,
+}
+
+/// Ticks a median prepared character needs to kill a crown.
+pub const CROWN_KILL_TICKS: i32 = 14;
+/// Ticks a crown needs to kill that character with no draught drunk. Shorter
+/// than the kill, so every crown is a race the prepared character wins on
+/// potions, self-heals, wards and the companion, and an unprepared one loses.
+pub const CROWN_SURVIVE_TICKS: i32 = 11;
+
+/// The crowns: the authored core's seven bosses, the three living-dark seals,
+/// the Frontier King, Yssgar, and the two Kaethyrs. Applied over
+/// `tune_spawn_balance` by `tune_crowns`, so nothing upstream (authored
+/// literals, land multipliers) decides what a crown is.
+///
+/// **Derived, not authored by feel.** Each row is `(name, level, max_hp,
+/// damage)` where `level` is the target the crown is tuned to fall at: a
+/// *prepared* character of that level (the tier's kit, the oil the crown is
+/// weak to, three draughts, and from the Reaches on a maxed companion).
+/// `max_hp` is the median prepared dps at that kit times `CROWN_KILL_TICKS`;
+/// `damage` is the median prepared health pool over `CROWN_SURVIVE_TICKS`
+/// plus what that kit's armor blunts (half of it for a Physical striker, a
+/// quarter otherwise). The inputs are printed by the arena's `arena_crown_yardstick`
+/// and the outcome is pinned by
+/// `every_crown_falls_to_a_prepared_character_and_not_to_a_walk_in`
+/// (`arena_test.rs`): every calling wins prepared, the median kill is a real
+/// fight, and a walk-in a few levels lower in the previous tier loses.
+/// Re-derive a row when the player curve moves; the contract says when.
+///
+/// The story this encodes: the grind to 100 is long by design, so the last
+/// crown falls to a prepared L80 and 80-100 is prestige; the first crown is
+/// a real fight at L12 with the right prep (the Treant teaches the oil).
+pub const CROWNS: &[Crown] = &[
+    Crown {
+        name: "the Elder Treant",
+        level: 12,
+        max_hp: 1160,
+        damage: 19,
+    },
+    Crown {
+        name: "the Bone Tyrant",
+        level: 16,
+        max_hp: 1806,
+        damage: 28,
+    },
+    Crown {
+        name: "the Lich Vael",
+        level: 20,
+        max_hp: 2100,
+        damage: 32,
+    },
+    Crown {
+        name: "the Magma Colossus",
+        level: 24,
+        max_hp: 2324,
+        damage: 35,
+    },
+    Crown {
+        name: "the Wyrm of Frostspire",
+        level: 27,
+        max_hp: 2982,
+        damage: 45,
+    },
+    Crown {
+        name: "the Fallen Paladin",
+        level: 30,
+        max_hp: 3248,
+        damage: 48,
+    },
+    Crown {
+        name: "the Archdemon Mal'gareth",
+        level: 35,
+        max_hp: 4088,
+        damage: 62,
+    },
+    Crown {
+        name: "The Bonewright Lich",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the Elder Dryad",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the Abyss-Thing",
+        level: 40,
+        max_hp: 4508,
+        damage: 75,
+    },
+    Crown {
+        name: "the King Who Was Promised Nothing",
+        level: 55,
+        max_hp: 9926,
+        damage: 138,
+    },
+    Crown {
+        name: "Yssgar, the Sundering Deep",
+        level: 65,
+        max_hp: 17528,
+        damage: 253,
+    },
+    Crown {
+        name: "Kaethyr the Unquenched, Ashen King of Kaelmyr",
+        level: 75,
+        max_hp: 22722,
+        damage: 368,
+    },
+    Crown {
+        name: "Kaethyr Ascendant, Who Sang the God Awake",
+        level: 80,
+        max_hp: 24542,
+        damage: 397,
+    },
+];
+
+/// The level a named crown is tuned to fall at. A name that is not a crown is
+/// a programming error, not a runtime case.
+pub fn crown_level(name: &str) -> i32 {
+    CROWNS
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("{name} is not a crown"))
+        .level
+}
+
+/// Field every crown at its `CROWNS` numbers. Panics if a crown's spawn is
+/// missing: a renamed boss must be renamed here too, loudly.
+fn tune_crowns(spawns: &mut [MobSpawn]) {
+    for crown in CROWNS {
+        let spawn = match spawns.iter_mut().find(|s| s.name == crown.name) {
+            Some(s) => s,
+            None => panic!("crown {:?} has no spawn", crown.name),
+        };
+        spawn.max_hp = crown.max_hp;
+        spawn.damage = crown.damage;
+    }
+}
+
+/// The tuning band a spawn belongs to, by id range (the per-land
+/// `*_SPAWN_ID_START` consts). Everything not named is the gentle overworld
+/// bucket: the authored core, the Sunderlakes, Broceliande, Aelunor, and the
+/// Wildbound Waste.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Band {
+    Overworld,
+    LivingDark,
+    Frontier,
+    Reaches,
+    Kaelmyr,
+    Archipelago,
+    /// Thornveil Falls: a parallel endgame track to Kaelmyr, not a sequel to
+    /// it (see `extend_thornveil`) - rides the exact same row as `Kaelmyr`
+    /// rather than the Archipelago's deliberately hotter one, since the two
+    /// are meant to read as equivalent choices, not a harder/easier pair.
+    Thornveil,
+}
+
+fn band_of(id: u32) -> Band {
+    if is_living_dark_spawn(id) {
+        Band::LivingDark
+    } else if (FRONTIER_SPAWN_ID_START..REACHES_SPAWN_ID_START).contains(&id) {
+        Band::Frontier
+    } else if (REACHES_SPAWN_ID_START..KAELMYR_SPAWN_ID_START).contains(&id) {
+        Band::Reaches
+    } else if (KAELMYR_SPAWN_ID_START..ARCH_SPAWN_ID_START).contains(&id) {
+        Band::Kaelmyr
+    } else if (ARCH_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id) {
+        Band::Archipelago
+    } else if (THORNVEIL_SPAWN_ID_START..THORNVEIL_SPAWN_ID_START + 20_000).contains(&id) {
+        Band::Thornveil
+    } else {
+        Band::Overworld
+    }
+}
+
+/// Scale every authored spawn into the band its land plays at. One row per
+/// (band, boss-or-regular); a land that reads out of band against its crown
+/// (`the_trash_on_a_crowns_doorstep_is_in_band`, `arena_test.rs`) is fixed
+/// here, in its row, never mob by mob. The three crowned endgame lands are
+/// calibrated at their deepest zone against the crown that stands there
+/// (a regular dies in ~3 prepared ticks and needs 15+ to kill you, casters
+/// included since armor blunts a school only by a quarter; a zone boss ~8
+/// and ~14), so what their generators author is what is fielded;
+/// the Frontier's generator was re-sloped for that and its row is 1:1, and
+/// the Archipelago's was too, for the same reason: it is ungated,
+/// portal-reachable and deadly by design, so the one land that runs past the
+/// end of the crown ladder is the one that can least afford a multiplier
+/// standing between what its generator says and what a player meets. Crowns
+/// are re-fielded afterwards by `tune_crowns`, so nothing here decides what a
+/// crown is.
 fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
     for spawn in spawns {
-        let frontier = (FRONTIER_SPAWN_ID_START..REACHES_SPAWN_ID_START).contains(&spawn.id);
-        // The Reaches deliberately ride the Frontier multipliers: their authored
-        // base stats sit on the same pre-scale curve, entering just under the
-        // King Who Was Promised Nothing and climbing well past him by Yssgar.
-        let reaches = spawn.id >= REACHES_SPAWN_ID_START;
-        let living_dark = is_living_dark_spawn(spawn.id);
-        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =
-            match (frontier || reaches, living_dark, spawn.boss) {
-                (true, _, true) => (12, 5, 21, 10, 4, 3),
-                (true, _, false) => (2, 1, 19, 10, 3, 2),
-                (false, true, true) => (6, 1, 7, 2, 2, 1),
-                (false, true, false) => (13, 4, 5, 2, 3, 2),
-                (false, false, true) => (3, 2, 5, 4, 4, 5),
-                (false, false, false) => (6, 5, 6, 5, 9, 8),
-            };
+        let band = band_of(spawn.id);
+        let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) = match (band, spawn.boss) {
+            (Band::Overworld, true) => (3, 2, 5, 4, 4, 5),
+            (Band::Overworld, false) => (6, 5, 6, 5, 9, 8),
+            (Band::LivingDark, true) => (6, 1, 7, 2, 2, 1),
+            (Band::LivingDark, false) => (13, 4, 5, 2, 3, 2),
+            (Band::Frontier, true) => (1, 1, 1, 1, 4, 3),
+            (Band::Frontier, false) => (1, 1, 1, 1, 3, 2),
+            (Band::Reaches, true) => (7, 6, 7, 8, 4, 3),
+            (Band::Reaches, false) => (4, 3, 4, 5, 3, 2),
+            (Band::Kaelmyr, true) => (5, 6, 4, 5, 4, 3),
+            (Band::Kaelmyr, false) => (4, 5, 2, 3, 3, 2),
+            // 1:1, like the Frontier's: `extend_archipelago` authors the
+            // numbers it wants fielded and reads them against the crown
+            // ladder itself. The old row multiplied damage by 19/10 and 21/10
+            // on top of a tier, which is how a one-line tier change could
+            // silently put every mob on all twenty islands at Lv100 while
+            // out-hitting the last crown threefold.
+            (Band::Archipelago, true) => (1, 1, 1, 1, 1, 1),
+            (Band::Archipelago, false) => (1, 1, 1, 1, 1, 1),
+            // Same row as Kaelmyr: a parallel track is meant to hit like the
+            // land it's an alternative to, not a harder or easier clone of it.
+            (Band::Thornveil, true) => (5, 6, 4, 5, 4, 3),
+            (Band::Thornveil, false) => (4, 5, 2, 3, 3, 2),
+        };
         spawn.max_hp = scale_i32(spawn.max_hp, hp_num, hp_den);
         spawn.damage = scale_i32(spawn.damage, dmg_num, dmg_den);
         spawn.xp = scale_i32(spawn.xp, xp_num, xp_den);
         if !spawn.boss {
-            spawn.respawn_secs = if frontier || reaches {
+            let endgame = matches!(
+                band,
+                Band::Frontier
+                    | Band::Reaches
+                    | Band::Kaelmyr
+                    | Band::Archipelago
+                    | Band::Thornveil
+            );
+            spawn.respawn_secs = if endgame {
                 scale_u64(spawn.respawn_secs, 3, 4).max(60)
             } else {
                 scale_u64(spawn.respawn_secs, 4, 5).max(25)
@@ -3727,6 +7441,12 @@ pub fn frontier_entrance_room() -> RoomId {
     FRONTIER_BASE
 }
 
+/// The safe entrance cell of Frontier zone `z` (0-based), for tracking a zone
+/// quest on the world map.
+pub fn frontier_zone_entrance(z: usize) -> RoomId {
+    FRONTIER_BASE + (z as u32) * FRONTIER_W * FRONTIER_H
+}
+
 pub fn is_frontier_room(id: RoomId) -> bool {
     (FRONTIER_BASE..FRONTIER_BASE + FRONTIER_ZONES as u32 * FRONTIER_W * FRONTIER_H).contains(&id)
 }
@@ -3738,15 +7458,25 @@ pub fn is_frontier_room(id: RoomId) -> bool {
 // than waypoints. Rooms are authored from a per-city theme; ids start at 3000
 // (free, between the Frontier band and the living-world mazes).
 fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
-    // (square, city name, district label, [4 (room-name, room-desc) pairs]).
-    // Each description is at least two sentences and a paragraph long, to satisfy
-    // the world invariants. Ids start at 3000 (free, between Frontier and mazes).
+    // (square, city name, district label, portal, street, [4 (room-name,
+    // room-desc) pairs]). `portal` is the free direction the district opens off
+    // the square; `street` is the step into each haunt in turn, so a district
+    // can turn a corner or drop a stair instead of running one straight line.
+    // Both are authored per city rather than derived: which way a district
+    // faces decides where it lands on the world map, and a district that walks
+    // back over its own capital's road is a fold (see `worldmap`'s
+    // `zone_interleaves`). Each description is at least two sentences and a
+    // paragraph long, to satisfy the world invariants. Ids start at 3000 (free,
+    // between Frontier and mazes).
     #[allow(clippy::type_complexity)]
-    const CITIES: [(RoomId, &str, &str, [(&str, &str); 4]); 4] = [
+    const CITIES: [(RoomId, &str, &str, Dir, [Dir; 4], [(&str, &str); 4]); 4] = [
         (
             1,
             "Embergate",
             "the Lamplit Quarter",
+            // Up onto the terraced quarter above the square, then east along it.
+            Dir::Up,
+            [Dir::East, Dir::East, Dir::East, Dir::East],
             [
                 (
                     "the Lamplit Baths",
@@ -3770,6 +7500,10 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
             TASMANIA_SQUARE,
             "Tasmania",
             "the Saltwind Wharves",
+            // West out of the square, then down the harbour stair and north
+            // along the water, away from the Greatroad and Embergate.
+            Dir::West,
+            [Dir::Down, Dir::North, Dir::North, Dir::North],
             [
                 (
                     "the Fishmarket",
@@ -3793,6 +7527,9 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
             MELVANALA_SQUARE,
             "Melvanala",
             "the Hightarn Terraces",
+            // Up onto the terraces cut above the lakeshore, then east.
+            Dir::Up,
+            [Dir::East, Dir::East, Dir::East, Dir::East],
             [
                 (
                     "the Mirrorlake Walk",
@@ -3816,6 +7553,10 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
             MATLATESH_SQUARE,
             "Matlatesh",
             "the Sunbaked Bazaar",
+            // North off the square and on north into the dunes, clear of the
+            // Greatroad running east from Matlatesh's gate.
+            Dir::North,
+            [Dir::North, Dir::North, Dir::North, Dir::North],
             [
                 (
                     "the Spice Bazaar",
@@ -3837,29 +7578,35 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
         ),
     ];
 
-    for (c, &(square, city, district, district_rooms)) in CITIES.iter().enumerate() {
+    for (c, &(square, city, district, portal, street, district_rooms)) in CITIES.iter().enumerate()
+    {
         let base = 3000 + (c as RoomId) * 10;
-        // Find a free direction off the square to open the district.
-        let portal = [
-            Dir::North,
-            Dir::South,
-            Dir::East,
-            Dir::West,
-            Dir::Up,
-            Dir::Down,
-        ]
-        .into_iter()
-        .find(|d| rooms.get(&square).is_some_and(|r| !r.exits.contains_key(d)))
-        .unwrap_or(Dir::Up);
         let back_to_square = portal.opposite();
-        // The district is a walkable street: the spine faces the square, and the
-        // several haunts run off it along one axis (chained to each other), so you
-        // can stroll through them rather than dead-ending back at the spine from
-        // each. Prefer an east-west run; never reuse the way back to the square.
-        let street = [Dir::East, Dir::West, Dir::South, Dir::North]
-            .into_iter()
-            .find(|d| *d != back_to_square)
-            .unwrap_or(Dir::East);
+        // The district is a walkable street: the spine faces the square and the
+        // several haunts chain on from it, so you can stroll through them rather
+        // than dead-ending back at the spine from each.
+        assert!(
+            rooms
+                .get(&square)
+                .is_some_and(|r| !r.exits.contains_key(&portal)),
+            "{district}'s portal {portal:?} is already taken on room {square}"
+        );
+        // The exits maps below are built wholesale, not through `link`, so a
+        // street step doubling back on the previous one would silently
+        // overwrite the back-link and make the street one-way. Refuse the
+        // authoring instead.
+        assert!(
+            street[0] != back_to_square,
+            "{district}'s first street step walks straight back into the square"
+        );
+        for k in 0..street.len() - 1 {
+            assert!(
+                street[k + 1] != street[k].opposite(),
+                "{district}'s street step {} doubles back on step {}",
+                k + 1,
+                k
+            );
+        }
         let zone: &'static str = district;
         let spine = base;
         rooms.insert(
@@ -3869,13 +7616,14 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
                 name: zone,
                 zone,
                 safe: true,
+                pvp: false,
                 desc: Box::leak(
                     format!(
                         "{district} opens off the {city} square, the livelier heart of the city where folk gather to trade, to drink, to worship, and to waste an idle hour. Its several haunts line the street that runs on from here, and the ordinary noise of living fills the air from dawn until well past dark."
                     )
                     .into_boxed_str(),
                 ),
-                exits: [(back_to_square, square), (street, base + 1)]
+                exits: [(back_to_square, square), (street[0], base + 1)]
                     .into_iter()
                     .collect(),
             },
@@ -3889,9 +7637,9 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
         for (k, (rname, rdesc)) in district_rooms.iter().enumerate() {
             let id = base + 1 + k as RoomId;
             let prev = if k == 0 { spine } else { base + k as RoomId };
-            let mut exits: Vec<(Dir, RoomId)> = vec![(street.opposite(), prev)];
+            let mut exits: Vec<(Dir, RoomId)> = vec![(street[k].opposite(), prev)];
             if k + 1 < n {
-                exits.push((street, base + 2 + k as RoomId));
+                exits.push((street[k + 1], base + 2 + k as RoomId));
             }
             rooms.insert(
                 id,
@@ -3900,6 +7648,7 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
                     name: rname,
                     zone,
                     safe: true,
+                    pvp: false,
                     desc: rdesc,
                     exits: exits.into_iter().collect(),
                 },
@@ -3934,10 +7683,36 @@ pub fn is_reaches_room(id: RoomId) -> bool {
     (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_ZONE_STRIDE).contains(&id)
 }
 
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Reaches zone, in `REACHES_ZONES_DATA` order. Regulars inherit the theme's
+/// profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+const REACHES_ZONE_THEMES: [ZoneTheme; REACHES_ZONES] = [
+    ZoneTheme::Tidal,     // Saltmarsh Shallows
+    ZoneTheme::Tidal,     // Wreckers' Coast
+    ZoneTheme::Resonant,  // Weeping Cliffs
+    ZoneTheme::Verdant,   // Kelpwood Drowned
+    ZoneTheme::Fae,       // Sirens' Reef
+    ZoneTheme::Haunted,   // Sinking Isles
+    ZoneTheme::Storm,     // Stormwall Straits
+    ZoneTheme::Drowned,   // Brine Caverns
+    ZoneTheme::Haunted,   // Sunken Valmaris
+    ZoneTheme::Drowned,   // Pearl Abyss
+    ZoneTheme::Beastwild, // Coral Throne Reach
+    ZoneTheme::Crystal,   // Glass Currents
+    ZoneTheme::Beastwild, // Leviathan's Wake
+    ZoneTheme::Undead,    // Mourning Depths
+    ZoneTheme::Storm,     // Tempest Spire Reach
+    ZoneTheme::Beastwild, // Trench of Maws
+    ZoneTheme::Profane,   // Drowned Pantheon
+    ZoneTheme::Resonant,  // Black Maelstrom
+    ZoneTheme::Fae,       // Abyssal Court
+    ZoneTheme::Profane,   // Sundering Deep
+];
+
 /// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
 /// creatures, three mob names, boss). Reuses `frontier_desc` for prose.
-#[allow(clippy::type_complexity)]
-const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+const REACHES_ZONES_DATA: [ZoneData; 20] = [
     (
         "Saltmarsh Shallows",
         "brackish",
@@ -4300,6 +8075,7 @@ fn extend_reaches(
                     desc,
                     zone,
                     safe: is_entrance && z == 0, // only the realm's sea-gate is safe
+                    pvp: false,
                     exits,
                 },
             );
@@ -4363,9 +8139,17 @@ fn extend_reaches(
                     56 + tier * 4 + depth,
                 )
             };
-            let profile = match behavior {
-                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
-                _ => DamageProfile::new(DamageType::Physical, None, None),
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = REACHES_ZONE_THEMES[z];
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, theme.weak())
+            } else {
+                DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
                 id: spawn_id,
@@ -4422,10 +8206,4237 @@ fn extend_reaches(
     }
 }
 
+// ==== Kaelmyr, the Ashen Reach ============================================
+//
+// A THIRD continent (rooms 12000+), hung off the deepest room of the Sundered
+// Reaches - Yssgar's drowned chamber - and gated behind the Bane of Yssgar
+// title, the deepest end-game crown in the game. Where the Reaches are a
+// drowned sea-realm, Kaelmyr is its opposite: a burnt, ash-choked landmass
+// torn loose from the seabed when Yssgar was slain and the seas drained into
+// the wound he left. The surfacing land baked sunless under an ash-sky, older
+// than Lateania itself, and five peoples cling to its cinders.
+//
+//   HISTORY. Long before the drowned cities of the Reaches, Kaelmyr floated
+//   above the Sundering Deep, a green shelf of the world's first age. When the
+//   Deep was unmade, the shelf broke and rose burning through the drained seas.
+//   Its people did not all die. The Sundering is remembered here not as an end
+//   but as a beginning: the day the ash-sky closed and the calderas woke.
+//
+//   TRIBES woven through the twenty zones:
+//     * The Emberkin    - ash-shamans and fire-cultists of the western calderas,
+//                          who read prophecy in cinder and keep the pyres lit.
+//     * The Cinderbound  - the bound dead, revenants shackled to labour the ash
+//                          by older masters; some have slipped their chains.
+//     * The Gloamwrights - glass-and-obsidian artificers of the black deserts,
+//                          who forge weapons the sun never touched.
+//     * The Stormheld    - sky-clans of the storm-spires who never set foot on
+//                          ash, striking down from the thunderheads.
+//     * The Hollow Choir - the final cult at the continent's wound, who sing to
+//                          the drowned god sleeping beneath and mean to wake it.
+//
+//   THROUGH-LINE. The zones march west-to-east and down: from the ashen shore
+//   where the Reaches spill their dead, through the Emberkin calderas, the
+//   Cinderbound labour-fields, the Gloamwright glass deserts, up into the
+//   Stormheld spires, and down at last into the Hollow Choir's wound, where the
+//   Ashen King, Kaethyr the Unquenched, has ruled since the Sundering and means
+//   to sing the sleeping god awake.
+
+pub const KAELMYR_BASE: RoomId = 12_000;
+const KAELMYR_W: usize = 13;
+const KAELMYR_H: usize = 9;
+const KAELMYR_ZONES: usize = KAELMYR_ZONES_DATA.len();
+/// Kaelmyr mob ids sit in a fresh band above the Reaches (which use 950000+).
+const KAELMYR_SPAWN_ID_START: u32 = 960_000;
+const KAELMYR_SEED: u64 = 0xA54E_D4EA_D000_u64;
+/// Each zone reserves this many room ids (a `KAELMYR_W`×`KAELMYR_H` cell field).
+const KAELMYR_ZONE_STRIDE: u32 = (KAELMYR_W * KAELMYR_H) as u32;
+
+/// Which Kaelmyr zones are carved as organic caverns (calderas, lava-tubes, and
+/// the drowned wound) rather than braided mazes. The rest are mazes. Never a grid.
+const fn kaelmyr_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 2 | 8 | 14 | 19)
+}
+
+pub fn is_kaelmyr_room(id: RoomId) -> bool {
+    (KAELMYR_BASE..KAELMYR_BASE + KAELMYR_ZONES as u32 * KAELMYR_ZONE_STRIDE).contains(&id)
+}
+
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Kaelmyr zone, in `KAELMYR_ZONES_DATA` order. Regulars inherit the theme's
+/// profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+/// The burnt continent leans Frost-weak on purpose: fear of the cold is the
+/// land's through-line.
+const KAELMYR_ZONE_THEMES: [ZoneTheme; KAELMYR_ZONES] = [
+    ZoneTheme::Sunscorched, // Cinderfall Shore
+    ZoneTheme::Sunscorched, // Emberkin Terraces
+    ZoneTheme::Ashen,       // Calder Vhael
+    ZoneTheme::Sunscorched, // Pyre-Roads
+    ZoneTheme::Beastwild,   // Sunless Vents
+    ZoneTheme::Haunted,     // Cinderbound Fields
+    ZoneTheme::Construct,   // Slagworks Ruin
+    ZoneTheme::Undead,      // Ashen Barrows
+    ZoneTheme::Crystal,     // Gloamwright Deeps
+    ZoneTheme::Crystal,     // Black Deserts
+    ZoneTheme::Crystal,     // Volcanoglass Reach
+    ZoneTheme::Ashen,       // Ashfall Wastes
+    ZoneTheme::Resonant,    // Stormheld Ascent
+    ZoneTheme::Storm,       // Thunderspires
+    ZoneTheme::Resonant,    // Cinder-Storms
+    ZoneTheme::Resonant,    // Hollowing
+    ZoneTheme::Profane,     // Choirhold Caverns
+    ZoneTheme::Tidal,       // Drowned Wound
+    ZoneTheme::Beastwild,   // Unquenched Throne
+    ZoneTheme::Profane,     // Sundering Wound
+];
+
+/// Twenty zones of Kaelmyr: (zone, adjective, ground, landmark, creatures, three
+/// mob names, boss). The tribe threading is carried in the mob/boss names and
+/// the landmarks; `kaelmyr_desc` supplies the paragraph prose.
+const KAELMYR_ZONES_DATA: [ZoneData; 20] = [
+    (
+        "Cinderfall Shore",
+        "ash-choked",
+        "grey cinder-drift",
+        "the Reaches' dead heaped on a burnt strand",
+        "shore-scavengers",
+        [
+            "a tide-cast revenant",
+            "a cinder-crawler",
+            "an ash-gorged carrion-thing",
+        ],
+        "Warden Vosk of the Drowned Gate",
+    ),
+    (
+        "Emberkin Terraces",
+        "smouldering",
+        "warm pumice",
+        "the smoke-terraces of the ash-shamans",
+        "Emberkin zealots",
+        ["an Emberkin acolyte", "a pyre-tender", "a cinder-reader"],
+        "Mother Ashglass, First of the Emberkin",
+    ),
+    (
+        "Calder Vhael",
+        "furnace-hot",
+        "cracked black glass",
+        "a living caldera that breathes fire",
+        "flame-born",
+        ["a magma-drake whelp", "a living cinder", "an ember-wraith"],
+        "Vhael, the Breathing Caldera",
+    ),
+    (
+        "Pyre-Roads",
+        "smoke-blind",
+        "road-ash trodden hard",
+        "the funeral roads the Emberkin walk their dead",
+        "pyre-walkers",
+        ["a masked pyre-priest", "an ash-pilgrim", "a cinder-hound"],
+        "The Grand Cindarch",
+    ),
+    (
+        "Sunless Vents",
+        "sulphur-reeking",
+        "hot vent-mud",
+        "a field of shrieking fumaroles",
+        "vent-dwellers",
+        [
+            "a sulphur-scaled lurker",
+            "a vent-crawler",
+            "a fume-choked horror",
+        ],
+        "The Vent-Mother",
+    ),
+    (
+        "Cinderbound Fields",
+        "chain-scarred",
+        "trampled slag",
+        "the labour-fields of the shackled dead",
+        "the shackled dead",
+        [
+            "a chained cinderbound",
+            "an overseer-wraith",
+            "a slag-hauler revenant",
+        ],
+        "The Chainmaster Undying",
+    ),
+    (
+        "Slagworks Ruin",
+        "iron-stained",
+        "cooled slag-heaps",
+        "the broken foundries of a dead age",
+        "foundry-haunts",
+        ["a molten revenant", "a bellows-thrall", "a slag-golem"],
+        "The Furnace-Lord",
+    ),
+    (
+        "Ashen Barrows",
+        "grave-still",
+        "barrow-ash",
+        "the burial-mounds of the Cinderbound's old masters",
+        "barrow-bound",
+        [
+            "a barrow-shackled dead",
+            "a grave-cinder wight",
+            "an ash-entombed lord",
+        ],
+        "The King Beneath the Ash",
+    ),
+    (
+        "Gloamwright Deeps",
+        "obsidian-dark",
+        "shard-strewn glass",
+        "the glass-galleries of the black artificers",
+        "glass-wrights",
+        [
+            "a Gloamwright artisan",
+            "an obsidian sentinel",
+            "a shard-familiar",
+        ],
+        "Archwright Sethume of the Black Glass",
+    ),
+    (
+        "Black Deserts",
+        "mirror-flat",
+        "glassed black sand",
+        "a desert fused to a single sheet of glass",
+        "glass-stalkers",
+        ["a mirage-hunter", "a glass-skinned nomad", "a heat-wraith"],
+        "The Mirror of Noon",
+    ),
+    (
+        "Volcanoglass Reach",
+        "razor-bright",
+        "fresh volcanic glass",
+        "spires of glass drawn straight from the fire",
+        "glasswork-guardians",
+        [
+            "a glass-forged knight",
+            "a molten-cored sentinel",
+            "a shard-swarm",
+        ],
+        "The Glasswright Tyrant",
+    ),
+    (
+        "Ashfall Wastes",
+        "snowing-ash",
+        "deep grey drift",
+        "a plain buried under endless falling ash",
+        "wastes-wanderers",
+        [
+            "an ash-drowned nomad",
+            "a drift-lurker",
+            "a grey-lung revenant",
+        ],
+        "The Grey Pilgrim",
+    ),
+    (
+        "Stormheld Ascent",
+        "wind-torn",
+        "bare wind-scoured rock",
+        "the first ledges of the sky-clans",
+        "sky-clan outriders",
+        [
+            "a Stormheld skirmisher",
+            "a cliff-lancer",
+            "a thunder-scout",
+        ],
+        "Warlord Skarn of the Stormheld",
+    ),
+    (
+        "Thunderspires",
+        "storm-crowned",
+        "lightning-fused stone",
+        "spires that comb the lightning from the sky",
+        "spire-riders",
+        [
+            "a storm-lancer",
+            "a levinbolt caster",
+            "a gale-borne raider",
+        ],
+        "Aethelmyr, the Sky-Queen",
+    ),
+    (
+        "Cinder-Storms",
+        "ash-blind",
+        "spinning cinder-wrack",
+        "the eye of a standing firestorm",
+        "storm-born",
+        [
+            "a firestorm revenant",
+            "a whirling ember-horror",
+            "a cinder-cyclone wraith",
+        ],
+        "The Heart of the Firestorm",
+    ),
+    (
+        "Hollowing",
+        "sound-swallowing",
+        "hollow ash-crust",
+        "where the ash-crust rings hollow over a void",
+        "the hollowed-out",
+        [
+            "a hollow-voiced revenant",
+            "a silence-eater",
+            "an echo-wraith",
+        ],
+        "The First Voice of the Choir",
+    ),
+    (
+        "Choirhold Caverns",
+        "hymn-haunted",
+        "damp sunken ash",
+        "the cavern-halls of the drowned-god cult",
+        "Choir-cultists",
+        [
+            "a Hollow Choir chorister",
+            "a drowned-god zealot",
+            "a hymn-bound wraith",
+        ],
+        "The Choirmaster of the Hollow",
+    ),
+    (
+        "Drowned Wound",
+        "abyss-cold",
+        "the wound's black silt",
+        "the wound where the seas drained away",
+        "wound-dwellers",
+        [
+            "a wound-crawling horror",
+            "a drained-sea revenant",
+            "a fathom-cold terror",
+        ],
+        "The Thing the Seas Fled",
+    ),
+    (
+        "Unquenched Throne",
+        "fire-and-ash",
+        "throne-cinders of a dead age",
+        "the burning throne of the Ashen King",
+        "throne-guard",
+        [
+            "an ash-crowned knight",
+            "an Unquenched zealot",
+            "a cinder-forged guardian",
+        ],
+        "Kaethyr the Unquenched, Ashen King of Kaelmyr",
+    ),
+    (
+        "Sundering Wound",
+        "world-unmaking",
+        "the floor beneath the world",
+        "the deepest scar, where the world was first cut",
+        "the unmade",
+        [
+            "a herald of the unmaking",
+            "an unmade terror",
+            "a singer-of-the-end",
+        ],
+        "Kaethyr Ascendant, Who Sang the God Awake",
+    ),
+];
+
+/// Kaelmyr's paragraph prose: an ashland twist on `frontier_desc`, so the new
+/// continent reads as burnt rather than drowned or wild. Weaves the tribe/place
+/// flavour and hits the >=180-char, >=2-sentence room-prose bar.
+fn kaelmyr_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You pick across {adj} ground where {ground} crunches and shifts beneath every wary step, and the ash-sky hangs low and starless overhead.",
+        "The land here is broken and burnt, the {ground} pale and treacherous, and a hot wind carries the reek of old fire out of the {adj} dark.",
+        "This {adj} stretch offers no green thing and no shade; only {ground} runs grey to a horizon smudged out by drifting ash.",
+        "The way winds between leaning shelves of scorched rock, the {ground} banked deep in the hollows and still warm to the touch.",
+        "Cinders sift down without end across this {adj} reach, and the {ground} whispers underfoot like something trying to speak.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead looms {feature}, half-lost in the smoke and older than any living memory of it.",
+        "Off the trail stands {feature}, a landmark for the few tribes that still walk these ashes.",
+        "The blackened bones of {feature} jut from the drift, from an age before the Sundering closed the sky.",
+        "Beside the way rests {feature}, silent witness to whatever fire first burned this world.",
+        "Through the haze you make out {feature}, leaning under the weight of uncounted ash-falls.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere in the smoke {creature} call to one another, and the sound is not one that welcomes strangers.",
+        "The air hangs thick with menace, for {creature} have left their marks on stone and ash alike.",
+        "Nothing stirs but the falling cinders, yet you feel {creature} watching from beyond the reddened murk.",
+        "A charred reek drifts on the hot wind; {creature} hunt these ashes, and they hunt without mercy.",
+        "A ringing quiet holds the reach, the quiet of a place from which {creature} have driven all else into the fire.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{ground}", ground);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// The Ashen King's ashland places, filling in the non-entrance, non-boss cells.
+const KAELMYR_PLACES: [&str; 10] = [
+    "Cinderway",
+    "Emberhollow",
+    "Ashcrossing",
+    "Smoke-Overlook",
+    "Pyre-Mark",
+    "Slag-Descent",
+    "Cinder-Reach",
+    "Ember-Gauntlet",
+    "Ash-Sanctum",
+    "Smoke-Threshold",
+];
+
+/// Build Kaelmyr, the Ashen Reach: twenty zones of braided mazes and organic
+/// calderas, each carved (never a grid), chained deepest-room -> next-entrance,
+/// and hung off the deepest room of the Sundered Reaches (Yssgar's chamber).
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_kaelmyr(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (KAELMYR_W, KAELMYR_H);
+    let n = w * h;
+    let mut spawn_id: u32 = KAELMYR_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        KAELMYR_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = KAELMYR_BASE + (z as u32) * KAELMYR_ZONE_STRIDE;
+        // Kaelmyr picks up a full continent past the Reaches (which sat at 12+z);
+        // its power curve is the deepest in the game.
+        let tier = (z + 32) as i32;
+        let mut rng = MazeRng::new(KAELMYR_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided maze or an organic cavern (with the connectivity
+        // pass), reducing both to a common form: which cells are rooms, their
+        // distance from the entrance, and their open exits. A too-sparse cavern
+        // falls back to a maze so no zone comes out empty. No uniform grids here.
+        let cavern_floor = if kaelmyr_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 24).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone boss waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Ash-Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Ashen Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", KAELMYR_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                kaelmyr_desc(adj, ground, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    safe: is_entrance && z == 0, // only the ashen shore is a safe waystation
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            // Behaviour by maze-role: dead-ends ambush, junctions swarm, corridors
+            // patrol or cast; the deepest cell holds the boss.
+            let depth = dist[cell] as i32;
+            let stormland = z >= 12; // the Stormheld spires and beyond crackle
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    3200 + tier * 260,
+                    128 + tier * 6,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    1900 + tier * 70 + depth * 7,
+                    116 + tier * 4 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    2000 + tier * 80 + depth * 7,
+                    118 + tier * 5 + depth,
+                )
+            } else {
+                // Leave some corridors quiet so the reach breathes.
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(if stormland {
+                        DamageType::Lightning
+                    } else {
+                        DamageType::Fire
+                    }),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    1900 + tier * 70 + depth * 7,
+                    116 + tier * 4 + depth,
+                )
+            };
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = KAELMYR_ZONE_THEMES[z];
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, theme.weak())
+            } else {
+                DamageProfile::new(attack, theme.resist(), theme.weak())
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                // XP continues past the Reaches: Kaelmyr is the longest grind in
+                // the game, ending at the Ashen King Ascendant.
+                xp: if boss_mob {
+                    1400 + tier * 110
+                } else {
+                    420 + tier * 45 + depth * 6
+                },
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: super::items::kaelmyr_loot(z),
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior boss room descends to
+        // this zone's ash-gate, and back up again.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Kaelmyr off the deepest room of the Sundered Reaches - Yssgar's
+    // drowned chamber - so the whole continent is reachable and gated behind the
+    // Bane of Yssgar. Descend through the wound Yssgar left, and rise back.
+    let entrance = KAELMYR_BASE;
+    if let Some(yssgar_room) = kaelmyr_seagate_room(rooms, spawns) {
+        if let Some(hub) = rooms.get_mut(&yssgar_room) {
+            hub.exits.insert(Dir::Down, entrance);
+        }
+        if let Some(r) = rooms.get_mut(&entrance) {
+            r.exits.insert(Dir::Up, yssgar_room);
+        }
+    }
+}
+
+/// The room Kaelmyr hangs off: the Reaches room where Yssgar, the Sundering
+/// Deep, makes his home - the deepest boss chamber of the whole drowned realm.
+/// Falls back to any Sundering Deep room, then the Reaches sea-gate, so the
+/// continent is never orphaned even if the Reaches change shape.
+fn kaelmyr_seagate_room(rooms: &HashMap<RoomId, Room>, spawns: &[MobSpawn]) -> Option<RoomId> {
+    spawns
+        .iter()
+        .find(|s| s.name == "Yssgar, the Sundering Deep")
+        .map(|s| s.home)
+        .filter(|home| rooms.contains_key(home))
+        .or_else(|| {
+            rooms
+                .values()
+                .filter(|r| is_reaches_room(r.id) && r.zone == "The Sundering Deep")
+                .max_by_key(|r| r.id)
+                .map(|r| r.id)
+        })
+        .or_else(|| rooms.contains_key(&REACHES_BASE).then_some(REACHES_BASE))
+}
+
+// ==== The Sunderlakes ======================================================
+//
+// A large, peaceful water country (rooms 16000+) of flooded caverns, reed
+// labyrinths, island-dotted meres and drowned valleys, hung off the Melvanala
+// high lake by a normal walk. Where Kaelmyr is a burnt end-game grind, the
+// Sunderlakes are mid-game friendly and serene: fewer and weaker mobs, whole
+// zones with nothing worse than a territorial pike, and - above all - fish. It
+// is the fishing country of Lateania: forty species (items 4600..4700) are
+// caught here at resource nodes gated by the Fishing skill, the prized deep
+// catches waiting for anglers who have trained the trade high enough to reach
+// the deep meres and drowned trenches.
+//
+//   LORE. When the Sundering drained the seas into Yssgar's wound and raised
+//   Kaelmyr burning from the seabed, the water it displaced had to go somewhere.
+//   It came down the mountain valleys behind Melvanala as a slow, silver flood
+//   that never wholly went away. A thousand meres and drowned dells were left
+//   behind, and the highland folk - who had always fished the one great lake -
+//   found a whole country of new water to work. They call it the Sunderlakes:
+//   the lakes the Sundering made. It is quiet, and green, and very deep in
+//   places, and the fishing has no equal in the world.
+//
+//   THROUGH-LINE. The zones wind outward and downward from the Anglers' Dock on
+//   the Melvanala shore: through reed labyrinths and island meres, down into the
+//   flooded caverns, and at last into the drowned valleys where whole villages
+//   lie under the water and the biggest fish of all move slow in the dark.
+
+pub const LAKES_BASE: RoomId = 16_000;
+const LAKES_W: usize = 11;
+const LAKES_H: usize = 8;
+const LAKES_ZONES: usize = LAKES_ZONES_DATA.len();
+/// Sunderlakes mob ids sit in a fresh band above Kaelmyr (960000+) and the
+/// Archipelago (970000+), clear of both.
+const LAKES_SPAWN_ID_START: u32 = 980_000;
+const LAKES_SEED: u64 = 0x5A17_1A4E_5000_u64;
+/// Each zone reserves this many room ids (a `LAKES_W`×`LAKES_H` cell field).
+const LAKES_ZONE_STRIDE: u32 = (LAKES_W * LAKES_H) as u32;
+
+/// Which Sunderlakes zones are carved as organic caverns (the flooded cavern
+/// halls) rather than braided reed-mazes. The rest are mazes. Never a grid.
+/// Fishing nodes are only seeded in the maze zones (every maze cell exists, so
+/// their node home rooms are guaranteed real; cavern floors are sparse).
+const fn lakes_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 2 | 5 | 8 | 11)
+}
+
+pub fn is_lakes_room(id: RoomId) -> bool {
+    (LAKES_BASE..LAKES_BASE + LAKES_ZONES as u32 * LAKES_ZONE_STRIDE).contains(&id)
+}
+
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Sunderlakes zone, in `LAKES_ZONES_DATA` order. Regulars inherit the
+/// theme's profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+const LAKES_ZONE_THEMES: [ZoneTheme; LAKES_ZONES] = [
+    ZoneTheme::Tidal,     // Anglers' Dock
+    ZoneTheme::Beastwild, // Reed Labyrinth
+    ZoneTheme::Drowned,   // Sunken Grotto
+    ZoneTheme::Beastwild, // Isle Meres
+    ZoneTheme::Verdant,   // Willow Drowns
+    ZoneTheme::Drowned,   // Weeping Caverns
+    ZoneTheme::Verdant,   // Lily Reaches
+    ZoneTheme::Haunted,   // Drowned Orchard
+    ZoneTheme::Beastwild, // Glasswater Deep
+    ZoneTheme::Fae,       // Fenlight Marsh
+    ZoneTheme::Fae,       // Mirror Meres
+    ZoneTheme::Drowned,   // Fathom Caverns
+    ZoneTheme::Haunted,   // Drowned Valley
+    ZoneTheme::Beastwild, // Mere-Mother's Deep
+];
+
+/// Fourteen zones of the Sunderlakes: (zone, adjective, water noun, landmark,
+/// creatures, three mob names, a notable/boss). Kept peaceful - the mob names
+/// lean toward wildlife and lost things rather than horrors, and the notables
+/// are lake-guardians more than tyrants. `lakes_desc` supplies the prose.
+const LAKES_ZONES_DATA: [ZoneData; 14] = [
+    (
+        "Anglers' Dock",
+        "sun-dappled",
+        "clear shallow water",
+        "the long weathered jetties of the lake-fishers",
+        "dock-things",
+        [
+            "a tangled net-wraith",
+            "a snapping mere-turtle",
+            "a bank-vole swarm",
+        ],
+        "Old Grib, the Jetty-Keeper",
+    ),
+    (
+        "Reed Labyrinth",
+        "whispering",
+        "reed-shadowed water",
+        "a maze of head-high reeds that hides the sky",
+        "reed-lurkers",
+        [
+            "a reed-stalking heron",
+            "a marsh-adder",
+            "a whispering reed-spirit",
+        ],
+        "the Heron-King of the Reeds",
+    ),
+    (
+        "Sunken Grotto",
+        "green-lit",
+        "still cavern water",
+        "a flooded cave whose roof drips like slow rain",
+        "grotto-dwellers",
+        [
+            "a blind cave-newt",
+            "a pale grotto-crab",
+            "a dripping stone-lurker",
+        ],
+        "the Grotto Warden",
+    ),
+    (
+        "Isle Meres",
+        "island-dotted",
+        "wide open mere-water",
+        "a scatter of green islets on a mirror-still mere",
+        "islet-wildlife",
+        ["a territorial mere-pike", "an otter-pack", "a nesting swan"],
+        "the Great Mere-Otter",
+    ),
+    (
+        "Willow Drowns",
+        "leaf-shadowed",
+        "root-tangled water",
+        "a drowned willow-wood, its branches trailing in the flood",
+        "willow-haunts",
+        ["a willow-wisp", "a drowned root-thing", "a bank-heron"],
+        "the Weeping Willow-Mother",
+    ),
+    (
+        "Weeping Caverns",
+        "echoing",
+        "black cavern pools",
+        "a cave-hall where the walls seem to weep cold water",
+        "cavern-drifters",
+        [
+            "a cave-eel",
+            "a drifting jelly-thing",
+            "a stone-cold lurker",
+        ],
+        "the Weeping Deep-Thing",
+    ),
+    (
+        "Lily Reaches",
+        "flower-strewn",
+        "lily-choked shallows",
+        "a broad slow reach carpeted white and gold with waterlilies",
+        "lily-dwellers",
+        [
+            "a lily-frog chorus",
+            "a snapping snapping-turtle",
+            "a heron in the reeds",
+        ],
+        "the Lilypad Sovereign",
+    ),
+    (
+        "Drowned Orchard",
+        "blossom-drowned",
+        "orchard-flooded water",
+        "an orchard sunk to its crowns, blossom floating on the flood",
+        "orchard-ghosts",
+        [
+            "a drowned orchard-keeper",
+            "a blossom-wisp",
+            "a windfall-eel",
+        ],
+        "the Orchard-Drowned Steward",
+    ),
+    (
+        "Glasswater Deep",
+        "crystal-clear",
+        "impossibly clear deep water",
+        "a deep so clear the bottom seems a stone's throw and is a hundred feet",
+        "deep-dwellers",
+        [
+            "a glass-clear ray",
+            "a deep-water sturgeon",
+            "a cold-current lurker",
+        ],
+        "the Glasswater Leviathan",
+    ),
+    (
+        "Fenlight Marsh",
+        "will-o-lit",
+        "lantern-lit fen-water",
+        "a fen where cold lights drift low over the standing water",
+        "marsh-lights",
+        ["a will-o'-the-wisp", "a fen-adder", "a bog-lurker"],
+        "the Fenlight Warden",
+    ),
+    (
+        "Mirror Meres",
+        "sky-holding",
+        "mirror-flat water",
+        "meres so still they hold the mountains upside down",
+        "mirror-dwellers",
+        [
+            "a mirror-carp",
+            "a reflected wraith",
+            "a still-water lurker",
+        ],
+        "the Mirror-Mere Guardian",
+    ),
+    (
+        "Fathom Caverns",
+        "lightless",
+        "fathomless black water",
+        "flooded caverns that fall away into water no light has touched",
+        "fathom-things",
+        ["an abyss-anglerfish", "a fathom-eel", "a lightless drifter"],
+        "the Fathom-King's Herald",
+    ),
+    (
+        "Drowned Valley",
+        "sorrow-still",
+        "valley-deep flood-water",
+        "a whole valley and its village lost beneath the silver flood",
+        "valley-drowned",
+        [
+            "a drowned villager",
+            "a flooded belfry-ghost",
+            "a silt-wading lurker",
+        ],
+        "the Bell-Drowned Warden",
+    ),
+    (
+        "Mere-Mother's Deep",
+        "sacred-still",
+        "the deepest sacred water",
+        "the oldest, deepest mere, where the fen-folk say the first fish still swims",
+        "the deep-sacred",
+        [
+            "a shrine-guardian eel",
+            "a deep-water leviathan",
+            "an ancient mere-thing",
+        ],
+        "the Mere-Mother, Eldest of the Deep",
+    ),
+];
+
+const LAKES_PLACES: [&str; 10] = [
+    "Shallows",
+    "Reed-Bend",
+    "Islet",
+    "Backwater",
+    "Ford",
+    "Deep-Channel",
+    "Fishing-Stand",
+    "Lily-Bank",
+    "Still-Pool",
+    "Landing",
+];
+
+/// The Sunderlakes' paragraph prose: a serene, watery counterpart to
+/// `frontier_desc` / `kaelmyr_desc`. Peaceful by default, hitting the
+/// >=180-char, multi-sentence room-prose bar. Varied by the cell index.
+fn lakes_desc(adj: &str, water: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You wade a {adj} stretch where {water} laps warm and slow against your legs, and dragonflies stitch the bright air above the surface.",
+        "The way winds along a bank of {adj} country, {water} spreading green and quiet on every side under a wide and gentle sky.",
+        "Here the flood opens into {adj} calm; {water} stretches out mirror-smooth, and the only sound is the plink of a rising fish.",
+        "A punt-track threads this {adj} reach, the {water} broken only by lily-pads and the slow spreading rings where something fed.",
+        "The land lies half-drowned and {adj} here, {water} standing between low green hummocks where herons fish the margins undisturbed.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead lies {feature}, reflected whole and unbroken in the still water.",
+        "Off across the water stands {feature}, a landmark the lake-fishers steer by.",
+        "The flood has half-swallowed {feature}, and the sight of it is strange and peaceful at once.",
+        "Beside the channel rests {feature}, softened by weed and the long patient work of the water.",
+        "Through the reeds you glimpse {feature}, quiet and green and older than the flood that drowned it.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere out on the water {creature} go about their business, paying you no mind at all.",
+        "The water is thick with life; {creature} move through the shallows, and the fishing here is famously fine.",
+        "It is a good place to cast a line - {creature} rise all around, and the deep water keeps its own counsel.",
+        "A heron lifts off unhurried, and {creature} slip away into the reeds; nothing here means you any harm.",
+        "The quiet is broken only by {creature} and the slow music of moving water, and it soothes the traveller's heart.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{water}", water);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// Build the Sunderlakes: fourteen zones of braided reed-mazes and flooded
+/// caverns (rooms 16000+), each carved (never a grid), chained deepest-room ->
+/// next-entrance, and hung off the Melvanala high lake by a normal walk. Kept
+/// peaceful: mobs are fewer and weaker than Kaelmyr, whole corridors are left
+/// serene, and the draw is the fishing (see `NODES` fishing spots at 16000+).
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_lakes(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (LAKES_W, LAKES_H);
+    let n = w * h;
+    let mut spawn_id: u32 = LAKES_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, water, feature, creature, mob_names, boss)) in
+        LAKES_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = LAKES_BASE + (z as u32) * LAKES_ZONE_STRIDE;
+        // A gentle mid-game power band that rises across the zones. Far below
+        // Kaelmyr - the Sunderlakes are meant to be enjoyable, not a wall.
+        let tier = z as i32;
+        let mut rng = MazeRng::new(LAKES_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided reed-maze or a flooded cavern (with the
+        // connectivity pass). A too-sparse cavern falls back to a maze so no
+        // zone comes out empty. No uniform grids.
+        let cavern_floor = if lakes_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 24).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone's notable waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(format!("The {zname}").into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Landing").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Deep Water").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", LAKES_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str =
+                Box::leak(lakes_desc(adj, water, feature, creature, cell as u32).into_boxed_str());
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // The whole first zone is a safe angler's haven; deeper
+                    // zones keep their entrance landings safe too, so the country
+                    // reads as friendly resting-water between the fishing.
+                    safe: is_entrance,
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // A peaceful country: the notable is a modest guardian, and only a
+            // fraction of the other cells hold anything at all - and what they
+            // hold is weak. Dead-ends may hide an ambusher, junctions a small
+            // pack, corridors are mostly empty water.
+            let (mob_name, behavior, boss_mob, hp, dmg): (&str, MobBehavior, bool, i32, i32) =
+                if is_boss {
+                    (
+                        boss,
+                        MobBehavior::Brute,
+                        true,
+                        420 + tier * 80,
+                        22 + tier * 3,
+                    )
+                } else if degree == 1 {
+                    // Half the dead-ends are simply quiet.
+                    if rng.chance(50) {
+                        continue;
+                    }
+                    (
+                        mob_names[0],
+                        MobBehavior::Ambusher,
+                        false,
+                        150 + tier * 22 + depth * 3,
+                        12 + tier + depth / 2,
+                    )
+                } else if degree >= 3 {
+                    if rng.chance(45) {
+                        continue;
+                    }
+                    (
+                        mob_names[1],
+                        MobBehavior::PackHunter,
+                        false,
+                        160 + tier * 24 + depth * 3,
+                        13 + tier + depth / 2,
+                    )
+                } else {
+                    // Corridors are mostly serene open water.
+                    if rng.chance(72) {
+                        continue;
+                    }
+                    let behavior = match rng.below(3) {
+                        0 => MobBehavior::Wanderer,
+                        1 => MobBehavior::Patroller,
+                        _ => MobBehavior::Skirmisher,
+                    };
+                    (
+                        mob_names[2],
+                        behavior,
+                        false,
+                        150 + tier * 22 + depth * 3,
+                        11 + tier + depth / 2,
+                    )
+                };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = LAKES_ZONE_THEMES[z];
+            let profile = if boss_mob {
+                DamageProfile::new(DamageType::Physical, None, theme.weak())
+            } else {
+                DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak())
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    120 + tier * 30
+                } else {
+                    28 + tier * 8 + depth * 2
+                },
+                respawn_secs: if boss_mob { 240 } else { 60 },
+                // Regular mobs drop from the zone's fish band; the zone's
+                // notable also carries a shot at its own two Wildbound finds.
+                loot: if boss_mob {
+                    lakes_notable_loot(z)
+                } else {
+                    lakes_loot(z)
+                },
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior deep-water room descends
+        // to this zone's landing, and rises back.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang the Sunderlakes off the Melvanala high lake by a normal walk exit, so
+    // the whole country is reachable. The first landing (Anglers' Dock) is a safe
+    // haven. Lightly gated or not at all - it is meant to be mid-game friendly.
+    let entrance = LAKES_BASE;
+    let portal = [Dir::South, Dir::East, Dir::West, Dir::North, Dir::Down]
+        .into_iter()
+        .find(|d| {
+            rooms
+                .get(&MELVANALA_SQUARE)
+                .is_some_and(|r| !r.exits.contains_key(d))
+        })
+        .unwrap_or(Dir::South);
+    if let Some(hub) = rooms.get_mut(&MELVANALA_SQUARE) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), MELVANALA_SQUARE);
+    }
+}
+
+/// A small drop table for a Sunderlakes zone: the zone's own band of fish, so a
+/// slain lake-notable may yield a catch. Fish resolve through `item`.
+fn lakes_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..LAKES_ZONES)
+            .map(|zone| {
+                // Each zone's fish band (see `lakes_fish_for_zone`).
+                lakes_fish_for_zone(zone).to_vec()
+            })
+            .collect()
+    });
+    tables[z.min(LAKES_ZONES - 1)].as_slice()
+}
+
+/// A Sunderlakes notable's loot: the zone's fish band plus its own two unique
+/// Wildbound finds, so the zone's guardian has a real shot at gear a fish
+/// stall would never sell.
+fn lakes_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..LAKES_ZONES)
+            .map(|zone| {
+                let mut v = lakes_fish_for_zone(zone);
+                v.extend(super::items::sunderlakes_find_ids(zone));
+                v
+            })
+            .collect()
+    });
+    tables[z.min(LAKES_ZONES - 1)].as_slice()
+}
+
+/// The fish species (item ids) associated with a Sunderlakes zone. The forty
+/// fish are spread across the ten maze zones in order of prestige (four per
+/// maze zone); cavern zones borrow the band of the nearest maze zone for their
+/// loot. This same mapping seeds the fishing NODES (see `LAKES_FISH_NODES`).
+fn lakes_fish_for_zone(z: usize) -> Vec<u32> {
+    // Maze zones in ascending order carry the fish bands 0..10; a cavern zone
+    // borrows the band of the maze zone just before it.
+    let maze_rank = (0..=z).filter(|&zz| !lakes_zone_is_cavern(zz)).count();
+    let band = maze_rank.saturating_sub(1).min(9);
+    let base = super::items::FISH_BASE + (band as u32) * 4;
+    (0..4).map(|i| base + i).collect()
+}
+
+// ---- Broceliande, the Greenwood (rooms 22000+) ---------------------------
+//
+//   Broceliande is a vast, verdant continent east of the Verdant Highlands: a
+//   Dark-Age-of-Camelot country of deep-green oakwoods and steaming ferny
+//   jungles, druid groves and briar mazes, standing stones and faerie rings,
+//   moss-grown keeps and vine-choked ruins. Its through-line is the old celtic
+//   dream of the enchanted wood: you enter at a safe woodward's holt on the
+//   forest eaves and wind ever deeper and greener, past the druid circles and
+//   the sleeping keeps, down into the jungle heart and the World-Oak at its
+//   centre, where the Greenwood's oldest guardian still keeps its long watch.
+//
+//   Twenty zones of ~99 rooms each (~2000 rooms), every one carved as a braided
+//   briar-maze (`carve_maze`) or an organic fern-cavern / grove-glade
+//   (`carve_cavern`) - never a uniform grid. Zones chain deepest-room ->
+//   next-entrance; mobs are behaviour-driven by maze-role (dead-ends ambush,
+//   junctions swarm, corridors patrol/skirmish). Light-to-moderate gating: the
+//   whole wood is reached by a normal walk off the Verdant Highlands (the
+//   Faerie Hollow), and the first holt is a safe haven. It is a moderate
+//   continent - tougher than the peaceful Sunderlakes but well below the
+//   endgame Kaelmyr - and it is the home of the fifty tameable beasts of the
+//   animal-taming trade (see `taming.rs`).
+
+pub const BROCELIANDE_BASE: RoomId = 22_000;
+const BROCELIANDE_W: usize = 11;
+const BROCELIANDE_H: usize = 9;
+const BROCELIANDE_ZONES: usize = BROCELIANDE_ZONES_DATA.len();
+/// Broceliande mob ids sit in a fresh band above the Sunderlakes (980000+),
+/// clear of every other region. Excluded from the endgame scaler (see
+/// `tune_spawn_balance`) so the Greenwood stays a moderate, green country.
+pub const BROCELIANDE_SPAWN_ID_START: u32 = 990_000;
+const BROCELIANDE_SEED: u64 = 0xB70C_E11A_9DE0_u64;
+/// Each zone reserves this many room ids (a `BROCELIANDE_W`×`BROCELIANDE_H`
+/// cell field). Public so the taming system can place beasts within a zone.
+pub const BROCELIANDE_ZONE_STRIDE: u32 = (BROCELIANDE_W * BROCELIANDE_H) as u32;
+/// Number of Broceliande zones, public for beast placement.
+pub const BROCELIANDE_ZONE_COUNT: usize = BROCELIANDE_ZONES;
+
+/// Which Broceliande zones are carved as organic caverns/glades (fern grottoes,
+/// grove-clearings, jungle sinks) rather than braided briar-mazes. The rest are
+/// mazes. Never a uniform grid.
+const fn broceliande_zone_is_cavern(z: usize) -> bool {
+    matches!(z, 2 | 5 | 8 | 11 | 14 | 17)
+}
+
+pub fn is_broceliande_room(id: RoomId) -> bool {
+    (BROCELIANDE_BASE..BROCELIANDE_BASE + BROCELIANDE_ZONES as u32 * BROCELIANDE_ZONE_STRIDE)
+        .contains(&id)
+}
+
+/// Where a procedurally-generated room sits inside its own generator grid.
+/// `region`/`zone` name the grid it belongs to, `(x, y)` is its cell within
+/// that `zone_w` x `zone_h` grid, and `z` is the map level (0 surface, negative
+/// underground). Rooms are numbered `base [+ zone*stride] + cell` and cells are
+/// `(cell % w, cell / w)`, so this is a pure decode of the room id. Returns
+/// `None` for hand-authored rooms (the capitals, roads, villages, housing,
+/// archipelago) which have no grid and are laid out by walking exits instead.
+/// The overhead world map uses this to place each zone as an exact,
+/// collision-free block rather than flattening the whole world onto one plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionPlacement {
+    pub region: &'static str,
+    pub zone: u32,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub zone_w: i32,
+    pub zone_h: i32,
+    /// How many zones this region chains together, so a room can say where it
+    /// sits in the run ("zone 7 of 20") rather than only naming itself. A
+    /// single-grid region is its own whole chain, so this is 1 there.
+    pub zone_count: u32,
+}
+
+pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
+    // Single-grid regions: `id = base + cell`.
+    let single = |region, base: RoomId, w: usize, h: usize, z: i32| {
+        (base..base + (w * h) as u32).contains(&id).then(|| {
+            let cell = (id - base) as i32;
+            RegionPlacement {
+                region,
+                zone: 0,
+                x: cell % w as i32,
+                y: cell / w as i32,
+                z,
+                zone_w: w as i32,
+                zone_h: h as i32,
+                zone_count: 1,
+            }
+        })
+    };
+    if let Some(p) = single("catacombs", CATACOMBS_BASE, CATACOMBS_W, CATACOMBS_H, -1) {
+        return Some(p);
+    }
+    if let Some(p) = single("thornwood", THORNWOOD_BASE, THORNWOOD_W, THORNWOOD_H, 0) {
+        return Some(p);
+    }
+    if let Some(p) = single("caverns", CAVERNS_BASE, CAVERNS_W, CAVERNS_H, -1) {
+        return Some(p);
+    }
+
+    // Multi-zone regions: `id = base + zone*stride + cell`, stride = w*h.
+    let multi = |region, base: RoomId, w: usize, h: usize, z: i32, zones: usize| {
+        let stride = (w * h) as u32;
+        let off = id - base;
+        let zone = off / stride;
+        let cell = (off % stride) as i32;
+        RegionPlacement {
+            region,
+            zone,
+            x: cell % w as i32,
+            y: cell / w as i32,
+            z,
+            zone_w: w as i32,
+            zone_h: h as i32,
+            zone_count: zones as u32,
+        }
+    };
+    if is_frontier_room(id) {
+        return Some(multi(
+            "frontier",
+            FRONTIER_BASE,
+            FRONTIER_W as usize,
+            FRONTIER_H as usize,
+            -1,
+            FRONTIER_ZONES,
+        ));
+    }
+    if is_reaches_room(id) {
+        return Some(multi(
+            "reaches",
+            REACHES_BASE,
+            REACHES_W,
+            REACHES_H,
+            0,
+            REACHES_ZONES,
+        ));
+    }
+    if is_kaelmyr_room(id) {
+        return Some(multi(
+            "kaelmyr",
+            KAELMYR_BASE,
+            KAELMYR_W,
+            KAELMYR_H,
+            0,
+            KAELMYR_ZONES,
+        ));
+    }
+    if is_lakes_room(id) {
+        return Some(multi("lakes", LAKES_BASE, LAKES_W, LAKES_H, 0, LAKES_ZONES));
+    }
+    if is_broceliande_room(id) {
+        return Some(multi(
+            "broceliande",
+            BROCELIANDE_BASE,
+            BROCELIANDE_W,
+            BROCELIANDE_H,
+            0,
+            BROCELIANDE_ZONES,
+        ));
+    }
+    if is_aelunor_room(id) {
+        return Some(multi(
+            "aelunor",
+            AELUNOR_BASE,
+            AELUNOR_W,
+            AELUNOR_H,
+            0,
+            AELUNOR_ZONES,
+        ));
+    }
+    if is_wildbound_room(id) {
+        return wildbound_layout(id);
+    }
+    if is_thornveil_room(id) {
+        return Some(multi(
+            "thornveil",
+            THORNVEIL_BASE,
+            THORNVEIL_W,
+            THORNVEIL_H,
+            0,
+            THORNVEIL_ZONES,
+        ));
+    }
+    None
+}
+
+/// The Wildbound Waste's map block: each biome is its own reserved `w` x `h`
+/// field, with that biome's four gate-town rooms anchored on the carve's
+/// entrance cell so the gate sits directly above the field room its South
+/// exit really opens onto (pinned by `each_wildbound_gate_sits_directly_
+/// above_the_field_cell_it_opens_onto`). The entrance is the first floor
+/// cell in row-major order, so every cell before it is wall: the four town
+/// cells (one row up and two rows up around the entrance's column) can never
+/// land on a field room. Unlike the other chained regions the three biomes
+/// are not one uniform grid, so this decodes by hand instead of going
+/// through `multi`.
+fn wildbound_layout(id: RoomId) -> Option<RegionPlacement> {
+    let off = id - WILDBOUND_BASE;
+    let zone = off / WILDBOUND_BIOME_STRIDE;
+    let slot = off % WILDBOUND_BIOME_STRIDE;
+    let biome = &WILDBOUND_BIOMES[zone as usize];
+    let (w, h) = (biome.w as i32, biome.h as i32);
+    let entrance = WILDBOUND_ENTRANCES[zone as usize] as i32;
+    let (ex, ey) = (entrance % w, entrance / w);
+    let (x, y) = match slot {
+        0 => (ex, ey - 2),     // the square
+        1 => (ex - 1, ey - 2), // the shelter, west of the square
+        2 => (ex + 1, ey - 2), // the outfitter, east of the square
+        3 => (ex, ey - 1),     // the gate, directly above the entrance cell
+        4..=9 => return None,  // reserved, never built
+        // The contested field: `field_base = base + 10`, one id per cell.
+        _ => {
+            let cell = slot as i32 - 10;
+            if cell >= w * h {
+                return None;
+            }
+            (cell % w, cell / w)
+        }
+    };
+    Some(RegionPlacement {
+        region: "wildbound",
+        zone,
+        x,
+        y,
+        z: 0,
+        zone_w: w,
+        zone_h: h + 2,
+        zone_count: WILDBOUND_BIOMES.len() as u32,
+    })
+}
+
+/// A room's map biome, for colouring the overhead world map. Derived from its
+/// region, and for the mixed continents from whether its zone was carved as a
+/// cavern (`*_zone_is_cavern`) rather than open ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Biome {
+    /// The safe home fields around Embergate.
+    Heartland,
+    /// Open overworld between the capitals.
+    Plains,
+    /// Capitals, city districts, portal villages, player housing.
+    Urban,
+    /// Greenwood: Broceliande and the Thornwood.
+    Forest,
+    /// The Sunderlakes and open water.
+    Water,
+    /// The Shattered Archipelago.
+    Islands,
+    /// Kaelmyr, the Ashen Reach: ash and volcanic ground.
+    Ash,
+    /// Underground: the catacombs, the Drowned Caverns, and any cavern zone.
+    Cavern,
+    /// The Frontier and the Sundered Reaches: broken, hostile ground.
+    Badlands,
+}
+
+pub fn biome_of(id: RoomId) -> Biome {
+    if let Some(p) = region_layout(id) {
+        let cavern_zone = match p.region {
+            "reaches" => reaches_zone_is_cavern(p.zone as usize),
+            "kaelmyr" => kaelmyr_zone_is_cavern(p.zone as usize),
+            "lakes" => lakes_zone_is_cavern(p.zone as usize),
+            "broceliande" => broceliande_zone_is_cavern(p.zone as usize),
+            "thornveil" => thornveil_zone_is_cavern(p.zone as usize),
+            _ => false,
+        };
+        if cavern_zone {
+            return Biome::Cavern;
+        }
+        return match p.region {
+            "catacombs" | "caverns" => Biome::Cavern,
+            "thornwood" | "broceliande" | "aelunor" | "thornveil" => Biome::Forest,
+            "kaelmyr" => Biome::Ash,
+            "lakes" => Biome::Water,
+            "reaches" | "frontier" => Biome::Badlands,
+            // The Waste's three biomes are three different lands: bramble
+            // forest, the maze cavern past it, then burnt flats.
+            "wildbound" => match p.zone {
+                0 => Biome::Forest,
+                1 => Biome::Cavern,
+                _ => Biome::Badlands,
+            },
+            _ => Biome::Plains,
+        };
+    }
+    // Generated regions above have their own zone layout. Keep the special
+    // hand-authored blocks below before consulting zone names.
+    if super::archipelago::is_archipelago_room(id) {
+        return Biome::Islands;
+    }
+    if super::archipelago::is_village_room(id) {
+        return Biome::Urban;
+    }
+    if (super::housing::HOUSING_BASE..super::housing::HOUSING_BASE + 1000).contains(&id) {
+        return Biome::Urban;
+    }
+    // Authored rooms and their wings carry the same zone name, even when their
+    // ids are far apart. The map's shared world is already warmed at startup.
+    match super::worldmap::zone_of(id) {
+        Some("Duskhollow Caverns" | "Drowned Crypts") => return Biome::Cavern,
+        Some("Emberpeak Mines") => return Biome::Ash,
+        _ => {}
+    }
+    if (1..600).contains(&id) {
+        return Biome::Heartland;
+    }
+    if (3000..3100).contains(&id) {
+        return Biome::Urban;
+    }
+    Biome::Plains
+}
+
+/// The atlas entry (display name, danger tier) whose id range contains `id`.
+/// Powers the region-level badge on the overhead map. Tiers are the same
+/// vocabulary the text atlas uses: "safe / low", "wilds", "endgame", "brutal",
+/// "deadly", etc.
+pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
+    REGIONS
+        .iter()
+        .find(|(_, lo, hi, _, _)| (*lo..*hi).contains(&id))
+        .map(|&(name, _, _, tier, _)| (name, tier))
+}
+
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Broceliande zone, in `BROCELIANDE_ZONES_DATA` order. Regulars inherit the
+/// theme's profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+/// The Greenwood leans Fire-weak on purpose: burning the wood is the answer
+/// the country teaches.
+const BROCELIANDE_ZONE_THEMES: [ZoneTheme; BROCELIANDE_ZONES] = [
+    ZoneTheme::Beastwild, // Woodward's Holt
+    ZoneTheme::Verdant,   // Oakheart Grove
+    ZoneTheme::Fungal,    // Fernlight Hollow
+    ZoneTheme::Resonant,  // Druid's Circle
+    ZoneTheme::Beastwild, // Briarmaze Thicket
+    ZoneTheme::Fae,       // Whispering Fens
+    ZoneTheme::Haunted,   // Verdant Ruins
+    ZoneTheme::Fae,       // Moonshadow Glade
+    ZoneTheme::Beastwild, // Steaming Jungle
+    ZoneTheme::Verdant,   // Vine-Choked Deep
+    ZoneTheme::Undead,    // Standing Kings
+    ZoneTheme::Undead,    // Barrowgreen
+    ZoneTheme::Fae,       // Faerie Reaches
+    ZoneTheme::Beastwild, // Wyrmfern Hollows
+    ZoneTheme::Haunted,   // Greenmantle Keep
+    ZoneTheme::Verdant,   // Thornwyrd Maze
+    ZoneTheme::Fae,       // Cernunmoor
+    ZoneTheme::Fungal,    // Worldroot Deep
+    ZoneTheme::Resonant,  // Greenmarch Heart
+    ZoneTheme::Fae,       // World-Oak Crown
+];
+
+/// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
+/// feature, the creatures that haunt it, three regular mob names, the zone
+/// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies
+/// the paragraph prose. Zone names must NOT start with "The " (the builder does
+/// not prepend it here, but keeps them clean for the leaked zone label).
+const BROCELIANDE_ZONES_DATA: [ZoneData; 20] = [
+    (
+        "Woodward's Holt",
+        "sun-dappled",
+        "old green oakwood",
+        "the mossy palisade of the woodwards who keep the forest eaves",
+        "eaves-dwellers",
+        [
+            "a bristling forest-boar",
+            "a green-eyed wildcat",
+            "a briar-tangled poacher",
+        ],
+        "Aldwyn the Woodward-Reeve",
+    ),
+    (
+        "Oakheart Grove",
+        "cathedral-tall",
+        "ancient oak columns",
+        "a grove of oaks so old their crowns close out the sky",
+        "grove-wardens",
+        [
+            "a moss-antlered stag",
+            "a grove-adder",
+            "a bark-skinned wood-wight",
+        ],
+        "the Oakheart Dryad",
+    ),
+    (
+        "Fernlight Hollow",
+        "green-lit",
+        "waist-deep fern",
+        "a sunken fern-grotto where the light falls green and thick as water",
+        "hollow-things",
+        [
+            "a fern-lurking lynx",
+            "a spore-drunk boar",
+            "a pale hollow-stalker",
+        ],
+        "the Fernlight Warden",
+    ),
+    (
+        "Druid's Circle",
+        "stone-ringed",
+        "grass cropped short by rites",
+        "a great ring of moss-furred standing stones humming with old power",
+        "circle-keepers",
+        [
+            "a mistletoe druid",
+            "a stone-guardian hound",
+            "a robed circle-acolyte",
+        ],
+        "the Archdruid of the Circle",
+    ),
+    (
+        "Briarmaze Thicket",
+        "thorn-walled",
+        "impassable briar",
+        "a labyrinth of thorn twice a man's height that shifts when unwatched",
+        "briar-haunts",
+        [
+            "a thorn-crowned wolf",
+            "a bramble-wight",
+            "a lost knight-errant",
+        ],
+        "the Briar-Knight of the Thicket",
+    ),
+    (
+        "Whispering Fens",
+        "will-o-lit",
+        "green standing water",
+        "a fen where cold lights drift and the reeds whisper old names",
+        "fen-lurkers",
+        [
+            "a fen-adder",
+            "a bog-drowned reaver",
+            "a marsh-lantern wisp",
+        ],
+        "the Drowned Green Man",
+    ),
+    (
+        "Verdant Ruins",
+        "vine-choked",
+        "green-shrouded ruin",
+        "a fallen keep swallowed whole by ivy, its halls floored with leaf-mould",
+        "ruin-dwellers",
+        [
+            "an ivy-shrouded revenant",
+            "a ruin-prowling panther",
+            "a tomb-robber's ghost",
+        ],
+        "the Ivy-Crowned Castellan",
+    ),
+    (
+        "Moonshadow Glade",
+        "moon-silvered",
+        "silver-lit sward",
+        "a perfect round glade where the moon seems always to hang low and full",
+        "glade-fae",
+        [
+            "a silver-pelt hare-king",
+            "a moonshadow hound",
+            "a glamour-weaving fae",
+        ],
+        "the Lady of the Moonlit Glade",
+    ),
+    (
+        "Steaming Jungle",
+        "steam-wreathed",
+        "dripping green jungle",
+        "a hot green tangle where steam rises off the leaf-litter in slow ghosts",
+        "jungle-things",
+        [
+            "a jungle-drake",
+            "a coiling constrictor",
+            "a fever-mad huntsman",
+        ],
+        "the Jungle-Drake Matriarch",
+    ),
+    (
+        "Vine-Choked Deep",
+        "sun-starved",
+        "black-green undergrowth",
+        "a jungle deep so thick with vine that noon is a green midnight",
+        "deep-lurkers",
+        [
+            "a strangler-vine horror",
+            "a deep-jungle panther",
+            "a vine-bound wanderer",
+        ],
+        "the Strangler-Vine Sovereign",
+    ),
+    (
+        "Standing Kings",
+        "storm-crowned",
+        "windswept moorgrass",
+        "a high heath crowned with monolith-kings that were old before the wood",
+        "king-stone wraiths",
+        [
+            "a moor-wolf pack-leader",
+            "a barrow-crowned wight",
+            "a storm-called reaver",
+        ],
+        "the King in the Stone",
+    ),
+    (
+        "Barrowgreen",
+        "grave-still",
+        "grass over old barrows",
+        "a green field of burial-mounds where the dead of the wood were laid",
+        "barrow-dead",
+        [
+            "a barrow-wight",
+            "a grave-hound",
+            "a mound-crowned revenant",
+        ],
+        "the Barrow-King of the Green",
+    ),
+    (
+        "Faerie Reaches",
+        "gold-hazed",
+        "toadstool-ringed meadow",
+        "a golden-lit country of faerie-rings where time itself runs thick and slow",
+        "the fair folk",
+        [
+            "a redcap raider",
+            "a will-o'-wisp",
+            "a glamoured changeling",
+        ],
+        "the Erlking of the Reaches",
+    ),
+    (
+        "Wyrmfern Hollows",
+        "fern-drowned",
+        "giant unfurling fern",
+        "a jungle sink of tree-tall ferns where the great wyrms of the wood den",
+        "wyrm-kin",
+        [
+            "a fern-wyrmling",
+            "a hollow-denning drake",
+            "a scale-hunter gone feral",
+        ],
+        "the Fern-Wyrm of the Hollows",
+    ),
+    (
+        "Greenmantle Keep",
+        "moss-mantled",
+        "ivy-mantled stonework",
+        "a keep the forest has taken for its own, moss for banners, roots for kings",
+        "keep-haunts",
+        [
+            "a moss-mantled sentinel",
+            "a keep-warden hound",
+            "a green-armoured revenant",
+        ],
+        "the Green Warden of the Keep",
+    ),
+    (
+        "Thornwyrd Maze",
+        "blood-thorned",
+        "wicked black thorn",
+        "the deepest briar-labyrinth, its thorns dark and wet and hungry",
+        "thornwyrd-things",
+        [
+            "a thorn-wyrm",
+            "a bloodbriar stalker",
+            "a maze-lost champion",
+        ],
+        "the Thornwyrd, the Maze-that-Hungers",
+    ),
+    (
+        "Cernunmoor",
+        "antler-shadowed",
+        "wild heath under horn",
+        "a wide wild heath overhung by the antler-shadow of the Horned One's presence",
+        "the wild hunt",
+        [
+            "a hunt-hound of Cernunnos",
+            "a horn-crowned stag-lord",
+            "a spectral huntsman",
+        ],
+        "Cernunnos' Master of the Hunt",
+    ),
+    (
+        "Worldroot Deep",
+        "root-cavernous",
+        "cavern-root and pale fungus",
+        "a cavern-deep of the World-Oak's roots, floored with pale luminous fungus",
+        "root-dwellers",
+        [
+            "a root-burrowing horror",
+            "a cave-panther of the deep",
+            "a fungus-riddled wanderer",
+        ],
+        "the Rootward of the Deep",
+    ),
+    (
+        "Greenmarch Heart",
+        "hush-fallen",
+        "the wood's own green silence",
+        "the still green heart of the march, where every path of the wood at last converges",
+        "heart-guardians",
+        [
+            "a heart-oak treant",
+            "a green-warden wyrm",
+            "an old guardian of the march",
+        ],
+        "the Heart-Oak Elder",
+    ),
+    (
+        "World-Oak Crown",
+        "ageless",
+        "the crown-roots of the World-Oak",
+        "the crown of the World-Oak itself, older than the forest that grew from it",
+        "the oldest green things",
+        [
+            "an ancient forest-drake",
+            "a bark-armoured great treant",
+            "a guardian of the first wood",
+        ],
+        "Broceliande, the Green Wyrm of the World-Oak",
+    ),
+];
+
+const BROCELIANDE_PLACES: [&str; 10] = [
+    "Green Ride",
+    "Fern Path",
+    "Oak Stand",
+    "Briar Turn",
+    "Moss Hollow",
+    "Deer-Track",
+    "Root Bend",
+    "Ivy Ford",
+    "Glade-Edge",
+    "Thornway",
+];
+
+/// Broceliande's paragraph prose: a deep-green, celtic-arthurian counterpart to
+/// `frontier_desc` / `lakes_desc`. Hits the >=180-char multi-sentence bar and
+/// varies by the cell index so no two rooms read alike.
+fn broceliande_desc(adj: &str, green: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You push through a {adj} stretch of {green}, where the light comes down in green coins through the canopy and the leaf-mould is soft and silent underfoot.",
+        "The ride winds on beneath {adj} boughs, {green} closing green on every side until the wood itself seems to lean in and listen to your passing.",
+        "Here the forest opens a little; {adj} {green} gives way to a hush of moss and fern, and old magic hangs in the still air like held breath.",
+        "A deer-track threads this {adj} tangle of {green}, hoofprints in the black earth and the smell of sap and rot and slow green growing.",
+        "The way climbs a {adj} bank of {green}, roots for a stair, and the whole wood breathes around you with a patience older than any kingdom.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead through the green stands {feature}, half-lost in leaf and shadow.",
+        "Off among the trunks rises {feature}, a landmark the old woodwards steered by.",
+        "The forest has all but swallowed {feature}, and the sight of it stops the breath.",
+        "Beside the track waits {feature}, softened by moss and the long patient work of the wood.",
+        "Through a gap in the briar you glimpse {feature}, green and still and older than the roads of men.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere back in the deep green {creature} move unseen, and the wood watches you with a thousand quiet eyes.",
+        "The undergrowth is thick with life; {creature} slip through the fern, and something far older stirs at the edge of hearing.",
+        "It is a place of old power - {creature} keep their distance, and the standing stones of the druids are never truly far.",
+        "A wood-pigeon claps up from the canopy, {creature} go still to watch you pass, and the green closes again behind your heels.",
+        "The only sound is the drip of green water and {creature} far off, and the enchanted hush lies heavy on the traveller's heart.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{green}", green);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// A small drop table for a Broceliande zone: representative gear from the
+/// shared realm ladder at a matching tier, so a slain Greenwood notable/mob
+/// yields real loot that resolves through `item`. Broceliande has no gear
+/// catalog of its own; the reward here is the taming (see `taming.rs`).
+///
+/// Half a Frontier tier per zone (`z / 2`, t=1..10 over the wood's twenty
+/// zones), and that halving is deliberate. It looks stingy against displayed
+/// level: zone 19 reads Lv51 and pays t=10, where the Frontier pays t=20 by
+/// Lv53. It is not. A Greenwood regular is 924hp at its deepest against the
+/// Frontier's 2005hp at t=20, so the wood already charges half the health for
+/// half the tier. Pay it per level instead and it hands out the Frontier's top
+/// table for 46% of the work, on ground with no title gate on it.
+///
+/// Displayed level is a damage reading (see `MobSpawn::level`), so it says
+/// nothing about what a region costs to clear. Health does. Compare health per
+/// tier against the road before re-slanting any land's loot.
+fn broceliande_loot(z: usize) -> &'static [u32] {
+    let tier = (z / 2).min(super::items::FRONTIER_TIERS - 1);
+    super::items::frontier_loot(tier)
+}
+
+/// A Greenwood notable's loot: the zone's own realm tier plus Broceliande's
+/// own two uniquely named Wildbound finds for that zone. The tier comes from
+/// `broceliande_loot` rather than a second copy of its formula, which is how
+/// the two drifted apart last time.
+fn broceliande_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..BROCELIANDE_ZONES)
+            .map(|zone| {
+                let mut v = broceliande_loot(zone).to_vec();
+                v.extend(super::items::broceliande_find_ids(zone));
+                v
+            })
+            .collect()
+    });
+    tables[z.min(BROCELIANDE_ZONES - 1)].as_slice()
+}
+
+/// Build Broceliande: twenty zones of braided briar-mazes and organic
+/// fern-caverns (rooms 22000+), each carved (never a grid), chained
+/// deepest-room -> next-entrance, and hung off the Verdant Highlands (the Faerie
+/// Hollow) by a normal walk. A moderate green continent - the home of the fifty
+/// tameable beasts, whose roaming spots are seeded in `taming.rs`.
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_broceliande(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (BROCELIANDE_W, BROCELIANDE_H);
+    let n = w * h;
+    let mut spawn_id: u32 = BROCELIANDE_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, green, feature, creature, mob_names, boss)) in
+        BROCELIANDE_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = BROCELIANDE_BASE + (z as u32) * BROCELIANDE_ZONE_STRIDE;
+        // A moderate power band that rises across the zones: above the peaceful
+        // lakes, below the endgame continents. The deep jungle and the World-Oak
+        // crown are a real challenge without being Kaelmyr.
+        let tier = z as i32;
+        let mut rng =
+            MazeRng::new(BROCELIANDE_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided briar-maze or an organic fern-cavern (with the
+        // connectivity pass). A too-sparse cavern falls back to a maze so no
+        // zone comes out empty. No uniform grids.
+        let cavern_floor = if broceliande_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 30).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone's notable waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(zname.to_string().into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Forest Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Green Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", BROCELIANDE_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                broceliande_desc(adj, green, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // Every zone's entrance gate is a safe green haven, so the
+                    // wood reads as a chain of woodward-holts between the deeps.
+                    safe: is_entrance,
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // Behaviour-driven foes by maze-role: dead-ends ambush, junctions
+            // swarm as packs, corridors patrol/skirmish. Moderate density - the
+            // wood is alive but not wall-to-wall like the endgame.
+            let (mob_name, behavior, boss_mob, hp, dmg): (&str, MobBehavior, bool, i32, i32) =
+                if is_boss {
+                    (
+                        boss,
+                        MobBehavior::Brute,
+                        true,
+                        600 + tier * 110,
+                        30 + tier * 4,
+                    )
+                } else if degree == 1 {
+                    if rng.chance(35) {
+                        continue;
+                    }
+                    (
+                        mob_names[0],
+                        MobBehavior::Ambusher,
+                        false,
+                        200 + tier * 30 + depth * 4,
+                        16 + tier + depth / 2,
+                    )
+                } else if degree >= 3 {
+                    if rng.chance(35) {
+                        continue;
+                    }
+                    (
+                        mob_names[1],
+                        MobBehavior::PackHunter,
+                        false,
+                        210 + tier * 32 + depth * 4,
+                        17 + tier + depth / 2,
+                    )
+                } else {
+                    if rng.chance(55) {
+                        continue;
+                    }
+                    let behavior = match rng.below(3) {
+                        0 => MobBehavior::Wanderer,
+                        1 => MobBehavior::Patroller,
+                        _ => MobBehavior::Skirmisher,
+                    };
+                    (
+                        mob_names[2],
+                        behavior,
+                        false,
+                        200 + tier * 30 + depth * 4,
+                        15 + tier + depth / 2,
+                    )
+                };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = BROCELIANDE_ZONE_THEMES[z];
+            let profile = if boss_mob {
+                DamageProfile::new(DamageType::Physical, None, theme.weak())
+            } else {
+                DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak())
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    160 + tier * 34
+                } else {
+                    36 + tier * 9 + depth * 2
+                },
+                respawn_secs: if boss_mob { 260 } else { 62 },
+                loot: if boss_mob {
+                    broceliande_notable_loot(z)
+                } else {
+                    broceliande_loot(z)
+                },
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior green-heart room
+        // descends to this zone's forest gate, and rises back.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Broceliande off the Verdant Highlands (the Faerie Hollow, room 688)
+    // by a normal walk exit, so the whole continent is reachable. The first
+    // forest gate (Woodward's Holt) is a safe haven. Lightly gated - a green
+    // country meant to be entered and explored.
+    const BROCELIANDE_GATEWAY: RoomId = 688;
+    let entrance = BROCELIANDE_BASE;
+    let anchor = if rooms.contains_key(&BROCELIANDE_GATEWAY) {
+        BROCELIANDE_GATEWAY
+    } else {
+        // Fall back to a real Verdant Highlands room if the hollow moved.
+        rooms
+            .keys()
+            .copied()
+            .find(|id| (680..692).contains(id))
+            .unwrap_or(MELVANALA_SQUARE)
+    };
+    let portal = [Dir::North, Dir::South, Dir::East, Dir::West, Dir::Down]
+        .into_iter()
+        .find(|d| rooms.get(&anchor).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::North);
+    if let Some(hub) = rooms.get_mut(&anchor) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), anchor);
+    }
+}
+
+// ---- Thornveil Falls (rooms 34000+) ---------------------------------------
+//
+//   Thornveil Falls is a hidden second wood past the known Greenwood: a
+//   ~1150-room continent of mist-wrapped canopy, root-choked hollows, and a
+//   descending chain of waterfalls each louder and older than the last. Where
+//   Broceliande is a moderate country you can walk into and out of freely,
+//   Thornveil is late-game ground intended as an alternative to Kaelmyr rather
+//   than a harder gate sitting past it.
+//
+//   **It does not reach that intent yet.** Measured through
+//   `tune_spawn_balance` and `MobSpawn::level`, Thornveil's twelve zones read
+//   L58-69 trash and L64-68 boss, against Kaelmyr's L63-78 and L69-80: every
+//   Thornveil notable reads below Kaelmyr's shallowest, so it lands as a
+//   Reaches-tier side country, not a second road through the same stretch.
+//   Raising it is an open balance decision, not a settled one - see the
+//   measured ladder in CONTEXT.md §9. `tier` is not comparable across bands:
+//   the band rows in `tune_spawn_balance` do most of the work, so compare
+//   displayed levels, never the tier literals.
+//
+//   Twelve zones of ~96 rooms each, every one carved as a braided maze
+//   (`carve_maze`) - never a uniform grid. Every zone is a maze rather than a
+//   mix of maze and cavern (see `thornveil_zone_is_cavern`) so each zone's
+//   entrance is deterministically cell 0, letting the villager roster
+//   (`VILLAGERS`) list an exact, stable gate room per zone. Zones chain
+//   deepest-room -> next-entrance, same as Kaelmyr and Broceliande; mobs are
+//   behaviour-driven by maze-role. Hung off
+//   Broceliande's own deepest chamber (the World-Oak Crown, where
+//   Broceliande the Green Wyrm keeps its watch) by a descent, not a portal -
+//   the falls are reachable only once that guardian has been bested.
+
+pub const THORNVEIL_BASE: RoomId = 34_000;
+const THORNVEIL_W: usize = 12;
+const THORNVEIL_H: usize = 8;
+const THORNVEIL_ZONES: usize = THORNVEIL_ZONES_DATA.len();
+/// Thornveil mob ids sit in a fresh band clear of every other region (Broceliande
+/// tops out at 990000+, Wildbound starts at 1500000+). Included in the endgame
+/// scaler (see `tune_spawn_balance`) so it rides Kaelmyr's own multipliers.
+const THORNVEIL_SPAWN_ID_START: u32 = 1_000_000;
+const THORNVEIL_SEED: u64 = 0x7407_11EA_FA11_u64;
+/// Each zone reserves this many room ids (a `THORNVEIL_W`x`THORNVEIL_H` cell field).
+const THORNVEIL_ZONE_STRIDE: u32 = (THORNVEIL_W * THORNVEIL_H) as u32;
+
+/// Which Thornveil zones are carved as organic caverns rather than braided
+/// mazes. Always false: every zone is a braided maze (`carve_maze`, never a
+/// uniform grid), so every zone's entrance is deterministically cell 0 - the
+/// villager roster (`VILLAGERS`) lists an exact room id per zone gate, which a
+/// cavern's RNG-chosen entrance cell can't offer without re-deriving those ids
+/// by hand each time the carve or seed changes. Kept as a named predicate (not
+/// just deleted) so a future zone can still opt into a cavern deliberately.
+const fn thornveil_zone_is_cavern(_z: usize) -> bool {
+    false
+}
+
+pub fn is_thornveil_room(id: RoomId) -> bool {
+    (THORNVEIL_BASE..THORNVEIL_BASE + THORNVEIL_ZONES as u32 * THORNVEIL_ZONE_STRIDE).contains(&id)
+}
+
+/// One theme per Thornveil zone, feeding the resist/weak pass exactly like
+/// `KAELMYR_ZONE_THEMES` and `BROCELIANDE_ZONE_THEMES`. Wet, green, storm-lit
+/// country, so the lanes lean Lightning/Fire/Arcane, with the beasts of the
+/// eaves, the haunted broken cliff, and the veiled sanctum rounding it out.
+/// The census contract in `the_school_census_stays_inside_its_declared_bands`
+/// caps a twelve-zone land at three zones per weak school and four resist
+/// zones; this sits at three and three.
+const THORNVEIL_ZONE_THEMES: [ZoneTheme; THORNVEIL_ZONES] = [
+    ZoneTheme::Beastwild, // Mistgate Eaves
+    ZoneTheme::Verdant,   // Weeping Boughs
+    ZoneTheme::Tidal,     // Sixfold Cataracts
+    ZoneTheme::Drowned,   // Drownroot Hollow
+    ZoneTheme::Storm,     // Hanging Spray
+    ZoneTheme::Verdant,   // Greywater Steps
+    ZoneTheme::Resonant,  // Undersong
+    ZoneTheme::Haunted,   // Cliffbroken Reach
+    ZoneTheme::Verdant,   // Rootfall Deep
+    ZoneTheme::Storm,     // Stormcanopy Heights
+    ZoneTheme::Tidal,     // Last Cataract
+    ZoneTheme::Fae,       // Veilfall Sanctum
+];
+
+/// Twelve zones of Thornveil Falls: (zone, adjective, ground, landmark,
+/// creatures, three mob names, boss). `thornveil_desc` supplies the paragraph
+/// prose. Zone names must NOT start with "The " (kept clean for the leaked
+/// zone label, same convention as `KAELMYR_ZONES_DATA`/`BROCELIANDE_ZONES_DATA`).
+#[allow(clippy::type_complexity)]
+const THORNVEIL_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 12] = [
+    (
+        "Mistgate Eaves",
+        "mist-hung",
+        "damp leaf-mould",
+        "the last true trees of the known Greenwood, before the fog swallows the path",
+        "eaves-lurkers",
+        [
+            "a mist-cloaked stalker",
+            "an eaves-lurker",
+            "a fog-born hound",
+        ],
+        "Warden Fenn of the Mistgate",
+    ),
+    (
+        "Weeping Boughs",
+        "rain-slick",
+        "moss-drowned root",
+        "boughs that weep a ceaseless, unnatural rain",
+        "bough-wraiths",
+        [
+            "a weeping bough-wraith",
+            "a rain-soaked stalker",
+            "a drip-fanged crawler",
+        ],
+        "The Weeping Mother",
+    ),
+    (
+        "Sixfold Cataracts",
+        "thunder-loud",
+        "spray-slick stone",
+        "six falls crashing together into one deafening basin",
+        "cataract-born",
+        [
+            "a cataract-born brute",
+            "a spray-drenched hunter",
+            "a white-water horror",
+        ],
+        "The Sixfold Warden",
+    ),
+    (
+        "Drownroot Hollow",
+        "flood-dark",
+        "black flooded root",
+        "the drowned roots of trees older than Broceliande itself",
+        "drownroot-things",
+        [
+            "a drownroot crawler",
+            "a root-bound revenant",
+            "a flood-dark lurker",
+        ],
+        "The Drownroot Elder",
+    ),
+    (
+        "Hanging Spray",
+        "cloud-wrapped",
+        "slick hanging stone",
+        "a cliffside veil of spray that never quite touches ground",
+        "spray-walkers",
+        [
+            "a spray-walker",
+            "a cloud-veiled stalker",
+            "a mist-fanged hunter",
+        ],
+        "The Spraywalker Queen",
+    ),
+    (
+        "Greywater Steps",
+        "stair-cut",
+        "worn grey step",
+        "a terraced stair of falls, each pool feeding the next",
+        "step-wardens",
+        [
+            "a greywater warden",
+            "a step-cut sentinel",
+            "a pool-lurking horror",
+        ],
+        "The Warden of the Ninth Step",
+    ),
+    (
+        "Undersong",
+        "hollow-echoing",
+        "damp resonant stone",
+        "a cavern hollowed out behind the falls, where the water's roar becomes a song",
+        "undersong-things",
+        [
+            "an undersong chorister",
+            "a hollow-voiced stalker",
+            "an echo-drenched horror",
+        ],
+        "The First Voice of the Undersong",
+    ),
+    (
+        "Cliffbroken Reach",
+        "wind-raw",
+        "crumbling ledge",
+        "a cliff face broken clean through by some ancient flood",
+        "cliffbroken things",
+        [
+            "a cliffbroken skirmisher",
+            "a ledge-walking hunter",
+            "a wind-raw stalker",
+        ],
+        "The Cliffbreaker",
+    ),
+    (
+        "Rootfall Deep",
+        "root-choked",
+        "black cavern loam",
+        "a cavern where the World-Oak's own roots plunge down into the dark",
+        "rootfall-dwellers",
+        [
+            "a rootfall crawler",
+            "a deep-root horror",
+            "a loam-drenched stalker",
+        ],
+        "The Rootfall Warden",
+    ),
+    (
+        "Stormcanopy Heights",
+        "storm-lashed",
+        "wind-bent canopy walk",
+        "a canopy walk lashed by storms that never seem to end",
+        "storm-canopy things",
+        [
+            "a storm-canopy raider",
+            "a lightning-scarred hunter",
+            "a wind-torn stalker",
+        ],
+        "Skyreach, the Canopy Storm",
+    ),
+    (
+        "Last Cataract",
+        "world-shaking",
+        "trembling wet stone",
+        "the greatest of the falls, louder than thought and older than the wood around it",
+        "cataract-guard",
+        [
+            "a cataract guardian",
+            "a world-shaking horror",
+            "a last-fall sentinel",
+        ],
+        "The Keeper of the Last Cataract",
+    ),
+    (
+        "Veilfall Sanctum",
+        "veil-shrouded",
+        "the sanctum's still black water",
+        "the sanctum behind every fall in Thornveil, where the water finally, briefly, stops",
+        "veil-things",
+        [
+            "a veilfall guardian",
+            "a still-water horror",
+            "a sanctum-bound revenant",
+        ],
+        "Thornveil, the Voice Beneath the Falls",
+    ),
+];
+
+/// Thornveil's paragraph prose: a wet, root-and-waterfall counterpart to
+/// `kaelmyr_desc`/`broceliande_desc`. Hits the >=180-char multi-sentence bar
+/// and varies by cell index so no two rooms read alike.
+fn thornveil_desc(adj: &str, ground: &str, feature: &str, creature: &str, idx: u32) -> String {
+    const TERRAIN: [&str; 5] = [
+        "You pick across {adj} ground where {ground} shifts underfoot, and somewhere close the falls never once stop their roar.",
+        "The path here runs {adj} and treacherous, the {ground} slick with a spray that never fully dries, no matter the season.",
+        "This {adj} stretch offers no true dry footing; {ground} runs on every side, and the air itself tastes of standing water.",
+        "The way winds between root and stone, the {ground} banked deep in every hollow and cold with a chill the sun never reaches.",
+        "Water sifts down without end across this {adj} reach, and the {ground} answers every step with a soft, wet give.",
+    ];
+    const FEATURE: [&str; 5] = [
+        "Ahead lies {feature}, half-lost in the spray and older than any living memory of it.",
+        "Off the path stands {feature}, a landmark for the very few who walk this deep into the falls.",
+        "The moss-black bones of {feature} rise from the mist, from an age before the Greenwood itself took root.",
+        "Beside the way rests {feature}, silent witness to however many centuries the water has run.",
+        "Through the spray-haze you make out {feature}, worn smooth by an uncounted weight of falling water.",
+    ];
+    const ATMOS: [&str; 5] = [
+        "Somewhere in the mist {creature} call to one another, and the sound carries far under the endless roar of water.",
+        "The air hangs damp with menace, for {creature} have left their marks on root and stone alike.",
+        "Nothing stirs but the falling spray, yet you feel {creature} watching from beyond the silvered murk.",
+        "A cold wet hush lies over the reach; {creature} hunt these falls, and the water hides their approach.",
+        "A ringing quiet holds the deep, broken only by falling water, the quiet of a place from which {creature} have driven all else.",
+    ];
+    let i = idx as usize;
+    let t = TERRAIN[i % 5]
+        .replace("{adj}", adj)
+        .replace("{ground}", ground);
+    let f = FEATURE[(i / 5) % 5].replace("{feature}", feature);
+    let a = ATMOS[(i / 7 + i) % 5].replace("{creature}", creature);
+    format!("{t} {f} {a}")
+}
+
+/// Thornveil's wet, wooded places, filling in the non-entrance, non-boss cells.
+const THORNVEIL_PLACES: [&str; 10] = [
+    "Fern Crossing",
+    "Spray Hollow",
+    "Root Bridge",
+    "Mist Landing",
+    "Falls Overlook",
+    "Willow Bend",
+    "Stone Ford",
+    "Canopy Rise",
+    "Pool's Edge",
+    "Hollow Path",
+];
+
+/// A regular Thornveil mob's loot: one realm tier per zone, t=29..40, the
+/// Reaches' own upper half. The falls have no bespoke catalog: their gear
+/// identity is the two signature finds per zone (`thornveil_notable_loot`),
+/// the same fallback-plus-finds shape Broceliande uses.
+///
+/// Reaches gear on ground that reads Lv58-69 looks under-paid next to
+/// Kaelmyr's Lv63 zone paying t=41, and it is not: a Thornveil regular runs
+/// 2760hp to 3288hp, which is what the road charges at exactly t=29 and t=40.
+/// The falls are priced on the health they cost, to the tier. What makes them
+/// read late is their damage, and damage is what sets displayed level; it buys
+/// no gear. The two finds per zone ride t=41..52 on top of this, and that
+/// lottery is the whole reward for coming, the same way Aelunor's Legendary
+/// roll is (see `aelunor_loot`).
+fn thornveil_loot(z: usize) -> &'static [u32] {
+    // One tier per zone, never clamped: `(10 + z).min(19)` collapsed zones 9,
+    // 10 and 11 onto one table, so the last quarter of the continent paid no
+    // gear progression at all.
+    super::items::realm_loot(29 + z as i32)
+}
+
+/// A Thornveil notable's loot: the zone's base Reaches tier (t=29..40) plus
+/// its own two uniquely named finds, which ride t=41..52 through the shared
+/// `items::realm_slot_stats`. The finds are the only Kaelmyr-grade gear the
+/// falls pay, and they are meant to be: see `thornveil_loot`.
+fn thornveil_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..THORNVEIL_ZONES)
+            .map(|zone| {
+                let mut v = thornveil_loot(zone).to_vec();
+                v.extend(super::items::thornveil_find_ids(zone));
+                v
+            })
+            .collect()
+    });
+    tables[z.min(THORNVEIL_ZONES - 1)].as_slice()
+}
+
+/// Build Thornveil Falls: twelve zones of braided mazes (never a grid),
+/// chained deepest-room -> next-entrance, and hung off the deepest room of
+/// Broceliande (the World-Oak Crown).
+#[allow(clippy::needless_range_loop, clippy::type_complexity)]
+fn extend_thornveil(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (THORNVEIL_W, THORNVEIL_H);
+    let n = w * h;
+    let mut spawn_id: u32 = THORNVEIL_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, ground, feature, creature, mob_names, boss)) in
+        THORNVEIL_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = THORNVEIL_BASE + (z as u32) * THORNVEIL_ZONE_STRIDE;
+        // Intended as a band beside Kaelmyr's own 32..51 (see
+        // `extend_kaelmyr`), but a raw tier comparison is misleading: the two
+        // lands ride different rows in `tune_spawn_balance` and Thornveil's
+        // base coefficients are ~10-15% gentler on top of that. Measured, this
+        // lands at L64-68 for notables against Kaelmyr's L69-80, i.e. below
+        // it. Open balance decision; see the block comment above.
+        let tier = (z + 30) as i32;
+        let mut rng = MazeRng::new(THORNVEIL_SEED ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        // Carve as a braided maze (the connectivity pass). Every zone is a
+        // maze (see `thornveil_zone_is_cavern`), so `cavern_floor` is always
+        // `None` here - the branch is kept in the same shape as every sibling
+        // region purely so a future zone can opt into a cavern later. No
+        // uniform grids here either way.
+        let cavern_floor = if thornveil_zone_is_cavern(z) {
+            let floor = carve_cavern(w, h, &mut rng);
+            (floor.iter().filter(|f| **f).count() >= 24).then_some(floor)
+        } else {
+            None
+        };
+        let (entrance, reachable, dist, cell_exits): (
+            usize,
+            Vec<bool>,
+            Vec<usize>,
+            Vec<Vec<(Dir, usize)>>,
+        ) = if let Some(floor) = cavern_floor {
+            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+            let dist = cavern_distances(&floor, w, h, entrance);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    let (x, y) = (c % w, c / w);
+                    let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                            let nb = ny as usize * w + nx as usize;
+                            if reachable[nb] {
+                                v.push((d, nb));
+                            }
+                        }
+                    };
+                    consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                    consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                    consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                    consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                    v
+                })
+                .collect();
+            (entrance, reachable, dist, exits)
+        } else {
+            let open = carve_maze(w, h, &mut rng);
+            let dist = maze_distances(&open, w, h, 0);
+            let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+            let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                .map(|c| {
+                    let mut v = Vec::new();
+                    if !reachable[c] {
+                        return v;
+                    }
+                    for d in 0..4 {
+                        if open[c][d]
+                            && let Some(nb) = maze_neighbor(c, d, w, h)
+                        {
+                            v.push((DIRS[d], nb));
+                        }
+                    }
+                    v
+                })
+                .collect();
+            (0, reachable, dist, exits)
+        };
+
+        // The zone's notable waits in the cell farthest from the entrance.
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(zname.to_string().into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Falls-Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Falls' Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", THORNVEIL_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                thornveil_desc(adj, ground, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // Every falls-gate is a safe haven, same as Broceliande's
+                    // own woodward-holts: Thornveil is meant to be entered and
+                    // explored freely, not walled off zone by zone.
+                    safe: is_entrance,
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            // Behaviour-driven foes by maze-role, same shape as Kaelmyr but
+            // roughly 10-15% gentler base coefficients at the same tier - a
+            // real alternative to Kaelmyr, not a reskin with identical numbers.
+            let (mob_name, behavior, boss_mob, hp, dmg) = if is_boss {
+                (
+                    boss,
+                    MobBehavior::Brute,
+                    true,
+                    2800 + tier * 225,
+                    112 + tier * 5,
+                )
+            } else if degree == 1 {
+                (
+                    mob_names[0],
+                    MobBehavior::Ambusher,
+                    false,
+                    1650 + tier * 60 + depth * 6,
+                    100 + tier * 3 + depth,
+                )
+            } else if degree >= 3 {
+                (
+                    mob_names[1],
+                    if rng.chance(50) {
+                        MobBehavior::PackHunter
+                    } else {
+                        MobBehavior::Summoner
+                    },
+                    false,
+                    1750 + tier * 68 + depth * 6,
+                    102 + tier * 4 + depth,
+                )
+            } else {
+                // Leave some corridors quiet so the falls breathe.
+                if rng.chance(35) {
+                    continue;
+                }
+                let behavior = match rng.below(4) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    2 => MobBehavior::Hunter,
+                    _ => MobBehavior::Caster(DamageType::Frost),
+                };
+                (
+                    mob_names[2],
+                    behavior,
+                    false,
+                    1650 + tier * 60 + depth * 6,
+                    100 + tier * 3 + depth,
+                )
+            };
+            // Same weak-forward shape as every other themed continent: the
+            // notable wears the zone's weakness but never its resist, so prep
+            // is pure reward on the fight players provision for. Thornveil
+            // shipped with flat `None/None` profiles, which left all twelve
+            // notables with no weakness at all and broke
+            // `every_boss_carries_a_weakness`.
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            let theme = THORNVEIL_ZONE_THEMES[z];
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, theme.weak())
+            } else {
+                DamageProfile::new(attack, theme.resist(), theme.weak())
+            };
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    1200 + tier * 95
+                } else {
+                    360 + tier * 38 + depth * 5
+                },
+                respawn_secs: if boss_mob { 600 } else { 90 },
+                loot: if boss_mob {
+                    thornveil_notable_loot(z)
+                } else {
+                    thornveil_loot(z)
+                },
+                boss: boss_mob,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        // Chain this zone to the previous one: the prior falls-heart room
+        // descends to this zone's falls-gate, and back up again.
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Thornveil off the deepest room of Broceliande - the World-Oak
+    // Crown, where the Green Wyrm keeps its watch - so the whole continent is
+    // reachable and gated behind that guardian. Descend past the crown-roots,
+    // and rise back.
+    let entrance = THORNVEIL_BASE;
+    if let Some(gate_room) = thornveil_gate_room(rooms, spawns) {
+        if let Some(hub) = rooms.get_mut(&gate_room) {
+            hub.exits.insert(Dir::Down, entrance);
+        }
+        if let Some(r) = rooms.get_mut(&entrance) {
+            r.exits.insert(Dir::Up, gate_room);
+        }
+    }
+}
+
+/// The room Thornveil hangs off: Broceliande's World-Oak Crown, where the
+/// Green Wyrm makes its home - the deepest boss chamber of the whole
+/// Greenwood. Falls back to any World-Oak Crown room, then Broceliande's own
+/// base, so the continent is never orphaned even if Broceliande changes shape.
+fn thornveil_gate_room(rooms: &HashMap<RoomId, Room>, spawns: &[MobSpawn]) -> Option<RoomId> {
+    spawns
+        .iter()
+        .find(|s| s.name == "Broceliande, the Green Wyrm of the World-Oak")
+        .map(|s| s.home)
+        .filter(|home| rooms.contains_key(home))
+        .or_else(|| {
+            rooms
+                .values()
+                .filter(|r| is_broceliande_room(r.id) && r.zone == "World-Oak Crown")
+                .max_by_key(|r| r.id)
+                .map(|r| r.id)
+        })
+        .or_else(|| {
+            rooms
+                .contains_key(&BROCELIANDE_BASE)
+                .then_some(BROCELIANDE_BASE)
+        })
+}
+
+// ---- Aelunor, the Faewood: a sprawling elven/fae forest (rooms 25000+) ----
+//
+// Twelve zones of organic, sprawling clearings - never a maze, never a grid
+// (see `carve_cavern`; every single zone here is cavern-carved, deliberately
+// unlike Broceliande's maze/cavern mix, so Aelunor always reads as glades and
+// dells you wander between rather than corridors you solve). Home to the
+// elves, high elves, druids, and fae of Lateania: some friendly (the
+// villagers at every zone gate and the city below), most hostile (the
+// hundred-creature roster below). Chained deepest-glade -> next-gate exactly
+// like Broceliande, and hung off the Amber Savanna's terminal room by a
+// normal walk east.
+
+pub const AELUNOR_BASE: RoomId = 25_000;
+const AELUNOR_W: usize = 9;
+const AELUNOR_H: usize = 8;
+const AELUNOR_ZONES: usize = AELUNOR_ZONES_DATA.len();
+/// A fresh spawn-id band clear of every other region (Frontier/Reaches/
+/// Kaelmyr/Lakes/Broceliande all sit in 900,000..1,000,000; Wildbound sits at
+/// 1,500,000+). Falls into `tune_spawn_balance`'s default "gentle overworld"
+/// bucket exactly like Wildbound does, since it matches none of the named
+/// endgame bands - no special-casing needed.
+const AELUNOR_SPAWN_ID_START: u32 = 1_600_000;
+const AELUNOR_SEED: u64 = 0xAE1A_7702_u64;
+/// Each zone reserves this many room ids (an `AELUNOR_W`x`AELUNOR_H` cell
+/// field). Public so `taming.rs` can place the five Aelunor companions.
+pub const AELUNOR_ZONE_STRIDE: u32 = (AELUNOR_W * AELUNOR_H) as u32;
+pub const AELUNOR_ZONE_COUNT: usize = AELUNOR_ZONES;
+
+pub fn is_aelunor_room(id: RoomId) -> bool {
+    (AELUNOR_BASE..AELUNOR_BASE + AELUNOR_ZONES as u32 * AELUNOR_ZONE_STRIDE).contains(&id)
+}
+
+/// The five rarity tiers a regular Aelunor spawn can roll, from common
+/// undergrowth to a once-in-a-visit find. Deliberately the same five words
+/// `items::Rarity` already uses, so "this is the rarity system" reads as
+/// literal, not just flavour - a Legendary spawn drops from a meaningfully
+/// better loot tier than a Common one of the same base creature.
+const AELUNOR_RARITY: [&str; 5] = ["", "Uncommon", "Rare", "Epic", "Legendary"];
+
+/// The twenty base creatures of Aelunor's hostile roster, crossed with
+/// `AELUNOR_RARITY` for a hundred named variants total (the same
+/// base-name x affix-ladder shape already proven at Wildbound's 20x5 pool -
+/// see `WILDBOUND_TIER_AFFIX`). Elves, high elves, druids, and fae gone
+/// hostile: raiders, renegades, and things that were never on anyone's side.
+const AELUNOR_CREATURES: [&str; 20] = [
+    "Hollow-Elf Raider",
+    "Grey Elf Outrider",
+    "Faerie Trickster",
+    "Wild Druid",
+    "Thornbound Satyr",
+    "Moss-Cloaked Stalker",
+    "Pixie Swarm",
+    "Bramble Warden",
+    "Nightshade Nymph",
+    "Dryad Handmaiden",
+    "Faeling Marauder",
+    "High Elf Renegade",
+    "Thistlewitch Acolyte",
+    "Antlered Stag-Knight",
+    "Sylvan Revenant",
+    "Gloomfae Assassin",
+    "Wychwood Treant-Kin",
+    "Starlit Mystic",
+    "Feral Green Knight",
+    "Wild Hunt Rider",
+];
+
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Aelunor glade, in `AELUNOR_ZONES_DATA` order. Regulars inherit the theme's
+/// profile whatever affix they roll (the affix buys stats and loot, not a
+/// different school game); the glade bosses keep their own authored profile
+/// (Shadow, resisting Physical, weak to Holy - the region's own school game).
+const AELUNOR_ZONE_THEMES: [ZoneTheme; AELUNOR_ZONES] = [
+    ZoneTheme::Verdant,   // Silverleaf Eaves
+    ZoneTheme::Haunted,   // the Whispering Boughs
+    ZoneTheme::Verdant,   // Mossheart Glade
+    ZoneTheme::Fae,       // the Sunfall Canopy
+    ZoneTheme::Beastwild, // Thistledown Hollow
+    ZoneTheme::Resonant,  // the Elder Ring
+    ZoneTheme::Fae,       // Duskpetal Grove
+    ZoneTheme::Tidal,     // the Starlit Fen
+    ZoneTheme::Fungal,    // Wychroot Deeps
+    ZoneTheme::Fae,       // the Faerie Loom
+    ZoneTheme::Tidal,     // Moonwell Thicket
+    ZoneTheme::Resonant,  // the Heartwood Sanctum
+];
+
+/// Twelve zones: (name, adjective, greenery noun, a landmark feature, the
+/// creatures that haunt it, three "native" indices into `AELUNOR_CREATURES`
+/// this zone favours, the zone's own named boss). Chained gate to gate, the
+/// same shape as `BROCELIANDE_ZONES_DATA`. Zone names must NOT start with
+/// "The " (the builder does not prepend it).
+const AELUNOR_ZONES_DATA: [GladeData; 12] = [
+    (
+        "Silverleaf Eaves",
+        "sun-dappled",
+        "silver-barked birch",
+        "a woven archway of living willow that never stops growing",
+        "eaves-wardens",
+        [0, 1, 6],
+        "the Hollow-Elf Warlord",
+    ),
+    (
+        "the Whispering Boughs",
+        "wind-stirred",
+        "tall whispering pine",
+        "a ring of standing-stones humming faintly on the breeze",
+        "bough-stalkers",
+        [1, 2, 8],
+        "Thistlewitch, the Bramble Queen",
+    ),
+    (
+        "Mossheart Glade",
+        "moss-thick",
+        "moss-cloaked old oak",
+        "a sunken hollow where the moss grows waist-deep and warm",
+        "moss-kin",
+        [5, 9, 16],
+        "the Moss-Cloaked Ancient",
+    ),
+    (
+        "the Sunfall Canopy",
+        "gold-lit",
+        "high sunfall canopy",
+        "a broken shaft of light falling clean through the leaves onto an old altar",
+        "canopy-runners",
+        [3, 13, 19],
+        "the Erlking's Huntsman",
+    ),
+    (
+        "Thistledown Hollow",
+        "thistle-choked",
+        "wild thistledown bramble",
+        "a drift of pale down that never quite settles",
+        "hollow-fae",
+        [2, 8, 12],
+        "the Nightshade Nymph-Queen",
+    ),
+    (
+        "the Elder Ring",
+        "ring-marked",
+        "an old fae-ring of toadstool and grass",
+        "a perfect green circle the grass will not grow inside",
+        "ring-wardens",
+        [4, 7, 9],
+        "the Ringmother of the Elder Circle",
+    ),
+    (
+        "Duskpetal Grove",
+        "dusk-shadowed",
+        "dusk-petal blossom",
+        "a grove of trees that only flower after dark",
+        "duskpetal stalkers",
+        [15, 16, 6],
+        "the Gloomfae Reaper",
+    ),
+    (
+        "the Starlit Fen",
+        "star-mirrored",
+        "reed and starlit water",
+        "a still black mere that mirrors the sky too perfectly",
+        "fen-wisps",
+        [17, 8, 2],
+        "the Starlit Seer-Queen",
+    ),
+    (
+        "Wychroot Deeps",
+        "root-choked",
+        "gnarled wychroot",
+        "a tangle of roots thick enough to walk on",
+        "root-things",
+        [16, 14, 5],
+        "the Wychroot Revenant-Lord",
+    ),
+    (
+        "the Faerie Loom",
+        "thread-hung",
+        "silver gossamer",
+        "strands of cobweb-silk strung between the trees like a vast loom",
+        "loom-fae",
+        [2, 10, 6],
+        "the Faerie Loomweaver",
+    ),
+    (
+        "Moonwell Thicket",
+        "moon-silvered",
+        "pale moonwell birch",
+        "a spring that only ever reflects the moon, whatever the hour",
+        "moonwell wardens",
+        [9, 17, 11],
+        "the Moonwell Warden",
+    ),
+    (
+        "the Heartwood Sanctum",
+        "ancient",
+        "the Heartwood itself, oldest tree in Aelunor",
+        "the vast, living Heartwood, roots sunk to the world's own bones",
+        "heartwood guardians",
+        [11, 18, 19],
+        "the Erlqueen, Heart of Aelunor",
+    ),
+];
+
+/// Twelve places, one per zone, cycled by cell like `BROCELIANDE_PLACES`.
+const AELUNOR_PLACES: [&str; 10] = [
+    "the Glade Path",
+    "a Sun-Break",
+    "the Root Hollow",
+    "a Fae Circle",
+    "the Bramble Turn",
+    "a Mossy Rise",
+    "the Stillwater",
+    "a Thicket Bend",
+    "the Old Way",
+    "a Quiet Dell",
+];
+
+/// Aelunor's regular-spawn loot: borrows the Frontier catalog exactly like
+/// `broceliande_loot`. Depth is a **shallow** ladder (half a tier per zone,
+/// the same slope Broceliande walks), and the rolled rarity is where the
+/// reward actually lives - each affix step is worth three zones of depth, so
+/// a Legendary spawn drops from a table a continent above its neighbours'.
+/// This is the literal mechanism behind "different rarity, different drops",
+/// and it is what makes the wood a lottery rather than a shortcut: the
+/// jackpot is real (a Deep Heart Legendary reaches the catalog's Legendary
+/// band) but you cannot farm it, because the affix is a rare roll at every
+/// depth (see the rarity roll in `extend_aelunor`).
+///
+/// It must stay that way. Aelunor is entered by a plain walk off the Amber
+/// Savanna with no title gate, and its mobs keep the gentle overworld
+/// multipliers, so a *reliable* high tier here would hand out at ~660hp what
+/// the Frontier guards at ~3280hp behind four Bane titles.
+fn aelunor_loot(zone: usize, rarity: usize) -> &'static [u32] {
+    let tier = (zone / 2 + rarity * 3).min(super::items::FRONTIER_TIERS - 1);
+    super::items::frontier_loot(tier)
+}
+
+/// A named zone boss always drops, so it pays as though it were an Epic
+/// spawn: the best table the wood offers reliably, still one affix step below
+/// the Legendary roll that only luck produces.
+fn aelunor_notable_loot(zone: usize) -> &'static [u32] {
+    aelunor_loot(zone, 3)
+}
+
+/// Carve zone `z`'s glade floor. A pure function of the zone index (same
+/// seed formula every call), factored out so the entrance a beast/city is
+/// placed at (computed by external code, before or after `extend_aelunor`
+/// runs) can never drift from the one `extend_aelunor` actually builds rooms
+/// for. A too-sparse roll is re-rolled with a different stream rather than
+/// falling back to a maze, so the "no maze here" promise never slips.
+fn aelunor_carve_floor(z: usize) -> Vec<bool> {
+    let (w, h) = (AELUNOR_W, AELUNOR_H);
+    let mut rng = MazeRng::new(AELUNOR_SEED ^ (z as u64).wrapping_mul(0xA5A5_1234_5678_9ABCu64));
+    let mut attempt = carve_cavern(w, h, &mut rng);
+    let mut tries = 0;
+    while attempt.iter().filter(|f| **f).count() < 24 && tries < 6 {
+        attempt = carve_cavern(w, h, &mut rng);
+        tries += 1;
+    }
+    attempt
+}
+
+/// Every zone's entrance room id (the "Wood-Gate"), the one cell every zone
+/// is guaranteed to have reachable and safe. **Never assume offset 0 is the
+/// entrance here** the way `taming::wild_beasts` does for Broceliande's
+/// maze zones (where the maze carver's DFS always starts at cell 0): every
+/// Aelunor zone is cavern-carved, and `carve_cavern` forces the whole grid
+/// border - including cell 0 - to solid rock, so offset 0 is never even a
+/// room. Computed once and cached.
+pub(super) fn aelunor_entrances() -> &'static [RoomId] {
+    static ENTRANCES: OnceLock<Vec<RoomId>> = OnceLock::new();
+    ENTRANCES.get_or_init(|| {
+        let n = AELUNOR_W * AELUNOR_H;
+        (0..AELUNOR_ZONES)
+            .map(|z| {
+                let floor = aelunor_carve_floor(z);
+                let cell = (0..n).find(|&i| floor[i]).unwrap_or(0);
+                AELUNOR_BASE + z as u32 * AELUNOR_ZONE_STRIDE + cell as u32
+            })
+            .collect()
+    })
+}
+
+/// Build Aelunor: twelve zones of organic forest glade (rooms 25000+), every
+/// one cavern-carved (never a maze, never a grid), chained deepest-glade ->
+/// next-gate, and hung off the Amber Savanna's terminal room. A moderate
+/// green country, home of the hundred-creature Aelunor roster and the five
+/// Aelunor companions (seeded in `taming.rs`), plus its own city, Silvael
+/// (`extend_silvael`).
+#[allow(clippy::needless_range_loop)]
+fn extend_aelunor(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (AELUNOR_W, AELUNOR_H);
+    let n = w * h;
+    let mut spawn_id: u32 = AELUNOR_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, green, feature, creature, native, boss)) in
+        AELUNOR_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = AELUNOR_BASE + (z as u32) * AELUNOR_ZONE_STRIDE;
+        // A separate stream from the carve's own rng (that one is fully
+        // encapsulated in `aelunor_carve_floor` now), used only for mob
+        // placement/rarity rolls below.
+        let mut rng = MazeRng::new(
+            AELUNOR_SEED.wrapping_mul(0xD1CE_u64) ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        );
+
+        // Always an organic cavern glade - never a maze, never a grid. Uses
+        // the same carve as `aelunor_entrances`, so the two can never
+        // disagree about which cell is the entrance.
+        let floor = aelunor_carve_floor(z);
+        let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+        let dist = cavern_distances(&floor, w, h, entrance);
+        let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+        let cell_exits: Vec<Vec<(Dir, usize)>> = (0..n)
+            .map(|c| {
+                let mut v = Vec::new();
+                if !reachable[c] {
+                    return v;
+                }
+                let (x, y) = (c % w, c / w);
+                let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                        let nb = ny as usize * w + nx as usize;
+                        if reachable[nb] {
+                            v.push((d, nb));
+                        }
+                    }
+                };
+                consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                v
+            })
+            .collect();
+
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(zname.to_string().into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Wood-Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Deep Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", AELUNOR_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                broceliande_desc(adj, green, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // Every zone's wood-gate is a safe haven, so Aelunor reads
+                    // as a chain of gates between deepening wildwood.
+                    safe: is_entrance,
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            let tier = z as i32;
+            if is_boss {
+                let profile = DamageProfile::new(
+                    DamageType::Shadow,
+                    Some(DamageType::Physical),
+                    Some(DamageType::Holy),
+                );
+                spawns.push(MobSpawn {
+                    id: spawn_id,
+                    name: boss,
+                    home: id,
+                    max_hp: 620 + tier * 120,
+                    damage: 32 + tier * 4,
+                    xp: 170 + tier * 36,
+                    respawn_secs: 260,
+                    loot: aelunor_notable_loot(z),
+                    boss: true,
+                    profile,
+                });
+                behaviors.insert(spawn_id, MobBehavior::Brute);
+                spawn_id += 1;
+                continue;
+            }
+
+            // Roughly a third of glade cells stay empty, so the wood breathes
+            // rather than every clearing holding a fight.
+            if rng.chance(34) {
+                continue;
+            }
+            let base = AELUNOR_CREATURES[native[rng.below(3)]];
+            // A lottery, not a depth ladder. The affix bands are fixed and
+            // depth only nudges the roll, so a Legendary stays a rare find
+            // wherever you are: ~1% at the eaves, ~5% in the Deep Heart.
+            // A roll that climbed with depth instead (`below(20) + tier * 3`)
+            // made the affix a second name for "how deep am I" - past zone 8
+            // *every* spawn came up Legendary, and since the rarity picks the
+            // drop table (`aelunor_loot`), that pointed a whole region of
+            // ~660hp mobs at the Frontier catalog's top tier.
+            let roll = rng.below(1000) as i32 + tier * 4;
+            let rarity: usize = match roll {
+                0..=549 => 0,
+                550..=799 => 1,
+                800..=929 => 2,
+                930..=989 => 3,
+                _ => 4,
+            };
+            let affix = AELUNOR_RARITY[rarity];
+            let mob_name: &'static str = if affix.is_empty() {
+                base
+            } else {
+                Box::leak(format!("{affix} {base}").into_boxed_str())
+            };
+            let behavior = match rng.below(3) {
+                0 => MobBehavior::Wanderer,
+                1 => MobBehavior::Skirmisher,
+                _ => MobBehavior::Patroller,
+            };
+            // Now that the affix is a rare roll rather than a depth stamp, it
+            // can buy a real fight instead of a slightly fatter common: the
+            // premium is **quadratic** in the affix, so a Legendary spawn
+            // lands at roughly twice its glade-mates' hp and reads as the
+            // mini-boss it is. Deliberately flat across zones - the affix
+            // jumps the drop table twelve tiers wherever it lands
+            // (`aelunor_loot`), so the guard has to stand as far above the
+            // local floor as the prize does, or a first-glade Legendary hands
+            // a wanderer Epic-band gear off an ordinary fight.
+            let elite = (rarity * rarity) as i32;
+            let theme = AELUNOR_ZONE_THEMES[z];
+            let profile = DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak());
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: 190 + tier * 28 + depth * 4 + elite * 40,
+                damage: 14 + tier + depth / 2 + elite * 3 / 2,
+                xp: 32 + tier * 8 + depth * 2 + elite * 10,
+                respawn_secs: 60,
+                loot: aelunor_loot(z, rarity),
+                boss: false,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Aelunor off the Amber Savanna's terminal room (its only free
+    // direction: the wing chains east, so the last room never gained an east
+    // neighbour) by a normal walk east. Lightly gated - a green country meant
+    // to be entered and explored, same as Broceliande.
+    let anchor = rooms
+        .iter()
+        .find(|(_, r)| r.name == "The Amber Savanna - The Pride's Reckoning")
+        .map(|(&id, _)| id)
+        .unwrap_or(MELVANALA_SQUARE);
+    // Zone 0's real entrance, not `AELUNOR_BASE` (offset 0) - see
+    // `aelunor_entrances`'s doc comment for why that would be a rock cell.
+    let entrance = aelunor_entrances().first().copied().unwrap_or(AELUNOR_BASE);
+    let portal = [Dir::East, Dir::North, Dir::South, Dir::West, Dir::Down]
+        .into_iter()
+        .find(|d| rooms.get(&anchor).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::East);
+    if let Some(hub) = rooms.get_mut(&anchor) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), anchor);
+    }
+}
+
+/// Silvael, the Faewood's own city (rooms 26000+): a small, hand-wired haven
+/// of elves, high elves, druids, and court fae. Every room here is safe -
+/// "some friendly, some foe" plays out as the split between this city (the
+/// friendly side) and the wood outside it, whose `AELUNOR_CREATURES` roster
+/// reuses the same elf/druid/fae vocabulary for the hostile half.
+pub const SILVAEL_BASE: RoomId = 26_000;
+const SILVAEL_ROOM_COUNT: u32 = 8;
+
+/// The direction a room should try next when chaining a fresh room onto it:
+/// its first exit-free compass direction. Lets Silvael's inner wiring stay
+/// correct no matter which direction `extend_aelunor` happened to splice the
+/// city's own gate onto.
+fn first_free_dir(rooms: &HashMap<RoomId, Room>, at: RoomId) -> Dir {
+    [
+        Dir::North,
+        Dir::East,
+        Dir::South,
+        Dir::West,
+        Dir::Up,
+        Dir::Down,
+    ]
+    .into_iter()
+    .find(|d| rooms.get(&at).is_some_and(|r| !r.exits.contains_key(d)))
+    .unwrap_or(Dir::North)
+}
+
+/// Build Silvael and splice it onto the seam `extend_aelunor` used to hang
+/// the wood off the Amber Savanna. That earlier splice walked the overworld
+/// straight into the Faewood's first zone; this reopens that same link as
+/// anchor -> Silvael's square -> the Wildwood Gate -> the wood, so the city
+/// sits exactly where its story says it does: the threshold between the
+/// King's roads and the Faewood proper. Never assumes the splice direction
+/// was East - it re-derives it by finding whichever room actually links to
+/// Aelunor's first zone entrance.
+fn extend_silvael(rooms: &mut HashMap<RoomId, Room>) {
+    let entrance = aelunor_entrances().first().copied().unwrap_or(AELUNOR_BASE);
+    // Only the overworld side counts as the real anchor - the entrance cell
+    // also has ordinary cavern-carved neighbours *within* Aelunor itself
+    // (it's a normal reachable cell, not an island), and a search that
+    // didn't exclude `is_aelunor_room` could match one of those instead,
+    // depending on `HashMap` iteration order.
+    let Some((anchor, dir)) = rooms.iter().find_map(|(&id, r)| {
+        if is_aelunor_room(id) {
+            return None;
+        }
+        r.exits
+            .iter()
+            .find(|&(_, &t)| t == entrance)
+            .map(|(&d, _)| (id, d))
+    }) else {
+        return;
+    };
+
+    const ZONE: &str = "Silvael";
+    let square = SILVAEL_BASE;
+    let gate = SILVAEL_BASE + 1;
+    let market = SILVAEL_BASE + 2;
+    let larder = SILVAEL_BASE + 3;
+    let moonwell = SILVAEL_BASE + 4;
+    let circle = SILVAEL_BASE + 5;
+    let terraces = SILVAEL_BASE + 6;
+    let hollow = SILVAEL_BASE + 7;
+
+    for (id, name, desc) in [
+        (
+            square,
+            "Silvael - the Starlit Square",
+            "Silvael rises straight out of the Faewood, with no wall to mark where \
+             forest ends and city begins - only a ring of vast silver-barked trees \
+             whose canopy has been coaxed, over centuries, into archways, stairs, \
+             and whole hanging halls. Elf and high elf walk the square in equal \
+             number, lantern-moths drift between the boughs where torches would \
+             be anywhere else, and somewhere above a druid's low song keeps time \
+             with the swaying leaves. The Wildwood breathes in cool and green from \
+             one side of the square; a market, a moonwell, a stair of living wood, \
+             and a quieter hollow open off the others.",
+        ),
+        (
+            gate,
+            "Silvael - the Wildwood Gate",
+            "Silvael's living archways finally give out here, and the true Faewood \
+             begins. The trees crowd closer, the lantern-moths thin to nothing, and \
+             the last carved rail gives way to root and bramble underfoot. A pair \
+             of high elf wardens keep this threshold, less to bar the way than to \
+             mark it - nobody official has ever quite managed to say what waits \
+             deeper in, only that it answers to older rules than the city's. The \
+             square lies safe behind you.",
+        ),
+        (
+            market,
+            "Silvael - the Canopy Market",
+            "Stalls hang from the branches on rope and pulley as often as they \
+             stand on the ground, strung with pressed leaf-paper, woven charms, \
+             and fae-work jewellery that shifts colour the moment nobody's looking \
+             straight at it. Aelwen Songleaf, a high elf trader with a voice like \
+             a struck bell, holds court at the finest stall and drives a harder \
+             bargain than her smile suggests. Smaller vendors work the branches \
+             above and below hers, trading in things that don't always translate \
+             well to human coin.",
+        ),
+        (
+            larder,
+            "Silvael - the Green Larder",
+            "A low, warm room built into the hollow of an ancient oak, its shelves \
+             crowded with bundled herbs, jarred honey, and roots that smell of \
+             nothing found outside the Faewood. Branwen Oakshadow, a druid with \
+             moss for a beard, weighs out tinctures on a bone scale and never once \
+             looks up from the work, though she always seems to know exactly who's \
+             walked in. The Canopy Market lies back through the boughs.",
+        ),
+        (
+            moonwell,
+            "Silvael - the Moonwell",
+            "A still, silver spring set into a hollow of root and stone, said to \
+             reflect the moon whatever the actual hour above the canopy. Elves \
+             kneel at its edge to wash the road from their faces, or simply to sit \
+             and watch the water do something the sky above it isn't doing. The \
+             old fae claim a wish spoken here on a true-dark night is heard, \
+             though nobody in Silvael will confirm which nights those are. The \
+             square lies close by.",
+        ),
+        (
+            circle,
+            "Silvael - the Druids' Circle",
+            "A ring of standing stones stands here, worn smooth and hung with \
+             willow-bark charms, where Silvael's druids keep their long watches \
+             over the wood beyond the city. An elder druid tends the circle's low \
+             fire without ever seeming to feed it, and the grass inside the ring \
+             grows a shade greener than anywhere else in the city. The moonwell \
+             glimmers back the way you came.",
+        ),
+        (
+            terraces,
+            "Silvael - the High Elm Terraces",
+            "Tiered platforms climb the trunk of a single vast elm, linked by rope \
+             bridges and stairs grown rather than built, where Silvael's high \
+             elves keep their halls and their long, unhurried arguments about the \
+             world beyond the wood. Shelves of bark-bound books line every \
+             terrace, tended by an archivist who seems personally offended \
+             whenever anyone actually asks to borrow one. The square lies below.",
+        ),
+        (
+            hollow,
+            "Silvael - the Beastkeeper's Hollow",
+            "A quieter clearing behind the city proper, ringed with low dens and \
+             roosts where a soft-spoken beastkeeper tends whatever the wood has \
+             recently decided to trust to human hands. Bells and tame-charms hang \
+             from every branch, and something with too many eyes watches you from \
+             the shadows without ever quite showing itself. None of Silvael's fae \
+             companions are sold here - the wood gives them, or it doesn't, same \
+             as it always has. The square lies just beyond the trees.",
+        ),
+    ] {
+        rooms.insert(id, room(id, name, ZONE, true, desc, &[]));
+    }
+
+    // Splice the city into the seam `extend_aelunor` used: overworld used to
+    // walk straight from `anchor` into the wood; now it detours through
+    // Silvael's square and its own Wildwood Gate first.
+    if let Some(r) = rooms.get_mut(&anchor) {
+        r.exits.insert(dir, square);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(dir.opposite(), gate);
+    }
+    if let Some(r) = rooms.get_mut(&square) {
+        r.exits.insert(dir.opposite(), anchor);
+        r.exits.insert(dir, gate);
+    }
+    if let Some(r) = rooms.get_mut(&gate) {
+        r.exits.insert(dir.opposite(), square);
+        r.exits.insert(dir, entrance);
+    }
+
+    // The square's remaining four compass directions (whichever they are)
+    // fan out to the market, the moonwell, the terraces, and the hollow;
+    // the market and the moonwell each chain one step further to the larder
+    // and the circle.
+    let spokes: Vec<Dir> = [
+        Dir::North,
+        Dir::East,
+        Dir::South,
+        Dir::West,
+        Dir::Up,
+        Dir::Down,
+    ]
+    .into_iter()
+    .filter(|&d| d != dir && d != dir.opposite())
+    .collect();
+    link(rooms, square, spokes[0], market);
+    link(rooms, square, spokes[1], moonwell);
+    link(rooms, square, spokes[2], terraces);
+    link(rooms, square, spokes[3], hollow);
+    let d = first_free_dir(rooms, market);
+    link(rooms, market, d, larder);
+    let d = first_free_dir(rooms, moonwell);
+    link(rooms, moonwell, d, circle);
+}
+
+// ---- The Wildbound Waste: a Felucca-style pvp continent (rooms 30000+) ----
+//
+// Three contested biomes - Duskmire Wood (forest), the Hollowdeep (dungeon),
+// and the Scorched Flats (wasteland) - each a single large maze/cavern carve
+// (never a uniform grid; see `carve_maze`/`carve_cavern`) whose regular mobs
+// and one apex boss scale with BFS depth from the biome's edge. Three small
+// safe towns, one gating each biome, are the only havens in the whole
+// continent; every other room here is `pvp: true` (see `Room::pvp` and
+// `svc::engage_player`) - adventurers can fight the mythical roster *or* each
+// other. Chained gate -> field -> gate -> field -> gate -> field (deepening
+// danger, same shape as Broceliande's zone chain) and hung off the Sahra
+// Wastes' Sand-Wyrm's Maw (room 751) by a normal walk south.
+
+pub const WILDBOUND_BASE: RoomId = 30_000;
+const WILDBOUND_SPAWN_ID_START: u32 = 1_500_000;
+const WILDBOUND_SEED: u64 = 0x5741_5354_4501_u64;
+/// Room ids reserved per biome: four for the town plus the field carve. The
+/// largest field (26x20 = 520 cells) starting at offset 10 leaves comfortable
+/// headroom under this stride.
+pub const WILDBOUND_BIOME_STRIDE: u32 = 700;
+/// The Sahra Wastes' terminal room (see `extend_overworld`'s Sahra wing): its
+/// `Dir::South` is never claimed there (the chain ends at this room), so the
+/// Waste hangs off it cleanly without disturbing that wing.
+const WILDBOUND_GATEWAY: RoomId = 751;
+
+/// Whether `id` belongs to the Wildbound Waste (any of its three biomes,
+/// gate town and contested field alike).
+pub fn is_wildbound_room(id: RoomId) -> bool {
+    (WILDBOUND_BASE..WILDBOUND_BASE + WILDBOUND_BIOMES.len() as u32 * WILDBOUND_BIOME_STRIDE)
+        .contains(&id)
+}
+
+/// One biome's carved field, deterministic per biome index. Shared by
+/// `extend_wildbound` (which builds the rooms from it) and the entrance table
+/// below (which `wildbound_layout` reads), so the drawn gate town and the
+/// gate's real exit can never disagree. `rng` is threaded through so a
+/// caller's later draws see the same state the inline carve used to leave.
+enum WildboundCarve {
+    Cavern(Vec<bool>),
+    Maze(Vec<Walls>),
+}
+
+fn wildbound_carve(b: usize, rng: &mut MazeRng) -> WildboundCarve {
+    let biome = &WILDBOUND_BIOMES[b];
+    let (w, h) = (biome.w, biome.h);
+    if biome.cavern {
+        let floor = carve_cavern(w, h, rng);
+        if floor.iter().filter(|f| **f).count() >= 40 {
+            return WildboundCarve::Cavern(floor);
+        }
+    }
+    WildboundCarve::Maze(carve_maze(w, h, rng))
+}
+
+impl WildboundCarve {
+    /// The field cell the biome's gate opens onto: the first floor cell in
+    /// row-major order for a cavern, cell 0 for a maze. First-in-row-major
+    /// is also what makes the town placement in `wildbound_layout`
+    /// collision-free: every cell before the entrance is wall.
+    fn entrance(&self) -> usize {
+        match self {
+            Self::Cavern(floor) => (0..floor.len()).find(|&i| floor[i]).unwrap_or(0),
+            Self::Maze(_) => 0,
+        }
+    }
+}
+
+/// Entrance cell per biome, cached: `wildbound_layout` decodes ids in tight
+/// loops and the carve behind the answer costs a full field each.
+static WILDBOUND_ENTRANCES: LazyLock<[usize; 3]> = LazyLock::new(|| {
+    std::array::from_fn(|b| {
+        let mut rng = MazeRng::new(WILDBOUND_SEED ^ (b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        wildbound_carve(b, &mut rng).entrance()
+    })
+});
+
+/// The five-tier power ladder shared by every biome's regular mobs, from the
+/// biome's edge (Lesser) to its deep interior (Ancient) - one step short of
+/// the biome's own named apex boss.
+const WILDBOUND_TIER_AFFIX: [&str; 5] = ["Lesser", "", "Greater", "Elder", "Ancient"];
+
+/// A closing clause appended to every contested-field room's description, so
+/// the Waste reads as a distinct, dangerous place regardless of which prose
+/// generator built the rest of the paragraph.
+const WILDBOUND_PVP_NOTE: [&str; 4] = [
+    " This deep in the Wildbound Waste no law but steel holds, and the next adventurer you meet may be foe as readily as friend.",
+    " The old truce ends at the Waste's edge; here blade answers blade, and mercy is a coin few can afford to spend.",
+    " No banner flies here to keep any peace - every stranger's hand may already be closing on a hilt.",
+    " Word of the Waste travels slow and grim: those who enter contested ground and leave whole count themselves fortunate twice over.",
+];
+
+/// One of the Wildbound Waste's three biomes: everything needed to carve its
+/// field, populate its mythical roster, and author its gate town.
+struct WildboundBiome {
+    zone: &'static str,
+    w: usize,
+    h: usize,
+    /// True for an organic cellular-automata cavern; false for a braided maze.
+    cavern: bool,
+    adj: &'static str,
+    ground: &'static str,
+    feature: &'static str,
+    creature_ambiance: &'static str,
+    /// Which paragraph generator dresses this biome's rooms (see
+    /// `broceliande_desc`/`frontier_desc`); both share this signature.
+    desc_fn: fn(&str, &str, &str, &str, u32) -> String,
+    places: [&'static str; 10],
+    /// Twenty base creature names, crossed with `WILDBOUND_TIER_AFFIX`.
+    creatures: [&'static str; 20],
+    boss_name: &'static str,
+    attack: DamageType,
+    resist: Option<DamageType>,
+    weak: Option<DamageType>,
+    /// Pre-balance-scale (max_hp, damage) for each of the five tiers.
+    tiers: [(i32, i32); 5],
+    /// Pre-balance-scale (max_hp, damage) for the biome's apex boss.
+    boss_stats: (i32, i32),
+    /// The biome's first tier on the shared realm ladder (1-based, see
+    /// `items::realm_loot` and `wildbound_loot`); each biome climbs five
+    /// tiers from here, and its apex boss takes the sixth. Chosen against the
+    /// health the biome actually charges, not against its displayed level.
+    loot_base: usize,
+    town_square_name: &'static str,
+    town_square_desc: &'static str,
+    town_shelter_name: &'static str,
+    town_shelter_desc: &'static str,
+    town_outfitter_name: &'static str,
+    town_outfitter_desc: &'static str,
+    town_gate_name: &'static str,
+    town_gate_desc: &'static str,
+}
+
+const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
+    // ---- Duskmire Wood: a bramble-cavern forest, the shallow end of the
+    // Waste. Levels run roughly 15-60, capped by its own apex.
+    WildboundBiome {
+        zone: "Duskmire Wood",
+        w: 26,
+        h: 20,
+        cavern: true,
+        adj: "bramble-choked",
+        ground: "black thorn and rotting oak",
+        feature: "a gallows-tree strung with old, swaying rope",
+        creature_ambiance: "wraith-hounds",
+        desc_fn: broceliande_desc,
+        places: [
+            "the Hanging Oak",
+            "Widow's Clearing",
+            "the Rot-Elm Stand",
+            "Crowfoot Hollow",
+            "the Gallows Path",
+            "Blackthorn Break",
+            "the Weeping Bower",
+            "Ashleaf Corner",
+            "the Sunken Grove",
+            "Nightshade Row",
+        ],
+        creatures: [
+            "Thornwolf",
+            "Bramble Stalker",
+            "Faehound",
+            "Grovewisp",
+            "Mosshide Troll",
+            "Antlered Shade",
+            "Weeping Wight",
+            "Fen Harpy",
+            "Bogsprite",
+            "Nightjar Fury",
+            "Elder Ent",
+            "Duskmire Chimera",
+            "Vinebound Horror",
+            "Owlbear",
+            "Marsh Basilisk",
+            "Thicket Wraith",
+            "Corpseflower Golem",
+            "Stagheart Guardian",
+            "Fungal Behemoth",
+            "Wychelm Revenant",
+        ],
+        boss_name: "the Wychelm Sovereign",
+        attack: DamageType::Poison,
+        resist: Some(DamageType::Poison),
+        weak: Some(DamageType::Fire),
+        tiers: [(120, 10), (220, 16), (340, 22), (480, 28), (640, 34)],
+        boss_stats: (1000, 45),
+        loot_base: 1,
+        town_square_name: "Last Watch - the Muster Square",
+        town_square_desc: "Last Watch is less a town than a standing dare: a ring of timber palisade thrown up at the edge of civilised ground, where the King's law gives out and the Wildbound Waste begins. A muster bell hangs ready in a scorched frame at the square's heart, and the packed dirt underfoot is scuffed by boots that came back fewer than went out. Sellswords and the desperate share the fires here, sizing each other up as readily as any foe beyond the wall. A rough shelter stands west, a scavenger's outfitter east, and the log-gate south opens straight onto Duskmire Wood.",
+        town_shelter_name: "Last Watch - the Ember Shelter",
+        town_shelter_desc: "A long log hall serves Last Watch as barracks, infirmary, and the only truly safe place to close your eyes this side of the wall. Bedrolls line both walls, a banked fire smoulders in a stone pit, and someone has scratched a tally of names into a support beam, most crossed through. Nobody asks what happened to the others; everybody already knows. The square lies east.",
+        town_outfitter_name: "Last Watch - the Scavenger's Stall",
+        town_outfitter_desc: "A lean-to of salvaged planks and cannibalised cart-wheels serves as Last Watch's one trading post, its awning strung with grim trophies: fangs, claws, and stranger things pulled from the Wood. The scarred woman who runs it trades in whatever survivors carry out rather than coin most of the time, and she never asks where a fine ring came from. The square lies west.",
+        town_gate_name: "Last Watch - the Log Gate",
+        town_gate_desc: "The palisade breaks here for a gate of black, iron-bound logs, thrown wide day and night because nobody has ever needed to keep the Wood out - only to keep themselves in until they were ready. A watchman's brazier gutters overhead, more habit than help. Beyond the gate the bramble closes in at once, and the square lies safe behind you to the north.",
+    },
+    // ---- The Hollowdeep: a braided crypt-maze, the middle reach of the
+    // Waste. Levels run roughly 40-70, capped by its own apex.
+    WildboundBiome {
+        zone: "the Hollowdeep",
+        w: 22,
+        h: 18,
+        cavern: false,
+        adj: "bone-choked",
+        ground: "cracked ossuary tile",
+        feature: "a rusted iron cage still holding a seated skeleton",
+        creature_ambiance: "grave-wisps",
+        desc_fn: frontier_desc,
+        places: [
+            "the Ossuary Vault",
+            "Chain Landing",
+            "the Weeping Wall",
+            "Marrow Hall",
+            "the Sealed Crypt",
+            "Rust-Gate Corridor",
+            "the Silent Choir",
+            "Bonepile Junction",
+            "the Drowned Stair",
+            "Charnel Row",
+        ],
+        creatures: [
+            "Hollow Wraith",
+            "Barrow Lich",
+            "Bone Chimera",
+            "Crypt Gorgon",
+            "Deepstalker",
+            "Grave Hydra",
+            "Sable Wyrmling",
+            "Cinder Wisp",
+            "Blackiron Golem",
+            "Vault Cockatrice",
+            "Manacled Horror",
+            "Echo Banshee",
+            "Tomb Basilisk",
+            "the Warden of the Deep",
+            "Shackled Behemoth",
+            "Skeletal Manticore",
+            "Voidtouched Revenant",
+            "Gloomspawn",
+            "Charnel Ooze",
+            "Deathless Sentinel",
+        ],
+        boss_name: "the Deathless Warden",
+        attack: DamageType::Shadow,
+        resist: Some(DamageType::Shadow),
+        weak: Some(DamageType::Holy),
+        tiers: [(420, 26), (620, 34), (860, 42), (1140, 50), (1460, 58)],
+        boss_stats: (2200, 68),
+        loot_base: 10,
+        town_square_name: "Barrowgate - the Sunken Square",
+        town_square_desc: "Barrowgate is built into the mouth of the Hollowdeep itself, its houses sunk half into the hillside as though the crypt-country had already begun to claim them. The square is a bowl of packed grave-dirt around an old well nobody drinks from anymore, ringed by lean stone houses whose owners deal only with those who go below and, sometimes, come back. A shelter stands west, an outfitter east, and the crypt-gate south breathes cold air up from the Hollowdeep.",
+        town_shelter_name: "Barrowgate - the Vigil House",
+        town_shelter_desc: "Candles burn in every window of the Vigil House, day and night, kept lit by a standing rota of Barrowgate's residents against a dark that everyone agrees is closer here than it ought to be. Cots line the single long room, and a chalked board by the door lists names owed a vigil of their own. It is warm, close, and the one room in Barrowgate no one has ever reported hearing something knock from the other side of the wall. The square lies east.",
+        town_outfitter_name: "Barrowgate - the Grave-Goods Exchange",
+        town_outfitter_desc: "Shelves of reclaimed grave-goods line this narrow shop, sorted with a care that borders on reverence: rings, blades, and stranger relics pulled up from the Hollowdeep and cleaned of whatever they were buried in. The proprietor, a thin man who never quite meets your eyes, pays well and asks nothing. The square lies west.",
+        town_gate_name: "Barrowgate - the Crypt Gate",
+        town_gate_desc: "A stair of worn stone drops away here through a broken archway carved with names long since weathered unreadable, the last light of Barrowgate falling behind as the cold, grave-scented dark of the Hollowdeep rises to meet it. Nobody has ever bothered building an actual door. The square is safe behind you to the north.",
+    },
+    // ---- The Scorched Flats: a vast, sun-cracked wasteland cavern, the
+    // Waste's deep end. Levels run roughly 65-100, ending at its own apex -
+    // the single hardest fight in the Wildbound Waste.
+    WildboundBiome {
+        zone: "the Scorched Flats",
+        w: 26,
+        h: 20,
+        cavern: true,
+        adj: "sun-cracked",
+        ground: "cracked white salt-pan",
+        feature: "a colossus of fused black glass, half-sunk in the flat",
+        creature_ambiance: "ash-wyrms",
+        desc_fn: frontier_desc,
+        places: [
+            "the Salt Flat",
+            "Cinder Row",
+            "the Glass Crater",
+            "Bonewhite Draw",
+            "the Furnace Break",
+            "Scorpion Wash",
+            "the Blistered Reach",
+            "Ember Gulch",
+            "the Dust Maw",
+            "Sunfall Ridge",
+        ],
+        creatures: [
+            "Ashwyrm",
+            "Cinderback Manticore",
+            "Scorpion King",
+            "Dune Wraith",
+            "Emberhide Basilisk",
+            "Bloodsand Harpy",
+            "Withered Colossus",
+            "Sunscorched Revenant",
+            "Sandstorm Djinn",
+            "Salt Golem",
+            "Bleached Chimera",
+            "Dust Behemoth",
+            "Glasswing Wyvern",
+            "Cracked-Earth Titan",
+            "Locust Swarm-Lord",
+            "Ashen Sphinx",
+            "Marauder's Wraith",
+            "Furnace Hound",
+            "Scoured Gorgon",
+            "the Cracked Sovereign",
+        ],
+        boss_name: "the Apex Sandwyrm",
+        attack: DamageType::Fire,
+        resist: Some(DamageType::Fire),
+        weak: Some(DamageType::Frost),
+        tiers: [(1200, 58), (1650, 68), (2150, 78), (2700, 88), (3300, 98)],
+        boss_stats: (4200, 120),
+        loot_base: 25,
+        town_square_name: "Ashhold - the Scorched Square",
+        town_square_desc: "Ashhold is a huddle of blackened stone at the true edge of the map, where the Wildbound Waste finally burns itself out into the Scorched Flats. Nothing grows here; the square is bare fused ground, and the folk who hold it - a harder breed than even Last Watch or Barrowgate turns out - trust nobody who hasn't already bled for the privilege. A shelter stands west, an outfitter east, and the ash-gate south is the last safe threshold before the Flats proper.",
+        town_shelter_name: "Ashhold - the Cinder Hall",
+        town_shelter_desc: "The Cinder Hall is dug half into the earth for the coolness of it, its low roof shored with salvaged black glass that catches what little light reaches this far into the Waste. Those who shelter here rarely talk about what drove them from wherever they started; the Flats have a way of erasing a person's history along with everything else. The square lies east.",
+        town_outfitter_name: "Ashhold - the Glasswright's Stall",
+        town_outfitter_desc: "A one-armed glasswright trades here in gear salvaged and reforged from whatever the Scorched Flats give up: fused-glass blades, ash-tempered armour, and trinkets pulled from things that used to be considerably larger and more dangerous. Prices are steep and non-negotiable, and the wares are, without exception, the genuine article. The square lies west.",
+        town_gate_name: "Ashhold - the Ash Gate",
+        town_gate_desc: "A last low arch of scorched stone marks where Ashhold ends and the true Scorched Flats begin, heat shimmering visibly through it even in the cold hours. No one has ever needed to be told twice what waits beyond. The square is safe behind you to the north.",
+    },
+];
+
+/// The drop table for a Wildbound Waste tier: borrows the shared realm ladder
+/// rather than authoring a bespoke item set, same shortcut `broceliande_loot`
+/// takes. It draws through `realm_loot`, not `frontier_loot`, because the
+/// Scorched Flats outgrew the Frontier catalog: a regular there is 3960hp,
+/// which is what the road charges around t=52, and it was paying t=18 because
+/// the Frontier's twenty tiers were the only ones this function could reach.
+/// The clamp that held it there was invisible from the call site.
+///
+/// The Flats are paid at t=25..29 rather than the t=52 their health alone
+/// would earn. They are a sponge with a soft bite (117 damage against
+/// Kaelmyr's 213), and a sponge is a longer fight, not a deadlier one, so
+/// health buys the tier its *level* supports: the road pays t=29 at Lv57 too.
+///
+/// Every table here is keyed to the biome's own `loot_base`, the apex boss
+/// included: one affix ladder past its deepest regular, and never the
+/// catalog's top tier (hence the clamp, which holds however `loot_base`
+/// is retuned later). The boss branch used to hand all three apexes
+/// `FRONTIER_TIERS - 1`, which paid the ~1500hp Duskmire boss - walked to off
+/// the Sahra Wastes, at gentle overworld multipliers, with no title anywhere
+/// on the road, and dropping guaranteed (`svc::roll_loot` never rolls for a
+/// boss) - exactly what the King Who Was Promised Nothing guards at ~11700hp
+/// behind twenty Frontier zones and four Bane titles. The crown's table stays
+/// the crown's.
+fn wildbound_loot(loot_base: usize, tier: usize, boss: bool) -> &'static [u32] {
+    let tier = if boss {
+        loot_base + WILDBOUND_TIER_AFFIX.len()
+    } else {
+        loot_base + tier
+    };
+    // Never the shared ladder's top tier, whatever a biome's `loot_base` is
+    // retuned to: the deepest full set in the game stays Kaelmyr's own.
+    let ceiling = super::items::MARKET_TIER_MAX - 1;
+    super::items::realm_loot((tier as i32).min(ceiling))
+}
+
+/// Build the Wildbound Waste: three chained biomes (rooms 30000+), each a
+/// carved contested field behind its own small safe town, hung off the Sahra
+/// Wastes' Sand-Wyrm's Maw by a normal walk south.
+#[allow(clippy::type_complexity)]
+fn extend_wildbound(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let mut spawn_id: u32 = WILDBOUND_SPAWN_ID_START;
+    // The chain's current tail: where the next town's square hangs. Starts at
+    // the Waste's real-world gateway.
+    let mut chain_from = WILDBOUND_GATEWAY;
+    let mut chain_dir = Dir::South;
+
+    for (b, biome) in WILDBOUND_BIOMES.iter().enumerate() {
+        let base = WILDBOUND_BASE + (b as u32) * WILDBOUND_BIOME_STRIDE;
+        let square_id = base;
+        let shelter_id = base + 1;
+        let outfitter_id = base + 2;
+        let gate_id = base + 3;
+        let field_base = base + 10;
+
+        // --- The gate town: four small safe rooms, pvp: false throughout. ---
+        rooms.insert(
+            square_id,
+            room(
+                square_id,
+                biome.town_square_name,
+                biome.zone,
+                true,
+                biome.town_square_desc,
+                &[
+                    (Dir::West, shelter_id),
+                    (Dir::East, outfitter_id),
+                    (Dir::South, gate_id),
+                ],
+            ),
+        );
+        rooms.insert(
+            shelter_id,
+            room(
+                shelter_id,
+                biome.town_shelter_name,
+                biome.zone,
+                true,
+                biome.town_shelter_desc,
+                &[(Dir::East, square_id)],
+            ),
+        );
+        rooms.insert(
+            outfitter_id,
+            room(
+                outfitter_id,
+                biome.town_outfitter_name,
+                biome.zone,
+                true,
+                biome.town_outfitter_desc,
+                &[(Dir::West, square_id)],
+            ),
+        );
+        rooms.insert(
+            gate_id,
+            room(
+                gate_id,
+                biome.town_gate_name,
+                biome.zone,
+                true,
+                biome.town_gate_desc,
+                &[(Dir::North, square_id)],
+            ),
+        );
+        link(rooms, chain_from, chain_dir, square_id);
+
+        // --- Carve the contested field: a braided maze or an organic cavern
+        // (with a density fallback to maze, exactly like Broceliande), never
+        // a uniform grid. ---
+        let (w, h) = (biome.w, biome.h);
+        let n = w * h;
+        let mut rng = MazeRng::new(WILDBOUND_SEED ^ (b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+
+        let carve = wildbound_carve(b, &mut rng);
+        let entrance = carve.entrance();
+        let (reachable, dist, cell_exits): (Vec<bool>, Vec<usize>, Vec<Vec<(Dir, usize)>>) =
+            if let WildboundCarve::Cavern(floor) = &carve {
+                let dist = cavern_distances(floor, w, h, entrance);
+                let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+                let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                    .map(|c| {
+                        let mut v = Vec::new();
+                        if !reachable[c] {
+                            return v;
+                        }
+                        let (x, y) = (c % w, c / w);
+                        let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                            if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                                let nb = ny as usize * w + nx as usize;
+                                if reachable[nb] {
+                                    v.push((d, nb));
+                                }
+                            }
+                        };
+                        consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                        consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                        consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                        consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                        v
+                    })
+                    .collect();
+                (reachable, dist, exits)
+            } else {
+                let WildboundCarve::Maze(open) = &carve else {
+                    unreachable!("a carve is either a cavern or a maze");
+                };
+                let dist = maze_distances(open, w, h, 0);
+                let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+                let exits: Vec<Vec<(Dir, usize)>> = (0..n)
+                    .map(|c| {
+                        let mut v = Vec::new();
+                        if !reachable[c] {
+                            return v;
+                        }
+                        for d in 0..4 {
+                            if open[c][d]
+                                && let Some(nb) = maze_neighbor(c, d, w, h)
+                            {
+                                v.push((DIRS[d], nb));
+                            }
+                        }
+                        v
+                    })
+                    .collect();
+                (reachable, dist, exits)
+            };
+
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let max_depth = dist[deepest].max(1);
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = field_base + cell as u32;
+            let is_deepest = cell == deepest && cell != entrance;
+            let degree = cell_exits[cell].len();
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, field_base + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_deepest {
+                Box::leak(format!("{} - {}'s Lair", biome.zone, biome.boss_name).into_boxed_str())
+            } else {
+                Box::leak(format!("{} - {}", biome.zone, biome.places[cell % 10]).into_boxed_str())
+            };
+            let base_desc = (biome.desc_fn)(
+                biome.adj,
+                biome.ground,
+                biome.feature,
+                biome.creature_ambiance,
+                cell as u32,
+            );
+            let desc: &'static str = Box::leak(
+                format!(
+                    "{base_desc}{}",
+                    WILDBOUND_PVP_NOTE[cell % WILDBOUND_PVP_NOTE.len()]
+                )
+                .into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone: biome.zone,
+                    safe: false,
+                    pvp: true,
+                    exits,
+                },
+            );
+
+            if cell == entrance {
+                continue;
+            }
+
+            let depth = dist[cell];
+            let tier = ((depth * 5) / max_depth).min(4);
+
+            let (mob_name, hp, dmg, boss_mob): (&str, i32, i32, bool) = if is_deepest {
+                (
+                    biome.boss_name,
+                    biome.boss_stats.0,
+                    biome.boss_stats.1,
+                    true,
+                )
+            } else if degree == 1 {
+                if rng.chance(35) {
+                    continue;
+                }
+                let (hp, dmg) = biome.tiers[tier];
+                (
+                    wildbound_named(biome.creatures[cell % 20], tier),
+                    hp,
+                    dmg,
+                    false,
+                )
+            } else if degree >= 3 {
+                if rng.chance(35) {
+                    continue;
+                }
+                let (hp, dmg) = biome.tiers[tier];
+                (
+                    wildbound_named(biome.creatures[(cell + 7) % 20], tier),
+                    hp,
+                    dmg,
+                    false,
+                )
+            } else {
+                if rng.chance(55) {
+                    continue;
+                }
+                let (hp, dmg) = biome.tiers[tier];
+                (
+                    wildbound_named(biome.creatures[(cell + 13) % 20], tier),
+                    hp,
+                    dmg,
+                    false,
+                )
+            };
+            let behavior = if boss_mob {
+                MobBehavior::Brute
+            } else if degree == 1 {
+                MobBehavior::Ambusher
+            } else if degree >= 3 {
+                MobBehavior::PackHunter
+            } else {
+                match rng.below(3) {
+                    0 => MobBehavior::Wanderer,
+                    1 => MobBehavior::Patroller,
+                    _ => MobBehavior::Skirmisher,
+                }
+            };
+            let pre_power = hp + dmg * 4;
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: hp,
+                damage: dmg,
+                xp: if boss_mob {
+                    pre_power / 3
+                } else {
+                    pre_power / 6
+                },
+                respawn_secs: if boss_mob { 300 } else { 55 },
+                loot: wildbound_loot(biome.loot_base, tier, boss_mob),
+                boss: boss_mob,
+                profile: DamageProfile::new(biome.attack, biome.resist, biome.weak),
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        link(rooms, gate_id, Dir::South, field_base + entrance as u32);
+        chain_from = field_base + deepest as u32;
+        chain_dir = Dir::Down;
+    }
+}
+
+/// Cross a base creature name with the shared tier ladder, e.g. tier 0
+/// "Lesser Thornwolf", tier 1 (bare) "Thornwolf", tier 3 "Elder Thornwolf".
+/// Leaked to `'static` once per call site, same as every other generated name
+/// in this file (the world is built once at startup).
+fn wildbound_named(creature: &str, tier: usize) -> &'static str {
+    let affix = WILDBOUND_TIER_AFFIX[tier];
+    Box::leak(
+        if affix.is_empty() {
+            creature.to_string()
+        } else {
+            format!("{affix} {creature}")
+        }
+        .into_boxed_str(),
+    )
+}
+
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Frontier zone, in `FRONTIER_ZONES_DATA` order, derived from the zone's
+/// flavor. Regulars inherit the theme's profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+const FRONTIER_ZONE_THEMES: [ZoneTheme; FRONTIER_ZONES] = [
+    ZoneTheme::Ashen,       // Ashen Wastes
+    ZoneTheme::Tidal,       // Sunken Fens
+    ZoneTheme::Fae,         // Glimmerwood
+    ZoneTheme::Beastwild,   // Howling Steppe
+    ZoneTheme::Sunscorched, // Cinder Barrens
+    ZoneTheme::Tidal,       // Tideglass Coast
+    ZoneTheme::Undead,      // Bonewhite Reach
+    ZoneTheme::Haunted,     // Verdigris Ruins
+    ZoneTheme::Storm,       // Stormspire Highlands
+    ZoneTheme::Haunted,     // Umbral Depths
+    ZoneTheme::Sunscorched, // Saltglass Desert
+    ZoneTheme::Fungal,      // Fungal Hollow
+    ZoneTheme::Crystal,     // Clockwork Ruins
+    ZoneTheme::Beastwild,   // Bloodmarsh
+    ZoneTheme::Resonant,    // Singing Canyon
+    ZoneTheme::Frozen,      // Frostfang Tundra
+    ZoneTheme::Crystal,     // Obsidian Flats
+    ZoneTheme::Haunted,     // Driftbone Sea
+    ZoneTheme::Sunscorched, // Emberfall Caldera
+    ZoneTheme::Profane,     // Hollow Crown
+];
+
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
 /// creatures that haunt it, three regular mob names, and the zone boss.
-#[allow(clippy::type_complexity)]
-const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+const FRONTIER_ZONES_DATA: [ZoneData; 20] = [
     (
         "Ashen Wastes",
         "ashen",
@@ -4618,6 +12629,19 @@ pub fn frontier_zone_info(z: usize) -> Option<(&'static str, &'static str)> {
     FRONTIER_ZONES_DATA.get(z).map(|d| (d.0, d.6))
 }
 
+/// The level Frontier zone `z` is pitched at: a straight line from the living
+/// dark's exit (the three seals' crown level) to the deep target (the King's),
+/// the two ends the generator is sloped between. Reward math (the zone-boss
+/// bounty, the champion title) keys off this, never the level displayed over
+/// the boss's head: that one reads by bite and moves with every retune of the
+/// ladder, and a one-time payout must not.
+pub fn frontier_zone_level(z: usize) -> i32 {
+    let entry = crown_level("the Elder Dryad");
+    let deep = crown_level("the King Who Was Promised Nothing");
+    let last = (frontier_zone_count() - 1) as i32;
+    entry + ((deep - entry) * z as i32) / last
+}
+
 /// The Frontier zone whose boss bears this name, if any, used to credit a
 /// zone quest when its boss is slain.
 pub fn frontier_zone_of_boss(name: &str) -> Option<usize> {
@@ -4715,6 +12739,7 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         desc,
                         zone,
                         safe: is_entrance,
+                        pvp: false,
                         exits: exits.into_iter().collect(),
                     },
                 );
@@ -4724,32 +12749,45 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                 }
                 if is_boss_room {
                     let ti = tier as i32;
+                    // The boss wears the zone's weakness but never its
+                    // resist: prep is a pure reward on the fight players
+                    // provision for.
+                    let theme = FRONTIER_ZONE_THEMES[z];
                     spawns.push(MobSpawn {
                         id: spawn_id,
                         name: boss,
                         home: id,
-                        max_hp: 900 + ti * 190,
-                        damage: 42 + ti * 5,
+                        // Fielded as authored (the Frontier's band row is
+                        // 1:1): a straight line from the entry target (a
+                        // prepared L40 out of the living dark) to the deep
+                        // target (the King's prepared L55), see `CROWNS`.
+                        max_hp: 2280 + ti * 147,
+                        damage: 56 + (ti * 57) / 20,
                         xp: 420 + ti * 95,
                         respawn_secs: 600,
                         loot: super::items::frontier_loot(z),
                         boss: true,
-                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                        profile: DamageProfile::new(DamageType::Physical, None, theme.weak()),
                     });
                     spawn_id += 1;
                 } else if idx.is_multiple_of(2) {
                     let ti = tier as i32;
+                    let theme = FRONTIER_ZONE_THEMES[z];
                     spawns.push(MobSpawn {
                         id: spawn_id,
                         name: mob_names[(idx as usize) % 3],
                         home: id,
-                        max_hp: 520 + ti * 70,
-                        damage: 38 + ti * 5,
+                        max_hp: 850 + ti * 55,
+                        damage: 44 + (ti * 9) / 4,
                         xp: 95 + ti * 25,
                         respawn_secs: 90,
                         loot: super::items::frontier_loot(z),
                         boss: false,
-                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                        profile: DamageProfile::new(
+                            DamageType::Physical,
+                            theme.resist(),
+                            theme.weak(),
+                        ),
                     });
                     spawn_id += 1;
                 }
@@ -4801,13 +12839,27 @@ struct WingRoom {
 }
 
 /// Link two rooms reciprocally: `from` gets `dir` -> `to`, `to` gets the
-/// opposite back to `from`. Never overwrites an existing exit.
+/// opposite back to `from`. Wiring a direction that already leads somewhere
+/// else is an authoring bug, and skipping it silently would sever the new
+/// rooms with nothing to notice (a cut-off component still gets coordinates
+/// of its own), so it panics instead. That refuses server startup:
+/// `LateaniaService::new` runs `seed_world` synchronously in `main` before
+/// the listener serves.
 fn link(rooms: &mut HashMap<RoomId, Room>, from: RoomId, dir: Dir, to: RoomId) {
     if let Some(r) = rooms.get_mut(&from) {
-        r.exits.entry(dir).or_insert(to);
+        let prev = r.exits.insert(dir, to);
+        assert!(
+            prev.is_none_or(|p| p == to),
+            "room {from} exit {dir:?} already leads to {prev:?}, cannot relink it to {to}"
+        );
     }
     if let Some(r) = rooms.get_mut(&to) {
-        r.exits.entry(dir.opposite()).or_insert(from);
+        let prev = r.exits.insert(dir.opposite(), from);
+        assert!(
+            prev.is_none_or(|p| p == from),
+            "room {to} exit {:?} already leads to {prev:?}, cannot relink it to {from}",
+            dir.opposite()
+        );
     }
 }
 
@@ -4836,6 +12888,7 @@ fn add_wing(
                 zone,
                 exits: HashMap::new(),
                 safe,
+                pvp: false,
             },
         );
         link(rooms, prev, prev_dir, id);
@@ -4893,13 +12946,13 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         "Whisperwood",
         false,
         14,
-        Dir::North,
+        Dir::Down,
         start,
         &[
             wr(
                 "Whisperwood - The Mushroom Stair",
-                "Shelves of bracket-fungus climb a steep slope like a giant's staircase, soft and cold and faintly yielding underfoot, and a slow rain of spores drifts down through the lanternlight to settle on your shoulders. The deeper air tastes of loam and rot and something sweeter beneath. The stair leads north, and the standing-stone ring lies back south.",
-                Dir::North,
+                "Shelves of bracket-fungus climb a steep slope like a giant's staircase, soft and cold and faintly yielding underfoot, and a slow rain of spores drifts down through the lanternlight to settle on your shoulders. The deeper air tastes of loam and rot and something sweeter beneath. The stair leads down, and the standing-stone ring lies back up.",
+                Dir::Down,
             ),
             wr(
                 "Whisperwood - The Glowcap Grotto",
@@ -5332,7 +13385,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         90,
         false,
         COMMON_LOOT,
-        p(D::Fire, Some(D::Physical), Some(D::Frost)),
+        p(D::Fire, Some(D::Poison), Some(D::Frost)),
     );
     mob(
         spawns,
@@ -5461,7 +13514,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         120,
         false,
         COMMON_LOOT,
-        p(D::Frost, Some(D::Physical), Some(D::Fire)),
+        p(D::Frost, Some(D::Frost), Some(D::Fire)),
     );
     mob(
         spawns,
@@ -5551,7 +13604,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         144,
         false,
         COMMON_LOOT,
-        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
     mob(
         spawns,
@@ -5562,7 +13615,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         150,
         false,
         COMMON_LOOT,
-        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
     mob(
         spawns,
@@ -5573,7 +13626,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         156,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Arcane)),
+        p(D::Physical, Some(D::Shadow), Some(D::Arcane)),
     );
     mob(
         spawns,
@@ -5798,7 +13851,9 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         130,
         true,
         &[1006, 1110, 1111, 1201, 1301],
-        DamageProfile::physical(),
+        // Living flesh: the cheapest coat in the game (a tier-0 poison
+        // vial) answers the game's first boss - the earliest prep lesson.
+        DamageProfile::new(DamageType::Physical, None, Some(DamageType::Poison)),
     );
 }
 
@@ -5829,6 +13884,7 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
             name: "Hearthward Close",
             zone: "Hearthward Close",
             safe: true,
+            pvp: false,
             desc: "A quiet cobbled court tucked behind Market Row, ringed with the doors of \
                    honest homes. A weathered housing clerk keeps a lectern of deeds by the \
                    gate, a wattle hut and a thatched cottage face each other across the \
@@ -5890,6 +13946,7 @@ fn extend_housing(rooms: &mut HashMap<RoomId, Room>) {
                     desc,
                     zone: t.label,
                     safe: true,
+                    pvp: false,
                     exits: exits.into_iter().collect(),
                 },
             );
@@ -5926,6 +13983,8 @@ fn house_room_desc(upper: bool, entrance: bool) -> &'static str {
         "A plain inner room stands empty and clean, its corners waiting for whatever you choose to put there."
     }
 }
+
+// ---- The overworld: the Greatroad and three capitals (rooms 600+) --------
 
 /// The overworld: 100 rooms of new biomes radiating from Embergate's South Gate
 /// down the Greatroad, plus the three capital cities - Tasmania (harbor),
@@ -6052,7 +14111,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         44,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Fire)),
+        p(D::Physical, Some(D::Poison), Some(D::Fire)),
     );
 
     // ---- Tasmania (7 rooms): the harbor capital (SAFE) ------------------
@@ -6113,12 +14172,12 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         &[
             wr(
                 "The Sapphire Coast - The Cliff Path",
-                "A narrow path clings to the chalk cliff above a sheer drop where the sea breaks white on black rocks a hundred feet below, and the wind comes off the water hard enough to lean your whole weight against. Seabirds wheel and scream from their nests in the cliff-face, loudly resentful of the company. The path runs east, and Tasmania lies west.",
-                Dir::East,
+                "A narrow path clings to the chalk cliff above a sheer drop where the sea breaks white on black rocks a hundred feet below, and the wind comes off the water hard enough to lean your whole weight against. Seabirds wheel and scream from their nests in the cliff-face, loudly resentful of the company. The path runs north, and Tasmania lies west.",
+                Dir::North,
             ),
             wr(
                 "The Sapphire Coast - The Smuggler's Cove",
-                "A hidden cove opens at the foot of a treacherous goat-track, its shingle beach littered with the grey ribs of wrecked boats and, higher up the strand, the cold ashes and stacked kegs of folk who do their trading strictly by moonlight. The tide is out, and the sea-caves gape black and dripping. East and west.",
+                "A hidden cove opens at the foot of a treacherous goat-track, its shingle beach littered with the grey ribs of wrecked boats and, higher up the strand, the cold ashes and stacked kegs of folk who do their trading strictly by moonlight. The tide is out, and the sea-caves gape black and dripping. East and south.",
                 Dir::East,
             ),
             wr(
@@ -6204,7 +14263,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         70,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Lightning)),
+        p(D::Physical, Some(D::Frost), Some(D::Lightning)),
     );
     mob(
         spawns,
@@ -6287,27 +14346,27 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         &[
             wr(
                 "The Verdant Highlands - The Herders' Path",
-                "A grassy path winds east through high rolling pasture, dotted with the small dark shapes of grazing yaks and the occasional stone cairn raised by herders to mark the way through the fog that rolls in without warning. Skylarks burst up singing from beneath your very boots. East, and Melvanala lies west.",
-                Dir::East,
+                "A grassy path winds north through high rolling pasture, dotted with the small dark shapes of grazing yaks and the occasional stone cairn raised by herders to mark the way through the fog that rolls in without warning. Skylarks burst up singing from beneath your very boots. North, and Melvanala lies west.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Gentian Meadow",
-                "A meadow of deep-blue gentian and nodding white edelweiss spills down the hillside in a sweep of color so intense it looks painted, loud with bees and the click of grasshoppers in the warm grass. A lone shepherd's flute carries faintly from somewhere out of sight. East and west.",
-                Dir::East,
+                "A meadow of deep-blue gentian and nodding white edelweiss spills down the hillside in a sweep of color so intense it looks painted, loud with bees and the click of grasshoppers in the warm grass. A lone shepherd's flute carries faintly from somewhere out of sight. North and south.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Standing Stones",
-                "A ring of moss-furred standing stones crowns a green hill, far older than any herder's memory, and the sheep will not graze within the circle no matter how rich the grass grows there. The wind drops oddly still as you step inside. East and west.",
-                Dir::East,
+                "A ring of moss-furred standing stones crowns a green hill, far older than any herder's memory, and the sheep will not graze within the circle no matter how rich the grass grows there. The wind drops oddly still as you step inside. North and south.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Thundering Falls",
-                "A river throws itself off a high green shelf in a white roar of spray, and the path crosses behind the falling water on a slick ledge where the whole world becomes noise and cold rainbow mist. The rock is treacherous and the drop is long. East and west.",
-                Dir::East,
+                "A river throws itself off a high green shelf in a white roar of spray, and the path crosses behind the falling water on a slick ledge where the whole world becomes noise and cold rainbow mist. The rock is treacherous and the drop is long. North and south.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Heather Moor",
-                "The grass gives way to a vast purple moor of springy heather and black peat-pools, stretching to every horizon under a sky full of racing cloud-shadow. Curlews call their lonely falling cry, and the wind never once stops moving over the open land. East and west.",
+                "The grass gives way to a vast purple moor of springy heather and black peat-pools, stretching to every horizon under a sky full of racing cloud-shadow. Curlews call their lonely falling cry, and the wind never once stops moving over the open land. East and south.",
                 Dir::East,
             ),
             wr(
@@ -6398,53 +14457,53 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         "The Mistfen",
         false,
         686,
-        Dir::South,
+        Dir::North,
         700,
         &[
             wr(
                 "The Mistfen - The Sinking Path",
-                "The firm highland turf rots away southward into a treacherous fen of black water and floating sedge, where a path of half-sunk logs offers the only footing and a cold white mist drinks the sound right out of the air. Something plops into the water just out of sight. South, and the hills lie north.",
-                Dir::South,
+                "The firm highland turf rots away northward into a treacherous fen of black water and floating sedge, where a path of half-sunk logs offers the only footing and a cold white mist drinks the sound right out of the air. Something plops into the water just out of sight. North, and the hills lie south.",
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Reed Labyrinth",
                 "Walls of reed twice your height close in on every side, channels of still brown water branching and rejoining until the world shrinks to mud, mist, and the rustle of unseen things parting the stems ahead of you. Direction becomes a matter of faith. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Drowned Village",
                 "The peaked roofs of a sunken village break the surface of the fen, their windows full of black water, a church spire leaning at a drunken angle with its bell still hung and waiting. The mist hangs a single rope of woodsmoke that has no fire to come from. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Will-o'-Wisp Mire",
                 "Pale lights drift and bob across the deep mire, beautiful and patient, each one hovering just over the worst of the sucking mud, each one promising firm ground that is not there at all. They brighten, hopefully, as you draw near. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Bog-Body Barrow",
                 "A low island of slightly firmer peat holds an ancient barrow, and the black bog has kept its dead so perfectly that the faces pressing up through the surface still wear their final expressions of surprise. The peat sighs and shifts as if breathing. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Leech-Black Pool",
                 "The path skirts a pool so utterly black and still it might be a hole cut clean through the world, and the things that live in it - long, soft, and far too many - lift the surface in slow ripples that all turn, somehow, toward you. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Hag's Causeway",
                 "A causeway of mortared skulls, white and grinning, lifts the path above the deepest fen, and at its midpoint a wicker idol leans over the water, freshly garlanded by hands that did not love what they were appeasing. A fungal glow leaks from a sinkhole side-delving here. North, south, and down.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Sunken Cathedral",
                 "A vast drowned cathedral rears from the mire, three-quarters swallowed, its remaining stained glass casting drowned and broken colors across the water, and from within comes the slow drip and the slower, deliberate sound of something very large turning over. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Marsh-Mother's Hollow",
-                "The fen opens into a stagnant lagoon ringed by dead willows, and from its center, draped in weed and rising water, the Marsh-Mother lifts her ancient drowned head and opens arms enough to gather in the whole foolish world. The only way back is north.",
-                Dir::South,
+                "The fen opens into a stagnant lagoon ringed by dead willows, and from its center, draped in weed and rising water, the Marsh-Mother lifts her ancient drowned head and opens arms enough to gather in the whole foolish world. The only way back is south.",
+                Dir::North,
             ),
         ],
     );
@@ -6575,7 +14634,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         74,
         false,
         COMMON_LOOT,
-        p(D::Poison, Some(D::Physical), Some(D::Fire)),
+        p(D::Poison, Some(D::Poison), Some(D::Fire)),
     );
     mob(
         spawns,
@@ -6839,7 +14898,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         74,
         false,
         COMMON_LOOT,
-        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
     mob(
         spawns,
@@ -6884,12 +14943,12 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
             ),
             wr(
                 "The Skyreach Mesas - The Thunderbird Eyrie",
-                "The trail passes beneath a ledge heaped with an enormous nest of whole tree-trunks and sun-bleached bones, and the very rock is scorched in long forking patterns, for this is the eyrie of the thunderbird, and the sky to the north growls in warning. North and south.",
-                Dir::North,
+                "The trail passes beneath a ledge heaped with an enormous nest of whole tree-trunks and sun-bleached bones, and the very rock is scorched in long forking patterns, for this is the eyrie of the thunderbird, and the sky above growls in warning. Up and south.",
+                Dir::Up,
             ),
             wr(
                 "The Skyreach Mesas - The Petroglyph Gallery",
-                "A long sheltered wall is covered floor to unreachable ceiling in spiraling petroglyphs - suns, beasts, falling stars, and figures with too many arms - a history or a warning pecked into the rock by hands no one remembers. North and south.",
+                "A long sheltered wall is covered floor to unreachable ceiling in spiraling petroglyphs - suns, beasts, falling stars, and figures with too many arms - a history or a warning pecked into the rock by hands no one remembers. North and down.",
                 Dir::North,
             ),
             wr(
@@ -6924,7 +14983,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         72,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Frost)),
+        p(D::Physical, Some(D::Poison), Some(D::Frost)),
     );
     mob(
         spawns,
@@ -6949,6 +15008,8 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         p(D::Lightning, Some(D::Lightning), Some(D::Frost)),
     );
 }
+
+// ---- The loot tables the region generators draw from ---------------------
 
 /// Common low-tier drop pool shared by wandering wing mobs.
 const COMMON_LOOT: &[u32] = &[1000, 1100, 1103, 1300];
@@ -6981,827 +15042,5 @@ const CAVERNS_BOSS_LOOT: &[u32] = &[
 ];
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_exit_resolves_to_a_real_room() {
-        let world = seed_world();
-        for room in world.rooms.values() {
-            for (dir, target) in &room.exits {
-                assert!(
-                    world.rooms.contains_key(target),
-                    "room {} ({}) has a {} exit to missing room {}",
-                    room.id,
-                    room.name,
-                    dir.label(),
-                    target
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn exits_are_reciprocal_where_expected() {
-        // Embergate square (1) <-> south gate (5): going south then north returns.
-        let world = seed_world();
-        let square = world.room(1).expect("square exists");
-        let gate_id = square.exits.get(&Dir::South).copied().expect("south exit");
-        let gate = world.room(gate_id).expect("gate exists");
-        assert_eq!(gate.exits.get(&Dir::North).copied(), Some(1));
-    }
-
-    #[test]
-    fn every_home_has_a_way_back_out() {
-        use super::super::housing as housing_mod;
-        let world = seed_world();
-        // Can `from` reach `target` by following exits across the whole graph?
-        let can_reach = |from: RoomId, target: RoomId| -> bool {
-            let mut seen = std::collections::HashSet::from([from]);
-            let mut stack = vec![from];
-            while let Some(r) = stack.pop() {
-                if r == target {
-                    return true;
-                }
-                if let Some(room) = world.room(r) {
-                    for &to in room.exits.values() {
-                        if seen.insert(to) {
-                            stack.push(to);
-                        }
-                    }
-                }
-            }
-            false
-        };
-        // No home may be a trap: every housing room must be able to get back to
-        // the start room (this catches a door whose only exit leads deeper).
-        for &id in world.rooms.keys() {
-            if housing_mod::is_housing_room(id) {
-                assert!(
-                    can_reach(id, world.start_room),
-                    "housing room {id} is trapped - no way back out without recall"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn city_districts_are_a_walkable_street_not_dead_end_rooms() {
-        let world = seed_world();
-        // Each capital's district lives at 3000 + c*10: a spine plus four haunts.
-        for c in 0..4 {
-            let base = 3000 + c * 10;
-            let haunts: Vec<RoomId> = (base + 1..base + 5).collect();
-            // Every haunt exists and can be walked into a sibling haunt (a street),
-            // not merely dead-end back at the spine.
-            let connects_to_sibling = haunts.iter().any(|&id| {
-                world
-                    .room(id)
-                    .is_some_and(|r| r.exits.values().any(|to| haunts.contains(to)))
-            });
-            assert!(
-                world.room(base).is_some(),
-                "district spine {base} should exist"
-            );
-            assert!(
-                connects_to_sibling,
-                "city district at {base} is dead-end rooms off a hub, not a walkable street"
-            );
-        }
-    }
-
-    #[test]
-    fn start_room_exists_and_is_safe() {
-        let world = seed_world();
-        let start = world.room(world.start_room).expect("start room exists");
-        assert!(start.safe, "players should spawn in a safe room");
-    }
-
-    #[test]
-    fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
-        let world = seed_world();
-        let count_in = |lo: RoomId, hi: RoomId| {
-            world
-                .rooms
-                .keys()
-                .filter(|id| **id >= lo && **id < hi)
-                .count()
-        };
-        // 198 base + extension rooms, 100 overworld rooms, and the 1000
-        // procedural Frontier rooms (rooms 2000+) all sit below room 5000.
-        let original = count_in(0, 5000);
-        assert_eq!(
-            original, 1318,
-            "expected 1318 original rooms (incl. 20 city-district rooms)"
-        );
-        // The two maze regions are full grids of rooms; the cave is sparse
-        // (only the largest connected pocket survives), so it is bounded but
-        // not exact.
-        let catacombs = count_in(CATACOMBS_BASE, THORNWOOD_BASE);
-        let thornwood = count_in(THORNWOOD_BASE, CAVERNS_BASE);
-        let caverns = count_in(
-            CAVERNS_BASE,
-            CAVERNS_BASE + (CAVERNS_W * CAVERNS_H) as RoomId,
-        );
-        assert_eq!(catacombs, CATACOMBS_W * CATACOMBS_H, "catacombs room count");
-        assert_eq!(thornwood, THORNWOOD_W * THORNWOOD_H, "thornwood room count");
-        assert!(
-            (40..=CAVERNS_W * CAVERNS_H).contains(&caverns),
-            "drowned caverns should be a sane size, got {caverns}"
-        );
-        // The housing district: the close plus one home of each tier.
-        use super::super::housing as housing_mod;
-        let housing = count_in(housing_mod::HOUSING_BASE, housing_mod::HOUSING_BASE + 1000);
-        let expected_housing = 1 + housing_mod::TIERS.iter().map(|t| t.rooms()).sum::<usize>();
-        assert_eq!(housing, expected_housing, "housing district room count");
-        // The Sundered Reaches: a second continent of braided mazes and organic
-        // caverns. Mazes fill their cell field; caverns are sparse, so the total
-        // is a sane band below the 1000-cell id range rather than an exact count.
-        let reaches = count_in(
-            REACHES_BASE,
-            REACHES_BASE + REACHES_ZONES as RoomId * REACHES_ZONE_STRIDE,
-        );
-        assert!(
-            (750..=1000).contains(&reaches),
-            "the Sundered Reaches should be ~900 rooms, got {reaches}"
-        );
-        // No stray rooms outside the six known groups.
-        assert_eq!(
-            world.rooms.len(),
-            original + catacombs + thornwood + caverns + housing + reaches,
-            "every room should belong to a known region"
-        );
-        for spawn in &world.spawns {
-            assert!(
-                world.rooms.contains_key(&spawn.home),
-                "mob {} ({}) homes to missing room {}",
-                spawn.id,
-                spawn.name,
-                spawn.home
-            );
-        }
-    }
-
-    #[test]
-    fn the_reaches_are_mazes_and_caverns_not_grids() {
-        let world = seed_world();
-        let reaches: Vec<&Room> = world
-            .rooms
-            .values()
-            .filter(|r| is_reaches_room(r.id))
-            .collect();
-        // Plenty of rooms - a real continent.
-        assert!(reaches.len() >= 750, "the Reaches are sizeable");
-        // A uniform grid has no dead-ends; a braided maze/cavern has many. The
-        // presence of degree-1 rooms (and varied degree overall) proves shape.
-        let dead_ends = reaches.iter().filter(|r| r.exits.len() == 1).count();
-        assert!(
-            dead_ends >= 20,
-            "the Reaches should wind into dead-ends, not be square blocks (got {dead_ends})"
-        );
-        let degrees: std::collections::HashSet<usize> =
-            reaches.iter().map(|r| r.exits.len()).collect();
-        assert!(
-            degrees.len() >= 3,
-            "rooms should vary in how many ways they branch (got {degrees:?})"
-        );
-    }
-
-    #[test]
-    fn catacombs_are_a_braided_maze_not_a_grid() {
-        let world = seed_world();
-        let catacomb_rooms: Vec<&Room> = world
-            .rooms
-            .values()
-            .filter(|r| {
-                r.id >= CATACOMBS_BASE
-                    && (r.id as usize) < CATACOMBS_BASE as usize + CATACOMBS_W * CATACOMBS_H
-            })
-            .collect();
-        assert_eq!(catacomb_rooms.len(), CATACOMBS_W * CATACOMBS_H);
-        // A maze has dead-ends (one exit, ignoring the safe entrance's portal)
-        // and junctions (3+ exits); a uniform grid would have neither in the
-        // interior. Confirm both shapes exist.
-        let dead_ends = catacomb_rooms
-            .iter()
-            .filter(|r| !r.safe && r.exits.len() == 1)
-            .count();
-        let junctions = catacomb_rooms.iter().filter(|r| r.exits.len() >= 3).count();
-        assert!(dead_ends > 0, "a maze should have dead-ends, found none");
-        assert!(junctions > 0, "a maze should have junctions, found none");
-        // Reachable from the start, and reciprocal: every exit's target links back.
-        for r in &catacomb_rooms {
-            for to in r.exits.values() {
-                let dest = world.room(*to).expect("catacomb exit resolves");
-                assert!(
-                    dest.exits.values().any(|back| *back == r.id),
-                    "room {} -> {} is one-way",
-                    r.id,
-                    to
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn catacombs_have_behavior_driven_mobs() {
-        let world = seed_world();
-        let catacomb_spawns: Vec<&MobSpawn> = world
-            .spawns
-            .iter()
-            .filter(|s| {
-                s.id >= CATACOMBS_SPAWN_ID_START && s.id < CATACOMBS_SPAWN_ID_START + 10_000
-            })
-            .collect();
-        assert!(
-            !catacomb_spawns.is_empty(),
-            "the catacombs should be populated"
-        );
-        // Every catacomb mob has a non-Sentinel behavior, and several distinct
-        // behaviors appear across the region.
-        let mut kinds = std::collections::HashSet::new();
-        for s in &catacomb_spawns {
-            let b = world.behavior_of(s.id);
-            assert_ne!(
-                b,
-                MobBehavior::Sentinel,
-                "{} should have a behavior",
-                s.name
-            );
-            kinds.insert(std::mem::discriminant(&b));
-        }
-        assert!(
-            kinds.len() >= 4,
-            "expected several distinct mob behaviors, found {}",
-            kinds.len()
-        );
-    }
-
-    #[test]
-    fn thornwood_is_a_maze_hung_off_melvanala() {
-        let world = seed_world();
-        let rooms: Vec<&Room> = world
-            .rooms
-            .values()
-            .filter(|r| r.id >= THORNWOOD_BASE && r.id < CAVERNS_BASE)
-            .collect();
-        assert_eq!(rooms.len(), THORNWOOD_W * THORNWOOD_H);
-        let dead_ends = rooms
-            .iter()
-            .filter(|r| !r.safe && r.exits.len() == 1)
-            .count();
-        let junctions = rooms.iter().filter(|r| r.exits.len() >= 3).count();
-        assert!(
-            dead_ends > 0 && junctions > 0,
-            "thornwood should read as a maze"
-        );
-        // The capital links into the wood, and the link is reciprocal.
-        let gate = world.room(THORNWOOD_BASE).expect("bramble gate exists");
-        assert!(gate.exits.values().any(|to| *to == MELVANALA_SQUARE));
-        assert!(
-            world
-                .room(MELVANALA_SQUARE)
-                .expect("melvanala square")
-                .exits
-                .values()
-                .any(|to| *to == THORNWOOD_BASE)
-        );
-    }
-
-    #[test]
-    fn drowned_caverns_are_one_connected_organic_cave() {
-        let world = seed_world();
-        let cave: Vec<RoomId> = world
-            .rooms
-            .keys()
-            .copied()
-            .filter(|id| {
-                *id >= CAVERNS_BASE && *id < CAVERNS_BASE + (CAVERNS_W * CAVERNS_H) as RoomId
-            })
-            .collect();
-        // Organic, not a grid: a sparse subset of the cell field survives.
-        assert!(
-            cave.len() < CAVERNS_W * CAVERNS_H,
-            "cave should be sparse, not a full grid"
-        );
-        // Every exit is reciprocal and resolves.
-        for &id in &cave {
-            for to in world.room(id).unwrap().exits.values() {
-                let dest = world.room(*to).expect("cavern exit resolves");
-                assert!(
-                    dest.exits.values().any(|back| *back == id),
-                    "cavern room {id} -> {to} is one-way"
-                );
-            }
-        }
-        // The whole cave is one connected pocket: BFS from the tide-mouth
-        // entrance reaches every cavern room (staying within the region).
-        let entrance = *cave
-            .iter()
-            .find(|id| world.room(**id).unwrap().safe)
-            .expect("cave has a safe entrance");
-        let in_cave: HashSet<RoomId> = cave.iter().copied().collect();
-        let mut seen = HashSet::from([entrance]);
-        let mut queue = VecDeque::from([entrance]);
-        while let Some(r) = queue.pop_front() {
-            for to in world.room(r).unwrap().exits.values() {
-                if in_cave.contains(to) && seen.insert(*to) {
-                    queue.push_back(*to);
-                }
-            }
-        }
-        assert_eq!(seen.len(), cave.len(), "all cavern rooms must be reachable");
-    }
-
-    #[test]
-    fn new_regions_are_populated_with_varied_behaviors() {
-        let world = seed_world();
-        for (lo, hi, label) in [
-            (
-                THORNWOOD_SPAWN_ID_START,
-                THORNWOOD_SPAWN_ID_START + 10_000,
-                "thornwood",
-            ),
-            (
-                CAVERNS_SPAWN_ID_START,
-                CAVERNS_SPAWN_ID_START + 10_000,
-                "caverns",
-            ),
-        ] {
-            let spawns: Vec<&MobSpawn> = world
-                .spawns
-                .iter()
-                .filter(|s| s.id >= lo && s.id < hi)
-                .collect();
-            assert!(!spawns.is_empty(), "{label} should be populated");
-            let mut kinds = HashSet::new();
-            for s in &spawns {
-                let b = world.behavior_of(s.id);
-                assert_ne!(
-                    b,
-                    MobBehavior::Sentinel,
-                    "{} should have a behavior",
-                    s.name
-                );
-                kinds.insert(std::mem::discriminant(&b));
-            }
-            assert!(kinds.len() >= 4, "{label} should field varied behaviors");
-        }
-    }
-
-    #[test]
-    fn living_world_regulars_stay_below_their_bosses() {
-        let world = seed_world();
-        for (lo, hi, label) in [
-            (
-                CATACOMBS_SPAWN_ID_START,
-                CATACOMBS_SPAWN_ID_START + 10_000,
-                "catacombs",
-            ),
-            (
-                THORNWOOD_SPAWN_ID_START,
-                THORNWOOD_SPAWN_ID_START + 10_000,
-                "thornwood",
-            ),
-            (
-                CAVERNS_SPAWN_ID_START,
-                CAVERNS_SPAWN_ID_START + 10_000,
-                "caverns",
-            ),
-        ] {
-            let spawns: Vec<&MobSpawn> = world
-                .spawns
-                .iter()
-                .filter(|s| s.id >= lo && s.id < hi)
-                .collect();
-            let boss_damage = spawns
-                .iter()
-                .filter(|s| s.boss)
-                .map(|s| s.damage)
-                .max()
-                .expect("region has a boss");
-            let too_strong: Vec<_> = spawns
-                .iter()
-                .filter(|s| !s.boss && s.damage >= boss_damage)
-                .map(|s| (s.name, s.damage, boss_damage))
-                .collect();
-            assert!(
-                too_strong.is_empty(),
-                "{label} regulars should not meet or exceed boss damage: {too_strong:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn living_world_loot_stays_out_of_the_frontier_catalog() {
-        let world = seed_world();
-        for spawn in world.spawns.iter().filter(|s| {
-            (CATACOMBS_SPAWN_ID_START..CATACOMBS_SPAWN_ID_START + 10_000).contains(&s.id)
-                || (THORNWOOD_SPAWN_ID_START..THORNWOOD_SPAWN_ID_START + 10_000).contains(&s.id)
-                || (CAVERNS_SPAWN_ID_START..CAVERNS_SPAWN_ID_START + 10_000).contains(&s.id)
-        }) {
-            for id in spawn.loot {
-                assert!(
-                    !(3000..3200).contains(id),
-                    "{} should not drop Frontier catalog item {}",
-                    spawn.name,
-                    id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn there_are_at_least_fifty_distinct_enemy_types() {
-        let world = seed_world();
-        let mut names: Vec<&str> = world.spawns.iter().map(|s| s.name).collect();
-        names.sort_unstable();
-        names.dedup();
-        assert!(
-            names.len() >= 50,
-            "expected 50+ distinct enemy types, found {}",
-            names.len()
-        );
-    }
-
-    #[test]
-    fn mob_spawn_ids_are_unique() {
-        let world = seed_world();
-        let mut ids: Vec<u32> = world.spawns.iter().map(|s| s.id).collect();
-        ids.sort_unstable();
-        let count = ids.len();
-        ids.dedup();
-        assert_eq!(count, ids.len(), "duplicate mob spawn id");
-    }
-
-    #[test]
-    fn every_boss_has_a_guaranteed_loot_table() {
-        let world = seed_world();
-        let bosses: Vec<_> = world.spawns.iter().filter(|s| s.boss).collect();
-        assert!(bosses.len() >= 7, "expected at least 7 zone bosses");
-        for boss in bosses {
-            assert!(!boss.loot.is_empty(), "boss {} has no loot", boss.name);
-            for id in boss.loot {
-                assert!(
-                    crate::app::door::lateania::items::item(*id).is_some(),
-                    "boss {} drops missing item {}",
-                    boss.name,
-                    id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn all_mob_loot_references_real_items() {
-        let world = seed_world();
-        for spawn in &world.spawns {
-            for id in spawn.loot {
-                assert!(
-                    crate::app::door::lateania::items::item(*id).is_some(),
-                    "mob {} drops missing item {}",
-                    spawn.name,
-                    id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn every_room_reachable_from_start() {
-        let world = seed_world();
-        let mut seen = std::collections::HashSet::new();
-        let mut stack = vec![world.start_room];
-        while let Some(id) = stack.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
-            if let Some(room) = world.room(id) {
-                for target in room.exits.values() {
-                    stack.push(*target);
-                }
-            }
-        }
-        assert_eq!(
-            seen.len(),
-            world.rooms.len(),
-            "some rooms are unreachable from the start room"
-        );
-    }
-
-    #[test]
-    fn overworld_adds_one_hundred_new_rooms() {
-        let world = seed_world();
-        // The overworld occupies ids 600..2000; the Frontier starts at 2000.
-        let new_rooms = world
-            .rooms
-            .keys()
-            .filter(|id| (600..2000).contains(*id))
-            .count();
-        assert_eq!(
-            new_rooms, 100,
-            "expected exactly 100 new overworld rooms (600-1999)"
-        );
-    }
-
-    #[test]
-    fn every_room_has_a_paragraph_description() {
-        // "A paragraph of detail" - every authored room reads as real prose, not
-        // a stub. The bar is a minimum length plus more than one sentence.
-        const MIN_CHARS: usize = 180;
-        let world = seed_world();
-        let mut short: Vec<(RoomId, usize)> = world
-            .rooms
-            .values()
-            .filter(|r| {
-                let len = r.desc.chars().count();
-                let sentences = r.desc.matches(['.', '!', '?']).count();
-                len < MIN_CHARS || sentences < 2
-            })
-            .map(|r| (r.id, r.desc.chars().count()))
-            .collect();
-        short.sort_unstable();
-        assert!(
-            short.is_empty(),
-            "{} room(s) lack a paragraph-length description: {:?}",
-            short.len(),
-            short
-        );
-    }
-
-    #[test]
-    fn frontier_quests_map_each_boss_back_to_its_zone() {
-        assert_eq!(frontier_zone_count(), 20);
-        for z in 0..frontier_zone_count() {
-            let (_zname, boss) = frontier_zone_info(z).expect("zone exists");
-            assert_eq!(
-                frontier_zone_of_boss(boss),
-                Some(z),
-                "boss {boss} should credit zone {z}"
-            );
-        }
-        assert_eq!(frontier_zone_of_boss("not a boss"), None);
-    }
-
-    #[test]
-    fn regular_mobs_respawn_fast_enough_for_grinding() {
-        let world = seed_world();
-        let slow: Vec<_> = world
-            .spawns
-            .iter()
-            .filter(|spawn| !spawn.boss && spawn.respawn_secs > 76)
-            .map(|spawn| (spawn.name, spawn.respawn_secs))
-            .collect();
-
-        assert!(
-            slow.is_empty(),
-            "regular grind mobs should not have long respawns: {slow:?}"
-        );
-    }
-
-    #[test]
-    fn regular_mobs_keep_grind_rewards_after_boss_tuning() {
-        let world = seed_world();
-        let first_road_mob = world
-            .spawns
-            .iter()
-            .find(|spawn| spawn.home == 6 && !spawn.boss)
-            .expect("first road mob exists");
-        assert!(
-            first_road_mob.xp >= 14,
-            "early mobs should still be worth killing"
-        );
-
-        let frontier_regular = world
-            .spawns
-            .iter()
-            .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && !spawn.boss)
-            .expect("frontier regular mob exists");
-        assert!(
-            frontier_regular.xp >= 60,
-            "frontier regulars should reward deliberate grinding"
-        );
-    }
-
-    #[test]
-    fn first_frontier_regulars_are_endgame_mobs_but_not_bosses() {
-        let world = seed_world();
-        let first_frontier_regular = world
-            .spawns
-            .iter()
-            .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && !spawn.boss)
-            .expect("frontier regular mob exists");
-        let first_frontier_boss = world
-            .spawns
-            .iter()
-            .find(|spawn| spawn.id >= FRONTIER_SPAWN_ID_START && spawn.boss)
-            .expect("frontier boss exists");
-        let strongest_living_boss_damage = world
-            .spawns
-            .iter()
-            .filter(|spawn| is_living_dark_spawn(spawn.id) && spawn.boss)
-            .map(|spawn| spawn.damage)
-            .max()
-            .expect("living-dark bosses exist");
-
-        assert!(
-            first_frontier_regular.damage > strongest_living_boss_damage,
-            "first Frontier regulars should assume the living-dark arc is cleared"
-        );
-        assert!(
-            first_frontier_regular.damage < first_frontier_boss.damage
-                && first_frontier_regular.max_hp < first_frontier_boss.max_hp,
-            "first Frontier regulars should still be below the first boss"
-        );
-    }
-
-    #[test]
-    fn town_and_capitals_have_wildlife() {
-        assert!(!critters_at(1).is_empty(), "the town square has wildlife");
-        assert!(
-            critters_at(1)
-                .iter()
-                .any(|c| matches!(c.kind, CritterKind::Boon(_))),
-            "a boon creature lives in the town square"
-        );
-        assert!(
-            WILDLIFE.iter().any(|c| c.kind == CritterKind::Game),
-            "small game lives out in the wilds"
-        );
-    }
-
-    #[test]
-    fn town_square_has_a_recall_fountain_and_bank() {
-        // The recall destination carries a healing fountain, and room 1 is safe
-        // so the fountain actually restores vitals. It also carries the bank
-        // that protects gold from death loss.
-        let features = features_at(1);
-        assert!(
-            features.iter().any(|f| f.kind == FeatureKind::Fountain),
-            "the town square needs a fountain"
-        );
-        assert!(
-            features.iter().any(|f| f.kind == FeatureKind::Bank),
-            "the town square needs a bank"
-        );
-        assert!(seed_world().room(1).expect("town square exists").safe);
-    }
-
-    #[test]
-    fn every_capital_has_a_fountain_and_a_plaque() {
-        let world = seed_world();
-        for square in [TASMANIA_SQUARE, MELVANALA_SQUARE, MATLATESH_SQUARE] {
-            let room = world.room(square).expect("capital square exists");
-            assert!(room.safe, "capital {square} must be a safe haven");
-            let feats = features_at(square);
-            assert!(
-                feats.iter().any(|f| f.kind == FeatureKind::Fountain),
-                "capital {square} has no healing fountain"
-            );
-            assert!(
-                feats.iter().any(|f| f.kind == FeatureKind::Plaque),
-                "capital {square} has no dedication plaque"
-            );
-        }
-    }
-
-    #[test]
-    fn every_feature_lives_in_a_real_room() {
-        let world = seed_world();
-        for feature in FEATURES {
-            assert!(
-                world.rooms.contains_key(&feature.room),
-                "feature {:?} references missing room {}",
-                feature.name,
-                feature.room
-            );
-        }
-    }
-
-    #[test]
-    fn minimap_centres_on_the_player_and_reveals_frontiers() {
-        let world = seed_world();
-        let start = world.start_room;
-        // Only the start room is visited: it sits dead centre, and at least one
-        // unexplored exit shows up as a frontier marker.
-        let visited = HashSet::from([start]);
-        let map = world.minimap(start, None, &visited, 3, 2);
-        let centre = (map.grid.len() / 2, map.grid[0].len() / 2);
-        assert_eq!(map.grid[centre.0][centre.1], MapCell::Current);
-        let frontiers = map
-            .grid
-            .iter()
-            .flatten()
-            .filter(|c| **c == MapCell::Frontier)
-            .count();
-        assert!(
-            frontiers >= 1,
-            "the start room should reveal somewhere to go"
-        );
-    }
-
-    #[test]
-    fn minimap_draws_a_corridor_between_visited_rooms() {
-        let world = seed_world();
-        let start = world.start_room;
-        let neighbour = world
-            .room(start)
-            .unwrap()
-            .exits
-            .iter()
-            .filter(|(dir, _)| dir.delta_2d().is_some())
-            .map(|(_, dest)| *dest)
-            .next()
-            .expect("start has a planar exit");
-        let visited = HashSet::from([start, neighbour]);
-        let map = world.minimap(start, None, &visited, 3, 2);
-        let visited_cells = map
-            .grid
-            .iter()
-            .flatten()
-            .filter(|c| **c == MapCell::Visited)
-            .count();
-        assert!(visited_cells >= 1, "the visited neighbour should be drawn");
-        let corridors = map
-            .grid
-            .iter()
-            .flatten()
-            .filter(|c| matches!(**c, MapCell::ConnH | MapCell::ConnV))
-            .count();
-        assert!(corridors >= 1, "a corridor should join the two rooms");
-    }
-
-    #[test]
-    fn minimap_marks_previous_room_and_trail() {
-        let world = seed_world();
-        let start = world.start_room;
-        let previous = world
-            .room(start)
-            .unwrap()
-            .exits
-            .iter()
-            .filter(|(dir, _)| dir.delta_2d().is_some())
-            .map(|(_, dest)| *dest)
-            .next()
-            .expect("start has a planar exit");
-        let visited = HashSet::from([start, previous]);
-
-        let map = world.minimap(start, Some(previous), &visited, 3, 2);
-
-        assert!(
-            map.grid.iter().flatten().any(|c| *c == MapCell::Previous),
-            "the room just left should be marked"
-        );
-        assert!(
-            map.grid
-                .iter()
-                .flatten()
-                .any(|c| matches!(*c, MapCell::TrailH | MapCell::TrailV)),
-            "the route from previous room to current room should be highlighted"
-        );
-    }
-
-    #[test]
-    fn reaches_zone_labels_are_not_doubled() {
-        let world = seed_world();
-        for room in world.rooms.values() {
-            assert!(
-                !room.zone.starts_with("The The "),
-                "room {} has a doubled zone label {:?}",
-                room.id,
-                room.zone
-            );
-        }
-        assert!(
-            world.rooms.values().any(|r| r.zone == "The Sundering Deep"),
-            "the deepest Reaches zone should carry its board-quest label"
-        );
-    }
-
-    #[test]
-    fn yssgar_out_toughens_and_out_earns_the_frontier_king() {
-        // The Reaches deliberately ride the Frontier's balance multipliers, so
-        // pin the intended outcome: the new continent's crowned boss stands
-        // above the King Who Was Promised Nothing in threat and in XP.
-        let world = seed_world();
-        let king = world
-            .spawns
-            .iter()
-            .find(|s| s.name == "the King Who Was Promised Nothing")
-            .expect("the Frontier king spawns");
-        let yssgar = world
-            .spawns
-            .iter()
-            .find(|s| s.name == "Yssgar, the Sundering Deep")
-            .expect("the Reaches' crowned boss spawns");
-        assert!(
-            yssgar.max_hp > king.max_hp,
-            "Yssgar should out-last the King"
-        );
-        assert!(
-            yssgar.damage > king.damage,
-            "Yssgar should out-hit the King"
-        );
-        assert!(yssgar.xp > king.xp, "Yssgar should out-reward the King");
-    }
-}
+#[path = "world_test.rs"]
+mod world_test;

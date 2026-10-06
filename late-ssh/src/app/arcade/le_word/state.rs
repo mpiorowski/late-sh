@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::svc::LeWordService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
+/// Mirrors the `le_word_daily_daily_win` reward template. Update both together.
+pub const DAILY_WIN_REWARD_CHIPS: i64 = 250;
 pub const WORD_LEN: usize = 5;
 pub const MAX_GUESSES: usize = 6;
 pub const DAILY_DIFFICULTY_KEY: &str = "daily";
@@ -27,8 +30,18 @@ pub struct State {
     pub won: bool,
     pub show_rules: bool,
     pub message: String,
+    /// In flight only while a rolled-over day is fetching its word; see
+    /// `ensure_current_daily`.
+    word_reload_rx: Option<tokio::sync::oneshot::Receiver<Option<DailyWord>>>,
+    /// Set when a rollover fetch failed; `ensure_current_daily` holds off
+    /// until this passes, then tries again. Without it a transient DB error
+    /// at midnight left the board dead for the rest of the session.
+    word_reload_backoff_until: Option<std::time::Instant>,
     pub svc: LeWordService,
 }
+
+/// How long a failed rollover word fetch waits before the next attempt.
+const WORD_RELOAD_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl State {
     pub fn new(
@@ -58,6 +71,8 @@ impl State {
             } else {
                 "Le Word is unavailable. Try again soon.".to_string()
             },
+            word_reload_rx: None,
+            word_reload_backoff_until: None,
             svc,
         };
         if let Some(game) = saved_game
@@ -77,6 +92,95 @@ impl State {
             };
         }
         state
+    }
+
+    /// Roll the round over when the UTC date changes under a live session.
+    /// The word itself lives in the database (the session's first one arrives
+    /// with the bootstrap), so this clears the board immediately and fetches
+    /// the new word in the background; `poll_word_reload` installs it.
+    /// `puzzle_date` only advances once the word lands, so a failed fetch is
+    /// retried here (after `WORD_RELOAD_RETRY`) instead of leaving the board
+    /// dead until reconnect. Returns true when the screen changed.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.puzzle_date == today {
+            return false;
+        }
+        if self.word_reload_rx.is_some() {
+            return false;
+        }
+        if let Some(until) = self.word_reload_backoff_until
+            && std::time::Instant::now() < until
+        {
+            return false;
+        }
+        self.word_reload_backoff_until = None;
+
+        // Yesterday's word must stop scoring guesses right away, whether or
+        // not the fetch succeeds.
+        self.answer = String::new();
+        self.daily_word_loaded = false;
+        self.guesses.clear();
+        self.current_guess.clear();
+        self.is_game_over = false;
+        self.won = false;
+        self.message = "Loading today's Le Word.".to_string();
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.word_reload_rx = Some(rx);
+        let svc = self.svc.clone();
+        // Pure state tests drive this without a runtime; the state is already
+        // cleared, and the poll below installs nothing when nothing arrives.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                let word = match svc.ensure_daily_word().await {
+                    Ok(word) => Some(word),
+                    Err(error) => {
+                        tracing::error!(error = ?error, "failed to load the rolled-over Le Word");
+                        None
+                    }
+                };
+                let _ = tx.send(word);
+            });
+        }
+        true
+    }
+
+    /// Install a word fetched by `ensure_current_daily`. Returns true when the
+    /// screen changed.
+    pub fn poll_word_reload(&mut self) -> bool {
+        let Some(rx) = self.word_reload_rx.as_mut() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(Some(word)) => {
+                self.word_reload_rx = None;
+                self.word_reload_backoff_until = None;
+                self.puzzle_date = word.puzzle_date;
+                self.answer = word.answer_word;
+                self.daily_word_loaded = true;
+                self.message = "Guess today's Le Word.".to_string();
+                true
+            }
+            Ok(None) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.word_reload_rx = None;
+                // `puzzle_date` was not advanced, so `ensure_current_daily`
+                // tries again once the backoff passes.
+                self.word_reload_backoff_until =
+                    Some(std::time::Instant::now() + WORD_RELOAD_RETRY);
+                self.message = "Le Word is unavailable. Retrying soon.".to_string();
+                true
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
+        }
+    }
+
+    /// Today's word has at least one submitted guess and the run is not over.
+    pub fn has_unfinished_daily(&self) -> bool {
+        self.daily_word_loaded
+            && !self.guesses.is_empty()
+            && !self.is_game_over
+            && self.puzzle_date == self.svc.today()
     }
 
     pub fn guess_number(&self) -> usize {
@@ -107,6 +211,11 @@ impl State {
         if guess == self.answer {
             self.won = true;
             self.is_game_over = true;
+            self.svc.record_finish(
+                ArcadeMode::Daily,
+                ArcadeDifficulty::Single,
+                ArcadeFinish::Won,
+            );
             self.message = format!("Solved in {}.", self.guesses.len());
             self.save_async();
             self.svc
@@ -116,6 +225,11 @@ impl State {
 
         if self.guesses.len() >= MAX_GUESSES {
             self.is_game_over = true;
+            self.svc.record_finish(
+                ArcadeMode::Daily,
+                ArcadeDifficulty::Single,
+                ArcadeFinish::Lost,
+            );
             self.message = format!("The word was {}.", self.answer.to_uppercase());
         } else {
             self.message = "Try again.".to_string();
@@ -242,94 +356,8 @@ fn score_rank(score: LetterScore) -> u8 {
     }
 }
 
+// A child of this module (not a sibling in mod.rs) so the rollover tests can
+// drive the private reload channel and backoff directly.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn score_guess_handles_duplicate_letters() {
-        assert_eq!(
-            score_guess("allee", "apple"),
-            [
-                LetterScore::Correct,
-                LetterScore::Present,
-                LetterScore::Absent,
-                LetterScore::Absent,
-                LetterScore::Correct,
-            ]
-        );
-        assert_eq!(
-            score_guess("sassy", "abyss"),
-            [
-                LetterScore::Present,
-                LetterScore::Present,
-                LetterScore::Absent,
-                LetterScore::Correct,
-                LetterScore::Present,
-            ]
-        );
-    }
-
-    #[test]
-    fn score_guess_matches_shade_screenshot_case() {
-        assert_eq!(
-            score_guess("wormy", "shade"),
-            [
-                LetterScore::Absent,
-                LetterScore::Absent,
-                LetterScore::Absent,
-                LetterScore::Absent,
-                LetterScore::Absent,
-            ]
-        );
-        assert_eq!(
-            score_guess("adieu", "shade"),
-            [
-                LetterScore::Present,
-                LetterScore::Present,
-                LetterScore::Absent,
-                LetterScore::Present,
-                LetterScore::Absent,
-            ]
-        );
-        assert_eq!(
-            score_guess("adeem", "shade"),
-            [
-                LetterScore::Present,
-                LetterScore::Present,
-                LetterScore::Present,
-                LetterScore::Absent,
-                LetterScore::Absent,
-            ]
-        );
-        assert_eq!(
-            score_guess("house", "shade"),
-            [
-                LetterScore::Present,
-                LetterScore::Absent,
-                LetterScore::Absent,
-                LetterScore::Present,
-                LetterScore::Correct,
-            ]
-        );
-    }
-
-    #[test]
-    fn score_letter_from_guesses_keeps_best_keyboard_hint() {
-        let guesses = vec!["allee".to_string(), "sassy".to_string()];
-
-        assert_eq!(
-            score_letter_from_guesses(&guesses, "apple", 'a'),
-            Some(LetterScore::Correct)
-        );
-        assert_eq!(
-            score_letter_from_guesses(&guesses, "apple", 'l'),
-            Some(LetterScore::Present)
-        );
-        assert_eq!(
-            score_letter_from_guesses(&guesses, "apple", 's'),
-            Some(LetterScore::Absent)
-        );
-        assert_eq!(score_letter_from_guesses(&guesses, "apple", 'z'), None);
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

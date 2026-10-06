@@ -4,10 +4,10 @@ use serde::Deserialize;
 
 use crate::{AppState, metrics};
 
-// late-web only surfaces the listener count; per-source track display lives
-// on the connect page, fed over the pair WS.
+// late-web only surfaces the listener count here; per-source track display
+// lives on the `/listen` page, fed by the `/listen/state` proxy.
 #[derive(Clone, Debug, Default)]
-pub struct NowPlayingStatus {
+pub(crate) struct NowPlayingStatus {
     pub listeners_count: Option<usize>,
 }
 
@@ -16,7 +16,7 @@ struct NowPlayingResponse {
     listeners_count: Option<usize>,
 }
 
-pub async fn fetch(state: &AppState) -> anyhow::Result<NowPlayingStatus> {
+pub(crate) async fn fetch(state: &AppState) -> anyhow::Result<NowPlayingStatus> {
     let url = format!("{}/api/now-playing", state.config.ssh_internal_url);
 
     let response = state

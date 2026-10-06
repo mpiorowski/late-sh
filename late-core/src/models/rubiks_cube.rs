@@ -14,6 +14,43 @@ crate::user_scoped_model! {
     }
 }
 
+crate::user_scoped_model! {
+    table = "rubiks_cube_games";
+    user_field = user_id;
+    params = GameParams;
+    struct Game {
+        @data
+        pub user_id: Uuid,
+        pub puzzle_date: NaiveDate,
+        pub stickers: String,
+        pub user_moves: i32,
+    }
+}
+
+impl Game {
+    pub async fn upsert(client: &Client, params: GameParams) -> Result<Self> {
+        let row = client
+            .query_one(
+                "INSERT INTO rubiks_cube_games (user_id, puzzle_date, stickers, user_moves)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (user_id) DO UPDATE SET
+                   puzzle_date = $2,
+                   stickers = $3,
+                   user_moves = $4,
+                   updated = current_timestamp
+                 RETURNING *",
+                &[
+                    &params.user_id,
+                    &params.puzzle_date,
+                    &params.stickers,
+                    &params.user_moves,
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+}
+
 impl DailyWin {
     pub async fn record_win(
         client: &Client,
@@ -22,10 +59,21 @@ impl DailyWin {
     ) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "INSERT INTO rubiks_cube_daily_wins (user_id, puzzle_date)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id, puzzle_date) DO NOTHING
-                 RETURNING *",
+                &format!(
+                    "WITH win AS (
+                         INSERT INTO rubiks_cube_daily_wins (user_id, puzzle_date)
+                         VALUES ($1, $2)
+                         ON CONFLICT (user_id, puzzle_date) DO NOTHING
+                         RETURNING *, true AS fresh_win
+                     ),
+                     total AS (
+                         {bump}
+                     )
+                     SELECT * FROM win",
+                    bump = super::leaderboard::bump_daily_win_total_sql(
+                        super::leaderboard::DailyPuzzle::RubiksCube
+                    ),
+                ),
                 &[&user_id, &puzzle_date],
             )
             .await?;

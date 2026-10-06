@@ -7,6 +7,8 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use late_core::models::media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS};
+
 use crate::app::{
     audio::svc::{AudioMode, HistoryItemView, QueueItemView, QueueSnapshot, SkipProgress},
     common::theme,
@@ -69,7 +71,9 @@ pub(crate) fn draw(
     let width = inner.width as usize;
 
     frame.render_widget(
-        Paragraph::new(section_heading("Submit (limit 10 songs / 5 min)")),
+        Paragraph::new(section_heading(&format!(
+            "Submit (limit 10 songs / 5 min · +{SONG_QUEUE_REWARD_CHIPS} chips, first {SONG_QUEUE_MAX_PAID_PER_DAY}/day)"
+        ))),
         layout[1],
     );
     draw_submit(frame, layout[3], state, submit_enabled, width);
@@ -111,7 +115,7 @@ fn draw_submit(
     let prefix_style = if focused {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -119,13 +123,13 @@ fn draw_submit(
     let label_style = if focused {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
     let trailing_style = if focused {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -152,7 +156,9 @@ fn draw_submit(
         }
     };
     let value_style = if focused {
-        Style::default().fg(value_color).bg(theme::BG_SELECTION())
+        Style::default()
+            .fg(value_color)
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(value_color)
     };
@@ -378,7 +384,7 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -386,7 +392,7 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     let label_style = if active {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
@@ -394,12 +400,12 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     let meta_style = if active {
         Style::default()
             .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let trailing_style = if active {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -409,14 +415,14 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD);
         if active {
-            base.bg(theme::BG_SELECTION())
+            base.patch(theme::selection_style())
         } else {
             base
         }
     } else if item.vote_score < 0 {
         let base = Style::default().fg(theme::TEXT_DIM());
         if active {
-            base.bg(theme::BG_SELECTION())
+            base.patch(theme::selection_style())
         } else {
             base
         }
@@ -492,7 +498,7 @@ fn history_line(
     let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else if currently_playing {
         Style::default()
@@ -504,7 +510,7 @@ fn history_line(
     let label_style = if active {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else if currently_playing {
         Style::default()
@@ -516,36 +522,15 @@ fn history_line(
     let meta_style = if active {
         Style::default()
             .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let trailing_style = if active {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
-    let score = format!("{:+}", item.vote_score);
-    let score_style = if item.vote_score > 0 {
-        let base = Style::default()
-            .fg(theme::AMBER_GLOW())
-            .add_modifier(Modifier::BOLD);
-        if active {
-            base.bg(theme::BG_SELECTION())
-        } else {
-            base
-        }
-    } else if item.vote_score < 0 {
-        let base = Style::default().fg(theme::TEXT_DIM());
-        if active {
-            base.bg(theme::BG_SELECTION())
-        } else {
-            base
-        }
-    } else {
-        meta_style
-    };
-
     let title = item
         .title
         .clone()
@@ -558,10 +543,7 @@ fn history_line(
     let inner_width = width.saturating_sub(RIGHT_PAD);
     let duration_width = 5usize.min(inner_width.saturating_sub(prefix_w + 4));
     let plays_width = 5usize.min(inner_width.saturating_sub(prefix_w + duration_width + 5));
-    let score_width =
-        5usize.min(inner_width.saturating_sub(prefix_w + duration_width + plays_width + 6));
-    let label_width =
-        inner_width.saturating_sub(prefix_w + duration_width + plays_width + score_width + 3);
+    let label_width = inner_width.saturating_sub(prefix_w + duration_width + plays_width + 2);
 
     Line::from(vec![
         Span::styled(prefix, prefix_style),
@@ -582,16 +564,11 @@ fn history_line(
             pad_left(&truncate_to_width(&plays, plays_width), plays_width),
             meta_style,
         ),
-        Span::styled(" ", trailing_style),
-        Span::styled(
-            pad_left(&truncate_to_width(&score, score_width), score_width),
-            score_style,
-        ),
         Span::styled(" ".repeat(RIGHT_PAD), trailing_style),
     ])
 }
 
-fn format_queue_duration(item: &QueueItemView) -> String {
+pub(super) fn format_queue_duration(item: &QueueItemView) -> String {
     if item.is_stream {
         return "live".to_string();
     }
@@ -642,8 +619,6 @@ fn draw_footer(
         Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("[/]", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" list  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("+/-/0", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" vote  ", Style::default().fg(theme::TEXT_DIM())),
     ];
     if focus == BoothFocus::History {
         spans.push(Span::styled("↵", Style::default().fg(theme::AMBER_DIM())));
@@ -664,6 +639,14 @@ fn draw_footer(
             ));
         }
     } else {
+        spans.push(Span::styled(
+            "+/-/0",
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+        spans.push(Span::styled(
+            " vote  ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
         spans.push(Span::styled("s", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
             " skip  ",
@@ -792,42 +775,5 @@ fn truncate_to_width(text: &str, width: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use uuid::Uuid;
-
-    fn history_item(video_id: &str) -> HistoryItemView {
-        HistoryItemView {
-            id: Uuid::nil(),
-            video_id: video_id.to_string(),
-            title: Some("Current Track".to_string()),
-            channel: Some("Channel".to_string()),
-            duration_ms: Some(125_000),
-            is_stream: false,
-            play_count: 2,
-            last_played_at_ms: 0,
-            vote_score: 4,
-        }
-    }
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    }
-
-    #[test]
-    fn history_line_marks_current_track() {
-        let line = history_line(&history_item("abc123"), false, true, 80);
-
-        assert!(line_text(&line).starts_with(" ▶ Current Track"));
-    }
-
-    #[test]
-    fn selected_history_line_keeps_cursor_when_not_current() {
-        let line = history_line(&history_item("abc123"), true, false, 80);
-
-        assert!(line_text(&line).starts_with(" › Current Track"));
-    }
-}
+#[path = "ui_test.rs"]
+mod ui_test;

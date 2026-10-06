@@ -19,11 +19,12 @@ pub enum AuthOutcome {
     Banned,
 }
 
-pub async fn authenticate(db: &Db, token: &str, peer_ip: IpAddr) -> Result<AuthOutcome> {
+pub async fn authenticate(db: &Db, token: &str, client_ip: Option<IpAddr>) -> Result<AuthOutcome> {
     let client = db.get().await?;
-    if ServerBan::find_active_for_ip_address(&client, &peer_ip.to_string())
-        .await?
-        .is_some()
+    if let Some(client_ip) = client_ip
+        && ServerBan::find_active_for_ip_address(&client, &client_ip.to_string())
+            .await?
+            .is_some()
     {
         return Ok(AuthOutcome::Banned);
     }

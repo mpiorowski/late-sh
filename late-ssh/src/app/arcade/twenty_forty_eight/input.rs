@@ -10,6 +10,10 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     }
 
     match byte {
+        b'r' | b'R' => {
+            state.reset();
+            true
+        }
         b'k' | b'K' => {
             state.move_up();
             true

@@ -3,14 +3,19 @@ use chrono::NaiveDate;
 use late_core::nonogram::{NonogramPack, NonogramPackIndex, NonogramPuzzle};
 use rand_core::{OsRng, RngCore};
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::svc::NonogramService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::nonogram::{Game, GameParams};
 
+/// Shared, immutable puzzle library. The packs sit behind an `Arc` so the
+/// per-session clones in `SessionConfig` are refcount bumps, not deep copies
+/// of ~300 embedded puzzles.
 #[derive(Clone, Debug, Default)]
 pub struct Library {
-    packs: Vec<NonogramPack>,
+    packs: Arc<Vec<NonogramPack>>,
 }
 
 impl Library {
@@ -51,6 +56,13 @@ pub const DIFFICULTIES: [NonogramDifficulty; 3] = [
         size_key: "20x20",
     },
 ];
+/// The metric label of each row of `DIFFICULTIES`, in the same order.
+/// Sized by the table, so a new difficulty must be labeled to build.
+const DIFFICULTY_METRICS: [ArcadeDifficulty; DIFFICULTIES.len()] = [
+    ArcadeDifficulty::Easy,
+    ArcadeDifficulty::Medium,
+    ArcadeDifficulty::Hard,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -85,16 +97,38 @@ const CELL_EMPTY: u8 = 0;
 const CELL_FILLED: u8 = 1;
 const CELL_MARKED_EMPTY: u8 = 2;
 
+/// The two keys that throw away a board in progress. Both ask first, the way
+/// every other Arcade game does: a 20x20 grid is half an hour of work and `r`
+/// sits one key from the movement row (user feedback).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to clear the board",
+        }
+    }
+}
+
 pub struct State {
     pub user_id: Uuid,
     pub mode: Mode,
     pub cursor: (usize, usize),
+    pub reset_pending: Option<ResetKind>,
     library: Library,
     selected_difficulty: usize,
     current_puzzle_id: String,
     player_grid: Vec<Vec<u8>>,
     is_game_over: bool,
     daily_snapshots: HashMap<String, PuzzleSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, PuzzleSnapshot>,
     pub svc: NonogramService,
 }
@@ -142,17 +176,46 @@ impl State {
             user_id,
             mode: Mode::Daily,
             cursor: (0, 0),
+            reset_pending: None,
             library,
             selected_difficulty,
             current_puzzle_id: String::new(),
             player_grid: Vec::new(),
             is_game_over: false,
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_pack();
         state
+    }
+
+    /// Roll the daily puzzles forward when the UTC date changes under a live
+    /// session; see `minesweeper::state::State::ensure_current_daily` for why
+    /// only a long-lived connection needs this. Returns true when they moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for difficulty in DIFFICULTIES {
+            let Some(pack) = self.library.pack_by_size_key(difficulty.size_key) else {
+                continue;
+            };
+            // Same contract as `new`: a pack always yields a daily puzzle.
+            // Degrading silently here would leave yesterday's board behind an
+            // advanced `daily_date`, the exact bug this rollover fixes.
+            let snapshot = generate_snapshot(pack, Mode::Daily, &self.svc, today)
+                .expect("daily nonogram pack should always have a puzzle");
+            self.daily_snapshots
+                .insert(difficulty.key.to_string(), snapshot);
+        }
+        if self.mode == Mode::Daily {
+            self.load_mode_snapshot_for_selected_pack();
+        }
+        true
     }
 
     pub fn has_puzzles(&self) -> bool {
@@ -163,6 +226,10 @@ impl State {
 
     pub fn pack_count(&self) -> usize {
         DIFFICULTIES.len()
+    }
+
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
     }
 
     pub fn difficulty_key(&self) -> &'static str {
@@ -224,19 +291,76 @@ impl State {
         Some(row_col_statuses(puzzle, &self.player_grid))
     }
 
+    /// Index of the first daily difficulty with player marks on the grid and
+    /// no win yet: the live grid when it is the active daily, the stored
+    /// snapshot otherwise.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES
+            .iter()
+            .enumerate()
+            .find_map(|(index, difficulty)| {
+                let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                    !self.is_game_over && grid_has_player_marks(&self.player_grid)
+                } else {
+                    self.daily_snapshots
+                        .get(difficulty.key)
+                        .is_some_and(|snapshot| {
+                            !snapshot.is_game_over && grid_has_player_marks(&snapshot.player_grid)
+                        })
+                };
+                started.then_some(index)
+            })
+    }
+
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
+            return true;
+        }
+        self.reset_pending = Some(kind);
+        false
+    }
+
+    /// Disarm. Called by every other action, so an `r` pressed minutes ago can
+    /// never combine with an unrelated later keystroke into a wiped board.
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = None;
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_pack();
+    }
+
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_pack();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_pack();
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let Some(pack) = self.selected_pack().cloned() else {
             return;
@@ -255,6 +379,7 @@ impl State {
     }
 
     pub fn reset_board(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -267,6 +392,7 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, dr: isize, dc: isize) {
+        self.clear_reset_pending();
         let Some(puzzle) = self.puzzle() else {
             return;
         };
@@ -280,6 +406,7 @@ impl State {
     }
 
     pub fn toggle_cell(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -302,6 +429,7 @@ impl State {
     }
 
     pub fn toggle_mark(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -323,6 +451,7 @@ impl State {
     }
 
     pub fn clear_cell(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -341,6 +470,7 @@ impl State {
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         if !self.has_puzzles() {
             return;
         }
@@ -350,6 +480,7 @@ impl State {
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         if !self.has_puzzles() {
             return;
         }
@@ -365,6 +496,16 @@ impl State {
         self.save_async();
     }
 
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = DIFFICULTY_METRICS[self.selected_difficulty];
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_win(&mut self) {
         if self.is_game_over {
             return;
@@ -377,9 +518,13 @@ impl State {
 
         if solved {
             self.is_game_over = true;
+            self.record_finish(ArcadeFinish::Won);
             if self.mode == Mode::Daily {
-                self.svc
-                    .record_win_task(self.user_id, self.difficulty_key().to_string());
+                self.svc.record_win_task(
+                    self.user_id,
+                    self.difficulty_key().to_string(),
+                    self.daily_date,
+                );
             }
         }
     }
@@ -460,7 +605,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_id: self.current_puzzle_id.clone(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),
             is_game_over: self.is_game_over,
@@ -676,6 +824,11 @@ fn snapshot_from_game(game: &Game, pack: &NonogramPack) -> Option<PuzzleSnapshot
     })
 }
 
+fn grid_has_player_marks(grid: &[Vec<u8>]) -> bool {
+    grid.iter()
+        .any(|row| row.iter().any(|cell| *cell != CELL_EMPTY))
+}
+
 fn is_current_daily_game(puzzle_date: Option<NaiveDate>, today: NaiveDate) -> bool {
     puzzle_date == Some(today)
 }
@@ -725,169 +878,11 @@ pub fn load_default_library() -> Result<Library> {
         packs.push(pack);
     }
 
-    Ok(Library { packs })
+    Ok(Library {
+        packs: Arc::new(packs),
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use late_core::nonogram::derive_clues;
-
-    fn sample_library() -> Library {
-        let solution = vec![
-            vec![0, 1, 1, 1, 0],
-            vec![1, 0, 0, 0, 1],
-            vec![1, 0, 1, 0, 1],
-            vec![1, 0, 0, 0, 1],
-            vec![0, 1, 1, 1, 0],
-        ];
-        let (row_clues, col_clues) = derive_clues(&solution);
-        Library {
-            packs: vec![NonogramPack {
-                size_key: "5x5".to_string(),
-                width: 5,
-                height: 5,
-                puzzles: vec![NonogramPuzzle {
-                    id: "5x5-000000".to_string(),
-                    width: 5,
-                    height: 5,
-                    row_clues,
-                    col_clues,
-                    solution,
-                    difficulty: "easy".to_string(),
-                    source: Some("test".to_string()),
-                    seed: Some(1),
-                }],
-            }],
-        }
-    }
-
-    #[test]
-    fn puzzle_date_only_exists_for_daily() {
-        let today = NaiveDate::from_ymd_opt(2026, 3, 29).expect("date");
-        assert_eq!(puzzle_date_for_mode(Mode::Daily, today), Some(today));
-        assert_eq!(puzzle_date_for_mode(Mode::Personal, today), None);
-    }
-
-    #[test]
-    fn pack_navigation_is_stable_on_empty_library() {
-        let state = Library::default();
-        assert!(state.pack(0).is_none());
-    }
-
-    #[test]
-    fn sample_library_has_deterministic_daily_pick() {
-        let library = sample_library();
-        let date = NaiveDate::from_ymd_opt(2026, 3, 29).expect("date");
-        assert_eq!(
-            library
-                .pack(0)
-                .expect("pack")
-                .select_for_date(date)
-                .expect("puzzle")
-                .id,
-            "5x5-000000"
-        );
-    }
-
-    #[test]
-    fn board_matches_clues_treats_marks_as_empty() {
-        let puzzle = &sample_library().packs[0].puzzles[0];
-        let player_grid = vec![
-            vec![2, 1, 1, 1, 2],
-            vec![1, 2, 0, 0, 1],
-            vec![1, 0, 1, 2, 1],
-            vec![1, 2, 0, 0, 1],
-            vec![0, 1, 1, 1, 2],
-        ];
-
-        assert!(board_matches_clues(puzzle, &player_grid));
-    }
-
-    #[test]
-    fn board_matches_clues_rejects_wrong_filled_pattern() {
-        let puzzle = &sample_library().packs[0].puzzles[0];
-        let player_grid = vec![
-            vec![1, 1, 1, 0, 0],
-            vec![1, 0, 0, 0, 1],
-            vec![1, 0, 1, 0, 1],
-            vec![1, 0, 0, 0, 1],
-            vec![0, 1, 1, 1, 0],
-        ];
-
-        assert!(!board_matches_clues(puzzle, &player_grid));
-    }
-
-    #[test]
-    fn row_col_satisfaction_all_true_on_solution() {
-        let puzzle = &sample_library().packs[0].puzzles[0];
-        let (rows, cols) = row_col_satisfaction(puzzle, &puzzle.solution);
-        assert!(rows.iter().all(|&r| r), "all rows should be satisfied");
-        assert!(cols.iter().all(|&c| c), "all cols should be satisfied");
-    }
-
-    #[test]
-    fn row_col_satisfaction_empty_grid_is_all_false() {
-        let puzzle = &sample_library().packs[0].puzzles[0];
-        let empty = vec![vec![0u8; puzzle.width as usize]; puzzle.height as usize];
-        let (rows, cols) = row_col_satisfaction(puzzle, &empty);
-        let any_empty_row_in_solution = puzzle.row_clues.iter().any(|c| c.is_empty());
-        let any_empty_col_in_solution = puzzle.col_clues.iter().any(|c| c.is_empty());
-        assert_eq!(
-            rows.iter().any(|&r| r),
-            any_empty_row_in_solution,
-            "only empty-clue rows can be satisfied by an empty grid"
-        );
-        assert_eq!(
-            cols.iter().any(|&c| c),
-            any_empty_col_in_solution,
-            "only empty-clue cols can be satisfied by an empty grid"
-        );
-    }
-
-    #[test]
-    fn row_col_satisfaction_partial_only_matching_lines_true() {
-        let puzzle = &sample_library().packs[0].puzzles[0];
-        let mut grid = vec![vec![0u8; puzzle.width as usize]; puzzle.height as usize];
-        grid[0] = vec![0, 1, 1, 1, 0];
-
-        let (rows, cols) = row_col_satisfaction(puzzle, &grid);
-        assert!(rows[0], "row 0 matches its clue");
-        assert!(!rows[1..].iter().any(|&r| r), "other rows not satisfied");
-        assert_eq!(rows.len(), puzzle.height as usize);
-        assert_eq!(cols.len(), puzzle.width as usize);
-    }
-
-    #[test]
-    fn row_col_satisfaction_treats_marks_as_empty() {
-        let puzzle = &sample_library().packs[0].puzzles[0];
-        let marked_grid = vec![
-            vec![2, 1, 1, 1, 2],
-            vec![1, 2, 0, 0, 1],
-            vec![1, 0, 1, 2, 1],
-            vec![1, 2, 0, 0, 1],
-            vec![0, 1, 1, 1, 2],
-        ];
-        let (rows, cols) = row_col_satisfaction(puzzle, &marked_grid);
-        assert!(
-            rows.iter().all(|&r| r),
-            "marks treated as empty → all rows satisfied"
-        );
-        assert!(
-            cols.iter().all(|&c| c),
-            "marks treated as empty → all cols satisfied"
-        );
-    }
-
-    #[test]
-    fn line_status_reports_impossible_when_mark_splits_required_run() {
-        let cells = vec![CELL_FILLED, CELL_MARKED_EMPTY, CELL_FILLED, CELL_EMPTY];
-        assert_eq!(line_status(false, &cells, &[3]), LineStatus::Impossible);
-    }
-
-    #[test]
-    fn line_status_stays_pending_when_unknowns_can_complete_run() {
-        let cells = vec![CELL_FILLED, CELL_EMPTY, CELL_FILLED, CELL_EMPTY];
-        assert_eq!(line_status(false, &cells, &[3]), LineStatus::Pending);
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

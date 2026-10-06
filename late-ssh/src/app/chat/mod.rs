@@ -1,16 +1,29 @@
 pub(crate) mod action;
 pub(crate) mod commands;
+pub mod cyberspace;
 pub mod discover;
 pub mod feeds;
+pub(crate) mod gild;
+pub(crate) mod history_modal;
 pub mod input;
 pub(crate) mod list_ui;
 pub mod news;
 pub mod notifications;
 pub mod polls;
+#[cfg(test)]
+mod sheet_test;
 pub mod showcase;
+pub(crate) mod slur;
 pub(crate) mod special_badges;
 pub mod state;
+#[cfg(test)]
+mod state_test;
 pub mod svc;
+#[cfg(test)]
+mod svc_test;
 pub mod ui;
 pub(crate) mod ui_text;
 pub mod work;
+
+#[cfg(test)]
+mod action_test;

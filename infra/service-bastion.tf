@@ -47,7 +47,7 @@ resource "kubernetes_deployment_v1" "service_bastion" {
         termination_grace_period_seconds = 7200
 
         container {
-          image = var.BASTION_IMAGE_TAG
+          image = local.image_tags["bastion"]
           name  = "service-bastion"
 
           port {
@@ -136,11 +136,11 @@ resource "kubernetes_deployment_v1" "service_bastion" {
           }
           env {
             name  = "LATE_BASTION_PROXY_PROTOCOL"
-            value = var.SSH_PROXY_PROTOCOL
+            value = "1"
           }
           env {
             name  = "LATE_BASTION_PROXY_TRUSTED_CIDRS"
-            value = var.SSH_PROXY_TRUSTED_CIDRS
+            value = "10.42.0.0/16,46.62.210.86/32"
           }
 
           # --- Bastion russh host key volume ---
@@ -170,6 +170,9 @@ resource "kubernetes_deployment_v1" "service_bastion" {
         }
       }
     }
+  }
+  lifecycle {
+    ignore_changes = [spec[0].template[0].spec[0].container[0].image]
   }
 }
 

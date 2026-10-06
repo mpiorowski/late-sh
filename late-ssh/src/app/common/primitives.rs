@@ -2,17 +2,21 @@ use std::time::{Duration, Instant};
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::theme;
 #[derive(Debug, Clone)]
 pub enum BannerKind {
     Success,
     Error,
+    /// Neutral news (a lost daily match, a draw): amber, not red — nothing
+    /// went wrong, the user just needs to know.
+    Info,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +43,14 @@ impl Banner {
         }
     }
 
+    pub fn info(message: &str) -> Self {
+        Self {
+            message: message.to_string(),
+            kind: BannerKind::Info,
+            created_at: Instant::now(),
+        }
+    }
+
     pub fn is_active(&self) -> bool {
         self.created_at.elapsed().as_secs() < 5
     }
@@ -49,21 +61,48 @@ pub enum Screen {
     Dashboard,
     Arcade,
     Games,
-    Rooms,
     Lateania,
     Rebels,
     Nethack,
+    Dcss,
+    Brogue,
     Dopewars,
+    Bashquest,
+    Codekeep,
+    Usurper,
     GreenDragon,
+    Darkroom,
     Artboard,
-    Pinstar,
-    WorldCup,
+    Profiles,
+    Leaderboard,
     Clubhouse,
+    /// A small bar out back of the Clubhouse (`app/clubhouse/nightcap`): a handful of
+    /// sittable seats and a round of drinks, no walking. Entered with `n`
+    /// from the Clubhouse, absent from the Tab cycle; Esc returns there.
+    Nightcap,
+    /// The Undercity (`app/deadchannel/city`): deadchannel's street under
+    /// the Clubhouse. `0` again on the Clubhouse goes down, runners only;
+    /// `0` or Enter at the wire comes back up. Not in the Tab cycle.
+    City,
+    /// Zen (`Ctrl+F` from anywhere): the tiling layout you arrange yourself
+    /// (`app/zen`). A surface over the page you were on, absent from the Tab
+    /// cycle; only the chord returns there (Esc stays).
+    Zen,
+    /// Full-screen daily-match board. Entered only from the Daily Games
+    /// modal, absent from the Tab cycle; Esc returns to the modal.
+    DailyMatch,
+    /// Full-screen house table (poker/blackjack/asterion/tron). Entered only
+    /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
+    /// modal.
+    HouseTable,
+    /// Paired live coding scratchpad. Entered only once both users have run
+    /// `/pair @other`, absent from the Tab cycle; Esc leaves the pairing.
+    Scratchpad,
 }
 
 impl Screen {
     /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
-    /// through World Cup (`7`). The door games (Lateania, Rebels, Nethack,
+    /// through Leaderboards (`6`). The door games (Lateania, Rebels, Nethack,
     /// Green Dragon) are reached through the Games hub, not the tab bar, so
     /// they are absent from the cycle; if one is somehow current,
     /// `next`/`prev` fall back to the hub that owns them.
@@ -72,36 +111,80 @@ impl Screen {
             Screen::Clubhouse => Screen::Dashboard,
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Games,
-            Screen::Games => Screen::Rooms,
-            Screen::Rooms => Screen::Artboard,
-            Screen::Artboard => Screen::Pinstar,
-            Screen::Pinstar => Screen::WorldCup,
-            Screen::WorldCup => Screen::Clubhouse,
+            Screen::Games => Screen::Artboard,
+            Screen::Artboard => Screen::Profiles,
+            Screen::Profiles => Screen::Leaderboard,
+            Screen::Leaderboard => Screen::Clubhouse,
+            Screen::City => Screen::Clubhouse,
+            Screen::Zen => Screen::Dashboard,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
             | Screen::Dopewars
-            | Screen::GreenDragon => Screen::Games,
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
+            Screen::Scratchpad => Screen::Dashboard,
+            Screen::Nightcap => Screen::Clubhouse,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Clubhouse => Screen::WorldCup,
+            Screen::Clubhouse => Screen::Leaderboard,
+            Screen::City => Screen::Clubhouse,
+            Screen::Zen => Screen::Dashboard,
             Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
-            Screen::Rooms => Screen::Games,
-            Screen::Artboard => Screen::Rooms,
-            Screen::Pinstar => Screen::Artboard,
-            Screen::WorldCup => Screen::Pinstar,
+            Screen::Artboard => Screen::Games,
+            Screen::Profiles => Screen::Artboard,
+            Screen::Leaderboard => Screen::Profiles,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
             | Screen::Dopewars
-            | Screen::GreenDragon => Screen::Games,
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom => Screen::Games,
+            Screen::DailyMatch => Screen::Dashboard,
+            Screen::HouseTable => Screen::Dashboard,
+            Screen::Scratchpad => Screen::Dashboard,
+            Screen::Nightcap => Screen::Clubhouse,
         }
     }
+}
+
+/// One row with `left` at the start and `right` flushed to the right edge, for
+/// header rows that pair live status with the keys that act on it. The right
+/// side is a hint, so a row too tight to hold both keeps the left side and
+/// drops the hint rather than wrapping or colliding.
+pub fn row_with_hint(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+) -> Line<'static> {
+    let span_width =
+        |spans: &[Span<'static>]| -> usize { spans.iter().map(|s| s.content.width()).sum() };
+    let left_width = span_width(&left);
+    let right_width = span_width(&right);
+    if right_width == 0 || left_width + right_width + 2 > width {
+        return Line::from(left);
+    }
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(width - left_width - right_width)));
+    spans.extend(right);
+    Line::from(spans)
 }
 
 pub fn format_duration_mmss(duration: Duration) -> String {
@@ -118,14 +201,25 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Lateania => "Lateania",
         Screen::Rebels => "Rebels",
         Screen::Nethack => "NetHack",
+        Screen::Dcss => "DCSS",
+        Screen::Brogue => "Brogue",
         Screen::Dopewars => "dopewars",
+        Screen::Bashquest => "BashQuest",
+        Screen::Codekeep => "CodeKeep",
+        Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
+        Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::Arcade => "Arcade",
-        Screen::Rooms => "Tables",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
-        Screen::WorldCup => "World Cup",
+        Screen::Profiles => "Profiles",
+        Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
+        Screen::Nightcap => "Nightcap",
+        Screen::City => "Undercity",
+        Screen::DailyMatch => "Daily Match",
+        Screen::HouseTable => "House Table",
+        Screen::Scratchpad => "Scratchpad",
+        Screen::Zen => "Zen",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
@@ -144,6 +238,7 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     let (icon, color) = match banner.kind {
         BannerKind::Success => (" ✓ ", theme::SUCCESS()),
         BannerKind::Error => (" ✗ ", theme::ERROR()),
+        BannerKind::Info => (" • ", theme::AMBER()),
     };
 
     let content = Paragraph::new(Line::from(vec![
@@ -152,6 +247,31 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     ]));
 
     frame.render_widget(content, area);
+}
+
+/// The one "your terminal is too small" line, for every screen that has a
+/// minimum size. Always names what needs the room, the size it needs, and the
+/// size you currently have: a bare "too small" leaves people resizing blind
+/// with no idea how far they have to go (user feedback). It says "space", not
+/// "terminal": callers pass their constrained inner area, which is smaller
+/// than the terminal by whatever chrome surrounds it.
+pub fn too_small_text(what: &str, min_width: u16, min_height: u16, area: Rect) -> String {
+    format!(
+        "{what} needs at least {min_width}×{min_height}, this space is {}×{}",
+        area.width, area.height
+    )
+}
+
+/// Render [`too_small_text`] centred in `area`, wrapped so the line survives a
+/// terminal narrower than the message itself.
+pub fn draw_too_small(frame: &mut Frame, area: Rect, what: &str, min_width: u16, min_height: u16) {
+    frame.render_widget(
+        Paragraph::new(too_small_text(what, min_width, min_height, area))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(theme::ERROR())),
+        area,
+    );
 }
 
 pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
@@ -174,11 +294,27 @@ pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {
     }
 }
 
+/// Compact relative stamp for tight rows: `now`, `5m`, `3h`, `2d`, `06-12`.
+pub fn format_relative_time_short(dt: chrono::DateTime<chrono::Utc>) -> String {
+    let diff = chrono::Utc::now().signed_duration_since(dt);
+    if diff.num_seconds() < 60 {
+        "now".to_string()
+    } else if diff.num_minutes() < 60 {
+        format!("{}m", diff.num_minutes())
+    } else if diff.num_hours() < 24 {
+        format!("{}h", diff.num_hours())
+    } else if diff.num_days() < 7 {
+        format!("{}d", diff.num_days())
+    } else {
+        dt.format("%m-%d").to_string()
+    }
+}
+
 /// Build a one-line action-hint footer: `key desc · key desc · …`.
 ///
 /// Keys render in amber, descriptions dim, separators faint. This is the shared
-/// recipe behind every bottom hint bar (the Directory footers, the Pinstar
-/// browser) so the foot of each page reads the same.
+/// recipe behind every bottom hint bar (the Profiles footer, the Artboard
+/// view bar) so the foot of each page reads the same.
 pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())
@@ -198,65 +334,21 @@ pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn screen_next_cycles_top_level_screens() {
-        assert_eq!(Screen::Clubhouse.next(), Screen::Dashboard);
-        assert_eq!(Screen::Dashboard.next(), Screen::Arcade);
-        assert_eq!(Screen::Arcade.next(), Screen::Games);
-        assert_eq!(Screen::Games.next(), Screen::Rooms);
-        assert_eq!(Screen::Rooms.next(), Screen::Artboard);
-        assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
-        assert_eq!(Screen::Pinstar.next(), Screen::WorldCup);
-        assert_eq!(Screen::WorldCup.next(), Screen::Clubhouse);
-    }
-
-    #[test]
-    fn screen_prev_cycles_top_level_screens() {
-        assert_eq!(Screen::Clubhouse.prev(), Screen::WorldCup);
-        assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
-        assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
-        assert_eq!(Screen::Games.prev(), Screen::Arcade);
-        assert_eq!(Screen::Rooms.prev(), Screen::Games);
-        assert_eq!(Screen::Artboard.prev(), Screen::Rooms);
-        assert_eq!(Screen::Pinstar.prev(), Screen::Artboard);
-        assert_eq!(Screen::WorldCup.prev(), Screen::Pinstar);
-    }
-
-    #[test]
-    fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
-        for door in [
-            Screen::Lateania,
-            Screen::Rebels,
-            Screen::Nethack,
-            Screen::Dopewars,
-            Screen::GreenDragon,
-        ] {
-            assert_eq!(door.next(), Screen::Games);
-            assert_eq!(door.prev(), Screen::Games);
+/// Group digits with commas: `10000` → `"10,000"`. The shared formatter for
+/// every chip, score, and progress figure, so numbers read the same on all
+/// surfaces.
+pub(crate) fn thousands(value: i64) -> String {
+    let raw = value.to_string();
+    let (sign, digits) = raw
+        .strip_prefix('-')
+        .map_or(("", raw.as_str()), |rest| ("-", rest));
+    let mut out = String::with_capacity(sign.len() + digits.len() + digits.len() / 3);
+    out.push_str(sign);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
         }
+        out.push(ch);
     }
-
-    #[test]
-    fn format_duration_mmss_formats_minutes_and_seconds() {
-        assert_eq!(format_duration_mmss(Duration::from_secs(0)), "0:00");
-        assert_eq!(format_duration_mmss(Duration::from_secs(65)), "1:05");
-        assert_eq!(format_duration_mmss(Duration::from_secs(3599)), "59:59");
-    }
-
-    #[test]
-    fn banner_is_active_for_recent_messages() {
-        let fresh = Banner::success("ok");
-        assert!(fresh.is_active());
-
-        let stale = Banner {
-            message: "old".to_string(),
-            kind: BannerKind::Error,
-            created_at: Instant::now() - Duration::from_secs(6),
-        };
-        assert!(!stale.is_active());
-    }
+    out
 }

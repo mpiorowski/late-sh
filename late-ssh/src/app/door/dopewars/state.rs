@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ratatui::layout::Rect;
 
 use super::proxy::{DopewarsProcess, ProcessConfig, ProxyStatus};
+use crate::app::door::keys;
 use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -144,11 +145,43 @@ impl State {
     /// leading `ESC` would otherwise leak into the game as stray commands.
     pub fn forward_input(&self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
-            let filtered = strip_input_noise(data);
-            if !filtered.is_empty() {
-                proxy.send_input(filtered);
+            let keys = keys_for_game(proxy, data);
+            if !keys.is_empty() {
+                proxy.send_input(keys);
             }
         }
+    }
+
+    /// Test-only: fabricate a Running state around a proxy pointed at a dead
+    /// address, so input paths can be exercised without a live host. Needs a
+    /// Tokio runtime (the proxy spawns its bridge task).
+    #[cfg(test)]
+    pub fn force_running_for_test(&mut self) {
+        self.proxy = Some(DopewarsProcess::spawn(ProcessConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            secret: "test-secret".into(),
+            user_id: uuid::Uuid::nil(),
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+            repaint: None,
+        }));
+        self.mode = Mode::Running;
+    }
+}
+
+/// The exact bytes a client chunk becomes for the running game: terminal
+/// reports dropped, then the cursor keys spoken in the form the game is
+/// listening for. dopewars is the real upstream ncursesw client, and its
+/// `keypad(TRUE)` request for application cursor keys stops at our vt100
+/// parser instead of reaching the player's terminal, so the client keeps
+/// sending the CSI form. See `app/door/keys.rs`.
+fn keys_for_game(proxy: &DopewarsProcess, data: &[u8]) -> Vec<u8> {
+    let filtered = strip_input_noise(data);
+    match proxy.with_screen(|screen| screen.application_cursor()) {
+        true => keys::to_application_cursor(&filtered),
+        false => filtered,
     }
 }
 
@@ -188,62 +221,5 @@ fn strip_input_noise(data: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn disabled_state() -> State {
-        State::new(
-            uuid::Uuid::nil(),
-            "127.0.0.1".to_string(),
-            2324,
-            String::new(),
-            "xterm".to_string(),
-            false,
-            None,
-        )
-    }
-
-    #[test]
-    fn connect_is_a_no_op_when_disabled() {
-        let mut state = disabled_state();
-        assert!(!state.is_enabled());
-        state.connect();
-        assert!(state.proxy().is_none());
-        assert_eq!(state.mode(), Mode::Launcher);
-    }
-
-    #[test]
-    fn forward_input_without_proxy_is_a_no_op() {
-        let state = disabled_state();
-        state.forward_input(b"hjkl");
-    }
-
-    #[test]
-    fn strip_input_noise_drops_mouse_keeps_keys() {
-        assert_eq!(strip_input_noise(b"\x1b[<35;10;5MJ"), b"J");
-        assert_eq!(strip_input_noise(b"J\x1b[<35;10;5m"), b"J");
-        assert_eq!(strip_input_noise(b"a\x1b[Mabcb"), b"ab");
-        assert_eq!(strip_input_noise(b"\x1b[200~hi\x1b[201~"), b"hi");
-    }
-
-    #[test]
-    fn strip_input_noise_passes_keys_and_arrows() {
-        assert_eq!(strip_input_noise(b"hjkl"), b"hjkl");
-        assert_eq!(strip_input_noise(b"\x1b[A\x1b[B"), b"\x1b[A\x1b[B");
-    }
-
-    #[test]
-    fn exit_grace_opens_on_close_and_counts_down() {
-        let mut state = disabled_state();
-        state.mode = Mode::Running;
-        assert!(!state.in_exit_grace());
-        state.tick();
-        assert_eq!(state.mode(), Mode::Launcher);
-        assert!(state.in_exit_grace());
-        for _ in 0..EXIT_GRACE_TICKS {
-            assert!(state.in_exit_grace());
-            state.tick();
-        }
-        assert!(!state.in_exit_grace());
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

@@ -3,11 +3,11 @@ use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
+        article::NewsShareReward,
         rss_entry::{RssEntry, RssEntryParams, RssEntryView},
         rss_feed::RssFeed,
         rss_feed_read::RssFeedRead,
     },
-    telemetry::TracedExt,
 };
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -15,10 +15,14 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 const ENTRY_LIMIT: i64 = 100;
+// Keep at least this many recent entries visible per feed so one
+// high-volume feed cannot evict weekly/monthly feeds from the inbox.
+const PER_FEED_ENTRY_LIMIT: i64 = 20;
 const POLL_LIMIT: i64 = 64;
 const POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
-const FEED_MAX_BYTES: u64 = 1_000_000;
+const FEED_MAX_BYTES: usize = 1_000_000;
+const FEED_MAX_REDIRECTS: usize = 5;
 const MAX_ENTRIES_PER_FETCH: usize = 20;
 
 #[derive(Clone, Default)]
@@ -54,13 +58,15 @@ pub enum FeedEvent {
     },
     EntryShared {
         user_id: Uuid,
+        /// What the share minted, or `None` when the entry was marked shared
+        /// because its link was already in News and nothing was published.
+        reward: Option<NewsShareReward>,
     },
 }
 
 #[derive(Clone)]
 pub struct FeedService {
     db: Db,
-    http_client: reqwest::Client,
     snapshot_tx: watch::Sender<FeedSnapshot>,
     snapshot_rx: watch::Receiver<FeedSnapshot>,
     evt_tx: broadcast::Sender<FeedEvent>,
@@ -72,7 +78,6 @@ impl FeedService {
         let (evt_tx, _) = broadcast::channel(256);
         Self {
             db,
-            http_client: reqwest::Client::new(),
             snapshot_tx,
             snapshot_rx,
             evt_tx,
@@ -113,7 +118,9 @@ impl FeedService {
     async fn do_list(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         let feeds = RssFeed::list_for_user(&client, user_id).await?;
-        let entries = RssEntry::list_visible_for_user(&client, user_id, ENTRY_LIMIT).await?;
+        let entries =
+            RssEntry::list_visible_for_user(&client, user_id, ENTRY_LIMIT, PER_FEED_ENTRY_LIMIT)
+                .await?;
         self.snapshot_tx.send(FeedSnapshot {
             user_id: Some(user_id),
             feeds,
@@ -241,10 +248,10 @@ impl FeedService {
         Ok(())
     }
 
-    pub fn mark_shared_task(&self, user_id: Uuid, entry_id: Uuid) {
+    pub fn mark_shared_task(&self, user_id: Uuid, entry_id: Uuid, reward: Option<NewsShareReward>) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = service.do_mark_shared(user_id, entry_id).await {
+            if let Err(e) = service.do_mark_shared(user_id, entry_id, reward).await {
                 late_core::error_span!(
                     "feed_entry_shared_failed",
                     error = ?e,
@@ -256,13 +263,18 @@ impl FeedService {
         });
     }
 
-    async fn do_mark_shared(&self, user_id: Uuid, entry_id: Uuid) -> Result<()> {
+    async fn do_mark_shared(
+        &self,
+        user_id: Uuid,
+        entry_id: Uuid,
+        reward: Option<NewsShareReward>,
+    ) -> Result<()> {
         let client = self.db.get().await?;
         RssEntry::mark_shared(&client, user_id, entry_id).await?;
         drop(client);
         self.do_list(user_id).await?;
         self.publish_unread_count(user_id).await?;
-        self.publish_event(FeedEvent::EntryShared { user_id });
+        self.publish_event(FeedEvent::EntryShared { user_id, reward });
         Ok(())
     }
 
@@ -394,23 +406,21 @@ impl FeedService {
         Ok(inserted)
     }
 
+    // Feed URLs are user-supplied, so fetches go through the SSRF-guarded
+    // downloader (private/link-local IPs rejected, DNS pinned, every redirect
+    // hop re-validated) instead of a plain reqwest client.
     async fn fetch_feed_body(&self, url: &str) -> Result<String> {
-        let response = tokio::time::timeout(FETCH_TIMEOUT, self.http_client.get(url).send_traced())
-            .await
-            .context("RSS fetch timed out")??;
-        if !response.status().is_success() {
-            anyhow::bail!("RSS returned HTTP {}", response.status());
-        }
-        if let Some(len) = response.content_length()
-            && len > FEED_MAX_BYTES
-        {
-            anyhow::bail!("RSS body exceeds {} bytes", FEED_MAX_BYTES);
-        }
-
-        let bytes = response.bytes().await?;
-        if bytes.len() as u64 > FEED_MAX_BYTES {
-            anyhow::bail!("RSS body exceeds {} bytes", FEED_MAX_BYTES);
-        }
+        let bytes = tokio::time::timeout(
+            FETCH_TIMEOUT,
+            crate::app::files::image_upload::download_url_bytes_following_redirects(
+                url,
+                FETCH_TIMEOUT,
+                FEED_MAX_BYTES,
+                FEED_MAX_REDIRECTS,
+            ),
+        )
+        .await
+        .context("RSS fetch timed out")??;
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 }
@@ -660,41 +670,5 @@ fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::parse_feed;
-
-    #[test]
-    fn parse_feed_reads_rss_items() {
-        let xml = r#"
-            <rss><channel><title>Blog</title>
-            <item><title>Hello</title><link>/hello</link><guid>1</guid><description><![CDATA[<p>Hi</p>]]></description></item>
-            </channel></rss>
-        "#;
-        let feed = parse_feed("https://example.com/feed.xml", xml).expect("feed");
-        assert_eq!(feed.title, "Blog");
-        assert_eq!(feed.entries[0].url, "https://example.com/hello");
-        assert_eq!(feed.entries[0].summary, "Hi");
-    }
-
-    #[test]
-    fn parse_feed_strips_entity_encoded_html() {
-        let xml = r#"
-            <rss><channel><title>Blog</title>
-            <item><title>T</title><link>/x</link><guid>1</guid><description>&lt;table border=0&gt;&lt;tr&gt;&lt;td&gt;Hello world&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</description></item>
-            </channel></rss>
-        "#;
-        let feed = parse_feed("https://example.com/feed.xml", xml).expect("feed");
-        assert_eq!(feed.entries[0].summary, "Hello world");
-    }
-
-    #[test]
-    fn parse_feed_reads_atom_entries() {
-        let xml = r#"
-            <feed><title>Atom</title>
-            <entry><title>Post</title><id>tag:post</id><link href="https://example.com/post" /></entry>
-            </feed>
-        "#;
-        let feed = parse_feed("https://example.com/feed", xml).expect("feed");
-        assert_eq!(feed.entries[0].url, "https://example.com/post");
-    }
-}
+#[path = "svc_test.rs"]
+mod svc_test;

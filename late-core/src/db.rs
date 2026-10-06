@@ -9,6 +9,8 @@ use deadpool_postgres::{
 };
 use tokio_postgres::NoTls;
 
+use crate::telemetry::{self, DbCheckout};
+
 /// Database configuration loaded from environment.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
@@ -29,35 +31,6 @@ impl Default for DbConfig {
             password: "postgres".to_string(),
             dbname: "postgres".to_string(),
             max_pool_size: 16,
-        }
-    }
-}
-
-impl DbConfig {
-    /// Load configuration from environment variables.
-    ///
-    /// Environment variables:
-    /// - `LATE_DB_HOST` (default: localhost)
-    /// - `LATE_DB_PORT` (default: 5432)
-    /// - `LATE_DB_USER` (default: postgres)
-    /// - `LATE_DB_PASSWORD` (default: postgres)
-    /// - `LATE_DB_NAME` (default: postgres)
-    /// - `LATE_DB_POOL_SIZE` (default: 16)
-    pub fn from_env() -> Self {
-        let defaults = Self::default();
-        Self {
-            host: std::env::var("LATE_DB_HOST").unwrap_or(defaults.host),
-            port: std::env::var("LATE_DB_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(defaults.port),
-            user: std::env::var("LATE_DB_USER").unwrap_or(defaults.user),
-            password: std::env::var("LATE_DB_PASSWORD").unwrap_or(defaults.password),
-            dbname: std::env::var("LATE_DB_NAME").unwrap_or(defaults.dbname),
-            max_pool_size: std::env::var("LATE_DB_POOL_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(defaults.max_pool_size),
         }
     }
 }
@@ -101,19 +74,23 @@ impl Db {
         })
     }
 
-    /// Create from environment variables.
-    pub fn from_env() -> Result<Self> {
-        Self::new(&DbConfig::from_env())
-    }
-
     /// Get a connection from the pool.
     ///
     /// Times out after 5 seconds if no connection is available.
     pub async fn get(&self) -> Result<deadpool_postgres::Client> {
-        self.pool
-            .get()
-            .await
-            .context("failed to get database connection from pool")
+        let started = std::time::Instant::now();
+        let checkout = self.pool.get().await;
+        let waited = started.elapsed().as_secs_f64();
+        match checkout {
+            Ok(client) => {
+                telemetry::record_db_checkout(DbCheckout::Ok, waited);
+                Ok(client)
+            }
+            Err(error) => {
+                telemetry::record_db_checkout(DbCheckout::Failed, waited);
+                Err(error).context("failed to get database connection from pool")
+            }
+        }
     }
 
     /// Check if the database is reachable.
@@ -194,41 +171,23 @@ impl Db {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Stable fingerprint of the embedded migration set.
+///
+/// Every migration's name and body is length-prefixed into the hash, so any
+/// edit, addition, removal, or rename produces a different value. Test-database
+/// templating (`test_utils`) keys its template name on this, which is what makes
+/// a stale template impossible rather than merely unlikely: change a migration
+/// and the next run simply builds a template under a new name.
+#[cfg(feature = "testing")]
+pub(crate) fn migrations_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
 
-    #[test]
-    fn default_config_values() {
-        let cfg = DbConfig::default();
-        assert_eq!(cfg.host, "localhost");
-        assert_eq!(cfg.port, 5432);
-        assert_eq!(cfg.user, "postgres");
-        assert_eq!(cfg.password, "postgres");
-        assert_eq!(cfg.dbname, "postgres");
-        assert_eq!(cfg.max_pool_size, 16);
+    let mut hasher = Sha256::new();
+    for (name, sql) in MIGRATIONS {
+        hasher.update((name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update((sql.len() as u64).to_le_bytes());
+        hasher.update(sql.as_bytes());
     }
-
-    #[test]
-    fn pool_creation_is_lazy() {
-        let cfg = DbConfig::default();
-        let result = create_pool(&cfg);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn db_new_succeeds_without_connection() {
-        let cfg = DbConfig::default();
-        let result = Db::new(&cfg);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn db_status_starts_empty() {
-        let cfg = DbConfig::default();
-        let db = Db::new(&cfg).unwrap();
-        let status = db.status();
-        assert_eq!(status.size, 0);
-        assert_eq!(status.available, 0);
-    }
+    hex::encode(&hasher.finalize()[..8])
 }

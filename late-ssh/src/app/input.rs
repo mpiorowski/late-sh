@@ -1,17 +1,19 @@
 use super::{
     audio::booth as audio_booth,
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, sheet_modal,
+    room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
+use late_core::models::user::{RightSidebarMode, RoomListMode};
+
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
-use crate::app::directory::state::DirectoryTab;
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::help_modal::data::HelpTopic;
+use crate::app::statusline::bar::StatusClick;
 use crate::usernames::UsernameLookup;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -23,33 +25,41 @@ use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
+/// Home rail scroll up. The same byte as BS, so on the few terminals whose
+/// Backspace sends BS instead of DEL, Backspace on Home scrolls the rail too:
+/// harmless, the next selection change snaps it back.
+const CTRL_H: u8 = 0x08;
+/// Home rail scroll down.
+const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
+/// Global force-repaint ("refresh").
+const CTRL_R: u8 = 0x12;
+const CTRL_S: u8 = 0x13;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
+/// Zen: the one page that is a chord, not a tab, so it is reachable from
+/// anywhere and hands you back where you were.
+const CTRL_F: u8 = 0x06;
 
 #[derive(Clone, Copy)]
 struct InputContext {
     screen: Screen,
-    directory_tab: DirectoryTab,
     chat_composing: bool,
     chat_ac_active: bool,
     feeds_processing: bool,
     news_composing: bool,
-    showcase_composing: bool,
-    work_composing: bool,
+    door_rc_modal: bool,
 }
 
 impl InputContext {
     fn from_app(app: &App) -> Self {
         Self {
             screen: app.screen,
-            directory_tab: app.directory_state.tab,
             chat_composing: app.chat.is_composing(),
             chat_ac_active: app.chat.is_autocomplete_active(),
             feeds_processing: app.chat.feeds.processing(),
             news_composing: app.chat.news.composing(),
-            showcase_composing: app.chat.showcase.composing(),
-            work_composing: app.chat.work.composing(),
+            door_rc_modal: app.door_rc_modal.is_some(),
         }
     }
 
@@ -60,25 +70,31 @@ impl InputContext {
             return false;
         }
         chat_screen
-            || (self.screen == Screen::Dashboard
-                && (self.feeds_processing
-                    || self.news_composing
-                    || self.showcase_composing
-                    || self.work_composing))
-            || (self.screen == Screen::Pinstar
-                && matches!(
-                    self.directory_tab,
-                    DirectoryTab::Profiles | DirectoryTab::Projects
-                )
-                && (self.showcase_composing || self.work_composing))
+            || (self.screen == Screen::Dashboard && (self.feeds_processing || self.news_composing))
     }
 }
 
-fn is_chat_composer_context(ctx: InputContext) -> bool {
+/// Screens that draw an embedded chat pane (message scroll + composer bar).
+/// THE roster for every pane-shaped gate — message clicks, composer-bar
+/// clicks, wheel/page scroll, reaction-leader Esc. A new screen with
+/// embedded chat joins here and in `embedded_chat_room_id`, and every gate
+/// follows; do not hand-write this screen list anywhere else.
+fn screen_has_chat_pane(screen: Screen) -> bool {
     matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) && ctx.chat_composing
+        screen,
+        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen
+    )
+}
+
+/// Screens where typing can land in the chat composer: the pane screens
+/// plus the Clubhouse, which composes into #lounge (speech bubbles) without
+/// drawing a pane. Used for the composer-priority gate and chat overlays.
+fn screen_composes_chat(screen: Screen) -> bool {
+    screen_has_chat_pane(screen) || matches!(screen, Screen::Clubhouse | Screen::Nightcap)
+}
+
+fn is_chat_composer_context(ctx: InputContext) -> bool {
+    screen_composes_chat(ctx.screen) && ctx.chat_composing
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,9 +102,7 @@ enum PasteTarget {
     None,
     ChatComposer,
     NewsComposer,
-    ShowcaseComposer,
-    WorkComposer,
-    Pinstar,
+    DoorRcModal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -121,6 +135,8 @@ pub enum ParsedInput {
     AltS,
     AltA,
     AltC,
+    /// Alt+K samples the Artboard colour under the cursor.
+    AltK,
     Paste(Vec<u8>),
     PageUp,
     PageDown,
@@ -231,7 +247,7 @@ impl VtInputParser {
         mem::take(&mut self.collector.events)
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.parser = Parser::new();
         self.collector.ss3_pending = false;
     }
@@ -320,7 +336,7 @@ impl Perform for VtCollector {
     }
 
     fn hook(&mut self, _: &Params, intermediates: &[u8], ignore: bool, action: char) {
-        if !ignore && intermediates == [b'>'] && action == '|' {
+        if !ignore && intermediates == *b">" && action == '|' {
             self.xtversion = Some(Vec::new());
         }
     }
@@ -426,7 +442,7 @@ impl Perform for VtCollector {
             // DA1 reply (CSI ? Ps;... c) from the startup probe. The `?`
             // private marker lands in `intermediates`, which also keeps DA2
             // (`CSI > ... c`) replies from matching here.
-            'c' if intermediates == [b'?'] => {
+            'c' if intermediates == *b"?" => {
                 self.events.push(ParsedInput::DeviceAttributes(params));
             }
             'I' if intermediates.is_empty() => {
@@ -435,7 +451,7 @@ impl Perform for VtCollector {
             'O' if intermediates.is_empty() => {
                 self.events.push(ParsedInput::FocusLost);
             }
-            'M' | 'm' if intermediates == [b'<'] && params.len() >= 3 => {
+            'M' | 'm' if intermediates == *b"<" && params.len() >= 3 => {
                 let raw = p0.unwrap_or_default();
                 let x = params.get(1).copied().unwrap_or(0);
                 let y = params.get(2).copied().unwrap_or(0);
@@ -515,6 +531,7 @@ impl Perform for VtCollector {
                 b'a' | b'A' => self.events.push(ParsedInput::AltA),
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
+                b'k' | b'K' => self.events.push(ParsedInput::AltK),
                 _ => {}
             }
         }
@@ -573,10 +590,23 @@ pub fn handle(app: &mut App, data: &[u8]) {
                 _ => {}
             }
         }
+        // First contact: an armed whisper holds the door, so input is
+        // swallowed instead of skipping (`app/deadchannel/haunt`).
+        if !saw_terminal_reply
+            && !data.is_empty()
+            && crate::app::deadchannel::haunt::svc::swallows_splash_input(app)
+        {
+            return;
+        }
         // Escape skips the rest of the intro animation. XTVERSION DCS replies
         // also begin with ESC, so avoid treating those as user cancellation.
         if !saw_terminal_reply && data.contains(&0x1B) {
             app.show_splash = false;
+            // The dismissing ESC was just fed into the parser above, leaving it
+            // wedged mid-escape. Without this reset the next key merges into an
+            // `ESC <key>` Alt chord (e.g. `1` becomes Alt+1, which is swallowed)
+            // so the first post-splash keypress is silently lost.
+            app.vt_input.reset();
         }
         return;
     }
@@ -699,37 +729,9 @@ fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
-fn handle_login_announcements_input(app: &mut App, event: &ParsedInput) {
-    match event {
-        ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            dismiss_login_announcements(app);
-        }
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Char('j' | 'J') => {
-            if let Some(announcements) = app.login_announcements.as_mut() {
-                announcements.scroll(1);
-            }
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Char('k' | 'K') => {
-            if let Some(announcements) = app.login_announcements.as_mut() {
-                announcements.scroll(-1);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn dismiss_login_announcements(app: &mut App) {
-    let Some(announcements) = app.login_announcements.take() else {
-        return;
-    };
-    if let Some(read_at) = announcements.latest_displayed_at() {
-        app.chat.mark_room_read_at(announcements.room_id, read_at);
-    }
-}
-
 fn close_image_modal(app: &mut App) {
     let needs_full_repaint = matches!(
-        app.terminal_image_protocol,
+        app.terminal_image_protocol(),
         Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel)
     );
     app.chat.close_image_modal();
@@ -763,6 +765,7 @@ fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
 
 fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     handle_parsed_input_inner(app, event);
+    app.chat.forget_stale_rail_scroll();
 }
 
 fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
@@ -778,9 +781,45 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         app.apply_primary_device_attributes(attrs);
         return;
     }
+    // `/brb` holds "until your next key". A bare mouse move is not one: with
+    // any-event tracking on, the pointer merely crossing the terminal reports
+    // here, and must not bring the session back. Keys, clicks, drags and
+    // scrolls do; the 1Hz edge publishes it.
+    match &event {
+        ParsedInput::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            ..
+        }) => {}
+        _ => app.sent_away = false,
+    }
 
-    if app.login_announcements_visible() {
-        handle_login_announcements_input(app, &event);
+    // The Late Edition sits above everything else: it is the first thing
+    // a session sees after the splash and the tour.
+    if app.paper.modal_visible() {
+        crate::app::paper::input::handle_input(app, &event);
+        return;
+    }
+
+    // Stream URL + QR modal: Esc closes it and nothing else does. The modal
+    // carries hand-copied capability values (the watch link, the WHIP server
+    // and bearer token), so a stray keystroke while reading them must not
+    // take the values off the screen. Esc lands in `dispatch_escape`; every
+    // other event is swallowed here. It sits above everything except the
+    // paper, so nothing else steals the keys either.
+    if app.stream_modal.is_some() {
+        return;
+    }
+
+    // The forced first-visit tour outranks even the reserved chords: a
+    // newcomer mid-route cannot open settings or the lobby, only follow the
+    // named key or quit. The quit-confirm modal stays above it so `y`/`n`
+    // keep working once quitting is on the table.
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
+    if handle_tour_gate(app, &event) {
         return;
     }
 
@@ -788,14 +827,39 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_quit_confirm {
-        quit_confirm::input::handle_input(app, event);
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_input(app, event);
+        return;
+    }
+
+    // Drawn over the settings modal and the profile editor, so it owns
+    // input ahead of both.
+    if app.tag_picker.is_open() {
+        crate::app::tag_picker::input::handle_input(app, event);
+        return;
+    }
+
+    if app.jobs.post.is_open() {
+        crate::app::jobs::input::handle_post_input(app, &event);
+        return;
+    }
+
+    if app.directory_editor.is_open() {
+        crate::app::directory::editor::input::handle_input(app, &event);
+        return;
+    }
+
+    // Ahead of the search modal, matching the draw order: history opens over
+    // the top of a jump, so it owns input until Esc closes it.
+    if app.chat.history_modal.is_open() {
+        crate::app::chat::history_modal::input::handle_input(app, event);
         return;
     }
 
     if is_room_search_shortcut(&event) {
         if app.room_search_modal_state.is_open() {
             app.room_search_modal_state.close();
+            app.chat.message_search.clear();
         } else {
             open_room_search_modal_globally(app);
         }
@@ -812,6 +876,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.stations_modal_state.is_open() {
+        crate::app::audio::stations_modal::input::handle_input(app, event);
+        return;
+    }
+
     if app.chat.has_news_modal() {
         handle_news_modal_input(app, &event);
         return;
@@ -822,16 +891,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if matches!(event, ParsedInput::Byte(0x11) | ParsedInput::AltA) {
-        toggle_aquarium_tray_globally(app);
-        return;
-    }
-    if matches!(event, ParsedInput::Byte(0x06)) && feed_aquarium_globally(app) {
-        return;
-    }
-
-    // Reserved global chords and tray shortcuts have already had first claim.
-    // Otherwise the existing modal stack owns input.
+    // Reserved global chords have already had first claim. Otherwise the
+    // existing modal stack owns input.
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -871,8 +932,22 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_bonsai_v2_modal {
-        crate::app::bonsai_v2::modal_input::handle_input(app, event);
+    if app.show_gild_modal {
+        chat::gild::input::handle_input(app, event);
+        return;
+    }
+
+    if app.chat.cyberspace.modal_active() {
+        chat::cyberspace::input::handle_modal_input(app, event);
+        return;
+    }
+
+    // The open room's composer takes every keystroke while it has focus, so
+    // arrows move the cursor rather than scrolling the conversation behind
+    // it. A room being read routes through chat instead, which is what keeps
+    // the rail and the global keys reachable from inside a room.
+    if app.chat.cyberspace.room_composing() {
+        chat::cyberspace::input::handle_room_composer_input(app, event);
         return;
     }
 
@@ -881,8 +956,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.show_cat_modal {
-        crate::app::pet::modal_input::handle_input(app, event);
+    if app.show_lobby_modal {
+        crate::app::lobby::modal_input::handle_input(app, event);
         return;
     }
 
@@ -898,16 +973,32 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if handle_dedicated_screen_input(app, ctx, &event) {
+    // A chat overlay owns input on every chat-composing screen, BEFORE the
+    // dedicated screen handlers so a game/board underneath never sees the
+    // keys (screens must not re-check `has_overlay` themselves).
+    if screen_composes_chat(ctx.screen) && app.chat.has_overlay() {
+        handle_overlay_input(app, &event);
         return;
     }
 
-    if matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) && app.chat.has_overlay()
-    {
-        handle_overlay_input(app, &event);
+    if let ParsedInput::Mouse(mouse) = &event {
+        // Honor keyboard-only mode before any page can consume the report.
+        if !app.interaction_mode.mouse_enabled() {
+            return;
+        }
+        // SGR coordinates are 1-based; the pet follows the cursor on Zen.
+        if let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) {
+            app.last_mouse = Some((x, y));
+        }
+        // The frame stays clickable even when a page captures all input
+        // (drawing, framing, naming/rating a piece, or playing a game).
+        // App-wide modals above retain their input priority.
+        if handle_topbar_screen_click(app, ctx.screen, *mouse) {
+            return;
+        }
+    }
+
+    if handle_dedicated_screen_input(app, ctx, &event) {
         return;
     }
 
@@ -926,83 +1017,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
-    if ctx.screen == Screen::Pinstar
-        && (ctx.directory_tab == DirectoryTab::Pinstar || app.pinstar_state.is_some())
-    {
-        let content_area = app_content_area(app);
-        if let Some(state) = &mut app.pinstar_state {
-            let pinstar_area = ratatui::layout::Rect::new(
-                content_area.x,
-                content_area.y.saturating_add(1),
-                content_area.width,
-                content_area.height.saturating_sub(1),
-            );
-            if let ParsedInput::Mouse(mouse) = &event {
-                let crossterm_mouse = crossterm::event::MouseEvent {
-                    kind: match mouse.kind {
-                        MouseEventKind::Down => {
-                            crossterm::event::MouseEventKind::Down(match mouse.button {
-                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
-                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
-                                _ => crossterm::event::MouseButton::Left,
-                            })
-                        }
-                        MouseEventKind::Up => {
-                            crossterm::event::MouseEventKind::Up(match mouse.button {
-                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
-                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
-                                _ => crossterm::event::MouseButton::Left,
-                            })
-                        }
-                        MouseEventKind::Drag => {
-                            crossterm::event::MouseEventKind::Drag(match mouse.button {
-                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
-                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
-                                _ => crossterm::event::MouseButton::Left,
-                            })
-                        }
-                        MouseEventKind::Moved => crossterm::event::MouseEventKind::Moved,
-                        MouseEventKind::ScrollUp => crossterm::event::MouseEventKind::ScrollUp,
-                        MouseEventKind::ScrollDown => crossterm::event::MouseEventKind::ScrollDown,
-                        MouseEventKind::ScrollLeft => crossterm::event::MouseEventKind::ScrollLeft,
-                        MouseEventKind::ScrollRight => {
-                            crossterm::event::MouseEventKind::ScrollRight
-                        }
-                    },
-                    column: mouse.x.saturating_sub(1),
-                    row: mouse.y.saturating_sub(1),
-                    modifiers: crossterm::event::KeyModifiers::NONE,
-                };
-                crate::app::pinstar::input::handle_pinstar_mouse(
-                    state,
-                    crossterm_mouse,
-                    pinstar_area,
-                );
-                return;
-            }
-        } else if matches!(&event, ParsedInput::Mouse(_)) {
-            // No active diagram — handle mouse on the browser list
-            let browser_area = ratatui::layout::Rect::new(
-                content_area.x,
-                content_area.y.saturating_add(1),
-                content_area.width,
-                content_area.height.saturating_sub(1),
-            );
-            if handle_pinstar_browser_mouse(app, &event, browser_area) {
-                return;
-            }
-        }
-    }
-    if ctx.screen == Screen::Rooms
-        && !ctx.chat_composing
-        && crate::app::rooms::input::handle_event(app, &event)
-    {
-        return;
-    }
-
     match event {
         ParsedInput::FocusGained
         | ParsedInput::FocusLost
@@ -1014,10 +1028,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             if is_chat_composer_context(ctx) {
                 app.chat.composer_push('\n');
                 app.chat.update_autocomplete();
-            } else if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
-                app.chat.showcase.field_newline();
-            } else if ctx.screen == Screen::Dashboard && ctx.work_composing {
-                app.chat.work.field_newline();
             }
         }
         ParsedInput::AltS => {
@@ -1026,20 +1036,26 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                     return;
                 }
                 let from_dashboard = ctx.screen == Screen::Dashboard;
-                if let Some(b) = app.chat.submit_composer(true, from_dashboard) {
+                let commands = chat::state::ComposerCommands::for_screen(ctx.screen);
+                if let Some(b) = app.chat.submit_composer(true, commands) {
                     app.banner = Some(b);
                 }
                 chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
-        ParsedInput::AltA | ParsedInput::AltC => {}
+        ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
-            if handle_notifications_hud_click(app, mouse) {
+            if handle_status_bar_click(app, mouse) {
+                return;
+            }
+            if ctx.screen == Screen::Leaderboard
+                && crate::app::leaderboard::input::handle_mouse(&mut app.leaderboard_page, mouse)
+            {
                 return;
             }
             if let Some(delta) = mouse_scroll_delta(mouse) {
@@ -1053,23 +1069,10 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             if room_jump_active_on_current_screen(app, ctx.screen) {
                 return;
             }
-            if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
-                app.chat.showcase.cycle_field(false);
-                return;
-            }
-            if ctx.screen == Screen::Dashboard && ctx.work_composing {
-                app.chat.work.cycle_field(false);
-                return;
-            }
             if is_chat_composer_context(ctx) {
                 return;
             }
-            if ctx.screen == Screen::Dashboard
-                && (ctx.feeds_processing
-                    || ctx.news_composing
-                    || ctx.showcase_composing
-                    || ctx.work_composing)
-            {
+            if ctx.screen == Screen::Dashboard && (ctx.feeds_processing || ctx.news_composing) {
                 return;
             }
             if ctx.screen == Screen::Arcade && app.is_playing_game {
@@ -1114,46 +1117,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::End if ctx.screen == Screen::Dashboard && ctx.news_composing => {
             app.chat.news.composer_cursor_end();
-        }
-        ParsedInput::Home if ctx.screen == Screen::Dashboard && ctx.showcase_composing => {
-            let field = app.chat.showcase.active_field();
-            app.chat.showcase.field_input(
-                field,
-                ratatui_textarea::Input {
-                    key: ratatui_textarea::Key::Home,
-                    ..Default::default()
-                },
-            );
-        }
-        ParsedInput::End if ctx.screen == Screen::Dashboard && ctx.showcase_composing => {
-            let field = app.chat.showcase.active_field();
-            app.chat.showcase.field_input(
-                field,
-                ratatui_textarea::Input {
-                    key: ratatui_textarea::Key::End,
-                    ..Default::default()
-                },
-            );
-        }
-        ParsedInput::Home if ctx.screen == Screen::Dashboard && ctx.work_composing => {
-            let field = app.chat.work.active_field();
-            app.chat.work.field_input(
-                field,
-                ratatui_textarea::Input {
-                    key: ratatui_textarea::Key::Home,
-                    ..Default::default()
-                },
-            );
-        }
-        ParsedInput::End if ctx.screen == Screen::Dashboard && ctx.work_composing => {
-            let field = app.chat.work.active_field();
-            app.chat.work.field_input(
-                field,
-                ratatui_textarea::Input {
-                    key: ratatui_textarea::Key::End,
-                    ..Default::default()
-                },
-            );
         }
         ParsedInput::Delete if is_chat_composer_context(ctx) => {
             app.chat.composer_delete_right();
@@ -1206,16 +1169,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                 app.chat.news.composer_cursor_word_left();
             }
         }
-        ParsedInput::CtrlArrow(key) | ParsedInput::AltArrow(key)
-            if ctx.screen == Screen::Dashboard && ctx.showcase_composing =>
-        {
-            let _ = chat::showcase::input::handle_arrow(app, key);
-        }
-        ParsedInput::CtrlArrow(key) | ParsedInput::AltArrow(key)
-            if ctx.screen == Screen::Dashboard && ctx.work_composing =>
-        {
-            let _ = chat::work::input::handle_arrow(app, key);
-        }
         ParsedInput::Delete
         | ParsedInput::CtrlArrow(_)
         | ParsedInput::AltArrow(_)
@@ -1253,15 +1206,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                 }
                 return;
             }
-            if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
-                let _ = chat::showcase::input::handle_arrow(app, key);
-                return;
-            }
-            if ctx.screen == Screen::Dashboard && ctx.work_composing {
-                let _ = chat::work::input::handle_arrow(app, key);
-                return;
-            }
-
             if ctx.blocks_arrow_sequence() {
                 return;
             }
@@ -1279,12 +1223,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         }
         // 0x1D (Ctrl+] / Ctrl+5 / raw GS) opens the chat icon picker on
         // chat-bearing screens, but active Artboard editing owns this
-        // keystroke as the glyph-picker open key — let it fall through
-        // to the byte dispatch below.
+        // keystroke as the glyph-picker open key, and the hang flow must
+        // not get a picker dropped on it either — let it fall through to
+        // the byte dispatch below.
         ParsedInput::Byte(0x1D)
             if !((ctx.screen == Screen::Arcade && app.is_playing_game)
-                || (ctx.screen == Screen::Artboard && app.artboard_interacting)
-                || ctx.screen == Screen::Pinstar) =>
+                || artboard_owns_keys(app, ctx.screen)) =>
         {
             try_open_icon_picker(app)
         }
@@ -1301,22 +1245,19 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Games hub keys. Left/right (or h/l) switch the selected game card; Enter
-/// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
-/// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
-/// fall through to the global handlers.
-/// World Cup screen keys: `Space` toggles overview/bracket and `j`/`k` (plus
-/// the down/up arrows) scroll the active view. Returns `false` for everything
-/// else so global navigation (Tab, page numbers, `?`, `q`, …) still works.
-fn handle_worldcup_input(app: &mut App, event: &ParsedInput) -> bool {
-    let byte = match event {
-        ParsedInput::Byte(b) => *b,
-        ParsedInput::Char(c) if c.is_ascii() => *c as u8,
-        ParsedInput::Arrow(b'B') => b'j',
-        ParsedInput::Arrow(b'A') => b'k',
-        _ => return false,
-    };
-    crate::app::worldcup::input::handle_key(&mut app.worldcup, byte)
+/// Games hub keys. Up/down (or j/k, h/l) move the selection in the grouped
+/// sidebar; Enter launches it; `d` opens the reset prompt for the saved-
+/// character doors. Returns `false` for keys it does not own (digit/Tab nav,
+/// `q`, `?`) so they fall through to the global handlers.
+/// The key byte a door launcher should see, if the event carries one. The vt
+/// parser emits printables as `Char` and control bytes (Enter, backspace) as
+/// `Byte`; the arcade-name claim prompt needs both.
+fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
+    match event {
+        ParsedInput::Byte(b) => Some(*b),
+        ParsedInput::Char(c) if c.is_ascii() => Some(*c as u8),
+        _ => None,
+    }
 }
 
 fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
@@ -1324,15 +1265,38 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
 
     let selected = app.games_hub_state.selected_game();
 
-    // Click on a selector chip jumps to that game. The selector row is the second
-    // line of the hub body (one spacer row sits under the top bar).
+    // The rc config modal is fully modal while open: `x` clears the stored
+    // config, paste replaces it (handle_bracketed_paste), Esc closes it
+    // (dispatch_escape), and every other key is swallowed.
+    if let Some(game) = app.door_rc_modal {
+        return match event {
+            ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
+                // Nothing stored means nothing to clear: skip the DB round
+                // trip and don't claim success for a no-op.
+                if app.door_rcs.remove(&game).is_some() {
+                    app.door_rc_service.clear_task(app.user_id, game);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(&format!(
+                        "{} cleared. Defaults are back at your next launch.",
+                        game.file_label()
+                    )));
+                }
+                true
+            }
+            ParsedInput::Byte(_) | ParsedInput::Char(_) | ParsedInput::Arrow(_) => true,
+            _ => false,
+        };
+    }
+
+    // Click on a sidebar row jumps to that game; the hit test mirrors the
+    // hub's own layout against the same content area the renderer gets.
     if let ParsedInput::Mouse(mouse) = event
         && matches!(mouse.kind, MouseEventKind::Down)
         && matches!(mouse.button, Some(MouseButton::Left))
     {
         let body = app_content_area(app);
-        if let Some(idx) = crate::app::door::hub::ui::selector_hit_test(
-            ratatui::layout::Rect::new(body.x, body.y.saturating_add(1), body.width, 1),
+        if let Some(idx) = crate::app::door::hub::ui::sidebar_hit_test(
+            body,
+            app.games_hub_state.selected(),
             mouse.x.saturating_sub(1),
             mouse.y.saturating_sub(1),
         ) {
@@ -1348,18 +1312,37 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         return match event {
             ParsedInput::Byte(b'y' | b'Y' | b'\r' | b'\n') | ParsedInput::Char('y' | 'Y') => {
                 app.door_delete_confirm = false;
-                if selected == HubGame::GreenDragon {
-                    app.leave_greendragon();
-                    app.greendragon_service.delete_character(app.user_id);
-                    app.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Green Dragon character reset. Enter the village to start over.",
-                    ));
-                } else {
-                    app.leave_lateania();
-                    app.lateania_service.delete_character_task(app.user_id);
-                    app.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Lateania character reset. Enter the world to start over.",
-                    ));
+                match selected {
+                    HubGame::GreenDragon => {
+                        app.leave_greendragon();
+                        app.greendragon_service.delete_character(app.user_id);
+                        app.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Green Dragon character reset. Enter the village to start over.",
+                        ));
+                    }
+                    HubGame::Darkroom => {
+                        app.leave_darkroom();
+                        app.darkroom_service.delete_game(app.user_id);
+                        app.banner = Some(crate::app::common::primitives::Banner::success(
+                            "A Dark Room save reset. The fire is dead again.",
+                        ));
+                    }
+                    // Only the native saved-character doors offer a reset; the
+                    // proxied ones own their own saves upstream. Lateania is
+                    // multi-slot now and no longer arms this confirm from the
+                    // hub at all (see the guard above) - its own landing is
+                    // the only place that can reach this arm, and it never
+                    // will, but the match still has to be exhaustive.
+                    HubGame::Lateania
+                    | HubGame::Minecraft
+                    | HubGame::Rebels
+                    | HubGame::Nethack
+                    | HubGame::Dcss
+                    | HubGame::Brogue
+                    | HubGame::Usurper
+                    | HubGame::Dopewars
+                    | HubGame::Bashquest
+                    | HubGame::Codekeep => {}
                 }
                 true
             }
@@ -1375,8 +1358,19 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     match event {
-        ParsedInput::Byte(b'\r' | b'\n') => {
+        ParsedInput::Byte(b'\r') => {
             launch_games_hub_selection(app, selected);
+            true
+        }
+        // Scroll the selected landing: Ctrl+K / Ctrl+Up up, Ctrl+J / Ctrl+Down
+        // down. Ctrl+J is a bare LF, which is why Enter above matches CR only
+        // (the same CR/LF split the chat composer relies on).
+        ParsedInput::Byte(0x0B) | ParsedInput::CtrlArrow(b'A') => {
+            app.games_hub_state.scroll_up();
+            true
+        }
+        ParsedInput::Byte(b'\n') | ParsedInput::CtrlArrow(b'B') => {
+            app.games_hub_state.scroll_down();
             true
         }
         // Right: l, j, or Right/Down arrow.
@@ -1393,14 +1387,41 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             app.games_hub_state.select_prev();
             true
         }
+        // Lateania has multiple character slots now, so its own landing (with
+        // a slot cursor to say *which* character) is the only safe place to
+        // confirm a delete; this hub shortcut still covers the single-save
+        // games.
         ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
-            if selected == HubGame::Lateania || selected == HubGame::GreenDragon =>
+            if matches!(selected, HubGame::GreenDragon | HubGame::Darkroom) =>
         {
             app.door_delete_confirm = true;
             true
         }
+        ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C')
+            if selected.rc_game().is_some() =>
+        {
+            app.door_rc_modal = selected.rc_game();
+            true
+        }
         _ => false,
     }
+}
+
+/// Jump to the Games hub with `game` selected in the sidebar and its rc config
+/// modal open. The modal only lives on the hub; the door screens' `c` key
+/// bounces through here so the landing hint works on both surfaces.
+fn open_door_rc_modal(app: &mut App, game: late_core::models::door_rc::DoorRcGame) {
+    use crate::app::door::hub::state::HubGame;
+
+    let hub_game = match game {
+        late_core::models::door_rc::DoorRcGame::Nethack => HubGame::Nethack,
+        late_core::models::door_rc::DoorRcGame::Dcss => HubGame::Dcss,
+    };
+    if let Some(idx) = HubGame::ALL.iter().position(|g| *g == hub_game) {
+        app.games_hub_state.select(idx);
+    }
+    app.set_screen(Screen::Games);
+    app.door_rc_modal = Some(game);
 }
 
 /// Launch the chosen door game from the hub: switch to its screen and start it
@@ -1412,9 +1433,14 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
     app.door_delete_confirm = false;
     match game {
         HubGame::Lateania => {
+            // Lands on the character-select landing rather than jumping
+            // straight into the world, since which of the account's saved
+            // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
-            app.enter_lateania();
         }
+        // Played from the Minecraft client, not the terminal: the landing
+        // says how to connect and there is nothing to launch.
+        HubGame::Minecraft => {}
         HubGame::Rebels => {
             if !app.rebels_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1439,6 +1465,42 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::Dcss => {
+            if !app.dcss_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "DCSS is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Dcss);
+            if let Some(state) = app.dcss_state.as_mut() {
+                state.connect();
+            }
+        }
+        HubGame::Brogue => {
+            if !app.brogue_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Brogue is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Brogue);
+            if let Some(state) = app.brogue_state.as_mut() {
+                state.connect();
+            }
+        }
+        HubGame::Usurper => {
+            if !app.usurper_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "Usurper is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Usurper);
+            if let Some(state) = app.usurper_state.as_mut() {
+                state.connect();
+            }
+        }
         HubGame::GreenDragon => {
             app.set_screen(Screen::GreenDragon);
             app.enter_greendragon();
@@ -1455,26 +1517,73 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
                 state.connect();
             }
         }
+        HubGame::Bashquest => {
+            if !app.bashquest_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "BashQuest is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Bashquest);
+            if let Some(state) = app.bashquest_state.as_mut() {
+                state.connect();
+            }
+        }
+        HubGame::Darkroom => {
+            app.set_screen(Screen::Darkroom);
+            app.enter_darkroom();
+        }
+        HubGame::Codekeep => {
+            if !app.codekeep_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "CodeKeep is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Codekeep);
+            if let Some(state) = app.codekeep_state.as_mut() {
+                state.connect();
+            }
+        }
     }
 }
 
 fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if ctx.screen == Screen::Games {
-        return handle_games_hub_input(app, event);
+    // The composer-priority invariant, in one place: while the chat composer
+    // is open on a screen that owns one, no screen handler sees the event.
+    // Everything falls through to the shared composer pipeline instead
+    // (`handle_modal_input` for bytes, the composer arms of the generic
+    // match for arrows/paste/etc). Screens must not re-check composing
+    // themselves — this gate is what keeps `q`/Enter/wasd out of the game
+    // while typing.
+    if is_chat_composer_context(ctx) {
+        return false;
     }
 
-    if ctx.screen == Screen::WorldCup {
-        return handle_worldcup_input(app, event);
+    if ctx.screen == Screen::Games {
+        return handle_games_hub_input(app, event);
     }
 
     if ctx.screen == Screen::Clubhouse {
         return crate::app::clubhouse::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Nightcap {
+        return crate::app::clubhouse::nightcap::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::City {
+        return crate::app::deadchannel::city::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::Zen {
+        return crate::app::zen::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Enter launches the game; every other
-        // key (Tab/1-7 nav, `q` to quit, `?` for help, ...) falls through to
+        // key (Tab/1-5 nav, `q` to quit, `?` for help, ...) falls through to
         // the normal global handling, so the splash behaves like a plain page.
         if let ParsedInput::Byte(b'\r' | b'\n') = event {
             app.enter_rebels();
@@ -1487,16 +1596,105 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Nethack {
-        // Running-mode bytes never reach here (intercepted in handle_input), so
-        // this only handles the Launcher. Enter launches the game; every other
-        // key (Tab/1-8 nav, `q` to quit, `?` for help, ...) falls through to the
-        // normal global handling, so the launcher behaves like a plain page.
-        if let ParsedInput::Byte(b'\r' | b'\n') = event {
-            app.enter_nethack();
-            if let Some(state) = app.nethack_state.as_mut() {
-                state.connect();
-            }
+        // While the arcade-name claim modal is up, the modal router
+        // (`handle_modal_input`) owns key bytes; fall through so they reach it.
+        if app
+            .nethack_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        // `c` opens the account rc config box, which lives on the Games hub:
+        // bounce there with the modal up and NetHack selected.
+        if let ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') = event {
+            open_door_rc_modal(app, late_core::models::door_rc::DoorRcGame::Nethack);
             return true;
+        }
+        // Running-mode bytes never reach here (intercepted in handle_input), so
+        // this only handles the Launcher. Keys go to the launcher first: Enter
+        // plays or reopens the claim modal depending on the arcade-name state.
+        // The vt parser emits printables as `Char` and control bytes as
+        // `Byte`, so both funnel in. Unconsumed keys keep the normal global
+        // handling, so the launcher still behaves like a plain page.
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_nethack();
+            if let Some(state) = app.nethack_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Dcss {
+        // Same as NetHack above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .dcss_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        // Same `c` bounce as NetHack: the rc config box lives on the hub.
+        if let ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') = event {
+            open_door_rc_modal(app, late_core::models::door_rc::DoorRcGame::Dcss);
+            return true;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_dcss();
+            if let Some(state) = app.dcss_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Brogue {
+        // Same as DCSS above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .brogue_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_brogue();
+            if let Some(state) = app.brogue_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Usurper {
+        // Same as DCSS above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .usurper_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_usurper();
+            if let Some(state) = app.usurper_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -1516,6 +1714,35 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::Bashquest {
+        // Same as Usurper above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .bashquest_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_bashquest();
+            if let Some(state) = app.bashquest_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Codekeep {
+        // Running bytes are intercepted before parsed input, and a non-running
+        // CodeKeep screen returns to the Games hub on the same tick (no exit
+        // grace), so there is no reachable launcher state to handle here.
+        return false;
+    }
+
     if ctx.screen == Screen::Lateania {
         if app.lateania_state.is_some() && door_games_allows_global_help(event) {
             return false;
@@ -1530,6 +1757,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 }
                 ParsedInput::Arrow(key) => {
                     crate::app::door::lateania::screen::GAME.handle_arrow(app, *key);
+                }
+                ParsedInput::Mouse(mouse) => {
+                    crate::app::door::lateania::screen::GAME.handle_mouse(app, *mouse);
                 }
                 _ => {}
             }
@@ -1587,6 +1817,60 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::Darkroom {
+        // Native in-process door, handled like Green Dragon: forward all keys
+        // to the game, except let the global `?` guide through.
+        if app.darkroom_state.is_some() && door_games_allows_global_help(event) {
+            return false;
+        }
+        if app.darkroom_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::darkroom::screen::GAME.handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::darkroom::screen::GAME.handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::darkroom::screen::GAME.handle_arrow(app, *key);
+                }
+                _ => {}
+            }
+            return true;
+        }
+        // Launcher fallback: Enter starts the game (the hub normally does this).
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_darkroom();
+            return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::DailyMatch {
+        // Full-screen daily board: forward everything to the board handler,
+        // except let the global `?` guide through like the door games.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::lobby::daily::board_input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::HouseTable {
+        // Full-screen house table: same shape as the daily board.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::lobby::house::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::Scratchpad {
+        // Unlike the daily board / house table above, this is a free-typing
+        // text editor, not a game board: '?' is a character someone can
+        // legitimately want to type, so it must not escape to the global
+        // help guide the way it does for those two. Forward everything.
+        return crate::app::scratchpad::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -1606,307 +1890,8 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return true;
     }
 
-    if ctx.screen == Screen::Rooms && app.rooms_active_room.is_some() {
-        if ctx.chat_composing {
-            return false;
-        }
-        let _ = crate::app::rooms::input::handle_event(app, event);
-        return true;
-    }
-
-    if ctx.screen == Screen::Pinstar {
-        if app.pinstar_state.is_none() && ctx.directory_tab != DirectoryTab::Pinstar {
-            return handle_directory_catalog_input(app, ctx, event);
-        }
-        if app.pinstar_state.is_none() {
-            match event {
-                ParsedInput::Byte(byte)
-                    if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) =>
-                {
-                    return true;
-                }
-                ParsedInput::Char(ch)
-                    if ch.is_ascii()
-                        && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8) =>
-                {
-                    return true;
-                }
-                _ => {}
-            }
-        }
-        // If no active diagram, handle browser input
-        if app.pinstar_state.is_none() {
-            return handle_pinstar_browser_input(app, event);
-        }
-        // Otherwise handle active diagram input
-        let mut area = app_content_area(app);
-        area.y = area.y.saturating_add(1);
-        area.height = area.height.saturating_sub(1);
-        let mut handled = false;
-        if let Some(state) = &mut app.pinstar_state {
-            if state.show_invite_dialog
-                && matches!(event, ParsedInput::Byte(0x0D) | ParsedInput::Byte(0x0A))
-                && let Some(token) = &state.invite_token
-            {
-                app.pending_clipboard = Some(token.clone());
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Invite link copied to clipboard!",
-                ));
-                return true;
-            }
-
-            match event {
-                ParsedInput::Byte(byte) => {
-                    let mut modifiers = crossterm::event::KeyModifiers::NONE;
-                    let code = if *byte < 32
-                        && *byte != 0x1B
-                        && *byte != 0x09
-                        && *byte != 0x0D
-                        && *byte != 0x0A
-                        && *byte != 0x08
-                    {
-                        modifiers |= crossterm::event::KeyModifiers::CONTROL;
-                        crossterm::event::KeyCode::Char((*byte + 96) as char)
-                    } else {
-                        match *byte {
-                            0x0D | 0x0A => crossterm::event::KeyCode::Enter,
-                            0x09 => crossterm::event::KeyCode::Tab,
-                            // ^H (0x08) and DEL (0x7F) are both plain Backspace;
-                            // word-delete stays on Ctrl+W. Matches chat composer.
-                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
-                            0x1B => crossterm::event::KeyCode::Esc,
-                            _ => crossterm::event::KeyCode::Char(*byte as char),
-                        }
-                    };
-                    let key = crossterm::event::KeyEvent::new(code, modifiers);
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Char(ch) => {
-                    let mut modifiers = crossterm::event::KeyModifiers::NONE;
-                    if ch.is_uppercase() {
-                        modifiers |= crossterm::event::KeyModifiers::SHIFT;
-                    }
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Char(*ch),
-                        modifiers,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Arrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key =
-                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key = crossterm::event::KeyEvent::new(
-                        code,
-                        crossterm::event::KeyModifiers::CONTROL,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::AltArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key =
-                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::ALT);
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::ShiftArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key = crossterm::event::KeyEvent::new(
-                        code,
-                        crossterm::event::KeyModifiers::SHIFT,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlShiftArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key = crossterm::event::KeyEvent::new(
-                        code,
-                        crossterm::event::KeyModifiers::CONTROL
-                            | crossterm::event::KeyModifiers::SHIFT,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlBackspace => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Backspace,
-                        crossterm::event::KeyModifiers::CONTROL,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlDelete => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Delete,
-                        crossterm::event::KeyModifiers::CONTROL,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Delete => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Delete,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Home => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Home,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::End => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::End,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::PageUp => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::PageUp,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::PageDown => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::PageDown,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        if !handled && app.pinstar_state.is_some() {
-            if matches!(
-                event,
-                ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q') | ParsedInput::Char('q')
-            ) {
-                app.pinstar_state = None;
-                app.refresh_pinstar_browser();
-                return true;
-            }
-
-            // Pinstar normally owns '?'. If the active handler declined it,
-            // let the generic path ignore it without treating it as back/quit.
-            if matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?')) {
-                return false;
-            }
-
-            // Do not return true for Mouse events here, let them fall through to the
-            // specialized Pinstar mouse handler in handle_parsed_input.
-            if matches!(event, ParsedInput::Mouse(_)) {
-                return false;
-            }
-
-            return false;
-        }
-        return handled;
+    if ctx.screen == Screen::Profiles {
+        return handle_directory_catalog_input(app, event);
     }
 
     false
@@ -1916,185 +1901,26 @@ fn door_games_allows_global_help(event: &ParsedInput) -> bool {
     matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?'))
 }
 
-fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
+fn handle_directory_catalog_input(app: &mut App, event: &ParsedInput) -> bool {
     if app.directory_state.search_mode() {
         return crate::app::directory::input::handle_search_input(app, event);
     }
 
     match event {
-        ParsedInput::AltEnter => {
-            match ctx.directory_tab {
-                DirectoryTab::Profiles if app.chat.work.composing() => {
-                    app.chat.work.field_newline()
-                }
-                DirectoryTab::Projects if app.chat.showcase.composing() => {
-                    app.chat.showcase.field_newline();
-                }
-                _ => {}
-            }
-            true
-        }
-        ParsedInput::Arrow(key) => match ctx.directory_tab {
-            DirectoryTab::Profiles => crate::app::chat::work::input::handle_arrow(app, *key),
-            DirectoryTab::Projects => crate::app::chat::showcase::input::handle_arrow(app, *key),
-            DirectoryTab::Pinstar => false,
-        },
+        ParsedInput::Arrow(key) => crate::app::directory::input::handle_idle_arrow(app, *key),
         ParsedInput::PageUp => {
-            move_directory_selection(app, ctx.directory_tab, -6);
+            crate::app::directory::input::move_idle_selection(app, -6);
             true
         }
         ParsedInput::PageDown => {
-            move_directory_selection(app, ctx.directory_tab, 6);
+            crate::app::directory::input::move_idle_selection(app, 6);
             true
         }
-        ParsedInput::Byte(byte) => {
-            if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) {
-                return true;
-            }
-            if *byte == b's'
-                && matches!(
-                    ctx.directory_tab,
-                    DirectoryTab::Profiles | DirectoryTab::Projects
-                )
-                && !app.chat.work.composing()
-                && !app.chat.showcase.composing()
-            {
-                app.directory_state.enter_search();
-                return true;
-            }
-            match ctx.directory_tab {
-                DirectoryTab::Profiles => {
-                    if app.chat.work.composing() {
-                        crate::app::chat::work::input::handle_composer_input(app, *byte);
-                        true
-                    } else {
-                        crate::app::chat::work::input::handle_byte(app, *byte)
-                    }
-                }
-                DirectoryTab::Projects => {
-                    if app.chat.showcase.composing() {
-                        crate::app::chat::showcase::input::handle_composer_input(app, *byte);
-                        true
-                    } else {
-                        crate::app::chat::showcase::input::handle_byte(app, *byte)
-                    }
-                }
-                DirectoryTab::Pinstar => false,
-            }
-        }
-        ParsedInput::Char(ch) => {
-            if ch.eq_ignore_ascii_case(&'s')
-                && matches!(
-                    ctx.directory_tab,
-                    DirectoryTab::Profiles | DirectoryTab::Projects
-                )
-                && !app.chat.work.composing()
-                && !app.chat.showcase.composing()
-            {
-                app.directory_state.enter_search();
-                return true;
-            }
-            if ch.is_ascii() && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8)
-            {
-                return true;
-            }
-            if route_directory_char_to_composer(app, ctx, *ch) {
-                return true;
-            }
-            if ch.is_ascii() {
-                let byte = *ch as u8;
-                match ctx.directory_tab {
-                    DirectoryTab::Profiles => crate::app::chat::work::input::handle_byte(app, byte),
-                    DirectoryTab::Projects => {
-                        crate::app::chat::showcase::input::handle_byte(app, byte)
-                    }
-                    DirectoryTab::Pinstar => false,
-                }
-            } else {
-                false
-            }
+        ParsedInput::Byte(byte) => crate::app::directory::input::handle_idle_byte(app, *byte),
+        ParsedInput::Char(ch) if ch.is_ascii() => {
+            crate::app::directory::input::handle_idle_byte(app, *ch as u8)
         }
         _ => false,
-    }
-}
-
-fn handle_directory_tab_switch_byte(app: &mut App, tab: DirectoryTab, byte: u8) -> bool {
-    match byte {
-        b'[' => {
-            select_directory_tab(app, tab.prev());
-            true
-        }
-        b']' => {
-            select_directory_tab(app, tab.next());
-            true
-        }
-        b'h' | b'H' if directory_tab_accepts_letter_switch(app, tab) => {
-            select_directory_tab(app, tab.prev());
-            true
-        }
-        b'l' | b'L' if directory_tab_accepts_letter_switch(app, tab) => {
-            select_directory_tab(app, tab.next());
-            true
-        }
-        _ => false,
-    }
-}
-
-fn directory_tab_accepts_letter_switch(app: &App, tab: DirectoryTab) -> bool {
-    match tab {
-        DirectoryTab::Profiles => !app.chat.work.composing(),
-        DirectoryTab::Projects => !app.chat.showcase.composing(),
-        DirectoryTab::Pinstar => {
-            app.pinstar_state.is_none()
-                && matches!(
-                    app.pinstar_browser.mode,
-                    crate::app::pinstar::browser::BrowserMode::List
-                )
-        }
-    }
-}
-
-fn route_directory_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
-    match ctx.directory_tab {
-        DirectoryTab::Profiles if app.chat.work.composing() => {
-            app.chat.work.field_insert_char(ch);
-            true
-        }
-        DirectoryTab::Projects if app.chat.showcase.composing() => {
-            app.chat.showcase.field_insert_char(ch);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn move_directory_selection(app: &mut App, tab: DirectoryTab, delta: isize) {
-    match tab {
-        DirectoryTab::Profiles => app.chat.work.move_selection(delta),
-        DirectoryTab::Projects => app.chat.showcase.move_selection(delta),
-        DirectoryTab::Pinstar => {}
-    }
-}
-
-fn select_directory_tab(app: &mut App, tab: DirectoryTab) {
-    if app.directory_state.tab == tab {
-        return;
-    }
-    app.chat.showcase.stop_composing();
-    app.chat.work.stop_composing();
-    app.directory_state.select(tab);
-    match tab {
-        DirectoryTab::Profiles => {
-            app.chat.work.list();
-            app.chat.work.mark_read();
-        }
-        DirectoryTab::Projects => {
-            app.chat.showcase.list();
-            app.chat.showcase.mark_read();
-        }
-        DirectoryTab::Pinstar => {
-            app.refresh_pinstar_browser();
-        }
     }
 }
 
@@ -2104,14 +1930,6 @@ fn route_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
         return true;
     }
     if ctx.screen == Screen::Dashboard && ctx.feeds_processing {
-        return true;
-    }
-    if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
-        app.chat.showcase.field_insert_char(ch);
-        return true;
-    }
-    if ctx.screen == Screen::Dashboard && ctx.work_composing {
-        app.chat.work.field_insert_char(ch);
         return true;
     }
     false
@@ -2138,6 +1956,10 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
         return;
     }
 
+    if matches!(byte, CTRL_H | CTRL_L) && scroll_room_rail_from_key(app, ctx, byte) {
+        return;
+    }
+
     if handle_global_key(app, ctx, byte) {
         app.chat.clear_message_selection();
         return;
@@ -2161,8 +1983,6 @@ fn toggle_room_section_from_key(app: &mut App, ctx: InputContext, section: RoomS
         || ctx.chat_composing
         || ctx.feeds_processing
         || ctx.news_composing
-        || ctx.showcase_composing
-        || ctx.work_composing
         || app.chat.room_jump_active
     {
         return false;
@@ -2172,6 +1992,27 @@ fn toggle_room_section_from_key(app: &mut App, ctx: InputContext, section: RoomS
     app.chat.reset_composer();
     app.sync_visible_chat_room();
     app.chat.request_list();
+    true
+}
+
+/// Ctrl+H / Ctrl+L on Home scroll the room rail without moving the
+/// selection; `h` / `l` are the ones that change room. Composers keep both
+/// bytes (^H is word-delete there), so this only runs while reading.
+fn scroll_room_rail_from_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    if ctx.screen != Screen::Dashboard
+        || ctx.chat_composing
+        || ctx.feeds_processing
+        || ctx.news_composing
+        || app.chat.room_jump_active
+    {
+        return false;
+    }
+    let delta = if byte == CTRL_H {
+        -RAIL_SCROLL_STEP
+    } else {
+        RAIL_SCROLL_STEP
+    };
+    scroll_room_rail(app, delta);
     true
 }
 
@@ -2188,8 +2029,21 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
+    // A lone Esc never reaches the swallow-everything gate in
+    // `handle_parsed_input` (it dispatches here via the pending-escape flush
+    // instead), so this arm is the stream URL modal's only way out and comes
+    // first, mirroring its position above everything else in that gate.
+    if app.stream_modal.is_some() {
+        app.stream_modal = None;
+        return;
+    }
     if app.show_quit_confirm {
         quit_confirm::input::handle_escape(app);
+        return;
+    }
+    // A lone Esc skips the tour gate the same way, and would close the modal
+    // or the practice table a stop is holding open.
+    if app.clubhouse.tutorial_forced_step().is_some() {
         return;
     }
     if app.show_help {
@@ -2208,6 +2062,12 @@ fn dispatch_escape(app: &mut App) {
         app.show_ultimate_modal = false;
         return;
     }
+    // Drawn over the settings modal and the profile editor, so it takes Esc
+    // ahead of both, the same order `handle_parsed_input` gives its keys.
+    if app.tag_picker.is_open() {
+        crate::app::tag_picker::input::close(app);
+        return;
+    }
     if app.show_settings {
         settings_modal::input::handle_escape(app);
         return;
@@ -2224,25 +2084,63 @@ fn dispatch_escape(app: &mut App) {
         chat::polls::input::handle_escape(app);
         return;
     }
-    if app.show_bonsai_v2_modal {
-        crate::app::bonsai_v2::modal_input::handle_escape(app);
+    if app.show_gild_modal {
+        chat::gild::input::close(app);
+        return;
+    }
+    if app.chat.cyberspace.modal_active() {
+        chat::cyberspace::input::handle_modal_escape(app);
+        return;
+    }
+    // Inside a cyberspace chat room, Esc backs out one step at a time: the
+    // composer first (so a room is never left out from under a half-typed
+    // message), then the room itself, which is what closes its stream.
+    if app.chat.cyberspace.cancel_room_composer() {
+        return;
+    }
+    if app.chat.cyberspace.open_room_name().is_some() {
+        app.leave_cyberspace_room();
+        return;
+    }
+    if (app.chat.cyberspace_selected || app.chat.cyberspace_notifications_selected)
+        && app.chat.cyberspace.escape_to_root()
+    {
         return;
     }
     if app.show_bonsai_modal {
         crate::app::bonsai::modal_input::handle_escape(app);
         return;
     }
-    if app.show_cat_modal {
-        app.pet_state.cancel_play();
-        app.show_cat_modal = false;
+    if app.show_lobby_modal {
+        crate::app::lobby::modal_input::handle_escape(app);
         return;
     }
     if app.icon_picker_open {
         close_icon_picker(app);
         return;
     }
+    if app.jobs.post.is_open() {
+        crate::app::jobs::input::handle_post_escape(app);
+        return;
+    }
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_escape(app);
+        return;
+    }
+    if app.directory_editor.is_open() {
+        let _ = crate::app::directory::editor::input::handle_escape(app);
+        return;
+    }
+    // A lone Esc dispatches here rather than through the history modal's own
+    // input handler; ordered between room info (drawn over it) and room
+    // search (drawn under it) to match the render stack.
+    if app.chat.history_modal.is_open() {
+        app.chat.history_modal.close();
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
+        app.chat.message_search.clear();
         return;
     }
     if app.booth_modal_state.is_open() {
@@ -2255,8 +2153,12 @@ fn dispatch_escape(app: &mut App) {
         app.booth_modal_state.close();
         return;
     }
-    if app.login_announcements_visible() {
-        dismiss_login_announcements(app);
+    if app.stations_modal_state.is_open() {
+        app.stations_modal_state.close();
+        return;
+    }
+    if app.paper.modal_visible() {
+        app.paper.close_modal();
         return;
     }
     if app.chat.has_news_modal() {
@@ -2283,17 +2185,11 @@ fn dispatch_escape(app: &mut App) {
     if handle_modal_input(app, ctx, 0x1B) {
         return;
     }
-    if matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
-        && app.chat.is_reaction_leader_active()
-    {
+    if screen_has_chat_pane(ctx.screen) && app.chat.is_reaction_leader_active() {
         app.chat.cancel_reaction_leader();
         return;
     }
-    if matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) && app.chat.has_overlay()
-    {
+    if screen_composes_chat(ctx.screen) && app.chat.has_overlay() {
         app.chat.close_overlay();
         return;
     }
@@ -2301,11 +2197,11 @@ fn dispatch_escape(app: &mut App) {
         let Some(state) = app.dartboard_state.as_ref() else {
             return;
         };
-        if state.is_snapshot_browser_open() {
-            dispatch_screen_key(app, ctx.screen, 0x1B);
-            return;
-        }
-        if state.is_glyph_picker_open() || state.is_help_open() {
+        // Every Artboard overlay (help, glyph picker, the rail's listings
+        // and archive lists, the hang flow) takes Esc before it can mean
+        // quit, and Esc on the board in view mode goes to the rail. Edit
+        // mode's Esc is the editor's, handled below.
+        if !app.artboard_interacting && state.claims_escape() {
             dispatch_screen_key(app, ctx.screen, 0x1B);
             return;
         }
@@ -2321,9 +2217,96 @@ fn dispatch_escape(app: &mut App) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
+    // Esc from the daily board peels state in layers (mirroring the active
+    // room): a selected match-chat message deselects, then a half-built
+    // checkers/backgammon move clears, then Esc drops back to the Daily
+    // Games modal on the screen it was opened from.
+    if ctx.screen == Screen::DailyMatch {
+        if let Some(chat_room_id) = app.daily.board_chat_room_id()
+            && app
+                .chat
+                .selected_message_body_in_room(chat_room_id)
+                .is_some()
+        {
+            app.chat.clear_message_selection();
+            return;
+        }
+        if app.daily.cancel_pending_move() {
+            return;
+        }
+        crate::app::lobby::daily::board_input::close_board(app);
+        return;
+    }
+    // Esc from a house table mirrors the daily board: peel chat selection
+    // first, then drop back to the Lobby modal.
+    if ctx.screen == Screen::HouseTable {
+        if let Some(chat_room_id) = app.house.chat_room_id()
+            && app
+                .chat
+                .selected_message_body_in_room(chat_room_id)
+                .is_some()
+        {
+            app.chat.clear_message_selection();
+            return;
+        }
+        crate::app::lobby::house::input::close_table(app);
+        return;
+    }
+    // Esc from the paired scratchpad leaves the pairing (notifying the partner
+    // via the registry) and returns to Home. This arm is not redundant with the
+    // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
+    // it is held as `pending_escape` and lands here via `flush_pending_escape`.
+    // The keymap only sees Esc when it arrives mid-chunk with other bytes.
+    // Esc on Zen peels the tile picker, the composer, or a selected message,
+    // and otherwise does nothing: only Ctrl+F (or `/zen`) leaves the page,
+    // so a stray Esc never throws away the layout you sat down in.
+    if ctx.screen == Screen::Zen {
+        if app.zen.kind_picker.is_some() {
+            app.zen.close_kind_picker();
+            return;
+        }
+        if app.chat.composing {
+            app.chat.reset_composer();
+            return;
+        }
+        if let Some(room_id) = app.zen_chat_room_id()
+            && app.chat.selected_message_body_in_room(room_id).is_some()
+        {
+            app.chat.clear_message_selection();
+        }
+        return;
+    }
+    if ctx.screen == Screen::Scratchpad {
+        app.set_screen(Screen::Dashboard);
+        return;
+    }
+    // Esc from Nightcap peels the drink menu if it is open, else steps back
+    // outside to the Clubhouse.
+    if ctx.screen == Screen::Nightcap {
+        if app.nightcap.cancel_carving() || app.nightcap.close_menu() {
+            return;
+        }
+        app.set_screen(Screen::Clubhouse);
+        return;
+    }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {
+        // ...but while a world is live, Esc is the door's key, not this
+        // dispatcher's. The door cancels a chat line being composed, and
+        // otherwise requires a confirming second press before it will give up
+        // a player's place in a persistent world. This runs before screen
+        // dispatch, so leaving here unconditionally skipped both rules - the
+        // same interception that was removed from `lateania::screen` still
+        // lived one layer up here. Forward it and let the door decide; only a
+        // leave it actually performed should reach the hub.
+        if app.lateania_state.is_some() {
+            crate::app::door::lateania::screen::GAME.handle_key(app, 0x1B);
+            if app.lateania_state.is_none() {
+                app.set_screen(Screen::Games);
+            }
+            return;
+        }
         app.door_delete_confirm = false;
         app.leave_lateania();
         app.set_screen(Screen::Games);
@@ -2339,68 +2322,65 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::greendragon::screen::GAME.handle_key(app, 0x1B);
         return;
     }
-    // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
-    // back to Home.
-    if ctx.screen == Screen::Games {
+    // Esc in A Dark Room settles the clock, saves, and returns to the hub. Same
+    // shape as Green Dragon: the game owns the leave, so forward it.
+    if ctx.screen == Screen::Darkroom {
         if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+            return;
+        }
+        crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
+        return;
+    }
+    // Esc in the city backs out one step at a time: the guide first, then
+    // the fight picker, then the fight scene (a run while the fight is on,
+    // `fight/input.rs`), then an open shop panel or the ledge; on the bare
+    // street it goes up to the chat with #lounge open (the wire and `0` go
+    // to the clubhouse instead).
+    if ctx.screen == Screen::City && app.guide.state.is_open() {
+        app.guide.state.close();
+        return;
+    }
+    if ctx.screen == Screen::City && app.fight.picker_open() {
+        app.fight.close();
+        return;
+    }
+    if ctx.screen == Screen::City && app.fight.scene_open() {
+        crate::app::deadchannel::fight::input::handle_escape(app);
+        return;
+    }
+    if ctx.screen == Screen::City && (app.city.panel().is_some() || app.city.at_ledge()) {
+        app.city.dismiss();
+        app.tailor.close();
+        return;
+    }
+    if ctx.screen == Screen::City {
+        // With no room list landed yet, Home keeps whatever it had.
+        if let Some(room_id) = app.chat.lounge_room_id() {
+            app.chat
+                .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+        }
+        app.set_screen(Screen::Dashboard);
+        return;
+    }
+    // Esc from the Games hub closes the rc config modal, cancels a pending
+    // reset prompt, and otherwise drops back to Home.
+    if ctx.screen == Screen::Games {
+        if app.door_rc_modal.is_some() {
+            app.door_rc_modal = None;
+        } else if app.door_delete_confirm {
             app.door_delete_confirm = false;
         } else {
             app.set_screen(Screen::Dashboard);
         }
         return;
     }
-    if ctx.screen == Screen::Pinstar {
-        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Profiles {
-            if app.chat.work.composing() {
-                app.chat.work.stop_composing();
-            }
-            return;
-        }
-        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Projects {
-            if app.chat.showcase.composing() {
-                app.chat.showcase.stop_composing();
-            }
-            return;
-        }
-        // If a browser popup is active (Create, Rename, Delete, AcceptInvite),
-        // forward Esc to the browser input handler
-        let is_browser_popup = !matches!(
-            app.pinstar_browser.mode,
-            crate::app::pinstar::browser::BrowserMode::List
-        );
-        if app.pinstar_state.is_none() && is_browser_popup {
-            let event = ParsedInput::Byte(0x1B);
-            handle_pinstar_browser_input(app, &event);
-            return;
-        }
-        let mut area = app_content_area(app);
-        area.y = area.y.saturating_add(1);
-        area.height = area.height.saturating_sub(1);
-        if let Some(state) = &mut app.pinstar_state {
-            let key = crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Esc,
-                crossterm::event::KeyModifiers::NONE,
-            );
-            let handled = crate::app::pinstar::input::handle_pinstar_key(
-                state,
-                key,
-                area,
-                app.pinstar_registry.db(),
-            );
-            if handled {
-                return;
-            }
-            app.pinstar_state = None;
-            app.refresh_pinstar_browser();
-        }
+    if ctx.screen == Screen::Profiles {
+        let _ = crate::app::directory::input::handle_escape(app);
         return;
     }
     if ctx.screen == Screen::Dashboard && ctx.feeds_processing {
         app.chat.feeds.stop_processing();
-        return;
-    }
-    if ctx.screen == Screen::Rooms {
-        dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }
     if ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some() {
@@ -2422,39 +2402,40 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         PasteTarget::NewsComposer => {
             insert_pasted_text(pasted, |ch| app.chat.news.composer_push(ch));
         }
-        PasteTarget::ShowcaseComposer => {
-            insert_pasted_text(pasted, |ch| app.chat.showcase.field_insert_char(ch));
-        }
-        PasteTarget::WorkComposer => {
-            insert_pasted_text(pasted, |ch| app.chat.work.field_insert_char(ch));
-        }
-        PasteTarget::Pinstar => {
-            if let Some(state) = &mut app.pinstar_state {
-                if let Some(textarea) = &mut state.rename_popup {
-                    insert_pasted_text(pasted, |ch| {
-                        textarea.insert_char(ch);
-                    });
-                } else if let Some(textarea) = &mut state.floating_editor {
-                    insert_pasted_text(pasted, |ch| {
-                        textarea.insert_char(ch);
-                    });
-                }
-            } else if app.pinstar_browser.mode
-                == crate::app::pinstar::browser::BrowserMode::ImportCanvas
-            {
-                insert_pasted_text(pasted, |ch| {
-                    app.pinstar_browser.import_input.push(ch);
-                });
-            } else if app.pinstar_browser.mode
-                == crate::app::pinstar::browser::BrowserMode::AcceptInvite
-            {
-                insert_pasted_text(pasted, |ch| {
-                    let _ = app.pinstar_browser.push_invite_token_char(ch);
-                });
-            }
-        }
+        PasteTarget::DoorRcModal => handle_door_rc_paste(app, pasted),
         PasteTarget::None => {}
     }
+}
+
+/// A paste into the rc config modal replaces the stored config wholesale:
+/// sanitize (keep newlines and tabs, drop other controls), enforce the size
+/// cap, then update the in-App copy and fire the DB save. The modal stays
+/// open so the refreshed preview confirms what landed.
+fn handle_door_rc_paste(app: &mut App, pasted: &[u8]) {
+    use crate::app::common::primitives::Banner;
+
+    let Some(game) = app.door_rc_modal else {
+        return;
+    };
+    let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(pasted));
+    let content = crate::app::door::rc::sanitize_rc_paste(&cleaned);
+    if content.trim().is_empty() {
+        app.banner = Some(Banner::error("That paste was empty."));
+        return;
+    }
+    if !late_core::models::door_rc::content_acceptable(&content) {
+        app.banner = Some(Banner::error("Config is too large (16KB max)."));
+        return;
+    }
+    let lines = content.lines().count();
+    app.door_rcs.insert(game, content.clone());
+    app.door_rc_service.save_task(app.user_id, game, content);
+    app.banner = Some(Banner::success(&format!(
+        "{} saved ({} line{}). Applies at your next launch.",
+        game.file_label(),
+        lines,
+        if lines == 1 { "" } else { "s" }
+    )));
 }
 
 fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
@@ -2467,22 +2448,27 @@ fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
     ));
 }
 
-pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Option<uuid::Uuid>) {
-    use crate::app::files::image_upload::{download_and_reupload_url, is_file_upload_configured};
-    if !is_file_upload_configured() {
+pub(crate) fn trigger_url_image_upload(
+    app: &mut App,
+    url: String,
+    room_id: Option<uuid::Uuid>,
+    reply_target: Option<crate::app::chat::state::ReplyTarget>,
+) {
+    use crate::app::files::image_upload::download_and_reupload_url;
+    let Some(files) = app.chat.files_config().cloned() else {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "File uploads are disabled",
         ));
         return;
-    }
+    };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    if let Some(banner) = app.chat.begin_image_upload(room_id, rx) {
+    if let Some(banner) = app.chat.begin_image_upload(room_id, reply_target, rx) {
         app.banner = Some(banner);
         return;
     }
     tokio::spawn(async move {
-        let result = download_and_reupload_url(url)
+        let result = download_and_reupload_url(&files, url)
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(result);
@@ -2493,22 +2479,12 @@ pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Opti
 }
 
 fn paste_target(ctx: InputContext) -> PasteTarget {
-    if is_chat_composer_context(ctx) {
+    if ctx.screen == Screen::Games && ctx.door_rc_modal {
+        PasteTarget::DoorRcModal
+    } else if is_chat_composer_context(ctx) {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Dashboard && ctx.news_composing {
         PasteTarget::NewsComposer
-    } else if (ctx.screen == Screen::Dashboard
-        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Projects))
-        && ctx.showcase_composing
-    {
-        PasteTarget::ShowcaseComposer
-    } else if (ctx.screen == Screen::Dashboard
-        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Profiles))
-        && ctx.work_composing
-    {
-        PasteTarget::WorkComposer
-    } else if ctx.screen == Screen::Pinstar {
-        PasteTarget::Pinstar
     } else {
         PasteTarget::None
     }
@@ -2556,24 +2532,18 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 }
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
-    match screen {
-        Screen::Dashboard => {
-            if let Some(room_id) = app.chat.selected_room_id {
-                chat::input::handle_scroll_in_room(app, room_id, delta);
-            }
-        }
-        Screen::Rooms => {
-            if let Some(room) = app.rooms_active_room.as_ref() {
-                chat::input::handle_scroll_in_room(app, room.chat_room_id, delta);
-            }
-        }
-        Screen::Artboard => {}
-        Screen::Pinstar => {}
-        Screen::WorldCup => app.worldcup.scroll(delta),
-        // The clubhouse has no scrollable chat panel; bubbles carry the
-        // conversation and the full history lives on Home.
-        Screen::Clubhouse => {}
-        _ => {}
+    // A cyberspace room draws over the pane, so the page keys scroll its
+    // conversation rather than the chat room sitting behind it. Its scroll
+    // counts rows back from the newest, so the sign flips.
+    if app.chat.cyberspace.open_room_name().is_some() {
+        app.chat.cyberspace.room_scroll(-delta);
+        return;
+    }
+    // Chat-pane screens scroll the room they're showing; the clubhouse has
+    // no scrollable chat panel (bubbles carry the conversation and the full
+    // history lives on Home), so it resolves to None like everything else.
+    if let Some(room_id) = embedded_chat_room_id(app, screen) {
+        chat::input::handle_scroll_in_room(app, room_id, delta);
     }
 }
 
@@ -2584,15 +2554,14 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 0 1 2 3 4 5 6 7 | ..." land on these columns.
+        // cells in " late.sh | 0 1 2 3 4 5 6 | ..." land on these columns.
         12 => Some(Screen::Clubhouse),
         14 => Some(Screen::Dashboard),
         16 => Some(Screen::Arcade),
         18 => Some(Screen::Games),
-        20 => Some(Screen::Rooms),
-        22 => Some(Screen::Artboard),
-        24 => Some(Screen::Pinstar),
-        26 => Some(Screen::WorldCup),
+        20 => Some(Screen::Artboard),
+        22 => Some(Screen::Profiles),
+        24 => Some(Screen::Leaderboard),
         _ => None,
     }
 }
@@ -2603,11 +2572,27 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
     }
 
     reset_composers_for_page_change(app);
-    if target == Screen::Rooms {
-        app.rooms_active_room = None;
-    }
     app.set_screen(target);
     app.chat.clear_message_selection();
+}
+
+fn handle_topbar_screen_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
+    // Zen is full-bleed and has no app frame or screen numbers.
+    if screen == Screen::Zen
+        || mouse.kind != MouseEventKind::Down
+        || mouse.button != Some(MouseButton::Left)
+    {
+        return false;
+    }
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    let Some(target) = topbar_screen_hit_test(x, y) else {
+        return false;
+    };
+    app.pending_chat_profile_open = None;
+    select_screen_from_topbar(app, screen, target);
+    true
 }
 
 fn chat_room_list_view<'a>(
@@ -2616,6 +2601,8 @@ fn chat_room_list_view<'a>(
 ) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
+        away_user_ids: &app.away_user_ids,
+        live_streams: &app.chat.live_streams,
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,
@@ -2625,11 +2612,25 @@ fn chat_room_list_view<'a>(
         selected_room_id: app.chat.selected_room_id,
         room_jump_active: app.chat.room_jump_active,
         room_section_prefix_armed: app.room_section_prefix_armed,
+        rail_scroll_nudge: app.chat.rail_scroll_nudge(),
         current_user_id: app.user_id,
         ignored_user_ids: app.chat.ignored_user_ids(),
+        sticky_unread_dm: app.chat.sticky_unread_dm,
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
+        cyberspace_linked: app.chat.cyberspace.is_linked(),
+        cyberspace_rooms: app.chat.cyberspace.pinned_rooms(),
+        cyberspace_selected: app.chat.cyberspace_selected,
+        cyberspace_notifications_selected: app.chat.cyberspace_notifications_selected,
+        cyberspace_room_selected: app.chat.cyberspace_room_selected,
+        cyberspace_room_unread: app.chat.cyberspace.room_unread_flags(),
+        cyberspace_mail: app.chat.cyberspace.pinned_cmail(),
+        cyberspace_mail_selected: app.chat.cyberspace_mail_selected,
+        cyberspace_mail_unread: app.chat.cyberspace.cmail_unread_counts(),
+        cyberspace_feeds_unread: app.chat.cyberspace.unread_entries(),
+        cyberspace_notifications_unread: app.chat.cyberspace.unread_notifications(),
+        cyberspace_unread_saturated: app.chat.cyberspace.unread_saturated(),
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
@@ -2642,12 +2643,47 @@ fn chat_room_list_view<'a>(
     }
 }
 
-fn apply_chat_room_selection_delta(app: &mut App, delta: isize) {
-    if app.chat.move_selection(delta) {
-        app.chat.reset_composer();
-        app.sync_visible_chat_room();
-        app.chat.request_list();
-    }
+/// Rows one Ctrl+H / Ctrl+L press or one wheel notch moves the Home rail.
+const RAIL_SCROLL_STEP: isize = 3;
+
+/// Scroll the Home room rail by `delta` rows, leaving the selection where it
+/// is. The offset is clamped to the rows there are, so scrolling back from
+/// either end moves on the first press. No-op while the rail is not drawn.
+fn scroll_room_rail(app: &mut App, delta: isize) {
+    let Some(rooms_area) = dashboard_room_rail_area(app) else {
+        return;
+    };
+    let (base, max_scroll, current) = room_rail_scroll_state(app, rooms_area);
+    let next = current.saturating_add_signed(delta).min(max_scroll);
+    app.chat
+        .set_rail_scroll_nudge(next as isize - base as isize);
+}
+
+/// Pin the rail at first-visible row `scroll` for the current selection, so a
+/// click on a row of a scrolled rail selects it without the rail jumping back
+/// to centre on it.
+fn keep_room_rail_scroll(app: &mut App, rooms_area: Rect, scroll: usize) {
+    let (base, max_scroll, _) = room_rail_scroll_state(app, rooms_area);
+    app.chat
+        .set_rail_scroll_nudge(scroll.min(max_scroll) as isize - base as isize);
+}
+
+/// `(selection-centred scroll, max scroll, scroll on screen)` for the Home
+/// rail drawn in `rooms_area`.
+fn room_rail_scroll_state(app: &App, rooms_area: Rect) -> (usize, usize, usize) {
+    let username_directory_snapshot = app
+        .username_directory
+        .as_ref()
+        .map(crate::usernames::snapshot);
+    let usernames =
+        UsernameLookup::new(app.chat.usernames(), username_directory_snapshot.as_deref());
+    let room_list_view = chat_room_list_view(app, &usernames);
+    let (base, max_scroll) =
+        crate::app::chat::ui::room_rail_scroll_bounds(rooms_area, &room_list_view);
+    let current = base
+        .saturating_add_signed(room_list_view.rail_scroll_nudge)
+        .min(max_scroll);
+    (base, max_scroll, current)
 }
 
 fn handle_mouse_scroll_over_screen(
@@ -2656,9 +2692,6 @@ fn handle_mouse_scroll_over_screen(
     mouse: MouseEvent,
     delta: isize,
 ) -> bool {
-    if !matches!(screen, Screen::Dashboard) {
-        return false;
-    }
     let Some(x) = mouse.x.checked_sub(1) else {
         return false;
     };
@@ -2666,25 +2699,8 @@ fn handle_mouse_scroll_over_screen(
         return false;
     };
 
-    // Home top-strip Activity panel: wheel scrolls the recent-events feed
-    // through the in-memory `activity` buffer. Bigger offset = older
-    // events; clamp to the events outside the visible window so a trim
-    // can't strand us past the end.
-    if let Some(rect) = app.last_dashboard_activity_rect.get()
-        && rect_contains(rect, x, y)
-    {
-        let visible = activity_visible_event_rows(!app.chat.active_friend_names().is_empty());
-        let max_offset = app.activity.len().saturating_sub(visible) as u16;
-        let current = app.dashboard_activity_scroll.min(max_offset);
-        // delta > 0 (wheel up) reveals newer events → smaller offset.
-        // delta < 0 (wheel down) reveals older events → larger offset.
-        let next = if delta > 0 {
-            current.saturating_sub(ACTIVITY_SCROLL_STEP)
-        } else {
-            current.saturating_add(ACTIVITY_SCROLL_STEP).min(max_offset)
-        };
-        app.dashboard_activity_scroll = next;
-        return true;
+    if !matches!(screen, Screen::Dashboard) {
+        return false;
     }
 
     let Some(rooms_area) = dashboard_room_rail_area(app) else {
@@ -2703,18 +2719,33 @@ fn handle_mouse_scroll_over_screen(
         return false;
     }
 
-    let selection_delta = if delta > 0 { -1 } else { 1 };
-    apply_chat_room_selection_delta(app, selection_delta);
+    // The wheel scrolls the rail the way Ctrl+H / Ctrl+L do; rooms change on
+    // a click, not on a pass of the wheel.
+    let rows = if delta > 0 {
+        -RAIL_SCROLL_STEP
+    } else {
+        RAIL_SCROLL_STEP
+    };
+    scroll_room_rail(app, rows);
     true
 }
 
-/// One wheel notch moves the Activity feed by this many events. Single-step
-/// keeps the scroll readable on small panels without overshooting the
-/// 3-4 visible rows.
-const ACTIVITY_SCROLL_STEP: u16 = 1;
-
-fn activity_visible_event_rows(has_active_friends: bool) -> usize {
-    if has_active_friends { 3 } else { 4 }
+/// A left-click on the pet's render-recorded rect pets it. The rect is only
+/// set on frames where the box drew, so this is a no-op wherever the box is
+/// hidden.
+fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
+    // The box renders under the global modals; don't let clicks on a
+    // modal that happens to overlap it fall through to the pet.
+    if chat_scroll_clicks_blocked(app) {
+        return false;
+    }
+    if let Some(rect) = app.last_pet_rect.get()
+        && rect_contains(rect, x, y)
+    {
+        pet_the_pet_globally(app);
+        return true;
+    }
+    false
 }
 
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
@@ -2727,10 +2758,20 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     let Some(y) = mouse.y.checked_sub(1) else {
         return false;
     };
-    if let Some(target) = topbar_screen_hit_test(x, y) {
-        app.pending_chat_profile_open = None;
-        select_screen_from_topbar(app, screen, target);
+    // Petting the pet is a passing gesture, not a move: it takes the click
+    // before the Zen focus, so a click on the pet leaves the keys with the
+    // chat tile the page opened on.
+    if handle_pet_click(app, x, y) {
         return true;
+    }
+    if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
+        return true;
+    }
+    // A click on a Zen tile focuses it, then falls through so the composer
+    // and the messages of that tile still take the click. A modal over the
+    // page takes the click itself, the same guard the pet click uses.
+    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
+        focus_zen_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
@@ -2765,7 +2806,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
             }
             if let Some(slot) = slot {
                 app.pending_chat_profile_open = None;
+                let (_, _, scroll) = room_rail_scroll_state(app, rooms_area);
                 let changed = app.chat.select_room_slot(slot);
+                keep_room_rail_scroll(app, rooms_area, scroll);
                 if changed {
                     app.chat.reset_composer();
                     app.sync_visible_chat_room();
@@ -2782,11 +2825,11 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
 /// Click inside the chat composer bar. A double-click enters compose mode,
 /// mirroring `i`/Enter. Once composing, a single click positions the text
 /// cursor at the clicked cell, so you can click between letters to place the
-/// caret. Only fires on Dashboard / Rooms — the only screens where the chat
-/// composer is drawn — and only for clicks inside the composer rect, so the
+/// caret. Only fires on the chat-pane screens — where the composer bar is
+/// drawn — and only for clicks inside the composer rect, so the
 /// message-row click flow (selection, link-open) is untouched.
 fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
-    if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
+    if !screen_has_chat_pane(screen) {
         return false;
     }
     let Some(rect) = app.chat.last_composer_rect.get() else {
@@ -2806,7 +2849,7 @@ fn handle_chat_composer_click(app: &mut App, screen: Screen, x: u16, y: u16) -> 
     );
     if is_double {
         app.chat.last_composer_click = None;
-        if let Some(room_id) = chat_click_room_id(app, screen) {
+        if let Some(room_id) = embedded_chat_room_id(app, screen) {
             app.chat.start_composing_in_room(room_id);
             // Land the caret where the focusing double-click pointed.
             app.chat.composer_click_to_cursor(rect, x, y);
@@ -2857,6 +2900,10 @@ pub(crate) enum ChatClickKind {
     /// Click landed on the user's currently-equipped chat flag — opens
     /// the Hub Shop on the Flags sub-store. No double-click verb.
     StoreFlag,
+    /// Click landed on the user's burn milestone — opens the Hub Shop on
+    /// the Ultimates sub-store, where the ladder is sold. No double-click
+    /// verb.
+    StoreMilestone,
     /// Click landed on an inline image preview row — selects the message
     /// and opens the image viewer modal. No double-click verb.
     Image { message_id: Uuid },
@@ -2886,14 +2933,18 @@ pub(crate) struct PendingChatProfileOpen {
     pub time: std::time::Instant,
 }
 
-/// Resolve which chat room a click in the message scroll targets.
-/// Single source of truth so the composer bar
-/// (`handle_chat_composer_click`) and the message scroll above it
-/// always agree on which room a click belongs to.
-fn chat_click_room_id(app: &App, screen: Screen) -> Option<Uuid> {
+/// Resolve which chat room a screen's embedded chat pane is showing right
+/// now. Single source of truth for every room-addressed gate — composer-bar
+/// clicks, message-scroll clicks, wheel/page scroll — so they always agree
+/// on which room an interaction belongs to. Screens outside
+/// `screen_has_chat_pane` resolve to `None`, as do pane screens with no
+/// room on show (no active table, pre-109 match, synthetic Home entry).
+fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
-        Screen::Rooms => app.rooms_active_room.as_ref().map(|r| r.chat_room_id),
         Screen::Dashboard => app.chat.selected_room_id,
+        Screen::DailyMatch => app.daily.board_chat_room_id(),
+        Screen::HouseTable => app.house.chat_room_id(),
+        Screen::Zen => app.zen_chat_room_id(),
         _ => None,
     }
 }
@@ -2910,10 +2961,11 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_profile_modal
         || app.show_sheet_modal
         || app.show_poll_modal
+        || app.show_gild_modal
+        || app.chat.cyberspace.modal_active()
         || app.show_quit_confirm
         || app.show_bonsai_modal
-        || app.show_cat_modal
-        || app.login_announcements_visible()
+        || app.show_lobby_modal
         || app.icon_picker_open
 }
 
@@ -2934,6 +2986,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
                 Some(HeaderTarget::Profile) => ChatClickKind::ProfileOf { message_id },
                 Some(HeaderTarget::StoreBadge) => ChatClickKind::StoreBadge,
                 Some(HeaderTarget::StoreFlag) => ChatClickKind::StoreFlag,
+                Some(HeaderTarget::StoreMilestone) => ChatClickKind::StoreMilestone,
                 None => ChatClickKind::BodySelect { message_id },
             },
         ),
@@ -2950,7 +3003,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
 /// can be promoted to an `@mention` insertion in `App::tick`. Returns
 /// `true` if the click was consumed.
 fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bool {
-    if !matches!(screen, Screen::Dashboard | Screen::Rooms) {
+    if !screen_has_chat_pane(screen) {
         return false;
     }
     if chat_scroll_clicks_blocked(app) {
@@ -2968,7 +3021,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
     let Some(hit) = layout.rows.get(row_idx) else {
         return false;
     };
-    let Some(room_id) = chat_click_room_id(app, screen) else {
+    let Some(room_id) = embedded_chat_room_id(app, screen) else {
         return false;
     };
     let Some(kind) = classify_chat_hit(hit, col) else {
@@ -3012,16 +3065,19 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             }
         }
         ChatClickKind::StoreBadge => {
-            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
         }
         ChatClickKind::StoreFlag => {
-            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
+        }
+        ChatClickKind::StoreMilestone => {
+            app.show_hub_modal = true;
+            app.shop_state
+                .select_category(crate::app::hub::shop::catalog::ShopCategory::Ultimates);
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
@@ -3044,7 +3100,8 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
 }
 
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
-    if !app.profile_state.profile().show_room_list_sidebar {
+    let (room_list_mode, _) = app.rail_modes();
+    if !crate::app::render::resolve_room_list_enabled(room_list_mode, app.size.0) {
         return None;
     }
     const HOME_RAIL_WIDTH: u16 = 24;
@@ -3057,37 +3114,67 @@ fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
     })
 }
 
-fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
+/// Route a click on a status bar (either frame bar, or Zen's row) to the
+/// segment under it.
+///
+/// The rects come from the bar's own layout pass, rebuilt every frame, so this
+/// stays correct however the bar is reordered or resized, and a segment a fit
+/// pass dropped simply has no rect to hit.
+fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }
     if app.show_splash {
         return false;
     }
-
-    let unread = app.chat.notifications.unread_count();
-    // SGR mouse coords are 1-indexed; the top border row is y=1.
-    if unread == 0 || mouse.y != 1 {
+    // SGR mouse coords are 1-indexed; the rects are in 0-indexed frame cells.
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
         return false;
-    }
-
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    let hud_width = format!(" {unread} unread {noun} ").len() as u16;
-    if mouse.x < app.size.0.saturating_sub(hud_width) {
+    };
+    let hit = app
+        .last_status_hits
+        .borrow()
+        .iter()
+        .find(|(_, rect)| rect_contains(*rect, x, y))
+        .map(|(action, _)| *action);
+    let Some(action) = hit else {
         return false;
-    }
+    };
 
     app.pending_chat_profile_open = None;
-    app.set_screen(Screen::Dashboard);
-    app.chat.select_notifications();
+    match action {
+        StatusClick::Mentions => {
+            app.chat.reset_composer();
+            app.chat.clear_message_selection();
+            app.set_screen(Screen::Dashboard);
+            app.chat.select_notifications();
+        }
+        StatusClick::Shop => open_shop_modal_globally(app),
+        StatusClick::Lobby => open_daily_modal_globally(app),
+        StatusClick::Booth => {
+            let submit_enabled = app.audio.booth_submit_enabled();
+            app.booth_modal_state.open(submit_enabled);
+        }
+        StatusClick::Arcade => app.set_screen(Screen::Arcade),
+        StatusClick::Profiles => app.set_screen(Screen::Profiles),
+        // Care on Zen's own row: the companions are already on the page,
+        // and reopening would make Zen its own return page.
+        StatusClick::Zen if app.screen == Screen::Zen => {}
+        StatusClick::Zen => open_zen_globally(app),
+        // Nothing up, or a result holding the strip: nothing to open.
+        StatusClick::Live => {
+            crate::app::live::input::open_from_key(app);
+        }
+    }
     true
 }
 
 fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let profile = app.profile_state.profile();
-    if crate::app::render::resolve_right_sidebar_enabled(profile.right_sidebar_mode, app.screen) {
+    let (_, right_sidebar_mode) = app.rail_modes();
+    if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
+    {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
     } else {
         inner
@@ -3103,12 +3190,11 @@ fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
 }
 
 fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
-    // Route arrows to autocomplete when active
-    if matches!(
-        screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) && app.chat.is_composing()
-        && app.chat.is_autocomplete_active()
+    // Route arrows to autocomplete when active. Every chat-composing screen
+    // (Dashboard, Clubhouse, and the embedded Daily/House chats) shares the
+    // composer, so the mention popup can open on any of them; the composer
+    // gate keeps arrows out of the game handlers while it's up.
+    if screen_composes_chat(screen) && app.chat.is_composing() && app.chat.is_autocomplete_active()
     {
         chat::input::handle_autocomplete_arrow(app, key);
         return true;
@@ -3120,29 +3206,104 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         Screen::GreenDragon => crate::app::door::greendragon::screen::GAME.handle_arrow(app, key),
+        Screen::Darkroom => crate::app::door::darkroom::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
         // Running-mode arrows are forwarded raw in App::handle_input; the
         // Launcher ignores them.
         Screen::Nethack => false,
+        Screen::Dcss => false,
+        Screen::Brogue => false,
+        Screen::Usurper => false,
         Screen::Dopewars => false,
+        Screen::Bashquest => false,
+        Screen::Codekeep => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
-        Screen::Rooms => crate::app::rooms::input::handle_arrow(app, key),
+        Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
-        Screen::Pinstar => {
+        Screen::Profiles => {
             // Arrows handled via handle_dedicated_screen_input
             false
         }
-        // World Cup up/down arrows are consumed earlier in
-        // handle_dedicated_screen_input (mapped to k/j scroll).
-        Screen::WorldCup => false,
         // Walk-mode arrows are consumed in handle_dedicated_screen_input;
         // composing-mode arrows are swallowed by the shared composer gate.
         Screen::Clubhouse => false,
+        // Nightcap has no arrow use (seats are picked by number key).
+        Screen::Nightcap => false,
+        // City arrows walk the runner in handle_dedicated_screen_input.
+        Screen::City => false,
+        // Daily board arrows are consumed in handle_dedicated_screen_input.
+        Screen::DailyMatch => false,
+        // House table arrows are consumed in handle_dedicated_screen_input.
+        Screen::HouseTable => false,
+        // Scratchpad arrows are consumed in handle_dedicated_screen_input.
+        Screen::Scratchpad => false,
+        // Zen arrows are consumed in handle_dedicated_screen_input.
+        Screen::Zen => false,
     }
 }
 
 fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
+    // The arcade-name claim modal swallows every key byte while it is up:
+    // printables and backspace edit the name, Enter claims, Esc closes, and
+    // everything else (Tab, digits-as-nav, `q`) is inert so the app can't
+    // navigate away underneath the modal.
+    if ctx.screen == Screen::Nethack
+        && let Some(state) = app.nethack_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Dcss
+        && let Some(state) = app.dcss_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Brogue
+        && let Some(state) = app.brogue_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Usurper
+        && let Some(state) = app.usurper_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Bashquest
+        && let Some(state) = app.bashquest_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_input(
             app,
@@ -3158,16 +3319,6 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
-    if ctx.screen == Screen::Dashboard && ctx.showcase_composing {
-        chat::showcase::input::handle_composer_input(app, byte);
-        return true;
-    }
-
-    if ctx.screen == Screen::Dashboard && ctx.work_composing {
-        chat::work::input::handle_composer_input(app, byte);
-        return true;
-    }
-
     false
 }
 
@@ -3176,11 +3327,7 @@ fn compose_room_switch_allowed(screen: Screen) -> bool {
 }
 
 fn start_slash_command_composer(app: &mut App, screen: Screen) -> bool {
-    if app.chat.is_composing()
-        || app.chat.news.composing()
-        || app.chat.showcase.composing()
-        || app.chat.work.composing()
-    {
+    if app.chat.is_composing() || app.chat.news.composing() {
         return false;
     }
 
@@ -3216,8 +3363,6 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.showcase.stop_composing();
-    app.chat.work.stop_composing();
     app.chat.close_news_modal();
 }
 
@@ -3227,12 +3372,14 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 
 fn clear_prefix_arms(app: &mut App) {
     app.music_prefix_armed = false;
-    app.room_join_prefix_armed = false;
     app.room_section_prefix_armed = false;
 }
 
-fn open_room_search_modal_globally(app: &mut App) {
+/// Everything a full-screen modal has to close before it opens, so it never
+/// lands behind an overlay that is already up.
+fn close_overlays_for_modal(app: &mut App) {
     clear_prefix_arms(app);
+    app.zen.close_kind_picker();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -3240,17 +3387,32 @@ fn open_room_search_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
+    app.chat.message_search.clear();
+}
+
+/// The `Ctrl+/` room picker, also behind `/picker` for terminals that
+/// swallow the chord (Ctrl+/ and Ctrl+_ are one byte, and some keep it).
+pub(crate) fn open_room_search_modal_globally(app: &mut App) {
+    close_overlays_for_modal(app);
     app.room_search_modal_state.open();
+}
+
+/// Open the Ctrl+/ modal pre-filled in message-search mode (`?query`).
+/// Backs the `/search [query]` composer command.
+pub(crate) fn open_message_search_modal_globally(app: &mut App, query: &str) {
+    open_room_search_modal_globally(app);
+    app.room_search_modal_state
+        .open_with_query(format!("?{}", query.trim()));
 }
 
 fn open_settings_modal_globally(app: &mut App) {
@@ -3262,21 +3424,25 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_lobby_modal = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
+    let device_rails = app.rail_modes();
     app.settings_modal_state
-        .open_from_profile(app.profile_state.profile());
+        .open_from_profile(app.profile_state.profile(), device_rails);
+    app.settings_modal_state
+        .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;
 }
 
-fn open_hub_modal_globally(app: &mut App) {
+/// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.
+pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3284,51 +3450,55 @@ fn open_hub_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.hub_state.open(crate::app::hub::state::HubTab::Shop);
     app.show_hub_modal = true;
 }
 
-fn toggle_aquarium_tray_globally(app: &mut App) {
-    clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        open_hub_modal_globally(app);
+/// A click on the pet: it purrs for a bit, and the first click of the day
+/// pays (`PetState::pet`). The box only draws for owners, so the click can
+/// only land on an unlocked pet; the service checks ownership again.
+pub(crate) fn pet_the_pet_globally(app: &mut App) {
+    if !app.shop_state.entitlements().has_pet_companion() {
         return;
     }
-    app.show_aquarium_tray = !app.show_aquarium_tray;
+    app.pet_state
+        .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
-fn feed_aquarium_globally(app: &mut App) -> bool {
-    if !app.show_aquarium_tray {
-        return false;
-    }
+/// The tank's free daily meal, from any surface that shows it. Ownership is
+/// the only gate: the flakes are the immediate feedback, the chips banner
+/// follows when the service's event comes back.
+pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
     if !app.shop_state.entitlements().has_aquarium() {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        return true;
+        return;
     }
-    if app.shop_state.aquarium_food_quantity() > 0 {
-        app.aquarium_state.feed();
+    match app.aquarium_care.feed() {
+        crate::app::hub::aquarium::state::CareOutcome::Fed => {
+            app.aquarium_state.feed();
+            app.aquarium_service.feed_task(app.user_id);
+        }
+        crate::app::hub::aquarium::state::CareOutcome::AlreadyFedToday => {
+            app.banner = Some(crate::app::common::primitives::Banner::error(
+                "The tank already ate today",
+            ));
+        }
     }
-    app.banner = Some(app.shop_state.use_aquarium_food());
-    true
 }
 
-fn open_bonsai_v2_modal_globally(app: &mut App) {
+fn open_bonsai_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3337,62 +3507,49 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
-    app.show_bonsai_v2_modal = false;
-    app.pet_state.cancel_play();
-    app.show_cat_modal = false;
+    app.show_lobby_modal = false;
     app.show_settings = false;
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.show_bonsai_v2_modal = true;
+    app.show_bonsai_modal = true;
 }
 
-fn room_join_suffix_index(byte: u8) -> Option<usize> {
-    match byte {
-        b'1' => Some(0),
-        b'2' => Some(1),
-        b'3' => Some(2),
-        b'4' => Some(3),
-        _ => None,
-    }
+pub(crate) fn open_daily_modal_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_quit_confirm = false;
+    close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.lobby.mark_seen(&app.daily);
+    app.show_lobby_modal = true;
 }
 
+/// The `z`-prefix suffix key, resolved through `RoomSection::shortcut` so the
+/// keys live in one place. Spelling them out again here left a section the
+/// rail drew but nothing could fold.
 fn room_section_suffix(byte: u8) -> Option<RoomSection> {
-    match byte {
-        b'f' | b'F' => Some(RoomSection::Favorites),
-        b'o' | b'O' => Some(RoomSection::Core),
-        b'c' | b'C' => Some(RoomSection::Channels),
-        b'u' | b'U' => Some(RoomSection::Updates),
-        b'd' | b'D' => Some(RoomSection::Dms),
-        _ => None,
-    }
-}
-
-fn enter_recent_join_room(app: &mut App, index: usize) -> bool {
-    let Some(room) = crate::app::dashboard::ui::recent_dashboard_rooms(
-        &app.rooms_snapshot,
-        &app.room_game_registry,
-        &app.dashboard_room_joins,
-        4,
-    )
-    .into_iter()
-    .nth(index)
-    .map(|card| card.room) else {
-        app.banner = Some(crate::app::common::primitives::Banner::error(&format!(
-            "No recent room join in slot {}.",
-            index + 1
-        )));
-        return true;
-    };
-
-    if crate::app::rooms::input::enter_room(app, room) {
-        reset_composers_for_page_change(app);
-        app.set_screen(Screen::Rooms);
-    }
-    true
+    let pressed = byte.to_ascii_lowercase();
+    RoomSection::ALL
+        .into_iter()
+        .find(|section| section.shortcut() == pressed)
 }
 
 pub(crate) fn trigger_global_quit(app: &mut App) {
@@ -3406,6 +3563,132 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
     }
 }
 
+/// The forced first-visit tour: while a stop is up
+/// (`clubhouse::state::State::tutorial_forced_step`), Enter moves it on and
+/// quitting is the way out. Everything else, mouse, arrows, and chords
+/// included, dies here so no modal, composer, or game can hijack a newcomer
+/// mid-route. Returns true when the event was consumed.
+fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
+    use crate::app::clubhouse::state::{TableStop, TourStep};
+
+    let Some(step) = app.clubhouse.tutorial_forced_step() else {
+        return false;
+    };
+    let byte = match event {
+        ParsedInput::Byte(byte) => *byte,
+        ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
+        // Arrows, mouse, pastes: swallowed while the tour runs.
+        _ => return true,
+    };
+    match (step, byte) {
+        (TourStep::Enter, b'\r' | b'\n') => tour_advance(app),
+        // The table's one shot has to be played: Enter or Space strikes the
+        // break, and only then does Enter move on. A terminal the table does
+        // not fit has no shot to see, so Enter walks on from there.
+        (TourStep::Table, b'\r' | b'\n' | b' ') => {
+            let table = crate::app::clubhouse::ui::table_stop(
+                app.content_area(),
+                app.daily.practice_played(),
+            );
+            match (table, byte) {
+                (TableStop::Racked, _) => app.daily.practice_break(),
+                (TableStop::TooSmall | TableStop::Played, b' ') => {}
+                (TableStop::TooSmall | TableStop::Played, _) => tour_advance(app),
+            }
+        }
+        // The fight is the same: every press is the next blow until it is won.
+        (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
+        (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
+        // The way out is always open.
+        (TourStep::Enter | TourStep::Table | TourStep::Fight, b'q' | b'Q') => {
+            trigger_global_quit(app)
+        }
+        (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
+    }
+    sync_tour_modal(app);
+    true
+}
+
+/// `/onboard`: the first-visit tour from the top, for anyone who asks.
+/// Through `leave_board` so a board left behind is closed properly.
+pub(crate) fn start_tour(app: &mut App) {
+    crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
+    app.clubhouse.begin_tutorial(
+        crate::app::presence::svc::now_ms(),
+        crate::app::clubhouse::state::TourStart::Rerun,
+    );
+}
+
+/// Enter at a tour stop: walk the newcomer to wherever the next one lives.
+fn tour_advance(app: &mut App) {
+    use crate::app::clubhouse::state::TourMove;
+
+    match app.clubhouse.tutorial_advance() {
+        TourMove::Stay => {}
+        // Through `leave_board` so a practice table left behind is dropped.
+        TourMove::Page(screen) => crate::app::lobby::daily::board_input::leave_board(app, screen),
+        // A pool table nobody else sees, for one break.
+        TourMove::Table => {
+            let username = app.username.clone();
+            app.daily.open_practice_table(Screen::Arcade, &username);
+            app.set_screen(Screen::DailyMatch);
+        }
+        // The same toggle Ctrl+F runs anywhere (modals closed, return page
+        // remembered).
+        TourMove::Zen => toggle_zen_globally(app),
+        TourMove::Finished => app.persist_clubhouse_tutorial_done(),
+    }
+}
+
+/// Hold open the real modal the current stop pitches, and close it once the
+/// tour has moved past.
+fn sync_tour_modal(app: &mut App) {
+    use crate::app::clubhouse::state::TourModal;
+
+    let modal = app.clubhouse.tour_modal();
+    match (
+        modal == TourModal::Stations,
+        app.stations_modal_state.is_open(),
+    ) {
+        (true, false) => app.stations_modal_state.open(app.selected_radio_station),
+        (false, true) => app.stations_modal_state.close(),
+        (true, true) | (false, false) => {}
+    }
+    app.show_lobby_modal = modal == TourModal::Lobby;
+}
+
+/// Live games own Ctrl+S even when they currently leave it unbound. Running
+/// terminal doors receive raw bytes in App::handle_input before this router;
+/// their launchers and the Arcade/Games menus still offer the Shop shortcut.
+fn game_owns_ctrl_s(app: &App) -> bool {
+    match app.screen {
+        Screen::Arcade => app.is_playing_game,
+        Screen::Lateania => app.lateania_state.is_some(),
+        Screen::GreenDragon => app.greendragon_state.is_some(),
+        Screen::Darkroom => app.darkroom_state.is_some(),
+        Screen::DailyMatch | Screen::HouseTable | Screen::City => true,
+        // Menus, launchers and plain pages. A running terminal door never
+        // gets here, so its screen only ever means the launcher.
+        Screen::Dashboard
+        | Screen::Games
+        | Screen::Rebels
+        | Screen::Nethack
+        | Screen::Dcss
+        | Screen::Brogue
+        | Screen::Dopewars
+        | Screen::Bashquest
+        | Screen::Codekeep
+        | Screen::Usurper
+        | Screen::Artboard
+        | Screen::Profiles
+        | Screen::Leaderboard
+        | Screen::Clubhouse
+        | Screen::Nightcap
+        | Screen::Zen
+        | Screen::Scratchpad => false,
+    }
+}
+
 fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     let ParsedInput::Byte(byte) = event else {
         return false;
@@ -3413,26 +3696,210 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 
     // Reserved app-level chords. Do not touch these keys or add local handlers
     // for them without updating help/docs/tests. Active Artboard editing owns
-    // raw control bytes as drawing commands.
-    if app.screen == Screen::Artboard && app.artboard_interacting {
+    // raw control bytes as drawing commands, and so does a piece title being
+    // typed: a modal must not open over the hang flow.
+    if artboard_owns_keys(app, app.screen) {
         return false;
     }
 
     match *byte {
+        CTRL_R => {
+            // An open chat composer keeps Ctrl+R: the byte falls through to
+            // its readline keymap (`chat::input::handle_byte`), where the
+            // textarea maps it to redo. `/redraw` repaints from inside one.
+            if screen_composes_chat(app.screen) && app.chat.is_composing() {
+                return false;
+            }
+            app.force_full_repaint();
+            true
+        }
+        // A Settings text field being edited holds typing that is not in the
+        // draft yet. Each of these chords closes or reopens the modal and
+        // would drop it, so the field keeps the key instead.
+        CTRL_O | CTRL_G | CTRL_F | CTRL_S
+            if app.show_settings && app.settings_modal_state.editing_text() =>
+        {
+            false
+        }
         CTRL_O => {
             open_settings_modal_globally(app);
             true
         }
         CTRL_G => {
-            open_hub_modal_globally(app);
+            // The Lobby owns the friendlier chord: Ctrl+Q is intercepted by
+            // some terminals and the Lobby is the surface people live in.
+            toggle_lobby_globally(app);
+            true
+        }
+        CTRL_F => {
+            toggle_zen_globally(app);
+            true
+        }
+        // Games keep their controls; these editors own Ctrl+S for save/post.
+        // Their tag picker also keeps input until it closes, leaving the draft
+        // underneath.
+        CTRL_S
+            if !game_owns_ctrl_s(app)
+                && !app.directory_editor.is_open()
+                && !app.jobs.post.is_open()
+                && !app.tag_picker.is_open() =>
+        {
+            open_shop_modal_globally(app);
             true
         }
         _ => false,
     }
 }
 
+/// Move the Zen focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, or on the tile already focused.
+fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
+    use crate::app::zen::layout as zen_layout;
+    let (cols, rows) = app.size;
+    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows), app.zen_status_row());
+    let zoomed = app.zen.zoomed.then_some(app.zen.focus);
+    let rects = zen_layout::tile_rects(
+        &app.zen.rice.root,
+        tiles_area,
+        app.zen.rice.look.gap as u16,
+        zoomed,
+    );
+    let hit = rects
+        .iter()
+        .position(|(_, rect)| rect_contains(*rect, x, y));
+    let Some(ordinal) = hit else {
+        return;
+    };
+    // Zoomed, the one rect on show is the focused tile whatever its index.
+    if zoomed.is_some() || ordinal == app.zen.focus {
+        return;
+    }
+    app.zen.focus = ordinal;
+    crate::app::zen::input::focus_moved(app);
+}
+
+/// Toggle: the daily surface is built for fast in-and-out, so the same chord
+/// (or `/lobby`) that opens it closes it.
+pub(crate) fn toggle_lobby_globally(app: &mut App) {
+    if app.show_lobby_modal {
+        app.show_lobby_modal = false;
+    } else {
+        open_daily_modal_globally(app);
+    }
+}
+
+/// The global guide, opened on the topic that fits the current page. Shared
+/// by `?` and `/guide`.
+pub(crate) fn open_guide_globally(app: &mut App) {
+    app.help_modal_state
+        .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
+    let topic = if app.screen == Screen::Lateania {
+        HelpTopic::Lateania
+    } else if app.screen == Screen::Profiles {
+        HelpTopic::Profiles
+    } else if app.screen == Screen::Zen {
+        HelpTopic::Zen
+    } else {
+        HelpTopic::Pair
+    };
+    app.help_modal_state.open(topic);
+    app.show_help = true;
+}
+
+/// Zen is a surface, not a place in the tab order: the chord opens it over
+/// whatever page is up and the same chord returns there. Esc never leaves.
+pub(crate) fn toggle_zen_globally(app: &mut App) {
+    if app.screen == Screen::Zen {
+        close_zen(app);
+    } else {
+        open_zen_globally(app);
+    }
+}
+
+fn open_zen_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_settings = false;
+    app.show_lobby_modal = false;
+    app.zen_return_screen = zen_return_screen(app);
+    reset_composers_for_page_change(app);
+    // The first opening this session lands on the first chat tile, so the
+    // chat keys work before anyone reads the footer.
+    app.zen.note_opened();
+    app.set_screen(Screen::Zen);
+    app.chat.clear_message_selection();
+}
+
+/// The page the chord on Zen hands back. A daily board or a house table
+/// does not survive the trip (`set_screen` closes it on the way out), so Zen
+/// remembers the page it was opened from instead. One opened from Zen hands
+/// back Zen's own page, which the workspace base carries; with none, Zen
+/// walks into the Clubhouse like a session that landed there.
+fn zen_return_screen(app: &App) -> Option<Screen> {
+    use crate::app::workspace::cycle::WorkspaceBase;
+
+    let opened_from = match app.screen {
+        Screen::DailyMatch => app.daily.board.as_ref().map(|board| board.return_screen),
+        Screen::HouseTable => Some(app.house.return_screen),
+        Screen::Dashboard
+        | Screen::Games
+        | Screen::Arcade
+        | Screen::Rebels
+        | Screen::Nethack
+        | Screen::Dcss
+        | Screen::Brogue
+        | Screen::Lateania
+        | Screen::Darkroom
+        | Screen::GreenDragon
+        | Screen::Dopewars
+        | Screen::Bashquest
+        | Screen::Codekeep
+        | Screen::Usurper
+        | Screen::Artboard
+        | Screen::Profiles
+        | Screen::Leaderboard
+        | Screen::Clubhouse
+        | Screen::Nightcap
+        | Screen::City
+        | Screen::Zen
+        | Screen::Scratchpad => return Some(app.screen),
+    };
+    match (opened_from, app.workspace_base) {
+        (Some(Screen::Zen), WorkspaceBase::Zen { back }) => back,
+        (Some(Screen::Zen), WorkspaceBase::Home) => None,
+        (Some(screen), _) => Some(screen),
+        (None, _) => None,
+    }
+}
+
+/// Hands the page back to wherever Ctrl+F was pressed. A session that
+/// landed on Zen has nowhere to go back to, so it walks into the Clubhouse,
+/// the front door. `set_screen` closes the tile picker and forgets the
+/// return page. Handing back a game screen is not going into the games from
+/// Zen, so the backtick base `set_screen` records is put back.
+fn close_zen(app: &mut App) {
+    let back = match app.zen_return_screen {
+        Some(screen) => screen,
+        None => Screen::Clubhouse,
+    };
+    reset_composers_for_page_change(app);
+    let base = app.workspace_base;
+    app.set_screen(back);
+    app.workspace_base = base;
+    app.chat.clear_message_selection();
+}
+
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if matches!(ctx.screen, Screen::Artboard | Screen::Pinstar) {
+    if ctx.screen == Screen::Artboard {
         return false;
     }
 
@@ -3451,34 +3918,25 @@ fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInp
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
-    // `?` opens the global guide unless the current screen owns local help.
+    // `?` opens the global guide everywhere, the Artboard included; the
+    // Artboard's own help is Ctrl+P. While the Artboard is drawing, typing
+    // a title, framing, or has an overlay up, `?` is the page's.
     let guide_shortcut = byte == b'?'
         && !ctx.chat_composing
         && !ctx.feeds_processing
         && !ctx.news_composing
-        && !ctx.showcase_composing
-        && !ctx.work_composing
-        && ctx.screen != Screen::Artboard
-        && !(ctx.screen == Screen::Pinstar && app.pinstar_state.is_some());
-    let chat_message_shortcut = matches!(ctx.screen, Screen::Dashboard | Screen::Rooms)
-        && app.chat.selected_message_id.is_some();
+        && !artboard_blocks_page_switch;
+    let chat_message_shortcut =
+        ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
-        app.help_modal_state
-            .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
-        let topic = if ctx.screen == Screen::Lateania {
-            HelpTopic::Lateania
-        } else {
-            HelpTopic::Pair
-        };
-        app.help_modal_state.open(topic);
-        app.show_help = true;
+        open_guide_globally(app);
         return true;
     }
 
     // While the reaction leader is armed, every digit belongs to it: `1`-`9`
     // are the quick reactions and `0` opens the custom icon picker. Let them
     // fall through to the chat message-action handler instead of the global
-    // page switch (`0` now lands on the Clubhouse, `1`-`7` on other pages).
+    // page switch (`0` now lands on the Clubhouse, `1`-`6` on other pages).
     if matches!(
         byte,
         b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9'
@@ -3492,7 +3950,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return false;
     }
 
-    if ctx.screen == Screen::Artboard && app.artboard_interacting {
+    if artboard_owns_keys(app, ctx.screen) {
         return false;
     }
 
@@ -3512,12 +3970,13 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
-    if app.room_join_prefix_armed {
-        app.room_join_prefix_armed = false;
-        if let Some(index) = room_join_suffix_index(byte) {
-            return enter_recent_join_room(app, index);
-        }
-    }
+    // The Artboard owns its letters. The paired-client hotkeys (`m` mute,
+    // `+`/`-` volume, `v` the music prefix) and `w` (Bonsai Care) stay off
+    // that page entirely, the way the voice chords do: the page spends
+    // those letters itself (`v` applauds a piece), and every one of them is
+    // a printable that a piece title may want. Only quit, the page
+    // switches, and the guide stay global there.
+    let global_letter_keys = ctx.screen != Screen::Artboard;
 
     match byte {
         b'q' | b'Q' => {
@@ -3525,14 +3984,14 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && app
                     .dartboard_state
                     .as_ref()
-                    .is_some_and(|state| state.is_snapshot_browser_open())
+                    .is_some_and(|state| state.gallery().claims_q())
             {
                 return false;
             }
             trigger_global_quit(app);
             true
         }
-        b'm' | b'M' => {
+        b'm' | b'M' if global_letter_keys => {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
@@ -3551,7 +4010,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'+' | b'=' => {
+        b'+' | b'=' if global_letter_keys => {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
@@ -3570,7 +4029,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'-' | b'_' => {
+        b'-' | b'_' if global_letter_keys => {
             let label = app
                 .paired_client_state()
                 .map(|state| match state.client_kind {
@@ -3589,22 +4048,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             }
             true
         }
-        b'b' | b'B'
-            if !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
-        {
-            app.room_join_prefix_armed = true;
-            true
-        }
         b'v' | b'V'
-            if !ctx.chat_composing
+            if global_letter_keys
+                && !ctx.chat_composing
                 && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
+                && !ctx.news_composing =>
         {
             app.music_prefix_armed = true;
             true
@@ -3614,8 +4062,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing
                 && !app.chat.room_jump_active =>
         {
             app.room_section_prefix_armed = true;
@@ -3625,74 +4071,57 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             if ctx.screen == Screen::Dashboard
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
-                && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
+                && !ctx.news_composing =>
         {
-            let label = match app.profile_state.cycle_sidebars() {
-                (true, true) => "Sidebars: both shown",
-                (false, true) => "Sidebars: room list hidden",
-                (true, false) => "Sidebars: info panel hidden",
-                (false, false) => "Sidebars: both hidden",
+            // Per device: this writes the layout onto the SSH key the session
+            // authenticated with, so cycling on a phone leaves the desktop's
+            // layout alone. The banner says so, since the same account can now
+            // legitimately look different in two places.
+            let label = match app.cycle_device_rails() {
+                (RoomListMode::Auto, _) | (_, RightSidebarMode::Auto) => {
+                    "Sidebars: auto for this terminal size (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::On) => "Sidebars: both shown (this device)",
+                (RoomListMode::Off, RightSidebarMode::On) => {
+                    "Sidebars: room list hidden (this device)"
+                }
+                (RoomListMode::On, RightSidebarMode::Off) => {
+                    "Sidebars: info panel hidden (this device)"
+                }
+                (RoomListMode::Off, RightSidebarMode::Off) => "Sidebars: both hidden (this device)",
             };
             app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true
         }
         b'w' | b'W'
-            if !ctx.chat_composing
+            if global_letter_keys
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing =>
+        {
+            open_bonsai_modal_globally(app);
+            true
+        }
+        b'o' | b'O'
+            if global_letter_keys
+                && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
-                && !ctx.showcase_composing
-                && !ctx.work_composing =>
+                && app.lounge_card_shown() =>
         {
-            if app.use_bonsai_v2() {
-                open_bonsai_v2_modal_globally(app);
-            } else {
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_sheet_modal = false;
-                app.show_poll_modal = false;
-                app.poll_modal_state.close();
-                app.show_settings = false;
-                app.show_hub_modal = false;
-                app.show_quit_confirm = false;
-                app.show_bonsai_v2_modal = false;
-                app.show_bonsai_modal = true;
-            }
-            true
+            crate::app::live::input::open_from_key(app)
         }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => {
-            if !app.shop_state.entitlements().has_pet_companion() {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Unlock Pet Companion in Hub Shop",
-                ));
-                app.show_help = false;
-                app.show_profile_modal = false;
-                app.show_sheet_modal = false;
-                app.show_poll_modal = false;
-                app.poll_modal_state.close();
-                app.show_settings = false;
-                app.show_quit_confirm = false;
-                app.show_bonsai_modal = false;
-                app.show_bonsai_v2_modal = false;
-                app.pet_state.cancel_play();
-                app.show_cat_modal = false;
-                app.hub_state.open(crate::app::hub::state::HubTab::Shop);
-                app.show_hub_modal = true;
-                return true;
-            }
-            app.show_help = false;
-            app.show_profile_modal = false;
-            app.show_sheet_modal = false;
-            app.show_poll_modal = false;
-            app.poll_modal_state.close();
-            app.show_settings = false;
-            app.show_hub_modal = false;
-            app.show_quit_confirm = false;
-            app.show_cat_modal = true;
-            true
+        // With a message selected, `r` replies to it (chat's message keys).
+        b'r' | b'R'
+            if global_letter_keys
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && app.lounge_card_shown()
+                && app.chat.selected_message_id.is_none() =>
+        {
+            crate::app::live::input::reply_from_key(app)
         }
-        b'c' | b'C' if cat_launcher_available(app, ctx) => true,
         b'1' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Dashboard);
@@ -3710,28 +4139,50 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'4' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.rooms_active_room = None;
-            app.set_screen(Screen::Rooms);
+            app.set_screen(Screen::Artboard);
             true
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
+            app.set_screen(Screen::Profiles);
             true
         }
         b'6' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Pinstar);
+            app.set_screen(Screen::Leaderboard);
             true
         }
-        b'7' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::WorldCup);
-            true
-        }
+        // `0` is the clubhouse. Pressed again on the clubhouse it goes
+        // down to the undercity (deadchannel's street), runners only;
+        // from the undercity it comes back up. A descent always lands on
+        // the street: a panel or the ledge left open on the way up does
+        // not carry over.
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Clubhouse);
+            let target = match ctx.screen {
+                Screen::Clubhouse if app.is_runner() => {
+                    app.city.dismiss();
+                    app.fight.close();
+                    app.tailor.close();
+                    app.guide.state.close();
+                    // The descent is a touch: the sheet re-reads (and the
+                    // day rolls if it turned) before the strip shows it.
+                    app.fight.reload();
+                    // The first descent opens the guide by itself, once
+                    // per runner (`app/deadchannel/guide`).
+                    app.guide.descend();
+                    // On the shared street from here until the session
+                    // ends (`deadchannel/street`).
+                    app.street.descend();
+                    Screen::City
+                }
+                _ => Screen::Clubhouse,
+            };
+            app.set_screen(target);
+            true
+        }
+        b'\t' if artboard_rail_takes_tab(app, ctx.screen) => {
+            dispatch_screen_key(app, Screen::Artboard, b'\t');
             true
         }
         b'\t' if !artboard_blocks_page_switch => {
@@ -3743,26 +4194,37 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
 }
 
-fn cat_launcher_available(app: &App, ctx: InputContext) -> bool {
-    if ctx.chat_composing
-        || ctx.feeds_processing
-        || ctx.news_composing
-        || ctx.showcase_composing
-        || ctx.work_composing
-    {
+/// Tab backs out of an Artboard pane (a listing, a piece, an archive list)
+/// to the rail. On the rail and on the board it is the page switch it is
+/// everywhere, so the page cycle never sticks on the page's landing spot.
+fn artboard_rail_takes_tab(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard || app.artboard_interacting {
         return false;
     }
+    app.dartboard_state.as_ref().is_some_and(|state| {
+        !state.is_help_open()
+            && !state.is_glyph_picker_open()
+            && !state.is_color_picker_open()
+            && matches!(
+                state.gallery().focus(),
+                crate::app::artboard::gallery::state::Focus::List
+                    | crate::app::artboard::gallery::state::Focus::Piece
+                    | crate::app::artboard::gallery::state::Focus::Archive
+            )
+    })
+}
 
-    if ctx.screen == Screen::Dashboard {
-        if app.chat.selected_message_id.is_some() {
-            return false;
-        }
-        if app.chat.work_selected {
-            return false;
-        }
+/// True while the Artboard owns every key a global hotkey would otherwise
+/// claim: drawing on the board, framing a piece, or typing its title.
+fn artboard_owns_keys(app: &App, screen: Screen) -> bool {
+    if screen != Screen::Artboard {
+        return false;
     }
-
-    true
+    app.artboard_interacting
+        || app
+            .dartboard_state
+            .as_ref()
+            .is_some_and(|state| state.gallery().captures_typing())
 }
 
 fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
@@ -3772,7 +4234,11 @@ fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
     let Some(state) = app.dartboard_state.as_ref() else {
         return app.artboard_interacting;
     };
-    app.artboard_interacting || state.is_help_open() || state.is_glyph_picker_open()
+    app.artboard_interacting
+        || state.is_help_open()
+        || state.is_glyph_picker_open()
+        || state.is_color_picker_open()
+        || state.gallery().captures_typing()
 }
 
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
@@ -3789,6 +4255,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::GreenDragon => {
             crate::app::door::greendragon::screen::GAME.handle_key(app, byte);
         }
+        Screen::Darkroom => {
+            crate::app::door::darkroom::screen::GAME.handle_key(app, byte);
+        }
         Screen::Rebels => {
             // Launcher key dispatch (connect on Enter) is handled via
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
@@ -3799,521 +4268,93 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }
+        Screen::Dcss => {
+            // Same as Nethack: Launcher Enter is handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Brogue => {
+            // Same as DCSS: Launcher keys are handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
+        Screen::Usurper => {
+            // Same as Nethack: Launcher keys are handled in
+            // handle_dedicated_screen_input; Running-mode bytes are forwarded
+            // raw in App::handle_input before reaching this path.
+        }
         Screen::Dopewars => {
             // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
         }
+        Screen::Bashquest => {
+            // Same as Usurper: Launcher keys (incl. the claim modal) are
+            // handled in handle_dedicated_screen_input; Running-mode bytes
+            // are forwarded raw in App::handle_input before reaching this
+            // path.
+        }
+        Screen::Codekeep => {
+            // Running-mode bytes are forwarded raw in App::handle_input; a
+            // non-running screen bounces back to Games on the same tick.
+        }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
         }
-        Screen::Rooms => {
-            crate::app::rooms::input::handle_key(app, byte);
+        Screen::Leaderboard => {
+            crate::app::leaderboard::input::handle_key(app, byte);
         }
         Screen::Artboard => {
             let _ = crate::app::artboard::page::handle_key(app, byte);
         }
-        Screen::Pinstar => {
-            // Pinstar key dispatch is handled via handle_dedicated_screen_input
-            // and the rich-event path; byte dispatch is a no-op here.
-        }
-        Screen::WorldCup => {
-            // World Cup keys are handled in handle_dedicated_screen_input
-            // (Space/j/k/arrows); byte dispatch is a no-op here.
+        Screen::Profiles => {
+            // Profiles keys are handled in handle_dedicated_screen_input.
         }
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
             // (walking, chat routing, interactions); no-op here.
         }
-    }
-}
-
-fn handle_pinstar_browser_mouse(
-    app: &mut App,
-    event: &ParsedInput,
-    area: ratatui::layout::Rect,
-) -> bool {
-    use crate::app::pinstar::browser::BrowserMode;
-
-    let ParsedInput::Mouse(mouse) = event else {
-        return false;
-    };
-
-    // Only handle mouse in List mode
-    if app.pinstar_browser.mode != BrowserMode::List {
-        return false;
-    }
-
-    let mx = mouse.x.saturating_sub(1);
-    let my = mouse.y.saturating_sub(1);
-
-    let inside_browser =
-        mx >= area.x && mx < area.x + area.width && my >= area.y && my < area.y + area.height;
-
-    match mouse.kind {
-        MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Left)) => {
-            if !inside_browser {
-                return false;
-            }
-
-            let mut list_y = area.y.saturating_add(1);
-            let mut list_height = area.height.saturating_sub(2);
-            if app.pinstar_browser.error.is_some() && list_height > 1 {
-                list_y = list_y.saturating_add(1);
-                list_height = list_height.saturating_sub(1);
-            }
-            let header_rows = 2;
-            if my < list_y + header_rows || my >= list_y + list_height {
-                return true;
-            }
-
-            let window_height = (list_height as usize).saturating_sub(header_rows as usize);
-            let offset = if window_height == 0 {
-                0
-            } else {
-                app.pinstar_browser
-                    .selected
-                    .saturating_sub(window_height.saturating_sub(1))
-            };
-            let clicked_idx = offset + (my - list_y - header_rows) as usize;
-            if clicked_idx < app.pinstar_browser.visible_len() {
-                let is_double_click = if let Some((lx, ly, lt)) = app.pinstar_browser.last_click {
-                    lx == mx && ly == my && lt.elapsed().as_millis() < 500
-                } else {
-                    false
-                };
-
-                app.pinstar_browser.selected = clicked_idx;
-                app.pinstar_browser.last_click = Some((mx, my, std::time::Instant::now()));
-
-                if is_double_click {
-                    handle_pinstar_browser_double_click(app);
-                    app.pinstar_browser.last_click = None;
-                }
-            }
-            true
+        Screen::Nightcap => {
+            // Nightcap keys (seat picks, drink, Esc) are handled in
+            // handle_dedicated_screen_input; no-op here.
         }
-        MouseEventKind::Down => inside_browser,
-        MouseEventKind::ScrollUp => {
-            if !inside_browser {
-                return false;
-            }
-            app.pinstar_browser.move_up();
-            true
+        Screen::City => {
+            // City keys are handled in handle_dedicated_screen_input.
         }
-        MouseEventKind::ScrollDown => {
-            if !inside_browser {
-                return false;
-            }
-            app.pinstar_browser.move_down();
-            true
+        Screen::DailyMatch => {
+            // Daily board keys are handled in handle_dedicated_screen_input.
         }
-        _ => false,
-    }
-}
-
-fn handle_pinstar_browser_double_click(app: &mut App) {
-    if let Some(entry) = app.pinstar_browser.selected_entry() {
-        app.pinstar_browser.pending_action = Some(
-            crate::app::pinstar::browser::BrowserAction::Open(entry.id, entry.role.clone()),
-        );
-    }
-}
-
-fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::pinstar::browser::BrowserMode;
-
-    match &mut app.pinstar_browser.mode {
-        BrowserMode::List => match event {
-            ParsedInput::Byte(0x10) | ParsedInput::Byte(b'?') | ParsedInput::Char('?') => {
-                app.pinstar_browser.mode = BrowserMode::Help;
-                true
-            }
-            ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
-                app.pinstar_browser.move_down();
-                true
-            }
-            ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
-                app.pinstar_browser.move_up();
-                true
-            }
-            ParsedInput::Byte(b'n') | ParsedInput::Char('n') => {
-                app.pinstar_browser.new_diagram_name.clear();
-                app.pinstar_browser.mode = BrowserMode::CreateDiagram;
-                true
-            }
-            ParsedInput::Byte(b'a') | ParsedInput::Char('a') => {
-                app.pinstar_browser.mode = BrowserMode::AcceptInvite;
-                app.pinstar_browser.invite_token_input.clear();
-                app.pinstar_browser.error = None;
-                true
-            }
-            ParsedInput::Byte(b'I') | ParsedInput::Char('I') => {
-                app.pinstar_browser.import_input.clear();
-                app.pinstar_browser.import_name = String::from("Imported Diagram");
-                app.pinstar_browser.error = None;
-                app.pinstar_browser.mode = BrowserMode::ImportCanvas;
-                true
-            }
-            ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    if entry.is_owner
-                        || app
-                            .permissions
-                            .has(crate::moderation::policy::Caps::DELETE_PINSTAR_GRAPH)
-                    {
-                        app.pinstar_browser.delete_target_id = Some(entry.id);
-                        app.pinstar_browser.mode = BrowserMode::ConfirmDelete;
-                    } else {
-                        app.pinstar_browser.error =
-                            Some("Only owner or staff can delete diagrams".to_string());
-                    }
-                }
-                true
-            }
-            ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    if entry.is_owner {
-                        app.pinstar_browser.rename_input = entry.title.clone();
-                        app.pinstar_browser.mode = BrowserMode::RenameInput;
-                    } else {
-                        app.pinstar_browser.error =
-                            Some("Only owner can rename diagrams".to_string());
-                    }
-                }
-                true
-            }
-            ParsedInput::Byte(b'c')
-            | ParsedInput::Char('c')
-            | ParsedInput::Byte(b'C')
-            | ParsedInput::Char('C') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    app.pinstar_browser.pending_action = Some(
-                        crate::app::pinstar::browser::BrowserAction::CopySource(entry.id),
-                    );
-                }
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    app.pinstar_browser.pending_action =
-                        Some(crate::app::pinstar::browser::BrowserAction::Open(
-                            entry.id,
-                            entry.role.clone(),
-                        ));
-                }
-                true
-            }
-            ParsedInput::Byte(b'i') | ParsedInput::Char('i') => {
-                if let Some((entry_id, is_owner)) = app
-                    .pinstar_browser
-                    .selected_entry()
-                    .map(|entry| (entry.id, entry.is_owner))
-                {
-                    if is_owner {
-                        app.pinstar_browser.generated_invite_token = None;
-                        app.pinstar_browser.error = None;
-                        app.pinstar_browser.pending_action = Some(
-                            crate::app::pinstar::browser::BrowserAction::GenerateInvite(entry_id),
-                        );
-                        app.pinstar_browser.mode =
-                            crate::app::pinstar::browser::BrowserMode::GenerateInvite;
-                    } else {
-                        app.pinstar_browser.error =
-                            Some("Only owner can create invite links".to_string());
-                    }
-                }
-                true
-            }
-            _ => false,
-        },
-        BrowserMode::Help => {
-            if matches!(
-                event,
-                ParsedInput::Byte(0x1b)
-                    | ParsedInput::Byte(b'q')
-                    | ParsedInput::Byte(b'Q')
-                    | ParsedInput::Char('\x1b')
-                    | ParsedInput::Char('q')
-                    | ParsedInput::Char('Q')
-            ) {
-                app.pinstar_browser.mode = BrowserMode::List;
-            }
-            true
+        Screen::HouseTable => {
+            // House table keys are handled in handle_dedicated_screen_input.
         }
-        BrowserMode::AcceptInvite => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                let token = app.pinstar_browser.invite_token_input.clone();
-                app.pinstar_browser.pending_action = Some(
-                    crate::app::pinstar::browser::BrowserAction::AcceptInvite(token),
-                );
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.invite_token_input.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                let _ = app.pinstar_browser.push_invite_token_char(*c);
-                true
-            }
-            ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
-                let _ = app.pinstar_browser.push_invite_token_char(*byte as char);
-                true
-            }
-            _ => false,
-        },
-        BrowserMode::ImportCanvas => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                let raw = app.pinstar_browser.import_input.trim().to_string();
-                let name = if app.pinstar_browser.import_name.trim().is_empty() {
-                    "Imported Diagram".to_string()
-                } else {
-                    app.pinstar_browser.import_name.trim().to_string()
-                };
-                match serde_json::from_str::<crate::app::pinstar::data::CanvasData>(&raw) {
-                    Ok(data) => {
-                        app.pinstar_browser.pending_action =
-                            Some(crate::app::pinstar::browser::BrowserAction::Import {
-                                title: name,
-                                data,
-                            });
-                        app.pinstar_browser.mode = BrowserMode::List;
-                        app.pinstar_browser.error = None;
-                    }
-                    Err(e) => {
-                        app.pinstar_browser.error = Some(format!("Invalid canvas JSON: {}", e));
-                    }
-                }
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.import_input.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                app.pinstar_browser.import_input.push(*c);
-                true
-            }
-            ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
-                app.pinstar_browser.import_input.push(*byte as char);
-                true
-            }
-            _ => false,
-        },
-        BrowserMode::GenerateInvite => match event {
-            ParsedInput::Byte(0x1b)
-            | ParsedInput::Char('\x1b')
-            | ParsedInput::Byte(b'c')
-            | ParsedInput::Char('c') => {
-                app.pinstar_browser.generated_invite_token = None;
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                if let Some(token) = &app.pinstar_browser.generated_invite_token {
-                    app.pending_clipboard = Some(token.clone());
-                    app.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Invite link copied to clipboard!",
-                    ));
-                }
-                true
-            }
-            _ => true,
-        },
-        BrowserMode::ConfirmDelete => match event {
-            ParsedInput::Byte(b'y')
-            | ParsedInput::Char('y')
-            | ParsedInput::Byte(b'Y')
-            | ParsedInput::Char('Y') => {
-                if let Some(id) = app.pinstar_browser.delete_target_id.take() {
-                    app.pinstar_browser.pending_action =
-                        Some(crate::app::pinstar::browser::BrowserAction::Delete(id));
-                }
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'n')
-            | ParsedInput::Char('n')
-            | ParsedInput::Byte(b'N')
-            | ParsedInput::Char('N')
-            | ParsedInput::Byte(0x1b)
-            | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.delete_target_id = None;
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            _ => true, // Consume all keys while in confirm mode
-        },
-        BrowserMode::RenameInput => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.rename_input.clear();
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    let new_title = app.pinstar_browser.rename_input.trim().to_string();
-                    app.pinstar_browser.pending_action = Some(
-                        crate::app::pinstar::browser::BrowserAction::Rename(entry.id, new_title),
-                    );
-                }
-                app.pinstar_browser.rename_input.clear();
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.rename_input.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                app.pinstar_browser.rename_input.push(*c);
-                true
-            }
-            // Control keys for text editing
-            ParsedInput::Byte(0x15) => {
-                // Ctrl+U: clear line
-                app.pinstar_browser.rename_input.clear();
-                true
-            }
-            ParsedInput::Byte(0x17) => {
-                // Ctrl+W: delete last word
-                while let Some(c) = app.pinstar_browser.rename_input.pop() {
-                    if c.is_whitespace()
-                        && !app
-                            .pinstar_browser
-                            .rename_input
-                            .ends_with(|c: char| c.is_whitespace())
-                    {
-                        break;
-                    }
-                }
-                true
-            }
-            // Printable ASCII range (space through ~)
-            ParsedInput::Byte(b) if *b >= 0x20 && *b <= 0x7E => {
-                app.pinstar_browser.rename_input.push(*b as char);
-                true
-            }
-            _ => true, // Consume all keys while in rename mode
-        },
-        BrowserMode::CreateDiagram => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.new_diagram_name.clear();
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                let title = app.pinstar_browser.new_diagram_name.trim().to_string();
-                app.pinstar_browser.pending_action =
-                    Some(crate::app::pinstar::browser::BrowserAction::Create { title });
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.new_diagram_name.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                app.pinstar_browser.new_diagram_name.push(*c);
-                true
-            }
-            // Control keys for text editing
-            ParsedInput::Byte(0x15) => {
-                app.pinstar_browser.new_diagram_name.clear();
-                true
-            }
-            ParsedInput::Byte(0x17) => {
-                while let Some(c) = app.pinstar_browser.new_diagram_name.pop() {
-                    if c.is_whitespace()
-                        && !app
-                            .pinstar_browser
-                            .new_diagram_name
-                            .ends_with(|c: char| c.is_whitespace())
-                    {
-                        break;
-                    }
-                }
-                true
-            }
-            // Printable ASCII range (space through ~)
-            ParsedInput::Byte(b) if *b >= 0x20 && *b <= 0x7E => {
-                app.pinstar_browser.new_diagram_name.push(*b as char);
-                true
-            }
-            _ => true, // Consume all keys while in create mode
-        },
+        Screen::Scratchpad => {
+            // Scratchpad keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Zen => {
+            // Zen keys are handled in handle_dedicated_screen_input.
+        }
     }
 }
 
 pub(crate) fn try_open_icon_picker(app: &mut App) {
     let ctx = InputContext::from_app(app);
     // Only chat composers can receive icons.
-    if !matches!(
-        ctx.screen,
-        Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-    ) {
+    if !screen_composes_chat(ctx.screen) {
         return;
     }
     if !ctx.chat_composing {
-        if ctx.screen == Screen::Dashboard {
-            if let Some(room_id) = app.chat.selected_room_id {
-                app.chat.start_composing_in_room(room_id);
-            }
-        } else if ctx.screen == Screen::Rooms {
-            if let Some(room) = app.rooms_active_room.as_ref() {
-                app.chat.start_composing_in_room(room.chat_room_id);
-            }
-        } else if ctx.screen == Screen::Clubhouse {
-            if let Some(lounge_id) = app.chat.lounge_room_id() {
-                app.chat.start_composing_in_room(lounge_id);
-            }
-        } else {
-            app.chat.start_composing();
-        }
+        let room_id = match ctx.screen {
+            Screen::Clubhouse => app.chat.lounge_room_id(),
+            // Only a seated patron has a composer to feed.
+            Screen::Nightcap => crate::app::clubhouse::nightcap::input::compose_room(app),
+            _ => embedded_chat_room_id(app, ctx.screen),
+        };
+        // No room on show (synthetic Home entry, chatless table) — nothing
+        // for the picker to feed, so don't open it.
+        let Some(room_id) = room_id else {
+            return;
+        };
+        app.chat.start_composing_in_room(room_id);
     }
     if app.icon_catalog.is_none() {
         app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
@@ -4459,11 +4500,7 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
             }
 
             let ctx = InputContext::from_app(app);
-            if matches!(
-                ctx.screen,
-                Screen::Dashboard | Screen::Rooms | Screen::Clubhouse
-            ) && ctx.chat_composing
-            {
+            if is_chat_composer_context(ctx) {
                 for ch in icon_str.chars() {
                     app.chat.composer_push(ch);
                 }
@@ -4516,919 +4553,5 @@ fn selected_raw_icon(app: &mut App, keep_open: bool) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Pure clone of the offset clamp + step logic from
-    /// `handle_mouse_scroll_over_screen` so we can unit-test it without
-    /// spinning up an `App`. Keep in sync with the call site.
-    fn next_activity_scroll(
-        current: u16,
-        total: usize,
-        has_active_friends: bool,
-        delta: isize,
-    ) -> u16 {
-        let visible = activity_visible_event_rows(has_active_friends);
-        let max_offset = total.saturating_sub(visible) as u16;
-        let current = current.min(max_offset);
-        if delta > 0 {
-            current.saturating_sub(ACTIVITY_SCROLL_STEP)
-        } else {
-            current.saturating_add(ACTIVITY_SCROLL_STEP).min(max_offset)
-        }
-    }
-
-    #[test]
-    fn activity_scroll_wheel_up_decreases_offset_toward_newest() {
-        // 20 events, currently at offset 5; wheel up moves toward newer.
-        assert_eq!(next_activity_scroll(5, 20, true, 1), 4);
-        // At top already → saturating subtract clamps at 0.
-        assert_eq!(next_activity_scroll(0, 20, true, 1), 0);
-    }
-
-    #[test]
-    fn activity_scroll_wheel_down_clamps_at_max_offset() {
-        // 20 events with active friends, 3 event rows visible → max_offset = 17.
-        assert_eq!(next_activity_scroll(17, 20, true, -1), 17);
-        assert_eq!(next_activity_scroll(16, 20, true, -1), 17);
-    }
-
-    #[test]
-    fn activity_scroll_uses_four_visible_rows_without_active_friends() {
-        // No active-friends row means the renderer shows 4 activity events.
-        assert_eq!(next_activity_scroll(16, 20, false, -1), 16);
-        assert_eq!(next_activity_scroll(15, 20, false, -1), 16);
-    }
-
-    #[test]
-    fn activity_scroll_zero_max_when_buffer_smaller_than_visible() {
-        // Only 2 events in buffer; nothing to scroll past.
-        assert_eq!(next_activity_scroll(0, 2, true, -1), 0);
-        assert_eq!(next_activity_scroll(5, 2, false, -1), 0);
-    }
-
-    #[test]
-    fn activity_scroll_clamps_stale_offset_after_buffer_trim() {
-        // User was at offset 30 in a 100-event buffer; buffer trims to 10.
-        // Next wheel event must clamp before stepping so we don't underflow.
-        assert_eq!(next_activity_scroll(30, 10, true, 1), 6);
-        assert_eq!(next_activity_scroll(30, 10, true, -1), 7);
-        assert_eq!(next_activity_scroll(30, 10, false, 1), 5);
-        assert_eq!(next_activity_scroll(30, 10, false, -1), 6);
-    }
-
-    #[test]
-    fn rect_contains_treats_edges_correctly() {
-        let r = Rect {
-            x: 5,
-            y: 10,
-            width: 3,
-            height: 2,
-        };
-        // top-left corner is inside
-        assert!(rect_contains(r, 5, 10));
-        // bottom-right exclusive corner is outside
-        assert!(!rect_contains(r, 8, 12));
-        // last inside cell on each axis
-        assert!(rect_contains(r, 7, 11));
-        // just outside on each axis
-        assert!(!rect_contains(r, 4, 10));
-        assert!(!rect_contains(r, 5, 9));
-        assert!(!rect_contains(r, 8, 11));
-        assert!(!rect_contains(r, 7, 12));
-    }
-
-    #[test]
-    fn rect_contains_handles_overflow_safely() {
-        let r = Rect {
-            x: u16::MAX - 1,
-            y: 0,
-            width: 5,
-            height: 1,
-        };
-        // saturating_add prevents wrap while keeping the right edge exclusive.
-        assert!(rect_contains(r, u16::MAX - 1, 0));
-        assert!(!rect_contains(r, u16::MAX, 0));
-    }
-
-    #[test]
-    fn composer_double_click_window_is_half_second() {
-        assert_eq!(
-            COMPOSER_DOUBLE_CLICK_WINDOW,
-            std::time::Duration::from_millis(500)
-        );
-    }
-
-    #[test]
-    fn profile_click_debounce_matches_chat_double_click_window() {
-        assert_eq!(PROFILE_CLICK_DEBOUNCE, CHAT_CLICK_DOUBLE_WINDOW);
-    }
-
-    #[test]
-    fn blocks_arrow_when_chat_is_composing_on_dashboard() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: true,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: false,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert!(ctx.blocks_arrow_sequence());
-    }
-
-    #[test]
-    fn blocks_arrow_when_chat_is_composing_on_chat_screen() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: true,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: false,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert!(ctx.blocks_arrow_sequence());
-    }
-
-    #[test]
-    fn allows_arrow_when_idle() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: false,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: false,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert!(!ctx.blocks_arrow_sequence());
-    }
-
-    #[test]
-    fn compose_room_switch_allowed_on_chat_surfaces() {
-        assert!(compose_room_switch_allowed(Screen::Dashboard));
-        assert!(compose_room_switch_allowed(Screen::Dashboard));
-        assert!(!compose_room_switch_allowed(Screen::Arcade));
-    }
-
-    #[test]
-    fn topbar_screen_hit_test_maps_screen_digits() {
-        assert_eq!(topbar_screen_hit_test(12, 0), Some(Screen::Clubhouse));
-        assert_eq!(topbar_screen_hit_test(14, 0), Some(Screen::Dashboard));
-        assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Arcade));
-        assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Games));
-        assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Rooms));
-        assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Artboard));
-        assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Pinstar));
-        assert_eq!(topbar_screen_hit_test(26, 0), Some(Screen::WorldCup));
-        // The door games are no longer top-level tabs; the column past the last
-        // digit and the gaps between digits map to nothing.
-        assert_eq!(topbar_screen_hit_test(28, 0), None);
-        assert_eq!(topbar_screen_hit_test(13, 0), None);
-        assert_eq!(topbar_screen_hit_test(12, 1), None);
-    }
-
-    #[test]
-    fn vt_parser_reads_arrow_sequence() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[A"), vec![ParsedInput::Arrow(b'A')]);
-    }
-
-    #[test]
-    fn vt_parser_reads_ss3_arrow_sequence() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1bOD"), vec![ParsedInput::Arrow(b'D')]);
-    }
-
-    #[test]
-    fn vt_parser_reads_backtab_sequence() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[Z"), vec![ParsedInput::BackTab]);
-    }
-
-    #[test]
-    fn vt_parser_reads_da1_reply() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x1b[?62;4;22c"),
-            vec![ParsedInput::DeviceAttributes(vec![62, 4, 22])]
-        );
-    }
-
-    #[test]
-    fn vt_parser_ignores_da2_reply() {
-        let mut parser = VtInputParser::default();
-        // Secondary Device Attributes uses the `>` marker; only DA1 (`?`)
-        // should surface as DeviceAttributes.
-        assert_eq!(parser.feed(b"\x1b[>1;10;0c"), vec![]);
-    }
-
-    #[test]
-    fn vt_parser_reads_multiple_probe_replies_in_one_chunk() {
-        let mut parser = VtInputParser::default();
-        // Terminals answer the startup probes back-to-back, so XTVERSION and
-        // DA1 replies routinely share one data chunk over a low-latency link.
-        // Both events must surface; the splash handler applies every one.
-        assert_eq!(
-            parser.feed(b"\x1bP>|XTerm(370)\x1b\\\x1b[?62;4;22c"),
-            vec![
-                ParsedInput::TerminalVersion("XTerm(370)".to_string()),
-                ParsedInput::DeviceAttributes(vec![62, 4, 22]),
-            ]
-        );
-    }
-
-    #[test]
-    fn vt_parser_parses_scroll_events() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x1b[<64;10;5M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollUp,
-                button: None,
-                x: 10,
-                y: 5,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-        assert_eq!(
-            parser.feed(b"\x1b[<65;10;5m"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                button: None,
-                x: 10,
-                y: 5,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-    }
-
-    #[test]
-    fn vt_parser_parses_horizontal_scroll_events() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x1b[<66;8;3M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollLeft,
-                button: None,
-                x: 8,
-                y: 3,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-        assert_eq!(
-            parser.feed(b"\x1b[<67;8;3M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::ScrollRight,
-                button: None,
-                x: 8,
-                y: 3,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-    }
-
-    #[test]
-    fn vt_parser_parses_ctrl_sequences() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x1b[1;5C"),
-            vec![ParsedInput::CtrlArrow(b'C')]
-        );
-        assert_eq!(parser.feed(b"\x1b[5D"), vec![ParsedInput::CtrlArrow(b'D')]);
-        // Alt+Arrow (xterm modifier 3). Kitty emits this for Option-Arrow /
-        // Alt-Arrow in its default mode; consumers alias it to word-jump.
-        assert_eq!(parser.feed(b"\x1b[1;3D"), vec![ParsedInput::AltArrow(b'D')]);
-        assert_eq!(parser.feed(b"\x1b[1;3C"), vec![ParsedInput::AltArrow(b'C')]);
-        // Unmodified Arrow falls through unchanged.
-        assert_eq!(parser.feed(b"\x1b[D"), vec![ParsedInput::Arrow(b'D')]);
-        assert_eq!(parser.feed(b"\x1b[3~"), vec![ParsedInput::Delete]);
-        assert_eq!(parser.feed(b"\x1b[3;5~"), vec![ParsedInput::CtrlDelete]);
-        assert_eq!(
-            parser.feed(b"\x1b[127;5u"),
-            vec![ParsedInput::CtrlBackspace]
-        );
-        assert_eq!(parser.feed(b"\x1b[8;5u"), vec![ParsedInput::CtrlBackspace]);
-        assert_eq!(parser.feed(b"\x1b[8;5~"), vec![ParsedInput::CtrlBackspace]);
-        assert_eq!(parser.feed(b"\x1b[47;5u"), vec![ParsedInput::Byte(0x1F)]);
-        // Raw ^H (0x08) and DEL (0x7F) stay plain bytes; the composer maps ^H to
-        // word-delete itself. The CSI-u forms above are the explicit Ctrl+BS.
-        assert_eq!(parser.feed(b"\x08"), vec![ParsedInput::Byte(0x08)]);
-        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
-    }
-
-    #[test]
-    fn vt_parser_keeps_split_arrow_state_across_reads() {
-        let mut parser = VtInputParser::default();
-        assert!(parser.feed(b"\x1b[").is_empty());
-        assert_eq!(parser.feed(b"A"), vec![ParsedInput::Arrow(b'A')]);
-    }
-
-    #[test]
-    fn vt_parser_consumes_alt_printable_without_emitting_bytes() {
-        let mut parser = VtInputParser::default();
-        assert!(parser.feed(b"\x1bq").is_empty());
-    }
-
-    #[test]
-    fn vt_parser_emits_alt_c_for_explicit_clipboard_chord() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1bc"), vec![ParsedInput::AltC]);
-    }
-
-    #[test]
-    fn vt_parser_emits_alt_a_for_explicit_aquarium_chord() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1ba"), vec![ParsedInput::AltA]);
-        assert_eq!(parser.feed(b"\x1bA"), vec![ParsedInput::AltA]);
-    }
-
-    #[test]
-    fn vt_parser_reset_clears_pending_escape_state() {
-        let mut parser = VtInputParser::default();
-        assert!(parser.feed(b"\x1b").is_empty());
-        parser.reset();
-        assert_eq!(parser.feed(b"j"), vec![ParsedInput::Char('j')]);
-    }
-
-    #[test]
-    fn vt_parser_keeps_split_bracketed_paste_state_across_reads() {
-        let mut parser = VtInputParser::default();
-        assert!(parser.feed(b"\x1b[200~hello").is_empty());
-        assert_eq!(
-            parser.feed(b"\nworld\x1b[201~"),
-            vec![ParsedInput::Paste(b"hello\nworld".to_vec())]
-        );
-    }
-
-    #[test]
-    fn paste_target_prefers_chat_composer() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: true,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: true,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
-    }
-
-    #[test]
-    fn paste_target_routes_to_news_composer() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: false,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: true,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
-    }
-
-    #[test]
-    fn paste_target_routes_to_showcase_composer() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: false,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: false,
-            showcase_composing: true,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
-    }
-
-    #[test]
-    fn insert_pasted_text_normalizes_newlines_and_filters_controls() {
-        let mut out = String::new();
-        insert_pasted_text(b"hello\r\nworld\x00\rok\x7f", |ch| out.push(ch));
-        assert_eq!(out, "hello\nworld\nok");
-    }
-
-    #[test]
-    fn split_alt_enter_returns_plain_bytes_when_no_trigger() {
-        let chunks = split_escaped_input(b"hello");
-        assert_eq!(chunks, vec![EscapedInputChunk::Bytes(b"hello")]);
-    }
-
-    #[test]
-    fn split_escaped_input_splits_on_inline_escape_cr() {
-        let chunks = split_escaped_input(b"ab\x1b\rcd");
-        assert_eq!(
-            chunks,
-            vec![
-                EscapedInputChunk::Bytes(b"ab"),
-                EscapedInputChunk::Event(ParsedInput::AltEnter),
-                EscapedInputChunk::Bytes(b"cd"),
-            ]
-        );
-    }
-
-    #[test]
-    fn split_escaped_input_handles_escape_lf_variant() {
-        let chunks = split_escaped_input(b"\x1b\n");
-        assert_eq!(
-            chunks,
-            vec![EscapedInputChunk::Event(ParsedInput::AltEnter)]
-        );
-    }
-
-    #[test]
-    fn split_escaped_input_handles_escape_backspace_variants() {
-        let chunks = split_escaped_input(b"\x1b\x08\x1b\x7fx");
-        assert_eq!(
-            chunks,
-            vec![
-                EscapedInputChunk::Event(ParsedInput::CtrlBackspace),
-                EscapedInputChunk::Event(ParsedInput::CtrlBackspace),
-                EscapedInputChunk::Bytes(b"x"),
-            ]
-        );
-    }
-
-    #[test]
-    fn split_escaped_input_handles_consecutive_triggers() {
-        let chunks = split_escaped_input(b"\x1b\r\x1b\nx");
-        assert_eq!(
-            chunks,
-            vec![
-                EscapedInputChunk::Event(ParsedInput::AltEnter),
-                EscapedInputChunk::Event(ParsedInput::AltEnter),
-                EscapedInputChunk::Bytes(b"x"),
-            ]
-        );
-    }
-
-    #[test]
-    fn split_escaped_input_leaves_trailing_lone_escape_for_pending_logic() {
-        // A bare ESC at the end of the buffer is left in the byte stream so
-        // handle()'s trailing-ESC bookkeeping can set pending_escape.
-        let chunks = split_escaped_input(b"ab\x1b");
-        assert_eq!(chunks, vec![EscapedInputChunk::Bytes(b"ab\x1b")]);
-    }
-
-    #[test]
-    fn vt_parser_parses_page_keys_numeric_form() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[5~"), vec![ParsedInput::PageUp]);
-        assert_eq!(parser.feed(b"\x1b[6~"), vec![ParsedInput::PageDown]);
-        assert_eq!(parser.feed(b"\x1b[4~"), vec![ParsedInput::End]);
-        assert_eq!(parser.feed(b"\x1b[8~"), vec![ParsedInput::End]);
-    }
-
-    #[test]
-    fn vt_parser_parses_end_bare_form() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[F"), vec![ParsedInput::End]);
-    }
-
-    #[test]
-    fn vt_parser_parses_end_ss3_form() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1bOF"), vec![ParsedInput::End]);
-    }
-
-    #[test]
-    fn vt_parser_parses_home_forms() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\x1b[1~"), vec![ParsedInput::Home]);
-        assert_eq!(parser.feed(b"\x1b[7~"), vec![ParsedInput::Home]);
-        assert_eq!(parser.feed(b"\x1b[H"), vec![ParsedInput::Home]);
-        assert_eq!(parser.feed(b"\x1bOH"), vec![ParsedInput::Home]);
-    }
-
-    #[test]
-    fn vt_parser_parses_modified_arrow_variants() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x1b[1;2A"),
-            vec![ParsedInput::ShiftArrow(b'A')]
-        );
-        assert_eq!(parser.feed(b"\x1b[2A"), vec![ParsedInput::ShiftArrow(b'A')]);
-        assert_eq!(parser.feed(b"\x1b[1;3B"), vec![ParsedInput::AltArrow(b'B')]);
-        assert_eq!(parser.feed(b"\x1b[3C"), vec![ParsedInput::AltArrow(b'C')]);
-        assert_eq!(
-            parser.feed(b"\x1b[1;6D"),
-            vec![ParsedInput::CtrlShiftArrow(b'D')]
-        );
-        assert_eq!(
-            parser.feed(b"\x1b[6A"),
-            vec![ParsedInput::CtrlShiftArrow(b'A')]
-        );
-    }
-
-    #[test]
-    fn vt_parser_parses_mouse_press_and_release() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x1b[<0;10;5M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Down,
-                button: Some(MouseButton::Left),
-                x: 10,
-                y: 5,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-        assert_eq!(
-            parser.feed(b"\x1b[<0;10;5m"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Up,
-                button: Some(MouseButton::Left),
-                x: 10,
-                y: 5,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-        assert_eq!(
-            parser.feed(b"\x1b[<2;10;5M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Down,
-                button: Some(MouseButton::Right),
-                x: 10,
-                y: 5,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-    }
-
-    #[test]
-    fn vt_parser_parses_mouse_drag_and_move() {
-        let mut parser = VtInputParser::default();
-        // Left-button drag: base button 0 + motion bit 32 = 32.
-        assert_eq!(
-            parser.feed(b"\x1b[<32;4;6M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Drag,
-                button: Some(MouseButton::Left),
-                x: 4,
-                y: 6,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-        // Hover / motion without a button: low bits = 3, plus motion bit 32 = 35.
-        assert_eq!(
-            parser.feed(b"\x1b[<35;4;6M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Moved,
-                button: None,
-                x: 4,
-                y: 6,
-                modifiers: MouseModifiers::default(),
-            })]
-        );
-    }
-
-    #[test]
-    fn vt_parser_parses_mouse_modifier_bits() {
-        let mut parser = VtInputParser::default();
-        // Left press with Shift (bit 4): 0 | 4 = 4.
-        assert_eq!(
-            parser.feed(b"\x1b[<4;1;1M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Down,
-                button: Some(MouseButton::Left),
-                x: 1,
-                y: 1,
-                modifiers: MouseModifiers {
-                    shift: true,
-                    alt: false,
-                    ctrl: false
-                },
-            })]
-        );
-        // Left press with Ctrl+Alt (bits 16|8 = 24): 0 | 24 = 24.
-        assert_eq!(
-            parser.feed(b"\x1b[<24;2;3M"),
-            vec![ParsedInput::Mouse(MouseEvent {
-                kind: MouseEventKind::Down,
-                button: Some(MouseButton::Left),
-                x: 2,
-                y: 3,
-                modifiers: MouseModifiers {
-                    shift: false,
-                    alt: true,
-                    ctrl: true
-                },
-            })]
-        );
-    }
-
-    #[test]
-    fn vt_parser_emits_char_for_printable_non_ascii() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed("т".as_bytes()), vec![ParsedInput::Char('т')]);
-        assert_eq!(parser.feed("漢".as_bytes()), vec![ParsedInput::Char('漢')]);
-        assert_eq!(parser.feed("ł".as_bytes()), vec![ParsedInput::Char('ł')]);
-    }
-
-    #[test]
-    fn vt_parser_emits_char_for_ascii_printable() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"a"), vec![ParsedInput::Char('a')]);
-        assert_eq!(parser.feed(b" "), vec![ParsedInput::Char(' ')]);
-        assert_eq!(parser.feed(b"~"), vec![ParsedInput::Char('~')]);
-    }
-
-    #[test]
-    fn vt_parser_emits_one_char_per_codepoint_for_full_word() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed("тест".as_bytes()),
-            vec![
-                ParsedInput::Char('т'),
-                ParsedInput::Char('е'),
-                ParsedInput::Char('с'),
-                ParsedInput::Char('т'),
-            ]
-        );
-    }
-
-    #[test]
-    fn vt_parser_preserves_ascii_controls_as_bytes() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(parser.feed(b"\r"), vec![ParsedInput::Byte(b'\r')]);
-        assert_eq!(parser.feed(b"\n"), vec![ParsedInput::Byte(b'\n')]);
-        assert_eq!(parser.feed(b"\x15"), vec![ParsedInput::Byte(0x15)]);
-        assert_eq!(parser.feed(b"\x7f"), vec![ParsedInput::Byte(0x7f)]);
-    }
-
-    #[test]
-    fn vt_parser_preserves_del_when_adjacent_to_printable_bytes() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed(b"\x7f!"),
-            vec![ParsedInput::Byte(0x7f), ParsedInput::Char('!')]
-        );
-    }
-
-    #[test]
-    fn vt_parser_interleaves_ascii_and_non_ascii() {
-        let mut parser = VtInputParser::default();
-        assert_eq!(
-            parser.feed("café".as_bytes()),
-            vec![
-                ParsedInput::Char('c'),
-                ParsedInput::Char('a'),
-                ParsedInput::Char('f'),
-                ParsedInput::Char('é'),
-            ]
-        );
-    }
-
-    #[test]
-    fn insert_pasted_text_strips_bracketed_paste_markers() {
-        let mut out = String::new();
-        insert_pasted_text(b"\x1b[200~https://example.com\x1b[201~", |ch| out.push(ch));
-        assert_eq!(out, "https://example.com");
-
-        // Literal residue (ESC already stripped by an earlier stage).
-        let mut out = String::new();
-        insert_pasted_text(b"[200~https://example.com[201~", |ch| out.push(ch));
-        assert_eq!(out, "https://example.com");
-    }
-
-    #[test]
-    fn sanitize_paste_markers_cleans_stored_urls() {
-        assert_eq!(
-            sanitize_paste_markers("[200~https://example.com[201~"),
-            "https://example.com"
-        );
-        assert_eq!(
-            sanitize_paste_markers("\x1b[200~https://example.com\x1b[201~"),
-            "https://example.com"
-        );
-        assert_eq!(
-            sanitize_paste_markers("https://example.com"),
-            "https://example.com"
-        );
-    }
-
-    #[test]
-    fn room_join_suffixes_are_one_based_digits() {
-        assert_eq!(room_join_suffix_index(b'1'), Some(0));
-        assert_eq!(room_join_suffix_index(b'2'), Some(1));
-        assert_eq!(room_join_suffix_index(b'3'), Some(2));
-        assert_eq!(room_join_suffix_index(b'4'), Some(3));
-        assert_eq!(room_join_suffix_index(b'b'), None);
-    }
-
-    #[test]
-    fn room_section_suffixes_map_plain_keys_to_sections() {
-        assert_eq!(room_section_suffix(b'f'), Some(RoomSection::Favorites));
-        assert_eq!(room_section_suffix(b'o'), Some(RoomSection::Core));
-        assert_eq!(room_section_suffix(b'c'), Some(RoomSection::Channels));
-        assert_eq!(room_section_suffix(b'u'), Some(RoomSection::Updates));
-        assert_eq!(room_section_suffix(b'd'), Some(RoomSection::Dms));
-        assert_eq!(room_section_suffix(b'x'), None);
-    }
-
-    // --- autocomplete arrow routing ---
-
-    #[test]
-    fn allows_arrow_when_autocomplete_active() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: true,
-            chat_ac_active: true,
-            feeds_processing: false,
-            news_composing: false,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert!(!ctx.blocks_arrow_sequence());
-    }
-
-    #[test]
-    fn blocks_arrow_when_composing_without_autocomplete() {
-        let ctx = InputContext {
-            screen: Screen::Dashboard,
-            chat_composing: true,
-            chat_ac_active: false,
-            feeds_processing: false,
-            news_composing: false,
-            showcase_composing: false,
-            work_composing: false,
-            directory_tab: DirectoryTab::Profiles,
-        };
-        assert!(ctx.blocks_arrow_sequence());
-    }
-
-    #[test]
-    fn overlay_input_action_accepts_printable_chars_and_arrows() {
-        assert_eq!(
-            overlay_input_action(&ParsedInput::Char('j')),
-            Some(OverlayInputAction::Scroll(1))
-        );
-        assert_eq!(
-            overlay_input_action(&ParsedInput::Char('k')),
-            Some(OverlayInputAction::Scroll(-1))
-        );
-        assert_eq!(
-            overlay_input_action(&ParsedInput::Char('q')),
-            Some(OverlayInputAction::Close)
-        );
-        assert_eq!(
-            overlay_input_action(&ParsedInput::Arrow(b'B')),
-            Some(OverlayInputAction::Scroll(1))
-        );
-        assert_eq!(
-            overlay_input_action(&ParsedInput::Arrow(b'A')),
-            Some(OverlayInputAction::Scroll(-1))
-        );
-    }
-
-    // ── Chat-scroll click classification ────────────────────────
-
-    use crate::app::chat::ui::HeaderSegment;
-
-    fn header_hit(message_id: Uuid, segments: Vec<HeaderSegment>) -> ChatRowHit {
-        ChatRowHit {
-            message_id: Some(message_id),
-            kind: ChatRowKind::Header(segments),
-        }
-    }
-
-    #[test]
-    fn classify_chat_hit_routes_username_column_to_profile() {
-        let mid = Uuid::now_v7();
-        let hit = header_hit(
-            mid,
-            vec![HeaderSegment {
-                start_col: 1,
-                end_col: 6,
-                target: HeaderTarget::Profile,
-            }],
-        );
-        assert_eq!(
-            classify_chat_hit(&hit, 3),
-            Some(ChatClickKind::ProfileOf { message_id: mid })
-        );
-    }
-
-    #[test]
-    fn classify_chat_hit_routes_store_badge_column_to_shop() {
-        let mid = Uuid::now_v7();
-        let hit = header_hit(
-            mid,
-            vec![
-                HeaderSegment {
-                    start_col: 1,
-                    end_col: 6,
-                    target: HeaderTarget::Profile,
-                },
-                HeaderSegment {
-                    start_col: 8,
-                    end_col: 10,
-                    target: HeaderTarget::StoreBadge,
-                },
-            ],
-        );
-        assert_eq!(classify_chat_hit(&hit, 9), Some(ChatClickKind::StoreBadge));
-    }
-
-    #[test]
-    fn classify_chat_hit_routes_store_flag_column_to_flags_shop() {
-        let mid = Uuid::now_v7();
-        let hit = header_hit(
-            mid,
-            vec![
-                HeaderSegment {
-                    start_col: 1,
-                    end_col: 6,
-                    target: HeaderTarget::Profile,
-                },
-                HeaderSegment {
-                    start_col: 8,
-                    end_col: 10,
-                    target: HeaderTarget::StoreFlag,
-                },
-            ],
-        );
-        assert_eq!(classify_chat_hit(&hit, 9), Some(ChatClickKind::StoreFlag));
-    }
-
-    #[test]
-    fn classify_chat_hit_falls_through_gap_between_segments_to_body() {
-        let mid = Uuid::now_v7();
-        let hit = header_hit(
-            mid,
-            vec![
-                HeaderSegment {
-                    start_col: 1,
-                    end_col: 6,
-                    target: HeaderTarget::Profile,
-                },
-                HeaderSegment {
-                    start_col: 8,
-                    end_col: 10,
-                    target: HeaderTarget::StoreBadge,
-                },
-            ],
-        );
-        // Column 7 is the separator space — no segment owns it.
-        assert_eq!(
-            classify_chat_hit(&hit, 7),
-            Some(ChatClickKind::BodySelect { message_id: mid })
-        );
-    }
-
-    #[test]
-    fn classify_chat_hit_body_and_image_use_message_id() {
-        let mid = Uuid::now_v7();
-        let body = ChatRowHit {
-            message_id: Some(mid),
-            kind: ChatRowKind::Body,
-        };
-        let image = ChatRowHit {
-            message_id: Some(mid),
-            kind: ChatRowKind::Image,
-        };
-        assert_eq!(
-            classify_chat_hit(&body, 0),
-            Some(ChatClickKind::BodySelect { message_id: mid })
-        );
-        assert_eq!(
-            classify_chat_hit(&image, 0),
-            Some(ChatClickKind::Image { message_id: mid })
-        );
-    }
-
-    #[test]
-    fn classify_chat_hit_blank_or_missing_message_yields_none() {
-        let blank = ChatRowHit {
-            message_id: None,
-            kind: ChatRowKind::None,
-        };
-        let orphan_body = ChatRowHit {
-            message_id: None,
-            kind: ChatRowKind::Body,
-        };
-        assert!(classify_chat_hit(&blank, 0).is_none());
-        assert!(classify_chat_hit(&orphan_body, 0).is_none());
-    }
-
-    #[test]
-    fn chat_click_kind_double_click_followup_only_for_body_and_profile() {
-        let mid = Uuid::now_v7();
-        assert!(ChatClickKind::BodySelect { message_id: mid }.has_double_click_followup());
-        assert!(ChatClickKind::ProfileOf { message_id: mid }.has_double_click_followup());
-        assert!(!ChatClickKind::StoreBadge.has_double_click_followup());
-        assert!(!ChatClickKind::StoreFlag.has_double_click_followup());
-        assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
-    }
-}
+#[path = "input_test.rs"]
+mod input_test;

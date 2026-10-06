@@ -8,7 +8,7 @@ services:
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
-      - "${LATE_TUNNEL_PORT}:${LATE_TUNNEL_PORT}"
+      - "${LATE_TUNNEL_PORT}:4002"
       - "${LATE_IRC_PORT:-6667}:${LATE_IRC_PORT:-6667}"
       - "${LATE_IRC_TLS_HOST_PORT:-6697}:6697"
     env_file:
@@ -27,11 +27,23 @@ services:
         condition: service_started
       service-dopewars:
         condition: service_started
+      service-bashquest:
+        condition: service_started
+      service-codekeep:
+        condition: service_started
+      service-dcss:
+        condition: service_started
+      service-usurper:
+        condition: service_started
+      service-brogue:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "timeout 2 bash -c 'exec 3<>/dev/tcp/localhost/${LATE_API_PORT}; printf \"GET /api/health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 600s
+      start_interval: 5s
 
   service-bastion:
     build:
@@ -84,6 +96,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 600s
+      start_interval: 5s
 
   service-nethack:
     build:
@@ -105,6 +119,84 @@ services:
       context: .
       target: dev-dopewars
     container_name: ${INSTANCE}-dopewars
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+
+  service-bashquest:
+    build:
+      context: .
+      target: dev-bashquest
+    container_name: ${INSTANCE}-bashquest
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+
+  service-codekeep:
+    build:
+      context: .
+      target: dev-codekeep
+    container_name: ${INSTANCE}-codekeep
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+      - codekeep-data:/var/lib/late-codekeep
+
+  service-dcss:
+    build:
+      context: .
+      target: dev-dcss
+    container_name: ${INSTANCE}-dcss
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+
+  service-usurper:
+    # Upstream Usurper contains Intel assembly and only builds for x86-64.
+    platform: linux/amd64
+    build:
+      context: .
+      target: dev-usurper
+    container_name: ${INSTANCE}-usurper
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target-amd64:/app/target
+
+  service-brogue:
+    build:
+      context: .
+      target: dev-brogue
+    container_name: ${INSTANCE}-brogue
     env_file:
       - .env
       - path: .env.local
@@ -156,14 +248,48 @@ services:
       - ./music:/music:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
 
+  # Message bus between livekit and livekit-ingress; nothing persists.
+  # Valkey is the BSD-licensed Redis fork, protocol-compatible drop-in.
+  redis:
+    image: valkey/valkey:8-alpine
+    container_name: ${INSTANCE}-redis
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+
   livekit:
     image: livekit/livekit-server:latest
     container_name: ${INSTANCE}-livekit
-    command: ["--dev", "--bind", "0.0.0.0"]
+    # The config file replaces the old `--dev` flag: same devkey keys and
+    # ports, plus the redis bus and WHIP base URL the OBS ingest flow needs.
+    command: ["--config", "/etc/livekit/config.yaml"]
+    depends_on:
+      - redis
+    volumes:
+      - ./infra/livekit/dev-config.yaml:/etc/livekit/config.yaml:ro
     ports:
       - "${LATE_LIVEKIT_HOST_PORT}:7880"
       - "${LATE_LIVEKIT_RTC_TCP_PORT}:7881"
       - "${LATE_LIVEKIT_RTC_UDP_PORT}:7882/udp"
+
+  # WHIP ingest for `/golive obs`. The container-side ports are fixed because
+  # they must match the two dev-config.yaml files exactly; only the host side
+  # varies so a second instance can bind its own.
+  # Instance 2 caveat: the WHIP base URL handed to the streamer is baked into
+  # infra/livekit/dev-config.yaml as http://localhost:7888/w, so `/golive obs`
+  # only works against instance 1. Everything else about streaming (`/golive`
+  # screen share, watch pages) works on both.
+  livekit-ingress:
+    image: livekit/ingress:v1.4.3
+    container_name: ${INSTANCE}-livekit-ingress
+    environment:
+      INGRESS_CONFIG_FILE: /etc/livekit-ingress/config.yaml
+    depends_on:
+      - redis
+      - livekit
+    volumes:
+      - ./infra/livekit-ingress/dev-config.yaml:/etc/livekit-ingress/config.yaml:ro
+    ports:
+      - "${LATE_LIVEKIT_WHIP_HOST_PORT}:7888" # WHIP HTTP: OBS Server URL is http://localhost:7888/w
+      - "${LATE_LIVEKIT_WHIP_UDP_HOST_PORT}:7890/udp" # WHIP ICE/UDP media
 
 volumes:
   cargo-registry-bastion:
@@ -172,3 +298,5 @@ volumes:
   cargo-registry:
   cargo-git:
   cargo-target:
+  cargo-target-amd64:
+  codekeep-data:

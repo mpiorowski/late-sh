@@ -1,0 +1,156 @@
+use serde_json::{Value, json};
+
+/// `shop_consumable_effects.effect_kind` for the user-scoped username effects
+/// (Name Glow / Name Gradient / Name Shimmer, each sold in a 24h and a 30-day
+/// tier). One active effect per user: activating any username effect
+/// deactivates the previous one, whichever tier it came from.
+pub const USERNAME_EFFECT_KIND: &str = "username_effect";
+
+pub const USERNAME_GLOW_SKU: &str = "username_glow_day";
+pub const USERNAME_GRADIENT_SKU: &str = "username_gradient_day";
+pub const USERNAME_SHIMMER_SKU: &str = "username_shimmer_day";
+
+/// The month tier: the same three styles, 30 days instead of 24 hours, at 30x
+/// the day price. Same variants and same picker; only `duration_secs` and the
+/// price differ, so nothing downstream branches on the tier.
+pub const USERNAME_GLOW_MONTH_SKU: &str = "username_glow_month";
+pub const USERNAME_GRADIENT_MONTH_SKU: &str = "username_gradient_month";
+pub const USERNAME_SHIMMER_MONTH_SKU: &str = "username_shimmer_month";
+
+// How long each tier runs, and the copy that quotes it, live in
+// `models::rental`: a username effect is one rental among several now.
+
+/// The buyer-picked color for the Name Glow effect. RGB values live in
+/// `late-ssh` (theme territory); this enum only names the choice so the
+/// purchase payload round-trips.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GlowColor {
+    Ember,
+    Gold,
+    Lime,
+    Aqua,
+    Sky,
+    Orchid,
+}
+
+impl GlowColor {
+    pub const ALL: [Self; 6] = [
+        Self::Ember,
+        Self::Gold,
+        Self::Lime,
+        Self::Aqua,
+        Self::Sky,
+        Self::Orchid,
+    ];
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Ember => "ember",
+            Self::Gold => "gold",
+            Self::Lime => "lime",
+            Self::Aqua => "aqua",
+            Self::Sky => "sky",
+            Self::Orchid => "orchid",
+        }
+    }
+
+    pub fn parse_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|color| color.slug() == slug)
+    }
+}
+
+/// The buyer-picked color pair for the Name Gradient effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GradientPair {
+    Sunset,
+    Ocean,
+    Dusk,
+    Forest,
+    Candy,
+    Flare,
+}
+
+impl GradientPair {
+    pub const ALL: [Self; 6] = [
+        Self::Sunset,
+        Self::Ocean,
+        Self::Dusk,
+        Self::Forest,
+        Self::Candy,
+        Self::Flare,
+    ];
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Sunset => "sunset",
+            Self::Ocean => "ocean",
+            Self::Dusk => "dusk",
+            Self::Forest => "forest",
+            Self::Candy => "candy",
+            Self::Flare => "flare",
+        }
+    }
+
+    pub fn parse_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|pair| pair.slug() == slug)
+    }
+}
+
+/// A purchased username effect, as persisted in the effect row payload. Glow
+/// paints the name one bright color, Gradient fades it between a preset pair,
+/// Shimmer animates through the glow palette. The payload carries the style
+/// only; how long it runs lives on the effect row's `ends_at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UsernameEffect {
+    Glow(GlowColor),
+    Gradient(GradientPair),
+    Shimmer,
+}
+
+impl UsernameEffect {
+    /// The item-payload `variant` key this choice belongs to; the purchase
+    /// path rejects a choice whose variant does not match the bought item.
+    pub fn variant_key(self) -> &'static str {
+        match self {
+            Self::Glow(_) => "glow",
+            Self::Gradient(_) => "gradient",
+            Self::Shimmer => "shimmer",
+        }
+    }
+
+    /// Stable identity string, e.g. `glow:ember` — used for activity
+    /// repeat-throttle keys.
+    pub fn slug(self) -> String {
+        match self {
+            Self::Glow(color) => format!("glow:{}", color.slug()),
+            Self::Gradient(pair) => format!("gradient:{}", pair.slug()),
+            Self::Shimmer => "shimmer".to_string(),
+        }
+    }
+
+    /// The `shop_consumable_effects.payload` for this choice.
+    pub fn to_payload(self) -> Value {
+        match self {
+            Self::Glow(color) => json!({"variant": "glow", "color": color.slug()}),
+            Self::Gradient(pair) => json!({"variant": "gradient", "color": pair.slug()}),
+            Self::Shimmer => json!({"variant": "shimmer"}),
+        }
+    }
+
+    /// Parse an effect row payload; `None` on unknown variant/color so
+    /// readers can warn and skip rather than fail.
+    pub fn from_payload(payload: &Value) -> Option<Self> {
+        let variant = payload.get("variant")?.as_str()?;
+        let color = payload.get("color").and_then(Value::as_str);
+        match variant {
+            "glow" => Some(Self::Glow(GlowColor::parse_slug(color?)?)),
+            "gradient" => Some(Self::Gradient(GradientPair::parse_slug(color?)?)),
+            "shimmer" => Some(Self::Shimmer),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "username_effect_test.rs"]
+mod username_effect_test;

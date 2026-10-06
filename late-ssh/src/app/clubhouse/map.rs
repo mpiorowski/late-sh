@@ -21,10 +21,10 @@ pub const MAP_H: u16 = 50;
 #[rustfmt::skip]
 pub const MAP: [&str; MAP_H as usize] = [
     "╔═══════════════════════════════════════════════════════════════════════════════╡ ☾ THE LATE LOUNGE ☽ ╞════════════════════════════════════════════════════════════════════════════════╗",
-    "║▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔         ╭──────┬──────╮     ╭───────────╮                         ╭───────────╮     ╔═════════╗   ╭──────┬──────╮            ║",
-    "║   ¡   !   ¡   °   !   ¡   !   °   ¡   !   ¡   °   !   ▐         │  ·   │    · │   ╭╯ ♪ JUKEBOX ♪ ╰╮  ╭────────────────╮ ╭╯   DOORS·3   ╰╮   ║ARCADE·2 ║   │  ·   │    · │      ♣♣♣   ║",
-    "║   █   █   █   █   █   █   █   █   █   █   █   █   █   ▐         │    ☾ │  ·   │   │   ▂▄▆█▇▆▄▂    │  │ ☾ late·sh 24/7 │ │   ║ │ ▒ │ ║   │   ║╭───────╮║   │ ·    │    · │     ♣♣♣♣♣  ║",
-    "║ ───────────────────────────────────────────────────── ▐         ├──────┼──────┤   │   [·······]   │  ╰────────────────╯ │   ║ │ ○ │ ║   │   ║│ ▄▀▄ · │║   ├──────┼──────┤      ♣♣♣   ║",
+    "║▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ╭────╮  ╭──────┬──────╮     ╭───────────╮                         ╭───────────╮     ╔═════════╗   ╭──────┬──────╮            ║",
+    "║   ¡   !   ¡   °   !   ¡   !   °   ¡   !   ¡   °   !   ▐ │back│  │  ·   │    · │   ╭╯ ♪ JUKEBOX ♪ ╰╮  ╭────────────────╮ ╭╯   DOORS·3   ╰╮   ║ARCADE·2 ║   │  ·   │    · │      ♣♣♣   ║",
+    "║   █   █   █   █   █   █   █   █   █   █   █   █   █   ▐ │door│  │    ☾ │  ·   │   │   ▂▄▆█▇▆▄▂    │  │ ☾ late·sh 24/7 │ │   ║ │ ▒ │ ║   │   ║╭───────╮║   │ ·    │    · │     ♣♣♣♣♣  ║",
+    "║ ───────────────────────────────────────────────────── ▐ │   ○│  ├──────┼──────┤   │   [·······]   │  ╰────────────────╯ │   ║ │ ○ │ ║   │   ║│ ▄▀▄ · │║   ├──────┼──────┤      ♣♣♣   ║",
     "║      Y     Y     Y     Y     Y     Y     Y     Y      ▐         │ ·    │   ·  │   │   ▞▚ ▞▚ ▞▚    │                     │   ║ │ ▒ │ ║   │   ║╰───────╯║   │ ·    │   ·  │      ╰─╯   ║",
     "║                                               [$]     ▐         │      │ ·    │   ╰───○───────○───╯                     ╰───────────────╯   ║ ┃  ● ●  ║   │      │ ·    │            ║",
     "║                                                       ▐ ╭──╮    ╰──────┴──────╯                                                             ╚═════════╝   ╰──────┴──────╯            ║",
@@ -35,7 +35,7 @@ pub const MAP: [&str; MAP_H as usize] = [
     "║    (_)     (_)     (_)     (_)     (_)     (_)   (_)      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                 ╨          ╨               ║",
     "║     ╨       ╨       ╨       ╨       ╨       ╨     ╨       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░            ╭────────────────────╮          ║",
     "║                                                           ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░        ╭───╯▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╰───╮      ║",
-    "║ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄               ╔═══════════╗       ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░   (_)  │▒♠▒▒▒▒▒▒▒▒TABLES·4▒▒▒▒▒▒▒▒♥▒│  (_) ║",
+    "║ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄               ╔═══════════╗       ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░   (_)  │▒♠▒▒▒▒▒▒▒▒▒LOBBY▒▒▒▒▒▒▒▒▒▒♥▒│  (_) ║",
     "║ █▒▒▒¡▒▒▒▒▒¡▒▒▒▒▒¡▒▒▒▒▒█ ╭──╮          ║▌▐│▌║▐▌│▐▌▐║       ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░    ╨   ╰───╮▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╭───╯   ╨  ║",
     "║ █▒╔═════════════════╗▒█  _ ▐          ╠═══════════╣       ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░            ╰────────────────────╯          ║",
     "║ █▒║ )~( ^ )~( ~ ( ^ ║▒█ ╰──╯          ║▐│▌▐▌║▌▐│▌║║       ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░                                            ║",
@@ -43,16 +43,16 @@ pub const MAP: [&str; MAP_H as usize] = [
     "║ █▒╚═════════════════╝▒█ ╭──╮                              ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                 ╨          ╨               ║",
     "║ ▀▀▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▀▀  _ ▐                              ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░                                            ║",
     "║    ░░░░░░░░░░░░░░░░░    ╰──╯                              ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                                            ║",
-    "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
-    "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░            (_)                             ║",
-    "║  ♣♣♣                                                      ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░             ╨                              ║",
-    "║ ♣♣♣♣♣                                                     ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░          ╭──────╮                          ║",
-    "║  ♣♣♣                                                      ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░     (_) ╭╯  ¡   ╰╮ (_)                     ║",
-    "║  ╰─╯                           ╭─╮                        ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░      ╨  ╰╮      ╭╯  ╨                      ║",
-    "║                                ╰┬╯           ♣♣♣          ░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░          ╰──────╯                          ║",
+    "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░               (_)      (_)                 ║",
+    "║    ░░░░░░░░░░░░░░░░░                                      ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░                ╨        ╨                  ║",
+    "║  ♣♣♣                                                      ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░         ╭────────────────────────╮         ║",
+    "║ ♣♣♣♣♣                                                     ░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░░░░░░ ╭──────╮ ░░░░░░░░░░░         │●▒▒▒▒▒▒▒▒▒▒▒●▒▒▒▒▒▒▒▒▒▒●│         ║",
+    "║  ♣♣♣                                                      ░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░░(_)░╭╯  ¡   ╰╮░(_)░░░░░░░         │▒▒▒◦▒▒▒▒▒▒POOL▒▒▒▒▒▒◦▒▒▒│         ║",
+    "║  ╰─╯                           ╭─╮                        ░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░░░╨░░╰╮      ╭╯░░╨░░░░░░░░         │●▒▒▒▒▒▒▒▒▒▒▒●▒▒▒▒▒▒▒▒▒▒●│         ║",
+    "║                                ╰┬╯           ♣♣♣          ░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░░░░░░ ╰──────╯ ░░░░░░░░░░░         ╰────────────────────────╯         ║",
     "║   ╔════════════╗                │           ♣♣♣♣♣         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
-    "║   ║ ARTBOARD·5 ║                ┴            ♣♣♣          ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░            (_)                             ║",
-    "║   ║  ~   ·   ° ║                             ╰─╯          ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░             ╨                              ║",
+    "║   ║ ARTBOARD·4 ║                ┴            ♣♣♣          ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░               (_)      (_)                 ║",
+    "║   ║  ~   ·   ° ║                             ╰─╯          ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                ╨        ╨                  ║",
     "║   ║ °   *   ·  ║                                          ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░                                            ║",
     "║   ╚════════════╝                                          ░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░░░░░░░░░(_)░░░░░░░░░░░░░░░                              (_)           ║",
     "║     ╱        ╲                                            ░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░░░░░░░░░░╨░░░░░░░░░░░░░░░░                               ╨            ║",
@@ -161,11 +161,12 @@ pub const SEATS: &[Seat] = &[
     s(167, 19, true, SeatKind::Stool),
     s(143, 15, false, SeatKind::Stool),
     s(180, 15, false, SeatKind::Stool),
+    // pool table
+    s(155, 23, false, SeatKind::Stool),
+    s(164, 23, false, SeatKind::Stool),
+    s(155, 31, true, SeatKind::Stool),
+    s(164, 31, true, SeatKind::Stool),
     // games-corner tables, south-east
-    s(152, 24, false, SeatKind::Stool),
-    s(152, 31, true, SeatKind::Stool),
-    s(145, 27, false, SeatKind::Stool),
-    s(160, 27, false, SeatKind::Stool),
     s(170, 34, false, SeatKind::Stool),
     s(170, 41, true, SeatKind::Stool),
     s(163, 37, false, SeatKind::Stool),
@@ -212,6 +213,11 @@ pub const DOOR_SIGN: Zone = Zone {
 /// from players); the torso renders one row below.
 pub const BARTENDER: (u16, u16) = (28, 6);
 
+/// @bot's standing spot: the narrow aisle column between the arcade cabinet
+/// and the poker table, on the east side of the room. Not part of the
+/// general pool; he stands here whenever he is online (always).
+pub const BOT_SPOT: (u16, u16) = (154, 9);
+
 /// The dog's home cell beside the hearth rug: where the `(ᴥ)` sprite body
 /// centers when the room starts. The dog itself is shared lobby state
 /// (`lobby.rs`); it wanders between `DOG_WAYPOINTS` and naps back here.
@@ -240,6 +246,16 @@ pub const BAR_COUNTER: Zone = Zone {
     x1: 56,
     y1: 10,
 };
+/// The bartender's reach: the counter plus three rows of open floor below,
+/// so walking toward the bar surfaces the popover (and the welcome pour)
+/// before the player hugs the counter. In the overlap band it wins over
+/// the fireplace popover; the bar is the louder landmark there.
+pub const BAR_APPROACH: Zone = Zone {
+    x0: 1,
+    y0: 9,
+    x1: 56,
+    y1: 13,
+};
 /// The back-bar shelf (bottles and hanging glasses), for the liquor glow.
 pub const BACK_BAR: Zone = Zone {
     x0: 1,
@@ -253,6 +269,18 @@ pub const JUKEBOX: Zone = Zone {
     x1: 100,
     y1: 6,
 };
+/// The back door, just past the end of the counter: out to Nightcap, the
+/// quiet bar (`nightcap/`).
+pub const BACK_DOOR: Zone = Zone {
+    x0: 58,
+    y0: 1,
+    x1: 63,
+    y1: 4,
+};
+/// The floor cell in front of the back door. `n` steps the avatar here on its
+/// way out, so the room sees a patron leave through the door the same way a
+/// walk-up Enter looks.
+pub const BACK_DOOR_MAT: (u16, u16) = (60, 6);
 /// The big wooden door to the door games (page 3).
 pub const DOORS: Zone = Zone {
     x0: 122,
@@ -280,6 +308,14 @@ pub const POKER_TABLE: Zone = Zone {
     y0: 13,
     x1: 176,
     y1: 17,
+};
+/// The pool table under the big one: the Lobby again, opened on a fresh pool
+/// challenge (Tables, page 4).
+pub const POOL_TABLE: Zone = Zone {
+    x0: 148,
+    y0: 25,
+    x1: 173,
+    y1: 29,
 };
 /// The easel (the Artboard, page 5).
 pub const EASEL: Zone = Zone {
@@ -382,11 +418,14 @@ impl Zone {
 /// Interactive props, in popover priority order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interactive {
+    /// The back door out to Nightcap.
+    BackDoor,
     Bartender,
     Jukebox,
     Arcade,
     Doors,
     Poker,
+    Pool,
     Easel,
     Dog,
     Fireplace,
@@ -395,7 +434,12 @@ pub enum Interactive {
 /// The prop the player is close enough to interact with, if any. The dog
 /// wanders (lobby state), so its current body-center cell is passed in.
 pub fn nearest_interactive(x: u16, y: u16, dog: (u16, u16)) -> Option<Interactive> {
-    if BAR_COUNTER.distance(x, y) <= 2 {
+    // Before the bar: the door sits at the counter's end, and the counter's
+    // approach apron reaches the cells in front of it.
+    if BACK_DOOR.distance(x, y) <= 2 {
+        return Some(Interactive::BackDoor);
+    }
+    if BAR_APPROACH.distance(x, y) <= 2 {
         return Some(Interactive::Bartender);
     }
     if JUKEBOX.distance(x, y) <= 2 {
@@ -409,6 +453,9 @@ pub fn nearest_interactive(x: u16, y: u16, dog: (u16, u16)) -> Option<Interactiv
     }
     if POKER_TABLE.distance(x, y) <= 2 {
         return Some(Interactive::Poker);
+    }
+    if POOL_TABLE.distance(x, y) <= 2 {
+        return Some(Interactive::Pool);
     }
     if EASEL.distance(x, y) <= 2 {
         return Some(Interactive::Easel);
@@ -462,182 +509,5 @@ pub fn walkable(x: u16, y: u16) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::{HashSet, VecDeque};
-
-    #[test]
-    fn map_rows_fit_declared_width() {
-        for (y, row) in MAP.iter().enumerate() {
-            let width = row.chars().count();
-            assert!(
-                width <= MAP_W as usize,
-                "row {y} is {width} chars, wider than MAP_W"
-            );
-        }
-        assert_eq!(MAP[0].chars().count(), MAP_W as usize);
-        assert_eq!(MAP[MAP_H as usize - 1].chars().count(), MAP_W as usize);
-    }
-
-    #[test]
-    fn seats_sit_on_seat_anchors() {
-        for seat in SEATS.iter().chain(std::iter::once(&GRAYBEARD_SEAT)) {
-            assert_eq!(
-                char_at(seat.x, seat.y),
-                '_',
-                "seat at ({}, {}) is not a seat anchor",
-                seat.x,
-                seat.y
-            );
-        }
-    }
-
-    #[test]
-    fn spawn_and_standing_spots_are_walkable() {
-        assert!(walkable(SPAWN.0, SPAWN.1));
-        for &(x, y) in STANDING_SPOTS {
-            assert!(walkable(x, y), "standing spot ({x}, {y}) is blocked");
-        }
-        for &(x, y) in DOOR_STACK {
-            assert!(walkable(x, y), "door-stack slot ({x}, {y}) is blocked");
-        }
-        for &(x, y) in DOG_WAYPOINTS {
-            assert!(walkable(x, y), "dog waypoint ({x}, {y}) is blocked");
-        }
-    }
-
-    #[test]
-    fn door_sign_zone_covers_the_door_lettering() {
-        let sign: String = (DOOR_SIGN.x0..=DOOR_SIGN.x1)
-            .map(|x| char_at(x, DOOR_SIGN.y0))
-            .collect();
-        assert_eq!(sign, "╡ door ╞");
-    }
-
-    /// Every cell a player can reach from spawn, by flood fill.
-    fn reachable_from_spawn() -> HashSet<(u16, u16)> {
-        let mut seen = HashSet::from([SPAWN]);
-        let mut queue = VecDeque::from([SPAWN]);
-        while let Some((x, y)) = queue.pop_front() {
-            for (nx, ny) in [
-                (x + 1, y),
-                (x.wrapping_sub(1), y),
-                (x, y + 1),
-                (x, y.wrapping_sub(1)),
-            ] {
-                if walkable(nx, ny) && seen.insert((nx, ny)) {
-                    queue.push_back((nx, ny));
-                }
-            }
-        }
-        seen
-    }
-
-    #[test]
-    fn bar_alley_is_sealed_from_players() {
-        // The bartender's alley (behind the counter) and the counter itself
-        // must not be reachable: shelf rows above, counter below, wall left,
-        // seal column right.
-        let reachable = reachable_from_spawn();
-        assert!(
-            !reachable.contains(&BARTENDER),
-            "players can reach the bartender's alley"
-        );
-        for y in 2..=BAR_COUNTER.y1 {
-            for x in 1..=BAR_COUNTER.x1 {
-                assert!(!reachable.contains(&(x, y)), "alley leak at ({x}, {y})");
-            }
-        }
-    }
-
-    #[test]
-    fn seats_and_spots_are_reachable() {
-        let reachable = reachable_from_spawn();
-        for seat in SEATS.iter().chain(std::iter::once(&GRAYBEARD_SEAT)) {
-            let (x, y) = (seat.x, seat.y);
-            // A stool's own parens and leg surround the anchor, so look at
-            // the full 8-neighborhood for a walkable approach cell.
-            let mut approachable = false;
-            for dx in -1i32..=1 {
-                for dy in -1i32..=1 {
-                    if (dx, dy) == (0, 0) {
-                        continue;
-                    }
-                    let cell = (
-                        x.wrapping_add_signed(dx as i16),
-                        y.wrapping_add_signed(dy as i16),
-                    );
-                    if reachable.contains(&cell) {
-                        approachable = true;
-                    }
-                }
-            }
-            assert!(approachable, "no way to walk up to the seat at ({x}, {y})");
-        }
-        for &(x, y) in STANDING_SPOTS {
-            assert!(reachable.contains(&(x, y)), "spot ({x}, {y}) unreachable");
-        }
-    }
-
-    #[test]
-    fn interactives_resolve_by_proximity() {
-        // Standing in front of the bar.
-        assert_eq!(
-            nearest_interactive(28, 12, DOG_HOME),
-            Some(Interactive::Bartender)
-        );
-        // Next to the jukebox.
-        assert_eq!(
-            nearest_interactive(82, 4, DOG_HOME),
-            Some(Interactive::Jukebox)
-        );
-        // In front of the arcade cabinet.
-        assert_eq!(
-            nearest_interactive(154, 4, DOG_HOME),
-            Some(Interactive::Arcade)
-        );
-        // Under the big door to the door games.
-        assert_eq!(
-            nearest_interactive(130, 8, DOG_HOME),
-            Some(Interactive::Doors)
-        );
-        // Walking up to the poker table.
-        assert_eq!(
-            nearest_interactive(145, 15, DOG_HOME),
-            Some(Interactive::Poker)
-        );
-        // Admiring the easel.
-        assert_eq!(
-            nearest_interactive(19, 33, DOG_HOME),
-            Some(Interactive::Easel)
-        );
-        // Petting distance follows the dog around.
-        assert_eq!(
-            nearest_interactive(13, 26, DOG_HOME),
-            Some(Interactive::Dog)
-        );
-        assert_eq!(
-            nearest_interactive(101, 23, (100, 22)),
-            Some(Interactive::Dog)
-        );
-        // Warming up by the hearth, out of the dog's reach.
-        assert_eq!(
-            nearest_interactive(25, 23, DOG_HOME),
-            Some(Interactive::Fireplace)
-        );
-        // Middle of the rug: nothing (while the dog is elsewhere).
-        assert_eq!(nearest_interactive(100, 22, DOG_HOME), None);
-    }
-
-    #[test]
-    fn walls_the_counter_and_the_bar_alley_block_movement() {
-        assert!(!walkable(0, 25)); // west wall
-        assert!(!walkable(28, 5)); // behind the counter
-        assert!(!walkable(28, 9)); // the counter top
-        assert!(!walkable(28, 10)); // the counter front
-        assert!(walkable(28, 11)); // at the bar: head leans over the counter
-        assert!(walkable(67, 16)); // right over a table
-        assert!(walkable(100, 22)); // rug
-        assert!(walkable(SPAWN.0, SPAWN.1)); // welcome mat
-    }
-}
+#[path = "map_test.rs"]
+mod map_test;

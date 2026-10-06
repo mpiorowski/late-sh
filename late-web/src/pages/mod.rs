@@ -1,22 +1,25 @@
 use crate::AppState;
 use axum::Router;
 
-pub mod connect;
-pub mod dashboard;
-pub mod gallery;
-pub mod home;
-pub mod play;
-pub mod profiles;
-pub mod shared;
-pub mod stream;
+pub(crate) mod gallery;
+pub(crate) mod home;
+pub(crate) mod legal;
+pub(crate) mod listen;
+pub(crate) mod live;
+pub(crate) mod profiles;
+pub(crate) mod shared;
+pub(crate) mod stream;
 
-pub fn router() -> Router<AppState> {
+#[cfg(test)]
+mod stream_test;
+
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .merge(home::router())
-        .merge(connect::router())
+        .merge(listen::router())
+        .merge(live::router())
         .merge(gallery::router())
-        .merge(play::router())
         .merge(profiles::router())
+        .merge(legal::router())
         .merge(stream::router())
-        .nest("/dashboard", dashboard::router())
 }

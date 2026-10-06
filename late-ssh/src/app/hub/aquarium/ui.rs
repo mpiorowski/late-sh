@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
 use ratatui::{
     Frame,
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::app::common::theme;
@@ -15,45 +17,31 @@ use super::{
     world::ReefWorld,
 };
 
-const BOTTOM_TRAY_HEIGHT: u16 = 15;
-
-pub(crate) fn bottom_tray_area(area: Rect) -> Rect {
-    let height = BOTTOM_TRAY_HEIGHT.min(area.height);
-    Rect::new(
-        area.x,
-        area.bottom().saturating_sub(height),
-        area.width,
-        height,
-    )
+pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
+    draw_into(frame.buffer_mut(), area, app);
 }
 
-pub fn draw_bottom_tray(frame: &mut Frame<'_>, area: Rect, state: &AquariumState) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Block::new().style(Style::new().bg(theme::BG_CANVAS())),
-        area,
-    );
-    draw(frame, area, state);
-}
-
-pub fn draw(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
+/// The same reef or tank, painted into any buffer. The profile modal composes
+/// its scrolling body off-screen and blits the visible rows, so the aquarium
+/// cannot assume it is drawing onto the frame.
+pub(crate) fn draw_into(buf: &mut Buffer, area: Rect, app: &AquariumState) {
     match &app.mode {
-        RuntimeMode::Tank(tank) => render_tank(frame, area, app, tank),
+        RuntimeMode::Tank(tank) => render_tank(buf, area, app, tank),
         RuntimeMode::Reef(reef) => {
             if area.height < reef.min_height {
-                render_size_warning(frame, area, reef.min_height);
+                render_size_warning(buf, area, reef.min_height);
             } else {
-                render_reef(frame, area, app, &reef.world);
+                render_reef(buf, area, app, &reef.world);
             }
         }
     }
 }
 
-fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_state: &TankState) {
+fn render_widget(buf: &mut Buffer, widget: impl Widget, area: Rect) {
+    widget.render(area, buf);
+}
+
+fn render_tank(buf: &mut Buffer, area: Rect, app: &AquariumState, tank_state: &TankState) {
     if area.width < tank_state.width || area.height < tank_state.height {
         let message = Paragraph::new(vec![
             Line::from(format!(
@@ -61,10 +49,10 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
                 tank_state.width, tank_state.height
             )),
             Line::from(format!("Current size: {}x{}", area.width, area.height)),
-            Line::from("Resize the terminal, or press Ctrl+Q to hide."),
+            Line::from("Resize the terminal, or /aquarium to hide."),
         ])
         .style(Style::new().fg(theme::TEXT_MUTED()));
-        frame.render_widget(message, area);
+        render_widget(buf, message, area);
         return;
     }
 
@@ -76,14 +64,14 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
         .borders(Borders::ALL)
         .border_style(Style::new().fg(theme::BORDER_ACTIVE()))
         .style(Style::new().bg(theme::BG_CANVAS()));
-    frame.render_widget(block, tank);
+    render_widget(buf, block, tank);
 
     if app.show_background {
-        render_water(frame, water, app.tick);
+        render_water(buf, water, app.tick);
     }
-    render_food_flakes(frame, water, app);
+    render_food_flakes(buf, water, app);
     render_creatures(
-        frame,
+        buf,
         water,
         &app.definitions,
         &app.entities,
@@ -93,7 +81,7 @@ fn render_tank(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, tank_stat
     );
 }
 
-fn render_reef(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, world: &ReefWorld) {
+fn render_reef(buf: &mut Buffer, area: Rect, app: &AquariumState, world: &ReefWorld) {
     let band = WaterBand::for_reef(world, area.height);
     let water = Rect::new(
         area.x,
@@ -102,14 +90,14 @@ fn render_reef(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, world: &R
         (band.bottom - band.top).max(0) as u16,
     );
     if app.show_background {
-        render_water(frame, water, app.tick);
+        render_water(buf, water, app.tick);
     }
-    render_food_flakes(frame, water, app);
+    render_food_flakes(buf, water, app);
 
-    render_surface_wave(frame, area, app.tick);
-    render_layer(frame, area, world, LayerPosition::Floor);
+    render_surface_wave(buf, area, app.tick);
+    render_layer(buf, area, world, LayerPosition::Floor);
     render_creatures(
-        frame,
+        buf,
         area,
         &app.definitions,
         &app.entities,
@@ -119,15 +107,15 @@ fn render_reef(frame: &mut Frame<'_>, area: Rect, app: &AquariumState, world: &R
     );
 }
 
-fn render_size_warning(frame: &mut Frame<'_>, area: Rect, min_height: u16) {
+fn render_size_warning(buf: &mut Buffer, area: Rect, min_height: u16) {
     let message = Paragraph::new(vec![
         Line::from("Aquarium reef mode needs more rows."),
         Line::from(format!("Minimum rows: {min_height}")),
         Line::from(format!("Current rows: {}", area.height)),
-        Line::from("Resize the terminal, or press Ctrl+Q to hide."),
+        Line::from("Resize the terminal, or /aquarium to hide."),
     ])
     .style(Style::new().fg(theme::TEXT_MUTED()));
-    frame.render_widget(message, area);
+    render_widget(buf, message, area);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,7 +123,7 @@ enum LayerPosition {
     Floor,
 }
 
-fn render_layer(frame: &mut Frame<'_>, area: Rect, world: &ReefWorld, position: LayerPosition) {
+fn render_layer(buf: &mut Buffer, area: Rect, world: &ReefWorld, position: LayerPosition) {
     let (layer, start_y) = match position {
         LayerPosition::Floor => (
             &world.floor,
@@ -147,7 +135,7 @@ fn render_layer(frame: &mut Frame<'_>, area: Rect, world: &ReefWorld, position: 
         Color::Green => theme::SUCCESS(),
         _ => layer.color,
     });
-    let buffer = frame.buffer_mut();
+    let buffer = &mut *buf;
 
     for row in 0..layer.height {
         let y = start_y + row;
@@ -167,16 +155,16 @@ fn render_layer(frame: &mut Frame<'_>, area: Rect, world: &ReefWorld, position: 
     }
 }
 
-fn render_surface_wave(frame: &mut Frame<'_>, area: Rect, tick: u64) {
+fn render_surface_wave(buf: &mut Buffer, area: Rect, tick: u64) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    let shift = (tick / 2) as u16;
+    let shift = tick / 2;
     let style = Style::new().fg(theme::BORDER_ACTIVE());
-    let buffer = frame.buffer_mut();
+    let buffer = &mut *buf;
     for x in 0..area.width {
-        let phase = (x + shift) % 8;
+        let phase = (u64::from(x) + shift) % 8;
         let symbol = match phase {
             0..=2 => "~",
             4..=5 => "-",
@@ -188,8 +176,8 @@ fn render_surface_wave(frame: &mut Frame<'_>, area: Rect, tick: u64) {
     }
 }
 
-fn render_water(frame: &mut Frame<'_>, area: Rect, tick: u64) {
-    let buffer = frame.buffer_mut();
+fn render_water(buf: &mut Buffer, area: Rect, tick: u64) {
+    let buffer = &mut *buf;
     let water_style = Style::new().fg(theme::BORDER_DIM());
     for y in 0..area.height {
         for x in 0..area.width {
@@ -207,7 +195,7 @@ fn render_water(frame: &mut Frame<'_>, area: Rect, tick: u64) {
     }
 }
 
-fn render_food_flakes(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
+fn render_food_flakes(buf: &mut Buffer, area: Rect, app: &AquariumState) {
     let Some(feed_tick) = app.feed_effect_tick() else {
         return;
     };
@@ -219,7 +207,7 @@ fn render_food_flakes(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
     let style = Style::new()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
-    let buffer = frame.buffer_mut();
+    let buffer = &mut *buf;
     let flakes = usize::from(area.width.clamp(8, 40) / 4);
     for index in 0..flakes {
         let seed = (index as u64).wrapping_mul(0x9e37_79b9);
@@ -241,8 +229,9 @@ fn render_food_flakes(frame: &mut Frame<'_>, area: Rect, app: &AquariumState) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_creatures(
-    frame: &mut Frame<'_>,
+    buf: &mut Buffer,
     area: Rect,
     definitions: &[CreatureDef],
     entities: &[Entity],
@@ -250,7 +239,7 @@ fn render_creatures(
     viewport_x: i32,
     show_names: bool,
 ) {
-    let buffer = frame.buffer_mut();
+    let buffer = &mut *buf;
 
     for entity in entities {
         if !entity.is_active() {
@@ -472,3 +461,107 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         height.min(area.height),
     )
 }
+
+/// Rows of the sidebar tank: the surface, four rows of water, the floor.
+pub(crate) const MINI_TANK_HEIGHT: u16 = 6;
+const MINI_WATER_ROWS: usize = MINI_TANK_HEIGHT as usize - 2;
+/// A 21-cell band holds this many glyphs before it reads as noise.
+const MINI_MAX_CREATURES: usize = 10;
+/// Copies of one kind drawn at most, so a school of ten does not crowd out
+/// every other kind.
+const MINI_MAX_PER_KIND: usize = 2;
+/// Wall ticks (66ms) per one-cell step for the quickest fish; the others
+/// take two or three times as long.
+const MINI_STEP_TICKS: usize = 4;
+/// Hungry fish lie on the bottom row and barely move.
+const MINI_HUNGRY_SLOWDOWN: usize = 4;
+const MINI_FLOOR: &str = "._.-^-.__-._";
+
+/// The sidebar tank: the owned population as one-to-three-cell glyphs
+/// (`CreatureDef::mini`) in a fixed band, `MINI_TANK_HEIGHT` rows tall.
+/// Stateless like the bonsai sway: where each creature is comes from the
+/// wall tick alone, so there is no simulation to step and the panel rides
+/// the sidebar's anim_half frames. It reads the reef's population and
+/// colours (the fry in its parent's, the sprout on the floor) and nothing
+/// else of the simulation. Swimmers take the water rows in turn and swim
+/// wall to wall, each at its own pace; floor-bound creatures stand still
+/// on the bottom row; hungry fish sink to that row and slow down.
+pub(crate) fn draw_mini_tank(
+    buf: &mut Buffer,
+    area: Rect,
+    app: &AquariumState,
+    hungry: bool,
+    tick: usize,
+) {
+    if area.width == 0 || area.height < MINI_TANK_HEIGHT {
+        return;
+    }
+    let band = Rect::new(area.x, area.y, area.width, MINI_TANK_HEIGHT);
+    render_surface_wave(buf, band, tick as u64);
+    let floor_style = Style::new().fg(theme::BORDER_DIM());
+    let floor: String = MINI_FLOOR
+        .chars()
+        .cycle()
+        .take(band.width as usize)
+        .collect();
+    buf.set_string(band.x, band.bottom() - 1, floor, floor_style);
+
+    let width = band.width as usize;
+    let bottom_row = band.y + MINI_WATER_ROWS as u16;
+    let mut drawn_per_kind: HashMap<usize, usize> = HashMap::new();
+    let mut plants = 0usize;
+    let mut swimmers = 0usize;
+    for entity in &app.entities {
+        if plants + swimmers == MINI_MAX_CREATURES {
+            break;
+        }
+        let drawn = drawn_per_kind.entry(entity.def).or_insert(0);
+        if *drawn == MINI_MAX_PER_KIND {
+            continue;
+        }
+        *drawn += 1;
+        let def = &app.definitions[entity.def];
+        let style = Style::new().fg(entity.color);
+        if def.is_floor_bound() {
+            let glyph = &def.mini.right;
+            let travel = width.saturating_sub(glyph_width(glyph)) + 1;
+            let x = (plants * 7 + 3) % travel;
+            buf.set_string(band.x + x as u16, bottom_row, glyph, style);
+            plants += 1;
+            continue;
+        }
+        let ordinal = swimmers;
+        swimmers += 1;
+        let (row, step) = if hungry {
+            (bottom_row, MINI_STEP_TICKS * MINI_HUNGRY_SLOWDOWN)
+        } else {
+            (
+                band.y + 1 + (ordinal % MINI_WATER_ROWS) as u16,
+                MINI_STEP_TICKS * (1 + ordinal % 3),
+            )
+        };
+        let glyph_cells = glyph_width(&def.mini.right).max(glyph_width(&def.mini.left));
+        let travel = width.saturating_sub(glyph_cells);
+        let (x, glyph) = match travel {
+            0 => (0, &def.mini.right),
+            _ => {
+                let lap = 2 * travel;
+                let pos = (tick / step + ordinal * 5) % lap;
+                if pos < travel {
+                    (pos, &def.mini.right)
+                } else {
+                    (lap - pos, &def.mini.left)
+                }
+            }
+        };
+        buf.set_string(band.x + x as u16, row, glyph, style);
+    }
+}
+
+fn glyph_width(glyph: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(glyph)
+}
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

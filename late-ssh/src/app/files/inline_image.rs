@@ -9,8 +9,9 @@ use ratatui::{
     text::{Line, Span},
 };
 
+use super::terminal_image::MAX_DECODED_IMAGE_PIXELS;
+
 const ALPHA_THRESHOLD: u8 = 128;
-const MAX_DECODED_IMAGE_PIXELS: u64 = 25_000_000;
 
 pub type InlineImagePreview = Vec<Line<'static>>;
 
@@ -80,20 +81,25 @@ pub(crate) async fn fetch_and_render_image(
     let bytes = crate::app::files::image_upload::download_url_bytes(
         &url,
         std::time::Duration::from_secs(15),
-        crate::app::files::image_upload::max_upload_bytes(),
+        crate::config::MAX_IMAGE_BYTES,
     )
     .await?;
     tracing::trace!("image downloaded: {} bytes", bytes.len());
 
+    render_image_bytes(bytes, max_width, max_height, settings).await
+}
+
+pub(crate) async fn render_image_bytes(
+    bytes: Vec<u8>,
+    max_width: u32,
+    max_height: u32,
+    settings: InlineImageRenderSettings,
+) -> Result<InlineImagePreview> {
     tokio::task::spawn_blocking(move || {
         tracing::trace!("decoding image...");
-        let img = match image::load_from_memory(&bytes) {
-            Ok(img) => img,
-            Err(e) => {
-                tracing::trace!("image decoding failed: {}", e);
-                return Err(e.into());
-            }
-        };
+        let img = image::load_from_memory(&bytes)
+            .inspect_err(|error| tracing::trace!("image decoding failed: {error}"))
+            .context("failed to decode image")?;
         tracing::trace!("image decoded: {}x{}", img.width(), img.height());
 
         let (width, height) = img.dimensions();
@@ -214,91 +220,5 @@ fn packed_truecolor(color: u32) -> Option<Color> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn symbol_mode_from_identity_routes_requested_terminals() {
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("xterm-kitty"),
-            InlineImageSymbolMode::Octant
-        );
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("WezTerm 20240203"),
-            InlineImageSymbolMode::Octant
-        );
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("ghostty"),
-            InlineImageSymbolMode::Octant
-        );
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("mtermux"),
-            InlineImageSymbolMode::Octant
-        );
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("iTerm2"),
-            InlineImageSymbolMode::Sextant
-        );
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("alacritty"),
-            InlineImageSymbolMode::Sextant
-        );
-        assert_eq!(
-            InlineImageSymbolMode::from_identity("xterm-256color"),
-            InlineImageSymbolMode::Default
-        );
-    }
-
-    #[test]
-    fn symbol_modes_extend_chafa_default() {
-        let mut octant = InlineImageSymbolMode::Octant.symbol_map();
-        octant.prepare();
-        assert!(octant.has_symbol('\u{1cd00}'));
-
-        let mut sextant = InlineImageSymbolMode::Sextant.symbol_map();
-        sextant.prepare();
-        assert!(sextant.has_symbol('\u{1fb00}'));
-    }
-
-    #[test]
-    fn transparent_chafa_cell_renders_as_space() {
-        let span = cell_span(&CellOut {
-            c: '┈' as u32,
-            fg: 0x01ff_ffff,
-            bg: 0x0000_0000,
-        })
-        .expect("cell converts");
-
-        assert_eq!(span.content.as_ref(), " ");
-        assert_eq!(span.style.fg, None);
-        assert_eq!(span.style.bg, None);
-    }
-
-    #[test]
-    fn alpha_at_chafa_threshold_edge_renders_as_transparent() {
-        let span = cell_span(&CellOut {
-            c: '┈' as u32,
-            fg: 0x7fff_ffff,
-            bg: 0x0000_0000,
-        })
-        .expect("cell converts");
-
-        assert_eq!(span.content.as_ref(), " ");
-        assert_eq!(span.style.fg, None);
-        assert_eq!(span.style.bg, None);
-    }
-
-    #[test]
-    fn transparent_foreground_with_background_uses_reversed_video() {
-        let span = cell_span(&CellOut {
-            c: '┈' as u32,
-            fg: 0x0000_0000,
-            bg: 0xff12_3456,
-        })
-        .expect("cell converts");
-
-        assert_eq!(span.content.as_ref(), "┈");
-        assert_eq!(span.style.fg, Some(Color::Rgb(0x12, 0x34, 0x56)));
-        assert!(span.style.add_modifier.contains(Modifier::REVERSED));
-    }
-}
+#[path = "inline_image_test.rs"]
+mod inline_image_test;

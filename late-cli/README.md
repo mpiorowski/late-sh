@@ -28,6 +28,33 @@ Nix / NixOS:
 nix run github:mpiorowski/late-sh#late
 ```
 
+## Verifying downloads
+
+Every release binary ships with a Sigstore build-provenance attestation, produced keylessly by the GitHub Actions release workflow. It proves the exact file was built by this repository's workflow at the tagged commit; there is no long-lived signing key anywhere. The bundle is published next to each binary as `<binary>.sigstore.json`.
+
+The installers also verify each download against `sha256sums.txt` served from the [GitHub Release](https://github.com/mpiorowski/late-sh/releases) rather than from `cli.late.sh`, and fail closed if the checksum file is unavailable or does not match. A tampered download host cannot swap the binary under a trusted copy of the installer. The installer itself is served from the same host, so `curl ... | sh` still trusts `cli.late.sh` for the script; to remove that trust, run the installer from a checkout of this repository, or verify the provenance bundle by hand as below.
+
+To verify a binary yourself with the GitHub CLI:
+
+```bash
+gh attestation verify late --repo mpiorowski/late-sh
+```
+
+Or offline with [cosign](https://github.com/sigstore/cosign) v3, using the published bundle:
+
+```bash
+tag=v0.27.11-cli
+target=x86_64-unknown-linux-gnu
+curl -fsSLO "https://cli.late.sh/releases/${tag}/${target}/late"
+curl -fsSLO "https://cli.late.sh/releases/${tag}/${target}/late.sigstore.json"
+cosign verify-blob-attestation late \
+  --bundle late.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/mpiorowski/late-sh/\.github/workflows/deploy_cli\.yml@refs/tags/'
+```
+
+The identity is always `deploy_cli.yml`, the workflow that runs the build. On a tagged release it is called from `release.yml`, and Sigstore names the called workflow, not the caller. The build always runs on the release tag itself, so the ref is `refs/tags/<tag>` for normal releases and manual redeploys alike. Pin the regexp to `@refs/tags/<tag>$` to check a specific version. cosign v2 needs `--new-bundle-format` added to the command.
+
 ## Build from source
 
 ```bash
@@ -37,6 +64,11 @@ cargo build --release --bin late
 # binary at target/release/late (late.exe on Windows)
 ```
 
+To install from the checkout, run `cargo install --locked --path late-cli`.
+On Windows x64 MSVC, the repository's `.cargo/config.toml` enables the static
+C runtime required by LiveKit's bundled WebRTC. If you override `RUSTFLAGS`,
+include `-C target-feature=+crt-static` to keep the runtimes consistent.
+
 ## What it does
 
 1. Opens an SSH session to `late.sh`
@@ -44,6 +76,7 @@ cargo build --release --bin late
 3. Runs a real-time FFT audio analyzer
 4. Sends visualizer data back to the TUI over WebSocket
 5. Syncs mute/volume controls between terminal and audio
+6. Publishes the active track to Linux desktop media integrations through MPRIS
 
 ## Usage
 
@@ -70,6 +103,7 @@ use your normal `~/.ssh/config`, agent, and default identity discovery.
 --audio-base-url <url>     Audio stream URL
 --audio-output-device <n>  Audio output device name (default: system default)
 --api-base-url <url>       API URL for WebSocket pairing
+--no-mpris                 Don't publish playback to Linux desktop media (MPRIS)
 -v, --verbose              Debug logging (file-backed on interactive terminals)
 ```
 
@@ -89,7 +123,7 @@ verbose = false
 ```
 
 Supported file keys are `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`,
-`audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`.
+`audio-base-url`, `api-base-url`, `audio-output-device`, `mpris`, and `verbose`.
 TUI keybinds, themes, sidebar settings, and other in-app preferences are saved
 server-side, not in the CLI config file.
 
@@ -98,6 +132,14 @@ server-side, not in the CLI config file.
 - Linux, macOS, or Windows x64 (WSL works too)
 - Working audio output device
 - Rust toolchain (if building from source)
+
+On Linux desktops, `late` publishes the selected YouTube, Icecast, or radio
+track over MPRIS, including title, artist, duration, and source details when the
+server provides them. This is read-only: playback remains controlled from the
+paired late.sh TUI. If no desktop D-Bus session is available (for example, in a
+headless shell), the CLI continues normally without MPRIS. To keep media keys
+and widgets for another player, turn it off with `--no-mpris`, `LATE_NO_MPRIS=1`,
+or `mpris = false` in the config file.
 
 `--ssh-mode openssh` uses a system OpenSSH client with an internal ControlMaster
 connection. It is the recommended mode for YubiKey/FIDO security-key identities

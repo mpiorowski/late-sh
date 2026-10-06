@@ -3,7 +3,7 @@
   "uid": "observability",
   "title": "Runtime Observability",
   "timezone": "browser",
-  "version": 14,
+  "version": 19,
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -44,6 +44,18 @@
         "includeAll": true,
         "multi": false,
         "current": {}
+      },
+      {
+        "name": "runner",
+        "label": "Runner (regex)",
+        "description": "Filters the deadchannel Runners, Recent Beats, and Haunt Log panels by username regex. Empty matches everyone.",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0
       }
     ]
   },
@@ -77,7 +89,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\"}[5m]))",
+          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\"}[5m]))",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -98,7 +110,8 @@
         "w": 8,
         "x": 0,
         "y": 1
-      }
+      },
+      "description": "HTTP requests only: server spans, without the readiness probe (/api/health answers 503 on purpose while an old pod drains) and the long-lived sockets and streams (/api/ws/pair, /api/listen, /listen/state), whose span lasts as long as the connection."
     },
     {
       "type": "timeseries",
@@ -110,7 +123,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / (sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\"}[5m])) > 0) * 100",
+          "expr": "sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\", status_code=\"STATUS_CODE_ERROR\"}[5m])) / (sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\"}[5m])) > 0) * 100",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -131,7 +144,8 @@
         "w": 8,
         "x": 8,
         "y": 1
-      }
+      },
+      "description": "HTTP requests only: server spans, without the readiness probe (/api/health answers 503 on purpose while an old pod drains) and the long-lived sockets and streams (/api/ws/pair, /api/listen, /listen/state), whose span lasts as long as the connection."
     },
     {
       "type": "timeseries",
@@ -143,7 +157,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", span_kind=\"SPAN_KIND_SERVER\", http_route!~\"/api/health|/api/ws/pair|/api/listen|/listen/state\"}[5m])))",
           "legendFormat": "{{service_name}}"
         }
       ],
@@ -164,6 +178,369 @@
         "w": 8,
         "x": 16,
         "y": 1
+      },
+      "description": "HTTP requests only: server spans, without the readiness probe (/api/health answers 503 on purpose while an old pod drains) and the long-lived sockets and streams (/api/ws/pair, /api/listen, /listen/state), whose span lasts as long as the connection."
+    },
+    {
+      "type": "row",
+      "title": "Operations",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Slowest Operations (p95)",
+      "description": "p95 duration of every traced operation (HTTP routes, service tasks, outbound calls) over the range, operations with at least 20 calls. Session-long loops are left out: their span lasts as long as a session. A parent and its child span both appear (a task and the work it wraps).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, histogram_quantile(0.95, sum by (le, service_name, span_name) (increase(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", span_name!~\"chat.refresh_registration|chat.poll_finalizer|cyberspace.circ_stream|cyberspace.circ_presence|.*key=.*\"}[$__range]))) and on (service_name, span_name) (sum by (service_name, span_name) (increase(traces_span_metrics_calls_total{service_name=~\"$service\", span_name!~\"chat.refresh_registration|chat.poll_finalizer|cyberspace.circ_stream|cyberspace.circ_presence|.*key=.*\"}[$__range])) >= 20))",
+          "legendFormat": "{{service_name}} {{span_name}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 250
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Time Spent by Operation",
+      "description": "Total time inside each operation over the range (calls x average). Where the server's time goes, as opposed to what is slow: a fast operation called constantly ranks high here. Same exclusions as the p95 panel; nested spans count in both parent and child.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (service_name, span_name) (increase(traces_span_metrics_duration_milliseconds_sum{service_name=~\"$service\", span_name!~\"chat.refresh_registration|chat.poll_finalizer|cyberspace.circ_stream|cyberspace.circ_presence|.*key=.*\"}[$__range])) / 1000)",
+          "legendFormat": "{{service_name}} {{span_name}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 600
+              },
+              {
+                "color": "red",
+                "value": 3600
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Session Start by Stage",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "Time from TCP accept to the first frame on screen, over the range. auth: SSH handshake and user lookup. bootstrap: key accepted to the App built (every preload). first_frame: App built to the first drawn frame. total: all of it, what a user waits in front of a blank terminal.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, stage, user) (increase(late_ssh_session_start_seconds_bucket[$__range])))",
+          "legendFormat": "p50 {{user}} {{stage}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, stage, user) (increase(late_ssh_session_start_seconds_bucket[$__range])))",
+          "legendFormat": "p95 {{user}} {{stage}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 20
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DB Pool",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "Pooled Postgres connections in use against the pool ceiling (worst pod per service), callers queued for a connection, and chat read permits held (of 8). In use at the ceiling with waiters above zero means the pool is the bottleneck; permits at 8 means chat reads queue on their own semaphore first.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (service_name, state) (late_db_pool_connections{state!=\"idle\"})",
+          "legendFormat": "{{service_name}} {{state}}"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (service_name) (late_db_pool_waiters)",
+          "legendFormat": "{{service_name}} waiters"
+        },
+        {
+          "refId": "C",
+          "expr": "max(late_ssh_chat_read_permits_in_use)",
+          "legendFormat": "chat read permits held"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DB Checkout Wait",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "Time Db::get waits for a pooled connection (p95, p99), and failed checkouts per second (the 5s pool timeout, or a backend that would not connect). Rising wait with a flat query time is pool pressure, not slow SQL.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, service_name) (rate(late_db_checkout_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{service_name}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(late_db_checkout_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99 {{service_name}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (service_name) (rate(late_db_checkout_seconds_count{outcome=\"failed\"}[$__rate_interval]))",
+          "legendFormat": "failed/s {{service_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Notify Re-reads",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "Every notify-driven re-read of shared state (pg_listener::read_until_ok), by domain: p95 of one attempt, and failed attempts per second. A domain failing here is a replica serving stale state (or, right after a reconnect, none) and retrying every 5s until the read lands.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, domain) (rate(late_ssh_pg_refresh_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{domain}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (domain) (rate(late_ssh_pg_refresh_seconds_count{outcome=\"failed\"}[$__rate_interval]))",
+          "legendFormat": "failed/s {{domain}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 28
       }
     },
     {
@@ -179,7 +556,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 36
       }
     },
     {
@@ -233,7 +610,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 10
+        "y": 37
       }
     },
     {
@@ -283,7 +660,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 10
+        "y": 37
       }
     },
     {
@@ -337,7 +714,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 10
+        "y": 37
       }
     },
     {
@@ -451,7 +828,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 45
       }
     },
     {
@@ -483,7 +860,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 26
+        "y": 53
       }
     },
     {
@@ -515,7 +892,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 65
       }
     },
     {
@@ -547,173 +924,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 38
-      }
-    },
-    {
-      "type": "row",
-      "title": "Dependencies",
-      "collapsed": false,
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [],
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 50
-      }
-    },
-    {
-      "type": "table",
-      "title": "Service Call Edges",
-      "description": "Request rate between services from the OTel servicegraph connector. Shows who calls whom.",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (client, server) (rate(traces_service_graph_request_total[$__rate_interval]))",
-          "legendFormat": "__auto",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "client": "Client",
-              "server": "Server",
-              "Value": "Requests/s"
-            }
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto",
-            "filterable": true
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Requests/s"
-            },
-            "properties": [
-              {
-                "id": "custom.displayMode",
-                "value": "gradient-gauge"
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 1
-                    },
-                    {
-                      "color": "red",
-                      "value": 10
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": false
-        },
-        "sortBy": [
-          {
-            "displayName": "Requests/s",
-            "desc": true
-          }
-        ],
-        "cellHeight": "sm"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 51
-      }
-    },
-    {
-      "type": "bargauge",
-      "title": "Top Slowest Routes (p99)",
-      "description": "Slowest HTTP routes by p99 latency across all services",
-      "datasource": {
-        "uid": "victoriametrics",
-        "type": "victoriametrics-metrics-datasource"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "topk(10, histogram_quantile(0.99, sum by (le, service_name, http_request_method, http_route) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~\"$service\", http_route!=\"\"}[$__rate_interval]))))",
-          "legendFormat": "{{service_name}} {{http_request_method}} {{http_route}}",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 500
-              }
-            ]
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "minVizWidth": 0,
-        "minVizHeight": 10
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 51
+        "y": 65
       }
     },
     {
@@ -729,7 +940,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 59
+        "y": 77
       }
     },
     {
@@ -802,7 +1013,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 78
       }
     },
     {
@@ -875,7 +1086,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 78
       }
     },
     {
@@ -948,7 +1159,7 @@
         "h": 12,
         "w": 12,
         "x": 0,
-        "y": 72
+        "y": 90
       }
     },
     {
@@ -1021,7 +1232,7 @@
         "h": 12,
         "w": 12,
         "x": 12,
-        "y": 72
+        "y": 90
       }
     },
     {
@@ -1037,7 +1248,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 102
       }
     },
     {
@@ -1071,13 +1282,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 85
+        "y": 103
       }
     },
     {
       "type": "timeseries",
       "title": "SSH Traffic",
-      "description": "SSH connections and successful browser pairings",
+      "description": "SSH connections and successful client pairings",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1110,7 +1321,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 85
+        "y": 103
       }
     },
     {
@@ -1154,7 +1365,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 111
       }
     },
     {
@@ -1193,7 +1404,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 93
+        "y": 111
       }
     },
     {
@@ -1227,7 +1438,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 119
       }
     },
     {
@@ -1261,7 +1472,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 119
       }
     },
     {
@@ -1277,12 +1488,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 127
       }
     },
     {
       "type": "bargauge",
-      "title": "Game Wins",
+      "title": "Daily Puzzle Wins by Mode",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1290,8 +1501,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (game) (increase(late_ssh_game_wins_total[$__range]))",
-          "legendFormat": "{{game}}",
+          "expr": "sum by (game, mode) (increase(late_ssh_arcade_finishes_total{finish=\"won\"}[$__range]))",
+          "legendFormat": "{{game}} / {{mode}}",
           "instant": true
         }
       ],
@@ -1301,7 +1512,8 @@
           "custom": {
             "displayMode": "gradient",
             "orientation": "horizontal"
-          }
+          },
+          "min": 0
         },
         "overrides": []
       },
@@ -1315,19 +1527,20 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true
+        "showUnfilled": true,
+        "namePlacement": "left"
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 110
+        "y": 128
       },
-      "description": "Wins over the selected time range, keyed by the low-cardinality game label."
+      "description": "Boards solved on a session over the range, daily and personal apart. Counted where the board ends, so personal boards (never a GameWon) show here too."
     },
     {
-      "type": "timeseries",
-      "title": "Game Win Rate",
+      "type": "bargauge",
+      "title": "Daily Puzzle Wins by Difficulty",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1335,8 +1548,561 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (game) (rate(late_ssh_game_wins_total[$__rate_interval]))",
-          "legendFormat": "{{game}}"
+          "expr": "sum by (game, difficulty) (increase(late_ssh_arcade_finishes_total{finish=\"won\",difficulty!=\"single\"}[$__range]))",
+          "legendFormat": "{{game}} / {{difficulty}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 128
+      },
+      "description": "Solved boards by difficulty, both modes. Le Word and Rubik's Cube have one board a day and are left out."
+    },
+    {
+      "type": "bargauge",
+      "title": "Share Rate per Daily Win (%)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (game) (label_replace(increase(late_ssh_share_cards_total{card!=\"day\"}[$__range]), \"game\", \"$1\", \"card\", \"(.*)\")) / sum by (game) (increase(late_ssh_game_wins_total{family=\"arcade_daily\"}[$__range]))",
+          "legendFormat": "{{game}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 136
+      },
+      "description": "Share cards copied per fresh daily win. The number that says which daily people brag about."
+    },
+    {
+      "type": "bargauge",
+      "title": "Win Rate, Losable Dailies (%)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (game, mode, difficulty) (increase(late_ssh_arcade_finishes_total{finish=\"won\",game=~\"le_word|minesweeper\"}[$__range])) / sum by (game, mode, difficulty) (increase(late_ssh_arcade_finishes_total{game=~\"le_word|minesweeper\"}[$__range]))",
+          "legendFormat": "{{game}} / {{mode}} / {{difficulty}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 136
+      },
+      "description": "Won over finished boards for the two dailies that can be lost (Le Word out of guesses, Minesweeper out of lives)."
+    },
+    {
+      "type": "bargauge",
+      "title": "Active Time by Screen",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (increase(late_ssh_attention_seconds_total{presence=\"active\"}[$__range]))",
+          "legendFormat": "{{screen}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 144
+      },
+      "description": "Session time on each screen with a key pressed in the last five minutes. Idle terminals left open are counted apart (presence=idle)."
+    },
+    {
+      "type": "bargauge",
+      "title": "Active Time by Game",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (place) (increase(late_ssh_attention_seconds_total{screen=~\"arcade|house_table\",place!=\"none\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 144
+      },
+      "description": "Active session time with a game open, by game: Arcade boards (dailies and score runs) and House Table games (poker, blackjack, asterion, tron, ssnake). Door games are screens of their own, in Active Time by Screen."
+    },
+    {
+      "type": "timeseries",
+      "title": "Sessions per Screen (active)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (rate(late_ssh_attention_seconds_total{presence=\"active\"}[$__rate_interval]))",
+          "legendFormat": "{{screen}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 1,
+            "showPoints": "auto",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 152
+      },
+      "description": "Seconds of active attention per second: the average number of active sessions looking at each screen."
+    },
+    {
+      "type": "bargauge",
+      "title": "Door, Table & Match Wins",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (family, game) (increase(late_ssh_game_wins_total{family=~\"door|table|match\"}[$__range]))",
+          "legendFormat": "{{family}} / {{game}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "displayMode": "gradient",
+            "orientation": "horizontal"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 152
+      },
+      "description": "Wins outside the Arcade dailies. Lateania is left out: its GameWon fires per mob kill (family=lateania), which would drown the rest."
+    },
+    {
+      "type": "bargauge",
+      "title": "Visits by Place",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (screen, place) (increase(late_ssh_place_visits_total[$__range])))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 160
+      },
+      "description": "Arrivals on each screen (and place inside it: Home room kind, Arcade board or House Table game, Profiles shelf, Artboard canvas or gallery) over the range, top 15. Sampled on the 1Hz edge, so a place passed through in under a second is not a visit."
+    },
+    {
+      "type": "bargauge",
+      "title": "Active Time per Visit",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (screen, place) (increase(late_ssh_attention_seconds_total{presence=\"active\"}[$__range])) / (sum by (screen, place) (increase(late_ssh_place_visits_total[$__range])) >= 5))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 160
+      },
+      "description": "Active seconds over arrivals, per screen and place, for places with at least 5 visits in the range. How long a stop lasts once someone is there."
+    },
+    {
+      "type": "bargauge",
+      "title": "Jobs & Artboard Split",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen, place) (increase(late_ssh_attention_seconds_total{screen=~\"profiles|artboard\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 160
+      },
+      "description": "Active time on the two shelves of Profiles (people, jobs) and the two halves of the Artboard (canvas, gallery). The Jobs number is the reach the nightly press pays for."
+    },
+    {
+      "type": "bargauge",
+      "title": "Home by Room",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (place) (increase(late_ssh_attention_seconds_total{screen=\"dashboard\",place!=\"none\",presence=\"active\"}[$__range]))",
+          "legendFormat": "{{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 168
+      },
+      "description": "Active time on Home by what the chat pane shows: #lounge (the Home card), a kind of room (language, public or private topic, DM, deadchannel), or a rail entry (feeds, news, cyberspace, notifications, discover, showcase, work)."
+    },
+    {
+      "type": "bargauge",
+      "title": "Home Visits by Room",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (place) (increase(late_ssh_place_visits_total{screen=\"dashboard\",place!=\"none\"}[$__range]))",
+          "legendFormat": "{{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 168
+      },
+      "description": "Arrivals on each Home room kind or rail entry over the range. Switching between two rooms of the same kind is no new arrival."
+    },
+    {
+      "type": "row",
+      "title": "Rendering",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 176
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Render Rate",
+      "description": "Frames drawn (by trigger) vs clean world ticks that skipped the draw entirely (the dirty gate)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(late_ssh_renders_total[$__rate_interval]))",
+          "legendFormat": "drawn ({{reason}})"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(late_ssh_renders_skipped_clean_total[$__rate_interval])",
+          "legendFormat": "skipped clean"
         }
       ],
       "fieldConfig": {
@@ -1344,8 +2110,117 @@
           "unit": "ops",
           "custom": {
             "drawStyle": "line",
-            "fillOpacity": 20,
-            "lineWidth": 1,
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 177
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Clean Skip Ratio (%)",
+      "description": "Share of render passes the dirty gate skipped; higher = more idle sessions settling clean",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * rate(late_ssh_renders_skipped_clean_total[$__rate_interval]) / (sum(rate(late_ssh_renders_total[$__rate_interval])) + rate(late_ssh_renders_skipped_clean_total[$__rate_interval]))",
+          "legendFormat": "skipped clean %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 177
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Draws per Session",
+      "description": "Average frames drawn per second per active session (pre-adaptive baseline was ~15; mostly-idle fleet should sit well under 2)",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(late_ssh_renders_total[$__rate_interval])) / late_ssh_sessions_active",
+          "legendFormat": "draws/s per session"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 185
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Render Stalls",
+      "description": "Output-budget guard: paused render passes and forced disconnects for clients not reading their stream",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(late_ssh_render_stall_skips_total[$__rate_interval])",
+          "legendFormat": "stall skips"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(late_ssh_render_stall_disconnects_total[$__rate_interval])",
+          "legendFormat": "stall disconnects"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
             "showPoints": "auto"
           }
         },
@@ -1355,9 +2230,1037 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 110
+        "y": 185
+      }
+    },
+    {
+      "type": "row",
+      "title": "Presence",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
       },
-      "description": "Per-second win rate by game."
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 193
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Presence Wire",
+      "description": "Batches this replica sent (published) and heard from other replicas (heard), per second. Published runs at most 5/s (one per 200ms flush with changes) plus a heartbeat every 3s, whatever the headcount; heard is the other replicas' published. See app/presence.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (rate(late_ssh_presence_total{beat=~\"published|heard\"}[$__rate_interval]))",
+          "legendFormat": "{{beat}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 194
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Presence Trouble",
+      "description": "What should stay at zero. expired: another replica's sessions dropped after 10s without a heartbeat (a replica died, or a LISTEN dropped and a leave was missed). publish_failed: the database refused a notify (the next heartbeat resends). rejected: a payload that did not parse (a replica on another wire format mid-deploy).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_presence_total{beat=~\"expired|publish_failed|rejected\"}[$__rate_interval]))",
+          "legendFormat": "{{beat}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 194
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Sessions in Presence",
+      "description": "Who every replica thinks is here. local is each replica's own sessions, summed; seen is every record a replica holds, shown for the replica seeing the most and the fewest. The two seen lines should sit on top of each other: a gap that lasts past a heartbeat means a replica is missing someone. SSH sessions for scale.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(late_ssh_presence_records{scope=\"local\"})",
+          "legendFormat": "local (all replicas)"
+        },
+        {
+          "refId": "B",
+          "expr": "max(late_ssh_presence_records{scope=\"all\"})",
+          "legendFormat": "seen (most)"
+        },
+        {
+          "refId": "C",
+          "expr": "min(late_ssh_presence_records{scope=\"all\"})",
+          "legendFormat": "seen (fewest)"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(late_ssh_sessions_active)",
+          "legendFormat": "ssh sessions"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 194
+      }
+    },
+    {
+      "type": "row",
+      "title": "Tavern",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 202
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Nightcap Orders",
+      "description": "Pours off the Nightcap menu over the range: poured (chips moved), comped (a round credit paid), bounced (the tab would not cover it), failed (the chip write did not land). Rounds count in the next panel, whichever bar sold them.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_nightcap_orders_total[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 203
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Rounds & Gift Drinks",
+      "description": "Drinks bought for other people over the range, at either bar: rounds bought and the drinks they granted and that were cashed, gift drinks, and why the house refused the rest.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(late_ssh_rounds_total[$__range]))",
+          "legendFormat": "rounds bought",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(late_ssh_round_drinks_granted_total[$__range]))",
+          "legendFormat": "round drinks granted",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum(increase(late_ssh_round_drinks_cashed_total[$__range]))",
+          "legendFormat": "round drinks cashed",
+          "instant": true
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (reason) (increase(late_ssh_rounds_refused_total[$__range]))",
+          "legendFormat": "round refused: {{reason}}",
+          "instant": true
+        },
+        {
+          "refId": "E",
+          "expr": "sum(increase(late_ssh_gift_drinks_total[$__range]))",
+          "legendFormat": "gift drinks",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "expr": "sum by (reason) (increase(late_ssh_gift_drinks_refused_total[$__range]))",
+          "legendFormat": "gift refused: {{reason}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 203
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Nightcap House Failures",
+      "description": "The bar's off-thread work that failed over the range: credit_count (the menu's free-drink count) and house_line (the house saying a pour out loud). What a healthy order counter cannot see: a stale menu or a quiet bar.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (work) (increase(late_ssh_nightcap_house_failures_total[$__range]))",
+          "legendFormat": "{{work}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 203
+      }
+    },
+    {
+      "type": "row",
+      "title": "deadchannel",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 211
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "First Contact Ladder",
+      "description": "Beats delivered per stage over the selected range. Counters are per-pod and reset on restart, so this sums each pod's high-water mark instead of the live value: a deploy never zeroes the ladder.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (max_over_time(late_ssh_first_contact_beats_total[$__range]))",
+          "legendFormat": "{{beat}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 212
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Gate Verdicts",
+      "description": "Connects by eligibility verdict, the same reset-safe sum. One count per connect, not per person: which leg turns people away, and how often.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (verdict) (max_over_time(late_ssh_first_contact_gate_total[$__range]))",
+          "legendFormat": "{{verdict}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 212
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Bio Screens",
+      "description": "AI bio-screen outcomes. Claimed once per bio text per day, so a flapping API costs at most one call per person per day.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (max_over_time(late_ssh_first_contact_bio_screens_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 212
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Beats Over Time",
+      "description": "When the ladder actually fires. Bars are beats per interval by stage; the slow burn should show as scattered singles, never a cluster.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_first_contact_beats_total[$__rate_interval]))",
+          "legendFormat": "{{beat}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 220
+      }
+    },
+    {
+      "type": "table",
+      "title": "Runners",
+      "description": "One row per person on the ladder, read off the deadchannel log lines: the highest glitch, name, and whisper hit seen, when the invitation went out and when they joined, how many sessions armed, when they were last seen, and the latest gate verdict with its three legs (hours need 8, settings keys need 2, bio needs 100 chars before a screen is spent). Logs keep 7 days, so a rung reached earlier than that shows as an empty cell: users.settings stays the source of truth. Filter with the Runner variable or the column filters.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "_msg:\"first contact\" OR _msg:\"deadchannel joined\" | filter username:* | filter username:~\"$runner\" | stats by (username) max(hits) if (_msg:\"clock glitch burst\") glitch, max(hits) if (_msg:\"name flicker hit\") name, max(hits) if (_msg:\"whisper delivered\") whisper, max(_time) if (_msg:\"invitation sent\") invited_at, max(_time) if (_msg:\"deadchannel joined\") joined_at, count() if (_msg:\"first contact armed\") sessions, max(_time) last_seen, row_max(_time, verdict, active_hours, touched_settings, bio_chars, bio) if (_msg:\"gate evaluated\") last_gate | unpack_json from last_gate fields (verdict, active_hours, touched_settings, bio_chars, bio) | delete last_gate | sort by (last_seen desc)",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "format": "auto",
+            "replace": false,
+            "keepTime": false
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "fields": {},
+            "conversions": [
+              {
+                "targetField": "glitch",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "name",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "whisper",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "sessions",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "active_hours",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "touched_settings",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "bio_chars",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Line": true,
+              "labels": true,
+              "id": true,
+              "tsNs": true,
+              "detected_level": true,
+              "level": true
+            },
+            "indexByName": {
+              "username": 0,
+              "glitch": 1,
+              "name": 2,
+              "whisper": 3,
+              "invited_at": 4,
+              "joined_at": 5,
+              "sessions": 6,
+              "last_seen": 7,
+              "verdict": 8,
+              "active_hours": 9,
+              "touched_settings": 10,
+              "bio_chars": 11,
+              "bio": 12
+            },
+            "renameByName": {
+              "username": "Runner",
+              "glitch": "Glitch /3",
+              "name": "Name /3",
+              "whisper": "Whisper /2",
+              "invited_at": "Invited",
+              "joined_at": "Joined",
+              "sessions": "Sessions",
+              "last_seen": "Last seen",
+              "verdict": "Gate",
+              "active_hours": "Hours",
+              "touched_settings": "Settings",
+              "bio_chars": "Bio chars",
+              "bio": "Bio"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Last seen",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 228
+      }
+    },
+    {
+      "type": "table",
+      "title": "Recent Beats",
+      "description": "What just happened on the ladder, newest first: hits (forced ones say so), whispers, invitations, joins, runner births, bio screens, and /haunt flag flips. Arming and gate lines are left out; they live in the Runners table and the Haunt Log.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "_msg:\"clock glitch burst\" OR _msg:\"name flicker hit\" OR _msg:\"whisper delivered\" OR _msg:\"invitation sent\" OR _msg:\"deadchannel joined\" OR _msg:\"runner created\" OR _msg:\"first contact bio screen\" OR _msg:\"haunt flag set\" | filter username:* | filter username:~\"$runner\" | fields _time, _msg, username, hits, outcome, key, enabled | sort by (_time desc) | limit 50",
+          "queryType": "instant"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "format": "auto",
+            "replace": false,
+            "keepTime": false
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "labels": true,
+              "id": true,
+              "tsNs": true,
+              "detected_level": true,
+              "level": true
+            },
+            "indexByName": {
+              "Time": 0,
+              "username": 1,
+              "Line": 2,
+              "hits": 3,
+              "outcome": 4,
+              "key": 5,
+              "enabled": 6
+            },
+            "renameByName": {
+              "Time": "When",
+              "username": "Runner",
+              "Line": "Beat",
+              "hits": "Hit",
+              "outcome": "Bio outcome",
+              "key": "Flag",
+              "enabled": "Enabled"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "displayMode": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "When",
+            "desc": true
+          }
+        ],
+        "cellHeight": "sm"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 237
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Haunt Log",
+      "description": "Every deadchannel line in one place, newest first: the gate, arming, each hit, the whisper, the invitation, the admin switches, and the runner's birth. The username is formatted into the message itself because the logs panel renders _msg and nothing else; expand a row for the counters and the trace id. The Runner variable filters it like the tables above.",
+      "datasource": {
+        "uid": "victorialogs",
+        "type": "victoriametrics-logs-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "_msg:\"first contact\" OR _msg:\"haunt flag\" OR _msg:\"runner created\" OR _msg:\"deadchannel joined\" | filter username:~\"$runner\" | format \"[<username>] <_msg>\" as _msg",
+          "queryType": "instant"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 247
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Fights by Beat",
+      "description": "The fight at the screen over the range, by what happened (exchanges inside a fight, beat=round, are left out so the outcomes stay readable): started or resumed, won, slain, lost, escaped, and the armorer's outfitted and patch's patched, with refused and failed.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_fights_total{beat!=\"round\"}[$__range]))",
+          "legendFormat": "{{beat}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 259
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Tailor & the Door",
+      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed) and runners leaving and returning to #deadchannel over the range.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_tailor_total[$__range]))",
+          "legendFormat": "tailor {{beat}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (direction) (increase(late_ssh_runner_door_total[$__range]))",
+          "legendFormat": "door {{direction}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 259
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Old Signal Payouts",
+      "description": "Old Signal kills over the range by what the chips did: paid, refused by the 30-day lockout (inside_month), or the grant failing.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(late_ssh_deadchannel_old_signal_payouts_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 259
+      }
     }
   ]
 }

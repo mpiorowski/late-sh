@@ -8,7 +8,7 @@ use crate::app::{
 
 use super::state::SheetField;
 
-pub fn handle_input(app: &mut App, event: ParsedInput) {
+pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.sheet_modal_state;
 
     if state.editing() {
@@ -57,13 +57,18 @@ pub fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.sheet_modal_state.scroll_body(-3),
             MouseEventKind::ScrollDown => app.sheet_modal_state.scroll_body(3),
+            MouseEventKind::Down if mouse.button == Some(crate::app::input::MouseButton::Left) => {
+                if let Some(field) = app.sheet_modal_state.field_at(mouse.x, mouse.y) {
+                    app.sheet_modal_state.set_focus(field);
+                }
+            }
             _ => {}
         },
         _ => {}
     }
 }
 
-pub fn handle_escape(app: &mut App) {
+pub(crate) fn handle_escape(app: &mut App) {
     handle_input(app, ParsedInput::Byte(0x1B));
 }
 

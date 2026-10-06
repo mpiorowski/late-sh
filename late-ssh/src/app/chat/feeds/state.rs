@@ -3,9 +3,17 @@ use late_core::models::{article::ArticleEvent, rss_entry::RssEntryView, rss_feed
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+use crate::app::chat::news::state::news_share_banner;
 use crate::app::{chat::news::svc::ArticleService, common::primitives::Banner};
 
 use super::svc::{FeedEvent, FeedService, FeedSnapshot};
+
+/// Outcome of one tab tick: the banner to surface plus whether a drained
+/// snapshot or event may have changed the rendered tab (badge counts, entry list).
+pub struct FeedsTick {
+    pub banner: Option<Banner>,
+    pub changed: bool,
+}
 
 pub struct State {
     service: FeedService,
@@ -131,11 +139,19 @@ impl State {
         Some(Banner::success("RSS entry dismissed."))
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub fn tick(&mut self) -> FeedsTick {
+        // Peek before draining: anything queued may change the rendered tab
+        // (badge counts, entry list), so it counts as changed.
+        let changed = self.snapshot_rx.has_changed().unwrap_or(false)
+            || !self.event_rx.is_empty()
+            || !self.article_event_rx.is_empty();
         self.drain_snapshot();
         let feed_banner = self.drain_events();
         let article_banner = self.drain_article_events();
-        feed_banner.or(article_banner)
+        FeedsTick {
+            banner: feed_banner.or(article_banner),
+            changed,
+        }
     }
 
     fn drain_snapshot(&mut self) {
@@ -188,15 +204,27 @@ impl State {
                 Ok(FeedEvent::EntryDismissed { user_id }) if user_id == self.user_id => {
                     banner = Some(Banner::success("RSS entry dismissed."));
                 }
-                Ok(FeedEvent::EntryShared { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("RSS entry shared."));
+                Ok(FeedEvent::EntryShared {
+                    user_id,
+                    reward: Some(reward),
+                }) if user_id == self.user_id => {
+                    banner = Some(news_share_banner("RSS entry shared to news.", reward));
                 }
+                // The entry was marked shared because its link was already in
+                // News; the "Already shared." banner has said so and no chips
+                // moved, so there is nothing to add.
+                Ok(FeedEvent::EntryShared {
+                    user_id,
+                    reward: None,
+                }) if user_id == self.user_id => {}
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    tracing::error!(%e, "failed to receive feed event");
-                    break;
+                // Skipped events are gone; the receiver resumes at the oldest
+                // one still buffered, so keep draining.
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "feed event receiver lagged");
                 }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
         banner
@@ -206,17 +234,21 @@ impl State {
         let mut banner = None;
         loop {
             match self.article_event_rx.try_recv() {
-                Ok(ArticleEvent::Created { user_id, url })
-                    if user_id == self.user_id
-                        && self
-                            .pending_share
-                            .as_ref()
-                            .is_some_and(|(_, pending_url)| pending_url == &url) =>
+                Ok(ArticleEvent::Created {
+                    user_id,
+                    url,
+                    reward,
+                }) if user_id == self.user_id
+                    && self
+                        .pending_share
+                        .as_ref()
+                        .is_some_and(|(_, pending_url)| pending_url == &url) =>
                 {
                     self.current_task = None;
                     self.processing = false;
                     if let Some((entry_id, _)) = self.pending_share.take() {
-                        self.service.mark_shared_task(self.user_id, entry_id);
+                        self.service
+                            .mark_shared_task(self.user_id, entry_id, Some(reward));
                     }
                 }
                 Ok(ArticleEvent::Failed {
@@ -234,7 +266,7 @@ impl State {
                     self.current_task = None;
                     self.processing = false;
                     if let Some((entry_id, _)) = self.pending_share.take() {
-                        self.service.mark_shared_task(self.user_id, entry_id);
+                        self.service.mark_shared_task(self.user_id, entry_id, None);
                         banner = Some(Banner::success("Already shared."));
                     }
                 }
@@ -256,10 +288,12 @@ impl State {
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,
-                Err(e) => {
-                    tracing::error!(%e, "failed to receive article event in feeds state");
-                    break;
+                // Skipped events are gone; the receiver resumes at the oldest
+                // one still buffered, so keep draining.
+                Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "article event receiver lagged in feeds state");
                 }
+                Err(broadcast::error::TryRecvError::Closed) => break,
             }
         }
         banner

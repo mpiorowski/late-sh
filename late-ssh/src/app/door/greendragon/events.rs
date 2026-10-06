@@ -6,13 +6,11 @@
 //! **Licensing.** The effect mechanics (gold/gem ranges, roll tables, heal/turn
 //! deltas) are transcribed 1=1 from those modules — pure numbers, uncopyrightable
 //! — exactly like the creature stat blocks in [`super::data`]. All prose here is
-//! **original to late.sh**; no module text is copied. Two events are adapted
-//! rather than ported verbatim because we lack the systems they depend on:
-//!   - `glowingstream` rolls 1..=10; cases 8..=10 fall through to a plain full
-//!     heal (the module's `default:`), kept as-is.
-//!   - `darkhorse` is mostly PvP enemy-intel, a dice gambling minigame, and a
-//!     shared comment board — none of which exist single-player. It's reduced to
-//!     a roadside rest (a drink that restores health). The trim is deliberate.
+//! **original to late.sh**; no module text is copied. One adaptation:
+//! `glowingstream` rolls 1..=10 and cases 8..=10 fall through to a plain full
+//! heal (the module's `default:`), kept as-is. `darkhorse` opens the real
+//! tavern room (the gambler's three games, `state`'s `Mode::Tavern`); its
+//! PvP enemy-intel and comment board wait for the multiplayer phase.
 
 use rand::Rng;
 
@@ -31,11 +29,12 @@ pub enum ForestEvent {
     Fairy,
     /// A glowing stream: drink for a high-variance outcome (`glowingstream`).
     GlowingStream,
-    /// Crazy Audrey's basket game, a forest-fight gamble (`crazyaudrey`).
+    /// Mad Juna's basket game, a forest-fight gamble (`crazyaudrey`).
     PettingZoo,
-    /// Foilwench, who trades a gem for specialty training (`foilwench`).
-    Foilwench,
-    /// The Dark Horse Tavern: a place to rest (`darkhorse`, reduced).
+    /// Lady Filigree, who trades a gem for specialty training (`foilwench`).
+    Filigree,
+    /// The Crooked Wheel (`darkhorse`): accepting opens the real room —
+    /// the gambler's games — via the state machine, not this resolver.
     Tavern,
 }
 
@@ -47,7 +46,7 @@ pub const ALL: [ForestEvent; 8] = [
     ForestEvent::Fairy,
     ForestEvent::GlowingStream,
     ForestEvent::PettingZoo,
-    ForestEvent::Foilwench,
+    ForestEvent::Filigree,
     ForestEvent::Tavern,
 ];
 
@@ -81,9 +80,9 @@ impl ForestEvent {
             ForestEvent::GoldMine => "The Abandoned Mine",
             ForestEvent::Fairy => "A Fairy in the Glade",
             ForestEvent::GlowingStream => "The Glowing Stream",
-            ForestEvent::PettingZoo => "Crazy Audrey's Baskets",
-            ForestEvent::Foilwench => "Foilwench's Hut",
-            ForestEvent::Tavern => "The Dark Horse Tavern",
+            ForestEvent::PettingZoo => "Mad Juna's Baskets",
+            ForestEvent::Filigree => "Lady Filigree's Hut",
+            ForestEvent::Tavern => "The Crooked Wheel",
         }
     }
 
@@ -140,7 +139,7 @@ impl ForestEvent {
                 ],
                 choice: Some(("Play her game", "Back away")),
             },
-            ForestEvent::Foilwench => {
+            ForestEvent::Filigree => {
                 if ch.specialty == Specialty::None {
                     // No specialty to train: a pure flavor dead-end, matching the
                     // module's "you have no direction in the world" branch.
@@ -174,9 +173,9 @@ impl ForestEvent {
                 title: self.title(),
                 intro: vec![
                     "A mist rolls in, and when it clears a log tavern stands before you, smoke curling from its chimney.",
-                    "It's quiet inside, a good place to sit a while and let your wounds close.",
+                    "Through the shutters you catch lamplight, laughter, and the unmistakable rattle of dice.",
                 ],
-                choice: Some(("Stop in for a drink", "Move on")),
+                choice: Some(("Step inside", "Move on")),
             },
         }
     }
@@ -199,7 +198,7 @@ impl ForestEvent {
             ForestEvent::Fairy => self.resolve_fairy(accepted, ch, rng),
             ForestEvent::GlowingStream => self.resolve_stream(accepted, ch, rng),
             ForestEvent::PettingZoo => self.resolve_baskets(accepted, ch, rng),
-            ForestEvent::Foilwench => self.resolve_foilwench(accepted, ch),
+            ForestEvent::Filigree => self.resolve_filigree(accepted, ch),
             ForestEvent::Tavern => self.resolve_tavern(accepted, ch),
         }
     }
@@ -251,16 +250,31 @@ impl ForestEvent {
                     "A rich pocket! You haul out {gold} gold and {gems} gem(s), losing a forest fight to the labor."
                 )]
             }
-            // 19..=20: greed brings the roof down. Upstream still credits 10%
-            // experience ("you learned about mining") and leaves gold/gems be.
+            // 19..=20: greed brings the roof down. The race decides whether it
+            // kills (`raceminedeath`, rolled `e_rand(1,100) < chance`: 90
+            // default, 5 for the Deepfolk). Death still credits 10% experience
+            // ("you learned about mining") and leaves gold/gems be; a lucky
+            // escape shakes you too badly to fight again today (`turns = 0`).
             _ => {
-                let learned = (ch.experience as f64 * 0.1).round() as u64;
-                ch.experience = ch.experience.saturating_add(learned);
-                ch.alive = false;
-                ch.hitpoints = 0;
-                vec![format!(
-                    "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
-                )]
+                if rng.gen_range(1..=100) < ch.race.mine_death_percent() {
+                    let learned = (ch.experience as f64 * 0.1).round() as u64;
+                    ch.experience = ch.experience.saturating_add(learned);
+                    ch.alive = false;
+                    ch.hitpoints = 0;
+                    vec![format!(
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust. In your last moments you grasp what went wrong (+{learned} experience), and that is the end of you."
+                    )]
+                } else {
+                    ch.turns = 0;
+                    let escape = if ch.race == super::model::Race::Deepfolk {
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust, but your people were born under stone: you read the groan of the timbers and roll clear."
+                    } else {
+                        "You spot a huge gem and swing too hard. The roof comes down in a roar of dust, and by sheer luck you stumble clear of the fall."
+                    };
+                    vec![format!(
+                        "{escape} The close call leaves you too shaken to face anything else today (all forest fights lost)."
+                    )]
+                }
             }
         }
     }
@@ -357,7 +371,7 @@ impl ForestEvent {
         // 1-in-20 jackpot forces all three to match (the "hedgehogs!" case).
         if rng.gen_range(1..=20) == 1 {
             ch.turns = ch.turns.saturating_add(5);
-            return vec!["All three baskets burst open with the same creature! Audrey shrieks with joy and drops a whole BAG of salve. You gain FIVE forest fights!".into()];
+            return vec!["All three baskets burst open with the same creature! Juna shrieks with joy and drops a whole BAG of salve. You gain FIVE forest fights!".into()];
         }
         let (c1, c2, c3): (u8, u8, u8) = (
             rng.gen_range(0..4),
@@ -366,21 +380,21 @@ impl ForestEvent {
         );
         if c1 == c2 && c2 == c3 {
             ch.turns = ch.turns.saturating_add(2);
-            vec!["All three match! Audrey grudgingly grants you two salves. You gain TWO forest fights!".into()]
+            vec!["All three match! Juna grudgingly grants you two salves. You gain TWO forest fights!".into()]
         } else if c1 == c2 || c2 == c3 || c1 == c3 {
             ch.turns = ch.turns.saturating_add(1);
-            vec!["Two of a kind! Audrey hands over a single salve. You gain a forest fight!".into()]
+            vec!["Two of a kind! Juna hands over a single salve. You gain a forest fight!".into()]
         } else if ch.turns > 0 {
             ch.turns -= 1;
-            vec!["No two alike. \"Off to bed early for you!\" Audrey cackles, and you lose a forest fight.".into()]
+            vec!["No two alike. \"Off to bed early for you!\" Juna cackles, and you lose a forest fight.".into()]
         } else {
             // No fight left to dock: upstream takes a charm point instead.
             ch.charm = ch.charm.saturating_sub(1);
-            vec!["No two alike, and no fight left to lose. Audrey settles for mocking you until your pride stings (-1 charm).".into()]
+            vec!["No two alike, and no fight left to lose. Juna settles for mocking you until your pride stings (-1 charm).".into()]
         }
     }
 
-    fn resolve_foilwench(self, accepted: bool, ch: &mut Character) -> Vec<String> {
+    fn resolve_filigree(self, accepted: bool, ch: &mut Character) -> Vec<String> {
         use super::model::Specialty;
         if ch.specialty == Specialty::None {
             return vec!["The crone has nothing to teach someone with no direction.".into()];
@@ -400,115 +414,12 @@ impl ForestEvent {
         }
     }
 
-    fn resolve_tavern(self, accepted: bool, ch: &mut Character) -> Vec<String> {
+    fn resolve_tavern(self, accepted: bool, _ch: &mut Character) -> Vec<String> {
+        // Accepting never reaches this resolver: the state machine intercepts
+        // it and opens the tavern room (`Mode::Tavern`) instead.
         if !accepted {
-            return vec!["You leave the strange tavern to its quiet and walk on.".into()];
+            return vec!["You leave the strange tavern to its noise and walk on.".into()];
         }
-        // Reduced from darkhorse: just the rest. A drink and a sit-down close your
-        // wounds. (No PvP intel / dice / comment board single-player.)
-        ch.hitpoints = ch.max_hitpoints();
-        vec!["The toothless barkeep pours you something strong. You drink, you rest, and your wounds close over. Back to full health.".into()]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rand::{SeedableRng, rngs::StdRng};
-
-    fn hero(level: u8) -> Character {
-        let mut c = Character::new("t", 0);
-        c.level = level;
-        c.hitpoints = c.max_hitpoints();
-        c
-    }
-
-    #[test]
-    fn roll_is_in_range() {
-        let mut rng = StdRng::seed_from_u64(1);
-        for _ in 0..200 {
-            assert!(ALL.contains(&roll(&mut rng)));
-        }
-    }
-
-    #[test]
-    fn findgold_pays_scaled_gold() {
-        let mut rng = StdRng::seed_from_u64(2);
-        let mut c = hero(5);
-        c.gold = 0;
-        ForestEvent::FindGold.resolve(true, &mut c, &mut rng);
-        // level 5 -> 50..=250 gold.
-        assert!((50..=250).contains(&c.gold), "got {}", c.gold);
-    }
-
-    #[test]
-    fn fairy_gemless_accept_costs_a_turn() {
-        let mut rng = StdRng::seed_from_u64(3);
-        let mut c = hero(3);
-        c.gems = 0;
-        c.turns = 5;
-        ForestEvent::Fairy.resolve(true, &mut c, &mut rng);
-        // No gem to give: upstream docks a forest fight for the wasted time.
-        assert_eq!(c.gems, 0);
-        assert_eq!(c.turns, 4);
-    }
-
-    #[test]
-    fn glowingstream_energetic_band_gives_turn_not_heal() {
-        // Force the 5..=7 band and confirm it grants a fight but no heal.
-        let mut found = false;
-        for seed in 0..200 {
-            let mut rng = StdRng::seed_from_u64(seed);
-            let mut c = hero(5);
-            c.hitpoints = 1;
-            c.turns = 3;
-            ForestEvent::GlowingStream.resolve(true, &mut c, &mut rng);
-            if c.alive && c.turns == 4 && c.hitpoints == 1 {
-                found = true;
-                break;
-            }
-        }
-        assert!(found, "expected a turns-only outcome with no heal");
-    }
-
-    #[test]
-    fn fairy_spends_the_gem() {
-        let mut rng = StdRng::seed_from_u64(4);
-        let mut c = hero(3);
-        c.gems = 1;
-        ForestEvent::Fairy.resolve(true, &mut c, &mut rng);
-        // The offered gem is always consumed (the boon varies by roll).
-        assert!(c.gems != 1 || c.turns != 10);
-    }
-
-    #[test]
-    fn declining_a_choice_event_is_inert() {
-        let mut rng = StdRng::seed_from_u64(5);
-        let mut c = hero(4);
-        let before = c.clone();
-        ForestEvent::GlowingStream.resolve(false, &mut c, &mut rng);
-        assert_eq!(c.hitpoints, before.hitpoints);
-        assert!(c.alive);
-    }
-
-    #[test]
-    fn goldmine_only_kills_on_the_cave_in() {
-        // Across many mines the player sometimes dies (cave-in) but mostly
-        // survives, losing a forest fight each time.
-        let mut deaths = 0;
-        let mut survivals = 0;
-        for seed in 0..400 {
-            let mut rng = StdRng::seed_from_u64(seed);
-            let mut c = hero(7);
-            c.turns = 5;
-            ForestEvent::GoldMine.resolve(true, &mut c, &mut rng);
-            if c.alive {
-                survivals += 1;
-            } else {
-                deaths += 1;
-            }
-        }
-        assert!(deaths > 0, "expected some cave-ins");
-        assert!(survivals > deaths, "cave-ins should be the minority");
+        Vec::new()
     }
 }

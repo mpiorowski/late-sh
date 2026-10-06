@@ -1,0 +1,756 @@
+//! The gallery's I/O: listings, hanging, applause, and the splash piece.
+//!
+//! Every DB call runs as a spawned task that reports back over the
+//! session's channel (`GalleryResult`), the way the archive loader does, so
+//! the tick and render paths never wait on Postgres. This module is the
+//! orchestration layer for the gallery: it owns the logs and metrics for
+//! every outcome. The decisions themselves live in
+//! `late_core::models::artboard_piece` (the SQL rails) and `frame.rs` (the
+//! local ones).
+//!
+//! The splash wall (one hung piece a day over the door, in hang order)
+//! is process-wide: one `watch` holding today's piece, refreshed hourly.
+//! The refresh is also the assignment: the first replica awake on a UTC
+//! day stamps the queue's head with the day (`ArtboardPiece::splash_for_day`,
+//! a row claim on a unique index), the rest read it back, so any number of
+//! replicas may run it (root CONTEXT.md, multi-replica rule). Every login
+//! reads the day's piece off the watch (`splash_piece`) and the door shows
+//! it all day, or the coffee cup when there is none.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, NaiveDate, Utc};
+use dartboard_core::Canvas;
+use late_core::db::Db;
+use late_core::models::artboard_piece::{
+    ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
+    TakeDownOutcome,
+};
+use late_core::models::artboard_piece_rating::{
+    ArtContentRating, ArtboardPieceRating, ContentRatingSummary, OwnerFlagOutcome, VoteOutcome,
+};
+use late_core::models::user::ArtSplashMode;
+use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
+
+use crate::app::artboard::provenance::ArtboardProvenance;
+use crate::metrics::{
+    self, GalleryApplauseResult, GalleryContentRatingResult, GalleryHangResult,
+    GalleryTakeDownResult,
+};
+
+use super::frame::{Credit, FramedPiece};
+
+/// How often the splash wall is re-read. It changes once a day, at UTC
+/// midnight, and a mod removal is the only thing that could change it in
+/// between; a replica is at most an hour behind either.
+const SPLASH_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// The day's piece over the door, and the UTC day it holds. Read once
+/// at bootstrap; the session never re-reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplashPiece {
+    pub shown_on: NaiveDate,
+    pub piece: GalleryPiece,
+}
+
+impl SplashPiece {
+    fn decode(shown_on: NaiveDate, piece: ArtboardPiece) -> Result<Self> {
+        Ok(Self {
+            shown_on,
+            piece: GalleryPiece::decode(piece)?,
+        })
+    }
+}
+
+/// What one refresh found. `Off` is no database or the gallery's switch
+/// off: nothing was read, so there is no queue to count. `Wall` is the
+/// day's piece (`None` on an empty queue) and how many pieces still wait
+/// for a day (hung before it, never shown), recorded as a gauge so the
+/// backlog is measurable before anyone decides on a cap.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SplashRefresh {
+    Off,
+    Wall {
+        piece: Option<Box<SplashPiece>>,
+        queued: i64,
+    },
+}
+
+/// A piece as the page draws it: the row decoded into a canvas, with the
+/// credits read off its provenance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GalleryPiece {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub username: String,
+    pub title: String,
+    pub width: usize,
+    pub height: usize,
+    pub canvas: Canvas,
+    /// Everyone with a glyph in the piece, most glyphs first.
+    pub credits: Vec<Credit>,
+    pub applause: i64,
+    pub applauded_by_viewer: bool,
+    pub created: DateTime<Utc>,
+    pub period_month: NaiveDate,
+    pub content_rating: ContentRatingSummary,
+}
+
+impl GalleryPiece {
+    pub fn decode(piece: ArtboardPiece) -> Result<Self> {
+        let canvas: Canvas = serde_json::from_value(piece.canvas)
+            .with_context(|| format!("decoding canvas of artboard piece {}", piece.id))?;
+        let provenance: ArtboardProvenance = serde_json::from_value(piece.provenance)
+            .with_context(|| format!("decoding provenance of artboard piece {}", piece.id))?;
+        let credits = provenance
+            .glyph_counts_by_username()
+            .into_iter()
+            .map(|(username, glyphs)| Credit { username, glyphs })
+            .collect();
+        Ok(Self {
+            id: piece.id,
+            user_id: piece.user_id,
+            username: piece.username,
+            title: piece.title,
+            width: piece.width.max(1) as usize,
+            height: piece.height.max(1) as usize,
+            canvas,
+            credits,
+            applause: piece.applause,
+            applauded_by_viewer: piece.applauded_by_viewer,
+            created: piece.created,
+            period_month: piece.period_month,
+            content_rating: piece.content_rating,
+        })
+    }
+
+    /// The caption under a piece wherever it hangs: title, hanger, applause.
+    pub fn caption(&self) -> String {
+        format!(
+            "\"{}\" by @{} · {}",
+            self.title,
+            self.username,
+            applause_label(self.applause)
+        )
+    }
+}
+
+pub fn applause_label(applause: i64) -> String {
+    match applause {
+        1 => "1 applause".to_string(),
+        n => format!("{n} applause"),
+    }
+}
+
+/// Why a hang did not land, in the words the notice uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HangRefusal {
+    DailyCap,
+    Duplicate,
+    Disabled,
+}
+
+impl HangRefusal {
+    pub fn notice(self) -> &'static str {
+        match self {
+            Self::DailyCap => "You have hung today's three pieces already. Tomorrow.",
+            Self::Duplicate => {
+                "Those exact cells hung in the gallery this month already, even if taken down since."
+            }
+            Self::Disabled => "The gallery is closed right now.",
+        }
+    }
+}
+
+/// What a spawned gallery task reports back.
+#[derive(Debug)]
+pub enum GalleryResult {
+    ContentRating {
+        piece_id: Uuid,
+        generation: u64,
+        outcome: ContentRatingOutcome,
+    },
+    ContentRatingFailed {
+        piece_id: Uuid,
+        generation: u64,
+        error: String,
+    },
+    Counts(ListingCounts),
+    CountsFailed(String),
+    /// `generation` is the section's request counter at the time this
+    /// listing was asked for, so the state can tell a stale answer from
+    /// the one it is waiting on.
+    Listed {
+        listing: PieceListing,
+        generation: u64,
+        pieces: Vec<GalleryPiece>,
+    },
+    ListFailed {
+        listing: PieceListing,
+        generation: u64,
+        error: String,
+    },
+    Hung(Box<GalleryPiece>),
+    HangRefused(HangRefusal),
+    HangFailed(String),
+    Applause {
+        piece_id: Uuid,
+        outcome: ApplauseOutcome,
+    },
+    ApplauseFailed {
+        piece_id: Uuid,
+        error: String,
+    },
+    TakeDown {
+        piece_id: Uuid,
+        outcome: TakeDownOutcome,
+    },
+    TakeDownFailed {
+        piece_id: Uuid,
+        error: String,
+    },
+}
+
+#[derive(Clone)]
+pub struct GalleryService {
+    db: Option<Db>,
+    splash_tx: Arc<watch::Sender<Option<SplashPiece>>>,
+    splash_rx: watch::Receiver<Option<SplashPiece>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentRatingAction {
+    Vote(Option<ArtContentRating>),
+    OwnerFlag(bool),
+}
+
+/// How a content-rating request ended. A refusal is an outcome; only a
+/// database failure is `GalleryResult::ContentRatingFailed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentRatingOutcome {
+    /// The piece's summary as it stands, after the write when there was one.
+    Rated(ContentRatingSummary),
+    OwnPiece,
+    NotYours,
+    NotFound,
+    Closed,
+}
+
+impl GalleryService {
+    pub fn new(db: Db) -> Self {
+        let (splash_tx, splash_rx) = watch::channel(None);
+        Self {
+            db: Some(db),
+            splash_tx: Arc::new(splash_tx),
+            splash_rx,
+        }
+    }
+
+    /// No database: every listing is empty, nothing hangs.
+    pub fn disabled() -> Self {
+        let (splash_tx, splash_rx) = watch::channel(None);
+        Self {
+            db: None,
+            splash_tx: Arc::new(splash_tx),
+            splash_rx,
+        }
+    }
+
+    /// Whether this service has a database behind it. A
+    /// [`GalleryService::disabled`] one (tests, a DB-less boot) hides the
+    /// gallery.
+    pub fn is_enabled(&self) -> bool {
+        self.db.is_some()
+    }
+
+    /// The day's piece over the door, as this replica last read it.
+    /// Every login shows it for the whole UTC day; `None` (no database,
+    /// empty queue) is the coffee cup.
+    pub fn splash_piece(&self) -> Option<SplashPiece> {
+        self.splash_rx.borrow().clone()
+    }
+
+    /// The authenticated login gate. A cache holds the canvas, never the
+    /// authority to show it: committed marks take effect on the next login.
+    pub async fn splash_piece_for_mode(&self, mode: ArtSplashMode) -> Option<SplashPiece> {
+        self.splash_piece_for_day(mode, Utc::now().date_naive())
+            .await
+    }
+
+    async fn splash_piece_for_day(
+        &self,
+        mode: ArtSplashMode,
+        day: NaiveDate,
+    ) -> Option<SplashPiece> {
+        if mode == ArtSplashMode::Never {
+            return None;
+        }
+        let mut splash = match self.splash_piece()? {
+            splash if splash.shown_on == day => splash,
+            // The hourly refresh has not crossed midnight yet, so the cache
+            // still holds an earlier day's piece. Assign and publish this
+            // day's here rather than show the cup until the next refresh.
+            _stale => match self.refresh_splash(day).await {
+                Ok(SplashRefresh::Wall {
+                    piece: Some(piece), ..
+                }) => *piece,
+                Ok(SplashRefresh::Wall { piece: None, .. }) | Ok(SplashRefresh::Off) => {
+                    return None;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = ?error,
+                        "artboard gallery splash refresh at login failed"
+                    );
+                    return None;
+                }
+            },
+        };
+        let db = self.db.as_ref()?;
+        let result = async {
+            let client = db.get().await?;
+            ArtboardPieceRating::read_for_day(&client, splash.piece.id, Uuid::nil(), Some(day))
+                .await
+        }
+        .await;
+        match result {
+            Ok(Some(rating)) => {
+                if mode == ArtSplashMode::Sfw && rating.determination().0.is_nsfw() {
+                    return None;
+                }
+                splash.piece.content_rating = rating;
+                Some(splash)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(error = ?error, piece_id = %splash.piece.id, "artboard splash classification check failed");
+                None
+            }
+        }
+    }
+
+    /// The rating dialog's round trip: read the piece's summary, after the
+    /// vote or owner flag in `action` when there is one.
+    pub fn content_rating_task(
+        &self,
+        piece_id: Uuid,
+        viewer_id: Uuid,
+        generation: u64,
+        action: Option<ContentRatingAction>,
+        tx: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(GalleryResult::ContentRating {
+                piece_id,
+                generation,
+                outcome: ContentRatingOutcome::Closed,
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let msg = match rate_content(&db, piece_id, viewer_id, action).await {
+                Ok(outcome) => {
+                    metrics::record_gallery_content_rating(match outcome {
+                        ContentRatingOutcome::Rated(_) => match action {
+                            None => GalleryContentRatingResult::Viewed,
+                            Some(ContentRatingAction::Vote(Some(_))) => {
+                                GalleryContentRatingResult::Voted
+                            }
+                            Some(ContentRatingAction::Vote(None)) => {
+                                GalleryContentRatingResult::VoteWithdrawn
+                            }
+                            Some(ContentRatingAction::OwnerFlag(true)) => {
+                                GalleryContentRatingResult::Flagged
+                            }
+                            Some(ContentRatingAction::OwnerFlag(false)) => {
+                                GalleryContentRatingResult::Unflagged
+                            }
+                        },
+                        ContentRatingOutcome::OwnPiece => GalleryContentRatingResult::OwnPiece,
+                        ContentRatingOutcome::NotYours => GalleryContentRatingResult::NotYours,
+                        ContentRatingOutcome::NotFound => GalleryContentRatingResult::NotFound,
+                        ContentRatingOutcome::Closed => GalleryContentRatingResult::Closed,
+                    });
+                    GalleryResult::ContentRating {
+                        piece_id,
+                        generation,
+                        outcome,
+                    }
+                }
+                Err(error) => {
+                    metrics::record_gallery_content_rating(GalleryContentRatingResult::Failed);
+                    late_core::error_span!(
+                        "artboard_gallery_content_rating",
+                        error = ?error,
+                        %viewer_id,
+                        %piece_id,
+                        "artboard content rating request failed"
+                    );
+                    GalleryResult::ContentRatingFailed {
+                        piece_id,
+                        generation,
+                        error: "The content rating did not go through. Try again.".to_string(),
+                    }
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Hourly re-read of the splash wall, assigning the day's piece when
+    /// nobody has yet. Runs at start so the first login after a deploy
+    /// already has it.
+    pub fn start_splash_refresh_task(&self) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SPLASH_REFRESH_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                match service.refresh_splash(Utc::now().date_naive()).await {
+                    Ok(SplashRefresh::Off) => {
+                        tracing::debug!("artboard gallery splash wall is off")
+                    }
+                    Ok(SplashRefresh::Wall {
+                        piece: None,
+                        queued,
+                    }) => {
+                        metrics::record_gallery_splash_queue_depth(queued);
+                        tracing::debug!(queued, "artboard gallery has no splash piece today")
+                    }
+                    Ok(SplashRefresh::Wall {
+                        piece: Some(piece),
+                        queued,
+                    }) => {
+                        metrics::record_gallery_splash_queue_depth(queued);
+                        tracing::debug!(
+                            piece_id = %piece.piece.id,
+                            shown_on = %piece.shown_on,
+                            queued,
+                            "artboard gallery splash wall refreshed"
+                        )
+                    }
+                    Err(error) => tracing::warn!(
+                        error = ?error,
+                        "artboard gallery splash refresh failed"
+                    ),
+                }
+            }
+        })
+    }
+
+    /// Read (and, on the first pass of the day, assign) `day`'s piece
+    /// into the watch. `Off` is a service with no database.
+    pub async fn refresh_splash(&self, day: NaiveDate) -> Result<SplashRefresh> {
+        let Some(db) = self.db.as_ref() else {
+            return Ok(SplashRefresh::Off);
+        };
+        let client = db.get().await?;
+        let piece = match ArtboardPiece::splash_for_day(&client, day).await? {
+            Some(piece) => Some(SplashPiece::decode(day, piece)?),
+            None => None,
+        };
+        let queued = ArtboardPiece::splash_queue_depth(&client, day).await?;
+        let _ = self.splash_tx.send(piece.clone());
+        Ok(SplashRefresh::Wall {
+            piece: piece.map(Box::new),
+            queued,
+        })
+    }
+
+    /// The rail's numbers, one query. Without a database everything is
+    /// zero.
+    pub fn counts_task(&self, viewer_id: Uuid, tx: mpsc::UnboundedSender<GalleryResult>) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(GalleryResult::Counts(ListingCounts::default()));
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                ArtboardPiece::listing_counts(&client, viewer_id).await
+            }
+            .await;
+            let msg = match result {
+                Ok(counts) => GalleryResult::Counts(counts),
+                Err(error) => {
+                    tracing::warn!(
+                        error = ?error,
+                        %viewer_id,
+                        "artboard gallery counts failed"
+                    );
+                    GalleryResult::CountsFailed(format!("{error:#}"))
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    pub fn list_task(
+        &self,
+        viewer_id: Uuid,
+        listing: PieceListing,
+        generation: u64,
+        tx: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(GalleryResult::Listed {
+                listing,
+                generation,
+                pieces: Vec::new(),
+            });
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                let rows = ArtboardPiece::list(&client, viewer_id, listing).await?;
+                rows.into_iter()
+                    .map(GalleryPiece::decode)
+                    .collect::<Result<Vec<_>>>()
+            }
+            .await;
+            let msg = match result {
+                Ok(pieces) => GalleryResult::Listed {
+                    listing,
+                    generation,
+                    pieces,
+                },
+                Err(error) => {
+                    tracing::warn!(
+                        error = ?error,
+                        ?listing,
+                        %viewer_id,
+                        "artboard gallery listing failed"
+                    );
+                    GalleryResult::ListFailed {
+                        listing,
+                        generation,
+                        error: "The gallery could not be loaded.".to_string(),
+                    }
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    pub fn hang_task(
+        &self,
+        user_id: Uuid,
+        title: String,
+        framed: FramedPiece,
+        tx: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            let _ = tx.send(GalleryResult::HangRefused(HangRefusal::Disabled));
+            return;
+        };
+        tokio::spawn(async move {
+            let result: Result<HangOutcome> = async {
+                let params = HangParams {
+                    user_id,
+                    title,
+                    width: framed.width as i32,
+                    height: framed.height as i32,
+                    canvas: serde_json::to_value(&framed.canvas)
+                        .context("encoding the piece's canvas")?,
+                    provenance: serde_json::to_value(&framed.provenance)
+                        .context("encoding the piece's provenance")?,
+                    glyph_count: framed.glyph_count as i32,
+                    own_share_percent: framed.own_share_percent as i32,
+                    content_hash: framed.content_hash,
+                };
+                let client = db.get().await?;
+                ArtboardPiece::hang(&client, params).await
+            }
+            .await;
+            let msg = match result {
+                Ok(HangOutcome::Hung(piece)) => match GalleryPiece::decode(*piece) {
+                    Ok(piece) => {
+                        metrics::record_gallery_hang(GalleryHangResult::Hung);
+                        tracing::info!(
+                            %user_id,
+                            piece_id = %piece.id,
+                            width = piece.width,
+                            height = piece.height,
+                            "artboard piece hung"
+                        );
+                        GalleryResult::Hung(Box::new(piece))
+                    }
+                    Err(error) => {
+                        metrics::record_gallery_hang(GalleryHangResult::Failed);
+                        late_core::error_span!(
+                            "artboard_gallery_hang",
+                            error = ?error,
+                            %user_id,
+                            "hung artboard piece could not be decoded"
+                        );
+                        GalleryResult::HangFailed("The piece could not be hung.".to_string())
+                    }
+                },
+                Ok(HangOutcome::DailyCapReached) => {
+                    metrics::record_gallery_hang(GalleryHangResult::DailyCap);
+                    GalleryResult::HangRefused(HangRefusal::DailyCap)
+                }
+                Ok(HangOutcome::Duplicate) => {
+                    metrics::record_gallery_hang(GalleryHangResult::Duplicate);
+                    GalleryResult::HangRefused(HangRefusal::Duplicate)
+                }
+                Err(error) => {
+                    metrics::record_gallery_hang(GalleryHangResult::Failed);
+                    late_core::error_span!(
+                        "artboard_gallery_hang",
+                        error = ?error,
+                        %user_id,
+                        "artboard piece could not be hung"
+                    );
+                    GalleryResult::HangFailed("The piece could not be hung.".to_string())
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    pub fn applaud_task(
+        &self,
+        piece_id: Uuid,
+        user_id: Uuid,
+        tx: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                ArtboardPiece::toggle_applause(&client, piece_id, user_id).await
+            }
+            .await;
+            let msg = match result {
+                Ok(outcome) => {
+                    metrics::record_gallery_applause(match outcome {
+                        ApplauseOutcome::Applauded(_) => GalleryApplauseResult::Applauded,
+                        ApplauseOutcome::Withdrawn(_) => GalleryApplauseResult::Withdrawn,
+                        ApplauseOutcome::OwnPiece => GalleryApplauseResult::OwnPiece,
+                        ApplauseOutcome::NotFound => GalleryApplauseResult::NotFound,
+                        ApplauseOutcome::Closed => GalleryApplauseResult::Closed,
+                    });
+                    GalleryResult::Applause { piece_id, outcome }
+                }
+                Err(error) => {
+                    metrics::record_gallery_applause(GalleryApplauseResult::Failed);
+                    late_core::error_span!(
+                        "artboard_gallery_applause",
+                        error = ?error,
+                        %user_id,
+                        %piece_id,
+                        "artboard applause could not be recorded"
+                    );
+                    GalleryResult::ApplauseFailed {
+                        piece_id,
+                        error: "Your applause did not land. Try again.".to_string(),
+                    }
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// The hanger takes their own piece down. Owner and month are checked
+    /// in the row's own `UPDATE` (`ArtboardPiece::take_down`).
+    pub fn take_down_task(
+        &self,
+        piece_id: Uuid,
+        user_id: Uuid,
+        tx: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                ArtboardPiece::take_down(&client, piece_id, user_id).await
+            }
+            .await;
+            let msg = match result {
+                Ok(outcome) => {
+                    metrics::record_gallery_take_down(match outcome {
+                        TakeDownOutcome::TakenDown => GalleryTakeDownResult::TakenDown,
+                        TakeDownOutcome::NotFound => GalleryTakeDownResult::NotFound,
+                        TakeDownOutcome::NotYours => GalleryTakeDownResult::NotYours,
+                        TakeDownOutcome::Closed => GalleryTakeDownResult::Closed,
+                    });
+                    if outcome == TakeDownOutcome::TakenDown {
+                        tracing::info!(%user_id, %piece_id, "artboard gallery piece taken down by its hanger");
+                    }
+                    GalleryResult::TakeDown { piece_id, outcome }
+                }
+                Err(error) => {
+                    metrics::record_gallery_take_down(GalleryTakeDownResult::Failed);
+                    late_core::error_span!(
+                        "artboard_gallery_take_down",
+                        error = ?error,
+                        %user_id,
+                        %piece_id,
+                        "artboard piece could not be taken down"
+                    );
+                    GalleryResult::TakeDownFailed {
+                        piece_id,
+                        error: "The piece did not come down. Try again.".to_string(),
+                    }
+                }
+            };
+            let _ = tx.send(msg);
+        });
+    }
+}
+
+/// One content-rating round trip in one transaction: the write in `action`
+/// when there is one, then the summary it left.
+async fn rate_content(
+    db: &Db,
+    piece_id: Uuid,
+    viewer_id: Uuid,
+    action: Option<ContentRatingAction>,
+) -> Result<ContentRatingOutcome> {
+    let mut client = db.get().await?;
+    let transaction = client.transaction().await?;
+    match action {
+        None => {}
+        Some(action) => match action {
+            ContentRatingAction::Vote(rating) => {
+                match ArtboardPieceRating::set_vote(&transaction, piece_id, viewer_id, rating)
+                    .await?
+                {
+                    VoteOutcome::Saved => {}
+                    VoteOutcome::OwnPiece => return Ok(ContentRatingOutcome::OwnPiece),
+                    VoteOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
+                }
+            }
+            ContentRatingAction::OwnerFlag(nsfw) => {
+                match ArtboardPieceRating::set_owner_flag(&transaction, piece_id, viewer_id, nsfw)
+                    .await?
+                {
+                    OwnerFlagOutcome::Saved => {}
+                    OwnerFlagOutcome::NotYours => return Ok(ContentRatingOutcome::NotYours),
+                    OwnerFlagOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
+                }
+            }
+        },
+    }
+    match ArtboardPieceRating::read(&transaction, piece_id, viewer_id).await? {
+        Some(summary) => {
+            transaction.commit().await?;
+            Ok(ContentRatingOutcome::Rated(summary))
+        }
+        None => Ok(ContentRatingOutcome::NotFound),
+    }
+}
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

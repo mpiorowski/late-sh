@@ -1,12 +1,30 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use late_core::models::account_link;
-use late_core::models::bonsai::{BonsaiV2Tree, Tree};
+use late_core::models::artboard_piece::{ArtboardPiece, GalleryCounts};
+use late_core::models::bonsai::Tree;
+use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
+use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
+use late_core::models::chips::{MonthChips, PROFILE_LEDGER_ROWS, UserChips};
+use late_core::models::crown::CrownReign;
+use late_core::models::deadchannel_runner::DeadchannelRunner;
+use late_core::models::drink_round::{DrinkCredit, DrinkRound};
+use late_core::models::game_payout::GamePayout;
 use late_core::models::irc_token::IrcToken;
 use late_core::models::marketplace;
+use late_core::models::media_queue_item::MediaQueueItem;
+use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
+use late_core::models::pot::Pot;
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::profile_award::{ProfileAward, list_profile_awards_for_user};
-use late_core::models::user::{User, sanitize_username_input};
+use late_core::models::profile_award::{
+    ProfileAward, find_profile_awards_by_ids, list_profile_awards_for_user,
+};
+use late_core::models::quest;
+use late_core::models::showcase::Showcase;
+use late_core::models::user::{
+    FirstContactHitCaps, FirstContactHitClaim, InteractionMode, User, sanitize_username_input,
+};
+use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
@@ -14,9 +32,10 @@ use late_core::MutexRecover;
 use late_core::db::Db;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 use tracing::{Instrument, info_span};
 
+use crate::app::profile::ledger::{self, LedgerRow, LedgerSources};
 use crate::ircd::registry::IrcRegistry;
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::ActiveUsers;
@@ -26,11 +45,31 @@ use crate::usernames::{self, UsernameDirectory};
 pub struct ProfileService {
     db: Db,
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
+    interaction_mode_writes: Arc<Mutex<HashMap<Uuid, watch::Sender<InteractionMode>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
     username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
     irc_registry: Option<IrcRegistry>,
+}
+
+/// What a profile shows of a pet: enough to draw it and caption it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfilePet {
+    pub species: PetSpecies,
+    pub mood: PetMood,
+    pub name: Option<String>,
+}
+
+/// What a profile shows of a runner: the face and the sheet, for the
+/// runner section. Present only while the viewed user stands on the row
+/// (`deadchannel_runners.left_at` unset); a look or sheet the row cannot
+/// parse is logged and shown as no runner, the way the directory treats
+/// it, so one bad row never blanks a profile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileRunner {
+    pub look: crate::app::deadchannel::runner::state::Look,
+    pub sheet: crate::app::deadchannel::fight::state::Sheet,
 }
 
 #[derive(Clone, Default)]
@@ -39,10 +78,26 @@ pub struct ProfileSnapshot {
     pub profile: Option<Profile>,
     pub chip_balance: Option<i64>,
     pub bonsai: Option<Tree>,
-    pub bonsai_v2: Option<BonsaiV2Tree>,
-    pub dynamic_bonsai_selected: bool,
+    pub bonsai_decay_protection: Option<BonsaiDecayProtection>,
     pub aquarium_fish: Vec<(String, usize)>,
+    /// The Pet Companion, for owners only, in the mood its owner's session
+    /// last left it in.
+    pub pet: Option<ProfilePet>,
+    /// The standing runner behind this profile, if any.
+    pub runner: Option<ProfileRunner>,
     pub profile_awards: Vec<ProfileAward>,
+    /// Gilds this profile's owner has received, per tier.
+    pub gild_counts: GildCounts,
+    /// Pieces this profile's owner has hung in the Artboard gallery, and
+    /// the applause they gathered.
+    pub gallery_counts: GalleryCounts,
+    /// The newest ledger rows, newest first, each with its ref resolved to
+    /// what a reader can use: the public chip audit.
+    pub chip_ledger: Vec<LedgerRow>,
+    /// This UTC month's earned (the board's own figure) and net.
+    pub chips_month: MonthChips,
+    /// Every showcase this profile's owner has posted, newest first.
+    pub showcases: Vec<Showcase>,
 }
 
 #[derive(Clone, Debug)]
@@ -68,12 +123,6 @@ pub enum ProfileEvent {
         abandoned_username: String,
     },
     Error {
-        user_id: Uuid,
-        message: String,
-    },
-    /// Connect-time summary of friends whose birthday is today or within the
-    /// next week. Surfaced as an in-app banner.
-    BirthdayAlert {
         user_id: Uuid,
         message: String,
     },
@@ -111,41 +160,6 @@ impl From<&IrcToken> for IrcTokenStatus {
     }
 }
 
-/// Build a one-line alert from tracked `(username, MM-DD)` pairs: anyone whose
-/// birthday is today, then anyone within the next 7 days. `None` if nobody
-/// qualifies. Pure — `today` is injected so it is unit-testable.
-pub(crate) fn build_birthday_alert(
-    birthdays: &[(String, String)],
-    today: NaiveDate,
-) -> Option<String> {
-    use late_core::models::birthday::{days_until, is_today};
-    let mut today_names = Vec::new();
-    let mut soon = Vec::new();
-    for (name, mmdd) in birthdays {
-        if is_today(mmdd, today) {
-            today_names.push(name.clone());
-        } else if let Some(d) = days_until(mmdd, today)
-            && (1..=7).contains(&d)
-        {
-            soon.push((d, name.clone()));
-        }
-    }
-    let mut parts = Vec::new();
-    if !today_names.is_empty() {
-        parts.push(format!("{} — birthday today!", today_names.join(", ")));
-    }
-    soon.sort();
-    for (d, name) in soon {
-        let when = if d == 1 {
-            "tomorrow".to_string()
-        } else {
-            format!("in {d} days")
-        };
-        parts.push(format!("{name}'s birthday {when}"));
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
 /// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
 /// blank, or unparseable) means "no local zone" — callers fall back to UTC.
 pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
@@ -155,13 +169,6 @@ pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
         .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
 }
 
-fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
-    match parse_account_tz(timezone) {
-        Some(tz) => now.with_timezone(&tz).date_naive(),
-        None => now.date_naive(),
-    }
-}
-
 impl ProfileService {
     pub fn new(db: Db, active_users: ActiveUsers) -> Self {
         let (evt_tx, _) = broadcast::channel(512);
@@ -169,6 +176,7 @@ impl ProfileService {
         Self {
             db,
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
+            interaction_mode_writes: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
             username_directory: None,
@@ -255,11 +263,82 @@ impl ProfileService {
         let client = self.db.get().await?;
         let profile = Profile::load_with_chip_balance(&client, user_id).await?;
         let bonsai = Tree::find_by_user_id(&client, user_id).await?;
-        let bonsai_v2 = BonsaiV2Tree::find_by_user_id(&client, user_id).await?;
-        let dynamic_bonsai_selected =
-            marketplace::is_dynamic_bonsai_selected(&client, user_id).await?;
-        let aquarium_fish = marketplace::active_aquarium_fish_for_user(&client, user_id).await?;
+        let bonsai_decay_protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
+        let aquarium_fish =
+            marketplace::active_aquarium_creatures_for_user(&client, user_id).await?;
+        let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
+            PetCompanion::find_by_user_id(&client, user_id)
+                .await?
+                .map(|row| ProfilePet {
+                    species: row.species(),
+                    mood: row.mood(),
+                    name: row.name.clone(),
+                })
+        } else {
+            None
+        };
+        let runner = match DeadchannelRunner::find_by_user(&client, user_id).await? {
+            Some(row) if row.left_at.is_none() => {
+                let look = crate::app::deadchannel::runner::state::Look::parse(&row.look);
+                let sheet = crate::app::deadchannel::fight::state::Sheet::from_row(&row);
+                match (look, sheet) {
+                    (Ok(look), Ok(mut sheet)) => {
+                        // The lazy day roll, applied to the view only: the
+                        // row rolls on the runner's next touch, and until
+                        // then it can hold yesterday's dead signal. Nothing
+                        // is written here; the fight service owns the row.
+                        sheet.settle(crate::app::deadchannel::fight::svc::FightService::today());
+                        Some(ProfileRunner { look, sheet })
+                    }
+                    (Err(error), _) => {
+                        tracing::error!(error = %error, user_id = %user_id, "runner look failed to parse; profile shows no runner");
+                        None
+                    }
+                    (_, Err(error)) => {
+                        tracing::error!(error = %error, user_id = %user_id, "runner sheet failed to parse; profile shows no runner");
+                        None
+                    }
+                }
+            }
+            Some(_) | None => None,
+        };
         let profile_awards = list_profile_awards_for_user(&client, user_id).await?;
+        let gild_counts = ChatMessageGild::counts_for_author(&client, user_id).await?;
+        let gallery_counts = ArtboardPiece::counts_for_user(&client, user_id).await?;
+        let chip_ledger = UserChips::recent_ledger(&client, user_id, PROFILE_LEDGER_ROWS).await?;
+        let chips_month = UserChips::month_figures(&client, user_id).await?;
+        let showcases = Showcase::list_by_user_id(&client, user_id).await?;
+        // One batched lookup per table the ledger's refs point at, each a
+        // primary-key or unique-index scan over at most PROFILE_LEDGER_ROWS
+        // ids, and only when a profile is opened.
+        let refs = ledger::refs(&chip_ledger);
+        let gilds = ChatMessageGild::parties_for_refs(&client, &refs.gilds).await?;
+        let payouts = GamePayout::sources_for_ids(&client, &refs.payouts).await?;
+        let deposed = CrownReign::deposed_for_reigns(&client, &refs.reigns).await?;
+        let pots = Pot::find_by_ids(&**client, &refs.pots).await?;
+        let quests = quest::assignment_titles(&**client, &refs.quests).await?;
+        let awards = find_profile_awards_by_ids(&client, &refs.awards).await?;
+        let rounds = DrinkRound::find_by_ids(&client, &refs.rounds).await?;
+        let gift_recipients =
+            DrinkCredit::recipients_for_rounds(&client, &refs.gift_rounds).await?;
+        let songs = MediaQueueItem::titles_for_video_ids(&client, &refs.videos).await?;
+        let named_ids = ledger::named_user_ids(&refs, &gilds, &deposed, &gift_recipients);
+        let usernames = User::list_usernames_by_ids(&client, &named_ids).await?;
+        let chip_ledger = ledger::resolve(
+            chip_ledger,
+            &LedgerSources {
+                gilds,
+                payouts,
+                deposed,
+                pots,
+                quests,
+                awards,
+                rounds,
+                gift_recipients,
+                songs,
+                usernames,
+            },
+        );
         self.publish_snapshot(
             user_id,
             ProfileSnapshot {
@@ -267,42 +346,18 @@ impl ProfileService {
                 profile: Some(profile.profile),
                 chip_balance: Some(profile.chip_balance),
                 bonsai,
-                bonsai_v2,
-                dynamic_bonsai_selected,
+                bonsai_decay_protection,
                 aquarium_fish,
+                pet,
+                runner,
                 profile_awards,
+                gild_counts,
+                gallery_counts,
+                chip_ledger,
+                chips_month,
+                showcases,
             },
         )?;
-        Ok(())
-    }
-
-    /// Fire-and-forget: on connect, surface a single banner for friends whose
-    /// birthday is today or within the next week.
-    pub fn check_birthdays_task(&self, user_id: Uuid) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                if let Err(e) = service.do_check_birthdays(user_id).await {
-                    late_core::error_span!(
-                        "birthday_alert_failed",
-                        error = ?e,
-                        user_id = %user_id,
-                        "failed to compute birthday alert"
-                    );
-                }
-            }
-            .instrument(info_span!("profile.check_birthdays", user_id = %user_id)),
-        );
-    }
-
-    async fn do_check_birthdays(&self, user_id: Uuid) -> Result<()> {
-        let client = self.db.get().await?;
-        let profile = Profile::load(&client, user_id).await?;
-        let birthdays = User::friend_birthdays(&client, user_id).await?;
-        let today = date_for_timezone(Utc::now(), profile.timezone.as_deref());
-        if let Some(message) = build_birthday_alert(&birthdays, today) {
-            self.publish_event(ProfileEvent::BirthdayAlert { user_id, message });
-        }
         Ok(())
     }
 
@@ -405,6 +460,248 @@ impl ProfileService {
                 }
             }
             .instrument(info_span!("profile.clubhouse_tutorial_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: claim one capped delivery of the first-contact
+    /// splash whisper. A lost claim means another device played the held
+    /// door in the same window, or the row's gap had not passed; it is
+    /// logged, since each whisper is meant to be seen once, and there is
+    /// nothing to undo. A failure is only logged: worst case the whisper
+    /// plays once more next session.
+    pub fn claim_first_contact_whisper(
+        &self,
+        user_id: Uuid,
+        at: chrono::DateTime<chrono::Utc>,
+        gap: chrono::Duration,
+        cap: u32,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::claim_first_contact_whisper(&client, user_id, at, gap, cap).await
+                }
+                .await;
+                match result {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::warn!(user_id = %user_id, "first contact whisper played but the row refused the mark: double-play, gap, or cap");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "failed to persist first contact whisper stamp");
+                    }
+                }
+            }
+            .instrument(info_span!("profile.first_contact_whisper_task", user_id = %user_id)),
+        );
+    }
+
+    /// Claim one capped stage-1 clock-glitch burst on the row. The answer
+    /// (won with the new count, capped with the row's count, or the error)
+    /// comes back on the returned channel; the haunting's tick drains it.
+    /// Errors are the receiver's to log, once.
+    pub fn claim_first_contact_glitch_burst(
+        &self,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> oneshot::Receiver<Result<FirstContactHitClaim>> {
+        let (tx, rx) = oneshot::channel();
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::claim_first_contact_glitch_burst(&client, user_id, today, caps).await
+                }
+                .await;
+                let _ = tx.send(result);
+            }
+            .instrument(info_span!("profile.first_contact_glitch_claim_task", user_id = %user_id)),
+        );
+        rx
+    }
+
+    /// Claim one capped stage-2 name-flicker hit on the row. Same contract
+    /// as [`ProfileService::claim_first_contact_glitch_burst`].
+    pub fn claim_first_contact_name_hit(
+        &self,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> oneshot::Receiver<Result<FirstContactHitClaim>> {
+        let (tx, rx) = oneshot::channel();
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::claim_first_contact_name_hit(&client, user_id, today, caps).await
+                }
+                .await;
+                let _ = tx.send(result);
+            }
+            .instrument(info_span!("profile.first_contact_name_claim_task", user_id = %user_id)),
+        );
+        rx
+    }
+
+    /// Fire-and-forget: count one forced (`/haunt glitch`) stage-1 burst,
+    /// uncapped. Natural bursts go through the claim above instead. A lost
+    /// write costs one uncounted burst.
+    pub fn record_first_contact_glitch_hit(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::record_first_contact_glitch_hit(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist first contact glitch hit");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_glitch_hit_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: count one forced (`/haunt name`) stage-2 hit,
+    /// uncapped. Natural hits go through the claim above instead. A lost
+    /// write costs one uncounted flicker.
+    pub fn record_first_contact_name_hit(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::record_first_contact_name_hit(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist first contact name hit");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_name_hit_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: wipe every first-contact mark (the admin
+    /// `/haunt reset` test hook).
+    pub fn reset_first_contact(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::reset_first_contact(&client, user_id).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to reset first contact marks");
+                }
+            }
+            .instrument(info_span!("profile.first_contact_reset_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: persist one device's home rail layout onto the SSH key
+    /// the session authenticated with. No event on success; a failure is only
+    /// logged, since the layout already applies for the rest of the session and
+    /// the cost of losing the write is one un-remembered preference.
+    pub fn set_key_layout(&self, user_id: Uuid, fingerprint: String, layout: KeyLayout) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    UserSshKey::set_layout(&client, user_id, &fingerprint, layout).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist device rail layout");
+                }
+            }
+            .instrument(info_span!("profile.device_rails_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: persist when this device's session went quiet before
+    /// it ended, the mark the next session's bare `/summary` reads from. A
+    /// failure is only logged: the next session falls back to the default
+    /// window, which is the pre-existing behavior rather than a wrong one.
+    pub fn set_key_left_at(&self, user_id: Uuid, fingerprint: String, left_at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    UserSshKey::set_left_at(&client, user_id, &fingerprint, left_at).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist device left_at");
+                }
+            }
+            .instrument(info_span!("profile.device_left_at_task", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget: persist the Zen page's layout JSON. A failure is
+    /// only logged (the page would start from its last stored layout next
+    /// session).
+    pub fn set_zen_layout(&self, user_id: Uuid, layout: serde_json::Value) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_zen_layout(&client, user_id, &layout).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist zen layout");
+                }
+            }
+            .in_current_span(),
+        );
+    }
+
+    /// Persist the latest interaction mode with one background writer per user.
+    pub fn set_interaction_mode(&self, user_id: Uuid, mode: InteractionMode) {
+        let mut writers = self.interaction_mode_writes.lock_recover();
+        if let Some(writer) = writers.get(&user_id) {
+            writer.send_replace(mode);
+            return;
+        }
+        let (writer, mut pending) = watch::channel(mode);
+        writers.insert(user_id, writer);
+        drop(writers);
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                loop {
+                    let mode = *pending.borrow_and_update();
+                    let result = async {
+                        let client = service.db.get().await?;
+                        User::set_interaction_mode(&client, user_id, mode).await
+                    }
+                    .await;
+                    if let Err(e) = result {
+                        tracing::warn!(error = ?e, "failed to persist interaction mode");
+                    }
+                    // Share the enqueue lock so a new choice cannot arrive
+                    // between checking for work and retiring this writer.
+                    let mut writers = service.interaction_mode_writes.lock_recover();
+                    if !pending.has_changed().unwrap_or(false) {
+                        writers.remove(&user_id);
+                        break;
+                    }
+                }
+            }
+            .instrument(info_span!("profile.interaction_mode_task", user_id = %user_id)),
         );
     }
 
@@ -750,72 +1047,5 @@ fn account_link_error_message(error: &anyhow::Error) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn profile_snapshot_default_is_empty() {
-        let snapshot = ProfileSnapshot::default();
-        assert_eq!(snapshot.user_id, None);
-        assert!(snapshot.profile.is_none());
-        assert!(snapshot.bonsai.is_none());
-    }
-
-    #[test]
-    fn should_prune_when_only_one_receiver_remains() {
-        let (tx, _rx) = watch::channel(ProfileSnapshot::default());
-        assert!(should_prune_snapshot_sender(&tx));
-    }
-
-    #[test]
-    fn should_not_prune_when_multiple_receivers_exist() {
-        let (tx, _rx1) = watch::channel(ProfileSnapshot::default());
-        let _rx2 = tx.subscribe();
-        assert!(!should_prune_snapshot_sender(&tx));
-    }
-
-    #[test]
-    fn should_prune_when_channel_is_closed() {
-        let (tx, rx) = watch::channel(ProfileSnapshot::default());
-        drop(rx);
-        assert!(should_prune_snapshot_sender(&tx));
-    }
-
-    fn day(y: i32, m: u32, d: u32) -> chrono::NaiveDate {
-        chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap()
-    }
-
-    #[test]
-    fn no_friend_birthdays_yields_no_alert() {
-        assert_eq!(build_birthday_alert(&[], day(2026, 5, 20)), None);
-        let none_soon = vec![("zoe".to_string(), "11-30".to_string())];
-        assert_eq!(build_birthday_alert(&none_soon, day(2026, 5, 20)), None);
-    }
-
-    #[test]
-    fn today_birthday_is_called_out_first() {
-        let b = vec![
-            ("ada".to_string(), "05-20".to_string()),
-            ("bo".to_string(), "05-23".to_string()),
-        ];
-        let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
-        assert!(msg.starts_with("ada — birthday today!"), "{msg}");
-        assert!(msg.contains("bo's birthday in 3 days"), "{msg}");
-    }
-
-    #[test]
-    fn tomorrow_is_phrased_specially_and_sorted_by_proximity() {
-        let b = vec![
-            ("far".to_string(), "05-27".to_string()),
-            ("near".to_string(), "05-21".to_string()),
-        ];
-        let msg = build_birthday_alert(&b, day(2026, 5, 20)).unwrap();
-        assert_eq!(msg, "near's birthday tomorrow · far's birthday in 7 days");
-    }
-
-    #[test]
-    fn eight_days_out_is_outside_the_window() {
-        let b = vec![("late".to_string(), "05-28".to_string())];
-        assert_eq!(build_birthday_alert(&b, day(2026, 5, 20)), None);
-    }
-}
+#[path = "svc_internal_test.rs"]
+mod svc_internal_test;

@@ -18,13 +18,46 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     }
 }
 
+/// The door-screen launcher: the landing with a handle-aware Launch block (the
+/// one-time arcade-name claim prompt, then the play action; see
+/// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    draw_landing(frame, area, state.is_enabled());
+    if !state.is_enabled() {
+        draw_landing(frame, area, false, false, 0);
+        return;
+    }
+    let launch = landing::handle_launch_block(
+        state.handle_status(),
+        state.entry_input(),
+        landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS()),
+    );
+    render_landing(frame, area, launch, 0);
 }
 
-/// NetHack landing copy, used by both the standalone screen fallback and the
-/// Games hub when NetHack is selected.
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
+/// NetHack landing copy with the classic one-line Launch block, used by the
+/// Games hub when NetHack is selected. `live` marks a detached game in
+/// progress this session, which turns the launch line into a resume line.
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, scroll: u16) -> u16 {
+    let action_line = if live {
+        landing::action(
+            ">",
+            "Enter",
+            "resume your game in progress",
+            theme::SUCCESS(),
+        )
+    } else if enabled {
+        landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS())
+    } else {
+        Line::from(Span::styled(
+            "Currently unavailable",
+            Style::default().fg(theme::ERROR()),
+        ))
+    };
+    render_landing(frame, area, vec![action_line], scroll)
+}
+
+/// The landing body around a caller-supplied Launch block.
+fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -33,15 +66,6 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
             Constraint::Length(1),
         ])
         .split(area)[1];
-
-    let action_line = if enabled {
-        landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS())
-    } else {
-        Line::from(Span::styled(
-            "Currently unavailable",
-            Style::default().fg(theme::ERROR()),
-        ))
-    };
 
     let mut lines = vec![Line::raw("")];
     lines.extend(nethack_logo());
@@ -75,25 +99,29 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         landing::heading("Rewards"),
         landing::stat(
             "Amulet of Yendor",
-            "10,000 chips + NHA badge, once per account",
+            "20,000 chips, and the NHA badge the first time",
             18,
         ),
         landing::stat(
             "Ascension",
-            "20,000 chips + NHY badge, once per account",
+            "40,000 chips, and the NHY badge the first time",
             18,
         ),
         Line::from(Span::styled(
-            "  Play again any time, but these chip payouts are lifetime claims.",
+            "  Each pays again 30 days after the last time it paid. One run, one payout.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(""),
         landing::heading("Launch"),
-        action_line,
+    ]);
+    lines.extend(launch);
+    lines.extend([
+        landing::hint("c", "customize your .nethackrc (paste box)", 8),
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "NetHack's own in-game help menu", 8),
         landing::hint("S", "save and continue another night", 8),
+        landing::hint("`", "step out to chat; the game keeps running", 8),
         landing::hint("Ctrl-C", "quit back to the Games hub", 8),
         Line::from(""),
         Line::from(Span::styled(
@@ -102,7 +130,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         )),
     ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn nethack_logo() -> Vec<Line<'static>> {

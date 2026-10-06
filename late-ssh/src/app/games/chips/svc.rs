@@ -1,9 +1,15 @@
+use anyhow::Context;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
-use late_core::models::asterion::ASTERION_ESCAPE_LEDGER_REASON;
-use late_core::models::chips::UserChips;
+use late_core::models::chips::{ChipMove, UserChips};
+use late_core::models::drink_round::{
+    Bar, DrinkCredit, DrinkRound, GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, OpenCredit,
+    ROUND_CREDIT_TTL_HOURS,
+};
 use late_core::models::drinks::UserDrinks;
-use late_core::models::game_payout::{GamePayout, GamePayoutClaim};
+use late_core::models::game_payout::{
+    GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutClaim, GamePayoutKey, GamePayoutMultiGrant,
+};
 use late_core::models::reward::{
     ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_PER_EVENT,
     REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate, daily_puzzle_reward_key,
@@ -16,8 +22,16 @@ use crate::app::activity::{
     event::{ActivityEvent, ActivityGame, ActivityKind},
 };
 
-const LIFETIME_REWARD_PERIOD_KIND: &str = "lifetime";
-const LIFETIME_REWARD_PERIOD_KEY: &str = "once";
+// `period_kind = "lifetime"` is gone from every write path: migration 158
+// made every door milestone repeatable, so nothing pays once per account for
+// life any more. The rows already banked under it stay as history, and no gate
+// reads them.
+const PER_EVENT_REWARD_PERIOD_KIND: &str = "event";
+/// The lobby's pair-day cap (decided 2026-08-27): one paid win per opponent per
+/// game per UTC day the match was posted. The key is
+/// `<opponent id>:<posting date>`, and the claim row carries the template's
+/// `game` like every other claim, so each roster game has its own row.
+const PAIR_DAY_REWARD_PERIOD_KIND: &str = "pair_day";
 
 #[derive(Clone)]
 pub struct ChipService {
@@ -35,6 +49,108 @@ pub struct RewardGrant {
 #[derive(Debug, Clone, Copy)]
 pub struct DrinkPurchase {
     pub balance: i64,
+    pub drunk_points: i64,
+    pub last_drink_at: DateTime<Utc>,
+}
+
+/// A round that was bought and paid for, and the buyer's own drink from it.
+#[derive(Debug, Clone, Copy)]
+pub struct RoundPurchase {
+    pub round_id: Uuid,
+    /// Credits that actually landed, which is what the buyer paid for.
+    pub patrons: i64,
+    pub total_chips: i64,
+    pub balance: i64,
+    /// The buyer's buzz after their own pour: "round on me" includes me.
+    pub drunk_points: i64,
+    pub last_drink_at: DateTime<Utc>,
+}
+
+/// One drink left on another patron's tab, without pouring the buyer one.
+#[derive(Debug, Clone, Copy)]
+pub struct GiftDrinkPurchase {
+    pub round_id: Uuid,
+    pub balance: i64,
+}
+
+/// Why the bar would not sell a gift drink. A one-credit grant has exactly
+/// two ways to say no, so this is not [`RoundRefusal`]: an empty house is
+/// impossible with a named recipient and does not get an arm. Uncharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftRefusal {
+    /// The recipient already holds `MAX_OPEN_CREDITS` uncashed drinks.
+    AllHolding,
+    /// `GIFT_DRINK_PRICE` would take the buyer below the chip floor.
+    InsufficientChips,
+}
+
+/// A gift that did not pay: a rule said no, or the database did.
+#[derive(Debug)]
+pub enum GiftError {
+    Refused(GiftRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for GiftError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// Why a personal gift drink did not happen, for the refusal metric. The
+/// first three are the bartender's own checks, made before this service is
+/// asked; the last two mirror [`GiftRefusal`]. Every arm is uncharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftDrinkRefusal {
+    UnknownRecipient,
+    SelfGift,
+    BotRecipient,
+    AllHolding,
+    InsufficientChips,
+}
+
+/// Why a round did not happen. Every arm is uncharged: a refused round leaves
+/// no ledger row and no credits. The wording lives with the bartender, who is
+/// the only one who ever says these out loud.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundRefusal {
+    /// Nobody else is at the bar. The buyer is never counted as their own
+    /// patron, so drinking alone cannot be sold as generosity.
+    EmptyHouse,
+    /// Everyone present is already holding `MAX_OPEN_CREDITS` uncashed
+    /// drinks. This is what makes a round into a room that is not drinking
+    /// cost nothing, and it is the only throttle the mechanic has.
+    AllHolding,
+    /// The total would take the buyer below the chip floor. Quotes what the
+    /// round would have cost, since the price is the room's size and the
+    /// buyer has no other way to know it.
+    InsufficientChips { patrons: i64, total: i64 },
+}
+
+/// A round that did not pay: a rule said no, or the database did. Same split
+/// as the crown's, and for the same reason: only one of the two is the
+/// patron's business.
+#[derive(Debug)]
+pub enum RoundError {
+    Refused(RoundRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for RoundError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// A drink the house poured against somebody else's round.
+#[derive(Debug, Clone, Copy)]
+pub struct CompedDrink {
+    pub round_id: Uuid,
+    /// Who bought the round, absent once they delete their account.
+    pub buyer_user_id: Option<Uuid>,
+    /// Drinks still waiting on the patron's tab after this one, so the
+    /// bartender can tell them what they are still owed.
+    pub remaining: i64,
     pub drunk_points: i64,
     pub last_drink_at: DateTime<Utc>,
 }
@@ -92,33 +208,30 @@ impl ChipService {
             user_id,
             &reward_key,
             event.occurred_at.date_naive(),
-            "daily_puzzle_win",
+            ChipMove::DailyPuzzleWin,
         )
         .await?;
         Ok(())
     }
 
-    pub async fn debit_bet(&self, user_id: Uuid, amount: i64) -> anyhow::Result<Option<i64>> {
-        let client = self.db.get().await?;
-        let chips = UserChips::deduct(&client, user_id, amount).await?;
-        Ok(chips.map(|c| c.balance))
-    }
-
-    /// Charge a bartender drink (floor-guarded) and record the buzz in one
-    /// transaction, so a crash can't charge without pouring. Returns None
+    /// Charge a drink poured at `bar` (floor-guarded) and record the buzz in
+    /// one transaction, so a crash can't charge without pouring. Returns None
     /// when the user can't cover the drink and keep the chip floor.
     pub async fn buy_drink(
         &self,
         user_id: Uuid,
+        bar: Bar,
         price: i64,
         drink: &str,
     ) -> anyhow::Result<Option<DrinkPurchase>> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
-        let Some(chips) = UserChips::deduct_for_drink(&tx, user_id, price, drink).await? else {
+        let Some(chips) =
+            UserChips::apply(&*tx, user_id, ChipMove::DrinkPurchase, price, drink).await?
+        else {
             return Ok(None);
         };
-        let drinks = UserDrinks::record_purchase(&tx, user_id, price).await?;
+        let drinks = UserDrinks::record_purchase(&tx, user_id, bar, price).await?;
         tx.commit().await?;
         Ok(Some(DrinkPurchase {
             balance: chips.balance,
@@ -127,17 +240,224 @@ impl ChipService {
         }))
     }
 
-    /// Comp the newcomer's welcome pour: record the buzz with no chip debit
-    /// (it's on the house) and hand back the fresh buzz so the clubhouse glow
-    /// can light up immediately.
-    pub async fn grant_free_drink(&self, user_id: Uuid, points: i64) -> anyhow::Result<UserDrinks> {
-        let client = self.db.get().await?;
-        UserDrinks::record_free_pour(&client, user_id, points).await
+    /// Buy the house a round: grant one credit to every patron at the bar who
+    /// is not already at [`MAX_OPEN_CREDITS`], charge the buyer for exactly
+    /// the credits that landed, and pour the buyer their own drink on the
+    /// spot. One
+    /// transaction, so a crash can neither charge for drinks nobody was
+    /// promised nor promise drinks nobody paid for.
+    ///
+    /// The buyer is the one person a round can pour into without asking: they
+    /// typed the order. Their drink is worth the same as every patron's
+    /// credit off this round ([`Bar::drink_points`], which is why the bar is
+    /// named here), and it rides on the round's price rather than adding a
+    /// head to it.
+    ///
+    /// `candidates` is the buyer's own presence read, minus the buyer: this
+    /// takes the roster it is given and never asks who is online, so the
+    /// caller owns that policy. The buyer is a connected patron, so their
+    /// chips row already exists (`ensure_chips` at login) and nothing here
+    /// creates one; a missing row reads as a floor refusal, the same way
+    /// [`Self::buy_drink`] treats it.
+    pub async fn buy_round(
+        &self,
+        buyer_id: Uuid,
+        price_per_patron: i64,
+        bar: Bar,
+        candidates: &[Uuid],
+    ) -> Result<RoundPurchase, RoundError> {
+        if candidates.is_empty() {
+            return Err(RoundError::Refused(RoundRefusal::EmptyHouse));
+        }
+
+        let mut client = self.db.get().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the round transaction")?;
+        let grant = DrinkRound::open(
+            &tx,
+            buyer_id,
+            price_per_patron,
+            bar,
+            candidates,
+            ROUND_CREDIT_TTL_HOURS,
+            MAX_OPEN_CREDITS,
+        )
+        .await?;
+        let patrons = grant.patron_count();
+        if patrons == 0 {
+            return Err(RoundError::Refused(RoundRefusal::AllHolding));
+        }
+
+        let total = grant.total_chips();
+        let source_ref = grant.round.id.to_string();
+        let Some(chips) =
+            UserChips::apply(&*tx, buyer_id, ChipMove::RoundPurchase, total, &source_ref).await?
+        else {
+            return Err(RoundError::Refused(RoundRefusal::InsufficientChips {
+                patrons,
+                total,
+            }));
+        };
+        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, bar, bar.drink_points()).await?;
+        tx.commit().await.context("committing the round")?;
+
+        Ok(RoundPurchase {
+            round_id: grant.round.id,
+            patrons,
+            total_chips: total,
+            balance: chips.balance,
+            drunk_points: drinks.drunk_points,
+            last_drink_at: drinks.last_drink_at,
+        })
     }
 
-    pub async fn credit_payout(&self, user_id: Uuid, amount: i64) -> anyhow::Result<i64> {
+    /// Leave one drink for a named patron, online or not. The same grant lock,
+    /// three-credit cap, expiry and pour as a house round apply, priced at
+    /// [`GIFT_DRINK_PRICE`] rather than a head of a round and written as
+    /// [`ChipMove::DrinkGift`] so the ledger can name the recipient. Only the
+    /// recipient may drink: buying a gift does not pour the buyer one.
+    ///
+    /// The recipient is a human other than the buyer: the bartender resolves
+    /// the name and refuses self-gifts and bots before asking, so this takes
+    /// the pair it is given and does not re-check it.
+    pub async fn buy_drink_for(
+        &self,
+        buyer_id: Uuid,
+        recipient_id: Uuid,
+    ) -> Result<GiftDrinkPurchase, GiftError> {
+        let mut client = self.db.get().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the gift drink transaction")?;
+        let grant = DrinkRound::open(
+            &tx,
+            buyer_id,
+            GIFT_DRINK_PRICE,
+            Bar::Tavern,
+            &[recipient_id],
+            ROUND_CREDIT_TTL_HOURS,
+            MAX_OPEN_CREDITS,
+        )
+        .await?;
+        if grant.patron_count() == 0 {
+            return Err(GiftError::Refused(GiftRefusal::AllHolding));
+        }
+        let Some(chips) = UserChips::apply(
+            &*tx,
+            buyer_id,
+            ChipMove::DrinkGift,
+            grant.total_chips(),
+            &grant.round.id.to_string(),
+        )
+        .await?
+        else {
+            return Err(GiftError::Refused(GiftRefusal::InsufficientChips));
+        };
+        tx.commit().await.context("committing the gift drink")?;
+        Ok(GiftDrinkPurchase {
+            round_id: grant.round.id,
+            balance: chips.balance,
+        })
+    }
+
+    /// The patron's next open credit, read before the bartender decides
+    /// anything so the prompt knows the pour is comped. Not a claim, and not
+    /// where the buyer's name comes from: [`Self::cash_round_drink`] is what
+    /// spends a credit, and the one it spends names the buyer.
+    pub async fn open_round_credit(&self, user_id: Uuid) -> anyhow::Result<Option<OpenCredit>> {
         let client = self.db.get().await?;
-        let chips = UserChips::add_bonus(&client, user_id, amount).await?;
+        DrinkCredit::find_open(&client, user_id).await
+    }
+
+    /// How many drinks the patron is holding: the count the Nightcap menu
+    /// prints beside the house beer, the one pour a credit pays for.
+    pub async fn open_round_credits(&self, user_id: Uuid) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        DrinkCredit::count_open(&client, user_id).await
+    }
+
+    /// Pour against a round's credit: spend the one closest to expiring and
+    /// record the buzz the bar that bought it pours ([`Bar::drink_points`]),
+    /// with no chip debit anywhere. One transaction, so the credit cannot be
+    /// spent without the drink landing. `None` means there was nothing to
+    /// spend, and the caller charges for the pour as usual. `bar` is where
+    /// the patron is drinking it, which may not be the bar that sold it.
+    pub async fn cash_round_drink(
+        &self,
+        user_id: Uuid,
+        bar: Bar,
+    ) -> anyhow::Result<Option<CompedDrink>> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(credit) = DrinkCredit::cash(&tx, user_id).await? else {
+            return Ok(None);
+        };
+        let drinks =
+            UserDrinks::record_comped_pour(&tx, user_id, bar, credit.bar.drink_points()).await?;
+        tx.commit().await?;
+        Ok(Some(CompedDrink {
+            round_id: credit.round_id,
+            buyer_user_id: credit.buyer_user_id,
+            remaining: credit.remaining,
+            drunk_points: drinks.drunk_points,
+            last_drink_at: drinks.last_drink_at,
+        }))
+    }
+
+    /// Comp the newcomer's welcome pour: record the buzz with no chip debit
+    /// (it's on the house) and hand back the fresh buzz so the clubhouse glow
+    /// can light up immediately. At most once per user ever, guarded by the
+    /// `user_drinks` insert; `None` means they have drunk before and the
+    /// welcome is spent.
+    pub async fn grant_free_drink(
+        &self,
+        user_id: Uuid,
+        points: i64,
+    ) -> anyhow::Result<Option<UserDrinks>> {
+        let client = self.db.get().await?;
+        UserDrinks::record_welcome_pour(&client, user_id, points).await
+    }
+
+    /// A house-table payout (a blackjack settlement, a poker pot). Credits
+    /// never decline, so a missing row is an error rather than a `None`.
+    pub async fn credit_payout(
+        &self,
+        user_id: Uuid,
+        chip_move: ChipMove,
+        amount: i64,
+        source_ref: &str,
+    ) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        match UserChips::apply(&**client, user_id, chip_move, amount, source_ref).await? {
+            Some(chips) => Ok(chips.balance),
+            None => anyhow::bail!("chip credit returned no row"),
+        }
+    }
+
+    /// One ledger move for a named [`ChipMove`], with no reward template and
+    /// no cooldown behind it: house-table bets, and the perpetual Super
+    /// Snake arena banking a visit. `None` means a debit the balance could
+    /// not cover.
+    pub async fn apply_move(
+        &self,
+        user_id: Uuid,
+        chip_move: ChipMove,
+        amount: i64,
+        source_ref: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        let client = self.db.get().await?;
+        let chips = UserChips::apply(&**client, user_id, chip_move, amount, source_ref).await?;
+        Ok(chips.map(|chips| chips.balance))
+    }
+
+    /// An admin minting chips for a player with `/grant`. Leaves no ledger
+    /// row by decision; see [`UserChips::admin_grant`].
+    pub async fn grant_chips(&self, recipient_id: Uuid, amount: i64) -> anyhow::Result<i64> {
+        let client = self.db.get().await?;
+        let chips = UserChips::admin_grant(&**client, recipient_id, amount).await?;
         Ok(chips.balance)
     }
 
@@ -195,7 +515,7 @@ impl ChipService {
             user_id,
             ASTERION_DAILY_ESCAPE_REWARD_KEY,
             escape_date,
-            ASTERION_ESCAPE_LEDGER_REASON,
+            ChipMove::AsterionEscape,
         )
         .await
     }
@@ -205,7 +525,7 @@ impl ChipService {
         user_id: Uuid,
         reward_key: &str,
         payout_date: NaiveDate,
-        ledger_reason: &str,
+        chip_move: ChipMove,
     ) -> anyhow::Result<RewardGrant> {
         let client = self.db.get().await?;
         let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
@@ -217,7 +537,7 @@ impl ChipService {
             template.payout_kind()?,
             payout_date,
             template.reward_chips,
-            ledger_reason,
+            chip_move,
         )
         .await?;
         Ok(reward_grant(template.reward_chips, claim))
@@ -227,7 +547,7 @@ impl ChipService {
         &self,
         user_id: Uuid,
         reward_key: &str,
-        ledger_reason: &str,
+        chip_move: ChipMove,
     ) -> anyhow::Result<RewardGrant> {
         let mut client = self.db.get().await?;
         let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
@@ -239,17 +559,22 @@ impl ChipService {
             template.payout_kind()?,
             cooldown,
             template.reward_chips,
-            ledger_reason,
+            chip_move,
         )
         .await?;
         Ok(reward_grant(template.reward_chips, claim))
     }
 
-    pub async fn credit_lifetime_reward_template(
+    /// Credit a `per_event` reward once per distinct `event_key` (forever).
+    /// Unlike the lifetime grant this pays for each event — e.g. every
+    /// distinct daily-match win, keyed on the match id — while staying
+    /// idempotent per event, so a re-broadcast or retry never double-pays.
+    pub async fn credit_per_event_reward_template(
         &self,
         user_id: Uuid,
         reward_key: &str,
-        ledger_reason: &str,
+        event_key: &str,
+        chip_move: ChipMove,
     ) -> anyhow::Result<RewardGrant> {
         let client = self.db.get().await?;
         let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
@@ -260,19 +585,118 @@ impl ChipService {
                 user_id,
                 game: template.game()?,
                 payout_kind: template.payout_kind()?,
-                period_kind: LIFETIME_REWARD_PERIOD_KIND,
-                period_key: LIFETIME_REWARD_PERIOD_KEY,
+                period_kind: PER_EVENT_REWARD_PERIOD_KIND,
+                period_key: event_key,
                 amount: template.reward_chips,
-                ledger_reason,
+                chip_move,
             },
         )
         .await?;
         Ok(reward_grant(template.reward_chips, claim))
     }
 
-    pub async fn restore_floor(&self, user_id: Uuid) -> anyhow::Result<i64> {
+    /// Credit a `per_event` reward that is also capped per counterpart per
+    /// posting day: it pays once per distinct `event_key` (a daily match id)
+    /// AND once per `pair_day_key` (`<opponent id>:<UTC date the match was
+    /// posted>`). Both claims land or neither does.
+    ///
+    /// Both claims are scoped to the template's `game`, so the cap is per
+    /// roster game: chess and battleship against the same opponent on the
+    /// same day both pay. Decided 2026-08-27: honest
+    /// friends who play several games together are never touched, and a
+    /// colluding pair is bounded at one paid win per game per direction per
+    /// day, which is the whole list of eight before it stops.
+    ///
+    /// This is what closes the lobby's resign loop: two accounts can post,
+    /// claim and resign all day, but every match they post today in one game
+    /// shares one pair-day key and pays once. Keying on the posting day
+    /// rather than the finishing day is what keeps honest play whole: two long
+    /// games against the same opponent were posted on different days, so both
+    /// pay whichever day they end.
+    pub async fn credit_per_event_pair_day_reward_template(
+        &self,
+        user_id: Uuid,
+        reward_key: &str,
+        event_key: &str,
+        pair_day_key: &str,
+        chip_move: ChipMove,
+    ) -> anyhow::Result<RewardGrant> {
+        let mut client = self.db.get().await?;
+        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
+        template.ensure_claim_policy(REWARD_CLAIM_POLICY_PER_EVENT)?;
+        let claim = GamePayout::grant_multi(
+            &mut client,
+            GamePayoutMultiGrant {
+                user_id,
+                game: template.game()?,
+                payout_kind: template.payout_kind()?,
+                keys: &[
+                    GamePayoutKey::Unique {
+                        period_kind: PER_EVENT_REWARD_PERIOD_KIND,
+                        period_key: event_key,
+                    },
+                    GamePayoutKey::Unique {
+                        period_kind: PAIR_DAY_REWARD_PERIOD_KIND,
+                        period_key: pair_day_key,
+                    },
+                ],
+                amount: template.reward_chips,
+                chip_move,
+            },
+        )
+        .await?;
+        Ok(reward_grant(template.reward_chips, claim))
+    }
+
+    /// Credit a `cooldown` reward that also has to be new: it pays once per
+    /// distinct `event_key` (a roguelike run's log line, a Lateania character)
+    /// AND at most once per the template's cooldown window per account. Both
+    /// claims land or neither does, so a milestone gated by the lockout leaves
+    /// no trace and the same event can pay later only if it was never paid.
+    ///
+    /// This is what makes the door milestones repeatable: the event key
+    /// absorbs a log replay, the window spaces the repeats. Claims banked
+    /// under the old lifetime gate carry a different `period_kind` and are
+    /// invisible to both.
+    pub async fn credit_run_cooldown_reward_template(
+        &self,
+        user_id: Uuid,
+        reward_key: &str,
+        event_key: &str,
+        chip_move: ChipMove,
+    ) -> anyhow::Result<RewardGrant> {
+        let mut client = self.db.get().await?;
+        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
+        let cooldown = template.cooldown()?;
+        let claim = GamePayout::grant_multi(
+            &mut client,
+            GamePayoutMultiGrant {
+                user_id,
+                game: template.game()?,
+                payout_kind: template.payout_kind()?,
+                keys: &[
+                    GamePayoutKey::Unique {
+                        period_kind: PER_EVENT_REWARD_PERIOD_KIND,
+                        period_key: event_key,
+                    },
+                    GamePayoutKey::Cooldown {
+                        period_kind: GAME_PAYOUT_PERIOD_COOLDOWN,
+                        window: cooldown,
+                    },
+                ],
+                amount: template.reward_chips,
+                chip_move,
+            },
+        )
+        .await?;
+        Ok(reward_grant(template.reward_chips, claim))
+    }
+
+    /// Top a losing house-table seat back up to the floor. `source_ref` is
+    /// the round or hand that emptied it.
+    pub async fn restore_floor(&self, user_id: Uuid, source_ref: &str) -> anyhow::Result<i64> {
         let client = self.db.get().await?;
-        let chips = UserChips::restore_floor(&client, user_id).await?;
+        let chips = UserChips::restore_floor(&client, user_id, source_ref).await?;
         Ok(chips.balance)
     }
 }
@@ -291,6 +715,7 @@ const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewar
         ActivityGame::Minesweeper => Some(DailyPuzzleRewardGame::Minesweeper),
         ActivityGame::Nonogram => Some(DailyPuzzleRewardGame::Nonogram),
         ActivityGame::RubiksCube => Some(DailyPuzzleRewardGame::RubiksCube),
+        ActivityGame::SlidingPuzzle => Some(DailyPuzzleRewardGame::SlidingPuzzle),
         ActivityGame::Solitaire => Some(DailyPuzzleRewardGame::Solitaire),
         ActivityGame::Sudoku => Some(DailyPuzzleRewardGame::Sudoku),
         ActivityGame::Sshattrick => None,
@@ -299,28 +724,5 @@ const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewar
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn daily_puzzle_reward_game_accepts_only_daily_puzzle_games() {
-        assert_eq!(
-            daily_puzzle_reward_game(ActivityGame::LeWord),
-            Some(DailyPuzzleRewardGame::LeWord)
-        );
-        assert_eq!(
-            daily_puzzle_reward_game(ActivityGame::Minesweeper),
-            Some(DailyPuzzleRewardGame::Minesweeper)
-        );
-        assert_eq!(
-            daily_puzzle_reward_game(ActivityGame::Sudoku),
-            Some(DailyPuzzleRewardGame::Sudoku)
-        );
-        assert_eq!(
-            daily_puzzle_reward_game(ActivityGame::RubiksCube),
-            Some(DailyPuzzleRewardGame::RubiksCube)
-        );
-        assert_eq!(daily_puzzle_reward_game(ActivityGame::Lateris), None);
-        assert_eq!(daily_puzzle_reward_game(ActivityGame::Blackjack), None);
-    }
-}
+#[path = "svc_internal_test.rs"]
+mod svc_internal_test;

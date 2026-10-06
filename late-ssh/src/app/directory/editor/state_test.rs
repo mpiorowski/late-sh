@@ -1,0 +1,466 @@
+use chrono::Utc;
+use late_core::models::{
+    profile::Profile,
+    work_profile::{WorkProfile, WorkStatus, WorkType},
+};
+use ratatui_textarea::TextArea;
+use uuid::Uuid;
+
+use super::state::{
+    CardValues, EditorState, EscapeOutcome, Field, Page, ProjectRow, ProjectValues, ProjectsView,
+    Save, Scope, validate_card, validate_project,
+};
+
+fn card(user_id: Uuid) -> WorkProfile {
+    let now = Utc::now();
+    WorkProfile {
+        id: Uuid::now_v7(),
+        user_id,
+        slug: "w_abcdef123456".to_string(),
+        headline: "Rust backend engineer".to_string(),
+        status: WorkStatus::Casual,
+        work_type: WorkType::Contract,
+        location: "EU remote".to_string(),
+        contact: "me@example.com".to_string(),
+        links: vec!["https://github.com/me".to_string()],
+        skills: vec!["rust".to_string(), "cobol".to_string()],
+        skills_tags: vec!["rust".to_string(), "cobol".to_string()],
+        summary: "Terminal software.".to_string(),
+        created: now,
+        updated: now,
+    }
+}
+
+fn profile() -> Profile {
+    Profile {
+        bio: "hello".to_string(),
+        ide: Some("nvim".to_string()),
+        langs: vec!["rust".to_string()],
+        ..Profile::default()
+    }
+}
+
+fn project() -> ProjectRow {
+    ProjectRow {
+        id: Uuid::now_v7(),
+        title: "SalaTUI".to_string(),
+        url: "https://example.com/salatui".to_string(),
+        tags: vec!["rust".to_string(), "tui".to_string()],
+        description: "A salad in the terminal.".to_string(),
+        created: Utc::now(),
+    }
+}
+
+fn type_into(ta: &mut TextArea<'static>, text: &str) {
+    ta.select_all();
+    ta.cut();
+    ta.insert_str(text);
+}
+
+#[test]
+fn opening_your_own_profile_seeds_every_page_and_is_clean() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    assert!(!editor.is_open());
+    editor.open_own(viewer, Some(&card(viewer)), &profile(), Page::Card);
+    assert!(editor.is_open());
+    assert_eq!(editor.scope(), &Scope::Own);
+    assert_eq!(
+        editor.scope().pages(),
+        &[Page::Card, Page::About, Page::Projects]
+    );
+    assert_eq!(editor.page(), Page::Card);
+    assert_eq!(editor.status(), WorkStatus::Casual);
+    assert_eq!(
+        editor.card_values(),
+        CardValues {
+            headline: "Rust backend engineer".to_string(),
+            status: WorkStatus::Casual,
+            work_type: WorkType::Contract,
+            location: "EU remote".to_string(),
+            contact: "me@example.com".to_string(),
+            links: "https://github.com/me".to_string(),
+            // cobol is not in the vocabulary: gone at open, not at save.
+            skills: vec!["rust".to_string()],
+            summary: "Terminal software.".to_string(),
+        }
+    );
+    assert_eq!(editor.about_values().bio, "hello");
+    assert_eq!(editor.about_values().ide, "nvim");
+    assert_eq!(editor.about_values().langs, vec!["rust"]);
+    assert!(!editor.dirty(), "nothing typed yet");
+    assert_eq!(editor.escape(), EscapeOutcome::Closed);
+    assert!(!editor.is_open());
+}
+
+#[test]
+fn closed_fields_cycle_and_wrap_with_the_arrows() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Card);
+    editor.set_row(1);
+    assert_eq!(editor.active_field(), Some(Field::Status));
+    assert_eq!(editor.status(), WorkStatus::Open);
+    editor.cycle_choice(true);
+    assert_eq!(editor.status(), WorkStatus::Casual);
+    editor.cycle_choice(false);
+    editor.cycle_choice(false);
+    assert_eq!(editor.status(), WorkStatus::NotLooking, "wraps backwards");
+    // Enter on a choice row cycles instead of typing.
+    editor.start_editing();
+    assert!(!editor.editing());
+    assert_eq!(editor.status(), WorkStatus::Open);
+    editor.set_row(2);
+    editor.cycle_choice(true);
+    assert_eq!(
+        editor.card_values().work_type,
+        WorkType::FullTime,
+        "any wraps to full-time"
+    );
+    assert!(editor.dirty());
+}
+
+#[test]
+fn saving_without_a_headline_names_the_row_and_saves_nothing() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Card);
+    editor.set_row(3);
+    editor.start_editing();
+    type_into(editor.field_mut(Field::Location), "Warsaw");
+    assert!(editor.save().is_err());
+    assert!(editor.is_open(), "a failed save keeps the form");
+    assert_eq!(editor.row(), 0, "the cursor lands on the failing row");
+    assert_eq!(editor.error(), Some((Field::Headline, "headline required")));
+    assert!(!editor.editing());
+}
+
+#[test]
+fn a_full_card_saves_the_picked_tags_in_both_columns_and_closes() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Card);
+    type_into(editor.field_mut(Field::Headline), "Elixir engineer");
+    type_into(editor.field_mut(Field::Location), "remote");
+    type_into(
+        editor.field_mut(Field::Links),
+        "https://late.sh, not-a-link",
+    );
+    // What the picker hands back on Esc.
+    editor.set_tags(
+        Field::Skills,
+        ["elixir", "postgres", "typescript"]
+            .map(str::to_string)
+            .to_vec(),
+    );
+    assert_eq!(
+        editor.field_text(Field::Skills),
+        "elixir · postgres · typescript"
+    );
+    type_into(editor.field_mut(Field::Summary), "Ship things.");
+
+    let saves = editor.save().expect("valid card");
+    assert!(!editor.is_open(), "a save closes the modal");
+    let [Save::Card { params, editing }] = saves.as_slice() else {
+        panic!("expected one card save, got {saves:?}");
+    };
+    assert_eq!(*editing, None);
+    assert_eq!(params.user_id, viewer);
+    assert!(
+        params.slug.starts_with("w_") && params.slug.len() == 14,
+        "{}",
+        params.slug
+    );
+    assert_eq!(params.headline, "Elixir engineer");
+    assert_eq!(params.links, vec!["https://late.sh"]);
+    assert_eq!(params.skills, vec!["elixir", "postgres", "typescript"]);
+    assert_eq!(params.skills_tags, params.skills);
+    assert_eq!(params.status, WorkStatus::Open);
+    assert_eq!(params.work_type, WorkType::Any);
+}
+
+#[test]
+fn editing_an_existing_card_keeps_its_id_and_slug_and_saves_the_about_page_too() {
+    let viewer = Uuid::now_v7();
+    let existing = card(viewer);
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, Some(&existing), &profile(), Page::Card);
+    type_into(editor.field_mut(Field::Headline), "Rust and Elixir");
+    editor.switch_page(true);
+    assert_eq!(editor.page(), Page::About);
+    type_into(editor.field_mut(Field::Bio), "new bio");
+    editor.set_tags(Field::Langs, ["rust", "go"].map(str::to_string).to_vec());
+
+    let saves = editor.save().expect("valid");
+    assert_eq!(saves.len(), 2, "{saves:?}");
+    let Save::Card { params, editing } = &saves[0] else {
+        panic!("card first: {saves:?}");
+    };
+    assert_eq!(*editing, Some(existing.id));
+    assert_eq!(params.slug, existing.slug);
+    assert_eq!(params.headline, "Rust and Elixir");
+    let Save::About(about) = &saves[1] else {
+        panic!("about second: {saves:?}");
+    };
+    assert_eq!(about.bio, "new bio");
+    assert_eq!(about.langs, vec!["rust", "go"]);
+}
+
+#[test]
+fn an_untouched_existing_card_saves_nothing_and_closes() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, Some(&card(viewer)), &profile(), Page::About);
+    let saves = editor.save().expect("valid");
+    assert!(saves.is_empty(), "{saves:?}");
+    assert!(!editor.is_open());
+}
+
+#[test]
+fn escape_asks_before_losing_typed_work_and_y_discards() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Card);
+    editor.start_editing();
+    type_into(editor.field_mut(Field::Headline), "half a card");
+    assert_eq!(
+        editor.escape(),
+        EscapeOutcome::Stayed,
+        "first Esc stops typing"
+    );
+    assert!(!editor.editing());
+    assert_eq!(editor.escape(), EscapeOutcome::AskedToDiscard);
+    assert!(editor.confirm_discard());
+    editor.confirm_discard_no();
+    assert!(editor.is_open() && !editor.confirm_discard());
+    assert_eq!(editor.escape(), EscapeOutcome::AskedToDiscard);
+    assert_eq!(editor.confirm_discard_yes(), EscapeOutcome::Closed);
+    assert!(!editor.is_open());
+}
+
+#[test]
+fn enter_walks_the_rows_and_stops_at_the_last() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, Some(&card(viewer)), &profile(), Page::Card);
+    editor.start_editing();
+    assert!(editor.editing());
+    editor.commit_and_advance(true);
+    assert_eq!(editor.active_field(), Some(Field::Status));
+    assert!(!editor.editing(), "a choice row is not typed into");
+    assert_eq!(
+        editor.status(),
+        WorkStatus::Casual,
+        "landing on the status row must not cycle it"
+    );
+    editor.commit_and_advance(true);
+    assert_eq!(
+        editor.work_type(),
+        WorkType::Contract,
+        "landing on the type row must not cycle it"
+    );
+    editor.commit_and_advance(true);
+    assert_eq!(editor.active_field(), Some(Field::Location));
+    assert!(editor.editing());
+    assert!(!editor.dirty(), "walking the rows changes nothing");
+    editor.set_row(7);
+    editor.start_editing();
+    editor.commit_and_advance(true);
+    assert_eq!(
+        editor.active_field(),
+        Some(Field::Summary),
+        "last row stays"
+    );
+    assert!(!editor.editing());
+}
+
+#[test]
+fn the_projects_page_lists_then_forms_then_lists_again() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Projects);
+    assert!(matches!(
+        editor.projects_view(),
+        ProjectsView::List { selected: 0 }
+    ));
+    assert!(editor.fields().is_empty());
+
+    editor.start_new_project();
+    assert!(matches!(editor.projects_view(), ProjectsView::Form(_)));
+    assert!(editor.editing(), "a new project starts on its title");
+    type_into(editor.field_mut(Field::Title), "late-tui");
+    editor.stop_editing();
+    assert!(editor.save().is_err(), "url required");
+    assert_eq!(editor.error(), Some((Field::Url, "url required")));
+    type_into(editor.field_mut(Field::Url), "https://example.com/late-tui");
+    type_into(editor.field_mut(Field::Tags), "Rust, TUI, rust");
+    type_into(editor.field_mut(Field::Description), "A late tui.");
+
+    let saves = editor.save().expect("valid project");
+    let [
+        Save::Project {
+            params,
+            editing: None,
+        },
+    ] = saves.as_slice()
+    else {
+        panic!("expected one new project, got {saves:?}");
+    };
+    assert_eq!(params.user_id, viewer);
+    assert_eq!(params.tags, vec!["rust", "tui"]);
+    assert!(editor.is_open(), "saving a project returns to the list");
+    assert!(matches!(editor.projects_view(), ProjectsView::List { .. }));
+}
+
+#[test]
+fn leaving_a_project_form_returns_to_the_row_it_came_from() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, None, &profile(), Page::Projects);
+    editor.set_project_selection(3, 5);
+    editor.start_editing_project(&project());
+    assert_eq!(editor.escape(), EscapeOutcome::LeftProjectForm);
+    assert_eq!(editor.project_selected(), 3, "esc keeps the list's place");
+
+    editor.start_editing_project(&project());
+    type_into(editor.field_mut(Field::Title), "renamed");
+    editor.save().expect("valid project");
+    assert_eq!(editor.project_selected(), 3, "save keeps the list's place");
+
+    // A new project lands at the top of the list, so the cursor goes there.
+    editor.start_new_project();
+    editor.stop_editing();
+    assert_eq!(editor.escape(), EscapeOutcome::LeftProjectForm);
+    assert_eq!(editor.project_selected(), 0);
+}
+
+#[test]
+fn click_rects_follow_a_scrolled_list() {
+    let editor = EditorState::default();
+    let rect = |y: u16| ratatui::layout::Rect {
+        x: 0,
+        y,
+        width: 10,
+        height: 1,
+    };
+    // The projects list scrolled past its first eight rows: the on-screen
+    // rows are projects 8 to 15, and a click must land on the right one.
+    for index in 8..16 {
+        editor.record_row_rect(index, rect(index as u16));
+    }
+    assert_eq!(editor.row_at(3, 9), Some(9));
+    assert_eq!(editor.row_at(3, 15), Some(15));
+    assert_eq!(editor.row_at(3, 20), None);
+}
+
+/// A card written before the picker holds typed skills; opening it keeps
+/// what the vocabulary knows, folded, and the save writes only that.
+#[test]
+fn a_card_typed_before_the_picker_opens_and_saves_with_only_known_tags() {
+    let viewer = Uuid::now_v7();
+    let mut legacy = card(viewer);
+    legacy.skills = ["C++", "c#", "#rust", "cobol"].map(str::to_string).to_vec();
+    let mut editor = EditorState::default();
+    editor.open_own(viewer, Some(&legacy), &profile(), Page::Card);
+    assert_eq!(editor.tags(Field::Skills), ["cpp", "csharp", "rust"]);
+
+    let values = CardValues {
+        headline: "Systems".to_string(),
+        location: "remote".to_string(),
+        links: "https://a.example".to_string(),
+        skills: ["cpp", "csharp", "rust", "cobol"]
+            .map(str::to_string)
+            .to_vec(),
+        summary: "yes".to_string(),
+        ..CardValues::default()
+    };
+    let params = validate_card(&values).expect("valid card");
+    assert_eq!(params.skills, vec!["cpp", "csharp", "rust"]);
+    assert_eq!(params.skills_tags, params.skills);
+}
+
+#[test]
+fn escape_on_a_touched_project_form_asks_and_drops_only_the_draft() {
+    let viewer = Uuid::now_v7();
+    let mut editor = EditorState::default();
+    let existing = project();
+    editor.open_own_project(viewer, None, &profile(), &existing);
+    assert!(matches!(editor.projects_view(), ProjectsView::Form(_)));
+    assert!(!editor.dirty());
+    type_into(editor.field_mut(Field::Title), "renamed");
+    assert_eq!(editor.escape(), EscapeOutcome::AskedToDiscard);
+    assert_eq!(editor.confirm_discard_yes(), EscapeOutcome::LeftProjectForm);
+    assert!(editor.is_open());
+    assert!(matches!(editor.projects_view(), ProjectsView::List { .. }));
+    // An untouched form leaves without asking.
+    editor.start_editing_project(&existing);
+    assert_eq!(editor.escape(), EscapeOutcome::LeftProjectForm);
+}
+
+#[test]
+fn a_moderator_on_someone_elses_card_gets_that_page_alone() {
+    let viewer = Uuid::now_v7();
+    let owner = Uuid::now_v7();
+    let theirs = card(owner);
+    let mut editor = EditorState::default();
+    editor.open_card_of(viewer, owner, "them".to_string(), &theirs);
+    assert_eq!(editor.scope().pages(), &[Page::Card]);
+    editor.switch_page(true);
+    assert_eq!(editor.page(), Page::Card, "nowhere to switch to");
+    type_into(editor.field_mut(Field::Headline), "fixed typo");
+    let saves = editor.save().expect("valid");
+    let [Save::Card { params, editing }] = saves.as_slice() else {
+        panic!("{saves:?}");
+    };
+    assert_eq!(params.user_id, owner, "the card stays theirs");
+    assert_eq!(*editing, Some(theirs.id));
+    assert!(!editor.is_open());
+
+    let mut editor = EditorState::default();
+    editor.open_project_of(viewer, owner, "them".to_string(), &project());
+    assert_eq!(editor.scope().pages(), &[Page::Projects]);
+    let saves = editor.save().expect("valid");
+    assert!(matches!(
+        saves.as_slice(),
+        [Save::Project {
+            editing: Some(_),
+            ..
+        }]
+    ));
+    assert!(!editor.is_open(), "a moderator's project save closes");
+}
+
+#[test]
+fn validation_rules_name_the_field() {
+    let mut values = CardValues {
+        headline: "x".repeat(121),
+        ..CardValues::default()
+    };
+    assert_eq!(
+        validate_card(&values).unwrap_err(),
+        (Field::Headline, "headline too long (max 120)")
+    );
+    values.headline = "ok".to_string();
+    assert_eq!(validate_card(&values).unwrap_err().0, Field::Location);
+    values.location = "remote".to_string();
+    assert_eq!(validate_card(&values).unwrap_err().0, Field::Links);
+    values.links = "https://a.example".to_string();
+    assert_eq!(validate_card(&values).unwrap_err().0, Field::Summary);
+    values.summary = "yes".to_string();
+    assert!(validate_card(&values).is_ok());
+
+    let mut project = ProjectValues {
+        title: "t".to_string(),
+        url: "ftp://nope".to_string(),
+        ..ProjectValues::default()
+    };
+    assert_eq!(
+        validate_project(&project).unwrap_err(),
+        (Field::Url, "url must start with http:// or https://")
+    );
+    project.url = "https://ok".to_string();
+    assert_eq!(
+        validate_project(&project).unwrap_err().0,
+        Field::Description
+    );
+}

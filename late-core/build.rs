@@ -22,6 +22,21 @@ fn main() {
         return;
     }
 
+    // Deferred migrations sit out at least one release in migrations/deferred/
+    // so old binaries drain before destructive DDL runs (see the file headers
+    // there). Subdirectories are invisible to the embed below; warn on every
+    // build so promoting them back is impossible to forget.
+    if let Ok(dir) = fs::read_dir(migrations_dir.join("deferred")) {
+        for path in dir.filter_map(Result::ok).map(|e| e.path()) {
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("sql") {
+                println!(
+                    "cargo:warning=deferred migration pending promotion: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+
     let mut entries: Vec<_> = fs::read_dir(migrations_dir)
         .expect("Failed to read migrations directory")
         .filter_map(Result::ok)

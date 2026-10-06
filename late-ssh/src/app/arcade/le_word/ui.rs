@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::{LetterScore, MAX_GUESSES, State, WORD_LEN};
+use super::state::{DAILY_WIN_REWARD_CHIPS, LetterScore, MAX_GUESSES, State, WORD_LEN};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, keys_line, status_line, tip_line,
 };
@@ -20,14 +20,6 @@ const KEYBOARD_HEIGHT: u16 = 5;
 const LETTER_KEY_WIDTH: u16 = 3;
 const ACTION_KEY_WIDTH: u16 = 5;
 const KEY_GAP: u16 = 1;
-const WORDLE_TEXT: Color = Color::Rgb(255, 255, 255);
-const WORDLE_TEXT_DIM: Color = Color::Rgb(211, 214, 218);
-const WORDLE_BG: Color = Color::Rgb(18, 18, 18);
-const WORDLE_TILE_EMPTY_BG: Color = Color::Rgb(67, 67, 69);
-const WORDLE_KEY_BG: Color = Color::Rgb(130, 131, 133);
-const WORDLE_CORRECT_BG: Color = Color::Rgb(82, 141, 77);
-const WORDLE_PRESENT_BG: Color = Color::Rgb(181, 159, 58);
-const WORDLE_ABSENT_BG: Color = Color::Rgb(58, 58, 60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeyboardKey {
@@ -57,17 +49,24 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
                 format!("{}/{}", state.guesses.len().min(MAX_GUESSES), MAX_GUESSES),
                 theme::SUCCESS(),
             ),
-            ("reward", "100".to_string(), theme::TEXT_BRIGHT()),
+            ("reward", "250".to_string(), theme::TEXT_BRIGHT()),
         ]),
-        keys: keys_line(vec![
-            ("a-z", "type"),
-            ("Backspace", "delete"),
-            ("Enter", "guess"),
-            ("?", "help"),
-            ("!", "rules"),
-            ("`", "dashboard"),
-            ("Esc", "exit"),
-        ]),
+        keys: keys_line(
+            vec![
+                ("a-z", "type"),
+                ("Backspace", "delete"),
+                ("Enter", "guess"),
+                ("?", "help"),
+                ("!", "rules"),
+                ("`", "dashboard"),
+                ("Esc", "exit"),
+            ]
+            .into_iter()
+            .chain(crate::app::arcade::ui::share_hints(super::share::is_ready(
+                state,
+            )))
+            .collect(),
+        ),
         tip: Some(tip_line(state.message.clone())),
     };
 
@@ -76,7 +75,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     frame.render_widget(
         Paragraph::new(board_lines(state))
             .alignment(Alignment::Center)
-            .style(Style::default().fg(WORDLE_TEXT).bg(WORDLE_BG)),
+            .style(
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .bg(theme::BG_CANVAS()),
+            ),
         layout.board,
     );
     if let Some(keyboard_rect) = layout.keyboard {
@@ -90,7 +93,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             layout.board,
             layout.keyboard,
             "YOU WON!",
-            "Come back tomorrow",
+            "Press s to share your card",
             theme::SUCCESS(),
         );
     } else if state.is_game_over {
@@ -116,7 +119,7 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             "Le Word Rules",
             Style::default()
-                .fg(WORDLE_TEXT)
+                .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -137,16 +140,24 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from("A new daily answer appears once per day."),
-        Line::from("Solving the daily earns 100 chips."),
+        Line::from(format!(
+            "Solving the daily earns {DAILY_WIN_REWARD_CHIPS} chips."
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "! / q / Esc closes",
-            Style::default().fg(WORDLE_TEXT_DIM).bg(WORDLE_BG),
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .bg(theme::BG_CANVAS()),
         )),
     ])
     .alignment(Alignment::Center)
     .wrap(Wrap { trim: true })
-    .style(Style::default().fg(WORDLE_TEXT_DIM).bg(WORDLE_BG))
+    .style(
+        Style::default()
+            .fg(theme::TEXT_DIM())
+            .bg(theme::BG_CANVAS()),
+    )
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -270,7 +281,10 @@ fn le_word_layout(area: Rect) -> LeWordLayout {
 }
 
 fn draw_keyboard(frame: &mut Frame, area: Rect, state: &State) {
-    frame.render_widget(Block::default().style(Style::default().bg(WORDLE_BG)), area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::BG_CANVAS())),
+        area,
+    );
     for key_rect in keyboard_key_rects(area) {
         let label = key_label(key_rect.key);
         let key = Paragraph::new(label)
@@ -386,8 +400,8 @@ fn key_label(key: KeyboardKey) -> String {
 fn key_style(state: &State, key: KeyboardKey) -> Style {
     let Some(score) = keyboard_key_score(state, key) else {
         return Style::default()
-            .fg(WORDLE_TEXT)
-            .bg(WORDLE_KEY_BG)
+            .fg(theme::TEXT_BRIGHT())
+            .bg(theme::BG_HIGHLIGHT())
             .add_modifier(Modifier::BOLD);
     };
     score_style(score).add_modifier(Modifier::BOLD)
@@ -455,75 +469,33 @@ fn cell_span(
             .to_ascii_uppercase();
         (
             ch,
-            Style::default().fg(WORDLE_TEXT).bg(WORDLE_TILE_EMPTY_BG),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION()),
         )
     } else {
         (
             ' ',
             Style::default()
-                .fg(WORDLE_TEXT_DIM)
-                .bg(WORDLE_TILE_EMPTY_BG),
+                .fg(theme::TEXT_DIM())
+                .bg(theme::BG_SELECTION()),
         )
     };
 
     Span::styled(format!(" {ch} "), style.add_modifier(Modifier::BOLD))
 }
 
+/// Scored tiles are the theme's accents with the letter punched through, so
+/// the board follows the palette (terminal palette included) instead of
+/// carrying its own greens and yellows.
 fn score_style(score: LetterScore) -> Style {
     match score {
-        LetterScore::Correct => Style::default().fg(WORDLE_TEXT).bg(WORDLE_CORRECT_BG),
-        LetterScore::Present => Style::default().fg(WORDLE_TEXT).bg(WORDLE_PRESENT_BG),
-        LetterScore::Absent => Style::default().fg(WORDLE_TEXT).bg(WORDLE_ABSENT_BG),
+        LetterScore::Correct => theme::punch_through(theme::SUCCESS()),
+        LetterScore::Present => theme::punch_through(theme::AMBER()),
+        LetterScore::Absent => theme::punch_through(theme::TEXT_FAINT()),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn result_panel_prefers_space_below_board() {
-        let board_area = Rect::new(0, 0, 80, 40);
-        let board_rect = Rect::new(28, 10, 24, 13);
-        let keyboard_rect = Rect::new(20, 25, 39, 5);
-
-        let area = result_panel_area(board_area, board_rect, Some(keyboard_rect));
-
-        assert!(area.y > keyboard_rect.y + keyboard_rect.height);
-        assert_eq!(area.width, 28);
-        assert_eq!(area.height, 4);
-    }
-
-    #[test]
-    fn layout_places_keyboard_two_rows_below_board() {
-        let layout = le_word_layout(Rect::new(0, 0, 80, 40));
-        let keyboard = layout.keyboard.expect("keyboard fits");
-
-        assert_eq!(
-            keyboard.y,
-            layout.board.y + layout.board.height + BOARD_KEYBOARD_GAP
-        );
-        assert_eq!(keyboard.width, KEYBOARD_WIDTH);
-        assert_eq!(keyboard.height, KEYBOARD_HEIGHT);
-    }
-
-    #[test]
-    fn keyboard_hit_test_maps_clicks_to_keys() {
-        let area = Rect::new(0, 0, 80, 40);
-
-        assert_eq!(
-            keyboard_hit_test(area, 20, 25),
-            Some(KeyboardKey::Letter('q'))
-        );
-        assert_eq!(
-            keyboard_hit_test(area, 22, 27),
-            Some(KeyboardKey::Letter('a'))
-        );
-        assert_eq!(keyboard_hit_test(area, 20, 29), Some(KeyboardKey::Enter));
-        assert_eq!(
-            keyboard_hit_test(area, 54, 29),
-            Some(KeyboardKey::Backspace)
-        );
-        assert_eq!(keyboard_hit_test(area, 0, 0), None);
-    }
-}
+#[path = "ui_test.rs"]
+mod ui_test;

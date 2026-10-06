@@ -2,6 +2,7 @@ name "clownfish"
 title "a banded clownfish"
 description "rounded body with vertical bands and a chunky tail"
 sauce author=hardlygospel date=20260527 license=CCBYSA4.0
+mini left="<=|" right="|=>"
 
 count 2
 

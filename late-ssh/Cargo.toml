@@ -7,11 +7,13 @@ edition = "2024"
 default = []
 otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemetry-http"]
 
+[lints]
+workspace = true
+
 [dependencies]
 late-core.workspace = true
 asterion-core.workspace = true
 sshattrick-core.workspace = true
-nes = { path = "../vendor/potatis/nes" }
 irc-proto = { path = "../vendor/irc-proto" }
 
 # Core Utils
@@ -39,6 +41,7 @@ tikv-jemallocator = "0.6"
 
 # Database
 tokio-postgres = { workspace = true }
+deadpool-postgres = { workspace = true }
 cozy-chess.workspace = true
 crossterm.workspace = true
 dartboard-core.workspace = true
@@ -46,7 +49,10 @@ dartboard-editor.workspace = true
 dartboard-local.workspace = true
 dartboard-tui.workspace = true
 ratatui.workspace = true
-ratatui-textarea = { version = "0.9.1", default-features = false }
+ratatui-textarea = { version = "0.9.2", default-features = false }
+# default-fancy swaps in the pure-Rust fancy-regex engine instead of the
+# default onig (C/oniguruma) backend, avoiding a C build-toolchain dependency.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 unicode-width.workspace = true
 unicode_names2.workspace = true
 emojis.workspace = true
@@ -65,7 +71,7 @@ russh.workspace = true
 
 # Web / HTTP
 axum = { workspace = true, features = ["ws"] }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 image.workspace = true
 tower-http = { workspace = true, features = ["cors", "trace"] }
 qrcodegen.workspace = true
@@ -85,3 +91,4 @@ nix = { workspace = true, features = ["term", "process"] }
 late-core = { workspace = true, features = ["testing"] }
 rstest.workspace = true
 tokio-tungstenite = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

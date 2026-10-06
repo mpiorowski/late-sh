@@ -12,7 +12,7 @@ pub struct IconEntry {
     pub name_lower: String,
 }
 
-pub struct IconSection {
+pub(crate) struct IconSection {
     pub title: &'static str,
     pub entries: Vec<IconEntry>,
 }

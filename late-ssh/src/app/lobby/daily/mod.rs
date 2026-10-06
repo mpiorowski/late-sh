@@ -1,0 +1,36 @@
+pub mod backgammon;
+pub mod backgammon_ui;
+pub mod battleship;
+pub mod battleship_ui;
+pub mod board_input;
+pub mod board_ui;
+pub mod briscola;
+pub mod briscola_ui;
+pub mod checkers;
+pub mod checkers_ui;
+pub mod connect4;
+pub mod connect4_ui;
+pub mod cribbage;
+pub mod cribbage_ui;
+pub mod games;
+pub mod gin;
+pub mod gin_ui;
+pub mod hand_ui;
+pub mod live;
+pub mod live_board;
+pub mod live_strip;
+pub mod panel;
+pub mod pool;
+pub mod pool_draft;
+pub mod pool_input;
+pub mod pool_ui;
+pub mod reversi;
+pub mod reversi_ui;
+pub mod state;
+pub mod std_deck;
+pub mod svc;
+#[cfg(test)]
+mod svc_test;
+
+#[cfg(test)]
+mod games_test;

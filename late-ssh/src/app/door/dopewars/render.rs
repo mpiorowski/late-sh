@@ -19,12 +19,12 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
-    draw_landing(frame, area, state.is_enabled());
+    draw_landing(frame, area, state.is_enabled(), 0);
 }
 
 /// dopewars landing copy, used by both the standalone screen fallback and the
 /// Games hub when dopewars is selected.
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -89,7 +89,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
         )),
     ]);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn dopewars_logo() -> Vec<Line<'static>> {

@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, watch};
 /// completes in well under a second; the bound just stops a wedged child from
 /// pinning teardown forever. Must stay under the host pod's
 /// `terminationGracePeriodSeconds` so a pod-wide SIGTERM can drain every child
-/// (see `main.rs` SHUTDOWN_GRACE and infra/service-nethack.tf).
+/// (see `main.rs` SHUTDOWN_GRACE and infra/doors.tf).
 const HANGUP_SAVE_GRACE: Duration = Duration::from_secs(5);
 
 /// Why the bridge loop stopped; decides whether teardown must SIGHUP-save.
@@ -26,17 +26,22 @@ enum StopReason {
 }
 
 /// Configuration for a single NetHack child process.
-pub struct HostConfig {
+pub(crate) struct HostConfig {
     /// Path to the nethack binary (e.g. `/usr/games/nethack`).
-    pub bin: String,
+    pub(crate) bin: String,
     /// `HOME` for the child, where its `.nethackrc` lives. Saves/bones live in
     /// the nethack install's own playground, keyed by the `-u` name.
-    pub data_dir: String,
+    pub(crate) data_dir: String,
     /// In-game player name, passed as `-u`. Already sanitized to be PTY-safe.
-    pub playname: String,
-    pub cols: u16,
-    pub rows: u16,
-    pub term: String,
+    pub(crate) playname: String,
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) term: String,
+    /// Per-account rc content pushed by the client over the SSH env request.
+    /// `Some(content)` replaces the player's rc file (empty content deletes
+    /// it); `None` (an older client that sent no env request) leaves whatever
+    /// is already on disk.
+    pub(crate) rc: Option<String>,
 }
 
 enum Command {
@@ -57,12 +62,12 @@ enum Command {
 /// channel end, and it runs the graceful SIGHUP-save teardown (see
 /// [`run_bridge`]) before exiting on its own; it is deliberately NOT aborted,
 /// since aborting would SIGKILL nethack mid-game and leak its getlock slot.
-pub struct PtyHost {
+pub(crate) struct PtyHost {
     cmd_tx: mpsc::Sender<Command>,
 }
 
 impl PtyHost {
-    pub fn spawn(
+    pub(crate) fn spawn(
         cfg: HostConfig,
         handle: Handle,
         channel: ChannelId,
@@ -90,11 +95,11 @@ impl PtyHost {
         Self { cmd_tx }
     }
 
-    pub fn send_input(&self, bytes: Vec<u8>) {
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
         let _ = self.cmd_tx.try_send(Command::Input(bytes));
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) {
         let _ = self.cmd_tx.try_send(Command::Resize { cols, rows });
     }
 }
@@ -140,6 +145,11 @@ async fn run_bridge(
         }
     }
 
+    // Materialize the per-account rc pushed by the client. When a file lands,
+    // NETHACKOPTIONS points nethack at it (the `@` prefix means "config file
+    // path"), overriding the shared `$HOME/.nethackrc` defaults.
+    let rc_path = materialize_rc(&cfg.data_dir, &cfg.playname, cfg.rc.as_deref());
+
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Spawn with a cleared environment and an explicit allowlist. Even though
     // this process is a dedicated host (not late-ssh), keep the env minimal so
@@ -172,6 +182,9 @@ async fn run_bridge(
                 .context("clone nethack pty slave for stderr")?,
         ))
         .kill_on_drop(true);
+    if let Some(path) = &rc_path {
+        cmd.env("NETHACKOPTIONS", format!("@{path}"));
+    }
 
     // Give the child its own session and make the PTY its controlling terminal,
     // so curses sizing and job control behave.
@@ -326,6 +339,50 @@ async fn bridge_loop(
     }
 }
 
+/// Where a player's pushed rc lives. Keyed by the (already sanitized,
+/// `[A-Za-z0-9_]`) playname so no two handles can share config.
+fn rc_path(data_dir: &str, playname: &str) -> String {
+    format!(
+        "{}/rc/{}.nethackrc",
+        data_dir.trim_end_matches('/'),
+        playname
+    )
+}
+
+/// Write, delete, or keep the player's rc file from the client-pushed content:
+/// `Some(content)` replaces the file, `Some("")` deletes it (the player
+/// cleared their config), `None` (an older client that sent no env request)
+/// leaves whatever is on disk. Returns the path when a usable file exists
+/// afterwards. Filesystem errors fail soft: warn and launch with defaults.
+fn materialize_rc(data_dir: &str, playname: &str, rc: Option<&str>) -> Option<String> {
+    let path = rc_path(data_dir, playname);
+    match rc {
+        Some("") => {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(path, error = ?e, "failed to delete nethack rc"),
+            }
+            None
+        }
+        Some(content) => {
+            let dir = format!("{}/rc", data_dir.trim_end_matches('/'));
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                tracing::warn!(dir, error = ?e, "failed to create nethack rc dir");
+                return None;
+            }
+            match std::fs::write(&path, content) {
+                Ok(()) => Some(path),
+                Err(e) => {
+                    tracing::warn!(path, error = ?e, "failed to write nethack rc");
+                    None
+                }
+            }
+        }
+        None => std::fs::metadata(&path).is_ok().then_some(path),
+    }
+}
+
 /// Send SIGHUP to a live nethack child so it runs its hangup-save (recoverable
 /// save + getlock-slot release) instead of being SIGKILLed.
 fn send_sighup(pid: u32, playname: &str) {
@@ -357,3 +414,7 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
         libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
     }
 }
+
+#[cfg(test)]
+#[path = "host_test.rs"]
+mod host_test;

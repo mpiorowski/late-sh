@@ -4,10 +4,9 @@ use russh::{
     keys::{self, PrivateKeyWithHashAlg, known_hosts},
 };
 use serde::Deserialize;
-use std::ffi::OsString;
 use std::{
-    env, fs, io,
-    io::{IsTerminal, Read, Write},
+    env, io,
+    io::{IsTerminal, Read},
     path::Path,
     sync::{
         Arc,
@@ -39,6 +38,9 @@ use std::{os::fd::AsRawFd, process::Stdio};
 
 #[cfg(unix)]
 use std::{
+    ffi::OsString,
+    fs,
+    io::Write,
     os::unix::fs::DirBuilderExt,
     path::PathBuf,
     process::Command as StdCommand,
@@ -48,7 +50,9 @@ use std::{
 #[cfg(unix)]
 use tokio::process::{Child, Command};
 
+#[cfg(unix)]
 pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
+#[cfg(unix)]
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const GENERIC_SSH_AUTH_HINT_MARKER: &str = "late.sh requires SSH public-key auth.";
@@ -96,7 +100,12 @@ const TIOCSCTTY_IOCTL_REQUEST: libc::c_ulong = libc::TIOCSCTTY;
 
 #[derive(Debug)]
 pub(super) enum SshExit {
+    // Clean and ProcessStatus describe a local ssh child process, which only
+    // the subprocess and OpenSSH modes spawn. Both are Unix-only, so on other
+    // platforms a session can only ever end through the native russh variants.
+    #[cfg(unix)]
     Clean,
+    #[cfg(unix)]
     ProcessStatus {
         status: std::process::ExitStatus,
         stdout_closed_cleanly: bool,
@@ -113,11 +122,14 @@ pub(super) enum SshExit {
 impl SshExit {
     pub(super) fn ensure_success(self) -> Result<()> {
         match self {
+            #[cfg(unix)]
             Self::Clean => Ok(()),
+            #[cfg(unix)]
             Self::ProcessStatus {
                 status,
                 stdout_closed_cleanly,
             } if status.success() || status.code() == Some(255) && stdout_closed_cleanly => Ok(()),
+            #[cfg(unix)]
             Self::ProcessStatus { status, .. } => anyhow::bail!("ssh exited with status {status}"),
             Self::RemoteStatus { code: None } | Self::RemoteStatus { code: Some(0) } => Ok(()),
             Self::RemoteStatus { code: Some(code) } => {
@@ -162,7 +174,7 @@ pub(super) async fn spawn_ssh(
     token_tx: oneshot::Sender<String>,
 ) -> Result<SshProcess> {
     match config.ssh_mode {
-        SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx).await,
+        SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx),
         SshMode::Native => spawn_native_ssh(config, identity_file, token_tx).await,
         SshMode::OpenSsh => {
             anyhow::bail!("openssh mode must use prepare_openssh_ssh")
@@ -182,7 +194,7 @@ impl OpenSshSession {
         &self.token
     }
 
-    pub(super) async fn spawn_shell(self, config: &Config) -> Result<OpenSshProcess> {
+    pub(super) fn spawn_shell(self, config: &Config) -> Result<OpenSshProcess> {
         // Reuse the already-authenticated master connection for the real
         // interactive shell, so hardware-key auth is not prompted a second time.
         let spec = openssh_shell_command_spec(config, self.master.control_path())?;
@@ -315,7 +327,7 @@ impl OpenSshSession {
         ""
     }
 
-    pub(super) async fn spawn_shell(self, _config: &Config) -> Result<OpenSshProcess> {
+    pub(super) fn spawn_shell(self, _config: &Config) -> Result<OpenSshProcess> {
         anyhow::bail!("openssh ssh mode is only available on Unix; use --ssh-mode native")
     }
 }
@@ -325,12 +337,16 @@ pub(super) struct OpenSshProcess {
     pub(super) completion_task: JoinHandle<Result<SshExit>>,
 }
 
+// The whole CommandSpec/openssh_*_command_spec family builds argv for a local
+// `ssh` child process, which only the Unix subprocess and OpenSSH modes use.
+#[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandSpec {
     program: OsString,
     args: Vec<OsString>,
 }
 
+#[cfg(unix)]
 impl CommandSpec {
     fn from_ssh_bin(ssh_bin: &[String]) -> Result<Self> {
         let (program, args) = ssh_bin
@@ -350,14 +366,12 @@ impl CommandSpec {
         self.args.push(value.as_os_str().to_os_string());
     }
 
-    #[cfg(unix)]
     fn tokio_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
         command
     }
 
-    #[cfg(unix)]
     fn std_command(&self) -> StdCommand {
         let mut command = StdCommand::new(&self.program);
         command.args(&self.args);
@@ -421,6 +435,7 @@ async fn wait_for_control_socket(path: &Path) -> Result<()> {
     )
 }
 
+#[cfg(unix)]
 fn append_openssh_destination_args(spec: &mut CommandSpec, config: &Config) {
     if let Some(port) = config.ssh_port {
         spec.arg("-p");
@@ -433,6 +448,7 @@ fn append_openssh_destination_args(spec: &mut CommandSpec, config: &Config) {
     spec.arg(config.ssh_target.as_str());
 }
 
+#[cfg(unix)]
 fn openssh_master_command_spec(
     config: &Config,
     identity_file: Option<&Path>,
@@ -456,6 +472,7 @@ fn openssh_master_command_spec(
     Ok(spec)
 }
 
+#[cfg(unix)]
 fn openssh_token_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
     let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
     spec.arg("-S");
@@ -469,6 +486,7 @@ fn openssh_token_command_spec(config: &Config, control_path: &Path) -> Result<Co
     Ok(spec)
 }
 
+#[cfg(unix)]
 fn openssh_shell_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
     let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
     spec.arg("-S");
@@ -482,6 +500,7 @@ fn openssh_shell_command_spec(config: &Config, control_path: &Path) -> Result<Co
     Ok(spec)
 }
 
+#[cfg(unix)]
 fn openssh_cleanup_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
     let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
     spec.arg("-S");
@@ -521,7 +540,7 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
         };
 
         while sigwinch.recv().await.is_some() {
-            if let Err(err) = apply_resize(&handle).await {
+            if let Err(err) = apply_resize(&handle) {
                 debug!(error = ?err, "failed to forward local terminal resize");
             }
         }
@@ -536,7 +555,7 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
             let current = terminal_size_or_default();
             if current != last_size {
                 last_size = current;
-                if let Err(err) = apply_resize(&handle).await {
+                if let Err(err) = apply_resize(&handle) {
                     debug!(error = ?err, "failed to forward local terminal resize");
                     break;
                 }
@@ -546,7 +565,7 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
 }
 
 #[cfg(unix)]
-async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
+fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     match handle {
         ResizeHandle::Subprocess(handle) => handle.resize_to_current(),
         ResizeHandle::Native(tx) => {
@@ -559,7 +578,7 @@ async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
+fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     match handle {
         ResizeHandle::Native(tx) => {
             let (cols, rows) = terminal_size_or_default();
@@ -571,7 +590,7 @@ async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
 }
 
 #[cfg(unix)]
-async fn spawn_subprocess_ssh(
+fn spawn_subprocess_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
@@ -660,7 +679,7 @@ async fn spawn_subprocess_ssh(
 }
 
 #[cfg(not(unix))]
-async fn spawn_subprocess_ssh(
+fn spawn_subprocess_ssh(
     _config: &Config,
     _identity_file: &Path,
     _token_tx: oneshot::Sender<String>,
@@ -916,6 +935,7 @@ async fn wait_for_subprocess_exit(
     }
 }
 
+#[cfg(unix)]
 fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> Result<()> {
     let mut pending = Vec::new();
     let mut buf = [0u8; 4096];
@@ -1282,12 +1302,17 @@ fn local_username() -> String {
         .unwrap_or_else(|_| "late".to_string())
 }
 
+// The token banner is only parsed out of a local ssh child's pty stream, which
+// is the Unix-only subprocess path; native russh reads the token off the
+// channel directly.
+#[cfg(unix)]
 enum BannerState {
     NeedMore,
     Token { token: String, consumed: usize },
     Passthrough { consumed: usize },
 }
 
+#[cfg(unix)]
 fn parse_cli_banner(buf: &[u8]) -> BannerState {
     let Some(newline_idx) = buf.iter().position(|b| *b == b'\n') else {
         return BannerState::NeedMore;
@@ -1308,194 +1333,5 @@ fn parse_cli_banner(buf: &[u8]) -> BannerState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_config() -> Config {
-        Config {
-            ssh_target: "late.example".to_string(),
-            ssh_port: Some(2222),
-            ssh_user: Some("alice".to_string()),
-            key_file: None,
-            ssh_mode: SshMode::OpenSsh,
-            ssh_bin: vec![
-                "ssh".to_string(),
-                "-F".to_string(),
-                "/tmp/ssh_config".to_string(),
-            ],
-            audio_base_url: "https://audio.example".to_string(),
-            audio_output_device: None,
-            api_base_url: "https://api.example".to_string(),
-            verbose: false,
-        }
-    }
-
-    #[test]
-    fn parse_cli_banner_extracts_token_and_consumed_bytes() {
-        let buf = b"LATE_SESSION_TOKEN=abc-123\r\n\x1b[?1049h";
-        match parse_cli_banner(buf) {
-            BannerState::Token { token, consumed } => {
-                assert_eq!(token, "abc-123");
-                assert_eq!(consumed, 28);
-            }
-            _ => panic!("expected token banner"),
-        }
-    }
-
-    #[test]
-    fn parse_cli_banner_passthroughs_regular_output() {
-        let buf = b"hello\r\nworld";
-        match parse_cli_banner(buf) {
-            BannerState::Passthrough { consumed } => assert_eq!(consumed, 7),
-            _ => panic!("expected passthrough"),
-        }
-    }
-
-    #[test]
-    fn openssh_master_command_uses_control_master_and_identity() {
-        let config = test_config();
-        let spec = openssh_master_command_spec(
-            &config,
-            Some(Path::new("/home/alice/.ssh/id_ed25519_sk")),
-            Path::new("/tmp/late-ssh-test/ctl"),
-        )
-        .unwrap();
-
-        assert_eq!(spec.program, OsString::from("ssh"));
-        assert_eq!(
-            spec.args_as_strings(),
-            vec![
-                "-F",
-                "/tmp/ssh_config",
-                "-M",
-                "-S",
-                "/tmp/late-ssh-test/ctl",
-                "-f",
-                "-N",
-                "-i",
-                "/home/alice/.ssh/id_ed25519_sk",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                "-p",
-                "2222",
-                "-l",
-                "alice",
-                "late.example",
-            ]
-        );
-    }
-
-    #[test]
-    fn openssh_master_command_allows_config_or_agent_identity() {
-        let config = test_config();
-        let spec = openssh_master_command_spec(&config, None, Path::new("/tmp/late-ssh-test/ctl"))
-            .unwrap();
-
-        assert!(!spec.args_as_strings().contains(&"-i".to_string()));
-    }
-
-    #[test]
-    fn openssh_token_command_uses_control_socket_and_exec_handshake() {
-        let config = test_config();
-        let spec =
-            openssh_token_command_spec(&config, Path::new("/tmp/late-ssh-test/ctl")).unwrap();
-
-        assert_eq!(
-            spec.args_as_strings(),
-            vec![
-                "-F",
-                "/tmp/ssh_config",
-                "-S",
-                "/tmp/late-ssh-test/ctl",
-                "-o",
-                "BatchMode=yes",
-                "-p",
-                "2222",
-                "-l",
-                "alice",
-                "late.example",
-                CLI_TOKEN_REQUEST,
-            ]
-        );
-    }
-
-    #[test]
-    fn openssh_shell_command_uses_control_socket_and_tty() {
-        let config = test_config();
-        let spec =
-            openssh_shell_command_spec(&config, Path::new("/tmp/late-ssh-test/ctl")).unwrap();
-
-        assert_eq!(
-            spec.args_as_strings(),
-            vec![
-                "-F",
-                "/tmp/ssh_config",
-                "-S",
-                "/tmp/late-ssh-test/ctl",
-                "-o",
-                "BatchMode=yes",
-                "-tt",
-                "-p",
-                "2222",
-                "-l",
-                "alice",
-                "late.example",
-            ]
-        );
-    }
-
-    #[test]
-    fn openssh_cleanup_command_exits_control_master() {
-        let config = test_config();
-        let spec =
-            openssh_cleanup_command_spec(&config, Path::new("/tmp/late-ssh-test/ctl")).unwrap();
-
-        assert_eq!(
-            spec.args_as_strings(),
-            vec![
-                "-F",
-                "/tmp/ssh_config",
-                "-S",
-                "/tmp/late-ssh-test/ctl",
-                "-O",
-                "exit",
-                "-p",
-                "2222",
-                "-l",
-                "alice",
-                "late.example",
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_session_token_response_accepts_valid_json() {
-        let token =
-            parse_session_token_response(br#"{"session_token":"token-123"}"#, "test handshake")
-                .unwrap();
-        assert_eq!(token, "token-123");
-    }
-
-    #[test]
-    fn parse_session_token_response_rejects_empty_token() {
-        let err = parse_session_token_response(br#"{"session_token":"  "}"#, "test handshake")
-            .unwrap_err();
-        assert!(err.to_string().contains("empty session token"));
-    }
-
-    #[test]
-    fn parse_target_supports_user_and_port() {
-        let parsed = ParsedTarget::parse("alice@late.sh:2222").unwrap();
-        assert_eq!(parsed.user.as_deref(), Some("alice"));
-        assert_eq!(parsed.host, "late.sh");
-        assert_eq!(parsed.port, Some(2222));
-    }
-
-    #[test]
-    fn parse_target_supports_bracketed_ipv6() {
-        let parsed = ParsedTarget::parse("alice@[::1]:2222").unwrap();
-        assert_eq!(parsed.user.as_deref(), Some("alice"));
-        assert_eq!(parsed.host, "::1");
-        assert_eq!(parsed.port, Some(2222));
-    }
-}
+#[path = "ssh_test.rs"]
+mod ssh_test;

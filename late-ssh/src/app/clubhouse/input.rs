@@ -3,30 +3,28 @@
 //! opens the #lounge composer, and what you send floats over your head as a
 //! speech bubble; `w` waves and `x` dances for everyone; `t` at the bar
 //! pours a `@bartender ` mention into the composer. Enter next to a landmark
-//! prop follows its signpost: the arcade cabinet, the heavy door, the poker
-//! table, and the easel jump to their app pages (2/3/4/5), the jukebox opens
-//! the Music Booth, and the dog gets petted where everyone can see it.
+//! prop follows its signpost: the arcade cabinet, the heavy door, and the
+//! easel jump to their app pages (2/3/4), the poker table opens the Lobby
+//! modal and the pool table opens it on a fresh pool challenge, the jukebox
+//! opens the Music Booth, and the dog gets petted where everyone can see it.
+//! `n` (or Enter at the back door past the counter) steps outside to
+//! Nightcap, the small bar out back (`app/clubhouse/nightcap`).
 //! Returns `false` for anything it does not own so global keys (numbers,
-//! Tab, `q`, `?`, `v` music chords, ...) keep working, and returns `false`
-//! outright while composing so the shared composer pipeline gets the bytes.
+//! Tab, `q`, `?`, `v` music chords, ...) keep working. Composing and
+//! chat-overlay input never reaches this handler: the shared composer and
+//! overlay gates in `app/input.rs` intercept first (`screen_composes_chat`).
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
+use crate::app::lobby::daily::games::DailyGame;
 use crate::app::state::App;
 
-use super::lobby::Emote;
+use late_core::models::presence::Emote;
+
 use super::map::Interactive;
+use crate::app::presence::svc::now_ms;
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    // While typing, the global composer pipeline owns every byte.
-    if app.chat.is_composing() {
-        return false;
-    }
-    // Chat overlays opened elsewhere are handled by the shared overlay path.
-    if app.chat.has_overlay() {
-        return false;
-    }
-
     // A left click on a patron opens their profile, the same view as
     // `/profile <name>`. Other mouse events (scroll) fall through to the
     // global handlers.
@@ -34,16 +32,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         return handle_click(app, mouse);
     }
 
+    // The first-visit tour never reaches this handler: while it runs, the
+    // forced gate in `app/input.rs` (`handle_tour_gate`) owns all input,
+    // including the homecoming Enter.
     if let Some(byte) = event_byte(event) {
-        // A tutorial popup wants Enter before anything else. There is no Esc
-        // skip: the tour only ends by reaching the bartender.
-        if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
-            if app.clubhouse.tutorial_advance() {
-                app.persist_clubhouse_tutorial_done();
-            }
-            return true;
-        }
-
         match byte {
             b'i' | b'I' => {
                 if let Some(lounge_id) = app.chat.lounge_room_id() {
@@ -52,15 +44,21 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 return true;
             }
             b'w' | b'W' => {
-                app.clubhouse.emote(Emote::Wave);
+                app.clubhouse.emote(Emote::Wave, now_ms());
                 return true;
             }
             b'x' | b'X' => {
-                app.clubhouse.emote(Emote::Dance);
+                app.clubhouse.emote(Emote::Dance, now_ms());
                 return true;
             }
             b's' | b'S' => {
-                app.clubhouse.sit();
+                app.clubhouse.sit(now_ms());
+                return true;
+            }
+            b'n' | b'N' => {
+                app.clubhouse.step_to_back_door(now_ms());
+                app.nightcap.enter_screen(now_ms());
+                app.set_screen(Screen::Nightcap);
                 return true;
             }
             b't' | b'T' if app.clubhouse.nearby() == Some(Interactive::Bartender) => {
@@ -80,11 +78,24 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                             app.chat.insert_mention_in_room(lounge_id, "bartender");
                         }
                     }
-                    Some(Interactive::Dog) => app.clubhouse.pet_dog(),
+                    Some(Interactive::Dog) => app.clubhouse.pet_dog(now_ms()),
+                    Some(Interactive::BackDoor) => {
+                        app.nightcap.enter_screen(now_ms());
+                        app.set_screen(Screen::Nightcap);
+                    }
                     // The landmark props are signposts: Enter walks through.
                     Some(Interactive::Arcade) => app.set_screen(Screen::Arcade),
                     Some(Interactive::Doors) => app.set_screen(Screen::Games),
-                    Some(Interactive::Poker) => app.set_screen(Screen::Rooms),
+                    Some(Interactive::Poker) => {
+                        crate::app::input::open_daily_modal_globally(app);
+                    }
+                    // The same Lobby, but a player standing at the pool table
+                    // came to play pool: open it on the challenge picker with
+                    // eight-ball already under the cursor.
+                    Some(Interactive::Pool) => {
+                        crate::app::input::open_daily_modal_globally(app);
+                        app.daily.begin_challenge_draft_for(DailyGame::EightBall);
+                    }
                     Some(Interactive::Easel) => app.set_screen(Screen::Artboard),
                     _ => {
                         if let Some(lounge_id) = app.chat.lounge_room_id() {
@@ -118,9 +129,9 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     // A consumed movement key also cancels a pending `v` music chord, like
     // any locally-handled key would on the chat screens.
     app.music_prefix_armed = false;
-    app.clubhouse.walk(dx, dy);
-    if app.clubhouse.tutorial_reached_bar() {
-        app.send_clubhouse_bartender_greeting();
+    app.clubhouse.walk(dx, dy, now_ms());
+    if app.clubhouse.welcome_pour_due() {
+        app.show_clubhouse_bartender_welcome();
     }
     true
 }

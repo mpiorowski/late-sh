@@ -15,6 +15,9 @@ otel = [
     "opentelemetry-http",
 ]
 
+[lints]
+workspace = true
+
 [dependencies]
 # Core Utils
 anyhow = { workspace = true }
@@ -30,6 +33,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 deadpool-postgres.workspace = true
 tokio-postgres = { workspace = true }
+bytes = { workspace = true }
 
 # Crypto / RNG
 getrandom = { workspace = true }
@@ -38,7 +42,6 @@ sha2 = { workspace = true }
 
 # HTTP Client
 reqwest = { workspace = true, features = ["blocking"] }
-rustfft.workspace = true
 symphonia = { workspace = true, features = ["mp3"] }
 image.workspace = true
 axum.workspace = true

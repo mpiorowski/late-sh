@@ -1,0 +1,1693 @@
+# GAME.md — deadchannel, the character layer of late.sh
+
+Status: **seed doc, vision + decisions.** Successor to DRAGON.md (removed
+2026-08-07; its thesis survives here, its "extend Green Dragon" framing does
+not). Nothing here is committed design: every step gets its own design review
+before implementation. This file exists so future spitballing starts from the
+thesis instead of re-deriving it.
+
+This is an **experiment**. It can fail, and the success metrics below define
+what failing looks like. Theme and name are decided: **deadchannel**.
+
+## Why (the diagnosis, carried over and sharpened)
+
+- ~30 concurrent users. Chat + music are healthy; the door games hold maybe 5%
+  of players. Anything needing synchronous coordination starves (~3 people
+  want a game at any moment, spread across many game types: a liquidity
+  problem, not a UX problem). What works is ambient, zero-coordination,
+  interruptible.
+- **People don't want to own things in late.sh, they want to be seen in it.**
+  This is now confirmed by revenue data, not just theory: the shop's only hit
+  is username colors/gradients (permanent, visible in every message, pure
+  status). Chat effects don't sell because they're a moment: fire once, half
+  the room misses it, nothing accumulates. Same category on paper, opposite
+  outcomes, and the only variable is persistence + audience.
+- **Ambient care loops decay.** Bonsai/pet/aquarium engagement is visibly
+  fading. They share two missing axes: no audience (nobody sees your bonsai
+  unless they go looking) and no variance (day 40 is identical to day 4).
+  Lesson for everything below: a feature that can't be seen from chat, the
+  profile, or the feed follows the aquarium's curve no matter how charming.
+- **The chip economy is deflated.** People amassed fortunes with nothing
+  meaningful to want. The game must be the sink, not another faucet.
+- **Doors as destinations have a ceiling.** A door you travel to competes
+  with chat for attention and loses. The 5% number does not move by making
+  any door better; it moves when the game happens in the room you're already
+  in.
+- **LORD's real retention engine was never its mechanics.** Solo, the game is
+  a skeleton (grind forest, buy armor, kill dragon, reset). It survived for
+  years on: other players as content (ambushes, the daily news screen,
+  rivalries), sysop-driven seasonal resets, and IGM bolt-on content cadence.
+  We rebuild those three engines and skip faithful-mechanics parity entirely.
+
+North-star check for any idea: **does it ship a story into #lounge?**
+
+## The idea in one sentence
+
+A new game that is not a place you visit but the persistent character layer
+of late.sh: your character lives in chat, things happen to it while you're
+offline, daily rations gate a 10-minute ritual, and the game's entire job is
+to generate stories, stakes, and status for the surfaces people already
+live in.
+
+## Decisions made (2026-08-07 spitball session)
+
+- **New game, new name, not a Green Dragon extension.** After stripping the
+  door and LORD's simulated-social features, the salvage was too thin to
+  justify the constraint. The Green Dragon door **stays untouched** as-is in
+  the Games hub; this game is a separate thing. No migration question:
+  everyone starts fresh at season one.
+- **Reuse the LoGD balance data 1:1.** Combat curves, price ladders, gem
+  chances, level pacing: twenty-years-tested numbers, and they're
+  fiction-free (rename the items, keep the math). Deviations from the curves
+  need a stated reason. Four stand: a glyph pays three times LoGD's bits
+  and exp (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`) and a drop keeps 65%
+  of the exp (`EXP_KEEP_ON_DEATH`), both for the three-to-four-week
+  climb ("The daily ration loop"); and the armorer's wall costs 225% of
+  LoGD's ladder while patch costs half (`PRICE_PERCENT`,
+  `PATCH_PERCENT`, "The crystal pass"), because at LoGD's prices under
+  triple pay a runner held the top kit half way up. This is the real salvage from the dragon work, plus
+  the pure-resolver + per-user save schema *shapes* as a parts bin.
+- **No full-screen game destination.** Interaction surfaces are: a
+  lightweight modal (Lobby-modal shape) for spending rations / setting fight
+  plans / buying looks, the character sheet on the profile, the chat badge,
+  and the feed. What died is the place you travel to, not the UI.
+  *Amended 2026-09-01:* the ban stands for gameplay but not for
+  transactions; the night city returns as a full-screen errand
+  destination under strict rules. See "The three surfaces".
+- **Strip the simulated-social 90%.** No gossip, flirting, gardens, outhouse
+  equivalents: LORD faked a community because BBSes had one phone line; we
+  have a real one and the fake one competes with it. Keep cheap *world*
+  flavor (named monsters, injuries, weird events) because that's raw
+  material for feed lines and the announcer. Strip fake socializing, not
+  texture.
+- **V1 mechanics frozen at LORD-simplicity.** One attack loop, a handful of
+  gear tiers, stances for the arena, nothing else. Every "we could add"
+  mid-build goes on the season roadmap, not into scope. With a new game the
+  main risk is no longer a boring base, it's the blank page plus "we could
+  add so much": scope is how solo projects die at 70% done.
+
+## The design gate (apply to every proposed mechanic)
+
+**Does another player see it?** Fight plans pass (your rival reads your
+history). Ambushes pass (feed line). Cosmetics pass. A skill tree fails:
+it's you, alone, in a menu. Combat depth is content players burn through in
+two weeks and nobody in chat ever sees; it is explicitly not the retention
+lever and gets no investment beyond the reused LoGD curves.
+
+## Theme (decided 2026-08-07)
+
+**The neon undercity inside the machine.** Blade Runner register, machine
+substance. The city is what the inside of the machine looks like: rain that
+falls as static, alleys of dead channels, bars where the signal is warm, and
+out in the dark, the **glyphs**: creatures made of the same characters the
+terminal renders.
+
+- **You are a runner**: the version of you that stays in the city when you
+  log off. This keeps theme-explains-mechanics: offline ambushes and the
+  login news screen are diegetic (of course things happened, your runner
+  never left), and Blade Runner hands us bounty hunting as the fantasy
+  centerpiece, so the bounty system is fiction, not just economy.
+- **The screenshot test (hard language rule).** Every game noun must be
+  legible from what's on screen, never from a man page. In: glyph, static,
+  signal, runner, dead channel, flicker. Out: kernel, daemon, segfault,
+  root, heap. Rationale: a large share of users are not devs; static is
+  folklore (haunted TVs, Matrix, vaporwave), the kernel is homework. The
+  deep-lore season boss is an Old Signal shape (something broadcasting at
+  the bottom of the city since before anyone connected), never a Unix
+  internal.
+- **Diegetic spectacle.** Enemies are made of the medium itself: a fight
+  where a swarm of block characters corrupts the fight panel, a boss whose
+  presence tears the frame border for everyone watching. Screen-tear as a
+  boss mechanic costs a render function, not an art team, and no one needs
+  it explained: they can see it.
+- **The bridge fiction.** The clubhouse is the surface, the city is what's
+  behind the screen, and chat spawns are the leak between them: a glyph
+  flickers into #lounge, someone's runner puts it down, the room watches
+  the static clear. The fiction of "the game bleeds into chat" and the
+  architecture of it are the same sentence.
+- The noir voice is the announcer's voice.
+
+### Name (decided 2026-08-07)
+
+**deadchannel.** Three layers in one word: the Neuromancer opening line
+("the sky above the port was the color of television, tuned to a dead
+channel"), the exact aesthetic DNA of the theme; fully non-dev legible (a
+dead TV channel looks like static, everyone knows it); and late.sh speaks
+IRC, rooms ARE channels, so the game's home room can literally be
+**#deadchannel**: the haunted channel underneath the clubhouse. The name
+gives us a place in the app for free, and place is what this design is
+about.
+
+Runner-up, kept on record because it also fits: **afterglow** (what a CRT
+does when switched off, the image that keeps burning when you stop
+looking, which is the offline-runner fiction in one word; warmer and more
+melancholy-cozy than deadchannel). A candidate for naming something
+inside the world later rather than the game itself.
+
+Rejected: *downtime* (collides with ops vocabulary: "downtime tonight at
+20:00" must never be ambiguous between maintenance and a fight card),
+*static*/*signal* (too generic to own), *phosphor* (borderline on the
+screenshot test), *the flicker* (reserved as fauna vocabulary alongside
+glyphs and the Old Signal).
+
+## Core design
+
+### The daily ration loop (the ritual floor)
+- X forest-equivalent fights, Y PvP attacks, one boss attempt per UTC day.
+  Fixed reset so "tomorrow" is a concrete promise.
+- A session spends rations in 10-15 minutes and is interruptible at any
+  point. Thin combat is a feature at this session length.
+- Ration status lives in the same mental slot as quests/streaks: sidebar
+  line, streak bonuses mirroring the `QuestService` daily-streak shape.
+- **The climb is three to four weeks.** A runner who
+  spends every ration and never drops puts the Old Signal down in about
+  three weeks; one who drops a few times on the way, in about four. The
+  first mark is a month's habit, not a season's. `fight/sim.rs` plays it
+  and `sim_test.rs` holds the window; every balance change is judged
+  against it.
+
+### The three surfaces (decided 2026-09-01)
+
+**Lounge = the snack. Wire = the log. City = the wallet.** Every piece of
+the game lives on exactly one of these three surfaces, and each surface
+has one job. When a mechanic doesn't know where it belongs, this table
+decides.
+
+**#lounge: the snack.** Spawns land where the eyes already are, but under
+a hard secrecy rule: **only runners see the game.** The spawn, the fight,
+the kill, all of it is render-layer theater injected into the sessions of
+invited players only. Zero DB rows in lounge, no kill lines, nothing on
+IRC, nothing in scrollback; the truth lives on the wire. Details:
+
+- A glyph posts into the lounge view of every runner present (shared
+  world event: server-side spawn with HP, hits resolved centrally, state
+  pushed to eligible sessions, rendered locally). This is the first
+  machine that is NOT like the haunting: first contact is per-session
+  private dice, a lounge spawn is one synchronized world object. Same
+  theater pipeline, different spine, and it is the expensive piece of
+  this phase.
+- Any runner answers it with one command; the command is swallowed (never
+  posts as a message), one damage roll off the LoGD curves, one reaction
+  line in the theater. A flicker dies to one hit: the snack stays a
+  snack, twenty seconds of play mid-scroll. Occasionally a bigger shape
+  (a howler) lands with several runners' worth of HP and the room gets a
+  two-minute pile-on: no party system, no invites, co-op is "whoever is
+  in the room hits it", the only multiplayer that survives the liquidity
+  math. Credit names everyone who landed a hit.
+- **Civilians see nothing, ever.** Their entire experience of the game is
+  overhearing runners' real messages around an invisible event ("dax get
+  in here", "who took the last hit", "gg") and typing "wtf are you
+  talking about". The half-conversation IS the story shipped into
+  #lounge, written by humans, better than any generated line. The
+  confusion is the marketing, and the only cure for it is the funnel:
+  fill your bio, wait for the static, get invited.
+- **The visuals are a setting.** A runner can switch off the clubhouse
+  overlay ("hide the static") and remain fully in the game: rations
+  tick, wire and city work, they just keep their chat pure chat. Plenty
+  of people here just want to chat; the game must never cost them that.
+- Timeouts give stakes: a spawn nobody answers slips deeper into the
+  wire and does something small but visible on the wire (never in
+  lounge).
+- The old "everyone watches the fight" spectacle is not dead, it is the
+  **public phase flip**: one day, when there are enough runners to make
+  it a show, spawns become visible to the whole room, and that flip IS
+  the game's public launch. No announcement needed; the first glyph
+  tearing into lounge in front of forty civilians is the announcement.
+
+**#deadchannel: the wire.** The runners' back room and the game's
+unfiltered log in one place. Everything real posts here as actual
+messages, timestamped, as it happens: every spawn and kill, every bounty
+posted and collected, every death, every offline event (your ambush at
+3am is on the wire at 3am), the Old Signal's broadcasts, plus ordinary
+runner chat between the lines. Half the messages are the game, half are
+people; that mix is the fantasy. Consequences:
+
+- **The feed budget only governs #lounge.** The wire is deliberately
+  unfiltered; people who want the firehose idle here with the sidebar
+  open, people who don't never see it. This resolves the budget tension
+  from DIGEST.md by geography instead of filtering.
+- The welcome-back paper quotes the wire instead of generating a recap:
+  the morning read is genuine news about you, not a summary.
+- The wire is also the doorway: you reach the city through #deadchannel,
+  which keeps the invite gate meaning something.
+
+**The night city: the wallet.** A full-screen destination after all
+(amending the 2026-08-07 ban), revived under one rule that keeps it safe:
+**transactions only, nothing ever happens there that you could miss.**
+Shops, the armorer, repairs, the quest board, the daily ration ritual:
+you descend with a wallet, spend ten minutes, and the game kicks you out
+while you still want more (the LORD town shape: town is menus, the game
+happens in the news and the field). No spawns, no ambushes, no timed
+events in the city, ever; the moment standing in the city beats standing
+in chat, the door-ceiling diagnosis applies and we have rebuilt the
+mistake. The market being the *only* place to buy is what makes it a
+place at all: scarcity of place is the fiction's spine, same as the
+"only place there" clubhouse.
+
+**The runner's day (the loop this geography produces):**
+
+- *Morning.* Connect, splash, lounge. The ration ticked at midnight.
+  Mid-scroll a flicker posts, invisible to civilians; one command, one
+  line back, the wire records the kill. Twenty seconds. For half the
+  players this is the whole game, and that is fine.
+- *The ritual.* Once a day, on your own schedule: drop into #deadchannel,
+  read the wire since last night (who died, what the Signal said, whose
+  bounty cleared), descend into the city, spend (repair, upgrade, take a
+  quest), get kicked out by the ration cap. Ten minutes, back to lounge.
+- *The overnight.* Your runner stays down there. What happens to it
+  (ambush, quest event, your name on a bounty) posts to the wire as it
+  happens, so tomorrow's read is news, not a report.
+
+### The login news screen (the killer feature)
+- "While you were gone: mira ambushed you, you lost 340 gold, your bounty is
+  now 8k." Every login opens with consequences.
+- My ten minutes creates content for your session tomorrow. Offline PvP,
+  arena results, boss kills, bounty changes, all rendered as morning news
+  and (budget permitting) #lounge lines.
+- Story variety over combat depth: fifty feed-line templates instead of five
+  is cheap and is the difference between gossip and a cron log.
+
+### The visibility layer (be-seen fuel)
+- Customizable ASCII character: we own the renderer, looks are picked/earned/
+  bought. Level/class/title as a chat badge; character sheet on the profile.
+- One identity system, multiple surfaces. Never a separate progression or
+  wallet for any sub-surface; that's two identity systems fighting for one
+  presence layer.
+- Cosmetics are the proven shop category (see Why), so lean in hard:
+  rotating/limited seasonal stock for scarcity and shop check-ins. No
+  legendary looks: a set only a few can wear becomes the look everyone
+  chases and then everyone wears.
+
+### Chat encounters (the onboarding funnel)
+- The Mudae/Pokécord shape: something spawns in a room, runners present
+  fight it with their characters, reward lands on their sheets, the line
+  ships to the wire. Zero coordination, works at any concurrency,
+  stronger the more people idle in chat: exactly our population shape.
+  *Amended 2026-09-01:* the claim model is co-op pile-on, not
+  first-to-react (everyone who hits shares the credit line), and lounge
+  spawns are runner-only theater until the public phase flip; the full
+  spec lives in "The three surfaces".
+- Solves onboarding without a manual: someone who never opened a modal now
+  owns a level-1 character and has a reason to look at it.
+- The Mudae warning: those bots won on pre-loaded attachment (anime
+  characters, Pokémon). A homegrown collectible set has none, so the
+  attachment object here is *your own character*, not the spawns.
+- Spawn cadence is a feed-budget question (event, not wallpaper);
+  encounters mint curiosity for the ration surfaces rather than consuming
+  rations.
+- **The spawn/event mechanism stays generic** (spawn → first-reactor claims
+  → feed line): it's a content pipeline, not a feature. A new encounter
+  type is an afternoon of data (name, art, numbers, feed lines). This is
+  the anti-staleness plan (world beats: a troll week, a plague, a two-day
+  siege, on a cadence we control) and the door to pet-style spawns later
+  without a second identity system.
+
+### First contact (the haunting, decided 2026-08-31)
+
+Status (2026-09-02): all four stages and the eligibility gate exist in
+this directory, `late-ssh/src/app/deadchannel/` (see `CONTEXT.md` beside this file), built
+for several replicas (every cap and stamp a conditional claim on the
+user row). Stage 1 is staff only, a rule in code rather than a switch,
+so nothing fires for non-staff users yet (staff: admins and moderators,
+the mods meeting it cold as the first playtest); stages 2-4 sit behind connected time, touched
+settings, and an AI-screened bio with placeholder thresholds (7 days of
+online time, 2 keys, 100 characters; the length is only the floor under
+which no screen is spent, the AI screen does the judging). Copy, the
+voice's name, and the thresholds still face design review before the
+haunting leaves staff.
+
+- **The game is never announced; it arrives.** Onboarding as haunting: the
+  bridge fiction says the city is behind the screen and chat is the leak,
+  so first contact IS a leak. No tutorial, no reward, no explanation, and
+  the first beats deliberately end with nothing: restraint is the magic.
+- **The escalation ladder** (cheapest to loudest, each stage roughly an
+  afternoon of render code, all pure client-side theater until the last):
+  1. **Deniable.** Ambient corruption where the eyes already are, and
+     the v1 target is decided: **the sidebar clock.** A glitch is only
+     legible against stability, and the clock is the most stable,
+     most-glanced-at element on screen (pinned core block, Home and
+     Arcade); the visualizer is the trap choice (already chaos, a burst
+     of static there reads as the visualizer being a visualizer), the
+     ticker is busy text, the splash too brief. Spec for the
+     implementer: replace one or two characters of the rendered HH:MM
+     with characters drawn from the game's fixed glyph alphabet (the
+     same set stage-4 spawns will render with, so the clock glitch is
+     retroactive foreshadowing), hold roughly 200ms (one frame at 15fps
+     is too fast to trust), restore. Rolled per session (independent
+     dice, so two people almost never see it together: "did anyone else
+     see that?" gets "no?" back, which is deniability and gossip in one
+     move), rare (order of once per hours-long session, at most once or
+     twice a day per user), render-layer only (the one DB touch is the
+     per-user burst counter), staff-scoped until the haunting is opened
+     up in code. Ladder count (tuned 2026-09-01): **three
+     bursts total per person**, persisted; the third quiets the clock
+     for good and opens stage 2, and the quiet is itself part of the
+     escalation. Whether unchosen users keep an unbounded ambient clock
+     instead is a fuse-time question. Chrome, never
+     content: chat message bodies stay untouched (a glitched clock is
+     spooky, a glitched sentence reads as data corruption). NOT the
+     clubhouse: the tavern is a hallway everyone tabs straight out of,
+     and its only lingering audience is brand-new users, the one group
+     the fuse must not spend itself on. Later variety (splash tear,
+     ticker stamp, bonsai leaves) rides the same machinery. Nobody is
+     sure they saw it.
+  2. **Personal, and witnessed.** The corruption chooses you, and the v1
+     target is decided: **your own name.** Spec for the implementer:
+     immediately after their message lands (the
+     one moment of guaranteed attention: eyes always follow your own
+     send), the author label of that just-landed message renders with
+     two or three of its characters swapped for glyph-alphabet
+     characters, holds roughly 800ms, swaps to a different two or three
+     for roughly 800ms more, heals (tuned 2026-09-01: heavier and well
+     past the clock's ~200ms; the second wave added 2026-09-03, because
+     stage 2 is meant to be hard to miss and a single flash can be
+     written off as a render hiccup). Only a send that renders its own
+     author header is a target: a fast follow-up to your own message
+     groups under it as a
+     continuation with no label at all, so a hit there would spend
+     itself invisibly and the roll skips it. The body is never touched:
+     the escalation over stage 1 is targeting, not content ("chrome,
+     never content" still holds; your name is chrome that happens to be
+     *you*). Rejected on purpose: corrupting the message echo itself,
+     which plants "did that send garbled to everyone?", a
+     data-integrity doubt and the panic rule violated in its most
+     personal form.
+
+     **Reversed 2026-09-05: the room sees it too.** Stage 2 shipped
+     private ("in the sender's session only") and that was the wrong
+     call, for one reason: a beat nobody else can corroborate is a beat
+     the person can talk themselves out of, and stage 3 then walks in and
+     says the static knows your name to somebody who has already decided
+     they imagined it. Stage 1 wants deniability and gets it honestly,
+     from independent dice ("did anyone else see that?" / "no?"). Stage 2
+     is the rung where that answer turns into *yes*, and a room that saw
+     it is worth more than a person who is not sure they did. It costs
+     nothing the panic rule protects: the corruption is still the label
+     and never the body, so nobody is left looking at a garbled sentence
+     wondering whether their send went out broken. What was rejected
+     above stays rejected; that was the message echo, not the name. What
+     the room sees is somebody's *name* tearing, which reads as the
+     static reaching for a person, which is what the fiction has been
+     claiming all along. Deliberately not simultaneous: everyone paints
+     the same two waves from whenever the message reached them, because
+     pinning the room to one clock would mean persisting a beat that is
+     over in a second and a half. Somebody who arrives after the fact
+     sees a clean name: the static does not perform for an empty room.
+
+     Chosen users only (the eligibility gate), never
+     before the clock has spent its three bursts (the ladder never
+     skips a rung), one in a few sends and capped once per UTC day
+     (the cap paces, the dice only pick the send), **three total hits
+     per person**, the third arming the door; the two doors sit a day
+     apart and the DM comes the day after the second, so for a person
+     who connects daily the full ladder is one week),
+     render-layer only, no DB beyond the per-user arming counter.
+     Later variety (your name
+     in the sidebar, the composer placeholder) rides the same
+     machinery. Thematic payoff: when the stage-3 whisper says the
+     static knows your name, it is describing what already happened.
+  3. **The whisper (the held door).** Delivered on the splash screen,
+     twice per person ever and never the same line twice: these two
+     times it does not skip. Triggered by the chain, not the calendar:
+     the third stage-2 hit arms it (the per-user counter), and it fires
+     on the armed user's next fresh connect, so
+     the beat is flickers one evening, then the door holds when they
+     come back: the haunting follows you home. A day or more later the
+     door holds again with a harder line (the first pool: the static
+     noticed you; the second: "something is trying to break in. do you
+     see it?"), which stretches the wait before the DM and turns one
+     jump-scare into a pattern. The splash is
+     the liminal space (the doorway between outside and inside the
+     machine), inherently private and per-session, so the whisper
+     touches no chat surface at all. The load-bearing mechanic
+     (**reversed 2026-09-13**): the scene plays whether or not anyone
+     presses anything. It first shipped as *respond, don't ignore* (Esc
+     surged the static and started the line early), and without a
+     keypress the scene was a quiet line under the cup that people were
+     missing. Now the static pulses from the first frame, the skip hint
+     corrupts and dissolves as the voiced line types itself, and every
+     key, Esc included, does nothing. The panic rule still holds because
+     the screen is visibly alive the whole time: *something is holding
+     the door*, never a hung terminal. Hard time cap of a few seconds,
+     then it releases on its own. Screenshot-bait, "glitches are coming" energy;
+     still no game to play.
+  4. **The invitation (decided 2026-08-31: the whole game is opt-in).**
+     Not a breach: no game ever lands on anyone unasked. Some days
+     after the second held door, the contact goes real, and **it arrives
+     through a breakthrough (added 2026-09-13):** the DM alone, met cold,
+     was taken for spam, so once it is due the next own send tears the
+     whole screen with the door's static while a voiced line says the
+     voice finally got through and names it, and the DM lands as the
+     line finishes. The scene is theater, the DM is the invitation: a DM from the game's
+     first voice, a character calling for help from the other side, not
+     a system announcing a feature (name and copy at design review; a
+     plea beats a pitch, it makes the reader the protagonist). It rides
+     the proven ghost-user plumbing (@bartender's shape: dedicated DB
+     user, fixed fingerprint) and, unlike stages 1-3, it persists on
+     purpose: this is where the fiction goes real, and an invitation
+     that vanishes cannot be followed three days later. It ends with
+     the only instruction the entire haunting ever gives:
+     `/join #deadchannel`. Typing the command IS the consent: runner
+     created, the haunted channel under the clubhouse opens, the game
+     exists for you and nobody else. The name decision (rooms ARE
+     channels) becomes the consent mechanism. **The invitation is the
+     key, not a head start (decided and built 2026-09-01, reversing
+     the earlier open-join call): `/join #deadchannel` works only for users whose
+     invitation stamp is set.** An open door would let people skip the
+     eligibility funnel entirely, and the funnel (fill your bio, touch
+     your settings, put in the hours) is the point. Everyone else gets
+     the same static line the reserved slug gives today ("only static
+     on that channel"): the door answers only to the marked. Gossip
+     still does the marketing, aimed one step earlier: overhearing the
+     name and bouncing off the door is what sends people to fill their
+     bio and wait for the static to choose them. The old stage 4 (a
+     glyph flickering into #lounge, the room watching a runner put it
+     down) is not dead, it is relocated: that is the game's public
+     phase, once enough runners exist to make it a show. The room
+     itself has its own room kind, `kind='deadchannel'` (migration 170
+     extends the `chat_rooms` kind CHECK; the room seeds itself on the
+     first invited join): every room listing is a kind
+     whitelist (browse lists only `topic`, IRC lists
+     lounge/language/topic), so a new kind is invisible to all of them
+     by construction, exactly how game rooms already hide, and without
+     inheriting the game-room join path or `game_kind` semantics. The
+     channel is never discoverable, only spoken of; once you are in, it
+     sits at the bottom of Core on the rail, under `#voice`, a fixture
+     next to the lounge rather than one channel among many.
+- **The eligibility gate is a whisper campaign.** Stages 2-4 target users
+  with a filled bio, touched settings, and real tenure (thresholds at
+  design review; built 2026-09-02 with placeholders, and the bio leg is
+  an AI screen, "does this read as a person describing themselves",
+  cached per bio text so it costs one call per rewrite, never per
+  login, and only spent once the free legs, tenure and settings,
+  already pass): the static chooses the invested. Stage 1 is universal
+  on purpose (ambient, harmless, and the "did anyone else see that?"
+  gossip works better when anyone might have). The gate is evaluated at
+  session init (three cheap reads where the user row already loads) and
+  arms that session's stage-2 dice; no stored chosen flag, so filling
+  your bio tonight means the static can find you tomorrow, and if the
+  community reverse-engineers the pattern, that folklore does the
+  profile push for free. Eligibility gates *entering* the funnel, never
+  continuing it: once the arming counter has hits, the haunting does
+  not retreat, whatever later happens to the bio. Side effects are the
+  point: it pushes profile completion, and it makes the first glitch a
+  social event (the chosen asking #lounge "did anyone else see that??"
+  while half the room has no idea). The mystery ships a story into
+  #lounge before the game has a single mechanic: north-star meets day
+  zero.
+- **Hard rules:**
+  - **Never eat the message.** Enter on a written message is an act of
+    trust in the app's healthiest feature. The haunting is theater
+    *around* the send, never the send itself: the message always
+    delivers untouched; only the sender's local echo, the idle
+    composer, or the ambient frame get corrupted.
+  - **Render-only, TUI-only.** No DB rows, no chat history, and IRC
+    clients see nothing, which is the fiction stated as architecture:
+    the city only leaks through the terminal.
+  - **Aesthetic, never system.** The audience is terminal people; a
+    hijacked input can read as "compromised server", and that panic is
+    the failure mode. No fake errors, no fake disconnects, nothing
+    resembling a real terminal failure. Static and corruption are
+    obviously *voiced*, never mechanical.
+  - **Staff only until opened up in code**, and a ready answer for the
+    inevitable "I found a display bug" report.
+- **First contact is a nonrenewable resource.** It works exactly once per
+  person. Two timing rules: never burn it on real users while it is
+  staff-scoped scaffolding, and never light it until the breach is close.
+  The whole ladder is a fuse of one to two weeks before the first real
+  spawn, not a promise without a date: "glitches are coming" followed by
+  months of nothing curdles into a broken feature.
+
+### Offline PvP / ambush (the story engine)
+- Attacking sleeping players. Risk and consequence are what make the news
+  screen worth reading and the feed worth gossiping about.
+- Needs a consent/grief model before launch: level bands, shields after a
+  loss, possibly opt-out (see Open questions).
+
+### The arena (the spectacle and the chip sink)
+- **Skill lives in preparation, not execution** (the autobattler insight).
+  Owners pre-commit a secret fight plan: a stance (small RPS triangle:
+  aggressive > cautious > reckless > aggressive) plus a gambit slot or two
+  ("open with the big swing", "hold the potion until under 30%"). Plans are
+  secret; fight *history* is public. Betting becomes reading people, not
+  looking up stats.
+- Keep the plan-space small (three stances, a handful of gambits). Fifteen
+  knobs make plans unreadable and betting collapses into coinflips; the
+  at-a-glance readability of the meta IS the product.
+- **Shaped luck:** tune the resolver so the on-paper favorite wins ~65-70%.
+  Script drama into the event stream deliberately (crits, near-death rally,
+  botched gambit): not to change outcomes, but because the play-by-play
+  needs moments people retell.
+- **Parimutuel betting, never a bookmaker.** Everyone bets chips into a
+  pool, winners split pro-rata, house rakes ~10% and *burns it* (chip sink
+  working on every fight). Odds emerge from the crowd; showing the live
+  pool split ("70% of chips on mira") provokes contrarians and is itself
+  content.
+- **Nightly fight card at a fixed hour.** An appointment without
+  coordination: present spectators watch the play-by-play land line by
+  line, everyone else gets a highlight feed line and the morning news.
+  Challenge → announced in feed → betting window (hours) → resolution.
+  Rides the existing daily-games deadline/your-turn plumbing.
+- **Announcer ghost** on the proven @dealer plumbing, pointed at the fight
+  event stream: flavor that doesn't come from a template pool, directly
+  attacking line-staleness.
+- Fighter side-stakes (both escrow chips, winner takes pot), title fights
+  for rank-1 flair.
+- Expectation-setting: at ~30 concurrents the card is 2-5 fights a night
+  and that's fine. Matchmaking never gates on "enough players": challenges
+  are person-to-person, plus maybe one house-arranged match daily between
+  willing characters so the card is never empty.
+
+### Bounties
+- Pay chips to put a price on someone's character; whoever takes them down
+  (ambush or arena) collects a cut, the rest burns. Chip sink and story
+  generator in one move: "tom put 10,000 chips on mira's head" is the best
+  feed line the system can produce, and it converts idle rich-player wealth
+  into drama for everyone else. Bounties funnel targets onto fight cards.
+
+### Seasons (the "what's after the boss" answer)
+- Rides the existing monthly leaderboard/awards rails: monthly cycle,
+  plaque resets, permanent `profile_awards` for the month's top placements,
+  weekly first-slayer flair (champion-flair shape).
+- LORD's prestige cycle (kill boss → reset with a mark) is already a season
+  mechanic; LORD just never put a calendar on it. The reset is what makes
+  the race exist.
+- Season cadence is also the content cadence: each season is where
+  new-game energy safely lands (a new spawn family, a world event, a
+  profession) once the loop has proven people care.
+
+### Economy rules (hard lines)
+- **Chips never buy power. Only visibility (cosmetics) and stakes (bets,
+  bounties, buy-ins).** A 200k-chip whale buying extra fights or better
+  gear kills the game in a week.
+- Game-internal gold stays internal. Chips flow *in* as sinks; out only at
+  rare milestone awards (boss-slain / champion `profile_awards` + chip
+  payouts, the shape NetHack and Lateania already use). Beware building a
+  printing press into an already-flooded economy.
+- **The Old Signal pays 40,000 chips once a month**, on the Top Chips
+  board like every other boss, behind the same monthly rule as every
+  milestone on the site: once per mark and at most once every 30 days
+  per account (the `deadchannel_old_signal_slain` reward template). The
+  climb back is three to four weeks, so the lockout rarely binds; it is
+  the rail against a faster second climb. That matches Lateania's full
+  run (four crowns at 10,000, each at most once every 30 days) on
+  purpose: the undercity is the accessible way to the top of the payout
+  ladder, five minutes a day and no skill ceiling. The number moves only
+  with the rest of that table.
+
+### The retention model (honest version)
+- A player burns hot for 2-4 weeks, sees the content, then settles into
+  ambient mode: rations in 5 minutes, the occasional spawn tap, keeps the
+  badge, reads the news. **Ambient players are fully valuable**: still a
+  body to ambush, a name in the arena, a line in the feed. Retired
+  characters are content too. Design for that curve, not for infinite
+  grind; the treadmill answer (more levels, more tiers, skill trees) is
+  expensive and targets players who were leaving anyway.
+- Four renewable reasons to log in tomorrow: the ration ritual (floor),
+  the monthly season race (ceiling), arena/ambush rivalries (renewable
+  middle: other players don't deplete), world beats (authored surprise on
+  our clock).
+
+## Phase 2 design pass: the runner (2026-09-02)
+
+Status: **design pass, character only.** What a runner is, what it wears,
+what it looks like, and where each of those is seen. The city's screens,
+the fight loop beat by beat, the overnight engine, and the wire's voice
+are the next passes; this one fixes the data all of them read. Every
+number below is the LoGD number as already transcribed in
+`late-ssh/src/app/door/greendragon/{data,model}.rs` unless a reason is
+stated beside it; the Green Dragon door itself stays untouched.
+
+### The runner in one sentence
+
+A runner is your username with a level, a band, two gear slots, three
+daily bars, and a look; there is no second name, no inventory, no points
+to allocate, and nothing on it another player cannot see.
+
+### The stat block (LoGD 1:1, renamed)
+
+| On screen | What it is | Number | LoGD source |
+|---|---|---|---|
+| level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, scaled by marks | `lib/experience.php` |
+| a glyph's pay | bits and exp per kill | LoGD's creature table times three (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`): LoGD paced a season, this ladder is a month; paying more per kill keeps prices and thresholds LoGD's and the bits in step with the exp | creature seeds |
+| a drop | exp kept | 65% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
+| crystals | the rare currency | one kill in twelve leaves one, a bright glyph always; a drop never takes them, a mark and the ledge do | forest gems |
+| signal | health | 10 per level, full at the day roll | `HP_PER_LEVEL` |
+| attack / defense | fight stats | level + weapon tier / level + armor tier | `battle-skills.php` |
+| rations | fights left today | 10 per UTC day | `TURNS_PER_DAY` |
+| charge | moves left today | band skill / 3 + 1 per UTC day | specialty uses |
+| bits | money on hand | start with 50 | `START_GOLD` |
+| stash | money in the city's locker | untouched by death; a tenth kept on the way in, no interest; a mark or the ledge empties it | `bank.php` |
+| debt | owed to the bits machine | up to 50 a level; +10% of each loan, once; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
+| band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
+| band skill | move unlocks | +1 per level gained | specialty points |
+| marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
+
+Vocabulary decided here, all passing the screenshot test: **signal** is
+health (the Old Signal is the deepest one; "mira's signal dropped" is a
+death line and needs no gloss), **bits** is money (runner-up: scrip),
+**charge** is what moves spend, **band** is class (runner-up: line; band
+because tuner and jammer are radio words and "what band are you" is the
+right amount of strange), **marks** is prestige. Attack and defense stay
+attack and defense: numbers on a sheet, not fiction.
+
+### Three bars, one clock (health, stamina, mana)
+
+Yes to three pools, and the mapping is exact: signal is health, rations
+are stamina, charge is mana. Two rules make them one mental model instead
+of three:
+
+- **Only signal moves during play.** Rations and charge only go down;
+  nothing during a session refills anything.
+- **Nothing regenerates on a timer.** All three refill at the UTC day
+  roll, together, and never in between. Timed regeneration is the mobile
+  shape ("your stamina is full!"): it turns the ritual into a nag and
+  the nag into a reason to resent the game. The fixed reset is the
+  promise the ration loop was built on ("tomorrow" is concrete), and
+  LoGD ran twenty years on it.
+
+The day roll is lazy: the first touch of the runner row after midnight
+UTC rolls it, as one conditional `UPDATE ... WHERE day < $today` (the
+glitch-day claim shape from the haunting). No cron, no scheduled reset,
+replica-safe by construction, and a runner nobody touches costs nothing.
+
+### Death (decided; closes the open question)
+
+**Signal dropped** means off the wire until the day roll. You still read
+the wire and still see the lounge theater; you cannot hit, and the wire
+says so when you try. You lose the bits on hand and 35% of your
+exp (`EXP_KEEP_ON_DEATH`, 0.65; LoGD's tenth made a drop too cheap to
+matter over a month); the stash is untouched, gear is untouched, and so
+is the debt.
+Punishment as spectatorship, in the exact surface you live in, and it is
+visible: **your mark renders as static (`░`) in chat until the roll**,
+so the room sees you are down before you tell them. No paid resurrection
+in v1: LoGD's graveyard is a chips-buy-power hazard waiting to happen,
+and "back tomorrow" is a better story than "paid 200 to skip the
+night".
+
+### Bands and moves (the answer to "skills")
+
+**No skill tree.** It fails the design gate outright (you, alone, in a
+menu), and it is the treadmill answer to a retention problem the
+treadmill does not fix (see "The retention model"). Combat depth is not
+the lever and gets no investment beyond the reused curves.
+
+What a runner gets instead is LoGD's specialties, 1:1 in numbers, under
+new names: three **bands**, each a ladder of four **moves** unlocked by
+band skill and spent from charge. The band is public (a word on the
+sheet, a word in every wire line about you: "mira, ghost, level 7"); the
+moves are private detail nobody else needs to read.
+
+| Band | Was | Register |
+|---|---|---|
+| **tuner** | Mystical Powers | works the signal itself: mends, siphons, summons a hand of the medium |
+| **jammer** | Dark Arts | noise and corruption: summoned static, curses that cut a foe's attack, wither |
+| **ghost** | Thief Skills | unseen: poison, the hidden strike, the backstab |
+
+Rules:
+
+- **Chosen on the first descent into the city, not at join.** LoGD picks
+  on the first new day; a join creates a bandless level-1 runner (a real
+  LoGD state), and the city has the room to explain three sentences
+  that a composer command does not.
+- **Switching is allowed** at the city, and the other band's progress is
+  benched, not lost (LoGD keeps each path's skill and uses; the port
+  already models this). "mira went jammer" is a wire line.
+- Move names are build-time content at feed-template quality (a repeated
+  flavor line is a bug report). Each must pass the screenshot test; the
+  four moves of a band should read as one voice.
+- Bands are not arena stances. Stances (phase 4) are a per-fight secret
+  plan; the band is who you are. Keeping them apart keeps the arena's
+  plan space small.
+
+### Gear: two slots, fifteen tiers
+
+Weapon and armor, tiers 1 to 15, one shared `COST_LADDER` at
+`PRICE_PERCENT` (108 bits at tier 1 to 23,287 at tier 15), power equals
+tier, 75% trade-in on the piece you hand back. Bought at the city's
+armorer with bits, any tier the purse reaches: the price is what keeps
+the kit on the level ("The crystal pass"). The blade shop sells the
+next tier up for crystals.
+Chips never touch gear: this is the hard economy line made concrete. In
+LoGD the tier is the item and the name is pure fiction, so the rename is
+free and the names carry no balance.
+
+Names (draft, lowercase in the voice's register, final at the city
+pass). Tier 0 is bare hands and street clothes. The ladder climbs from
+street junk to things made of the medium itself, so the top tiers sound
+like broadcast folklore, never hardware:
+
+| Tier | Weapon | Armor |
+|---|---|---|
+| 1 | bent antenna | thrift coat |
+| 2 | box cutter | rain shell |
+| 3 | tire iron | padded jacket |
+| 4 | rebar club | riot vest |
+| 5 | stun baton | foil-lined coat |
+| 6 | nail gun | kevlar weave |
+| 7 | cable whip | faraday coat |
+| 8 | arc torch | lead apron |
+| 9 | static knife | static cloak |
+| 10 | flicker blade | shielded rig |
+| 11 | feedback saw | ghost weave |
+| 12 | dead-air saber | dead-channel mantle |
+| 13 | burnout lance | blackout plate |
+| 14 | channel breaker | white-noise shell |
+| 15 | the last broadcast | the test pattern |
+
+(`faraday coat` is the one borderline entry on the screenshot test; swap
+it if a non-dev reader stumbles.) Gear names show on the sheet and in
+fight and wire lines ("mira's flicker blade"), which is the only reason
+they exist.
+
+### The look (the be-seen fuel)
+
+The avatar is **one object at two sizes**: a portrait where there is
+room, a mark where a person is one cell. Both are built from pieces, and
+pieces are the thing chips buy.
+
+**The portrait.** 5 columns by 3 rows, three slots, one row each: **hood**
+(top), **eyes** (middle), **coat** (bottom). Rows stack, so any hood
+composes with any coat and the set never needs compatibility rules. The
+rack is gated by level: three pieces per slot at level 1, three more
+at 4, 7, 10, and 13 (fifteen per slot), free once unlocked and
+re-picked at the tailor for nothing, forever. A join assigns a random
+level-1 look so the mark exists from the first second. There are no
+earned or legendary pieces: a piece only a few can wear becomes the
+look everyone chases and then everyone wears. Feats (the Old Signal
+kill) earn a badge, not clothes, and no piece carries the Signal's `╬`
+on the chest.
+
+**The mark.** One cell: a glyph, rendered in the chat author badge stack
+(beside the bonsai glyph, the existing precedent for a game glyph there)
+followed by the level, `▚7`, and as the runner's avatar glyph on the
+clubhouse floor, where runners become the only patrons who are not the
+default glyph. Starter marks are the characters of `MARK_ALPHABET`,
+free, so a fresh runner already wears the alphabet the city's fauna is
+made of: all of it but the Signal's `╬`, which is the paragon count and
+nobody's to wear. Rarer marks are bought. The badge's color is the newest tint the
+level opened, and an Old Signal kill shows as `╬N` after the level
+(`▚3╬2`): proof no chip can buy, so the room learns to read it.
+
+**Pieces come in two kinds, and the look tells the story:**
+
+- **Bought** pieces: chips, at the tailor in the city, permanent (never
+  rented: the shop's lesson is that permanent and visible sells, and the
+  rental treadmill is what made effects a moment). The tailor's rack
+  rotates by season and a piece that leaves the rack never returns, so
+  a look dates you the way a jersey does.
+- **Level** pieces: the tailor's rack opens by level, three per slot
+  every three levels, so the look says how far down you have been.
+  There are no earned pieces: a piece only a few can wear becomes the
+  look everyone chases and then everyone wears. Milestones (the Old
+  Signal kill, a season placement, later the arena title) earn badges,
+  not clothes.
+
+Because the piece set is closed, a look is legible to anyone who has
+learned it: this coat says "was here in season one", that tint says
+"level ten", and the badge beside the name says "did the thing". Both
+are status; both are why you look.
+
+**Signal corrupts the look.** The portrait renders with cells replaced by
+static in proportion to missing signal (the haunting's `glitched_name`
+machinery, pointed at a 5x3 grid): a runner at 3/40 looks half dead on
+their card, and a dropped signal turns the mark to `░`. Health becomes
+something other people see without a number.
+
+**Where the look is seen** (the design gate, answered per surface):
+
+| Surface | Size | Who sees it |
+|---|---|---|
+| chat author line | mark + level | everyone in the room |
+| clubhouse floor | mark | everyone on the floor |
+| profile card (`p`, `/profile @user`) | portrait + sheet | anyone who looks |
+| web `/profiles/{slug}` | portrait + sheet | the whole internet: the brag that leaves the terminal |
+| #deadchannel messages | portrait in a 3-row gutter beside every runner's message | runners only; the wire is the game's own room, so the face rides every message there (decided 2026-09-02) |
+| the wire | portrait as a three-line message | runners; printed by the game on a level gained and on an Old Signal kill, the two moments worth a picture |
+| the fight panel (later) | two portraits facing | whoever is watching |
+
+**Tackled: "show the avatar in chat."** One chat row cannot hold a face,
+and a face beside every message in #lounge would be wallpaper by lunch
+and would break the chat-stays-chat rule the game lives under. The mark
+is the face's signature and the lure to press `p`; the portrait lives
+where there is room. **The one exception is #deadchannel itself**
+(decided 2026-09-02): the wire is the game's own room, every author
+there is a runner, and the message list reserves a small gutter on the
+right where the author's portrait sits beside their message. Only
+there, never in any other room, and never a frame or border around the
+message (that is the theater leaking into content, which the haunting
+rules forbid for the same reason).
+
+**Visibility rule (decided).** The mark and the sheet are public,
+civilians included. Only the theater is runner-only; the status never
+is. This is exactly the half-conversation the three-surfaces design
+wants: "what is the little square next to your name" is the question
+that sends someone to fill their bio. Cosmetics are the shop's one
+proven category; hiding them from the room would hide the product.
+
+**Portrait sketches (2026-09-02).** The register is decided from these:
+dense, symmetric, made of the medium, no limbs (slashes as arms read as
+a stick figure and were rejected). Every row is five cells; a portrait
+is three rows stacked.
+
+The voice's family, the operators, and the fauna:
+
+```
+afterglow   operator    antenna     crowned     heavy hood   dead air
+  ╬═╬         ┼─┼         ╫╫╫       ▚▞▚▞▚        ▗███▖         ▀▀▀
+ ▐◈ ◈▌       ▐■ ■▌       ▐◉ ◉▌     ▐◈ ◈▌        ▐◈ ▪▌        ▐▬▬▬▌
+  ▟▓▙         ▐▓▌         ▟█▙       ▟▓▙          ▟▓▙          ▟░▙
+```
+
+The bands and the street looks:
+
+```
+ghost       visor       static      the glyph   tuner       jammer
+  ░▒░         ▄▄▄         ▚▞▚         ▝▀▘        ╪═╪         ▙▄▟
+  ◌ ◌        ▐═══▌       ▐● ●▌       ▐▚ ▞▌      ▐○ ○▌       ▐╳ ╳▌
+  ▒░▒         ▟█▙         ▟▓▙         ▟╬▙        ▟═▙         ▟▒▙
+```
+
+What the sketches decided:
+
+- **The coat's center cell is the emblem.** `▟╬▙`, `▟═▙`, `▟▓▙` are one
+  coat with a different chest; emblems are the cheapest way to grow the
+  catalog. The Signal's `╬` is kept off every chest: it belongs to the
+  boss, not to a coat.
+- **Static shades inside a piece mean "half in the city already."** The
+  ghost band's pieces mix `░▒▓` into themselves, so the corruption effect
+  and the fashion speak one visual language and a wound never reads as
+  a bug.
+- **Corruption is a render effect, never pieces.** The same runner at
+  full, half, low, and dropped signal:
+
+```
+  ╬═╬       ╬░╬       ░═░       ░░░
+ ▐◈ ◈▌     ▐◈ ░▌     ░◈ ░░      ░░░
+  ▟▓▙       ▟▓░       ░░▙       ░░░
+```
+
+- **One tint per piece, never per cell**, from a closed palette of about
+  seven (static grey, amber, phosphor green, cyan, magenta, red, white),
+  opened by level. No earned tint: gold stays out of the palette. Two people in the same three
+  pieces and different tints already look different, so the catalog
+  multiplies without more art. The wire prints portraits in plain text
+  (chat bodies carry no color and IRC would need color codes); the
+  profile card, the #deadchannel gutter, and the fight panel paint them.
+- **"Build your own" means composing, never drawing.** No freehand cells.
+  A closed piece set is what makes a look legible ("that coat is season
+  one"), and it is also the only thing between the tailor and a room
+  full of ASCII dicks. Building is picking a hood, eyes, a coat, and a
+  tint for each. That is the whole editor.
+- **Glyph width is the real risk.** Box drawing and block elements are
+  single width everywhere; shapes like `◉ ◈ ◔ ◌` are ambiguous width
+  and render double wide in some terminals and fonts, which would tear
+  the portrait. The piece alphabet is a tested closed set and a test
+  asserts every row is exactly five single-width cells; emoji are out
+  entirely.
+
+**The data model (decided 2026-09-02):** art in code, ownership in the
+database, the way the door keeps its ladders in `data.rs`.
+
+- **Pieces are a Rust const table**, one entry per piece: a code, its
+  slot, the five-cell row, and the level that opens it.
+  The width test above runs over this table, so a bad glyph fails the
+  build instead of someone's card.
+- **A shop SKU references the piece code**; a catalog migration per rack
+  in the existing `ON CONFLICT (sku)` shape, ownership in
+  `user_purchases`. Level pieces have no SKU at all, so they cannot be
+  sold by accident.
+- **The look is one JSONB column on the runner row**, parsed at load into
+  a typed struct and rejected loudly on an unknown code (the boundary
+  rule the user settings already follow):
+
+```json
+{
+  "hood": {"piece": "hood.cross", "tint": "amber"},
+  "eyes": {"piece": "eyes.gem",   "tint": "white"},
+  "coat": {"piece": "coat.heavy", "tint": "static"},
+  "mark": {"glyph": "▚"}
+}
+```
+
+- **Rendering is one pure function**: look plus signal fraction in, three
+  styled rows out. Corruption is applied there, seeded by user id and
+  the UTC day, so a wound looks the same all day instead of shimmering
+  every frame.
+
+**Pricing** (placeholders, design review; every purchase burned whole, see
+"Shop rules the game inherits" below):
+
+| Piece | Chips |
+|---|---|
+| starter piece or starter mark | free |
+| common piece | 2,000 |
+| rare piece | 10,000 |
+| rare mark | 25,000 |
+
+Looks are deadchannel's chip sink from day one, before the arena or a
+single bounty exists.
+
+### The sheet (what the profile card shows)
+
+For a runner, above the ordinary profile: the portrait; name, mark,
+level, band; signal as a bar; rations and charge left today; weapon and
+armor by name; marks and the title they earn; bits on hand (public on
+purpose: LORD's rankings showed gold, and visible wealth is what a bounty
+is placed on later). The stash stays private. For anyone who never
+joined, the card shows nothing game-related; civilians reading a
+runner's card see "ghost, level 7" and have no idea what it means,
+which is fine.
+
+Titles by marks (LoGD's dragon-kill titles, one neutral name per rung,
+build-time content) live on the sheet and in wire lines, **never in the
+chat title slot**: the shop rents that slot for 1,000 a day and a free
+runner title would undercut it. The mark is the runner's chat presence;
+that is enough.
+
+### What a runner is not (decisions)
+
+- No skill tree. Bands and their four-move ladders are the whole of it.
+- No charm, no flirting stat, no mounts, no mercenaries, no
+  companions in v1. (Companions as an earned fourth portrait slot is a
+  season idea, not a v1 idea.) *Amended 2026-10-04:* gems came back as
+  crystals ("The crystal pass"); the rest stands.
+- No timed regeneration of anything.
+- No inventory. Two slots, one item each, the tier is the item.
+- No point allocation on a level gained: a level is a level (LoGD gives
+  flat HP and attack/defense per level, and it was never boring for the
+  lack of a stat screen).
+- No character name. The runner is you; one identity system.
+- No paid resurrection.
+- No chips anywhere near power: gear is bits only, looks are chips only,
+  and the two wallets never convert.
+
+### Persistence (the row)
+
+`deadchannel_runners`, one row per user (`user_id` unique), id UUID v7.
+Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash, debt,
+rations_left, charge_left, day (the UTC date of the last roll), band,
+band_skill, the benched band progress, alive, marks, peak_level, and the look as
+four piece codes (hood, eyes, coat, mark). All data ops in one late-core
+model, the multi-replica rule throughout: the day roll and every spend
+are conditional claims on the row (`WHERE day < $today`, `WHERE
+rations_left > 0 ... RETURNING`), so several replicas and two devices of
+one person always agree. The invited join creates the row with a random
+starter look and no band. Leaving #deadchannel never deletes it: the row
+carries a `left_at` stamp, so the gate shuts and the portrait goes dark
+while the character (its look, and everything phase 2 grows beside it)
+waits for an invited rejoin, which clears the stamp and hands back the
+same face. Piece ownership rides `user_purchases` with a
+new catalog category; the mark reaches the chat author line through the
+existing chat label query, never a second directory.
+
+### Shop rules the game inherits
+
+The chip-sink roadmap that built the Shop (rentals, gild, crown, burn
+milestones, pot, door payouts, the round) is finished and its doc is gone
+(2026-09-03); its ideas that never shipped are dropped. The rules it ran
+on still bind every piece, band, and ration the city sells:
+
+- **Chips never buy power.** Only visibility (pieces, tints, the mark) and
+  stakes. No purchase changes a fight's outcome.
+- **Every chip movement is a named `ChipMove` variant** in
+  `late-core/src/models/chips.rs`. Never reuse `ShopPurchase` or `Credit`
+  for a new mechanic.
+- **Burns are the gap between a debit and a credit.** No house wallet, no
+  chips in limbo. A purchase burned whole is a debit and nothing else.
+- **One wallet, one identity system.** Ownership rides `user_purchases`;
+  name-adjacent visuals ride the existing flair pipeline or the chat label
+  query. Never a second directory, never a second wallet.
+- **Catalog edits are migrations** (`ON CONFLICT (sku) DO UPDATE`). Retire
+  SKUs with `active = false`, never delete: purchase history keeps them.
+- **Replica-safe.** Anything drawn or settled by a sweeper claims its row
+  with `UPDATE ... WHERE status = 'open' RETURNING *`, so exactly one
+  replica wins.
+- **Prices sit in one price band with the Shop.** A completionist arcade
+  day is about 2,000 chips; rentals price against that day, the month
+  tier is 40x the day tier, and the crown's 1.5x ratchet is the only
+  price we never set.
+- **Spectator side bets on fights** (the arena, phase 4) were parked in
+  the shop roadmap for the game to own; the pot's parimutuel shape is the
+  engine to copy when they come.
+
+### The ladder above (brief; the next pass names it)
+
+Fourteen **operators** hold levels 2 to 15 (LoGD master stats: attack
+2L, defense 2L, signal 11L), each an old voice on the wire with a name
+and a line, beaten once per level to climb. Level 15 opens the **Old
+Signal**; putting it down leaves a mark and resets the climb (see
+"Marks: the reset"), and is the season loop's engine. Names and copy
+belong to the city pass.
+
+### Marks: the reset (decided)
+
+Classic LoGD, with Diablo's paragon feel: the climb resets, the status
+never does.
+
+- **The gate.** At level 15 with the exp to leave it (`exp_to_seek`, the
+  last rung of the curve), the next step into the screen meets the Old
+  Signal instead of a glyph. A dropped signal against it costs what any
+  drop costs, and the exp lost usually puts the gate a day or two of
+  glyphs away again.
+- **The numbers.** 240 signal, 36 attack, 22 defense. LoGD's dragon
+  (300 / 45 / 25) is a one-in-fifty fight for a runner with no bands and
+  no bonus hit points; these land a first kill about two tries in five
+  at the top of the wall, pinned by a seeded simulation test. Revisit
+  when the bands ship.
+- **What the kill takes:** level back to 1, exp to 0, weapon and armor to
+  tier 0, bits to the starting 50, the locker emptied, the crystals gone. The climb is a
+  real climb again, and nothing saved for it carries over.
+- **What it keeps:** the peak level (the tailor's rack stays open), the
+  look, the badges, the kill count, today's rations, and the debt.
+- **What it gives:** a mark. Marks are the paragon number, shown behind
+  the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
+  defense up to a cap of five (the second climb is quicker, a veteran
+  never outgrows the room), scales every exp threshold (LoGD's formula,
+  a quarter of level times a hundred per mark), and climbs the title
+  ladder (placeholder copy: heard, tuned, carrier, broadcast, old
+  voice). The first kill grants the rankless `SIG` profile badge. A kill
+  pays 40,000 chips, at most once every 30 days: the one milestone payout
+  (see "Economy rules"), and the only place bits ever turn into chips. A
+  second mark inside the month is kept all the same, unpaid. The payout is
+  a debt on the row until the house answers: a grant that fails is retried
+  on the next step or connect, never lost with the mark.
+- **A mark empties the stash** (decided with the money pass below): a
+  full locker waiting at level 1 would make the second climb a shopping
+  trip.
+
+### Build order for this phase
+
+1. The runner row, created by the invited join with a random starter
+   look (pieces and tints), and the portrait in the #deadchannel
+   message gutter. The room stops being empty and the be-seen surface
+   exists before a single fight does. Then the sheet on the profile
+   card, the mark and level in the chat badge stack and on the
+   clubhouse floor.
+2. The day roll and the three bars on the row (claims), with signal
+   corrupting the portrait and the dropped-signal mark.
+3. The city pass: the tailor (looks, chips), the armorer (gear, bits),
+   the locker, the band choice, the ration ritual against glyphs.
+4. Piece catalog v1: starter sets, the first rack, the first earned
+   pieces.
+
+## The city pass: the street (2026-09-18)
+
+Status: **built, art only, under the clubhouse.** The night city exists
+(`late-ssh/src/app/deadchannel/city/`, see `CONTEXT.md` §3b beside this
+file). It is the undercity: `0` is the clubhouse, `0` again goes down,
+runners only (2026-09-19; it was a dedicated page `7` for a day). Two art
+registers are built and one is still to be chosen. Decisions this pass
+fixed:
+
+- **One glyph per person, in either register.** The runner walks the
+  street as its mark (the one-cell avatar decided in the phase 2 pass).
+  The clubhouse's three-row figures were considered and rejected for the
+  city: at that zoom a terminal shows two shopfronts.
+- **Two registers to choose between (2026-09-19).** The first pass drew
+  the street front-on, Rangedrifter-style: multi-cell facades, carts,
+  a skyline. It read as a plaza: symmetrical, wide, no corridors. The
+  second is pure Dwarf Fortress: top-down, one tile per thing, nothing
+  drawn larger than a cell. A side street four tiles wide that doglegs,
+  alleys one to three wide, rooms you walk into, stalls of five tiles,
+  a ledge over the drop, and room on the floor for cats and NPCs later.
+  **Tiles won**, the same day: it went long (440 columns, three legs, a
+  canal, a back lane), gained walkers pacing the street, and the drawn
+  one left the live script (git history has it).
+- **Blade Runner, not cyberpunk.** Dark, wet, few strong light sources,
+  warm sodium against cold neon, everything else in silhouette. Not
+  saturated everywhere: terminal cells cannot blend, so color on every
+  cell reads as noise. So the street is lit: every lamp, sign, doorway
+  and window is a light source with falloff stopped by walls, the
+  street fades to black with distance, rooms are dark until you are at
+  the door, walls throw shadows, rain shows only in light. And the city
+  has **its own palette**: it does not follow the person's theme, not
+  even for the background or the overlay text. A hundred palettes
+  cannot all be lit well; one look, tuned once.
+- **Alive without state.** The street's extras, the people pacing it,
+  the cats, the rats, the rain, the searchlight, are all pure functions
+  of the tick. Nothing moves that could desync across replicas, nothing
+  is persisted. Real NPCs and cats with behavior come later; the walkers
+  are the placeholder that makes the street read as inhabited now.
+- **The street is one block.** Stairs down, the armorer, the tailor, the
+  lockers, bands, the bar, the screen, patch; carts and stalls against
+  the walls; the board and the bits machine; the railing and the lower
+  city's lights; the way up to the wire in a gap of the rail, where you
+  arrive and where you leave. The tile register adds what has no
+  function, on purpose: two tenements, a lockup with a guard, a pawn shop
+  with its shutter down and its sign still burning, a motel called
+  SLEEP, a hidden court with a shrine. The map is generated from stamps
+  (`scripts/gen_city_map.py`), never hand-drawn, so it can grow a second
+  block without redrawing the first.
+- **Names.** The street sign reads `STATIC ROW`; the bar is `DEAD AIR`
+  (the signal is warm in here); repairs are `PATCH`; the giant screen has
+  no sign and needs none. All pass the screenshot test. Banners in the
+  glyph alphabet hang off the buildings: the city's own script, and
+  nobody can read it, which is the point.
+- **No function behind anything yet, and the panels say so.** Every shop
+  opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
+  the rack cut to the runner's peak level with the portrait in the mirror, the
+  three bands) under a line in the voice saying the till is not open. The
+  street answers Enter at a cart with a line from a small pool. Placeholder
+  copy, design review pending: the draft **move names** (tuner: retune,
+  siphon, carrier, clear channel; jammer: hiss, jam, wither, blackout;
+  ghost: smear, from behind, unseen, vanish), the board's four notices, the
+  bar's drink list, the reader's lines (which point at the haunting).
+- **Shared, nothing timed.** Every runner who went down this session
+  stands on the street until they log out, lit while looking and dim while
+  on another page (CONTEXT.md §3b). No spawns, no clock. The screen's
+  static and the rain are render-only ambience.
+
+Done since: the signs smear into the wet ground, a car runs the street
+with its headlights ahead of it, the monorail crosses the sky,
+billboards cycle the glyph script, rain splashes on the puddles, and at
+the railing Enter looks over the ledge at the lower city (a half-block
+perspective picture, the showpiece). The screen is the forest (the
+fight pass, next section). The armorer's till trades and the tailor's
+mirror edits the look (pick, not draw: rows, racks, tints, the mark, the
+join's dice again; the rack gated by level, free once unlocked). Still to come on the
+street: the locker, the band choice.
+
+## The fight pass: where the ration goes (2026-09-24)
+
+Status: **built as an experiment, staff only like the rest**
+(`late-ssh/src/app/deadchannel/fight/`, `CONTEXT.md` §3c beside this
+file). The question was where the daily fights happen and how anyone
+sees them. The three surfaces already answered half of it (the ration
+ritual is the city's, the wire is the log); this pass fixed the shape:
+
+- **The forest is the static at the end of Static Row.** The screen
+  closes the street as three tiles of static, and the whisper already
+  taught that static is where glyphs come from. Enter there spends a
+  ration. A fight only happens when you ask for it, so the city rule
+  holds: nothing there can be missed. No glyphs wandering the tiles: a
+  street worth standing in is exactly the failure the door-ceiling
+  diagnosis names, and the LoGD numbers are an exchange loop, not a
+  roguelike.
+- **The fight is a panel over the street, not a place.** Two five-by-three
+  portraits facing, yours and the glyph's, the exchange line by line in
+  the announcer's voice, three keys. The ASCII drama is the two faces
+  corrupting to static as signal drops (the wound renderer from "The
+  look", pointed at both). Five exchanges, twenty seconds, ten rations in
+  five minutes. The Old Signal is the exception, and the "diegetic
+  spectacle" line above made concrete: its scene takes the whole screen
+  in red, the empty rows fill with static, the frame's border loses
+  cells to static and the box shudders a column from frame to frame
+  while it broadcasts, and everything goes still once it is down. One
+  render function, no art team, nothing to explain.
+- **Interactive like LORD, state on the row.** Attack, run (bands and
+  their moves come with the band choice). Each key is one transaction on
+  the locked runner row with the fight as a JSON column, so a dropped
+  session or a second device finds the same fight waiting; the ration was
+  spent when it started. Auto-resolving the whole fight in one claim with
+  a standing "bail under 30%" gambit (the arena's preparation idea) was
+  the thinner alternative and was passed over: `run` as a live decision
+  is what makes a forest a forest. The door's pure resolver is imported,
+  not copied; the door stays untouched.
+- **The wire sees the news, never the play-by-play.** Ten fights times
+  ten runners times five lines drowns the room under human chat, and
+  LORD's news screen never listed forest fights either. The wire gets a
+  dropped signal and a level gained (with the face); kills, rounds, and
+  runs post nothing. This tightens "every spawn and kill" above: every
+  *result worth a story*, as messages, as they happen.
+- **The fauna is one glyph per level,** fifteen of them, from the
+  flicker (barely there) to the interference (from somewhere below), each
+  a portrait in the runner's own format so a fight is two faces in one
+  register. Names, arrival lines, and the drop lines are placeholder
+  copy at feed-template standards, design review pending with the rest.
+- **Levels climb on exp in the fight, for now.** The operators are the
+  design (beaten once per level); until they exist this is the one
+  stated deviation, so the runner is not level 1 forever. It can carry a
+  runner into a glyph their gear cannot beat; the step down (the money
+  pass, below) is the way back.
+- **The armorer's till is open.** The first bits sink, and the LoGD one:
+  a tier above what you carry, 75% back on the piece you hand in, no
+  credit. It runs through the fight's command path on the locked row
+  (one writer per row) rather than a second service, and the answer is
+  the armorer's line in the panel, not a wire post: a purchase is the
+  runner's business, and the piece does its own talking in the hit line.
+  The wall is a cursor and two keys because a numbered list of thirty
+  items is a menu, and the city is not menus. Only up, never down: a
+  runner selling their blade for cash is a LoGD loophole, not a scene.
+
+- **The tailor's mirror is the look's editor.** One write per `wear`,
+  no lock (a look is one value, never a sum, so two devices dressing at
+  once simply race and the last one is the face), through the same
+  change trigger the join uses, so every surface that paints the look
+  follows on the directory refresh. Nothing posts to the wire: the new
+  face rides the runner's next message there, which is the be-seen fuel
+  doing its own work. The rack is a window of up to five around the worn
+  piece rather than the whole row (the whole rack, once, while it is
+  shorter), so the panel fits eighty columns and the eye stays on the
+  piece.
+
+What comes next on this surface is decided in the next section, "The
+road pass": the exchange loop above is the placeholder it replaces.
+
+## The money pass: the step down, the locker, the machine, the ledge
+
+Status: **built, staff only like the rest** (`fight/` and `city/`,
+`fight/MONEY.md`). The question was a real one: a
+runner walked past the armorer, levelled on exp into the hiss with bare
+hands, dropped, and stood at level 2 with no bits and a fight they win
+three times in a hundred. LoGD never locks there, because promotion is a
+choice (the master), you can go slumming, and the bank keeps your gold.
+Auto-levelling took the first away, so the rest had to exist, and each
+is harder than LoGD's on purpose: this game should cost more than the
+one it borrowed from.
+
+- **The picker before every step in.** `f` does not start a fight: it
+  shows the sheet and what waits, each glyph with its numbers, pay, and
+  a threat word (easy, even, risky, grim) that is the fight simulated to
+  the end from where you stand. LoGD's master told you after the fact
+  that you were not ready; the picker tells you before. A fight already
+  waiting skips it. More fight kinds land here later without new keys.
+- **The step down (`g`).** The glyph a level below, at half its pay
+  (LoGD's slumming pays in full). A way out of a fight you cannot win,
+  never a better farm than the fair one.
+- **The lockers.** The stash: a drop never reaches it, a tenth of every
+  deposit is the locker's (LoGD's bank is free and pays interest), out is
+  free, all or nothing. It is only worth anything
+  because it is a walk away: bits earned in a fight are on you until
+  you carry them there, which keeps "one more fight or bank it" a real
+  question.
+- **The bits machine.** The machine that hums on the street lends: fifty
+  bits a level, a tenth of the loan added to the debt once when it pays
+  out, half of every kill's bits taken until it is square, and nothing
+  clears it but paying. No daily rate: a day roll is any touch on the
+  row, a connect included, so interest at the roll would bill a runner
+  for days they never fought and compound past anything the garnish
+  could pay. The debt only goes down, and playing pays it.
+- **The ledge.** Two presses of `r` over the drop start the runner over:
+  level 1, bare hands, empty pockets and locker. The marks, the peak, the
+  kills, the face, and the debt come down too, no starting bits, and not
+  with the signal down, so it is never loan forgiveness, a bit farm, or a
+  way back on the wire before the roll. (The crystals go too.) The wire hears it, so a runner
+  with nothing to lose is refused: the fall is not a free line to post.
+- **The operators stay unbuilt.** The step down and the machine answer
+  the lock from below, for a fraction of fourteen named characters, and
+  the road pass may replace the exchange loop they would gate. If the
+  climb reads too soft once staff have played this, the operators are
+  the cleanest way to make it harder.
+
+## The crystal pass: the wall's price, the bright glyph, and something to want (2026-10-04)
+
+Status: **built, staff only like the rest** (`fight/`, `city/`,
+`fight/CRYSTALS.md`). A week of staff play asked two questions at once.
+A level 8 runner held the whole level 15 kit, both pieces, with bits to
+spare: the armorer was finished half way up the ladder. And with the kit
+done, a day was ten identical presses of the same key. LoGD answered the
+second with gems: a small chance of something special in every forest
+fight, spent on things gold could not buy. Both answers are in:
+
+- **The wall costs what a level pays.** The first cut gated the wall (a
+  tier a level) and was thrown out the same day: a gate makes the
+  reading come out right without making the game right, and hides the
+  number that was wrong. The number was the price. Under triple pay,
+  LoGD's ladder let a level buy two to four tiers. The wall now asks
+  225% of the ladder, at which a level's kills pay for about its own
+  pair of pieces, and patch asks half a bit a point, because at the old
+  patch price a runner one tier behind spent on patch what the next
+  tier needed and never caught up (`fight/BALANCE.md`, the sweep). The
+  careful runner now fights every level in that level's kit and wears
+  the top one at 15; gear takes over half the bits earned, patch under
+  a quarter. Nothing stops a rich runner buying ahead; a tier ahead is
+  worth two or three points of odds, so nobody needs to.
+- **Crystals.** One kill in twelve of the glyph of your level leaves
+  one. Rare enough to be a moment, common enough that a week holds a
+  few. They are the one thing a dropped signal does not take (LoGD's
+  gems survived death too): losing the purse is the cost of a drop,
+  losing the rare thing would make nobody carry it. A mark and the
+  ledge take them with everything else.
+- **The bright glyph.** Two steps of every day have a bright one waiting
+  behind them: the glyph of your level burning harder, for double the
+  bits and a certain crystal. The picker shows it with its threat word
+  like any other offer, so it is a choice and never an ambush, and it
+  is for that step only. The two steps come from the date alone, the
+  same for every runner (the Le Word lesson below: one object a day for
+  the room to compare, "the bright one is on six today"), which also
+  means no column and no reroll. It pays the plain glyph's exp on
+  purpose: the pace of the climb belongs to the rations, and a second
+  way to level faster would have to be balanced against the first.
+  From the wall's kit it is about a coin toss; one thing a crystal buys
+  makes it a fight to take.
+- **Dead Air pours.** A glass for a crystal, one a day, gone at the
+  roll: attack, defense, or the signal's bars. The consumable sink, and
+  the reason to walk into the bar. The prepared runner's move is to
+  save one for the Old Signal (two tries in five dry, a little better
+  than even with a glass).
+- **The blade shop takes the other wallet.** The next tier up from what
+  a slot carries, for three crystals and no bits. The standing sink:
+  three crystals is a few days' luck, and what they buy grows with the
+  climb, so the choice between a glass tonight and a piece later is a
+  real one.
+- **Shops are the game, the street is flavor.** A runner could not tell
+  a shop that mattered from a painted wall: every sign burned alike, the
+  loan lived in a machine at the far end, crystal gear on a cart, and
+  the working shops were bunched at the west end. Now everything that
+  spends or earns is inside a lit shop, placed by how often it is
+  needed: the armorer and the blade shop in the middle, patch and Dead
+  Air beside them, the lockers at the wire stairs, loans toward the
+  screen, the tailor out west. A shop with nothing in it yet keeps its
+  sign barely on, in its own color, so the street still reads as lived
+  in (MARKET, SHRINE, PAWN, INK, which was CLINIC and read as a second
+  patch, BATHS, BANDS, SLEEP, COIN, VIDS), and says "not open yet" at
+  the door. They get lit one at a time, and a sign coming on is news.
+  Stalls and carts stay as flavor and, later, small bonuses.
+- **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
+  forest fights) and hired swords (a second attacker). More fights a day
+  breaks the ten-minute ritual, and a companion is a second combat
+  system; neither is here. A glass and one tier of gear are numbers the
+  sheet already has.
+- **The balance is measured.** `fight/arena.rs` plays every matchup and
+  four whole climbs through the real machine under any set of numbers
+  (`data::Rules`), and one contract holds every target as a band
+  (`fight/BALANCE.md`): the pace of the careful and reckless runners,
+  the kit tracking the level, where the bits go, the fair fight easy and
+  the bright one a coin toss, a glass that helps against the Old Signal
+  without handing it over, and the whole crystal pass worth days, not
+  weeks (the runner who plays all of it marks about two days ahead of
+  the one who plays none). The drop keeps 65% of the exp, down from 70,
+  to hold the reckless runner at four weeks.
+
+What this pass leaves for the next: the board's standing orders are the
+natural third crystal source ("put down three bright ones this week"),
+and the reader, who already talks about the static, is the natural place
+to ask which steps are bright tomorrow.
+
+## The road pass: the daily run, the hand, and being seen (2026-09-24)
+
+Status: **decided, not built.** A design conversation after the fight,
+the armorer, and the tailor landed. Three threads: what the game must
+give people (visibility, ten times what the bonsai and the arcade give),
+what to do about PvP at forty people, and what the fight itself should
+be once it stops being LoGD.
+
+### The lesson of Le Word
+
+The arcade's runaway game is Le Word, and it is not because it is the
+best puzzle. It has five things at once that nothing else here has all
+of, and every one of them maps onto the diagnosis at the top of this
+file:
+
+- **Short and bounded.** Two minutes, six guesses, over. It cannot be
+  ground and it cannot eat an evening from people who are here to vibe
+  with music on. Sudoku asks twenty minutes of attention and gets it
+  from almost nobody.
+- **Everyone plays the same object.** One global word. Two people who
+  have played have something to say that nobody else can decode until
+  they have played too. Personal boards are a fact about you; a shared
+  board is a thing for the room.
+- **The share card is a story without a legend.** The grid shows luck,
+  skill, the near miss, the panic on row five, and yours differs from
+  mine in a way that invites comparison.
+- **Failing is content.** A 6/6 or an X is a better post than a 3/6.
+  Games where failure is silent produce fewer posts than games where
+  failure is a picture.
+- **No skill floor.** Everybody knows words. Nobody feels stupid.
+
+**Rule for everything below: deadchannel is the Le Word of RPGs, never
+the Sudoku of RPGs.** Same object for everyone each day, a hard visible
+bound, a picture at the end, loud fun failure, one key for the first-day
+runner. The number that tests the theory is share rate per completion
+per daily; the gap between Le Word and the rest is the whole brief.
+
+### Detached from LoGD
+
+The forest exchange loop (attack, run, the door's resolver) was the
+placeholder that got the ritual, the row, the scene, and the wire built.
+It stays only until the round below replaces it. Kept as is, because
+none of it cares what happens inside a round: the row as truth, rations,
+signal, the lazy day roll, the fixed scene panel, the wire's news, the
+armorer, the tailor, the level colors. Replaced: the resolver and the
+attack/run commands.
+
+### The round: ten cards, three energy, two intents
+
+A card fight, in the Slay the Spire shape, cut down until the balance
+fits in one head. Balatro's scoring (poker hands, multipliers) is the
+thing to resist longest: glorious, and a balance sink; it can arrive as
+a season beat once the loop stands.
+
+- **One deck, ten cards, no builds at v0.** Five strikes, three blocks,
+  two of the band's moves (the move names already drafted under
+  "Bands"). Everyone starts with the same ten. The weapon tier adds to
+  strike numbers, the armor tier to block numbers, so gear still matters
+  and the armorer still sells; the deck itself does not change. Balance
+  is a spreadsheet with two columns, and the gear ladder, already
+  priced, carries the power curve.
+- **Draw five, three energy, end turn.** Strike costs one, block costs
+  one, a band move costs two. Unplayed cards discard; the deck
+  reshuffles when empty.
+- **The foe telegraphs two intents.** Hit for N, or charge and hit for
+  2N next turn, shown before you play. "Block or race" is the whole
+  tactical question and it reads at a glance. Fifteen glyphs, one table
+  row each, the numbers they already have.
+- **Static corrupts the deck.** When a hit lands, one static card goes
+  into your discard: costs one, does nothing. The hand fills with noise
+  as the signal drops, the portrait corrupts the same way, and a dropped
+  signal is a hand you cannot play. One metaphor for health, deck, and
+  face; ours and nobody else's, and free on top of the loop above.
+- **Auto.** One key plays the obvious policy: strike unless the foe is
+  charging, block when it is, band move when the energy is there. The
+  daily floor for the ambient runner, and later the offline policy for
+  ambush and the arena for free.
+- **Balancing is a test.** Ten cards and two intents means every
+  matchup simulates: a seeded test drives the auto policy through a
+  thousand fights per level and asserts the win rate lands in a band.
+  Retuning a number is running that test, not a playtest.
+- **On the row:** the fight JSON grows a deck, a hand, a discard pile,
+  energy, and the foe's intent. Commands: play card N, end turn, run,
+  auto. The scene gets a hand row along the bottom, five compact cards
+  in the city palette, number keys to pick.
+
+Waits: jokers and multipliers, a card shop, relics, deck building, foe
+variety past two intents. Each is data once the loop stands, and each is
+a season beat, not a launch feature.
+
+### The road: ten rations, ten steps, one road for everyone
+
+The ration is a step down a branching road, not a fight. The road is the
+lower city the ledge already looks down at; the screen is where you step
+in. This is the piece that makes a daily run, and a run is what people
+talk about.
+
+- **One road per day, seeded by the UTC date, the same for everyone.**
+  The Le Word shape. "Did you take the left at four, the elite charges
+  on turn one" is where the talk comes from, and it makes the wire a
+  spoiler channel civilians overhear.
+- **Ten nodes, a hard bound.** About four fights out of ten; the rest
+  are one-key choices. Three minutes with auto, ten with the hand. If a
+  run ever runs past that, we built a sudoku.
+- **Node kinds:** fight (the round); elite (both intents live, a card
+  drop on the kill: where jokers enter later, one at a time, as rewards
+  rather than a shop); rest (clear static from the deck, or heal
+  signal: the one decision every Spire player argues about); cache
+  (bits, which walk back up to the armorer: the road is the faucet, the
+  street is the sink); event (a line and a choice, pure copy in the
+  voice, an afternoon each: the content slot that never runs dry).
+- **The row holds the run:** position, the deck as it stands, static in
+  it, bits found. The day roll starts a new road and wipes the old one
+  the way it wipes a hanging fight now. A dropped signal ends the run
+  where you stand; back tomorrow.
+- **The end of a run is a share card:** the road as a picture, ten
+  columns, the forks lit, the node you fell on marked. The arcade's
+  proven trick pointed at the game. Dying at seven is a better card
+  than clearing it.
+- **The wire gets one line per run,** not per fight: a run is a story
+  unit, a fight is not.
+- **The map render** is the one new surface: a small branching graph
+  in the city palette above the fight panel. The road comes from a pure
+  date-seeded generator with a whole-state test, like the city map and
+  the dailies, so a bad road is a failing test and not a bad day for
+  forty people.
+
+### Being seen: your color is your level
+
+The badge (mark plus level, `▚7`, decided 2026-09-02) is where the
+game's status lives in chat, and its color is earned, never bought:
+
+- **Level bands tint the badge.** The badge wears the newest tint the
+  level unlocked: grey 1 to 3, phosphor 4 to 6, cyan 7 to 9, magenta 10
+  to 12, red 13 and 14, white at 15; the earned tint only after an Old
+  Signal kill. The room learns the ladder in a week without a legend.
+- **The badge carries the level color; the username keeps the shop
+  color.** Username gradients are the shop's one hit. Both on one line
+  would fight; side by side they read as "has chips" and "did the
+  thing", the exact distinction "The look" draws.
+- **Tints and pieces in the tailor unlock by level, not by price.** Every
+  three levels opens three pieces per slot and a tint: static and amber
+  at 1, phosphor at 4, cyan at 7, magenta at 10, red at 13, white alone
+  at 15. Bits stay internal and buy gear; chips buy pieces later. The
+  mirror names what the next unlock level opens: a reason to come back
+  at four.
+- All of it in #deadchannel only until the public flip.
+
+### PvP at forty people
+
+The ranking under "Core design" holds: ambush is the story engine, the
+arena the spectacle and the chip sink, bounties the glue. Decisions from
+this pass:
+
+- **The deck is the preparation layer.** The arena's secret stances are
+  replaced by the deck: your build plays itself offline with the auto
+  policy, bettors read decks the way they were meant to read people,
+  and live fights and offline ones share one mechanism.
+- **Ambush is the first PvP to build,** because the fight machine and
+  the row already carry it: the defender is their sheet and deck, the
+  log lands on their row as "while you were gone", and the next descent
+  plays it back as the same scene with the attacker's portrait on the
+  other side. The login news screen made concrete without the digest
+  engine. On the road, a runner you meet is a node: "you crossed tom at
+  six", never a menu.
+- **The grief model, settled** (closes the open question's in-game
+  half; the "only a bounty opens you" idea starves ambush at this
+  population): an ambush costs a ration, so it competes with the road;
+  level band of plus or minus two, no punching down; one ambush per pair
+  per day and a runner is hit at most once per day, so the worst login
+  is one thing happened; the loser's signal drops and bits on hand go
+  (the locker ships before the ambush, so carrying is a choice); the
+  victim gets a revenge token, one answer within a day that costs no
+  ration, which turns a hit into a rivalry, the renewable middle of the
+  retention model.
+- **The arena stays as designed** minus stances (parimutuel bets, the
+  nightly card, the announcer ghost) and comes after ambush proves
+  people read the news, because betting is the big build.
+- **No clans, no guilds.** Anything that needs coordination starves
+  here, and a guild is a coordination machine. Bands are the tribe: pick
+  once, wear the word, a weekly tally on the wire ("tuners took the
+  week") for faction feeling with zero coordination. If bands work as
+  tribes, clans never need to exist.
+
+### Build order
+
+1. The round as a pure state machine with the seeded simulation test, a
+   fixed starter deck, three foes with intents, the hand row on the
+   existing panel. Staff play it for a week before anything else.
+2. The road with three node kinds (fight, rest, cache), the map render,
+   the run share card, the one wire line per run. Elites and events
+   follow as data.
+3. Level badge and color bands in #deadchannel, tints gated by level in
+   the tailor.
+4. Ambush with the replay and the revenge token (the locker is in, so
+   carrying bits into the day is already a choice).
+5. Arena and bets, then bounties. Bands as tribes when the band choice
+   ships.
+
+Telemetry is the prerequisite for reading any of it: game wins must be
+exported per game and split so the dashboard says what people actually
+do, and share rate per completion per daily is the first number to pull.
+
+## Experiment framing
+
+Success metrics, named now so the experiment can fail honestly:
+- stories shipped to #lounge per day (the north star)
+- daily ration check-ins (ritual retention)
+- bet participation (does the spectacle + sink work)
+- NOT hours-in-game. Two good gossip lines a day and a 5-minute ritual for
+  40 people is total success at this population.
+
+Sequencing, each phase testing something before paying for the next:
+1. **Feed budget + daily digest.** Still the hard prerequisite (global
+   lines/hour budget and morning digest remain unbuilt; only the per-user
+   30-min repeat window exists). Everything above multiplies feed volume.
+   Now specced separately in **DIGEST.md** (2026-08-31): the same engine
+   is the welcome-back paper, and the login news screen ships as a
+   section of that paper rather than its own surface. *Amended
+   2026-09-02:* no longer a gate for phase 2. The three-surfaces
+   decision put every phase 2 output on the wire, which is unfiltered by
+   design, so phase 2 ships zero lines to #lounge; the budget becomes
+   the gate for the lounge theater in phase 3 instead.
+2. **Character layer + rations + login news.** Tests: do people do the
+   daily loop.
+3. **Chat spawns.** Tests: does the room engage. Spawns start on the
+   wire in #deadchannel, then reach #lounge as runner-only theater (the
+   snack loop, invisible to civilians; see "The three surfaces"); the
+   public phase flip (everyone sees the glyphs, the room watches a
+   runner put one down) is this phase's last beat, shipped only once
+   enough runners exist to make it a show, and doubles as the game's
+   public launch. The shared-world spawn spine (server-side HP, central
+   hit resolution, state pushed to runner sessions) is this phase's
+   real engineering cost; the haunting's per-session dice cannot be
+   reused for it. The first-contact haunting ladder (see Core design)
+   is the fuse: it ends at the invitation, so it must not fire for real
+   users until phase 2's character layer can receive a
+   `/join #deadchannel`; its machinery can be built and staff-tested
+   any time earlier, the invitation stamp being the only key to the
+   room.
+4. **Arena + betting + bounties.** Tests: spectacle and chip sink.
+5. **Seasons** wrap it once the loop is proven.
+
+## Open questions
+
+- **PvP consent/grief model.** The base layer is now decided
+  (2026-08-31): the whole game is opt-in via `/join #deadchannel`, so
+  nobody who never joined can be ambushed, ever. Still open is the
+  in-game tuning for people who did join: level bands? Shields after a
+  loss? A way to retire a runner without deleting it? Needs an answer
+  before the ambush engine ships.
+- ~~**V1's one visible surface.**~~ Decided 2026-09-02: the mark and
+  level in the chat badge stack, plus the mark as the clubhouse floor
+  glyph; see "The look" in the phase 2 design pass.
+- **Quests at 30 users (the city's board).** Leading idea, undecided: a
+  quest is a *standing order* ("put down five flickers this week",
+  "survive the Signal's broadcast tonight"), fulfilled through the
+  ambient loop rather than a separate activity, so the board sells
+  reasons to care about spawns you'd see anyway. There is no walking, so
+  "go here, click thing" quests cannot exist.
+- ~~**What dying means.**~~ Decided 2026-09-02: signal dropped, off the
+  wire until the day roll, bits on hand and a share of the exp lost, the
+  mark renders as static in chat meanwhile; see "Death" in the phase 2
+  design pass.
+- **Who may start a fight.** Leading idea, undecided (extends the PvP
+  consent question): unprovoked player-vs-player aggression does not
+  exist; only the static starts trouble, and a bounty on your head is
+  the only thing that opens you to other runners. At 30 users one bully
+  empties the room.
+- **The big-fight grammar.** What a howler pile-on and a season boss look
+  like beat by beat (threshold reactions, frame corruption for watchers
+  after the public flip), and the exact name of the "hide the static"
+  setting.
+- **First-contact tuning.** The eligibility thresholds (built as
+  placeholders: 100 bio characters as the floor under which no screen is
+  spent, lowered from 200 on 2026-09-02 when a real mod's honest bio came
+  in at 199, the AI screen doing the judging above it; 2 of a closed
+  list of 11 deliberately set keys; 7 days of lifetime connected time
+  from the online-time leaderboard's table rather than account age,
+  since an account that signed up and left is not invested; people will
+  paste a generated bio to clear the screen and that is fine, the gate
+  measures investment, not authorship), and the two whisper pools: the
+  voiced lines need the same variety discipline as feed templates, since
+  a repeated whisper is a bug report, not a haunting.
+- **The voice never answers.** The invitation opens a real DM, and the
+  natural human reply to a plea is to answer it; nothing listens on the
+  voice's side. Decide deliberately at design review: a scripted
+  one-shot reply, or the fiction that the channel died after the plea,
+  stated in the DM itself. Also confirm the voice's name (`afterglow`
+  is implemented but was only reserved, not decided) before real users
+  ever see the DM.
+- **Professions as interdependence (v2 at the earliest).** As "+10% yield"
+  they fail the design gate; as interdependence (only the blacksmith
+  repairs gear, only the healer shortens recovery) they pass, because
+  players need each other by name. Economy design, gated on the core loop
+  proving out.
+
+## Graveyard note
+
+- **DRAGON.md (2026-08-07):** the dragon-as-layer thesis lives on in this
+  file; "extend Green Dragon" died because the salvage (content, not
+  curves) was too thin to justify the constraint. The Green Dragon door
+  itself remains in the Games hub, untouched.
+- **Space trade/fight MMO:** parked, not wrong. The most liquidity-hungry
+  genre there is; coordination machinery for a population we don't have
+  (the SOCIAL.md mistake in a spacesuit). A fine idea for a late.sh with
+  500 concurrents.
+- **Card/pet collection game as a separate thing:** folded into the generic
+  spawn mechanism. If chat encounters work, pet-style spawn families ride
+  the same pipeline and the same identity system later; never a parallel
+  progression/wallet.
+- **SOCIAL.md events/tournaments pillar:** still parked (see prior
+  reasoning: coordination machinery for liquidity we don't have). The
+  seeded score window remains the first thing to un-park once the
+  character layer gives people a reason to show up daily.

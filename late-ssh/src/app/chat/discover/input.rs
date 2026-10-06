@@ -43,6 +43,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             app.chat.discover.start_filter();
             true
         }
+        b's' | b'S' => {
+            app.chat.discover.cycle_sort();
+            true
+        }
         b'j' | b'J' => {
             app.chat.discover.move_selection(1);
             true

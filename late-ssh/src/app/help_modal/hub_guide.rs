@@ -1,7 +1,21 @@
 use asterion_core::MAX_MAZE_ID;
+
+use crate::app::common::primitives::thousands;
+use crate::app::lobby::house::{
+    ssnake::settings::{
+        SSNAKE_BONUS_FOOD_MULTIPLIER, SSNAKE_CLEAR_CHIPS, SSNAKE_CRASH_CHIPS,
+        SSNAKE_CRASH_LENGTH_PENALTY_PCT, SSNAKE_EDGE_BONUS_CHIPS, SSNAKE_FOOD_CHIPS,
+        SSNAKE_SKIP_COOLDOWN,
+    },
+    tron::svc::{TRON_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN},
+};
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
-    chips::difficulty_bonus,
+    chat_message_gild::GildTier,
+    drink_round::{
+        GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON,
+    },
+    drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 
@@ -25,6 +39,7 @@ struct GuideSection {
 fn guide_sections() -> Vec<GuideSection> {
     let mut sections = Vec::new();
     sections.extend(chip_sections());
+    sections.extend(bar_sections());
     sections.extend(quest_sections());
     sections.extend(leaderboard_sections());
     sections.extend(arcade_sections());
@@ -34,29 +49,86 @@ fn guide_sections() -> Vec<GuideSection> {
 
 fn chip_sections() -> Vec<GuideSection> {
     vec![
+        // Earning lives on the Chips tab, which lists every payout in the app.
+        // Keeping a second, shorter list here only invited the two to drift.
         GuideSection {
             title: "Earn Chips",
             body: vec![
+                "The Chips tab lists every way to earn chips, with amounts.".to_string(),
                 "New accounts start with 1,000 chips.".to_string(),
-                "Daily puzzle wins pay once per daily board:".to_string(),
-                format!("easy       {:>4} chips", difficulty_bonus("easy")),
-                format!("medium     {:>4} chips", difficulty_bonus("medium")),
-                format!("hard       {:>4} chips", difficulty_bonus("hard")),
-                "Solitaire draw-1 pays medium; draw-3 pays hard.".to_string(),
-                "Le Word daily pays easy.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Gilds",
+            body: vec![
+                "Press g on someone else's message in a public room to gild it.".to_string(),
                 format!(
-                    "Bonsai watering pays {} chips once per UTC day.",
-                    crate::app::bonsai::svc::WATER_CHIP_BONUS
+                    "Three tiers: Bronze {}, Silver {}, Gold {} chips.",
+                    thousands(GildTier::Bronze.price()),
+                    thousands(GildTier::Silver.price()),
+                    thousands(GildTier::Gold.price())
                 ),
+                "Two thirds reaches the author; the last third is destroyed.".to_string(),
+                "The marker is permanent, and the count shows on the author's profile.".to_string(),
+                "No self-gilds, no gilding bots, and no un-gilding.".to_string(),
             ],
         },
         GuideSection {
             title: "Top Chips",
             body: vec![
-                "Monthly Top Chips counts net chip delta.".to_string(),
-                "Betting losses offset betting wins; Shop spending does not lower your rank."
+                "Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received.".to_string(),
+                "Poker and Blackjack money, gifts, invite rewards, and the starting chips stay off it."
                     .to_string(),
-                "Floor restores are excluded from the board.".to_string(),
+                "Spending never lowers your rank: drinks, rounds, gilds, the crown, pot tickets, the Shop."
+                    .to_string(),
+            ],
+        },
+    ]
+}
+
+fn bar_sections() -> Vec<GuideSection> {
+    vec![
+        GuideSection {
+            title: "The Bar",
+            body: vec![
+                "Mention @bartender in the Lounge to order; press t at the bar.".to_string(),
+                "There is no menu. He invents the drink and prices it".to_string(),
+                format!(
+                    "{DRINK_PRICE_MIN}-{DRINK_PRICE_MAX} chips, never more than you can spend."
+                ),
+                "Your first ever drink is on the house.".to_string(),
+                "He only pours for you; say '@bartender buy @user a drink' to leave one"
+                    .to_string(),
+                format!("on their tab for {GIFT_DRINK_PRICE} chips, claimed when they order."),
+            ],
+        },
+        GuideSection {
+            title: "The Round",
+            body: vec![
+                "Tell @bartender \"round for everyone\" and you buy the house one.".to_string(),
+                format!("{ROUND_PRICE_PER_PATRON} chips a head, for everyone online but you."),
+                "Say it plainly; he only rings up those exact words, never a question.".to_string(),
+                "You drink yours on the spot. Each of them gets a drink waiting".to_string(),
+                format!(
+                    "at the bar, good for {ROUND_CREDIT_TTL_HOURS}h, claimed by ordering from him."
+                ),
+                format!("They can bank {MAX_OPEN_CREDITS}; past that a round passes them by."),
+            ],
+        },
+        GuideSection {
+            title: "Last Call",
+            body: vec![
+                "Drinks build a buzz: tipsy, buzzed, sloshed, wasted.".to_string(),
+                "Your level shows beside your name wherever you talk.".to_string(),
+                format!(
+                    "It wears off at {DRUNK_DECAY_PER_HOUR} points an hour, online or not, so a big night is gone by morning."
+                ),
+                "Wasted is last call: water and coffee only after that.".to_string(),
+                "A buzz also comes out in your typing, in public rooms only.".to_string(),
+                "Letters inside a word shuffle, more of them the drunker you".to_string(),
+                "are, but every word keeps its first and last letter so it".to_string(),
+                "stays readable. Handles, links, and code are never touched.".to_string(),
+                "What you typed is saved that way; sobering up will not fix it.".to_string(),
             ],
         },
     ]
@@ -66,9 +138,9 @@ fn quest_sections() -> Vec<GuideSection> {
     vec![GuideSection {
         title: "Quests",
         body: vec![
-            "Hub Quests draws two daily quests and one weekly quest on UTC boundaries.".to_string(),
-            "Daily slot 1 is always an Arcade quest.".to_string(),
-            "Daily slot 2 is always a multiplayer room-game quest.".to_string(),
+            "Two daily quests and one weekly quest are drawn on UTC boundaries; they render at the top of The Arcade (page 2).".to_string(),
+            "Daily slot 1 is an easy Arcade quest; slot 2 is a medium one.".to_string(),
+            "The weekly slot is a hard Arcade quest.".to_string(),
             "Quest rewards pay automatically when the progress target completes.".to_string(),
             "Finishing any one daily quest advances your daily streak.".to_string(),
             format!(
@@ -91,7 +163,7 @@ fn leaderboard_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Arcade Wins",
             body: vec![
-                "Counts daily Sudoku, Nonograms, Solitaire, Minesweeper, Le Word, and Rubik's Cube."
+                "Counts daily Sudoku, Nonograms, Solitaire, Minesweeper, Le Word, Rubik's Cube, and Sliding Puzzle."
                     .to_string(),
                 "Each completed daily adds monthly points:".to_string(),
                 "easy / draw-1  1 pt".to_string(),
@@ -99,15 +171,24 @@ fn leaderboard_sections() -> Vec<GuideSection> {
                 "hard / draw-3  5 pts".to_string(),
                 "Le Word daily  1 pt".to_string(),
                 "Rubik's Cube   3 pts".to_string(),
+                "Sliding Puzzle 1 / 3 / 5 pts by difficulty".to_string(),
                 "More hard dailies across more games wins the board.".to_string(),
             ],
         },
         GuideSection {
             title: "Score Games",
             body: vec![
-                "Lateris, 2048, and Snake record run scores.".to_string(),
+                "Lateris, 2048, Snake, and Traffic record run scores.".to_string(),
                 "Monthly boards use scores recorded this month.".to_string(),
                 "All-time boards use each user's saved best score.".to_string(),
+                "Traffic's saved best is the sum of your per-track bests.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Daily Win Boards",
+            body: vec![
+                "Every daily puzzle has its own board on Leaderboards (page 6).".to_string(),
+                "Monthly and all-time columns count solved daily boards.".to_string(),
             ],
         },
         GuideSection {
@@ -115,7 +196,7 @@ fn leaderboard_sections() -> Vec<GuideSection> {
             body: vec![
                 "Monthly boards reset on the 1st, UTC.".to_string(),
                 "All-time score boards persist.".to_string(),
-                "Hub refreshes from the server about every 30 seconds.".to_string(),
+                "Leaderboards refresh from the server about every 5 minutes.".to_string(),
             ],
         },
     ]
@@ -129,10 +210,9 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "The Arcade mixes daily puzzle runs, daily challenges, and endless score chases."
                     .to_string(),
                 "Open The Arcade with 2.".to_string(),
-                "High-score games: 2048, Lateris, Snake.".to_string(),
-                "Daily games: Rubik's Cube, Sudoku, Nonograms, Minesweeper, Solitaire, Le Word."
+                "High-score games: 2048, Lateris, Snake, Traffic.".to_string(),
+                "Daily games: Rubik's Cube, Sliding Puzzle, Sudoku, Nonograms, Minesweeper, Solitaire, Le Word."
                     .to_string(),
-                "NES Cabinet runs bundled homebrew ROMs locally.".to_string(),
             ],
         },
         GuideSection {
@@ -168,6 +248,22 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
+            title: "Traffic",
+            body: vec![
+                "Top-down driving: pick a track, then drive as far as you can through traffic without crashing out."
+                    .to_string(),
+                "Six tracks: Batin, Route 66, Eurotrip, The Realm, Cosmic Highway, Chaos Highway."
+                    .to_string(),
+                "Picker: j/k or arrows choose a track; Enter or Space starts it.".to_string(),
+                "w/W or up arrow accelerates; s/S or down arrow brakes.".to_string(),
+                "a/d or left/right arrow changes lane.".to_string(),
+                "Space is the handbrake.".to_string(),
+                "p pauses; r restarts the current track; t returns to the track picker.".to_string(),
+                "Each track keeps your best score; the leaderboard total is the sum of your per-track bests."
+                    .to_string(),
+            ],
+        },
+        GuideSection {
             title: "Rubik's Cube",
             body: vec![
                 "Everyone gets the same UTC daily scramble.".to_string(),
@@ -178,16 +274,20 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "NES Cabinet",
+            title: "Sliding Puzzle",
             body: vec![
-                "ROMs: Squirrel Domino, Thwaite, DABG, Falling, Brick Breaker, Escape from Pong, RHDE, Concentration Room, Zap Ruder, 2048."
+                "Daily and personal boards: easy 3x3, medium 4x4, hard 5x5."
                     .to_string(),
-                "WASD uses the d-pad; arrows also use the d-pad in fit view.".to_string(),
-                "k is B; l is A.".to_string(),
-                "Space is Select; Enter is Start.".to_string(),
-                "z toggles full-frame fit and readable zoom.".to_string(),
-                "Arrows or Shift+h/j/k/l pan while zoomed.".to_string(),
-                "r resets the current ROM.".to_string(),
+                "hjkl or arrows slide a tile in the indicated direction.".to_string(),
+                "Click an adjacent tile to slide it into the gap.".to_string(),
+                "i toggles numbered and image tiles; this view is session only and keeps the same board and rewards."
+                    .to_string(),
+                "d selects daily; p selects personal; n twice starts a new personal board."
+                    .to_string(),
+                "Personal boards persist but grant no chips, quest progress, or Arcade Win."
+                    .to_string(),
+                "[ and ] change difficulty.".to_string(),
+                "r or 0 twice resets the current scramble.".to_string(),
             ],
         },
         GuideSection {
@@ -205,6 +305,8 @@ fn arcade_sections() -> Vec<GuideSection> {
             title: "Sudoku",
             body: vec![
                 "1-9 fills a digit.".to_string(),
+                "m toggles pencil (candidate mark) mode.".to_string(),
+                "u undoes the previous move.".to_string(),
                 "0 or Backspace clears a cell.".to_string(),
             ],
         },
@@ -250,28 +352,33 @@ fn arcade_sections() -> Vec<GuideSection> {
 fn room_game_sections() -> Vec<GuideSection> {
     vec![
         GuideSection {
-            title: "Table Games",
+            title: "House Tables",
             body: vec![
-                "Open Tables with 4.".to_string(),
-                "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
+                "Ctrl+G opens the Lobby; house tables sit below the daily matches.".to_string(),
+                "There is one fixed table per game: no creating tables, no settings forms."
                     .to_string(),
-                "j/k or arrows navigate tables.".to_string(),
-                "h/l or left/right cycles filters.".to_string(),
-                "/ searches by table name.".to_string(),
-                "Enter enters the selected table.".to_string(),
-                "n creates a new table when the selected game supports creation.".to_string(),
-                "Esc clears create/search/query/filter before leaving table state.".to_string(),
+                "Poker, Blackjack, Asterion, Tron, and Super Snake.".to_string(),
+                "j/k or arrows move; Enter sits at the selected table.".to_string(),
+                "The row shows live occupancy; empty tables are always joinable.".to_string(),
+                "q or Esc leaves the table screen; your seat follows that game's rules."
+                    .to_string(),
+                "Only Poker and Blackjack put your chips at risk, and Super Snake docks a small fee per crash. Everywhere else the winner is paid by the house and losers lose nothing."
+                    .to_string(),
             ],
         },
         GuideSection {
-            title: "Create Table Forms",
+            title: "Daily Matches",
             body: vec![
-                "Table name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
-                "A user can have up to 10 open tables per game kind.".to_string(),
-                "Asterion form: name.".to_string(),
-                "Blackjack form: name, pace, stake.".to_string(),
-                "Poker form: name, pace, blinds, starting stack.".to_string(),
-                "Tic-Tac-Toe form: name.".to_string(),
+                "Press c in the Lobby to post a daily correspondence match anyone can claim."
+                    .to_string(),
+                "Chess, battleship, connect4, reversi, checkers, and backgammon.".to_string(),
+                "24h per move; Enter in the Lobby claims an open match or opens one of yours."
+                    .to_string(),
+                "Boards live outside the Tab cycle; Esc returns to the Lobby.".to_string(),
+                "` hops Home chat, boards waiting on your move, seated tables, and unfinished dailies."
+                    .to_string(),
+                "Nothing is staked and a draw pays nobody; only the winner is paid, once per match."
+                    .to_string(),
             ],
         },
         GuideSection {
@@ -285,7 +392,6 @@ fn room_game_sections() -> Vec<GuideSection> {
                 "PageUp/PageDown scroll embedded chat.".to_string(),
                 "r/e/d/p/c/f reply, edit, delete, profile, copy, react selected chat message.".to_string(),
                 "g jumps to a reply's original message even when it contains an image.".to_string(),
-                "Ctrl+P pins or unpins selected embedded-chat message.".to_string(),
                 "Arrows go to the game first; otherwise embedded chat handles them.".to_string(),
             ],
         },
@@ -306,8 +412,10 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Blackjack",
             body: vec![
                 "Four seats, chips, 6-deck shoe, dealer stands soft 17, blackjack pays 3:2.".to_string(),
-                "Paces: Quick 2m, Standard 5m, Chill 10m.".to_string(),
-                "Stakes: 10, 50, 100, or 500 chips; max bet is 10x stake.".to_string(),
+                "The house table is fixed: 10-chip stake, standard pace (5m action timer)."
+                    .to_string(),
+                "Chip buttons are 10, 20, 50, and 100; the table max is 100 chips a hand."
+                    .to_string(),
                 "s or Enter sits in first open seat.".to_string(),
                 "l leaves seat when safe.".to_string(),
                 "[/a previous chip; ]/d next chip.".to_string(),
@@ -323,8 +431,10 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Poker",
             body: vec![
                 "Four-seat fixed-stack Texas Hold'em with private hole cards, shared board, side pots, showdown ranking, and chip settlement.".to_string(),
-                "Room stacks: 100, 500, 1000, 2000, or 5000 chips.".to_string(),
-                "Blinds: 10/20, 25/50, 50/100, or 100/200.".to_string(),
+                "The house table is fixed: 1000-chip starting stack, 10/20 blinds, standard pace."
+                    .to_string(),
+                "The pot is what you win; it varies with how many players bet and how much."
+                    .to_string(),
                 "s or Enter sits in first open seat.".to_string(),
                 "n deals next hand.".to_string(),
                 "c, Space, or Enter checks or calls.".to_string(),
@@ -336,23 +446,14 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Chess",
-            body: vec![
-                "Two seats, White and Black. Decisive wins pay 500 chips.".to_string(),
-                "Clock presets: blitz, rapid, and 1d/move daily.".to_string(),
-                "s sits when not seated.".to_string(),
-                "n starts when both players are seated.".to_string(),
-                "w/a/s/d or arrows move cursor while seated.".to_string(),
-                "Space or Enter selects a piece, then destination.".to_string(),
-                "r resigns active game.".to_string(),
-                "l leaves seat before or after a game.".to_string(),
-            ],
-        },
-        GuideSection {
             title: "Tron",
             body: vec![
-                "Two to four riders. Wins pay 50/75/100 chips by rider count.".to_string(),
-                "Speeds: chill, standard, quick.".to_string(),
+                "Two to four riders on the fixed house table: quick speed, glitch mode."
+                    .to_string(),
+                format!(
+                    "Wins pay {TRON_WIN_CHIPS} chips whatever the rider count, one payout per {} minutes.",
+                    TRON_WIN_PAYOUT_COOLDOWN.as_secs() / 60
+                ),
                 "s, Space, or Enter sits when not seated.".to_string(),
                 "n starts when at least two riders are seated.".to_string(),
                 "w/a/s/d or arrows steer while seated.".to_string(),
@@ -360,15 +461,51 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Tic-Tac-Toe",
+            title: "Super Snake",
             body: vec![
-                "Two seats, X and O, no chips.".to_string(),
+                "A five-seat snake arena that never stops: nobody starts it, nobody wins it, and there is no round to wait for."
+                    .to_string(),
+                "Sit down mid-flight and you spawn well clear of the other snakes; stand up any time.".to_string(),
+                format!(
+                    "Every food is worth {SSNAKE_FOOD_CHIPS} chips times the number of snakes MOVING when you eat it."
+                ),
+                "What the arena owes you runs up in the seat row as a pending figure; it reaches your balance when you stand up, and the idle kick banks it for you if you just disconnect."
+                    .to_string(),
+                "Snakes that are seated but not moving count for nobody, so idling at a seat pays zero and inflates nothing."
+                    .to_string(),
+                format!(
+                    "Food touching an arena wall pays +{SSNAKE_EDGE_BONUS_CHIPS} per wall before any multiplier, so a corner pickup is worth more than one in open floor."
+                ),
+                format!("Pink food pays {SSNAKE_BONUS_FOOD_MULTIPLIER}x the usual rate."),
+                format!(
+                    "The orange food is the arena's last: eating it pays {SSNAKE_CLEAR_CHIPS} chips times the same multiplier and reshuffles the board to a new random level."
+                ),
+                "The new board counts 3, 2, 1, GO on screen before anyone can steer, so a key pressed on the old arena cannot drive you into a wall you have not seen."
+                    .to_string(),
+                format!(
+                    "Crashing costs {SSNAKE_CRASH_CHIPS} chips and respawns you {SSNAKE_CRASH_LENGTH_PENALTY_PCT}% shorter; there are no lives to lose, and shedding length is how a snake too long to steer gets back under control."
+                ),
+                format!(
+                    "v votes to skip the arena. It changes only once every seated player has voted, and no more than once every {}s — on a table of one you are the whole vote, so the cooldown is what stops anyone rerolling until they get the level they farm fastest.",
+                    SSNAKE_SKIP_COOLDOWN.as_secs()
+                ),
                 "s, Space, or Enter sits when not seated.".to_string(),
-                "1-9 places directly.".to_string(),
-                "w/a/s/d or arrows move cursor while seated.".to_string(),
-                "Space or Enter places on cursor.".to_string(),
-                "n starts a new round.".to_string(),
-                "l leaves seat and resets board.".to_string(),
+                "w/a/s/d, h, or arrows steer while seated.".to_string(),
+                format!(
+                    "l leaves your seat, but standing up while your snake is moving costs the same {SSNAKE_CRASH_CHIPS} chips as a crash — you cannot bail out of one for free. Stand up parked and it is free."
+                ),
+                "q or Esc leaves the table screen; your snake keeps its seat and keeps going.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Daily Boards",
+            body: vec![
+                "Chess and the other daily games are correspondence matches now, not house tables."
+                    .to_string(),
+                "One move per turn, 24h to reply, played from the Lobby.".to_string(),
+                "w/a/s/d or arrows move the cursor; Space or Enter selects and moves.".to_string(),
+                "Esc returns to the Lobby; the match keeps waiting on whoever is to move."
+                    .to_string(),
             ],
         },
     ]

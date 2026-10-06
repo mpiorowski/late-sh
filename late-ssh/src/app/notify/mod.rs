@@ -18,6 +18,12 @@ pub(crate) enum Kind {
     Dms,
     Mentions,
     GameEvents,
+    /// Everything "watch me": who turned up to your broadcast, and a friend
+    /// starting theirs. Its own kind because streaming alerts are the ones
+    /// people want to mute independently — a friend who streams every night
+    /// should not cost you their login pings, and an audience ping should
+    /// not depend on game events being on.
+    Streams,
 }
 
 impl Kind {
@@ -27,6 +33,7 @@ impl Kind {
             Self::Dms => "dms",
             Self::Mentions => "mentions",
             Self::GameEvents => "game_events",
+            Self::Streams => "streams",
         }
     }
 
@@ -55,6 +62,31 @@ impl Notification {
         }
     }
 
+    /// `Streams`, not the `Friends` bucket [`friend_online`](Self::friend_online)
+    /// uses: a friend who broadcasts nightly is a different volume of alert
+    /// from a friend logging in, and muting one must not mute the other.
+    /// Opt-in as a result, unlike every other `Friends` notification; the
+    /// in-app banner still fires either way.
+    pub(crate) fn friend_live(username: &str, title: Option<&str>) -> Self {
+        Self {
+            kind: Kind::Streams,
+            title: "Friend live".to_string(),
+            body: match title {
+                Some(title) => format!("@{username} is live: {title}"),
+                None => format!("@{username} went live"),
+            },
+        }
+    }
+
+    /// The only notification that fires at you about your own broadcast.
+    pub(crate) fn stream_viewer(username: &str) -> Self {
+        Self {
+            kind: Kind::Streams,
+            title: "New viewer".to_string(),
+            body: format!("@{username} is watching your stream"),
+        }
+    }
+
     pub(crate) fn dm(sender: &str, preview: String) -> Self {
         Self {
             kind: Kind::Dms,
@@ -71,11 +103,19 @@ impl Notification {
         }
     }
 
-    pub(crate) fn your_turn(game: &str, room: &str) -> Self {
+    pub(crate) fn daily_your_turn(game: &str, opponent: &str) -> Self {
+        Self {
+            kind: Kind::GameEvents,
+            title: format!("Daily {game}: your turn"),
+            body: format!("@{opponent} is waiting on your move"),
+        }
+    }
+
+    pub(crate) fn house_your_turn(game: &str) -> Self {
         Self {
             kind: Kind::GameEvents,
             title: format!("{game}: your turn"),
-            body: format!("Waiting on you in {room}"),
+            body: "the table is waiting on your move".to_string(),
         }
     }
 
@@ -84,6 +124,18 @@ impl Notification {
             kind: Kind::GameEvents,
             title: "Poll started".to_string(),
             body: question.to_string(),
+        }
+    }
+
+    /// Someone paid chips to mark your message. Reuses `Mentions` rather
+    /// than adding a dedicated `Kind`/settings row: it is the same "a person
+    /// in chat singled you out" bucket, and a user who mutes mentions is not
+    /// asking to be pinged about gilds either.
+    pub(crate) fn gilded(buyer: &str, tier: &str, chips: i64) -> Self {
+        Self {
+            kind: Kind::Mentions,
+            title: format!("{tier} gild received"),
+            body: format!("@{buyer} gilded your message (+{chips} chips)"),
         }
     }
 }
@@ -118,6 +170,13 @@ pub(crate) struct Outbox {
 }
 
 impl Outbox {
+    /// True when notifications are queued for the next drain. The render
+    /// gate forces a frame on pending notifications because `drain` only
+    /// runs during render.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.rx.is_empty()
+    }
+
     /// Drain pending notifications into at most one terminal payload per
     /// call. Notifications during cooldown or with disabled kinds are
     /// dropped, not queued.
@@ -214,101 +273,4 @@ fn terminal_bytes(notification: &Notification, mode: Mode, bell: bool) -> Vec<u8
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn dm_bytes(mode: Mode, bell: bool) -> String {
-        let notification = Notification::dm("sender", "hello".to_string());
-        let notification = Notification {
-            title: "DM title".to_string(),
-            ..notification
-        };
-        String::from_utf8(terminal_bytes(&notification, mode, bell)).expect("valid utf8")
-    }
-
-    #[test]
-    fn terminal_bytes_both_mode_with_bell_emits_osc_777_and_osc_9() {
-        assert_eq!(
-            dm_bytes(Mode::Both, true),
-            "\x1b]777;notify;DM title;hello\x1b\\\x1b]9;DM title: hello\x1b\\\x07"
-        );
-    }
-
-    #[test]
-    fn terminal_bytes_osc777_mode_emits_only_osc_777() {
-        assert_eq!(
-            dm_bytes(Mode::Osc777, false),
-            "\x1b]777;notify;DM title;hello\x1b\\"
-        );
-    }
-
-    #[test]
-    fn terminal_bytes_osc9_mode_emits_only_osc_9() {
-        assert_eq!(dm_bytes(Mode::Osc9, false), "\x1b]9;DM title: hello\x1b\\");
-    }
-
-    #[test]
-    fn terminal_bytes_sanitize_control_bytes_and_separators() {
-        let notification = Notification {
-            kind: Kind::Dms,
-            title: "hey;\x07".to_string(),
-            body: "a\nb\x1bc".to_string(),
-        };
-        let got = String::from_utf8(terminal_bytes(&notification, Mode::Both, false))
-            .expect("valid utf8");
-        assert_eq!(
-            got,
-            "\x1b]777;notify;hey| ;a b c\x1b\\\x1b]9;hey| : a b c\x1b\\"
-        );
-    }
-
-    #[test]
-    fn mode_from_format_maps_known_values_and_defaults_to_both() {
-        assert_eq!(Mode::from_format(Some("both")), Mode::Both);
-        assert_eq!(Mode::from_format(Some("osc777")), Mode::Osc777);
-        assert_eq!(Mode::from_format(Some("osc9")), Mode::Osc9);
-        assert_eq!(Mode::from_format(None), Mode::Both);
-        assert_eq!(Mode::from_format(Some("")), Mode::Both);
-        assert_eq!(Mode::from_format(Some("garbage")), Mode::Both);
-    }
-
-    #[test]
-    fn drain_emits_first_enabled_kind_and_drops_the_rest() {
-        let (notifier, mut outbox) = channel();
-        let profile = Profile {
-            notify_kinds: vec!["mentions".to_string()],
-            ..Profile::default()
-        };
-        notifier.push(Notification::dm("a", "dm body".to_string()));
-        notifier.push(Notification::mention("b", "mention body".to_string()));
-        notifier.push(Notification::mention("c", "later body".to_string()));
-
-        let bytes = outbox.drain(&profile).expect("one payload");
-        let got = String::from_utf8(bytes).expect("valid utf8");
-        assert!(got.contains("mention body"));
-        assert!(!got.contains("dm body"));
-        // The rest were dropped, not queued.
-        assert!(outbox.drain(&profile).is_none());
-    }
-
-    #[test]
-    fn drain_always_allows_friend_notifications() {
-        let (notifier, mut outbox) = channel();
-        notifier.push(Notification::friend_online("pal"));
-        assert!(outbox.drain(&Profile::default()).is_some());
-    }
-
-    #[test]
-    fn drain_honors_cooldown() {
-        let (notifier, mut outbox) = channel();
-        let profile = Profile {
-            notify_kinds: vec!["dms".to_string()],
-            notify_cooldown_mins: 5,
-            ..Profile::default()
-        };
-        notifier.push(Notification::dm("a", "first".to_string()));
-        assert!(outbox.drain(&profile).is_some());
-        notifier.push(Notification::dm("a", "second".to_string()));
-        assert!(outbox.drain(&profile).is_none());
-    }
-}
+mod notify_test;

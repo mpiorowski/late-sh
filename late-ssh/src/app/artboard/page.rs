@@ -3,7 +3,8 @@ use crate::app::{
     state::App,
 };
 
-use super::ui::{info_hit, swatch_hit};
+use super::gallery::input::GalleryAction;
+use super::ui::{info_hit, palette_hit, swatch_hit};
 
 const VIEW_MODE_ALT_PAN_STEP: isize = 4;
 
@@ -14,13 +15,9 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         return false;
     };
 
-    if state.is_help_open() || state.is_glyph_picker_open() {
+    if state.is_help_open() || state.is_glyph_picker_open() || state.is_color_picker_open() {
         let action = super::input::handle_byte(state, size, byte);
         return handle_action(app, action);
-    }
-
-    if state.is_snapshot_browser_open() {
-        return handle_snapshot_browser_key(state, byte);
     }
 
     if is_interacting {
@@ -28,20 +25,35 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         return handle_action(app, action);
     }
 
+    // The rail, a listing, an archive list, or the hang flow sees the key
+    // first; what it ignores (`i`, `?`, the Ctrl keys) still means what it
+    // means on the board.
+    if state.gallery_claims_input() {
+        match super::gallery::input::handle_key(state, size, byte) {
+            GalleryAction::Ignored => {}
+            action => return handle_gallery_action(app, action),
+        }
+    }
+    let Some(state) = app.dartboard_state.as_mut() else {
+        return false;
+    };
+
     match byte {
         0x1C => {
             state.toggle_ownership_overlay();
             true
         }
-        b'?' => {
-            state.toggle_help();
-            state.clear_pending_canvas_click();
+        0x1B => {
+            // Esc on the board goes back to the rail; the rail unfolds.
+            state.gallery_mut().focus_rail();
             true
         }
-        b'g' | b'G' => {
-            state.toggle_snapshot_browser_or_live();
-            true
-        }
+        // Vim keys move the cursor, in view mode only: in edit mode every
+        // letter paints.
+        b'h' => handle_arrow(app, b'D'),
+        b'j' => handle_arrow(app, b'B'),
+        b'k' => handle_arrow(app, b'A'),
+        b'l' => handle_arrow(app, b'C'),
         b'i' | b'I' | b'\r' | b'\n' => {
             if state.is_archive_view_active() {
                 return true;
@@ -53,7 +65,9 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             let action = super::input::handle_byte(state, size, byte);
             handle_action(app, action)
         }
-        0x15 | 0x19 => {
+        // Ctrl+U / Ctrl+Y cycle the paint colour, Ctrl+K opens the picker:
+        // the colour is local, so it can be chosen before drawing starts.
+        0x15 | 0x19 | 0x0B => {
             let action = super::input::handle_byte(state, size, byte);
             handle_action(app, action)
         }
@@ -68,13 +82,23 @@ pub(crate) fn handle_arrow(app: &mut App, key: u8) -> bool {
         return false;
     };
 
-    if is_interacting || state.is_help_open() || state.is_glyph_picker_open() {
+    if is_interacting
+        || state.is_help_open()
+        || state.is_glyph_picker_open()
+        || state.is_color_picker_open()
+    {
         return super::input::handle_arrow(state, size, key);
     }
 
-    if state.is_snapshot_browser_open() {
-        return handle_snapshot_browser_arrow(state, key);
+    if state.gallery_claims_input() {
+        match super::gallery::input::handle_arrow(state, size, key) {
+            GalleryAction::Ignored => {}
+            action => return handle_gallery_action(app, action),
+        }
     }
+    let Some(state) = app.dartboard_state.as_mut() else {
+        return false;
+    };
 
     match key {
         b'A' => {
@@ -104,13 +128,25 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         return false;
     };
 
-    if is_interacting || state.is_help_open() || state.is_glyph_picker_open() {
+    if is_interacting
+        || state.is_help_open()
+        || state.is_glyph_picker_open()
+        || state.is_color_picker_open()
+    {
         let action = super::input::handle_event(state, size, event);
         return handle_action(app, action);
     }
 
-    if state.is_snapshot_browser_open() {
-        return handle_snapshot_browser_event(state, event);
+    // The gallery sees every event while it has focus, and every mouse
+    // event while the rail is up (a click on the rail must win over the
+    // board under it). `Ignored` falls through to the board.
+    if state.gallery_claims_input()
+        || (matches!(event, ParsedInput::Mouse(_)) && state.gallery().rail_visible())
+    {
+        match super::gallery::input::handle_event(state, size, event) {
+            GalleryAction::Ignored => {}
+            action => return handle_gallery_action(app, action),
+        }
     }
 
     match event {
@@ -128,6 +164,10 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         }
         ParsedInput::End => {
             state.move_end(size);
+            true
+        }
+        ParsedInput::AltK => {
+            state.sample_color_at_cursor();
             true
         }
         ParsedInput::AltArrow(key) => match key {
@@ -169,6 +209,10 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 && !mouse.modifiers.ctrl
                 && !state.is_archive_view_active() =>
         {
+            if let Some(index) = palette_hit(size, state, mouse.x, mouse.y) {
+                state.select_palette_color(index);
+                return true;
+            }
             if swatch_hit(size, state, mouse.x, mouse.y).is_some()
                 || info_hit(size, state, mouse.x, mouse.y)
             {
@@ -183,36 +227,6 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         ParsedInput::Mouse(mouse) => handle_view_mode_mouse(state, size, mouse),
         _ => false,
     }
-}
-
-fn handle_snapshot_browser_key(state: &mut super::state::State, byte: u8) -> bool {
-    match byte {
-        b'g' | b'G' | b'q' | b'Q' | 0x1B => state.close_snapshot_browser(),
-        b'j' | b'J' => state.move_snapshot_browser_selection(1),
-        b'k' | b'K' => state.move_snapshot_browser_selection(-1),
-        b'\r' | b'\n' => state.activate_snapshot_browser_selection(),
-        _ => return false,
-    }
-    true
-}
-
-fn handle_snapshot_browser_arrow(state: &mut super::state::State, key: u8) -> bool {
-    match key {
-        b'A' => state.move_snapshot_browser_selection(-1),
-        b'B' => state.move_snapshot_browser_selection(1),
-        _ => return false,
-    }
-    true
-}
-
-fn handle_snapshot_browser_event(state: &mut super::state::State, event: &ParsedInput) -> bool {
-    match event {
-        ParsedInput::Home => state.snapshot_browser_home(),
-        ParsedInput::PageUp => state.snapshot_browser_page(-1),
-        ParsedInput::PageDown => state.snapshot_browser_page(1),
-        _ => return false,
-    }
-    true
 }
 
 fn handle_view_mode_mouse(
@@ -236,6 +250,41 @@ fn handle_view_mode_mouse(
     false
 }
 
+fn handle_gallery_action(app: &mut App, action: GalleryAction) -> bool {
+    match action {
+        GalleryAction::Ignored => false,
+        GalleryAction::Handled => true,
+        GalleryAction::FocusBoard => {
+            if let Some(state) = app.dartboard_state.as_mut()
+                && state.is_archive_view_active()
+            {
+                state.exit_archive_view();
+            }
+            true
+        }
+        GalleryAction::BeginHang => {
+            app.begin_artboard_hang();
+            true
+        }
+        GalleryAction::OpenArchive(kind) => {
+            if let Some(state) = app.dartboard_state.as_mut() {
+                state.open_archive_list(kind);
+            }
+            true
+        }
+        GalleryAction::OpenModeration(piece_id) => {
+            if app.permissions.can_access_mod_surface() {
+                crate::app::mod_modal::input::open(app, Some("artboard safety"));
+                crate::app::mod_modal::input::submit_command(
+                    app,
+                    format!("artboard safety view {piece_id}"),
+                );
+            }
+            true
+        }
+    }
+}
+
 fn handle_action(app: &mut App, action: super::input::InputAction) -> bool {
     match action {
         super::input::InputAction::Ignored => false,
@@ -252,122 +301,5 @@ fn handle_action(app: &mut App, action: super::input::InputAction) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use dartboard_core::{Canvas, Pos};
-
-    use super::*;
-    use crate::app::artboard::{
-        provenance::ArtboardProvenance,
-        state::{PAINT_PALETTE, State},
-        svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot},
-    };
-
-    #[test]
-    fn view_mode_right_drag_reuses_editor_pan_behavior() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(200, 200);
-        state.set_viewport_for_screen((80, 24));
-        state.editor.viewport_origin = Pos { x: 20, y: 10 };
-
-        assert!(handle_view_mode_mouse(
-            &mut state,
-            (80, 24),
-            &MouseEvent {
-                kind: MouseEventKind::Down,
-                button: Some(MouseButton::Right),
-                x: 10,
-                y: 10,
-                modifiers: Default::default(),
-            },
-        ));
-        assert_eq!(
-            state.editor.pan_drag.expect("pan drag").origin,
-            Pos { x: 20, y: 10 }
-        );
-
-        assert!(handle_view_mode_mouse(
-            &mut state,
-            (80, 24),
-            &MouseEvent {
-                kind: MouseEventKind::Drag,
-                button: Some(MouseButton::Right),
-                x: 6,
-                y: 7,
-                modifiers: Default::default(),
-            },
-        ));
-        assert_eq!(state.viewport_origin(), Pos { x: 24, y: 13 });
-
-        assert!(handle_view_mode_mouse(
-            &mut state,
-            (80, 24),
-            &MouseEvent {
-                kind: MouseEventKind::Up,
-                button: Some(MouseButton::Right),
-                x: 6,
-                y: 7,
-                modifiers: Default::default(),
-            },
-        ));
-        assert!(state.editor.pan_drag.is_none());
-    }
-
-    #[test]
-    fn view_mode_right_click_ignores_non_canvas_hits() {
-        let mut state = test_state();
-
-        assert!(!handle_view_mode_mouse(
-            &mut state,
-            (80, 24),
-            &MouseEvent {
-                kind: MouseEventKind::Down,
-                button: Some(MouseButton::Right),
-                x: 80,
-                y: 1,
-                modifiers: Default::default(),
-            },
-        ));
-        assert_eq!(state.cursor(), dartboard_core::Pos { x: 0, y: 0 });
-    }
-
-    #[test]
-    fn view_mode_alt_arrow_pans_viewport_without_moving_cursor() {
-        let mut state = test_state();
-        state.snapshot.canvas = Canvas::with_size(200, 200);
-        state.set_viewport_for_screen((80, 24));
-        state.editor.viewport_origin = Pos { x: 20, y: 10 };
-        state.editor.cursor = Pos { x: 25, y: 12 };
-
-        let event = ParsedInput::AltArrow(b'C');
-        match event {
-            ParsedInput::AltArrow(key) => match key {
-                b'A' => state.pan_viewport_by((80, 24), 0, -VIEW_MODE_ALT_PAN_STEP),
-                b'B' => state.pan_viewport_by((80, 24), 0, VIEW_MODE_ALT_PAN_STEP),
-                b'C' => state.pan_viewport_by((80, 24), VIEW_MODE_ALT_PAN_STEP, 0),
-                b'D' => state.pan_viewport_by((80, 24), -VIEW_MODE_ALT_PAN_STEP, 0),
-                _ => {}
-            },
-            _ => unreachable!(),
-        }
-
-        assert_eq!(state.viewport_origin(), Pos { x: 24, y: 10 });
-        assert_eq!(state.cursor(), Pos { x: 25, y: 12 });
-    }
-
-    fn test_state() -> State {
-        let shared_provenance = ArtboardProvenance::default().shared();
-        let snapshot = DartboardSnapshot {
-            provenance: ArtboardProvenance::default(),
-            your_user_id: Some(1),
-            your_color: Some(PAINT_PALETTE[1]),
-            ..Default::default()
-        };
-        let svc = DartboardService::disconnected_for_tests(snapshot);
-        State::new(
-            svc,
-            ArtboardSnapshotService::disabled(),
-            "viewer".to_string(),
-            shared_provenance,
-        )
-    }
-}
+#[path = "page_test.rs"]
+mod page_test;

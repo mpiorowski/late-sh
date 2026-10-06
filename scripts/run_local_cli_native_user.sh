@@ -62,6 +62,13 @@ fi
 
 cd "${ROOT_DIR}"
 
+# Build the Linux webview helper so the debug `late` finds its sibling
+# `late-webview` in target/debug (embedded YouTube playback).
+if [[ "$(uname -s)" == "Linux" ]]; then
+  cargo build -p late-webview --bin late-webview
+  export LATE_WEBVIEW_BIN="${LATE_WEBVIEW_BIN:-${CARGO_TARGET_DIR:-${ROOT_DIR}/target}/debug/late-webview}"
+fi
+
 exec cargo run -p late-cli --bin late -- \
   --ssh-mode native \
   --ssh-target "${SSH_TARGET}" \

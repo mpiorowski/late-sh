@@ -1,4 +1,7 @@
-use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame};
+use late_core::models::{
+    chips::Difficulty,
+    leaderboard::{DailyCompletionStatus, DailyPuzzle},
+};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -8,26 +11,40 @@ use ratatui::{
 };
 
 use crate::app::{
+    activity::event::ActivityGame,
     common::theme,
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
-        GAME_SELECTION_NES_2048, GAME_SELECTION_NES_BRICK_BREAKER,
-        GAME_SELECTION_NES_CONCENTRATION_ROOM, GAME_SELECTION_NES_DABG,
-        GAME_SELECTION_NES_ESCAPE_FROM_PONG, GAME_SELECTION_NES_FALLING, GAME_SELECTION_NES_RHDE,
-        GAME_SELECTION_NES_SQUIRREL_DOMINO, GAME_SELECTION_NES_THWAITE,
-        GAME_SELECTION_NES_ZAP_RUDER, GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE,
+        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SLIDING_PUZZLE,
         GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
-        GAME_SELECTION_TETRIS,
+        GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
     },
 };
 
 type DailyRewardTiers = &'static [(&'static str, i64)];
+
+/// Smallest area the Arcade lobby (quest strip + game grid) still fits in.
+const LOBBY_MIN_WIDTH: u16 = 50;
+const LOBBY_MIN_HEIGHT: u16 = 10;
+
+/// The three-tier games pay [`Difficulty::chips`] per tier. Solitaire's draw
+/// modes are not difficulties, but pay the medium and hard chip amounts; the
+/// mapping lives here per the `Difficulty` doc.
+const TIERED_REWARDS: DailyRewardTiers = &[
+    (Difficulty::Easy.key(), Difficulty::Easy.chips()),
+    (Difficulty::Medium.key(), Difficulty::Medium.chips()),
+    (Difficulty::Hard.key(), Difficulty::Hard.chips()),
+];
+const SOLITAIRE_REWARDS: DailyRewardTiers = &[
+    ("draw-1", Difficulty::Medium.chips()),
+    ("draw-3", Difficulty::Hard.chips()),
+];
 type DailyRow = (
     usize,
     &'static str,
     &'static str,
     bool,
-    DailyGame,
+    DailyPuzzle,
     DailyRewardTiers,
 );
 
@@ -124,6 +141,26 @@ pub fn draw_game_overlay(
     draw_game_overlay_anchored(frame, area, heading, subtitle, color, OverlayAnchor::Center);
 }
 
+fn overlay_size(heading: &str, subtitle: &str, area: Rect) -> (u16, u16) {
+    const BORDER_LINES: u16 = 2;
+    const MIN_WIDTH: u16 = 28;
+    const MAX_WIDTH: u16 = 44;
+
+    let heading_cols = (heading.chars().count() as u16).saturating_add(2);
+    let subtitle_cols = subtitle.chars().count() as u16;
+    let overlay_w = heading_cols
+        .max(subtitle_cols)
+        .saturating_add(BORDER_LINES)
+        .clamp(MIN_WIDTH, MAX_WIDTH)
+        .min(area.width);
+
+    let text_cols = overlay_w.saturating_sub(BORDER_LINES).max(1);
+    let subtitle_lines = subtitle_cols.div_ceil(text_cols).max(1);
+    let overlay_h = (BORDER_LINES + 1 + subtitle_lines).min(area.height);
+
+    (overlay_w, overlay_h)
+}
+
 pub fn draw_game_overlay_anchored(
     frame: &mut Frame,
     area: Rect,
@@ -132,8 +169,7 @@ pub fn draw_game_overlay_anchored(
     color: Color,
     anchor: OverlayAnchor,
 ) {
-    let overlay_w = 28.min(area.width);
-    let overlay_h = 4.min(area.height);
+    let (overlay_w, overlay_h) = overlay_size(heading, subtitle, area);
     let overlay_area = match anchor {
         OverlayAnchor::Center => centered_rect(area, overlay_w, overlay_h),
         OverlayAnchor::Top => {
@@ -156,6 +192,7 @@ pub fn draw_game_overlay_anchored(
         )),
     ])
     .alignment(Alignment::Center)
+    .wrap(Wrap { trim: false })
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -194,6 +231,16 @@ pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static
     Line::from(spans)
 }
 
+/// The share hint a finished daily adds to its key line: `s` copies the
+/// card. Empty while the board is still open.
+pub fn share_hints(card_ready: bool) -> Vec<(&'static str, &'static str)> {
+    if card_ready {
+        vec![("s", "share")]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, (key, desc)) in hints.into_iter().enumerate() {
@@ -201,17 +248,15 @@ pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
             spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
         }
         spans.push(Span::styled(key, Style::default().fg(theme::AMBER())));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(desc, Style::default().fg(theme::TEXT_DIM())));
+        if !desc.is_empty() {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(desc, Style::default().fg(theme::TEXT_DIM())));
+        }
     }
     Line::from(spans)
 }
 
 pub fn game_title(selection: usize) -> &'static str {
-    if let Some(rom) = super::input::nes_rom_for_selection(selection) {
-        return super::nes_cabinet::state::ROMS[rom].title;
-    }
-
     match selection {
         GAME_SELECTION_2048 => "2048",
         GAME_SELECTION_TETRIS => "Lateris",
@@ -222,7 +267,29 @@ pub fn game_title(selection: usize) -> &'static str {
         GAME_SELECTION_SOLITAIRE => "Solitaire",
         GAME_SELECTION_SNAKE => "Snake",
         GAME_SELECTION_RUBIKS_CUBE => "Rubik's Cube",
+        GAME_SELECTION_SLIDING_PUZZLE => "Sliding Puzzle",
+        GAME_SELECTION_TRAFFIC => "Traffic",
         _ => "The Arcade",
+    }
+}
+
+/// The game behind a lobby selection, for the attention metric. The
+/// selections are the closed `GAME_SELECTION_*` set; any other index is a
+/// new game that was never given a name here.
+pub fn game_for_selection(selection: usize) -> ActivityGame {
+    match selection {
+        GAME_SELECTION_2048 => ActivityGame::TwentyFortyEight,
+        GAME_SELECTION_TETRIS => ActivityGame::Lateris,
+        GAME_SELECTION_LE_WORD => ActivityGame::LeWord,
+        GAME_SELECTION_SUDOKU => ActivityGame::Sudoku,
+        GAME_SELECTION_NONOGRAMS => ActivityGame::Nonogram,
+        GAME_SELECTION_MINESWEEPER => ActivityGame::Minesweeper,
+        GAME_SELECTION_SOLITAIRE => ActivityGame::Solitaire,
+        GAME_SELECTION_SNAKE => ActivityGame::Snake,
+        GAME_SELECTION_RUBIKS_CUBE => ActivityGame::RubiksCube,
+        GAME_SELECTION_SLIDING_PUZZLE => ActivityGame::SlidingPuzzle,
+        GAME_SELECTION_TRAFFIC => ActivityGame::Traffic,
+        other => unreachable!("arcade selection {other} has no game"),
     }
 }
 
@@ -233,17 +300,27 @@ pub struct ArcadeHubView<'a> {
     pub tetris_state: &'a super::tetris::state::State,
     pub snake_state: &'a super::snake::state::State,
     pub rubiks_cube_state: &'a super::rubiks_cube::state::State,
+    pub sliding_puzzle_state: &'a super::sliding_puzzle::state::State,
     pub le_word_state: &'a super::le_word::state::State,
-    pub nes_cabinet_state: &'a super::nes_cabinet::state::State,
+    pub traffic_state: &'a super::traffic::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
     pub nonogram_state: &'a super::nonogram::state::State,
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub daily_completion: Option<&'a DailyCompletionStatus>,
+    /// Dailies this session banked today, ahead of the snapshot above.
+    pub session_daily_completion: Option<&'a DailyCompletionStatus>,
+    pub quest_state: &'a crate::app::hub::dailies::state::QuestState,
 }
 
+/// Arcade games always draw their status/keys/tip footer. Mouse hit-testing
+/// and the pre-frame raster wipe both run outside the draw path and have to
+/// reach the same answer, so it is stated once here instead of being
+/// re-decided as a literal at each call site.
+pub const SHOW_GAME_BOTTOM_BAR: bool = true;
+
 pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
-    let show_bottom_bar = true;
+    let show_bottom_bar = SHOW_GAME_BOTTOM_BAR;
     if view.is_playing_game {
         if view.game_selection == GAME_SELECTION_2048 {
             super::twenty_forty_eight::ui::draw_game(
@@ -259,14 +336,22 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
         } else if view.game_selection == GAME_SELECTION_SNAKE {
             super::snake::ui::draw_game(frame, area, view.snake_state, show_bottom_bar);
             return;
+        } else if view.game_selection == GAME_SELECTION_TRAFFIC {
+            super::traffic::ui::draw_game(frame, area, view.traffic_state, show_bottom_bar);
+            return;
         } else if view.game_selection == GAME_SELECTION_RUBIKS_CUBE {
             super::rubiks_cube::ui::draw_game(frame, area, view.rubiks_cube_state, show_bottom_bar);
             return;
+        } else if view.game_selection == GAME_SELECTION_SLIDING_PUZZLE {
+            super::sliding_puzzle::ui::draw_game(
+                frame,
+                area,
+                view.sliding_puzzle_state,
+                show_bottom_bar,
+            );
+            return;
         } else if view.game_selection == GAME_SELECTION_LE_WORD {
             super::le_word::ui::draw_game(frame, area, view.le_word_state, show_bottom_bar);
-            return;
-        } else if super::input::is_nes_selection(view.game_selection) {
-            super::nes_cabinet::ui::draw_game(frame, area, view.nes_cabinet_state, show_bottom_bar);
             return;
         } else if view.game_selection == GAME_SELECTION_SUDOKU {
             super::sudoku::ui::draw_game(frame, area, view.sudoku_state, show_bottom_bar);
@@ -283,257 +368,41 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
         }
     }
 
-    if area.height < 10 || area.width < 50 {
-        frame.render_widget(
-            Paragraph::new("Terminal too small for The Arcade").alignment(Alignment::Center),
+    if area.height < LOBBY_MIN_HEIGHT || area.width < LOBBY_MIN_WIDTH {
+        crate::app::common::primitives::draw_too_small(
+            frame,
             area,
+            "The Arcade",
+            LOBBY_MIN_WIDTH,
+            LOBBY_MIN_HEIGHT,
         );
         return;
     }
 
-    let content_area = area;
-
-    let show_header = content_area.height >= 25;
-    let layout = if show_header {
-        Layout::default()
+    // Quests live at the top of the lobby, not in a modal: they are all
+    // arcade quests, so they belong where the games are launched. Short
+    // terminals drop the strip before the game list loses room.
+    let strip_height = crate::app::hub::dailies::ui::arcade_strip_height(view.quest_state);
+    let content_area = if area.height >= strip_height + 13 {
+        let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10), // Header (added 1 for top padding)
-                Constraint::Length(1),  // Spacer
-                Constraint::Min(0),     // Content
-            ])
-            .split(content_area)
+            .constraints([Constraint::Length(strip_height), Constraint::Min(0)])
+            .split(area);
+        crate::app::hub::dailies::ui::draw_arcade_strip(frame, rows[0], view.quest_state);
+        rows[1]
     } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0)])
-            .split(content_area)
+        area
     };
 
-    if show_header {
-        draw_header(frame, layout[0], view.game_selection);
-        draw_game_list(frame, layout[2], view);
-    } else {
-        draw_game_list(frame, layout[0], view);
-    }
-}
-
-fn draw_header(frame: &mut Frame, area: Rect, selection: usize) {
-    let (art, subtitle, subtitle_indent) = match selection {
-        GAME_SELECTION_2048 => (
-            vec![
-                r#"     ██████╗  ██████╗ ██╗  ██╗ █████╗ "#,
-                r#"     ╚════██╗██╔═████╗██║  ██║██╔══██╗"#,
-                r#"      █████╔╝██║██╔██║███████║╚█████╔╝"#,
-                r#"     ██╔═══╝ ████╔╝██║╚════██║██╔══██╗"#,
-                r#"     ███████╗╚██████╔╝     ██║╚█████╔╝"#,
-                r#"     ╚══════╝ ╚═════╝      ╚═╝ ╚════╝ "#,
-            ],
-            "Slide, merge, and chase the warmest tile on the board.",
-            "     ",
-        ),
-        GAME_SELECTION_TETRIS => (
-            vec![
-                r#"     ██╗      █████╗ ████████╗███████╗██████╗ ██╗███████╗"#,
-                r#"     ██║     ██╔══██╗╚══██╔══╝██╔════╝██╔══██╗██║██╔════╝"#,
-                r#"     ██║     ███████║   ██║   █████╗  ██████╔╝██║███████╗"#,
-                r#"     ██║     ██╔══██║   ██║   ██╔══╝  ██╔══██╗██║╚════██║"#,
-                r#"     ███████╗██║  ██║   ██║   ███████╗██║  ██║██║███████║"#,
-                r#"     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝"#,
-            ],
-            "Endless falling blocks. Speed rises as you survive.",
-            "     ",
-        ),
-        GAME_SELECTION_SUDOKU => (
-            vec![
-                r#"     ███████╗██╗   ██╗██████╗  ██████╗ ██╗  ██╗██╗   ██╗"#,
-                r#"     ██╔════╝██║   ██║██╔══██╗██╔═══██╗██║ ██╔╝██║   ██║"#,
-                r#"     ███████╗██║   ██║██║  ██║██║   ██║█████╔╝ ██║   ██║"#,
-                r#"     ╚════██║██║   ██║██║  ██║██║   ██║██╔═██╗ ██║   ██║"#,
-                r#"     ███████║╚██████╔╝██████╔╝╚██████╔╝██║  ██╗╚██████╔╝"#,
-                r#"     ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ "#,
-            ],
-            "Classic newspaper puzzle, rebuilt for the terminal.",
-            "     ",
-        ),
-        GAME_SELECTION_LE_WORD => (
-            vec![
-                r#"     ██╗     ███████╗    ██╗    ██╗ ██████╗ ██████╗ ██████╗ "#,
-                r#"     ██║     ██╔════╝    ██║    ██║██╔═══██╗██╔══██╗██╔══██╗"#,
-                r#"     ██║     █████╗      ██║ █╗ ██║██║   ██║██████╔╝██║  ██║"#,
-                r#"     ██║     ██╔══╝      ██║███╗██║██║   ██║██╔══██╗██║  ██║"#,
-                r#"     ███████╗███████╗    ╚███╔███╔╝╚██████╔╝██║  ██║██████╔╝"#,
-                r#"     ╚══════╝╚══════╝     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═════╝ "#,
-            ],
-            "Six guesses, one daily word, classic green-yellow-gray clues.",
-            "     ",
-        ),
-        GAME_SELECTION_RUBIKS_CUBE => (
-            vec![
-                r#"     ██████╗ ██╗   ██╗██████╗ ██╗██╗  ██╗"#,
-                r#"     ██╔══██╗██║   ██║██╔══██╗██║██║ ██╔╝"#,
-                r#"     ██████╔╝██║   ██║██████╔╝██║█████╔╝ "#,
-                r#"     ██╔══██╗██║   ██║██╔══██╗██║██╔═██╗ "#,
-                r#"     ██║  ██║╚██████╔╝██████╔╝██║██║  ██╗"#,
-                r#"     ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝"#,
-            ],
-            "Turn a real cube model through three visible sides and a mini net.",
-            "     ",
-        ),
-        GAME_SELECTION_NONOGRAMS => (
-            vec![
-                r#"     ███╗   ██╗ ██████╗ ███╗   ██╗ ██████╗  ██████╗ ██████╗  █████╗ ███╗   ███╗███████╗"#,
-                r#"     ████╗  ██║██╔═══██╗████╗  ██║██╔═══██╗██╔════╝ ██╔══██╗██╔══██╗████╗ ████║██╔════╝"#,
-                r#"     ██╔██╗ ██║██║   ██║██╔██╗ ██║██║   ██║██║  ███╗██████╔╝███████║██╔████╔██║███████╗"#,
-                r#"     ██║╚██╗██║██║   ██║██║╚██╗██║██║   ██║██║   ██║██╔══██╗██╔══██║██║╚██╔╝██║╚════██║"#,
-                r#"     ██║ ╚████║╚██████╔╝██║ ╚████║╚██████╔╝╚██████╔╝██║  ██║██║  ██║██║ ╚═╝ ██║███████║"#,
-                r#"     ╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝"#,
-            ],
-            "Pixel puzzles painted by logic, one clue at a time.",
-            "     ",
-        ),
-        GAME_SELECTION_MINESWEEPER => (
-            vec![
-                r#"     ███╗   ███╗██╗███╗   ██╗███████╗███████╗"#,
-                r#"     ████╗ ████║██║████╗  ██║██╔════╝██╔════╝"#,
-                r#"     ██╔████╔██║██║██╔██╗ ██║█████╗  ███████╗"#,
-                r#"     ██║╚██╔╝██║██║██║╚██╗██║██╔══╝  ╚════██║"#,
-                r#"     ██║ ╚═╝ ██║██║██║ ╚████║███████╗███████║"#,
-                r#"     ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝"#,
-            ],
-            "Flag mines, clear the field. Three lives, no guessing around.",
-            "     ",
-        ),
-        GAME_SELECTION_SOLITAIRE => (
-            vec![
-                r#"     ███████╗ ██████╗ ██╗     ██╗████████╗ █████╗ ██╗██████╗ ███████╗"#,
-                r#"     ██╔════╝██╔═══██╗██║     ██║╚══██╔══╝██╔══██╗██║██╔══██╗██╔════╝"#,
-                r#"     ███████╗██║   ██║██║     ██║   ██║   ███████║██║██████╔╝█████╗  "#,
-                r#"     ╚════██║██║   ██║██║     ██║   ██║   ██╔══██║██║██╔══██╗██╔══╝  "#,
-                r#"     ███████║╚██████╔╝███████╗██║   ██║   ██║  ██║██║██║  ██║███████╗"#,
-                r#"     ╚══════╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚══════╝"#,
-            ],
-            "Classic Klondike, dealt fresh every day.",
-            "     ",
-        ),
-        GAME_SELECTION_SNAKE => (
-            vec![
-                r#"     ███████╗███╗   ██╗ █████╗ ██╗  ██╗███████╗"#,
-                r#"     ██╔════╝████╗  ██║██╔══██╗██║ ██╔╝██╔════╝"#,
-                r#"     ███████╗██╔██╗ ██║███████║█████╔╝ █████╗  "#,
-                r#"     ╚════██║██║╚██╗██║██╔══██║██╔═██╗ ██╔══╝  "#,
-                r#"     ███████║██║ ╚████║██║  ██║██║  ██╗███████╗"#,
-                r#"     ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝"#,
-            ],
-            "Classic Snake game, eat, grow and survive!",
-            "     ",
-        ),
-        selection if super::input::is_nes_selection(selection) => (
-            vec![
-                r#"     ███╗   ██╗███████╗███████╗"#,
-                r#"     ████╗  ██║██╔════╝██╔════╝"#,
-                r#"     ██╔██╗ ██║█████╗  ███████╗"#,
-                r#"     ██║╚██╗██║██╔══╝  ╚════██║"#,
-                r#"     ██║ ╚████║███████╗███████║"#,
-                r#"     ╚═╝  ╚═══╝╚══════╝╚══════╝"#,
-            ],
-            "Select a homebrew ROM. Potatis renders the NES frame into the terminal.",
-            "     ",
-        ),
-
-        _ => (
-            vec![
-                r#"     ██████╗ ██████╗  ██████╗ █████╗ ██████╗ ███████╗"#,
-                r#"    ██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝"#,
-                r#"    ███████║██████╔╝██║     ███████║██║  ██║█████╗  "#,
-                r#"    ██╔══██║██╔══██╗██║     ██╔══██║██║  ██║██╔══╝  "#,
-                r#"    ██║  ██║██║  ██║╚██████╗██║  ██║██████╔╝███████╗"#,
-                r#"    ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝ ╚══════╝"#,
-            ],
-            "Welcome to the Clubhouse Arcade. Browse with j/k, open with Enter.",
-            "     ",
-        ),
-    };
-
-    let mut header_text = vec![Line::from("")];
-    header_text.extend(art.into_iter().map(|line| {
-        Line::from(Span::styled(
-            line,
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ))
-    }));
-    header_text.push(Line::from(""));
-    header_text.push(Line::from(Span::styled(
-        format!("{subtitle_indent}{subtitle}"),
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-
-    let paragraph = Paragraph::new(header_text).alignment(Alignment::Left);
-    frame.render_widget(paragraph, area);
+    // No banner art above the list: with the quest strip on top, every row
+    // belongs to the games, and small terminals never had the headroom.
+    draw_game_list(frame, content_area, view);
 }
 
 fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let selection = view.game_selection;
     let mut selected_line: usize = 0;
-
-    push_game_section(&mut lines, "─── Score Games ───");
-    lines.push(Line::from(""));
-
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "Chase personal bests and monthly leaderboard spots.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(""));
-
-    for (idx, name, desc, status) in [
-        (
-            GAME_SELECTION_2048,
-            "2048",
-            "Slide, merge, and chase the warmest tile.",
-            format!(
-                "Best {}",
-                view.twenty_forty_eight_state
-                    .best_score
-                    .max(view.twenty_forty_eight_state.score)
-            ),
-        ),
-        (
-            GAME_SELECTION_TETRIS,
-            "Lateris",
-            "Endless falling blocks. Speed rises as you survive.",
-            format!("Best {}", view.tetris_state.best_score),
-        ),
-        (
-            GAME_SELECTION_SNAKE,
-            "Snake",
-            "Eat grow and avoid danger. Speed rises as you survive.",
-            format!("Best {}", view.snake_state.best_score),
-        ),
-    ] {
-        draw_game_entry(
-            &mut lines,
-            &mut selected_line,
-            selection,
-            GameEntry {
-                idx,
-                name,
-                descriptions: &[desc],
-                selected_style: Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-                normal_style: Style::default().fg(theme::TEXT()),
-                description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: vec![Span::styled(status, Style::default().fg(theme::SUCCESS()))],
-                label_width: 16,
-            },
-        );
-    }
 
     push_game_section(&mut lines, "─── Daily Games ───");
     lines.push(Line::from(""));
@@ -545,6 +414,27 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            " s ",
+            Style::default()
+                .fg(theme::BG_SELECTION())
+                .bg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            "Share your day card",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            ": copies a spoiler-free score for today's dailies. Every finished puzzle has one too.",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ]));
     lines.push(Line::from(""));
 
     let daily_rows: [DailyRow; 5] = [
@@ -553,40 +443,40 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Le Word",
             "Guess the daily five-letter word in six tries.",
             true,
-            DailyGame::LeWord,
-            &[("daily", 100)],
+            DailyPuzzle::LeWord,
+            &[("daily", super::le_word::state::DAILY_WIN_REWARD_CHIPS)],
         ),
         (
             GAME_SELECTION_SUDOKU,
             "Sudoku",
             "Classic newspaper puzzle, rebuilt for the terminal.",
             true,
-            DailyGame::Sudoku,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            DailyPuzzle::Sudoku,
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_NONOGRAMS,
             "Nonograms",
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
-            DailyGame::Nonogram,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            DailyPuzzle::Nonogram,
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_MINESWEEPER,
             "Minesweeper",
             "Flag mines, clear the field. Three lives.",
             true,
-            DailyGame::Minesweeper,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            DailyPuzzle::Minesweeper,
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_SOLITAIRE,
             "Solitaire",
             "Klondike with daily and personal deals over SSH.",
             true,
-            DailyGame::Solitaire,
-            &[("draw-1", 250), ("draw-3", 500)],
+            DailyPuzzle::Solitaire,
+            SOLITAIRE_REWARDS,
         ),
     ];
 
@@ -605,7 +495,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_MUTED())
         };
         let status = if available {
-            daily_reward_status_spans(view.daily_completion, game, tiers)
+            daily_reward_status_spans(
+                view.daily_completion,
+                view.session_daily_completion,
+                game,
+                tiers,
+            )
         } else {
             vec![Span::styled(
                 "Coming Soon",
@@ -645,8 +540,31 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                     description_style: Style::default().fg(theme::TEXT_DIM()),
                     status: daily_reward_status_spans(
                         view.daily_completion,
-                        DailyGame::RubiksCube,
+                        view.session_daily_completion,
+                        DailyPuzzle::RubiksCube,
                         &[("daily", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS)],
+                    ),
+                    label_width: 16,
+                },
+            );
+            draw_game_entry(
+                &mut lines,
+                &mut selected_line,
+                selection,
+                GameEntry {
+                    idx: GAME_SELECTION_SLIDING_PUZZLE,
+                    name: "Sliding Puzzle",
+                    descriptions: &["Slide tiles into order by number or image."],
+                    selected_style: Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                    normal_style: Style::default().fg(theme::TEXT()),
+                    description_style: Style::default().fg(theme::TEXT_DIM()),
+                    status: daily_reward_status_spans(
+                        view.daily_completion,
+                        view.session_daily_completion,
+                        DailyPuzzle::SlidingPuzzle,
+                        TIERED_REWARDS,
                     ),
                     label_width: 16,
                 },
@@ -654,76 +572,51 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
         }
     }
 
-    push_game_section(&mut lines, "─── NES Cabinet ───");
+    push_game_section(&mut lines, "─── Score Games ───");
     lines.push(Line::from(""));
 
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            "Homebrew ROMs running through Potatis by github.com/henrikpersson/potatis.",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]));
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "For the best experience, press Z and zoom out your terminal font.",
+            "Chase personal bests and monthly leaderboard spots.",
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ]));
     lines.push(Line::from(""));
 
-    for (idx, rom, desc) in [
+    for (idx, name, desc, status) in [
         (
-            GAME_SELECTION_NES_SQUIRREL_DOMINO,
-            super::nes_cabinet::state::ROM_SQUIRREL_DOMINO,
-            "Domino-clearing puzzle duel.",
+            GAME_SELECTION_2048,
+            "2048",
+            "Slide, merge, and chase the warmest tile.",
+            format!(
+                "Best {}",
+                view.twenty_forty_eight_state
+                    .best_score
+                    .max(view.twenty_forty_eight_state.score)
+            ),
         ),
         (
-            GAME_SELECTION_NES_THWAITE,
-            super::nes_cabinet::state::ROM_THWAITE,
-            "Missile-defense arcade shooter.",
+            GAME_SELECTION_TETRIS,
+            "Lateris",
+            "Endless falling blocks. Speed rises as you survive.",
+            format!("Best {}", view.tetris_state.best_score),
         ),
         (
-            GAME_SELECTION_NES_DABG,
-            super::nes_cabinet::state::ROM_DABG,
-            "Platform shooter with co-op.",
+            GAME_SELECTION_SNAKE,
+            "Snake",
+            "Eat grow and avoid danger. Speed rises as you survive.",
+            format!("Best {}", view.snake_state.best_score),
         ),
         (
-            GAME_SELECTION_NES_FALLING,
-            super::nes_cabinet::state::ROM_FALLING,
-            "Dodge-and-collect score chase.",
-        ),
-        (
-            GAME_SELECTION_NES_BRICK_BREAKER,
-            super::nes_cabinet::state::ROM_BRICK_BREAKER,
-            "Breakout-style brick smashing.",
-        ),
-        (
-            GAME_SELECTION_NES_ESCAPE_FROM_PONG,
-            super::nes_cabinet::state::ROM_ESCAPE_FROM_PONG,
-            "Pong-from-the-ball puzzle.",
-        ),
-        (
-            GAME_SELECTION_NES_RHDE,
-            super::nes_cabinet::state::ROM_RHDE,
-            "Furniture-fight strategy oddity.",
-        ),
-        (
-            GAME_SELECTION_NES_CONCENTRATION_ROOM,
-            super::nes_cabinet::state::ROM_CONCENTRATION_ROOM,
-            "Memory card game for one or two.",
-        ),
-        (
-            GAME_SELECTION_NES_ZAP_RUDER,
-            super::nes_cabinet::state::ROM_ZAP_RUDER,
-            "Air-hockey toy with controller fallback.",
-        ),
-        (
-            GAME_SELECTION_NES_2048,
-            super::nes_cabinet::state::ROM_2048,
-            "Tile-merging puzzle ROM.",
+            GAME_SELECTION_TRAFFIC,
+            "Traffic",
+            "You're LATE and stuck in TRAFFIC. Overtake or crash.",
+            if view.traffic_state.best_score > 0 {
+                format!("Best {:>11}", view.traffic_state.best_score)
+            } else {
+                "No runs yet".to_string()
+            },
         ),
     ] {
         draw_game_entry(
@@ -732,15 +625,15 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             selection,
             GameEntry {
                 idx,
-                name: super::nes_cabinet::state::ROMS[rom].title,
+                name,
                 descriptions: &[desc],
                 selected_style: Style::default()
                     .fg(theme::TEXT_BRIGHT())
                     .add_modifier(Modifier::BOLD),
                 normal_style: Style::default().fg(theme::TEXT()),
                 description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: vec![Span::styled("ROM", Style::default().fg(theme::SUCCESS()))],
-                label_width: 24,
+                status: vec![Span::styled(status, Style::default().fg(theme::SUCCESS()))],
+                label_width: 16,
             },
         );
     }
@@ -781,9 +674,13 @@ fn push_game_section(lines: &mut Vec<Line<'static>>, title: &str) {
     )));
 }
 
+/// One `✓chips`/`✗chips` span per tier. A tier is done when either the
+/// leaderboard snapshot or this session's own wins (`SessionDailyWins`) say
+/// so; the snapshot catches up within a refresh, the session mark is instant.
 fn daily_reward_status_spans(
     status: Option<&DailyCompletionStatus>,
-    game: DailyGame,
+    session_status: Option<&DailyCompletionStatus>,
+    game: DailyPuzzle,
     tiers: &[(&str, i64)],
 ) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(tiers.len() * 2);
@@ -791,9 +688,10 @@ fn daily_reward_status_spans(
         if i > 0 {
             spans.push(Span::raw(" "));
         }
-        let done = status
-            .map(|s| s.completed_difficulty(game, difficulty_key))
-            .unwrap_or(false);
+        let done = [status, session_status]
+            .into_iter()
+            .flatten()
+            .any(|s| s.completed_difficulty(game, difficulty_key));
         let (glyph, style) = if done {
             ("✓", Style::default().fg(theme::SUCCESS()))
         } else {
@@ -847,25 +745,4 @@ fn draw_game_entry(
         ]));
     }
     lines.push(Line::from(""));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn centered_rect_centers_inside_larger_area() {
-        let area = Rect::new(2, 3, 80, 24);
-        let centered = centered_rect(area, 30, 10);
-
-        assert_eq!(centered, Rect::new(27, 10, 30, 10));
-    }
-
-    #[test]
-    fn centered_rect_clamps_to_available_area() {
-        let area = Rect::new(2, 3, 80, 24);
-        let centered = centered_rect(area, 100, 40);
-
-        assert_eq!(centered, area);
-    }
 }

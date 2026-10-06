@@ -1,7 +1,12 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research only, nothing committed.** Last updated 2026-06-28.
+Status: **research notes.** Last updated 2026-07-28 (A Dark Room v1 is playable
+end to end: the room and village acts, the pacing decision, and the door's own
+context file). Previous cut 2026-07-21: Brogue CE
+is the next door, one marketing beat before the Green Dragon push (see root
+`DRAGON.md`); TradeWars/twclone re-parked as future season/event content
+despite a green spike; museum wing passed on.
 
 ## TL;DR
 
@@ -14,8 +19,13 @@ Status: **research only, nothing committed.** Last updated 2026-06-28.
   (GPL, LORD-like, already ported to 64-bit Linux). Both run as a normal process
   on a PTY - exactly how NetHack already works here.
 - **TradeWars 2002 is a no-go on license** (proprietary, EIS/Pritchett own the
-  trademark). The open path is **twclone** (MIT clone), which would be a port,
+  trademark). The open path is **twclone** (GPL-2 clone), which would be a port,
   not the real thing.
+- **The cheapest native port we have found is A Dark Room** (MPL-2.0, 8.5k lines
+  of dependency-free jQuery, no server, no DB). It is a whole new *shelf* for
+  late.sh, not just a door: minimalist text incrementals. See the deep dive
+  below. The gates are brand etiquette and one design call, not license or
+  effort.
 - **MUDs are parked** (see bottom). Almost all the demand is for *doors*, not
   MUDs, and MUDs fight late.sh's quick-session format. Licensing is fine if we
   ever want one (DikuMUD LGPL, Evennia BSD), but it's not on the roadmap.
@@ -51,17 +61,30 @@ worth owning. Licensing is the gate before any of this matters.
 | Game | License | Notes / fit |
 |---|---|---|
 | **dopewars** | GPL | Drug Wars / Dope Wars done right. Has a **curses text client** and a client/server **multiplayer** mode. Pure Linux terminal program → **pattern 2, near-zero friction.** Copyright Ben Webb 1998-2022, still maintained. |
-| **Usurper** | GPL | Classic LORD-style RPG door. Rick Parrish ported it to **32/64-bit** (orig by Jakob Dangarden). Runs on Linux → **pattern 2.** Good "second LORD-like" alongside LotGD. |
+| **Usurper** | GPL | **Shipped 2026-07-20** (`late-usurper` + the Usurper screen). Classic LORD-style RPG door. Rick Parrish ported it to **32/64-bit** (orig by Jakob Dangarden). Runs as a DOOR32 local-mode child on a PTY; the host generates per-session dropfiles, leases node numbers, and transcodes CP437→UTF-8. One shared world on a PVC. |
 | **Legend of the Green Dragon (LotGD)** | GPL (≤0.9.7), Creative Commons (after) | **The open LORD.** Faithful remake. BUT it's **PHP + MySQL web**, not a terminal door → needs either a TUI front-end or a native port (**pattern 1**). Highest player-recognition payoff, highest effort. Active forks exist (incl. a Symfony rewrite). |
 | **Wolfpack Empire** | GPLv3 | Classic large multiplayer strategy "Empire" door. Server + client, runs on Linux. Heavier/niche but clean. |
-| **twclone** | MIT (v1.0.0, Dec 2025) | Independent TradeWars clone, **fully rewritten and now headless**: a TCP server with a **pure JSON protocol** and a **PostgreSQL** backend. No BBS, no DOSBox, no telnet/ANSI. The clean way to get TradeWars-like gameplay. See deep dive below. |
+| **Dungeon Crawl Stone Soup (DCSS)** | GPL-2.0-or-later (project relicensed with every past contributor's consent) | **Shipped 2026-07-18** (`late-dcss` + the DCSS screen). Not a door - the *other* flagship roguelike - but the cleanest **pattern 2** candidate on this list. Native Linux curses binary (`crawl`), actively maintained, yearly releases. Built to be hosted: official public servers run dgamelaunch, and the game writes machine-readable `logfile`/`milestones` files (rune pickups, Zot entry, wins) - so achievements come off disk, no vt100 scraping like NetHack. Reuses the `late-nethack` host machinery almost verbatim. Wants 80x24 minimum. |
+| **twclone** | GPL-2.0 (v1.0.0-rc1, Dec 2025). The README claims MIT, but the actual LICENSE/COPYING files are GPLv2 (GitHub detects GPL-2.0) | Independent TradeWars clone, **fully rewritten and now headless**: a TCP server with a **pure JSON protocol** and a **PostgreSQL** backend. No BBS, no DOSBox, no telnet/ANSI. The clean way to get TradeWars-like gameplay - but still a release candidate with ~175 open issues and federation/economy/NPC systems deferred. See deep dive below. |
+| **Brogue CE** | AGPL-3.0 | The most beautiful pure-terminal roguelike ever made, and the friendliest of the classics: short runs, no grinding, stunning colored ASCII. Community Edition is actively maintained, builds a curses/terminal binary on Linux, saves per player, and public dgamelaunch servers already host it → **pattern 2, drop into the nethack/dcss host shape.** AGPL is fine for us: we build from source and can point at the pinned tarball. Best "third dungeon" candidate. |
+| **Angband 4.2** | GPL-2.0 (dual-licensed Angband licence / GPLv2) | The third giant lineage next to NetHack and Crawl. Long-form dungeon diving, rock-solid ncurses build (`-mgcu`), per-user saves, still maintained → **pattern 2.** Opens the door to celebrated variants later (Sil-Q, FrogComposband), which reuse the same shape. |
+| **A Dark Room** | MPL-2.0 (`LICENSE.md` + `package.json`, marked "Incompatible With Secondary Licenses") | The minimalist incremental everyone remembers: light a fire, build a village, walk an ASCII wasteland. Browser JS, so **pattern 1** - but by far the cheapest pattern-1 target we have seen (no server, no DB, no build step). Audited 2026-07-25, see the incremental shelf below. MPL is file-level copyleft and coexists with our FSL. |
+| **Evolve** | MPL-2.0 | Ooze-to-space-empire incremental, 1.2k stars, genuinely deep endgame. Same clean license story as A Dark Room, and the same pattern-1 requirement - but it is 4,690 commits of content with an enormous UI surface. Green on law, huge on effort. That is not a door, that is a second Lateania. |
+| **Antimatter Dimensions** | MIT | The genre's biggest number-go-up game and the cleanest license on this whole page. All numbers and tabs, so it renders in a terminal trivially. The open question is fit, not law: it is a 1000-hour optimization spreadsheet with no story and no aesthetic, the opposite pole of the genre from A Dark Room. |
+| **Progress Quest** | Source released 2011, reported BSD. The Bitbucket Mercurial repo is gone, so **verify the license on whichever mirror we take** before shipping | The original zero-player RPG, and conceptually the most BBS-shaped idea in the genre: it plays itself, you log in to watch the bar fill. Tiny. A Python terminal edition already exists (`rr-/pq-cli`), so **pattern 2 is on the table** as well as a trivial native port. Best charm-per-hour on the list. |
+| **NetHack variants: EvilHack / xNetHack / UnNetHack** | NGPL (same as NetHack) | Cheapest wins on the whole list: same license, same build recipe, and the **late-nethack host code reuses almost verbatim** - new crate, new port, new secret. EvilHack is what the hardcore public-server crowd plays; xNetHack is the polished modernization. Only cost is another image + pod each. |
+| **Cataclysm: Dark Days Ahead** | CC-BY-SA-3.0 (code and data) | Modern zombie-survival roguelike with a real ncurses build. Genuinely popular. The catch is weight: big binary, big RAM per session, and long-lived per-player worlds on disk → **pattern 2 but a heavyweight**; treat as an experiment with one watched pod, not a casual add. |
+| **The museum wing: Rogue 5.4 / Hack 1.0 / Umoria** | BSD-3-clause (Rogue 5.4.4 restoration; verify tarball license before shipping) / BSD (Hack) / GPL-3.0 (Umoria, relicensed 2017) | "Where it all began" shelf: the actual 1980 Rogue next to the roots of both family trees (Hack → NetHack, Moria → Angband). Tiny ncurses binaries, trivial hosting, one shared host crate could run all three → **pattern 2, minimal effort, maximum charm.** Great story for the public launch. |
 
 ### 🟡 Yellow - usable but read the terms
 
 | Game | License | Notes |
 |---|---|---|
+| **DarkLands** ([darklands.cx](https://darklands.cx)) | Site calls it "an open-source project," but no license file or repo turned up; the download page's own author note says "I'm working on bringing this on a proper git system" - so today it's tarballs only, no source control, no explicit license text. | LORD/MUD-style BBS door, active on-and-off since 2000 (Nuitari & Snell productions, currently v0.21). Big character-generation surface (12 major races, 60+ subraces, 9 alignment combos, 12 gods or atheist, 200+ racial skills, 100+ rooms, 15+ monsters) plus a "build cities, raise armies" persistent-world angle - closer to a LORD/Usurper-style door than a roguelike. Ships a Linux tarball, a DOS/DPMI build, and BBS-door support (`Door.sys`/`doorfile.sr`/`chain.txt`), so pattern 2 is plausible in shape - but with no source repo and no stated license, we can't point at a pinned tarball with any license confidence yet, so it's not actionable until the author's promised git migration lands. Note the name collision: this is unrelated to both the 1992 MicroProse *Darklands* RPG and `darklands.net` (an unrelated MicroProse-abandonware mirror site). Revisit once a repo + explicit license shows up. |
 | **GWT (Galactic Warriors Tournament)** | Source on GitHub, license unclear | Sci-fi LORD-like, source available; confirm license before use. |
 | **Dominion** | Source on GitHub, license unclear | Fantasy RPG door; confirm license. |
+| **Candy Box 2** | GPL-3.0 | A Dark Room's 2013 twin: ASCII art, hidden depth, same cult status. Perfect aesthetic fit, **wrong license for a native port** - linking GPL code into late-ssh would relicense late-ssh, which our FSL cannot do. The only clean path is a standalone GPLv3 binary we spawn on a PTY (pattern 2), which for a browser game means writing the entire thing ourselves and then giving it away. Yellow, not red: legal, just a bad trade. |
+| **Swarm Simulator** | GPL-3.0 | Big idle name, 525 stars. Same GPL-versus-FSL problem as Candy Box 2, and it is CoffeeScript + AngularJS on top. Pass. |
 
 ### 🔴 Red - proprietary / licensing pain (avoid or port-only)
 
@@ -73,6 +96,9 @@ worth owning. Licensing is the gate before any of this matters.
 | **The Pit** | DOS gladiator door by James R. Berry / Midas Touch (1990; Berry died 1999). **No registration code is required to run it anymore**, so it's free to *play* - but the source is now owned by **BBSFiles.com**, with no open-source license, and there's **no clone/port**. So: same DOS-door stack as TW2002 (DOSBox + BBS + door32) and no code rights to embed or port. See note below. |
 | **Land of Devastation, Arrowbridge I/II, Sinbad, Bordello, Yankee Trader** | Old proprietary/abandonware DOS doors. No clean license; only runnable via DOSBox wrappers (e.g. DoorNode) which doesn't grant rights. Treat as red unless an author releases source. |
 | **DrugWars / Dope Wars (the originals)** | Originals are proprietary/abandonware - but **dopewars (green, above) is the GPL reimplementation**, so this is solved. |
+| **Kittens Game** | The custom **"WET PAWS LICENSE"**: changes allowed "for personal or educational purpose", but explicitly **no commercial gain and no creation of derivative works**. A port is precisely a commercial derivative work. |
+| **Cookie Clicker** | Proprietary. The source is readable, and Orteil has said so publicly, but the header is "copyright Orteil" plus "do not re-host it, do not profit from it and do not present it as your own". Readable is not licensed. |
+| **Universal Paperclips** | **No license at all** and no copyright notice, so all rights are reserved by default. Every GitHub "paperclips" repo is an unofficial mirror or fork, none of which grants us anything. Frank Lantz never released it. |
 | **Falcon's Eye** | Not a separate game - it's a **NetHack** frontend (graphical). We already run real NetHack; nothing new here. |
 
 ---
@@ -102,12 +128,14 @@ fixups - which tells you this is a well-known pain point, not just us.
 **Verdict on the real thing:** red. Proprietary server, DOS emulation, ANSI
 mess. Not worth it.
 
-### The actual answer: twclone (MIT, headless, JSON + Postgres)
+### The actual answer: twclone (GPL-2, headless, JSON + Postgres)
 
-`twclone` was **fully rewritten and released as v1.0.0 in Dec 2025**, and it's
-now shaped almost perfectly for late.sh:
+`twclone` was **fully rewritten**, with **v1.0.0-rc1 released Dec 15 2025** (a
+release candidate, not a finished 1.0.0 - ~175 open issues, federation/economy/
+NPC systems still deferred), and it's shaped almost perfectly for late.sh:
 
-- **MIT licensed** - no permission needed, donations/chip economy is fine.
+- **GPL-2 licensed** (the README says MIT, but the actual LICENSE/COPYING files
+  are GPLv2) - same license family as dopewars, donations/chip economy is fine.
 - **Headless TCP server, no BBS** - just run the server binary.
 - **Pure JSON protocol** - "all client<->server interactions use JSON." No
   telnet, no ANSI, no CP437. Any language that speaks JSON can be a client.
@@ -124,15 +152,75 @@ late.sh instead of being a blitted foreign terminal. The JSON protocol means no
 screen-scraping for milestones either (contrast NetHack, where we scrape vt100
 for the Amulet/ascension) - we read game state straight off the wire.
 
-**Open questions specific to twclone:**
-- Does its JSON protocol expose enough state to render a full TUI, or is the
-  bundled terminal client doing logic we'd have to reimplement? Read
-  `data/menus.json` + the protocol spec first.
-- Shared universe (one server, Lateania-style) vs. per-player - TW is
-  inherently a shared persistent universe, so this is one global instance, not
-  isolated NetHack-style sessions.
-- Does it want its **own** Postgres or can it share ours with a schema/db
-  separation? Prefer a separate database on the same instance.
+### Protocol spike results (2026-07-20, repo audit + local build)
+
+Audited the full repo (docs, both bundled clients, server source, SQL, test
+rig) and built it locally on Arch: `./configure && make` produces `server` and
+`bigbang` cleanly (needs `touch aclocal.m4 configure Makefile.in` first to
+stop autotools regen on fresh clones). Local reference clone: `~/projects/twclone`.
+
+**The key question is answered: YES, the protocol is data, not screens.**
+- Newline-delimited JSON over TCP (default port 1234), request/response
+  correlated by `id`/`reply_to`; frames without `reply_to` are async push
+  events (pub-sub via `subscribe.*`). Docs explicitly mandate "no prose inside
+  `data`": everything is codes/ids/enums, the client renders.
+- Menus are 100% client-side (`client/menus.json` is the Python client's own
+  config; the server never sees it). Our ratatui UI is unconstrained.
+- All game logic is server-side: trade math, combat, pathfinding
+  (`move.pathfind`), autopilot routes, economy. Both bundled clients (Python
+  menu client + the LLM-driven `ai_player` bot) are thin protocol clients
+  using zero hidden commands. A Rust client owns only rendering, input,
+  framing, and deserialization.
+- Command surface: **235 commands registered** in `src/server_loop.c` (the
+  shipped `published_commands.json` lists 177 and is stale). Move/trade/
+  combat/planets/citadels/corps/stock market/banking/tavern gambling/mail/
+  news/bounties/insurance are all real implementations with protocol-level
+  integration tests (`tests.v2/`, ~185 commands covered). Discover schemas at
+  runtime via `system.cmd_list` / `system.describe_schema`, NOT from the docs.
+- Identity: one TCP connection = one authenticated player (session token from
+  `auth.login`/`auth.register`). No single-socket multiplexing, so late-ssh
+  opens one connection per active door session. Fits the arcade-handle +
+  host-held random password pattern we already use for Usurper dropfiles.
+
+**Postgres: shares our instance fine.** Postgres is the only real backend
+(MySQL driver is a stub; server hard-fails on non-PG). Wants a dedicated
+database (unqualified names in `public`), no extensions, no pg_cron (cron is
+a DB table driven by its own engine), no superuser if we pre-create the DB and
+role. Config via a `bigbang.json` (libpq conninfo), not env vars. `bigbang` is
+the one-time universe generator (default 500 sectors).
+
+**Caveats found (none fatal, all handleable):**
+- **Plaintext password storage** (`repo_auth.c`: raw `strcmp` against a
+  `passwd` column). Contained for us: users never type a password, our host
+  mints random per-user credentials, and the server sits on the internal
+  network. Never expose port 1234 publicly.
+- **One blocking libpq connection per client thread**: 100 players = 100 PG
+  backends. Upstream's answer is pgbouncer (their deploy script even ships a
+  hardcoded password - ignore it, we do our own deploy). Our concurrent door
+  sessions will be small; a hard client cap or pgbouncer in the pod solves it.
+- **Ships a dev build**: `bin/Makefile.am` bakes in ASan/UBSan. Strip
+  sanitizers for the prod image.
+- **Server auto-generates a universe if the DB looks empty** - point the
+  conninfo carefully.
+- Docs are partly aspirational and contradict the wire (e.g. `passwd` vs
+  `password`, money fields int-or-string, police bribe/surrender and bank
+  standing orders are stubs, federation/S2S is not real). Trust the runtime
+  schema endpoints and `tests.v2/`, not the markdown.
+- **Project pulse**: solo, heavily AI-assisted development; quiet since
+  2026-02-14; 175 open issues (P0s are mostly a localisation epic + test
+  infra, not broken gameplay; 42 "canon" deviations from real TW2002 open).
+  Plan to pin a commit and treat it as ours to patch (GPL-2; the README
+  claims the rewrite is MIT but COPYING/LICENSE both say GPLv2 - either way
+  fine, we run it as a separate process).
+
+**Integration shape:** twclone server + own PG database as one pod (own
+image, sanitizers stripped, TLS off - internal network, SSH fronts it);
+`door/tradewars` native ratatui client in late-ssh speaking NDJSON over TCP;
+one shared persistent universe (Lateania-style, not per-player); milestones
+and achievements read straight off the wire (no scraping). Effort sits
+between dopewars and a native port: no game to design, but a full multi-panel
+TUI to build. Start with the core loop (sector view, warp, port trade, ship,
+bank) and grow toward planets/corps/stardock.
 
 ## The Pit (the gladiator one)
 
@@ -158,23 +246,251 @@ ever want the gladiator-arena vibe, a **native Rust original** inspired by it
 (mechanics aren't copyrightable) is the only sane route - and at that point it's
 really a new Lateania-style game, not "The Pit."
 
+**Resolved 2026-07-21:** the gladiator vibe is absorbed into the Green Dragon
+plan instead - a town arena where player characters fight each other, results
+called into #lounge (see root `DRAGON.md`, we-own-it liberties). Gladiators
+fighting is a mechanic, not a door; The Pit stays red and stays unhosted.
+
+## The incremental shelf: A Dark Room and its neighbours
+
+A different genre from everything above, and worth treating as its own shelf
+rather than one more door. Minimalist text incrementals are the closest thing on
+the open web to what late.sh already looks like: no graphics, no art budget,
+progressive reveal, prose as the interface.
+
+### Why the genre fits us structurally, not just aesthetically
+
+Every door we run today is a **run** (NetHack, DCSS, Brogue: you start over when
+you die) or a **daily-turn RPG** (Green Dragon, Usurper). An incremental is a
+third shape: **a save that grows**. That is a different retention curve, and it
+is the one a BBS was always built around - a reason to log in, check on the
+thing, log out. It is also single-player, which sidesteps exactly the problem
+that parked twclone: no player density required, so it works at 30 concurrent
+users just as well as at 3,000.
+
+**The one design call, and it is not optional:** A Dark Room has **no offline
+progress**. Every timer is wall-clock while the tab is open, and `collectIncome`
+runs on a 1-second tick; close the tab and the village stops. Ported faithfully,
+that means you only advance while your SSH session is attached, which turns
+"check in daily" into "idle in a session", the opposite of the pitch above. Two
+honest options:
+
+1. **Faithful.** Accept it. ADR is a 2-4 hour narrative arc with a real ending,
+   not an endless idler, so a player realistically does it across a handful of
+   sittings anyway. Cheapest and truest.
+2. **Offline accrual.** Compute elapsed time on reconnect and settle the
+   production tick forward. We are writing the port, so this is ours to add, but
+   it rebalances the whole game (the fire, the wanderers, the population curve)
+   and needs caps or the wasteland is trivial after one night away.
+
+**Resolved 2026-07-27, and it is neither of the two:** the port credits time
+while the **SSH session is connected** (anywhere on late.sh, not just on the
+door's screen), runs the **village half at 5x slower**, and caps village time
+at **3 hours per UTC day**. Cooldowns, the fire and the room temperature stay
+at upstream speed, because the opening act is a click loop and slowing it
+produces dead air rather than a longer game; the slowdown lands only on worker
+income and new arrivals. The daily cap is what makes the "spans weeks" claim
+true regardless of who parks a terminal on a spare monitor. The whole design
+lives in one module (`pace.rs`) and nothing else knows about it.
+
+### A Dark Room: license (the short version)
+
+- **MPL-2.0**, stated in both `LICENSE.md` and `package.json`, with the Exhibit B
+  "Incompatible With Secondary Licenses" notice attached. That notice only blocks
+  relicensing under GPL/LGPL/AGPL, which we do not want to do anyway.
+- **MPL is file-level copyleft with no network clause** (unlike Brogue's AGPL).
+  Section 3.3 explicitly lets us ship a Larger Work under our own terms as long
+  as the covered files stay MPL. So the practical rule is: everything derived
+  from ADR (the game text, the data tables, the balance constants, anything
+  transliterated rather than reinvented) lives in its own module carrying
+  MPL-2.0 headers, and the rest of late-ssh stays FSL-1.1-MIT. Our repo is
+  already public, so the source-availability obligation is satisfied by
+  existing. Record it in `LICENSING.md` and NOTICE the way we did for Brogue.
+- **Only the web version is MPL.** The iOS/Android port (Amir Rajan, RubyMotion),
+  the Steam release, and the prequel *The Ensign* are separate closed products.
+  Port from `doublespeakgames/adarkroom` and nothing else.
+- **MPL grants no trademark rights** (§2.3, explicit).
+
+### A Dark Room: the etiquette gate (the actual blocker)
+
+This is the part that matters more than the license. Michael Townsend
+open-sourced ADR so people could learn from it, and has said publicly he was
+disheartened watching people use the brand he built to make a quick buck (the
+App Store clone wave). He is not a dead author of abandonware: the game is
+**still a live commercial product**, on iOS, Android and Steam.
+
+late.sh has a chip economy. Shipping a door called "A Dark Room" next to it,
+without asking, is a good way to become the thing he complained about, even
+though the MPL permits it.
+
+**Recommendation:** email him first. `michael@doublespeakgames.com` is right
+there in `package.json`. A yes costs one email and buys a good story we can put
+in #lounge. A no saves us the entire port. Either way: credit prominently, and
+never put it behind chips or donations.
+
+### A Dark Room: code audit (2026-07-25, shallow clone of `main`)
+
+The verdict is that this is the cheapest pattern-1 target we have looked at, by
+a wide margin. LotGD was a PHP + MySQL web application. ADR is a single-player
+state machine with no backend at all.
+
+- **8,481 lines** of plain, dependency-free jQuery-era JS across 19 files in
+  `script/`. No build step, no framework, no database, no server. The single
+  npm dependency is `express`, used only by `dev-server.js`.
+- Biggest files: `events.js` 1,487 (encounter and combat scenes, overwhelmingly
+  data), `room.js` 1,259, `world.js` 1,109 (wasteland generation and travel),
+  `engine.js` 942, `outside.js` 665, `space.js` 631, `state_manager.js` 440,
+  `path.js` 341, `fabricator.js` 244, `ship.js` 177.
+- **Roughly 1,100 lines we delete outright**: `dropbox.js` (361, cloud saves),
+  `audio.js` + `audioLibrary.js` (376), `notifications.js`, `Button.js` (131, a
+  DOM widget). A further large slice of every remaining module is jQuery DOM
+  construction that ratatui replaces rather than translates.
+- **State is one nested JSON blob** behind a single `StateManager` (`$SM`) with
+  fixed top-level categories: features, stores, character, income, timers, game,
+  playStats, previous, outfit, config, wait, cooldown. That maps almost 1:1 onto
+  a serde struct persisted per user, which is the Green Dragon shape we already
+  run.
+- **The timer model is already centralized.** Everything goes through
+  `Engine.setTimeout` / `Engine.setInterval` wrappers rather than raw calls, so
+  the fire cooling, temperature drift, population growth, income tick and enemy
+  attack cadence all funnel through one indirection point. A ratatui tick loop
+  covers the lot.
+- **The text is already externalized for i18n**: `_()` calls throughout (108 in
+  `room.js` alone), with `lang/*.po` files for 23 languages and a `.pot`
+  template. The strings extract cleanly instead of having to be dug out of
+  logic, and we would inherit the translations for free.
+- Lightly maintained upstream (last commit May 2025), which is fine: we pin a
+  commit and own the port.
+
+**Effort:** comparable to Green Dragon or less, and with none of the design work,
+because every balance number is sitting right there in the source.
+
+### The rest of the genre, at a glance
+
+The famous ones sort cleanly, and the sort is mostly bad news, which is what
+makes ADR valuable:
+
+- **Green and portable:** A Dark Room (MPL-2.0), Evolve (MPL-2.0, but enormous),
+  Antimatter Dimensions (MIT, but tonally the opposite of us), Progress Quest
+  (reported BSD, verify the mirror; tiny and perfectly BBS-shaped).
+- **GPL, so out-of-process only:** Candy Box 2, Swarm Simulator. Aesthetically
+  Candy Box 2 is the one that hurts to skip.
+- **Closed, do not attempt:** Kittens Game (its licence forbids derivative works
+  by name), Cookie Clicker (proprietary, "do not re-host, do not profit"),
+  Universal Paperclips (no license at all, so all rights reserved).
+
+If we want a second game on this shelf after ADR, **Progress Quest is the pick**:
+smallest possible port, an existing terminal edition to crib from, and the joke
+lands harder on an SSH server than it ever did on the web.
+
 ## Recommended order of attack
 
-1. **dopewars** - fastest real win. GPL, terminal-native, multiplayer. Wrap it
-   like NetHack (`late-nethack`-style host or a local PTY child). Low risk, high
-   "oh nice, Drug Wars" recognition.
-2. **Usurper** - second easy PTY door, scratches the LORD-RPG itch with a clean
-   license while we decide on LotGD.
-3. **Legend of the Green Dragon** - the marquee "this is basically LORD" feature,
-   but budget real effort: it's a web app, so either a native Rust port
-   (Lateania-style) or a TUI shim over the PHP backend. Decide pattern before
-   starting.
-4. **TradeWars via twclone** - the most-requested game, finally tractable.
-   Run the MIT twclone server next to our Postgres and write a native Rust JSON
-   client. More work than dopewars but no licensing/DOS/BBS nightmare, and the
-   payoff is the game people keep asking for. Do the protocol spike first (see
-   deep dive) before committing.
+1. **dopewars** - **done, shipped.** GPL, terminal-native. Runs as its own
+   `late-dopewars` SSH host (NetHack-style), single-player with a shared
+   high-score table. See `late-ssh/src/app/door/dopewars/CONTEXT.md`.
+2. **DCSS** - **done, built (prod deploy pending).** Same standalone-SSH-host
+   pattern as NetHack (`late-dcss` host crate + `door/dcss` client), from-source
+   0.34.1 console build with wizard mode compiled out. File-based milestones
+   (no scraping) deferred to a v2. See `late-ssh/src/app/door/dcss/CONTEXT.md`.
+   First rollout must be `deploy_dcss.yml` (it builds the image).
+3. **Usurper** - **done, built (prod deploy pending).** Standalone-SSH-host
+   pattern like DCSS (`late-usurper` host crate + `door/usurper` client), built
+   from pinned source with Debian's Free Pascal, world data generated by
+   scripting the EDITOR's Reset Game at image build. First rollout must be
+   `deploy_usurper.yml` (it builds the image). See
+   `late-ssh/src/app/door/usurper/CONTEXT.md`.
+4. **Legend of the Green Dragon** - **done, shipped** as the native Green
+   Dragon door: an in-process Rust remake of LoGD with per-user persistent
+   characters (pattern 1, Lateania-style). See
+   `late-ssh/src/app/door/greendragon/CONTEXT.md`.
+5. **Brogue CE** - **done, built 2026-07-21 (prod deploy pending).**
+   Standalone-SSH-host pattern like DCSS (`late-brogue` host crate + the
+   `door/brogue` client), from-source CE 1.15.1 curses-only build. Identity
+   is a per-player cwd under the playground (brogue opens saves/recordings/
+   high scores relative to its working directory; no name flag), keyed by the
+   shared arcade handle. One source patch (`scripts/brogue_hangup_save.patch`)
+   adds the SIGHUP save-and-exit the curses build lacks upstream, so
+   disconnects and rollouts keep runs; verified by hand against a PTY. v1
+   ships without awards as planned (a future pipe can read the per-player
+   run-history files host-side). AGPL-3.0 note: we run a patched build, so
+   the pinned tarball + patch + Dockerfile recipe must stay public (NOTICE).
+   First rollout must be `deploy_brogue.yml` (it builds the image). See
+   `late-ssh/src/app/door/brogue/CONTEXT.md`. Museum wing (Rogue/Hack/
+   Umoria) was considered for the same slot and passed on.
+6. **TradeWars via twclone** - **parked until it can be a season.** Protocol
+   spike done 2026-07-20 (see deep dive): verdict green on the tech
+   (structured-data protocol end to end, Postgres coexists on our instance,
+   caveats handleable). Parked anyway: an always-on persistent universe is
+   appointment gaming that needs player density we don't have; at ~30
+   concurrent it's an empty 500-sector world, and its stories (ambushes, corp
+   wars) all require other players. The right format is **event content after
+   the dragon ships**: a fresh small universe per season (`bigbang` makes
+   regeneration cheap), a daily turn ration, "highest net worth by Sunday",
+   #lounge coronation, universe dies. Do not build the always-on version.
+7. **A Dark Room** - **v1 playable 2026-07-28, room + village acts.**
+   Native Rust port (pattern 1), the first game on the incremental shelf.
+   Both gates are closed: Townsend was emailed about **the name** (the MPL
+   covers the code, so the email is etiquette plus trademark, not permission),
+   and the **pacing question is decided** - see below. Built so far: the fire,
+   room temperature, the full builder arc, the forest unlock, gathering and
+   traps, huts/population, the worker income economy, and buildings through the
+   smokehouse. Still to come: the wasteland, the path/outfitting screen,
+   combat and events, the workshop crafting tier, the trading post's buy menu,
+   and the ship endgame. See `late-ssh/src/app/door/darkroom/CONTEXT.md`.
+   **Progress Quest** is the natural cheap follow-up on this shelf.
+
 MUDs are intentionally **not** in this list anymore - see Parked below.
+
+## NetHack: per-player options via `.nethackrc` (feature idea, not built)
+
+NetHack reads a `.nethackrc` file (or the `NETHACKOPTIONS` env var) out of
+`HOME` at startup for everything from role/race/gender/alignment presets
+(`role:Valkyrie`, `race:human`) to `autopickup`, `pickup_types`, `number_pad`,
+`msg_window`, the symbol set, and color. Full list is in the pinned 5.0.0
+source's `doc/nethack.6` / `doc/options.doc` (`late-nethack/` builds from that
+same verified tarball, see the NetHack `CONTEXT.md` §6).
+
+**Today there is no per-player rcfile at all.** `late-nethack/src/server.rs`
+passes every session the same `HostConfig.data_dir` (`LATE_NETHACK_DATA_DIR`,
+default `/var/lib/late-nethack`) as `HOME` (`host.rs`), and no code ever writes
+a `.nethackrc` into it. So every player gets NetHack's compiled-in defaults and
+its interactive startup prompts (role/race/gender/align, the "Shall I pick a
+character for you?" dance) every single game, with no way to skip or
+customize them. The `Dockerfile` comment calling it "the per-player
+`.nethackrc` HOME" is aspirational, not what the code does yet.
+
+**Step 1: make HOME actually per-player.** Small, contained change: derive
+`HostConfig.data_dir` as `{data_dir}/{playname}` (the same sanitized `-u` name
+that already scopes saves/bones inside the shared HACKDIR playground) and
+`fs::create_dir_all` it on first connect. No PVC/volume shape change, no
+schema, just one path join. This alone unlocks per-player rcfiles; it does not
+by itself give players a way to write one.
+
+**Step 2: an actual way for players to set options.** There is no shell, no
+file transfer, and no exposed path into the host by design (fail-closed,
+`env_clear`d, `SHELL`/`SUSPEND` compiled out) - so "let the user configure
+stuff" needs a real channel, not "ssh in and edit a dotfile". Two shapes worth
+weighing, not mutually exclusive:
+
+1. **A late-ssh options screen for the NetHack launcher.** A small curated
+   form (role/race/gender/align, autopickup, number_pad, symset - a handful of
+   the most player-visible knobs, not the full option surface) that late-ssh
+   collects before `connect` and hands to `late-nethack` (e.g. an extra field
+   alongside the existing `-u`/secret handshake), which writes it out as
+   `{HOME}/.nethackrc` before spawning the child. Keeps the "no shell into the
+   host" invariant intact since the host is still the only thing touching the
+   filesystem.
+2. **NetHack's own in-game options UI.** The `O` command already lets a player
+   view/toggle options live inside a running game, and versions since 3.6 can
+   write the current settings back out to the rcfile from that menu - **verify
+   this against our pinned 5.0.0 source before relying on it**, the same way
+   every other NetHack fact in this doc is checked against the actual tarball,
+   not memory. If it holds, step 1 (per-player HOME) is *all* the plumbing
+   needed - no new late-ssh UI, no side channel, players self-serve entirely
+   inside the game they already know how to drive.
+
+Either path is additive on top of the door as it ships today (§ NetHack
+`CONTEXT.md`); neither is currently planned or built.
 
 ## Open questions before building anything
 
@@ -187,6 +503,11 @@ MUDs are intentionally **not** in this list anymore - see Parked below.
 - Multiplayer state: dopewars/Wolfpack have their own servers - decide whether
   each player gets an isolated instance (NetHack-style) or shares one persistent
   world (Lateania-style).
+- General rule this research surfaced: **any pattern-1 native port has to be
+  license-compatible with our FSL**, which rules out GPL sources (Candy Box 2,
+  Swarm Simulator) that pattern 2 would have been fine with. MPL/MIT/BSD are the
+  portable licenses; GPL games have to stay a separate process. Worth applying
+  to every future candidate before we get attached to one.
 
 ---
 
@@ -223,5 +544,8 @@ not a native port.
 - TradeWars hosting reality: [erikh/trade SSH->telnet proxy](https://github.com/erikh/trade) · [TWGS on Synchronet](http://wiki.synchro.net/howto:door:trade_wars_game_server) · [TW2002 on WWIV](https://docs.wwivbbs.org/en/wwiv53/chains/tradewars2002/)
 - The Pit: [Break Into Chat wiki](https://breakintochat.com/wiki/The_Pit) · [My Abandonware](https://www.myabandonware.com/game/the-pit-gm6) · [v4.17 registration patch](https://github.com/rambkk/The-Pit-bbs-door-game-patch)
 - [CircleMUD](https://www.circlemud.org/) · [CircleMUD wiki](https://mud.fandom.com/wiki/CircleMUD) · [Evennia](https://www.evennia.com/) · [awesome-muds](https://github.com/maldorne/awesome-muds) · [awesome-mud](https://github.com/mudcoders/awesome-mud)
+- Incremental shelf: [A Dark Room source](https://github.com/doublespeakgames/adarkroom) · [LICENSE.md (MPL-2.0)](https://github.com/doublespeakgames/adarkroom/blob/main/LICENSE.md) · ["A Dark Room goes open source"](http://blog.doublespeakgames.com/news/a-dark-room-goes-open-source/) · [LWN writeup](https://lwn.net/Articles/612829/) · [Wikipedia](https://en.wikipedia.org/wiki/A_Dark_Room) · [Haskell WIP terminal port](https://github.com/jordangedney/adarkroom-port)
+- Genre neighbours: [Evolve (MPL-2.0)](https://github.com/pmotschmann/Evolve) · [Antimatter Dimensions (MIT)](https://github.com/IvarK/AntimatterDimensionsSourceCode) · [Candy Box 2 (GPLv3)](https://github.com/candybox2/candybox2.github.io) · [Swarm Simulator (GPL-3.0)](https://github.com/swarmsim/swarm) · [Kittens Game (WET PAWS LICENSE)](https://github.com/nuclear-unicorn/kittensgame) · [Progress Quest](https://progressquest.com/) · [pq-cli terminal edition](https://github.com/rr-/pq-cli)
 - [DoorNode (DOSBox door launcher)](https://github.com/dinchak/doornode) · [BBS door game wiki](https://breakintochat.com/wiki/BBS_door_game) · [Dominion](https://github.com/mostlygeek/dominion) · [GWT](https://github.com/Rurik/GWT)
+- [DarkLands homepage](https://darklands.cx/) · [features](https://darklands.cx/features.php) · [downloads](https://darklands.cx/download.php)
 </content>

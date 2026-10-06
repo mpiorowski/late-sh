@@ -1,13 +1,91 @@
-use late_core::models::pet::{PET_SPECIES_CAT, PET_SPECIES_DOG};
-
 use crate::app::{
     common::primitives::Banner,
+    hub::aquarium::state::CutOutcome,
     hub::shop::state::RoomEffectTarget,
     input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput},
     state::App,
 };
 
-pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
+/// Peel one shop layer off a bare Esc: an open style picker or room-effect
+/// confirm cancels and the hub stays up. Returns false when there is nothing
+/// to peel, letting the caller close the hub.
+pub(crate) fn handle_escape(app: &mut App) -> bool {
+    if app.shop_state.pending_custom_title().is_some() {
+        if let Some(banner) = app.shop_state.cancel_pending_custom_title() {
+            app.banner = Some(banner);
+        }
+        return true;
+    }
+    if app.shop_state.pending_username_effect().is_some() {
+        if let Some(banner) = app.shop_state.cancel_pending_username_effect() {
+            app.banner = Some(banner);
+        }
+        return true;
+    }
+    if app.shop_state.pending_room_effect().is_some() {
+        if let Some(banner) = app.shop_state.cancel_pending_room_effect() {
+            app.banner = Some(banner);
+        }
+        return true;
+    }
+    false
+}
+
+pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
+    // The title prompt is a text field: every printable key is content, so it
+    // takes the whole event stream and the usual shop bindings do not apply
+    // while it is open.
+    if app.shop_state.pending_custom_title().is_some() {
+        match event {
+            ParsedInput::Byte(b'\r' | b'\n') => {
+                if let Some(banner) = app.shop_state.confirm_pending_custom_title() {
+                    app.banner = Some(banner);
+                }
+            }
+            ParsedInput::Byte(0x1B) => {
+                if let Some(banner) = app.shop_state.cancel_pending_custom_title() {
+                    app.banner = Some(banner);
+                }
+            }
+            ParsedInput::Byte(0x7F | 0x08) => app.shop_state.backspace_custom_title(),
+            ParsedInput::Char(ch) => app.shop_state.push_custom_title_char(*ch),
+            ParsedInput::Byte(byte) if byte.is_ascii_graphic() || *byte == b' ' => {
+                app.shop_state.push_custom_title_char(*byte as char);
+            }
+            _ => {}
+        }
+        return true;
+    }
+    if app.shop_state.pending_username_effect().is_some() {
+        match event {
+            ParsedInput::Arrow(b'D')
+            | ParsedInput::Byte(b'h' | b'H' | b'k' | b'K')
+            | ParsedInput::Char('h' | 'H' | 'k' | 'K') => {
+                app.shop_state.cycle_pending_username_effect(-1);
+                return true;
+            }
+            ParsedInput::Arrow(b'C')
+            | ParsedInput::Byte(b'l' | b'L' | b'j' | b'J')
+            | ParsedInput::Char('l' | 'L' | 'j' | 'J') => {
+                app.shop_state.cycle_pending_username_effect(1);
+                return true;
+            }
+            ParsedInput::Byte(b'\r' | b'\n' | b'y' | b'Y') | ParsedInput::Char('y' | 'Y') => {
+                if let Some(banner) = app.shop_state.confirm_pending_username_effect() {
+                    app.banner = Some(banner);
+                }
+                return true;
+            }
+            ParsedInput::Byte(0x1B | b'n' | b'N' | b'q' | b'Q')
+            | ParsedInput::Char('n' | 'N' | 'q' | 'Q') => {
+                if let Some(banner) = app.shop_state.cancel_pending_username_effect() {
+                    app.banner = Some(banner);
+                }
+                return true;
+            }
+            _ => return true,
+        }
+    }
     if app.shop_state.pending_room_effect().is_some() {
         match event {
             ParsedInput::Byte(b'\r' | b'\n' | b'y' | b'Y') | ParsedInput::Char('y' | 'Y') => {
@@ -64,14 +142,32 @@ pub fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'+' | b'=') | ParsedInput::Char('+' | '=') => {
-            if let Some(banner) = app.shop_state.adjust_selected_aquarium_fish(1) {
+            if app
+                .shop_state
+                .selected_item()
+                .is_some_and(|item| item.is_sprout())
+            {
+                app.banner = Some(Banner::error(
+                    "Sprouts come up on their own, every 14 days; - cuts the one on the floor",
+                ));
+                return true;
+            }
+            if let Some(banner) = app.shop_state.adjust_selected_tank_stock(1) {
                 app.banner = Some(banner);
                 return true;
             }
             false
         }
         ParsedInput::Byte(b'-' | b'_') | ParsedInput::Char('-' | '_') => {
-            if let Some(banner) = app.shop_state.adjust_selected_aquarium_fish(-1) {
+            if app
+                .shop_state
+                .selected_item()
+                .is_some_and(|item| item.is_sprout())
+            {
+                cut_sprout(app);
+                return true;
+            }
+            if let Some(banner) = app.shop_state.adjust_selected_tank_stock(-1) {
                 app.banner = Some(banner);
                 return true;
             }
@@ -135,18 +231,38 @@ fn toggle_pet_species(app: &mut App) -> Option<Banner> {
     if !item.is_pet_companion() || !item.owned {
         return None;
     }
-    let next = if app.pet_state.species == PET_SPECIES_DOG {
-        PET_SPECIES_CAT
-    } else {
-        PET_SPECIES_DOG
-    };
-    app.pet_state.set_species(next.to_string());
+    let next = app.pet_state.species.next();
+    app.pet_state.set_species(next);
     Some(Banner::success(&format!(
         "Switched companion to {}",
-        if next == PET_SPECIES_DOG {
-            "dog"
-        } else {
-            "cat"
-        }
+        next.as_str()
     )))
+}
+
+/// `-` on the Sprout row: cut the sprout on the tank floor. The floor
+/// clears at once; the service writes it behind the row's own gate (still
+/// standing, still within its week).
+fn cut_sprout(app: &mut App) {
+    if !app.shop_state.entitlements().has_aquarium() {
+        app.banner = Some(Banner::error("Unlock Aquarium first"));
+        return;
+    }
+    match app
+        .aquarium_care
+        .cut_sprout(chrono::Utc::now().date_naive())
+    {
+        CutOutcome::Cut => {
+            app.refresh_aquarium_population();
+            app.aquarium_service.cut_task(app.user_id);
+            app.banner = Some(Banner::success("Cut the sprout"));
+        }
+        CutOutcome::NothingToCut => {
+            app.banner = Some(Banner::error("Nothing to cut: the floor is bare"));
+        }
+        CutOutcome::Rooted => {
+            app.banner = Some(Banner::error(
+                "Too late to cut: the sprout has rooted, a plant is on its way",
+            ));
+        }
+    }
 }

@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    future::poll_fn,
     sync::{Arc, Mutex},
 };
 
@@ -8,25 +7,21 @@ use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::{
     MutexRecover,
-    db::{Db, DbConfig},
+    db::Db,
     models::quest::{
-        DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, DailyQuestStreakSnapshot,
-        MAX_DAILY_QUEST_STREAK_BONUS_LEVEL, QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
-        QUEST_USER_CHANGED_CHANNEL, QuestProgressUpdate, QuestSnapshotRow, RewardTemplateAdminRow,
-        RewardTemplateAdminUpdate, apply_progress_event, ensure_current_assignments,
-        get_daily_quest_streak_snapshot, list_active_snapshot_rows,
-        list_reward_templates_for_admin, listen_for_quest_changes,
-        update_reward_template_for_admin,
+        DailyQuestStreakSnapshot, QuestProgressUpdate, QuestSnapshotRow, apply_progress_event,
+        ensure_current_assignments, get_daily_quest_streak_snapshot, list_active_snapshot_rows,
     },
 };
 use serde_json::Value;
-use tokio::sync::{broadcast, watch};
-use tokio_postgres::{AsyncMessage, NoTls};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
+
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
 use crate::app::activity::{
     channel::ActivitySender,
-    event::{ActivityEvent, ActivityGame, ActivityKind},
+    event::{ActivityEvent, ActivityKind},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -157,25 +152,6 @@ impl QuestService {
         });
     }
 
-    pub async fn list_reward_templates_for_admin(
-        &self,
-        is_admin: bool,
-    ) -> Result<Vec<RewardTemplateAdminRow>> {
-        anyhow::ensure!(is_admin, "admin access required");
-        let client = self.db.get().await?;
-        list_reward_templates_for_admin(&client).await
-    }
-
-    pub async fn update_reward_template_for_admin(
-        &self,
-        is_admin: bool,
-        update: RewardTemplateAdminUpdate,
-    ) -> Result<RewardTemplateAdminRow> {
-        anyhow::ensure!(is_admin, "admin access required");
-        let client = self.db.get().await?;
-        update_reward_template_for_admin(&client, update).await
-    }
-
     async fn load_snapshot(&self, user_id: Uuid) -> Result<QuestSnapshot> {
         let mut client = self.db.get().await?;
         let now = Utc::now();
@@ -264,69 +240,49 @@ impl QuestService {
         Ok(())
     }
 
-    pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] =
+        &[Channel::QuestUserChanged, Channel::QuestAssignmentsChanged];
+
+    /// Keep this replica's open quest boards in step with
+    /// `quest_user_changed` and `quest_assignments_changed`. A resync, and
+    /// any failed signal, re-reads every active user's board, retrying
+    /// until it lands, so a change missed while the listener reconnected
+    /// is caught up.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let svc = self.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(error) = svc.listen_once(&db_config).await {
-                    tracing::warn!(error = ?error, "quest postgres listener stopped");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                }
+            while let Some(signal) = signals.recv().await {
+                let Err(error) = svc.apply_signal(signal).await else {
+                    continue;
+                };
+                tracing::warn!(error = ?error, "quest notify failed, refreshing active users");
+                read_until_ok(Refresh::ActiveQuestBoards, || svc.refresh_active_users()).await;
             }
         })
     }
 
-    async fn listen_once(&self, db_config: &DbConfig) -> Result<()> {
-        let mut config = tokio_postgres::Config::new();
-        config.host(&db_config.host);
-        config.port(db_config.port);
-        config.user(&db_config.user);
-        config.password(&db_config.password);
-        config.dbname(&db_config.dbname);
-
-        let (client, mut connection) = config.connect(NoTls).await?;
-        let listen = listen_for_quest_changes(&client);
-        tokio::pin!(listen);
-        loop {
-            tokio::select! {
-                result = &mut listen => {
-                    result?;
-                    break;
-                }
-                message = poll_fn(|cx| connection.poll_message(cx)) => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    self.handle_async_message(message?).await?;
+    async fn apply_signal(&self, signal: Signal) -> Result<()> {
+        match signal {
+            Signal::Resync => self.refresh_active_users().await?,
+            Signal::Notify {
+                channel: Channel::QuestUserChanged,
+                payload,
+            } => {
+                if let Ok(user_id) = payload.parse::<Uuid>() {
+                    self.refresh_user_if_active(user_id).await?;
                 }
             }
-        }
-
-        loop {
-            let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await else {
-                return Ok(());
-            };
-            self.handle_async_message(message?).await?;
-        }
-    }
-
-    async fn handle_async_message(&self, message: AsyncMessage) -> Result<()> {
-        match message {
-            AsyncMessage::Notification(notification) => match notification.channel() {
-                QUEST_USER_CHANGED_CHANNEL => {
-                    if let Ok(user_id) = notification.payload().parse::<Uuid>() {
-                        self.refresh_user_if_active(user_id).await?;
-                    }
-                }
-                QUEST_ASSIGNMENTS_CHANGED_CHANNEL => {
-                    self.refresh_active_users().await?;
-                }
-                _ => {}
-            },
-            AsyncMessage::Notice(notice) => {
-                tracing::debug!(notice = ?notice, "postgres quest listener notice");
+            Signal::Notify {
+                channel: Channel::QuestAssignmentsChanged,
+                ..
+            } => self.refresh_active_users().await?,
+            Signal::Notify { channel, .. } => {
+                unreachable!("quests subscribed only to quest channels, got {channel:?}")
             }
-            _ => {}
         }
         Ok(())
     }
@@ -383,8 +339,6 @@ fn progress_update_for_event(
         "arcade_puzzle_solved" => match_arcade_puzzle_solved(&row.template.params, event),
         "arcade_score" => match_arcade_score(&row.template.params, event),
         "arcade_level" => match_arcade_level(&row.template.params, event),
-        "room_rounds_played" => match_room_round(&row.template.params, event),
-        "room_wins" => match_room_win(&row.template.params, event),
         "bonsai_watered" => match_bonsai_watered(event),
         "login_once" => match_login_once(event),
         _ => None,
@@ -438,20 +392,6 @@ fn match_arcade_level(params: &Value, event: &ActivityEvent) -> Option<QuestProg
     }
 }
 
-fn match_room_round(params: &Value, event: &ActivityEvent) -> Option<QuestProgressUpdate> {
-    let ActivityKind::GamePlayed { game, .. } = &event.kind else {
-        return None;
-    };
-    matches_game(params, *game).then_some(QuestProgressUpdate::Increment(1))
-}
-
-fn match_room_win(params: &Value, event: &ActivityEvent) -> Option<QuestProgressUpdate> {
-    let ActivityKind::GameWon { game, .. } = &event.kind else {
-        return None;
-    };
-    matches_game(params, *game).then_some(QuestProgressUpdate::Increment(1))
-}
-
 fn match_bonsai_watered(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
     matches!(event.kind, ActivityKind::BonsaiWatered).then_some(QuestProgressUpdate::Increment(1))
 }
@@ -460,18 +400,6 @@ fn match_login_once(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
     matches!(event.kind, ActivityKind::UserJoined).then_some(QuestProgressUpdate::Increment(1))
 }
 
-fn matches_game(params: &Value, game: ActivityGame) -> bool {
-    param_str(params, "game").is_some_and(|expected| game.key() == expected)
-}
-
 fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str)
-}
-
-pub fn daily_streak_bonus_label(level: i32) -> String {
-    format!(
-        "{} chips",
-        i64::from(level.clamp(0, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL))
-            * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
-    )
 }

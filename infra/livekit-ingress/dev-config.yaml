@@ -1,0 +1,19 @@
+# Local dev LiveKit ingress config: WHIP ingest for `/golive obs`. OBS on
+# the host pushes to http://localhost:7888/w with the per-stream bearer
+# token. Ports here must match docker-compose.yml and
+# infra/livekit/dev-config.yaml.
+api_key: devkey
+api_secret: secret
+ws_url: ws://livekit:7880
+redis:
+  address: redis:6379
+whip_port: 7888
+http_relay_port: 7889
+# Bound but inert: the app only creates WHIP ingresses (see
+# infra/livekit-ingress.tf for the same note on prod).
+rtmp_port: 1935
+rtc_config:
+  udp_port: 7890
+  use_external_ip: false
+logging:
+  level: info

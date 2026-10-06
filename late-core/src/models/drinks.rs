@@ -1,9 +1,16 @@
 //! Per-user tavern drink tally backing the clubhouse drunkenness glow.
 //!
 //! `drunk_points` is the raw buzz recorded at `last_drink_at` (chips spent on
-//! drinks, capped at [`MAX_DRUNK_POINTS`]). Nothing ever writes a sober-up:
-//! readers apply [`decayed_points`] against elapsed wall-clock time, so a user
-//! dries out on their own and the row only changes when they buy again.
+//! drinks, capped at [`MAX_DRUNK_POINTS`]). Readers apply [`decayed_points`]
+//! against elapsed wall-clock time, so a user dries out on their own; the one
+//! write that sobers anyone up early is the Shop's hangover pill
+//! ([`UserDrinks::sober_up_in_tx`]).
+//!
+//! Every drink a patron takes also leaves a `drink_pours` row (who, which
+//! bar, how many points), written by the same statement as the buzz upsert
+//! in [`UserDrinks::record_pour`], the one gate every taken drink goes
+//! through. The Top Drinkers board, its monthly `DRNK` award and the
+//! Nightcap's tab board read it.
 
 use std::collections::HashMap;
 
@@ -13,27 +20,35 @@ use deadpool_postgres::GenericClient;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::drink_round::Bar;
+
 /// Bounds on what the bartender may charge for a single pour.
 pub const DRINK_PRICE_MIN: i64 = 100;
 pub const DRINK_PRICE_MAX: i64 = 1_000;
 /// Buzz comped to a newcomer on their first walk up to the bar. Sized to land
 /// exactly on the first drunk level so the welcome round already glows.
 pub const WELCOME_DRINK_POINTS: i64 = 100;
-/// How fast the buzz wears off, in drunk points (= chips) per hour.
-pub const DRUNK_DECAY_PER_HOUR: i64 = 300;
-/// Hard cap on stored points so one binge can't glow for days. At the decay
-/// rate above a maxed-out patron is fully sober in 20 hours.
-pub const MAX_DRUNK_POINTS: i64 = 6_000;
+/// Hard cap on stored points so one binge can't glow for days.
+pub const MAX_DRUNK_POINTS: i64 = 4_000;
+/// How long a patron sitting on the cap takes to come back to fully sober.
+/// This is the dial to turn when the bar feels too forgiving or too punishing;
+/// the per-hour rate below follows from it. Half a day means a big night is
+/// gone by the next evening, and entering "wasted" (2000) clears in six hours.
+pub const DRUNK_SOBER_UP_HOURS: i64 = 12;
+/// How fast the buzz wears off, in drunk points (= chips) per hour. Derived
+/// from the cap and [`DRUNK_SOBER_UP_HOURS`], rounded up so the last hour
+/// finishes the job instead of leaving a point of buzz behind.
+pub const DRUNK_DECAY_PER_HOUR: i64 =
+    (MAX_DRUNK_POINTS + DRUNK_SOBER_UP_HOURS - 1) / DRUNK_SOBER_UP_HOURS;
 
 /// Level thresholds on effective (decayed) points. Level 0 renders nothing;
-/// level 4 ("fully wasted") lands at 3000, three top-shelf pours deep. Level 1
-/// (the welcome round) glows without a word; the printed drunk label only kicks
-/// in at level 2, i.e. 500 points, so a first sip stays quiet.
-const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 500, 1_500, 3_000];
+/// level 1 ("tipsy", the welcome round) already earns its printed label;
+/// level 4 ("fully wasted") lands at 2000, two top-shelf pours deep.
+const DRUNK_LEVEL_THRESHOLDS: [i64; 4] = [1, 300, 1_000, 2_000];
 
-/// Lowest level that earns a printed "(word)" label next to the name. Below it,
-/// the glow carries the state on its own.
-pub const DRUNK_LABEL_MIN_LEVEL: u8 = 2;
+/// Lowest level that earns a printed "(word)" label next to the name. Every
+/// non-sober level gets one now that the label is the only drunk indicator.
+pub const DRUNK_LABEL_MIN_LEVEL: u8 = 1;
 
 /// The top drunk level ("wasted"). The bar keeps pouring the strong stuff right
 /// up to here so a patron can actually climb the ladder; only once they hit it
@@ -75,6 +90,14 @@ pub fn drunk_level(effective_points: i64) -> u8 {
         .count() as u8
 }
 
+/// One line of a bar's tab board, from [`UserDrinks::top_regulars`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BarRegular {
+    pub user_id: Uuid,
+    pub username: String,
+    pub drinks: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct UserDrinks {
     pub user_id: Uuid,
@@ -107,68 +130,162 @@ impl UserDrinks {
         drunk_level(self.effective_points(now))
     }
 
-    /// Shared upsert behind [`Self::record_purchase`] and
-    /// [`Self::record_free_pour`]: decay the stored buzz to now, add `buzz`,
-    /// cap, and bump the tallies. `tab` is the chips actually charged (0 for a
-    /// comped pour), tracked apart from `buzz` so a free round lights the glow
-    /// without inflating `lifetime_spent`. One statement, so concurrent buys
-    /// from two sessions can't double-count the decay window. Every numeric
-    /// parameter is cast to bigint so Postgres never infers a `LEAST`/
-    /// `GREATEST` argument as text.
-    async fn record(
+    /// Record a paid drink poured at `bar`: `price` chips become both buzz
+    /// and tab.
+    pub async fn record_purchase(
         client: &impl GenericClient,
         user_id: Uuid,
-        buzz: i64,
-        tab: i64,
+        bar: Bar,
+        price: i64,
+    ) -> Result<Self> {
+        Self::record_pour(client, user_id, bar, price, price).await
+    }
+
+    /// Record a drink somebody else already paid for: the buzz lands, the tab
+    /// does not. A round's credit is the only way to get one
+    /// ([`crate::models::drink_round`]), and it pours a flat
+    /// [`crate::models::drink_round::ROUND_DRINK_POINTS`] whatever the
+    /// bartender named the drink, so what the house comps never depends on
+    /// what he invented to call it. `lifetime_spent` stays put because the
+    /// drinker spent nothing: the chips are on the buyer's ledger row.
+    /// `bar` is where the drink was poured, not the bar that sold the round.
+    pub async fn record_comped_pour(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        bar: Bar,
+        points: i64,
+    ) -> Result<Self> {
+        Self::record_pour(client, user_id, bar, points, 0).await
+    }
+
+    /// Decay the stored buzz to now, add `points`, cap it, bump the tallies
+    /// by `spent`, and log the drink in `drink_pours` at its full `points`
+    /// (before the cap: a drink taken while wasted still counts what it
+    /// poured). One statement, so concurrent buys from two sessions can't
+    /// double-count the decay window and the log cannot miss a pour. Every
+    /// numeric parameter is cast to bigint so Postgres never infers a
+    /// `LEAST`/`GREATEST` argument as text.
+    async fn record_pour(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        bar: Bar,
+        points: i64,
+        spent: i64,
     ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO user_drinks
+                "WITH pour AS (
+                    INSERT INTO drink_pours (user_id, bar, points)
+                    VALUES ($1, $6, $2::bigint)
+                 )
+                 INSERT INTO user_drinks
                     (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
-                 VALUES ($1, LEAST($2::bigint, $5::bigint), $3::bigint, 1, current_timestamp)
+                 VALUES ($1, LEAST($2::bigint, $4::bigint), $5::bigint, 1, current_timestamp)
                  ON CONFLICT (user_id) DO UPDATE SET
                     drunk_points = LEAST(
                         GREATEST(
                             user_drinks.drunk_points
-                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $4::bigint / 3600),
+                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $3::bigint / 3600),
                             0
                         ) + $2::bigint,
-                        $5::bigint
+                        $4::bigint
                     ),
-                    lifetime_spent = user_drinks.lifetime_spent + $3::bigint,
+                    lifetime_spent = user_drinks.lifetime_spent + $5::bigint,
                     drink_count = user_drinks.drink_count + 1,
                     last_drink_at = current_timestamp,
                     updated = current_timestamp
                  RETURNING *",
                 &[
                     &user_id,
-                    &buzz,
-                    &tab,
+                    &points,
                     &DRUNK_DECAY_PER_HOUR,
                     &MAX_DRUNK_POINTS,
+                    &spent,
+                    &bar.as_str(),
                 ],
             )
             .await?;
         Ok(Self::from(row))
     }
 
-    /// Record a paid drink: `price` chips become both buzz and tab.
-    pub async fn record_purchase(
-        client: &impl GenericClient,
-        user_id: Uuid,
-        price: i64,
-    ) -> Result<Self> {
-        Self::record(client, user_id, price, price).await
-    }
-
-    /// Comp a drink on the house: `points` of buzz with no chips charged, so
-    /// `lifetime_spent` stays put. Backs the tutorial's welcome round.
-    pub async fn record_free_pour(
+    /// Comp the newcomer's welcome round: `points` of buzz with no chips
+    /// charged, insert-only so it lands at most once per user ever. Not a
+    /// drink anybody took, so it leaves no `drink_pours` row and never
+    /// reaches a board. `None`
+    /// when a `user_drinks` row already exists (they have drunk before, the
+    /// welcome is spent), which lets the caller re-fire safely across
+    /// sessions without double-comping.
+    pub async fn record_welcome_pour(
         client: &impl GenericClient,
         user_id: Uuid,
         points: i64,
-    ) -> Result<Self> {
-        Self::record(client, user_id, points, 0).await
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "INSERT INTO user_drinks
+                    (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
+                 VALUES ($1, LEAST($2::bigint, $3::bigint), 0, 1, current_timestamp)
+                 ON CONFLICT (user_id) DO NOTHING
+                 RETURNING *",
+                &[&user_id, &points, &MAX_DRUNK_POINTS],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    /// Whether the user is drunk at all right now (any level above sober),
+    /// read inside a purchase transaction.
+    pub async fn is_drunk_in_tx(
+        client: &impl tokio_postgres::GenericClient,
+        user_id: Uuid,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt("SELECT * FROM user_drinks WHERE user_id = $1", &[&user_id])
+            .await?;
+        Ok(row
+            .map(Self::from)
+            .is_some_and(|drinks| drinks.level(Utc::now()) > 0))
+    }
+
+    /// The hangover pill: every point of buzz gone at once. The tab
+    /// (`lifetime_spent`, `drink_count`) stays, since the drinks were drunk.
+    pub async fn sober_up_in_tx(
+        client: &impl tokio_postgres::GenericClient,
+        user_id: Uuid,
+    ) -> Result<()> {
+        client
+            .execute(
+                "UPDATE user_drinks SET drunk_points = 0 WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The patrons who took the most drinks at one bar, all time: the tab
+    /// board out back. Every drink counts one whatever it cost; the buzz it
+    /// poured only breaks a tie.
+    pub async fn top_regulars(client: &Client, bar: Bar, limit: i64) -> Result<Vec<BarRegular>> {
+        let rows = client
+            .query(
+                "SELECT p.user_id, u.username, count(*) AS drinks
+                 FROM drink_pours p
+                 JOIN users u ON u.id = p.user_id
+                 WHERE p.bar = $1
+                 GROUP BY p.user_id, u.username
+                 ORDER BY drinks DESC, sum(p.points) DESC, u.username ASC
+                 LIMIT $2",
+                &[&bar.as_str(), &limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| BarRegular {
+                user_id: row.get("user_id"),
+                username: row.get("username"),
+                drinks: row.get("drinks"),
+            })
+            .collect())
     }
 
     pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {
@@ -179,14 +296,15 @@ impl UserDrinks {
     }
 
     /// Rows that can still be drunk right now: anything that drank recently
-    /// enough that the cap hasn't fully decayed. Callers compute per-user
+    /// enough that the cap hasn't fully decayed (the window sits above
+    /// [`DRUNK_SOBER_UP_HOURS`] with room to spare). Callers compute per-user
     /// levels from these with [`UserDrinks::level`].
     pub async fn all_active(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 "SELECT * FROM user_drinks
                  WHERE drunk_points > 0
-                   AND last_drink_at > current_timestamp - interval '24 hours'",
+                   AND last_drink_at > current_timestamp - interval '18 hours'",
                 &[],
             )
             .await?;
@@ -203,74 +321,5 @@ impl UserDrinks {
                 (level > 0).then_some((drinks.user_id, level))
             })
             .collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn decayed_points_wears_off_linearly() {
-        assert_eq!(decayed_points(600, 0), 600);
-        assert_eq!(decayed_points(600, 3600), 300);
-        assert_eq!(decayed_points(600, 7200), 0);
-        assert_eq!(decayed_points(600, 36000), 0);
-    }
-
-    #[test]
-    fn decayed_points_handles_edge_inputs() {
-        assert_eq!(decayed_points(0, 3600), 0);
-        assert_eq!(decayed_points(-5, 0), 0);
-        // Clock skew: a last_drink_at in the future never inflates the buzz.
-        assert_eq!(decayed_points(600, -3600), 600);
-    }
-
-    #[test]
-    fn drunk_level_buckets() {
-        assert_eq!(drunk_level(0), 0);
-        assert_eq!(drunk_level(1), 1);
-        // The welcome round lands on level 1: a glow, but no printed word yet.
-        assert_eq!(drunk_level(WELCOME_DRINK_POINTS), 1);
-        assert_eq!(drunk_level(499), 1);
-        assert_eq!(drunk_level(500), 2);
-        assert_eq!(drunk_level(1499), 2);
-        assert_eq!(drunk_level(1500), 3);
-        assert_eq!(drunk_level(2999), 3);
-        assert_eq!(drunk_level(3000), 4);
-        assert_eq!(drunk_level(MAX_DRUNK_POINTS), 4);
-    }
-
-    #[test]
-    fn drunk_label_word_starts_at_level_two() {
-        // Below 500 points the glow stands alone; from level 2 up a word prints.
-        assert_eq!(drunk_label_word(0), None);
-        assert_eq!(drunk_label_word(1), None);
-        assert_eq!(drunk_label_word(drunk_level(WELCOME_DRINK_POINTS)), None);
-        assert_eq!(drunk_label_word(2), Some("buzzed"));
-        assert_eq!(drunk_label_word(3), Some("sloshed"));
-        assert_eq!(drunk_label_word(4), Some("wasted"));
-    }
-
-    #[test]
-    fn max_cap_dries_out_within_a_day() {
-        // The 24h window in all_active must cover the slowest sober-up.
-        let hours_to_sober = MAX_DRUNK_POINTS / DRUNK_DECAY_PER_HOUR;
-        assert!(hours_to_sober <= 24);
-        assert_eq!(decayed_points(MAX_DRUNK_POINTS, hours_to_sober * 3600), 0);
-    }
-
-    #[test]
-    fn effective_points_uses_last_drink_at() {
-        let now = Utc::now();
-        let drinks = UserDrinks {
-            user_id: Uuid::nil(),
-            drunk_points: 600,
-            lifetime_spent: 600,
-            drink_count: 1,
-            last_drink_at: now - chrono::Duration::hours(1),
-        };
-        assert_eq!(drinks.effective_points(now), 300);
-        assert_eq!(drinks.level(now), 1);
     }
 }

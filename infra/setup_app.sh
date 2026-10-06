@@ -91,8 +91,6 @@ echo "SSH host key generated."
 echo ""
 echo "--- AI Configuration (optional, press Enter to skip) ---"
 read -p "Enter Gemini API key: " AI_API_KEY
-read -p "Enter AI model [gemini-3.1-pro-preview]: " AI_MODEL
-AI_MODEL=${AI_MODEL:-gemini-3.1-pro-preview}
 if [ -n "$AI_API_KEY" ]; then
     AI_ENABLED="true"
 else
@@ -165,7 +163,6 @@ echo "Setting GitHub variables..."
 gh variable set LOG_LEVEL --body "$LOG_LEVEL" --env $GITHUB_ENV --repo $OWNER_REPO
 gh variable set DOMAIN --body "$DOMAIN" --env $GITHUB_ENV --repo $OWNER_REPO
 gh variable set GRAFANA_URL --body "$GRAFANA_URL" --env $GITHUB_ENV --repo $OWNER_REPO
-gh variable set AI_MODEL --body "$AI_MODEL" --env $GITHUB_ENV --repo $OWNER_REPO
 gh variable set AI_ENABLED --body "$AI_ENABLED" --env $GITHUB_ENV --repo $OWNER_REPO
 if [ -n "$S3_ENDPOINT" ]; then
     gh variable set S3_ENDPOINT --body "$S3_ENDPOINT" --env $GITHUB_ENV --repo $OWNER_REPO

@@ -2,6 +2,7 @@ name "anchovy"
 title "a slim sleek fish"
 description "long thin body with a forked tail; swims in schools"
 sauce author=hardlygospel date=20260527 license=CCBYSA4.0
+mini left="<'-" right="-'>"
 
 count 3
 

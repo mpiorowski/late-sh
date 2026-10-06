@@ -1,9 +1,8 @@
-use crate::app::{
-    ai::svc::AiService,
-    chat::svc::{ChatService, SendLoungeMessageTask},
-};
+use crate::app::ai::svc::AiService;
+use crate::metrics;
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
-use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_MARKER};
+use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT};
 use late_core::{
     db::Db,
     models::{
@@ -18,23 +17,31 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-const NEWS_SEPARATOR: &str = " || ";
 const ASCII_WIDTH: u32 = 12;
 const ASCII_HEIGHT: u32 = 6;
 const PROCESS_URL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const ARTICLE_IMAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const ARTICLE_IMAGE_MAX_BYTES: u64 = 1_500_000;
 const ARTICLE_IMAGE_MAX_PIXELS: u64 = 4_000_000;
+const TWEET_OEMBED_ENDPOINT: &str = "https://publish.x.com/oembed";
+const TWEET_MEDIA_ENDPOINT: &str = "https://api.fxtwitter.com/i/status/";
+const TWEET_MEDIA_TIMEOUT: Duration = Duration::from_secs(5);
+/// fxtwitter answers `401` to a request that sends no `User-Agent`, and
+/// `reqwest` sends none by default.
+const TWEET_MEDIA_USER_AGENT: &str = "late.sh (https://late.sh)";
+const TWEET_TITLE_MAX_CHARS: usize = 100;
+/// The post's own text gets two of the card's three bullets; the third is
+/// always the attribution line.
+const TWEET_TEXT_BULLETS: usize = 2;
 
 #[derive(Clone)]
 pub struct ArticleService {
     db: Db,
     ai_service: AiService,
-    chat_service: ChatService,
     http_client: reqwest::Client,
     snapshot_tx: watch::Sender<ArticleSnapshot>,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
@@ -42,14 +49,13 @@ pub struct ArticleService {
 }
 
 impl ArticleService {
-    pub fn new(db: Db, ai_service: AiService, chat_service: ChatService) -> Self {
+    pub fn new(db: Db, ai_service: AiService) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(ArticleSnapshot::default());
         let (evt_tx, _) = broadcast::channel(512);
 
         Self {
             db,
             ai_service,
-            chat_service,
             http_client: reqwest::Client::new(),
             snapshot_tx,
             snapshot_rx,
@@ -73,15 +79,15 @@ impl ArticleService {
         }
     }
 
-    pub fn refresh_unread_count_task(&self, user_id: Uuid) {
+    pub fn load_read_cursor_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = service.publish_unread_count(user_id).await {
+            if let Err(e) = service.publish_read_cursor(user_id).await {
                 late_core::error_span!(
-                    "article_unread_refresh_failed",
+                    "article_read_cursor_load_failed",
                     error = ?e,
                     user_id = %user_id,
-                    "failed to refresh article unread count"
+                    "failed to load article read cursor"
                 );
             }
         });
@@ -114,10 +120,33 @@ impl ArticleService {
         });
     }
 
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::ArticlesChanged];
+
+    /// Keep this replica's shared news snapshot in step with `articles`.
+    /// Every write fires `articles_changed` (migration 198), routed here by
+    /// the process listener (`crate::pg_listener`), so a share or a delete
+    /// on any replica reaches every session. A resync and a notify are the
+    /// same re-read, a burst of writes collapses into one, and a failed
+    /// read retries until it lands: the resync read is what seeds this
+    /// replica, so it may not be dropped.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            while signals.recv().await.is_some() {
+                while signals.try_recv().is_ok() {}
+                read_until_ok(Refresh::Articles, || service.do_list_articles()).await;
+            }
+        })
+    }
+
     #[tracing::instrument(skip(self))]
     async fn do_list_articles(&self) -> Result<()> {
         let db_client = self.db.get().await?;
-        let articles = Article::list_recent(&db_client, 20).await?;
+        let articles = Article::list_recent(&db_client, NEWS_FEED_LIMIT).await?;
         let user_ids = articles
             .iter()
             .map(|article| article.user_id)
@@ -141,13 +170,11 @@ impl ArticleService {
         Ok(())
     }
 
-    async fn publish_unread_count(&self, user_id: Uuid) -> Result<()> {
+    async fn publish_read_cursor(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
         let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::UnreadCountUpdated {
+        self.publish_event(ArticleEvent::ReadCursorLoaded {
             user_id,
-            unread_count,
             last_read_at,
         });
         Ok(())
@@ -157,35 +184,10 @@ impl ArticleService {
         let db_client = self.db.get().await?;
         ArticleFeedRead::mark_read_now(&db_client, user_id).await?;
         let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::UnreadCountUpdated {
+        self.publish_event(ArticleEvent::ReadCursorLoaded {
             user_id,
-            unread_count: 0,
             last_read_at,
         });
-        Ok(())
-    }
-
-    async fn publish_unread_updates_for_all(
-        &self,
-        announce_new: bool,
-        actor_user_id: Option<Uuid>,
-    ) -> Result<()> {
-        let db_client = self.db.get().await?;
-        for user_id in User::list_ids(&db_client).await? {
-            let unread_count = ArticleFeedRead::unread_count_for_user(&db_client, user_id).await?;
-            let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-            self.publish_event(ArticleEvent::UnreadCountUpdated {
-                user_id,
-                unread_count,
-                last_read_at,
-            });
-            if announce_new && Some(user_id) != actor_user_id && unread_count > 0 {
-                self.publish_event(ArticleEvent::NewArticlesAvailable {
-                    user_id,
-                    unread_count,
-                });
-            }
-        }
         Ok(())
     }
 
@@ -196,8 +198,7 @@ impl ArticleService {
                 let result = async {
                     let client = service.db.get().await?;
 
-                    // Fetch the article so we can (a) enforce ownership, (b)
-                    // clean up the chat announcement afterwards.
+                    // Fetch the article to enforce ownership.
                     let Some(article) = Article::get(&client, article_id).await? else {
                         anyhow::bail!("Article not found");
                     };
@@ -219,28 +220,6 @@ impl ArticleService {
                         json!({ "target_user_id": article.user_id, "url": article.url }),
                     )
                     .await?;
-                    drop(client);
-
-                    // Delete the news announcement from lounge chat and
-                    // notify active chat clients so the stale card disappears.
-                    if let Err(e) = service
-                        .chat_service
-                        .delete_news_announcements_by_user_and_url(
-                            article.user_id,
-                            NEWS_MARKER,
-                            &article.url,
-                        )
-                        .await
-                    {
-                        tracing::warn!(
-                            error = ?e,
-                            url = %article.url,
-                            "failed to delete news chat announcement"
-                        );
-                    }
-
-                    service.do_list_articles().await?;
-                    service.publish_unread_updates_for_all(false, None).await?;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -315,7 +294,17 @@ impl ArticleService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, url = %url))]
     async fn do_process_url(&self, user_id: Uuid, url: &str) -> Result<()> {
-        // 1. Quick existence check — acquire and release before the slow AI work
+        // cyberspace.online's API terms ban feeding their content to AI
+        // systems, and this pipeline summarizes the page with AI. Hard stop
+        // here so no share path (chat link, RSS share) can route their
+        // content into the summarizer.
+        if is_ai_blocklisted_url(url) {
+            anyhow::bail!(
+                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
+            );
+        }
+
+        // 1. Quick existence check: acquire and release before the slow AI work
         tracing::info!(%url, "checking article url");
         {
             let client = self.db.get().await?;
@@ -326,9 +315,13 @@ impl ArticleService {
         }
 
         // YouTube gets its own path: oEmbed pins identity, AI writes the
-        // summary. Everything else goes through the legacy AI-first flow.
+        // summary. An X post gets a path with no AI in it at all, since the
+        // post's own words are the content. Everything else goes through the
+        // legacy AI-first flow.
         let extraction = if is_youtube_url(url) {
             self.extract_youtube(url).await?
+        } else if let Some(status_id) = tweet_status_id(url) {
+            self.extract_tweet(url, &status_id).await?
         } else {
             self.extract_via_ai(url).await?
         };
@@ -337,15 +330,15 @@ impl ArticleService {
             .article_ascii_art(url, extraction.image_url.as_deref())
             .await?;
 
-        let announcement =
-            build_news_chat_announcement(&extraction.title, &extraction.summary, url, &ascii_art);
-
-        // 4. Save to database — scoped so the client is dropped before helper calls
+        // 4. Save to database and pay the sharer, scoped so the client is
+        //    dropped before helper calls. Both share paths (the News composer
+        //    and an RSS entry shared with `s`) land here, so this is the one
+        //    place a share is rewarded.
         tracing::info!(%url, "saving article to database");
-        {
-            let db_client = self.db.get().await?;
-            Article::create_by_user_id(
-                &db_client,
+        let reward = {
+            let mut db_client = self.db.get().await?;
+            let (_, reward) = Article::create_shared(
+                &mut db_client,
                 user_id,
                 ArticleParams {
                     user_id,
@@ -356,45 +349,21 @@ impl ArticleService {
                 },
             )
             .await?;
-        }
+            metrics::record_news_shared(reward);
+            reward
+        };
 
-        // Post the announcement into #lounge via the same send path as any
-        // other message, preserving the normal composer success/failure event.
-        self.chat_service
-            .send_lounge_message_task(SendLoungeMessageTask {
-                user_id,
-                body: announcement,
-                request_id: Some(Uuid::now_v7()),
-                join_if_needed: false,
-                failure_log: "failed to share news in lounge chat",
-            });
-
-        // Refresh the shared feed snapshot immediately so clients see the new item
-        // without waiting for the periodic poll tick.
-        if let Err(e) = self.do_list_articles().await {
-            late_core::error_span!(
-                "article_refresh_failed",
-                error = ?e,
-                "failed to refresh article snapshot after create"
-            );
-        }
-
-        if let Err(e) = self
-            .publish_unread_updates_for_all(true, Some(user_id))
-            .await
-        {
-            late_core::error_span!(
-                "article_unread_broadcast_failed",
-                error = ?e,
-                "failed to publish article unread updates after create"
-            );
-        }
+        // The insert fired `articles_changed`; every replica's listener,
+        // this one included, refreshes the shared snapshot from it, and the
+        // #lounge live strip features the article from there
+        // (`news/live.rs`). Nothing is posted into the chat.
 
         // 5. Publish Event
         tracing::info!(%url, "publishing ArticleEvent::Created");
         self.publish_event(ArticleEvent::Created {
             user_id,
             url: url.to_string(),
+            reward,
         });
 
         Ok(())
@@ -479,8 +448,7 @@ impl ArticleService {
         )
     }
 
-    /// AI-first extraction for non-YouTube URLs, with a Twitter/X oEmbed
-    /// fallback when the AI rejects or misidentifies the link.
+    /// AI-first extraction for everything without a dedicated path.
     #[tracing::instrument(skip(self), fields(url = %url))]
     async fn extract_via_ai(&self, url: &str) -> Result<ArticleExtraction> {
         tracing::info!(%url, "researching article via AI search");
@@ -492,22 +460,12 @@ impl ArticleService {
             .await?
             .context("AI failed to return extraction")?;
 
-        let mut extraction: ArticleExtraction =
+        let extraction: ArticleExtraction =
             serde_json::from_str(&json_str).context("failed to parse AI json extraction")?;
 
-        if extraction.title == "INVALID_OR_NSFW" || extraction_looks_not_found(&extraction) {
-            if is_twitter_url(url) {
-                tracing::warn!(%url, "AI extraction for Twitter/X looked invalid; trying oEmbed fallback");
-                extraction = self
-                    .fetch_twitter_oembed_extraction(url)
-                    .await?
-                    .context("Twitter/X oEmbed fallback failed")?;
-            } else if extraction.title == "INVALID_OR_NSFW" {
-                tracing::warn!(%url, "AI rejected URL as invalid or NSFW");
-                anyhow::bail!(
-                    "Link was rejected due to content policy violations or being invalid."
-                );
-            }
+        if extraction.title == "INVALID_OR_NSFW" {
+            tracing::warn!(%url, "AI rejected URL as invalid or NSFW");
+            anyhow::bail!("Link was rejected due to content policy violations or being invalid.");
         }
 
         Ok(extraction)
@@ -583,7 +541,7 @@ impl ArticleService {
     }
 
     /// Ask the AI for a summary of a known video. The user message must be
-    /// just the raw URL — Gemini only invokes its Search tool when the
+    /// just the raw URL: Gemini only invokes its Search tool when the
     /// prompt looks like a research task, not a formatting task. Verified
     /// title and channel go in the system prompt as context.
     #[tracing::instrument(skip(self), fields(url = %url, title = %title, author = %author))]
@@ -616,39 +574,108 @@ impl ArticleService {
         }
     }
 
-    #[tracing::instrument(skip(self), fields(url = %url))]
-    async fn fetch_twitter_oembed_extraction(
-        &self,
-        url: &str,
-    ) -> Result<Option<ArticleExtraction>> {
-        if !is_twitter_url(url) {
-            return Ok(None);
-        }
+    /// X post path, with no AI anywhere in it. A post's own words *are* the
+    /// content, so there is nothing to research and nothing to summarize:
+    /// oEmbed hands us the author, the text, and the date, and the card is
+    /// built from those. The AI path invented titles for these links because
+    /// x.com serves no `og:` tags even to crawlers and Search has almost
+    /// nothing indexed against a bare status URL.
+    #[tracing::instrument(skip(self), fields(url = %url, status_id = %status_id))]
+    async fn extract_tweet(&self, url: &str, status_id: &str) -> Result<ArticleExtraction> {
+        let identity = self.fetch_tweet_identity(url).await?.context(
+            "X could not resolve this post: it may be deleted, from a protected account, or not a post URL",
+        )?;
 
-        let endpoint =
-            reqwest::Url::parse_with_params("https://publish.twitter.com/oembed", &[("url", url)])?;
+        // oEmbed carries neither an image nor a sensitivity flag, so this is
+        // the only source for either, and the sensitivity flag is the only
+        // NSFW gate on this path. A lookup that cannot answer therefore
+        // rejects the share rather than waving it through unscreened; the
+        // counter makes an fxtwitter outage visible as a run of
+        // `unavailable` verdicts.
+        let media = match self.fetch_tweet_media(status_id).await {
+            Ok(media) => media,
+            Err(e) => {
+                metrics::record_news_x_media_lookup(XMediaLookup::Unavailable);
+                tracing::warn!(%url, error = ?e, "tweet media lookup failed; rejecting the share unscreened");
+                anyhow::bail!(
+                    "X could not confirm this post is safe to share right now. Try again in a minute."
+                );
+            }
+        };
+
+        if media.possibly_sensitive {
+            metrics::record_news_x_media_lookup(XMediaLookup::Sensitive);
+            tracing::warn!(%url, "X flags this post as sensitive; rejecting the share");
+            anyhow::bail!("Link was rejected due to content policy violations or being invalid.");
+        }
+        metrics::record_news_x_media_lookup(XMediaLookup::Clean);
+
+        Ok(ArticleExtraction {
+            title: tweet_title(&identity.author_name, &identity.lines[0]),
+            image_url: media.thumbnail_url,
+            summary: tweet_summary(&identity),
+        })
+    }
+
+    /// Hit X's oEmbed endpoint and return the post's public identity. `None`
+    /// on any non-success response (a deleted, protected, or never-existed
+    /// post answers `404`) or on a body with no post text in it.
+    #[tracing::instrument(skip(self), fields(url = %url))]
+    async fn fetch_tweet_identity(&self, url: &str) -> Result<Option<TweetIdentity>> {
+        let endpoint = reqwest::Url::parse_with_params(
+            TWEET_OEMBED_ENDPOINT,
+            &[("url", url), ("omit_script", "1"), ("dnt", "true")],
+        )?;
 
         let res = self.http_client.get(endpoint).send_traced().await?;
         if !res.status().is_success() {
+            tracing::warn!(%url, status = %res.status(), "X oEmbed did not return a post");
             return Ok(None);
         }
 
-        let payload: TwitterOEmbedResponse = res.json().await?;
-        let author = payload.author_name.trim();
-        if author.is_empty() {
+        let payload: TweetOEmbedResponse = res.json().await?;
+        let lines = tweet_text_from_oembed_html(&payload.html);
+        if lines.is_empty() {
+            tracing::warn!(%url, "X oEmbed body carried no post text");
             return Ok(None);
         }
 
-        let title = format!("Post by {author}");
-        let summary = format!(
-            "• Post by {author} on X/Twitter.\n• Open the link to view the full post.\n• Metadata fetched from Twitter oEmbed."
-        );
-
-        Ok(Some(ArticleExtraction {
-            title,
-            image_url: None,
-            summary,
+        Ok(Some(TweetIdentity {
+            author_name: payload.author_name.trim().to_string(),
+            handle: handle_from_author_url(&payload.author_url),
+            date: tweet_date_from_oembed_html(&payload.html),
+            lines,
         }))
+    }
+
+    /// The post's thumbnail and sensitivity flag, which oEmbed does not
+    /// carry. Any response that is not a post is an error, because without
+    /// the flag the caller has no verdict on the post at all.
+    #[tracing::instrument(skip(self), fields(status_id = %status_id))]
+    async fn fetch_tweet_media(&self, status_id: &str) -> Result<TweetMedia> {
+        let endpoint = reqwest::Url::parse(&format!("{TWEET_MEDIA_ENDPOINT}{status_id}"))?;
+        let res = self
+            .http_client
+            .get(endpoint)
+            .header(reqwest::header::USER_AGENT, TWEET_MEDIA_USER_AGENT)
+            .timeout(TWEET_MEDIA_TIMEOUT)
+            .send_traced()
+            .await?;
+        if !res.status().is_success() {
+            anyhow::bail!("tweet media lookup answered {}", res.status());
+        }
+
+        let payload: TweetMediaResponse = res.json().await?;
+        let Some(tweet) = payload.tweet else {
+            anyhow::bail!("tweet media lookup answered without a post");
+        };
+
+        Ok(TweetMedia {
+            thumbnail_url: tweet
+                .media
+                .and_then(|media| media.all.into_iter().find_map(tweet_media_image)),
+            possibly_sensitive: tweet.possibly_sensitive,
+        })
     }
 }
 
@@ -670,9 +697,74 @@ struct YoutubeOEmbedResponse {
 }
 
 #[derive(Deserialize)]
-struct TwitterOEmbedResponse {
+struct TweetOEmbedResponse {
     #[serde(default)]
     author_name: String,
+    /// `https://x.com/<handle>`, the structured source for the handle,
+    /// which the rendered blockquote only spells out in prose.
+    #[serde(default)]
+    author_url: String,
+    /// The rendered `<blockquote>`. This is where the post's own text is:
+    /// oEmbed has no plain-text field for it.
+    #[serde(default)]
+    html: String,
+}
+
+/// An X post's public identity, parsed out of the oEmbed blockquote.
+struct TweetIdentity {
+    author_name: String,
+    handle: String,
+    /// The post's own text, one entry per line the author broke it into.
+    /// Never empty: a body with no text never becomes an identity.
+    lines: Vec<String>,
+    date: Option<String>,
+}
+
+/// The two things oEmbed does not carry.
+struct TweetMedia {
+    thumbnail_url: Option<String>,
+    possibly_sensitive: bool,
+}
+
+/// How the fxtwitter lookup behind an X share resolved. That lookup is the
+/// only NSFW gate on the X path, so `Unavailable` counts the shares the gate
+/// turned away without a verdict, which is what an fxtwitter outage looks
+/// like from the outside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XMediaLookup {
+    Clean,
+    Sensitive,
+    Unavailable,
+}
+
+#[derive(Deserialize)]
+struct TweetMediaResponse {
+    #[serde(default)]
+    tweet: Option<TweetMediaTweet>,
+}
+
+#[derive(Deserialize)]
+struct TweetMediaTweet {
+    #[serde(default)]
+    possibly_sensitive: bool,
+    #[serde(default)]
+    media: Option<TweetMediaList>,
+}
+
+#[derive(Deserialize)]
+struct TweetMediaList {
+    #[serde(default)]
+    all: Vec<TweetMediaItem>,
+}
+
+#[derive(Deserialize)]
+struct TweetMediaItem {
+    #[serde(default)]
+    thumbnail_url: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: String,
 }
 
 /// Verified YouTube video identity pulled from oEmbed.
@@ -691,7 +783,7 @@ struct AiSummaryOnly {
 
 mod summary_parser {
     use serde::{Deserialize, Deserializer};
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -715,7 +807,7 @@ mod summary_parser {
     }
 }
 
-/// Placeholder summary for when the AI summary call returns nothing —
+/// Placeholder summary for when the AI summary call returns nothing:
 /// usually because the API key is unset or Gemini came back empty.
 fn youtube_fallback_summary(author: &str) -> String {
     let who = author.trim();
@@ -736,6 +828,18 @@ fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {
         .unwrap_or_else(|| user_id.to_string()[..8].to_string())
 }
 
+/// Domains whose content must never reach the AI summarizer. Currently just
+/// cyberspace.online: their API terms ban feeding their content to AI systems.
+fn is_ai_blocklisted_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    host == "cyberspace.online" || host.ends_with(".cyberspace.online")
+}
+
 fn is_youtube_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
@@ -751,40 +855,204 @@ fn is_youtube_url(url: &str) -> bool {
         || host.ends_with(".youtube-nocookie.com")
 }
 
-fn is_twitter_url(url: &str) -> bool {
-    let Ok(parsed) = reqwest::Url::parse(url) else {
-        return false;
-    };
-    let Some(host) = parsed.host_str() else {
-        return false;
-    };
+fn is_twitter_host(host: &str) -> bool {
     host == "twitter.com"
         || host.ends_with(".twitter.com")
         || host == "x.com"
         || host.ends_with(".x.com")
 }
 
-fn extraction_looks_not_found(extraction: &ArticleExtraction) -> bool {
-    let title = extraction.title.trim().to_ascii_lowercase();
-    let summary = extraction.summary.trim().to_ascii_lowercase();
-    if title.is_empty() || summary.is_empty() {
-        return true;
+/// The `/status/<id>` id inside an X post URL, which is the only X shape
+/// oEmbed resolves. Profile, search, and list URLs return `None` and stay on
+/// the generic AI path. Trailing segments (`/photo/1`, `/video/1`) and query
+/// strings (`?s=20`) are ignored.
+fn tweet_status_id(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !is_twitter_host(parsed.host_str()?) {
+        return None;
     }
 
-    let markers = [
-        "video not found",
-        "unknown video",
-        "could not be found",
-        "does not return any public search results",
-        "no content details are available",
-        "non-existent",
-        "private",
-        "unlisted",
-        "deleted",
-    ];
-    markers
+    let mut segments = parsed.path_segments()?;
+    while let Some(segment) = segments.next() {
+        if segment != "status" && segment != "statuses" {
+            continue;
+        }
+        let id = segments.next()?;
+        return (!id.is_empty() && id.chars().all(|c| c.is_ascii_digit())).then(|| id.to_string());
+    }
+    None
+}
+
+/// Headline for a post card: the author and the post's opening line, which
+/// is what makes one post distinguishable from another in the feed.
+fn tweet_title(author_name: &str, headline: &str) -> String {
+    match author_name.trim() {
+        "" => truncate_for_chat(headline, TWEET_TITLE_MAX_CHARS),
+        author => truncate_for_chat(&format!("{author} on X: {headline}"), TWEET_TITLE_MAX_CHARS),
+    }
+}
+
+/// The post's own lines as bullets, closed by the attribution. A post that
+/// breaks its own text into lines keeps that shape, which is usually how the
+/// author meant it to read.
+fn tweet_summary(identity: &TweetIdentity) -> String {
+    let mut bullets: Vec<String> = identity
+        .lines
         .iter()
-        .any(|marker| title.contains(marker) || summary.contains(marker))
+        .take(TWEET_TEXT_BULLETS)
+        .map(|line| format!("• {line}"))
+        .collect();
+    bullets.push(format!("• {}", tweet_attribution(identity)));
+    bullets.join("\n")
+}
+
+fn tweet_attribution(identity: &TweetIdentity) -> String {
+    let who = match (identity.author_name.trim(), identity.handle.trim()) {
+        ("", "") => "an X account".to_string(),
+        ("", handle) => format!("@{handle}"),
+        (name, "") => name.to_string(),
+        (name, handle) => format!("{name} (@{handle})"),
+    };
+
+    match identity
+        .date
+        .as_deref()
+        .map(str::trim)
+        .filter(|date| !date.is_empty())
+    {
+        Some(date) => format!("Posted by {who} on X, {date}."),
+        None => format!("Posted by {who} on X."),
+    }
+}
+
+/// The still image for one media item: a video's thumbnail, or the photo
+/// itself. A video's own URL is an mp4 and would only waste an image fetch.
+fn tweet_media_image(item: TweetMediaItem) -> Option<String> {
+    match item.kind.as_str() {
+        "photo" => item.thumbnail_url.or(item.url),
+        _ => item.thumbnail_url,
+    }
+}
+
+/// The handle out of oEmbed's `author_url` (`https://x.com/OpenAI`).
+fn handle_from_author_url(author_url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(author_url) else {
+        return String::new();
+    };
+    parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next())
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches('@')
+        .to_string()
+}
+
+/// The post's own words out of the `<blockquote>` oEmbed returns, one entry
+/// per non-empty line. The text lives in the first `<p>`, `<br>` is the
+/// author's line break, and the trailing `pic.twitter.com/...` anchor is X's
+/// own media shortlink rather than anything the author typed.
+fn tweet_text_from_oembed_html(html: &str) -> Vec<String> {
+    let Some(body) = inner_html(html, "p") else {
+        return Vec::new();
+    };
+
+    let with_breaks = body
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+    let text = decode_html_entities(&strip_tags(&unwrap_anchors(&with_breaks)));
+
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The post's date out of the attribution that follows the text, where
+/// oEmbed renders it as the last link in the blockquote.
+fn tweet_date_from_oembed_html(html: &str) -> Option<String> {
+    let attribution = &html[html.find("</p>")? + "</p>".len()..];
+    let anchor = &attribution[attribution.rfind("<a")?..];
+    let start = anchor.find('>')? + 1;
+    let end = anchor.find("</a>")?;
+    if end <= start {
+        return None;
+    }
+
+    let date = decode_html_entities(anchor[start..end].trim());
+    (!date.is_empty()).then_some(date)
+}
+
+/// Replace each `<a>` with its own text, dropping X's media shortlinks
+/// (`pic.twitter.com/xxxx`) entirely: they render as noise in a card and
+/// point back at the post we already link.
+fn unwrap_anchors(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+
+    while let Some(start) = rest.find("<a") {
+        out.push_str(&rest[..start]);
+        let anchor = &rest[start..];
+        let Some(close) = anchor.find("</a>") else {
+            out.push_str(anchor);
+            return out;
+        };
+
+        let text = anchor[..close]
+            .find('>')
+            .map(|open_end| &anchor[open_end + 1..close])
+            .unwrap_or_default();
+        if !is_media_shortlink(text) {
+            out.push_str(text);
+        }
+        rest = &anchor[close + "</a>".len()..];
+    }
+
+    out.push_str(rest);
+    out
+}
+
+fn is_media_shortlink(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with("pic.twitter.com/") || text.starts_with("pic.x.com/")
+}
+
+fn strip_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match (ch, in_tag) {
+            ('<', _) => in_tag = true,
+            ('>', _) => in_tag = false,
+            (_, false) => out.push(ch),
+            (_, true) => {}
+        }
+    }
+    out
+}
+
+/// `&amp;` is decoded last so a double-encoded `&amp;lt;` stays literal text
+/// instead of turning into a `<`.
+fn decode_html_entities(input: &str) -> String {
+    input
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&mdash;", "\u{2014}")
+        .replace("&amp;", "&")
+}
+
+/// The contents of the first `<tag ...>...</tag>` pair.
+fn inner_html(html: &str, tag: &str) -> Option<String> {
+    let start = html.find(&format!("<{tag}"))?;
+    let content_start = start + html[start..].find('>')? + 1;
+    let end = content_start + html[content_start..].find(&format!("</{tag}>"))?;
+    Some(html[content_start..end].to_string())
 }
 
 fn procedural_ascii_art(url: &str) -> String {
@@ -811,17 +1079,6 @@ fn procedural_ascii_art(url: &str) -> String {
     art
 }
 
-fn build_news_chat_announcement(title: &str, summary: &str, url: &str, ascii_art: &str) -> String {
-    let title = truncate_for_chat(&sanitize_payload_field(title.trim()), 90);
-    let summary = truncate_for_chat(&encode_summary_bullets(summary), 400);
-    let url = sanitize_payload_field(url.trim());
-    let ascii = encode_ascii_payload(ascii_art);
-    let payload = format!(
-        "{NEWS_MARKER} {title}{NEWS_SEPARATOR}{summary}{NEWS_SEPARATOR}{url}{NEWS_SEPARATOR}{ascii}"
-    );
-    truncate_for_chat(&payload, 1800)
-}
-
 fn truncate_for_chat(input: &str, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
         return input.to_string();
@@ -835,205 +1092,6 @@ fn truncate_for_chat(input: &str, max_chars: usize) -> String {
     out
 }
 
-fn sanitize_payload_field(input: &str) -> String {
-    input
-        .replace(NEWS_SEPARATOR, " | ")
-        .replace(['\n', '\r'], " ")
-}
-
-fn encode_summary_bullets(summary: &str) -> String {
-    summary
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| {
-            !line
-                .to_ascii_lowercase()
-                .starts_with("• no content details")
-        })
-        .take(3)
-        .map(|line| {
-            truncate_for_chat(
-                &sanitize_payload_field(
-                    line.trim_start_matches('•').trim_start_matches('-').trim(),
-                ),
-                120,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\\n")
-}
-
-fn encode_ascii_payload(ascii_art: &str) -> String {
-    ascii_art.replace('\\', "\\\\").replace('\n', "\\n")
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{
-        ArticleExtraction, display_author, encode_ascii_payload, extraction_looks_not_found,
-        is_twitter_url, is_youtube_url, sanitize_payload_field, truncate_for_chat,
-    };
-    use std::collections::HashMap;
-    use uuid::Uuid;
-
-    #[test]
-    fn youtube_url_detection_covers_common_hosts() {
-        assert!(is_youtube_url("https://www.youtube.com/watch?v=abc"));
-        assert!(is_youtube_url("https://youtu.be/abc"));
-        assert!(is_youtube_url("https://m.youtube.com/watch?v=abc"));
-        assert!(!is_youtube_url("https://vimeo.com/123"));
-    }
-
-    #[test]
-    fn not_found_detection_flags_low_confidence_ai_output() {
-        let extraction = ArticleExtraction {
-            title: "Video Not Found".to_string(),
-            image_url: None,
-            summary: "• No content details are available to generate a summary.".to_string(),
-        };
-        assert!(extraction_looks_not_found(&extraction));
-    }
-
-    #[test]
-    fn not_found_detection_allows_normal_extractions() {
-        let extraction = ArticleExtraction {
-            title: "Never Run claude /init".to_string(),
-            image_url: Some("https://i.ytimg.com/vi/abc/default.jpg".to_string()),
-            summary: "• Explains tradeoffs of generated context files.".to_string(),
-        };
-        assert!(!extraction_looks_not_found(&extraction));
-    }
-
-    #[test]
-    fn display_author_prefers_username() {
-        let user_id = Uuid::now_v7();
-        let mut usernames = HashMap::new();
-        usernames.insert(user_id, "mat".to_string());
-        assert_eq!(display_author(&usernames, user_id), "mat");
-    }
-
-    #[test]
-    fn display_author_falls_back_to_short_id() {
-        let user_id = Uuid::now_v7();
-        let usernames = HashMap::new();
-        assert_eq!(
-            display_author(&usernames, user_id),
-            user_id.to_string()[..8]
-        );
-    }
-
-    #[test]
-    fn encode_summary_bullets_preserves_all_bullets() {
-        let summary = "• first point\n• second point\n• third point";
-        assert_eq!(
-            super::encode_summary_bullets(summary),
-            "first point\\nsecond point\\nthird point"
-        );
-    }
-
-    #[test]
-    fn encode_summary_bullets_empty_input() {
-        assert_eq!(super::encode_summary_bullets(""), "");
-    }
-
-    #[test]
-    fn encode_summary_bullets_skips_no_content_lines() {
-        let summary = "• No content details are available.\n• Actual point";
-        assert_eq!(super::encode_summary_bullets(summary), "Actual point");
-    }
-
-    // --- truncate_for_chat ---
-
-    #[test]
-    fn truncate_for_chat_returns_short_string_unchanged() {
-        assert_eq!(truncate_for_chat("hello", 10), "hello");
-    }
-
-    #[test]
-    fn truncate_for_chat_at_exact_limit() {
-        assert_eq!(truncate_for_chat("abcde", 5), "abcde");
-    }
-
-    #[test]
-    fn truncate_for_chat_adds_ellipsis_when_over_limit() {
-        assert_eq!(truncate_for_chat("abcdefghij", 7), "abcd...");
-    }
-
-    // --- sanitize_payload_field ---
-
-    #[test]
-    fn sanitize_payload_field_replaces_separator() {
-        let input = format!("before{}after", super::NEWS_SEPARATOR);
-        assert_eq!(sanitize_payload_field(&input), "before | after");
-    }
-
-    #[test]
-    fn sanitize_payload_field_replaces_newlines() {
-        assert_eq!(sanitize_payload_field("a\nb\rc"), "a b c");
-    }
-
-    // --- encode_ascii_payload ---
-
-    #[test]
-    fn encode_ascii_payload_encodes_newlines() {
-        assert_eq!(encode_ascii_payload("a\nb"), "a\\nb");
-    }
-
-    #[test]
-    fn encode_ascii_payload_escapes_backslashes() {
-        assert_eq!(encode_ascii_payload("a\\b"), "a\\\\b");
-    }
-
-    #[test]
-    fn encode_ascii_payload_handles_both() {
-        assert_eq!(encode_ascii_payload("a\\b\nc"), "a\\\\b\\nc");
-    }
-
-    // --- edge cases for existing functions ---
-
-    #[test]
-    fn display_author_ignores_whitespace_only_username() {
-        let user_id = Uuid::now_v7();
-        let mut usernames = HashMap::new();
-        usernames.insert(user_id, "   ".to_string());
-        assert_eq!(
-            display_author(&usernames, user_id),
-            user_id.to_string()[..8]
-        );
-    }
-
-    #[test]
-    fn is_youtube_url_detects_nocookie_domain() {
-        assert!(is_youtube_url("https://www.youtube-nocookie.com/embed/abc"));
-    }
-
-    #[test]
-    fn is_youtube_url_rejects_invalid_url() {
-        assert!(!is_youtube_url("not a url at all"));
-    }
-
-    #[test]
-    fn twitter_url_detection_covers_common_hosts() {
-        assert!(is_twitter_url("https://twitter.com/user/status/123"));
-        assert!(is_twitter_url("https://x.com/user/status/123"));
-        assert!(is_twitter_url("https://mobile.twitter.com/user/status/123"));
-        assert!(!is_twitter_url("https://youtube.com/watch?v=abc"));
-        assert!(!is_twitter_url("not a url at all"));
-    }
-
-    #[test]
-    fn build_news_chat_announcement_is_compact_and_branded() {
-        let msg = super::build_news_chat_announcement(
-            "A very cool post title",
-            "• one interesting summary point\n• another point",
-            "https://example.com/article",
-            ".:-\n+*#",
-        );
-        assert!(msg.starts_with(super::NEWS_MARKER));
-        assert!(msg.contains(super::NEWS_SEPARATOR));
-        assert!(msg.contains("A very cool post title"));
-        assert!(msg.contains("one interesting summary point"));
-        assert!(msg.contains("\\n"));
-    }
-}
+#[path = "svc_internal_test.rs"]
+mod svc_internal_test;

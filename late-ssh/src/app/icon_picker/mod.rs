@@ -1,6 +1,6 @@
-pub mod catalog;
-pub mod nerd_fonts;
-pub mod picker;
+pub(crate) mod catalog;
+pub(crate) mod nerd_fonts;
+pub(crate) mod picker;
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -12,10 +12,10 @@ use crate::app::common::theme;
 
 /// Fallback when the picker hasn't been rendered yet (first input before
 /// first frame). Matches the minimum icon-list height in `picker::render`.
-pub const DEFAULT_VISIBLE_HEIGHT: usize = 13;
+pub(crate) const DEFAULT_VISIBLE_HEIGHT: usize = 13;
 
 /// Max gap between two left-clicks (on the same item) to count as a double-click.
-pub const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
+pub(crate) const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconPickerTab {
@@ -193,3 +193,6 @@ fn new_search_textarea() -> TextArea<'static> {
     ta.set_wrap_mode(WrapMode::None);
     ta
 }
+
+#[cfg(test)]
+mod picker_test;

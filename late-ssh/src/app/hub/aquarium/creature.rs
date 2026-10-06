@@ -48,6 +48,10 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
         source: include_str!("../../../../assets/aquarium/creatures/anchovy.kdl"),
     },
     EmbeddedKdl {
+        path: "art/creatures/fry.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/fry.kdl"),
+    },
+    EmbeddedKdl {
         path: "art/creatures/bee.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/bee.kdl"),
     },
@@ -124,19 +128,38 @@ const DEFAULT_CREATURE_SOURCES: &[EmbeddedKdl] = &[
         source: include_str!("../../../../assets/aquarium/creatures/wigglewort.kdl"),
     },
     EmbeddedKdl {
+        path: "art/creatures/sprout.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/sprout.kdl"),
+    },
+    EmbeddedKdl {
+        path: "art/creatures/seatuft.kdl",
+        source: include_str!("../../../../assets/aquarium/creatures/seatuft.kdl"),
+    },
+    EmbeddedKdl {
         path: "art/creatures/wingfish.kdl",
         source: include_str!("../../../../assets/aquarium/creatures/wingfish.kdl"),
     },
 ];
 
-pub const IDLE_ACTION_INTERVAL: u64 = 4;
-pub const DEFAULT_IDLE_MOVE_CHANCE: f64 = 0.30;
-pub const DEFAULT_IDLE_TURN_CHANCE: f64 = 0.05;
-pub const IDLE_CHANCE_STEP: f64 = 0.05;
+/// The hatchling's definition (`fry.kdl`): two cells of fish, drawn in its
+/// parent's colour for its first week. Never sold; the shop knows no such
+/// creature, only the population builder does.
+pub(crate) const FRY_CREATURE: &str = "fry";
+/// The bud that comes up on the floor every two weeks; cut or rooted, it
+/// is never sold.
+pub(crate) const SPROUT_CREATURE: &str = "sprout";
+/// Widest a `mini` glyph may be, in cells: the sidebar tank is 21 wide.
+pub(crate) const MINI_MAX_WIDTH: usize = 3;
+pub(crate) const IDLE_ACTION_INTERVAL: u64 = 4;
+pub(crate) const DEFAULT_IDLE_MOVE_CHANCE: f64 = 0.30;
+pub(crate) const DEFAULT_IDLE_TURN_CHANCE: f64 = 0.05;
+pub(crate) const IDLE_CHANCE_STEP: f64 = 0.05;
 
 #[derive(Debug, Clone)]
-pub struct CreatureDef {
+pub(crate) struct CreatureDef {
     pub name: String,
+    /// The one-to-three-cell stand-in the sidebar tank draws.
+    pub mini: MiniGlyph,
     pub kindom: Kindom,
     pub constraints: CreatureConstraints,
     pub preferences: CreaturePreferences,
@@ -152,12 +175,21 @@ pub struct CreatureDef {
     school_rearrange_chance: Option<f64>,
 }
 
+/// A creature at sidebar size: `mini left="<'" right="'>"` in its `.kdl`,
+/// the glyph for each way it swims. Required on every creature; a plant
+/// gives the same glyph twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MiniGlyph {
+    pub left: String,
+    pub right: String,
+}
+
 impl CreatureDef {
-    pub fn best_variant(&self, dx: i16, tick: u64, phase: usize) -> &Variant {
+    pub(crate) fn best_variant(&self, dx: i16, tick: u64, phase: usize) -> &Variant {
         self.best_variant_for(dx, PoseIntent::Lateral, tick, phase)
     }
 
-    pub fn best_variant_for(
+    pub(crate) fn best_variant_for(
         &self,
         dx: i16,
         pose_intent: PoseIntent,
@@ -210,7 +242,7 @@ impl CreatureDef {
         }
     }
 
-    pub fn has_motion_drag_poses(&self) -> bool {
+    pub(crate) fn has_motion_drag_poses(&self) -> bool {
         self.has_pose("left-drag") || self.has_pose("right-drag")
     }
 
@@ -218,7 +250,7 @@ impl CreatureDef {
         has_pose(&self.variants, pose)
     }
 
-    pub fn starting_velocity(&self, rng: &mut ThreadRng) -> (i16, i16) {
+    pub(crate) fn starting_velocity(&self, rng: &mut ThreadRng) -> (i16, i16) {
         let dx = self.h_velocity.unwrap_or_else(|| {
             let has_left = self
                 .variants
@@ -260,15 +292,15 @@ impl CreatureDef {
         (dx, dy)
     }
 
-    pub fn uses_default_movement(&self) -> bool {
+    pub(crate) fn uses_default_movement(&self) -> bool {
         self.default_movement
     }
 
-    pub fn school_rearrange_chance(&self) -> Option<f64> {
+    pub(crate) fn school_rearrange_chance(&self) -> Option<f64> {
         self.school_rearrange_chance
     }
 
-    pub fn is_floor_bound(&self) -> bool {
+    pub(crate) fn is_floor_bound(&self) -> bool {
         self.spawn_location == SpawnLocation::Floor
             || self
                 .constraints
@@ -277,11 +309,11 @@ impl CreatureDef {
                 .is_some_and(|sessile| sessile.to == "floor")
     }
 
-    pub fn is_sessile(&self) -> bool {
+    pub(crate) fn is_sessile(&self) -> bool {
         self.constraints.sessile.is_some()
     }
 
-    pub fn initial_activity(&self, rng: &mut ThreadRng) -> (ActivityState, u16) {
+    pub(crate) fn initial_activity(&self, rng: &mut ThreadRng) -> (ActivityState, u16) {
         let idle_chance = (self.preferences.sedentary * 0.65
             + self.preferences.planktonic * 0.2
             + kindom_stillness(self.kindom) * 0.15
@@ -296,7 +328,7 @@ impl CreatureDef {
         (state, self.activity_duration(state, rng))
     }
 
-    pub fn next_activity(
+    pub(crate) fn next_activity(
         &self,
         current: ActivityState,
         rng: &mut ThreadRng,
@@ -332,7 +364,7 @@ impl CreatureDef {
     }
 }
 
-pub fn default_movement_transition_chance() -> f64 {
+pub(crate) fn default_movement_transition_chance() -> f64 {
     1.0 - 0.5_f64.powf(1.0 / 200.0)
 }
 
@@ -350,7 +382,7 @@ fn lerp_u16(min: u16, max: u16, t: f64) -> u16 {
 }
 
 #[derive(Debug, Clone)]
-pub struct Variant {
+pub(crate) struct Variant {
     pub pose: String,
     pub art: Vec<String>,
     pub width: u16,
@@ -359,38 +391,38 @@ pub struct Variant {
 }
 
 #[derive(Debug, Clone)]
-pub struct School {
+pub(crate) struct School {
     pub unit: String,
     pub units: Vec<SchoolUnit>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct SchoolUnit {
+pub(crate) struct SchoolUnit {
     pub x: u16,
     pub y: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PoseIntent {
+pub(crate) enum PoseIntent {
     Lateral,
     Face,
     FaceAway,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpawnLocation {
+pub(crate) enum SpawnLocation {
     Water,
     Floor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivityState {
+pub(crate) enum ActivityState {
     Active,
     Idle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Kindom {
+pub(crate) enum Kindom {
     #[default]
     Animal,
     Plant,
@@ -412,20 +444,20 @@ impl Kindom {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct CreatureConstraints {
+pub(crate) struct CreatureConstraints {
     pub sessile: Option<SessileConstraint>,
     pub walker: bool,
     pub obligate_airbreather: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessileConstraint {
+pub(crate) struct SessileConstraint {
     pub attach: String,
     pub to: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CreaturePreferences {
+pub(crate) struct CreaturePreferences {
     pub demersal: f64,
     pub depth: f64,
     pub reefer: f64,
@@ -462,12 +494,12 @@ impl Default for CreaturePreferences {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerritoryGeometry {
+pub(crate) enum TerritoryGeometry {
     Rectangle(RectangleTerritoryGeometry),
 }
 
 impl TerritoryGeometry {
-    pub fn sample_size(&self, rng: &mut ThreadRng) -> (u16, u16) {
+    pub(crate) fn sample_size(&self, rng: &mut ThreadRng) -> (u16, u16) {
         match self {
             Self::Rectangle(rectangle) => {
                 (rectangle.width.sample(rng), rectangle.height.sample(rng))
@@ -477,13 +509,13 @@ impl TerritoryGeometry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RectangleTerritoryGeometry {
+pub(crate) struct RectangleTerritoryGeometry {
     pub width: DimensionSpec,
     pub height: DimensionSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DimensionSpec {
+pub(crate) enum DimensionSpec {
     Constant(u16),
     Uniform { min: u16, max: u16 },
 }
@@ -550,7 +582,7 @@ fn unit_positions<'a>(line: &'a str, unit: &'a str) -> impl Iterator<Item = usiz
 }
 
 #[derive(Debug)]
-pub struct Entity {
+pub(crate) struct Entity {
     pub def: usize,
     pub x: i32,
     pub y: i32,
@@ -571,7 +603,7 @@ pub struct Entity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Territory {
+pub(crate) struct Territory {
     pub min_x: i32,
     pub max_x: i32,
     pub min_y: i32,
@@ -579,7 +611,7 @@ pub struct Territory {
 }
 
 impl Entity {
-    pub fn tick_bounded(
+    pub(crate) fn tick_bounded(
         &mut self,
         def: &CreatureDef,
         bounds: Rect,
@@ -628,15 +660,15 @@ impl Entity {
         }
     }
 
-    pub fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         self.respawn_at.is_none()
     }
 
-    pub fn mark_exited(&mut self, delay: Duration, now: Instant) {
+    pub(crate) fn mark_exited(&mut self, delay: Duration, now: Instant) {
         self.respawn_at = Some(now + delay);
     }
 
-    pub fn resume_lateral_motion(&mut self) {
+    pub(crate) fn resume_lateral_motion(&mut self) {
         if self.lateral_dx == 0 {
             self.lateral_dx = if self.dx < 0 { -1 } else { 1 };
         }
@@ -647,7 +679,7 @@ impl Entity {
         self.depth_swim_ticks = 0;
     }
 
-    pub fn pose_dx(&self) -> i16 {
+    pub(crate) fn pose_dx(&self) -> i16 {
         if self.dx != 0 {
             self.dx
         } else if self.activity == ActivityState::Idle {
@@ -657,7 +689,7 @@ impl Entity {
         }
     }
 
-    pub fn pose_dx_for(&self, def: &CreatureDef) -> i16 {
+    pub(crate) fn pose_dx_for(&self, def: &CreatureDef) -> i16 {
         if self.dx != 0 {
             self.dx
         } else if self.activity == ActivityState::Idle && def.has_motion_drag_poses() {
@@ -667,7 +699,7 @@ impl Entity {
         }
     }
 
-    pub fn animation_tick(&self, tick: u64) -> u64 {
+    pub(crate) fn animation_tick(&self, tick: u64) -> u64 {
         if self.activity == ActivityState::Idle {
             0
         } else {
@@ -675,7 +707,7 @@ impl Entity {
         }
     }
 
-    pub fn animation_tick_for(&self, def: &CreatureDef, tick: u64) -> u64 {
+    pub(crate) fn animation_tick_for(&self, def: &CreatureDef, tick: u64) -> u64 {
         if self.activity == ActivityState::Idle && def.is_sessile() {
             tick
         } else {
@@ -683,7 +715,7 @@ impl Entity {
         }
     }
 
-    pub fn update_idle_motion(&mut self, tick: u64, rng: &mut ThreadRng) {
+    pub(crate) fn update_idle_motion(&mut self, tick: u64, rng: &mut ThreadRng) {
         self.dy = 0;
         self.pose_intent = PoseIntent::Lateral;
 
@@ -718,7 +750,7 @@ impl Entity {
         self.idle_turn_chance = DEFAULT_IDLE_TURN_CHANCE;
     }
 
-    pub fn toggle_vertical_motion(&mut self, rng: &mut ThreadRng) {
+    pub(crate) fn toggle_vertical_motion(&mut self, rng: &mut ThreadRng) {
         self.dy = if self.dy == 0 {
             if rng.gen_bool(0.5) { -1 } else { 1 }
         } else {
@@ -726,7 +758,7 @@ impl Entity {
         };
     }
 
-    pub fn maybe_rearrange_school(&mut self, def: &CreatureDef, rng: &mut ThreadRng) {
+    pub(crate) fn maybe_rearrange_school(&mut self, def: &CreatureDef, rng: &mut ThreadRng) {
         if let Some(chance) = def.school_rearrange_chance()
             && rng.gen_bool(chance)
         {
@@ -734,7 +766,7 @@ impl Entity {
         }
     }
 
-    pub fn advance_activity(&mut self, def: &CreatureDef, rng: &mut ThreadRng) {
+    pub(crate) fn advance_activity(&mut self, def: &CreatureDef, rng: &mut ThreadRng) {
         if def.is_sessile() {
             self.activity = ActivityState::Idle;
             self.activity_ticks = self.activity_ticks.max(1);
@@ -899,7 +931,7 @@ fn load_embedded_kindom_defaults() -> Result<KindomDefaults> {
     Ok(defaults)
 }
 
-pub fn load_default_creatures() -> Result<Vec<CreatureDef>> {
+pub(crate) fn load_default_creatures() -> Result<Vec<CreatureDef>> {
     let defaults = load_embedded_kindom_defaults()?;
     let creatures = DEFAULT_CREATURE_SOURCES
         .iter()
@@ -914,7 +946,7 @@ pub fn load_default_creatures() -> Result<Vec<CreatureDef>> {
 }
 
 #[allow(dead_code)]
-pub fn load_creatures(dir: &Path) -> Result<Vec<CreatureDef>> {
+pub(crate) fn load_creatures(dir: &Path) -> Result<Vec<CreatureDef>> {
     let defaults = load_kindom_defaults(dir)?;
     let mut paths = fs::read_dir(dir)
         .with_context(|| format!("reading creature directory {}", dir.display()))?
@@ -946,7 +978,7 @@ fn load_creature_from_source(
 }
 
 #[allow(dead_code)]
-pub fn load_creature(path: &Path) -> Result<CreatureDef> {
+pub(crate) fn load_creature(path: &Path) -> Result<CreatureDef> {
     let defaults = path
         .parent()
         .map(load_kindom_defaults)
@@ -1030,6 +1062,7 @@ fn build_creature_from_doc(
     if variants.is_empty() {
         return Err(anyhow!("{} has no drawable pose nodes", path.display()));
     }
+    let mini = parse_mini(&doc, path)?;
     let four_way_swimmer = has_pose(&variants, "left")
         && has_pose(&variants, "right")
         && has_pose(&variants, "face")
@@ -1037,6 +1070,7 @@ fn build_creature_from_doc(
 
     Ok(CreatureDef {
         name,
+        mini,
         kindom: template.kindom,
         constraints: template.constraints,
         preferences: template.preferences,
@@ -1053,7 +1087,7 @@ fn build_creature_from_doc(
     })
 }
 
-pub fn tallest_variant_height(definitions: &[CreatureDef]) -> u16 {
+pub(crate) fn tallest_variant_height(definitions: &[CreatureDef]) -> u16 {
     definitions
         .iter()
         .flat_map(|definition| &definition.variants)
@@ -1143,6 +1177,29 @@ fn doc_int_arg(doc: &KdlDocument, node_name: &str) -> Option<i128> {
     doc.get(node_name)
         .and_then(|node| node.get(0))
         .and_then(KdlValue::as_integer)
+}
+
+fn parse_mini(doc: &KdlDocument, path: &Path) -> Result<MiniGlyph> {
+    let Some(node) = doc.get("mini") else {
+        return Err(anyhow!("{} has no `mini` glyph", path.display()));
+    };
+    let side = |key: &str| -> Result<String> {
+        let Some(glyph) = node.get(key).and_then(KdlValue::as_string) else {
+            return Err(anyhow!("{} `mini` needs a `{key}` string", path.display()));
+        };
+        let width = unicode_width::UnicodeWidthStr::width(glyph);
+        if width == 0 || width > MINI_MAX_WIDTH || glyph.contains('\n') {
+            return Err(anyhow!(
+                "{} `mini {key}` must be one row of 1 to {MINI_MAX_WIDTH} cells",
+                path.display()
+            ));
+        }
+        Ok(glyph.to_string())
+    };
+    Ok(MiniGlyph {
+        left: side("left")?,
+        right: side("right")?,
+    })
 }
 
 fn parse_colors(doc: &KdlDocument, path: &Path) -> Result<Vec<Color>> {
@@ -1439,28 +1496,5 @@ fn clamp_velocity(value: i128) -> i16 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn all_embedded_creatures_parse() {
-        // Tripwire: any new `.kdl` added to DEFAULT_CREATURE_SOURCES must
-        // parse cleanly. Catches typos in tag names, heredoc fences, or
-        // missing required fields before they hit a live aquarium.
-        let creatures =
-            load_default_creatures().expect("embedded creature kdl files must all parse");
-        assert!(
-            !creatures.is_empty(),
-            "expected at least one default creature"
-        );
-
-        let names: std::collections::HashSet<String> =
-            creatures.iter().map(|c| c.name.clone()).collect();
-        for required in ["anchovy", "clownfish", "pufferfish"] {
-            assert!(
-                names.contains(required),
-                "new creature `{required}` missing from default sources"
-            );
-        }
-    }
-}
+#[path = "creature_test.rs"]
+mod creature_test;

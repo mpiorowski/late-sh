@@ -11,6 +11,8 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
+use late_core::models::leaderboard::DailyPuzzle;
 
 const ANSWER_POOL: &str = include_str!("../../../../assets/le_word/answer_pool.txt");
 const VALID_EXTRA: &str = include_str!("../../../../assets/le_word/valid_extra.txt");
@@ -25,6 +27,17 @@ pub struct LeWordService {
 }
 
 impl LeWordService {
+    /// A board ended on this session. Counted for the dashboard, nothing
+    /// stored: the daily win itself goes through `record_win_task`.
+    pub fn record_finish(
+        &self,
+        mode: ArcadeMode,
+        difficulty: ArcadeDifficulty,
+        finish: ArcadeFinish,
+    ) {
+        metrics::record_arcade_finish(DailyPuzzle::LeWord, mode, difficulty, finish);
+    }
+
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self { db, activity_feed }
     }
@@ -46,11 +59,7 @@ impl LeWordService {
         }
 
         let tx = client.transaction().await?;
-        tx.query_one(
-            "SELECT pg_advisory_xact_lock(hashtextextended('le_word_daily_word', 0))",
-            &[],
-        )
-        .await?;
+        DailyWord::lock_daily_creation(&*tx).await?;
 
         if let Some(word) = DailyWord::find_by_date(&*tx, puzzle_date).await? {
             tx.commit().await?;
@@ -167,22 +176,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn supplied_word_pools_are_loaded() {
-        assert_eq!(answer_words().len(), 2317);
-        assert!(valid_guesses().contains("hunch"));
-        assert!(valid_guesses().contains("noire"));
-    }
-
-    #[test]
-    fn daily_selection_avoids_used_answers() {
-        let mut used: HashSet<&str> = answer_words().iter().copied().collect();
-        used.remove("hunch");
-        for _ in 0..32 {
-            assert_eq!(choose_unused_answer(&used).expect("answer"), "hunch");
-        }
-    }
-}
+#[path = "svc_test.rs"]
+mod svc_test;

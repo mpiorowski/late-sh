@@ -2,26 +2,6 @@
 
 {% block content %}
 <div class="max-w-4xl mx-auto">
-    <!--
-    <nav class="mb-8 border-b border-gray-700 pb-4 inline-flex items-center gap-6 text-sm">
-        <a href="/dashboard" 
-           class="inline-flex items-center hover:text-white transition-colors {% if active_page() == "dashboard" %}text-white{% else %}text-gray-400{% endif %}">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-            Dashboard
-        </a>
-        <a href="/stream/demo" 
-           class="inline-flex items-center hover:text-white transition-colors {% if active_page() == "stream" %}text-white{% else %}text-gray-400{% endif %}">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-            Stream
-        </a>
-        <a href="/connect/123" 
-           class="inline-flex items-center hover:text-white transition-colors {% if active_page() == "connect" %}text-white{% else %}text-gray-400{% endif %}">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-            Connect
-        </a>
-    </nav>
--->
-
     {% block page %}{% endblock %}
 </div>
 {% endblock %}

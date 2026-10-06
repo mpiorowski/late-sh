@@ -14,7 +14,7 @@ use super::state::{SheetField, SheetModalState};
 const MODAL_WIDTH: u16 = 80;
 const MODAL_HEIGHT: u16 = 28;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &SheetModalState) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SheetModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -39,6 +39,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &SheetModalState) {
     ])
     .split(inner);
 
+    // Record the two fields so a click can focus one. The Name field spans its
+    // row plus the label above it; the Body spans its header + text area.
+    state.record_field_rect(SheetField::Name, layout[1]);
+    state.record_field_rect(SheetField::Body, layout[2].union(layout[3]));
     draw_name_row(frame, layout[1], state);
     draw_body_header(frame, layout[2], state);
     frame.render_widget(state.body_input(), layout[3].inner(Margin::new(2, 0)));

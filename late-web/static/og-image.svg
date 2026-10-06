@@ -21,7 +21,7 @@
     <text x="84" y="442" fill="#4b5563" font-size="20">pour a coffee. pull up a chair. stay a while.</text>
   </g>
 
-  <!-- Footer mark, same style as the connect page section markers -->
+  <!-- Footer mark, same style as the site section markers -->
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace">
     <text x="84" y="556" font-size="18" xml:space="preserve"><tspan fill="#374151"># </tspan><tspan fill="#4b5563">open the terminal, you're already home</tspan></text>
   </g>

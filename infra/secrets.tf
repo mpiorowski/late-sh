@@ -113,27 +113,6 @@ resource "kubernetes_secret_v1" "youtube_credentials" {
 }
 
 # =============================================================================
-# Web Terminal Tunnel Token
-# =============================================================================
-
-resource "random_password" "web_tunnel_token" {
-  length  = 32
-  special = false
-}
-
-resource "kubernetes_secret_v1" "web_tunnel_token" {
-  metadata {
-    name = "web-tunnel-token"
-  }
-
-  data = {
-    token = random_password.web_tunnel_token.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
 # Rebels in the Sky Identity Seed
 # =============================================================================
 
@@ -154,53 +133,8 @@ resource "kubernetes_secret_v1" "rebels_identity_secret" {
   type = "Opaque"
 }
 
-# =============================================================================
-# NetHack Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-nethack. The same value is injected
-# into BOTH the service-ssh client (LATE_NETHACK_SECRET) and the late-nethack
-# host pod, which each derive the same ed25519 key from it (see late-nethack).
-
-resource "random_password" "nethack_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "nethack_identity_secret" {
-  metadata {
-    name = "nethack-identity-secret"
-  }
-
-  data = {
-    secret = random_password.nethack_identity_secret.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
-# dopewars Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-dopewars. The same value is injected
-# into BOTH the service-ssh client (LATE_DOPEWARS_SECRET) and the late-dopewars
-# host pod, which each derive the same ed25519 key from it (see late-dopewars).
-
-resource "random_password" "dopewars_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "dopewars_identity_secret" {
-  metadata {
-    name = "dopewars-identity-secret"
-  }
-
-  data = {
-    secret = random_password.dopewars_identity_secret.result
-  }
-
-  type = "Opaque"
-}
+# Door-game identity seeds (nethack, dopewars, codekeep, dcss, bashquest,
+# brogue, usurper) live in the door module; see doors.tf.
 
 # =============================================================================
 # Icecast Passwords

@@ -8,16 +8,10 @@ use axum::{
 
 use crate::{AppState, error::AppError, metrics, pages::shared::now_playing};
 
-pub fn router() -> Router<AppState> {
+pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(root_handler))
         .route("/status", get(status_handler))
-}
-
-impl Home {
-    fn active_page(&self) -> &str {
-        "/"
-    }
 }
 
 #[derive(Template)]

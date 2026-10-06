@@ -17,10 +17,51 @@ on:
 permissions:
   contents: read
 
+# CI speed layout:
+# - fmt runs first as a cheap gate. clippy and test share ONE job so the
+#   dependency crates compile once and are reused for both (clippy then test
+#   against a single target dir). Splitting them into parallel jobs would
+#   double the dependency build, which is the long pole and the billed cost.
+# - No otel here on purpose. clippy and test both run WITHOUT --features otel,
+#   so CI never compiles the heavy otel subtree (opentelemetry / otlp / tonic /
+#   prost / hyper) and both steps share one non-otel dep set. The otel config
+#   (what prod ships) is compiled and linted by `make check` before merge, and
+#   the release Dockerfile builds --features otel, so otel breakage cannot
+#   reach prod; it surfaces at `make check` / release-build time, not per-PR.
+# - Rust dependency artifacts are cached (Swatinem/rust-cache). The action
+#   prunes workspace crates before saving and keys on rustc version + lockfile
+#   hash, so first-party code is always compiled fresh; a stale-but-compatible
+#   cache can only cost a dependency rebuild, never wrong artifacts. It also
+#   sets CARGO_INCREMENTAL=0.
+# - Caches are saved only on main pushes (save-if below; main.yml keeps them
+#   warm). PR runs restore, never save.
+# - check_cli is the non-Linux guard, one matrix job over the three OSes we ship
+#   late-cli to that Linux CI cannot compile: Windows, macOS, and the Android
+#   build Termux installs pull. Those halves of the per-platform cfgs used to be
+#   compiled for the first time at release, so a platform-only break could not
+#   fail a PR. It is a `cargo check` on purpose: it type-checks every cfg branch
+#   without codegen or linking, which is the cheap 80% of the value. Link-time
+#   failures (missing symbols, a bad .lib) are the part it does not cover and
+#   still surface first in the release build. Scoped to late-cli, the only crate
+#   we ship to those platforms.
+# - The job is named "clippy + test" so the branch ruleset's required check
+#   "ci / clippy + test" is satisfied directly (context is "<caller job> /
+#   <this job>" = "ci / clippy + test"); fmt provides "ci / rustfmt".
+# - To purge all Rust caches: bump CACHE_PREFIX below (any new value starts a
+#   fresh cache namespace; old entries age out via LRU), or delete entries
+#   directly with `gh cache list` / `gh cache delete`, or in the repo UI under
+#   Actions -> Management -> Caches.
+env:
+  CACHE_PREFIX: rust-v1
+  # No full debuginfo in CI: faster compiles and links, far smaller caches.
+  # line-tables-only keeps file:line in test-failure backtraces.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -35,36 +76,52 @@ jobs:
     name: clippy + test
     needs: [fmt]
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 45
     steps:
       - name: checkout
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.source_ref || github.ref }}
+      # Plain `docker run` instead of a job-level service so we can pass server
+      # flags: durability off (test databases are disposable) and
+      # max_connections sized for nextest --test-threads 8 with
+      # TEST_DB_POOL_SIZE=8 per test database. Started first so postgres boots
+      # while the toolchain and build deps install.
+      - name: start_postgres
+        run: |
+          docker run -d --name ci-postgres \
+            -e POSTGRES_USER=test \
+            -e POSTGRES_PASSWORD=test \
+            -e POSTGRES_DB=postgres \
+            -p 5432:5432 \
+            postgres:18-alpine \
+            postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c max_connections=200
       - name: install_linux_build_dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libwebkit2gtk-4.1-dev pkg-config mold
       - name: restore_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: ${{ env.CACHE_PREFIX }}
           shared-key: ci-rust
-          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: install_clippy
         run: rustup component add clippy
+      - name: install_nextest
+        uses: taiki-e/install-action@nextest
+      - name: wait_for_postgres
+        run: |
+          for _ in $(seq 1 60); do
+            if docker exec ci-postgres pg_isready -U test -d postgres >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "postgres never became ready" >&2
+          docker logs ci-postgres >&2
+          exit 1
       - name: cargo_clippy
         env:
           CARGO_PACKAGE: ${{ inputs.package }}
@@ -74,9 +131,7 @@ jobs:
             package_args=(-p "$CARGO_PACKAGE")
           fi
 
-          cargo clippy "${package_args[@]}" --all-targets --features otel -- -D warnings
-      - name: install_nextest
-        uses: taiki-e/install-action@nextest
+          cargo clippy "${package_args[@]}" --all-targets -- -D warnings
       - name: cargo_test
         env:
           TEST_DATABASE_URL: "host=127.0.0.1 port=5432 user=test password=test dbname=postgres"
@@ -87,4 +142,90 @@ jobs:
             package_args=(-p "$CARGO_PACKAGE")
           fi
 
-          cargo nextest run "${package_args[@]}" --all-targets
+          cargo nextest run "${package_args[@]}" --all-targets --test-threads 8
+      - name: dump_postgres_logs
+        if: failure()
+        run: docker logs ci-postgres
+
+  check_cli:
+    name: check_cli (${{ matrix.target }})
+    needs: [fmt]
+    # late-cli is the only crate shipped to these platforms, so this job is
+    # pointless for the other per-package release callers.
+    if: ${{ inputs.package == '' || inputs.package == 'late-cli' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One arch per OS is enough: the platform cfgs key off target_os, so
+          # the second arch of each pair compiles the exact same branches.
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          # Termux installs get this build, so it is not optional coverage.
+          - runner: ubuntu-latest
+            target: aarch64-linux-android
+            android: true
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - name: restore_rust_cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          shared-key: ci-check-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: install_rust_target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+      # /MT so the C dependencies' build scripts match the release build. The
+      # release build also passes -C target-feature=+crt-static; that one is
+      # purely a link-time flag and `cargo check` never links, so it is omitted
+      # here rather than fighting cargo's mutually exclusive rustflags sources.
+      - name: configure_windows_msvc_runtime
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          {
+            echo "CFLAGS_x86_64_pc_windows_msvc=/MT"
+            echo "CXXFLAGS_x86_64_pc_windows_msvc=/MT"
+          } >> "$GITHUB_ENV"
+      - name: set_up_android_sdk
+        if: matrix.android == true
+        uses: android-actions/setup-android@v4.0.1
+        # The action's default installs the removed legacy `tools` package,
+        # which fails on current cmdline-tools. Only the NDK is needed.
+        with:
+          packages: platform-tools
+      - name: install_android_ndk
+        if: matrix.android == true
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+      # The NDK is needed even for a check: nothing links, but build scripts
+      # still compile the C dependencies for the target.
+      - name: configure_android_toolchain
+        if: matrix.android == true
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: |
+          NDK_HOME="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          linker="$TOOLCHAIN/bin/aarch64-linux-android26-clang"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$linker" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          ln -sf "$TOOLCHAIN/bin/llvm-ranlib" "$TOOLCHAIN/bin/aarch64-linux-android-ranlib"
+          ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/aarch64-linux-android-ar"
+          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
+      - name: cargo_check_late_cli
+        shell: bash
+        run: cargo check -p late-cli --all-targets --target ${{ matrix.target }}

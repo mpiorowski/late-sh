@@ -1,9 +1,7 @@
-use std::sync::OnceLock;
-
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
@@ -13,21 +11,12 @@ use crate::app::{
     common::{primitives::Banner, theme},
     door::game::{DoorGame, DoorGameId},
     door::landing,
-    files::inline_image::{InlineImageRenderSettings, render_rgba_preview},
-    files::terminal_image::{
-        TerminalImageData, TerminalImageFrame, TerminalImagePlacement, TerminalImageProtocol,
-        terminal_image_from_bytes,
-    },
+    files::terminal_image::TerminalImageFrame,
     state::App,
 };
 use crate::usernames::UsernameLookup;
-use uuid::Uuid;
 
-const FRONTIER_BANNER_PNG: &[u8] =
-    include_bytes!("../../../../assets/lateania/frontier-banner.png");
-const BANNER_IMAGE_COLS: u32 = 54;
-const BANNER_IMAGE_ROWS: u32 = 15;
-const FRONTIER_BANNER_IMAGE_ID: Uuid = Uuid::from_u128(0x4c41_5445_414e_4941_4652_4f4e_0001);
+use super::svc::{CHARACTER_SLOTS, SlotList};
 
 pub const GAME: LateaniaDoorGame = LateaniaDoorGame;
 
@@ -45,7 +34,7 @@ impl DoorGame for LateaniaDoorGame {
     }
 
     fn description(&self) -> &'static str {
-        "A persistent terminal world with shared rooms, twelve classes, quests, player housing, companions, titles, and loot."
+        "A persistent terminal world of six great lands: shared rooms, seventeen classes, crafting and taming trades, quests, player housing, companions, titles, and loot."
     }
 
     fn activity_game(&self) -> Option<ActivityGame> {
@@ -57,9 +46,9 @@ impl DoorGame for LateaniaDoorGame {
         frame: &mut Frame,
         area: Rect,
         view: &LateaniaScreenView<'_>,
-        terminal_images: &mut TerminalImageFrame,
+        _terminal_images: &mut TerminalImageFrame,
     ) {
-        draw_screen(frame, area, view, terminal_images);
+        draw_screen(frame, area, view);
     }
 
     fn handle_key(&self, app: &mut App, byte: u8) -> bool {
@@ -70,8 +59,8 @@ impl DoorGame for LateaniaDoorGame {
         handle_arrow(app, key)
     }
 
-    fn leave_active(&self, app: &mut App) -> bool {
-        leave_active_game(app)
+    fn handle_mouse(&self, app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+        handle_mouse(app, mouse)
     }
 }
 
@@ -79,17 +68,15 @@ pub struct LateaniaScreenView<'a> {
     pub delete_confirm: bool,
     pub state: Option<&'a super::state::State>,
     pub usernames: &'a UsernameLookup<'a>,
-    pub terminal_image_protocol: Option<TerminalImageProtocol>,
     /// Players currently in the Lateania world, shown on the landing.
     pub online: usize,
+    /// This account's character list, for the landing's select list.
+    pub slots: &'a SlotList,
+    /// Highlighted slot on the landing.
+    pub slot_cursor: usize,
 }
 
-fn draw_screen(
-    frame: &mut Frame,
-    area: Rect,
-    view: &LateaniaScreenView<'_>,
-    terminal_images: &mut TerminalImageFrame,
-) {
+fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
     if let Some(state) = view.state {
         super::ui::draw_page(frame, area, state, view.usernames);
         return;
@@ -105,8 +92,9 @@ fn draw_screen(
         area,
         view.delete_confirm,
         view.online,
-        view.terminal_image_protocol,
-        terminal_images,
+        view.slots,
+        view.slot_cursor,
+        0,
     );
 }
 
@@ -120,18 +108,47 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 
     match byte {
-        b'j' | b'J' | b'k' | b'K' => true,
+        b'j' | b'J' => {
+            move_slot_cursor(app, 1);
+            true
+        }
+        b'k' | b'K' => {
+            move_slot_cursor(app, -1);
+            true
+        }
         b'\r' | b'\n' => {
             app.door_delete_confirm = false;
+            app.lateania_service
+                .select_slot(app.user_id, app.lateania_slot_cursor as i16);
             app.enter_lateania();
             true
         }
         b'd' | b'D' => {
-            app.door_delete_confirm = true;
+            // A list still being read cannot say whether the highlighted slot
+            // holds a character, and `d` deletes one for good.
+            if let SlotList::Ready(_) = app.lateania_service.character_slots(app.user_id) {
+                app.door_delete_confirm = true;
+            }
             true
         }
         _ => false,
     }
+}
+
+/// Move the landing's slot cursor, clamped to the character slots that exist.
+fn move_slot_cursor(app: &mut App, delta: i32) {
+    let max = CHARACTER_SLOTS as i32 - 1;
+    let next = app.lateania_slot_cursor as i32 + delta;
+    app.lateania_slot_cursor = next.clamp(0, max) as usize;
+}
+
+fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+    // Only meaningful once you're in the world with a character; the landing has
+    // no clickable chips.
+    let Some(state) = app.lateania_state.as_mut() else {
+        return false;
+    };
+    super::input::handle_mouse(state, mouse)
 }
 
 fn handle_arrow(app: &mut App, key: u8) -> bool {
@@ -147,20 +164,16 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
         return true;
     }
 
-    matches!(key, b'A' | b'B')
-}
-
-fn leave_active_game(app: &mut App) -> bool {
-    if app.door_delete_confirm {
-        app.door_delete_confirm = false;
-        return true;
-    }
-
-    if app.lateania_state.is_some() {
-        app.leave_lateania();
-        true
-    } else {
-        false
+    match key {
+        b'A' => {
+            move_slot_cursor(app, -1);
+            true
+        }
+        b'B' => {
+            move_slot_cursor(app, 1);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -168,11 +181,20 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
     match byte {
         b'y' | b'Y' | b'\r' | b'\n' => {
             app.door_delete_confirm = false;
+            let slot = app.lateania_slot_cursor as i16;
+            // A reset slot must not stay a backtick stop: hopping back in
+            // would silently start a fresh character there.
+            app.lateania_detached_at = None;
             app.leave_lateania();
-            app.lateania_service.delete_character_task(app.user_id);
-            app.banner = Some(Banner::success(
-                "Lateania character reset. Enter the world to start over.",
-            ));
+            app.lateania_service.delete_character_task(
+                app.user_id,
+                slot,
+                app.repaint_signal.clone(),
+            );
+            app.banner = Some(Banner::success(&format!(
+                "Slot {} reset. Enter to start a new character there.",
+                slot + 1
+            )));
             true
         }
         b'n' | b'N' | b'd' | b'D' | b'q' | b'Q' | 0x1B => {
@@ -184,46 +206,126 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
 }
 
 fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
-    if byte == 0x1B {
-        app.leave_lateania();
-        return true;
-    }
-
+    // Esc must route through `input::handle_key` like every other byte, not
+    // be special-cased here: that function is what cancels an in-progress
+    // chat compose on Esc instead of leaving, and what gates a genuine leave
+    // behind a confirming second press. Short-circuiting Esc here used to
+    // skip both, so Esc while chatting closed the game and a single
+    // accidental Esc always logged the player straight out.
     let Some(state) = app.lateania_state.as_mut() else {
         return true;
     };
-    if super::input::handle_key(state, byte) == super::input::InputAction::Leave {
-        app.leave_lateania();
+    match super::input::handle_key(state, byte) {
+        super::input::InputAction::Leave => {
+            app.lateania_detached_at = None;
+            app.leave_lateania();
+        }
+        // Arm the recency window that keeps Lateania on the backtick cycle,
+        // then hop: the cycle's screen switch tears the session down
+        // (autosave + world leave), so this must be armed before it runs.
+        super::input::InputAction::Detach => {
+            app.lateania_detached_at = Some(std::time::Instant::now());
+            app.detach_door_game();
+        }
+        super::input::InputAction::Ignored | super::input::InputAction::Handled => {}
     }
     true
 }
 
-/// Two-column Lateania landing, used both by the standalone screen fallback and
-/// the Games hub when Lateania is the selected card.
+/// Lateania landing, used both by the standalone screen fallback and the Games
+/// hub when Lateania is the selected card.
 pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     delete_confirm: bool,
     online: usize,
-    terminal_image_protocol: Option<TerminalImageProtocol>,
-    terminal_images: &mut TerminalImageFrame,
-) {
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(if area.width >= 104 && area.height >= 22 {
-            [Constraint::Min(48), Constraint::Length(58)]
-        } else {
-            [Constraint::Min(0), Constraint::Length(0)]
-        })
-        .split(area);
+    slots: &SlotList,
+    slot_cursor: usize,
+    scroll: u16,
+) -> u16 {
+    draw_launch_copy(
+        frame,
+        area,
+        delete_confirm,
+        online,
+        slots,
+        slot_cursor,
+        scroll,
+    )
+}
 
-    draw_launch_copy(frame, layout[0], delete_confirm, online);
-    if layout.len() > 1 && layout[1].width > 0 {
-        draw_frontier_art(frame, layout[1], terminal_image_protocol, terminal_images);
+/// One row of the character-select list: the highlighted slot gets a `>`
+/// marker and bright text.
+fn slot_row(slot: i16, desc: String, desc_color: Color, highlighted: bool) -> Line<'static> {
+    let marker_color = if highlighted {
+        theme::SUCCESS()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    let marker_style = if highlighted {
+        Style::default()
+            .fg(marker_color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(marker_color)
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("{} {}. ", if highlighted { ">" } else { " " }, slot + 1),
+            marker_style,
+        ),
+        Span::styled(desc, Style::default().fg(desc_color)),
+    ])
+}
+
+/// The character-select rows. A saved character reads as itself, an empty slot
+/// as an invitation to start one, and a list still being read says so: those
+/// last two used to look identical, so the landing invited you to start a new
+/// character over one it had not heard about yet.
+fn slot_rows(slots: &SlotList, slot_cursor: usize) -> Vec<Line<'static>> {
+    match slots {
+        SlotList::Loading => (0..CHARACTER_SLOTS)
+            .map(|slot| {
+                slot_row(
+                    slot,
+                    "loading".to_string(),
+                    theme::TEXT_FAINT(),
+                    slot as usize == slot_cursor,
+                )
+            })
+            .collect(),
+        SlotList::Ready(rows) => rows
+            .iter()
+            .map(|row| {
+                let (desc, color) = match (row.occupied, row.class) {
+                    (false, _) => (
+                        "empty - start a new character".to_string(),
+                        theme::TEXT_FAINT(),
+                    ),
+                    (true, Some(class)) => (
+                        format!("{}, Lv {}", class.name(), row.level),
+                        theme::TEXT_BRIGHT(),
+                    ),
+                    (true, None) => (
+                        format!("Lv {} - no class chosen yet", row.level),
+                        theme::TEXT_BRIGHT(),
+                    ),
+                };
+                slot_row(row.slot, desc, color, row.slot as usize == slot_cursor)
+            })
+            .collect(),
     }
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online: usize) {
+fn draw_launch_copy(
+    frame: &mut Frame,
+    area: Rect,
+    delete_confirm: bool,
+    online: usize,
+    slots: &SlotList,
+    slot_cursor: usize,
+    scroll: u16,
+) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -249,7 +351,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
         ),
     ]));
     lines.push(Line::from(Span::styled(
-        "Shared rooms, twelve classes, frontier quests, player housing, companions, titles, loot, and real persistence.",
+        "Shared rooms, seventeen classes, crafting and taming trades, boss quests, player housing, companions, titles, loot, and real persistence.",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::raw(""));
@@ -258,35 +360,43 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
     lines.push(landing::heading("Boss Achievements"));
     lines.push(landing::stat(
         "Archdemon Mal'gareth",
-        "10,000 chips + LMG badge, once per account",
-        22,
+        "10,000 chips, and the LMG badge the first time",
+        24,
     ));
     lines.push(landing::stat(
         "Frontier King",
-        "20,000 chips + LKN badge, once per account",
-        22,
+        "10,000 chips, and the LKN badge the first time",
+        24,
     ));
     lines.push(landing::stat(
         "Yssgar, Sundering Deep",
-        "LYS badge, once per account; no chips, only glory",
-        22,
+        "10,000 chips, and the LYS badge the first time",
+        24,
+    ));
+    lines.push(landing::stat(
+        "Kaethyr Ascendant",
+        "10,000 chips, and the LKA badge the first time",
+        24,
     ));
     lines.push(Line::from(Span::styled(
-        "  Repeat clears keep titles and loot, but these chip payouts are lifetime claims.",
+        "  Each crown pays once per character, and at most once every 30 days per account.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));
-    lines.push(landing::heading("Enter The World"));
+    lines.push(landing::heading("Choose Your Character"));
+    lines.extend(slot_rows(slots, slot_cursor));
+    lines.push(Line::raw(""));
+    lines.push(landing::hint("j/k or up/down", "highlight a slot", 19));
     lines.push(landing::action(
         ">",
         "Enter",
-        "step through the gate",
+        "play the highlighted slot",
         theme::SUCCESS(),
     ));
     lines.push(landing::action(
         " ",
         "d",
-        "reset your saved character",
+        "reset the highlighted slot",
         theme::ERROR(),
     ));
     lines.push(landing::action(" ", "?", "open the guide", theme::AMBER()));
@@ -303,7 +413,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
     if delete_confirm {
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![Span::styled(
-            "Delete your Lateania character?",
+            format!("Delete the character in slot {}?", slot_cursor + 1),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
@@ -322,97 +432,12 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
         )));
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-}
-
-fn draw_frontier_art(
-    frame: &mut Frame,
-    area: Rect,
-    terminal_image_protocol: Option<TerminalImageProtocol>,
-    terminal_images: &mut TerminalImageFrame,
-) {
-    let inner = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(BANNER_IMAGE_ROWS as u16),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
-    if !draw_native_frontier_banner(inner[1], terminal_image_protocol, terminal_images) {
-        frame.render_widget(Paragraph::new(frontier_banner_preview().to_vec()), inner[1]);
-    }
-
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "The Frontier is open",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::raw(""),
-        fact_line("20", "frontier zones"),
-        fact_line("1,500+", "rooms in the world"),
-        fact_line("12", "classes, each with two archetype paths"),
-        fact_line("5", "home tiers to buy and furnish"),
-        fact_line("30k", "one-time chips across final boss achievements"),
-        Line::raw(""),
-        Line::from(Span::styled(
-            "Your character persists. The world persists. Other adventurers are really there.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-    ];
-    if area.height >= 30 {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(Span::styled(
-            "Launch, pick a class, and make a name worth wearing.",
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner[3]);
-}
-
-fn draw_native_frontier_banner(
-    area: Rect,
-    protocol: Option<TerminalImageProtocol>,
-    terminal_images: &mut TerminalImageFrame,
-) -> bool {
-    let Some(protocol) = protocol else {
-        return false;
-    };
-    // Sixel has no delete-by-id, so a non-modal banner that appears and
-    // vanishes on hub-card / screen changes leaves stale raster pixels behind
-    // (see pre_frame_sixel_wipe_bytes). Render the ASCII preview instead on
-    // Sixel terminals; Kitty/iTerm2 (delete-by-id) keep the native banner.
-    // Full-quality Sixel still applies to the chat image modal, a separate path.
-    if protocol == TerminalImageProtocol::Sixel {
-        return false;
-    }
-    let Some(data) = frontier_terminal_image(protocol) else {
-        return false;
-    };
-    if !data.supports_protocol(protocol) {
-        return false;
-    }
-    let width = data.display_cols.min(area.width);
-    let height = data.display_rows.min(area.height);
-    if width == 0 || height == 0 {
-        return false;
-    }
-    let image_area = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
-    terminal_images.push(TerminalImagePlacement {
-        message_id: FRONTIER_BANNER_IMAGE_ID,
-        area: image_area,
-        data: data.clone(),
-    });
-    true
+    crate::app::door::landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 fn lateania_logo() -> Vec<Line<'static>> {
@@ -445,18 +470,23 @@ fn world_stats(online: usize) -> Vec<Line<'static>> {
     vec![
         landing::stat(&online_label, "in the world right now", 22),
         landing::stat(
-            "20 frontier zones",
-            "boss quests, titles, and bounty rewards",
+            "six great lands",
+            "frontier, reaches, ash, lakes, greenwood & isles",
             22,
         ),
         landing::stat(
-            "1,500+ rooms",
-            "towns, capitals, wilds, mazes, a cave, and homes",
+            "8,600+ rooms",
+            "towns, capitals, wilds, mazes, caves, and homes",
             22,
         ),
         landing::stat(
-            "12 classes",
-            "the five originals plus seven new callings",
+            "17 classes",
+            "the five originals plus twelve new callings",
+            22,
+        ),
+        landing::stat(
+            "trades & taming",
+            "gather, craft, fish, and tame fifty wild beasts",
             22,
         ),
         landing::stat(
@@ -464,68 +494,6 @@ fn world_stats(online: usize) -> Vec<Line<'static>> {
             "mob state and combat persist server-side",
             22,
         ),
+        landing::stat("5 home tiers", "buy and furnish your own place", 22),
     ]
-}
-
-fn fact_line(value: &str, label: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{value:>6} "),
-            Style::default()
-                .fg(theme::BADGE_GOLD())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
-    ])
-}
-
-fn frontier_banner_preview() -> &'static [Line<'static>] {
-    static PREVIEW: OnceLock<Vec<Line<'static>>> = OnceLock::new();
-    PREVIEW
-        .get_or_init(render_frontier_banner_preview)
-        .as_slice()
-}
-
-fn frontier_terminal_image(protocol: TerminalImageProtocol) -> Option<&'static TerminalImageData> {
-    static KITTY: OnceLock<Option<TerminalImageData>> = OnceLock::new();
-    static ITERM2: OnceLock<Option<TerminalImageData>> = OnceLock::new();
-    static SIXEL: OnceLock<Option<TerminalImageData>> = OnceLock::new();
-    let slot = match protocol {
-        TerminalImageProtocol::Kitty => &KITTY,
-        TerminalImageProtocol::Iterm2 => &ITERM2,
-        TerminalImageProtocol::Sixel => &SIXEL,
-    };
-    slot.get_or_init(|| {
-        terminal_image_from_bytes(
-            FRONTIER_BANNER_PNG,
-            BANNER_IMAGE_COLS,
-            BANNER_IMAGE_ROWS,
-            protocol,
-        )
-        .ok()
-    })
-    .as_ref()
-}
-
-fn render_frontier_banner_preview() -> Vec<Line<'static>> {
-    let Ok(image) = image::load_from_memory(FRONTIER_BANNER_PNG) else {
-        return fallback_banner_preview();
-    };
-    render_rgba_preview(
-        &image.to_rgba8(),
-        BANNER_IMAGE_COLS,
-        BANNER_IMAGE_ROWS,
-        InlineImageRenderSettings::default(),
-    )
-    .unwrap_or_else(|_| fallback_banner_preview())
-}
-
-fn fallback_banner_preview() -> Vec<Line<'static>> {
-    [
-        "  The Frontier banner could not be rendered.",
-        "  Enter Lateania and find the wilds yourself.",
-    ]
-    .into_iter()
-    .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::AMBER_DIM()))))
-    .collect()
 }

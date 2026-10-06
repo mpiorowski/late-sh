@@ -7,98 +7,90 @@ use std::collections::{BTreeSet, HashMap};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::marketplace::{
-    BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
+use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
+use super::profile_award::{
+    CROWN_AWARD_CATEGORY, MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
 };
-use super::profile_award::PROFILE_AWARD_RANK_LIMIT;
+use super::statusline::{
+    StatusComponentSetting, default_statusline_components, parse_statusline_components,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioSource {
-    #[default]
-    Icecast,
     Youtube,
+    /// Direct station streams from the radio catalogue (`crate::radio`).
+    /// The default for users who never picked a source, so fresh `late`
+    /// sessions land on the radio.
+    #[default]
     Radio,
 }
 
 impl AudioSource {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Icecast => "icecast",
             Self::Youtube => "youtube",
             Self::Radio => "radio",
         }
     }
 
+    /// `icecast` is the retired house-stream source; migration 220 moved
+    /// its users to `radio` on the mount they had.
     pub fn from_settings_str(value: &str) -> Self {
         match value {
             "youtube" => Self::Youtube,
-            "radio" => Self::Radio,
-            _ => Self::Icecast,
+            _ => Self::Radio,
         }
     }
 }
 
+/// How a session is driven. Chosen on first entry (see the onboarding prompt),
+/// then editable in settings. The key behavioural lever is whether the terminal
+/// mouse reporting is turned on: off in `Keyboard` so native selection/copy keep
+/// working; on in `Mouse` and `Hybrid`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum IcecastStream {
+pub enum InteractionMode {
+    /// Keyboard only, the classic terminal/programmer experience; mouse
+    /// reporting stays off so the terminal's own text selection works.
+    Keyboard,
+    /// Mouse-first, Discord-like: everything is clickable, mouse reporting on.
+    Mouse,
+    /// Both keyboard shortcuts and the mouse work. The safe default.
     #[default]
-    Chill,
-    Classical,
+    Hybrid,
 }
 
-impl IcecastStream {
+impl InteractionMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Chill => "chill",
-            Self::Classical => "classical",
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
+            Self::Hybrid => "hybrid",
         }
     }
 
     pub fn from_settings_str(value: &str) -> Self {
         match value {
-            "classical" => Self::Classical,
-            _ => Self::Chill,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RadioStation {
-    #[default]
-    Chillsynth,
-    Nightride,
-    Datawave,
-    Spacesynth,
-    Ambient,
-}
-
-impl RadioStation {
-    /// Settings/persistence key, also used to look up live now-playing
-    /// metadata in the Nightride `/meta` feed. The feed keys stations by
-    /// their stream filename, so `Ambient` must key on `"rektify"` (its
-    /// `rektify.mp3` stream) even though its display label is `"ambient"`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Chillsynth => "chillsynth",
-            Self::Nightride => "nightride",
-            Self::Datawave => "datawave",
-            Self::Spacesynth => "spacesynth",
-            Self::Ambient => "rektify",
+            "keyboard" => Self::Keyboard,
+            "mouse" => Self::Mouse,
+            _ => Self::Hybrid,
         }
     }
 
-    pub fn from_settings_str(value: &str) -> Self {
-        match value {
-            "nightride" => Self::Nightride,
-            "datawave" => Self::Datawave,
-            "spacesynth" => Self::Spacesynth,
-            "rektify" => Self::Ambient,
-            _ => Self::Chillsynth,
-        }
+    /// Whether the terminal's mouse reporting should be enabled in this mode.
+    pub fn mouse_enabled(self) -> bool {
+        matches!(self, Self::Mouse | Self::Hybrid)
+    }
+
+    /// Whether keyboard shortcuts are the primary/expected input (for which set
+    /// of on-screen hints to show). Both keyboard-only and hybrid say yes.
+    pub fn keyboard_primary(self) -> bool {
+        matches!(self, Self::Keyboard | Self::Hybrid)
     }
 }
+
+pub use crate::radio::{RADIO_SLOTS, RadioSlots, RadioStation};
 
 crate::model! {
     table = "users";
@@ -121,10 +113,16 @@ pub const USERNAME_MAX_LEN: usize = 32;
 /// Master on/off for the global right sidebar. The sidebar only appears on the
 /// first three top-level screens (Home, Arcade, Rooms); which panels show and
 /// in what order is governed by the component list, not by this mode.
+///
+/// `Auto` hands the decision to the terminal: the sidebar shows only when the
+/// session is wide enough to spare the columns, so one account works on both a
+/// phone and a desktop. The width thresholds live in `late-ssh`'s render layer,
+/// which is the only place that knows the live terminal size.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarMode {
     On,
     Off,
+    Auto,
 }
 
 impl RightSidebarMode {
@@ -132,62 +130,278 @@ impl RightSidebarMode {
         match self {
             Self::On => "on",
             Self::Off => "off",
+            Self::Auto => "auto",
         }
     }
 
-    pub fn cycle(self, _forward: bool) -> Self {
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) | (Self::Auto, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Auto,
+            (Self::Auto, true) | (Self::Off, false) => Self::On,
+        }
+    }
+}
+
+/// The page a session starts on (Settings, Tweaks, Startup). Brand-new users
+/// always start in the Clubhouse regardless, so the first-visit tour runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LandingPage {
+    Clubhouse,
+    Home,
+    Zen,
+}
+
+impl LandingPage {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::On => Self::Off,
-            Self::Off => Self::On,
+            Self::Clubhouse => "clubhouse",
+            Self::Home => "home",
+            Self::Zen => "zen",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "clubhouse" => Some(Self::Clubhouse),
+            "home" => Some(Self::Home),
+            "zen" => Some(Self::Zen),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Clubhouse, true) => Self::Home,
+            (Self::Home, true) => Self::Zen,
+            (Self::Zen, true) => Self::Clubhouse,
+            (Self::Clubhouse, false) => Self::Zen,
+            (Self::Home, false) => Self::Clubhouse,
+            (Self::Zen, false) => Self::Home,
+        }
+    }
+}
+
+/// Which hung pieces may appear over the login splash. Unmarked art is SFW.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ArtSplashMode {
+    #[default]
+    Sfw,
+    Always,
+    Never,
+}
+
+impl ArtSplashMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sfw => "sfw",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sfw => "SFW",
+            Self::Always => "Always",
+            Self::Never => "Never",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "sfw" => Some(Self::Sfw),
+            "always" => Some(Self::Always),
+            "never" => Some(Self::Never),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Sfw, true) | (Self::Never, false) => Self::Always,
+            (Self::Always, true) | (Self::Sfw, false) => Self::Never,
+            (Self::Never, true) | (Self::Always, false) => Self::Sfw,
+        }
+    }
+}
+
+pub fn extract_art_splash_mode(settings: &Value) -> ArtSplashMode {
+    settings
+        .get("art_splash_mode")
+        .and_then(Value::as_str)
+        .and_then(ArtSplashMode::from_key)
+        .unwrap_or_default()
+}
+
+/// Inline terminal image previews (Settings, Tweaks, Display). `Auto` trusts
+/// what the terminal reports. The other two override it for terminals that
+/// report wrong: tmux can pass on sixel support its host terminal lacks, and
+/// some terminals draw sixel without ever advertising it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalImagesMode {
+    Auto,
+    Off,
+    Sixel,
+}
+
+impl TerminalImagesMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Off => "off",
+            Self::Sixel => "sixel",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "auto" => Some(Self::Auto),
+            "off" => Some(Self::Off),
+            "sixel" => Some(Self::Sixel),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Auto, true) => Self::Off,
+            (Self::Off, true) => Self::Sixel,
+            (Self::Sixel, true) => Self::Auto,
+            (Self::Auto, false) => Self::Sixel,
+            (Self::Off, false) => Self::Auto,
+            (Self::Sixel, false) => Self::Off,
+        }
+    }
+}
+
+/// Master on/off for the Home room-list rail, the left column. Mirrors
+/// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
+/// narrow to carry three columns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RoomListMode {
+    On,
+    Off,
+    Auto,
+}
+
+impl RoomListMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::On, true) | (Self::Auto, false) => Self::Off,
+            (Self::Off, true) | (Self::On, false) => Self::Auto,
+            (Self::Auto, true) | (Self::Off, false) => Self::On,
         }
     }
 }
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 6;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
-/// listed here — it is always pinned at the top of the sidebar.
+/// listed here: it is always pinned at the top of the sidebar. The
+/// visualizer is not a panel of its own: it renders inline at the top of
+/// `Music`, see `common/sidebar.rs`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarComponent {
-    Visualizer,
     Music,
-    Pet,
     Bonsai,
+    Daily,
+    /// The Pet Companion's box; drawn only while the account owns one.
+    Pet,
+    /// A small tank of one-to-three-cell fish; drawn only while the account
+    /// owns the aquarium.
+    Tank,
+    /// Free space: no rule, no rows of its own, it takes whatever the rail
+    /// has left, so the panels under it sit at the bottom.
+    Spacer,
 }
 
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
-    /// to backfill any panels missing from a stored list.
-    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Visualizer, Self::Music, Self::Pet, Self::Bonsai];
+    /// to backfill any panels missing from a stored list. Every panel has a
+    /// fixed height; when the rail runs short, panels drop from the bottom
+    /// of this order up. Stale stored keys (e.g. the retired "pet",
+    /// "activity", "visualizer" and "pot" panels) are dropped on read by
+    /// `from_key`; the pet panel came back under a new key so an old stored
+    /// "pet" entry cannot switch it on.
+    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
+        Self::Daily,
+        Self::Music,
+        Self::Spacer,
+        Self::Bonsai,
+        Self::Pet,
+        Self::Tank,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Visualizer => "visualizer",
             Self::Music => "music",
-            Self::Pet => "pet",
             Self::Bonsai => "bonsai",
+            Self::Daily => "daily",
+            Self::Pet => "pet_box",
+            Self::Tank => "mini_tank",
+            Self::Spacer => "spacer",
         }
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
         match key.trim() {
-            "visualizer" => Some(Self::Visualizer),
             "music" => Some(Self::Music),
-            "pet" => Some(Self::Pet),
             "bonsai" => Some(Self::Bonsai),
+            "daily" => Some(Self::Daily),
+            "pet_box" => Some(Self::Pet),
+            "mini_tank" => Some(Self::Tank),
+            "spacer" => Some(Self::Spacer),
             _ => None,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Visualizer => "Visualizer",
             Self::Music => "Audio playback",
-            Self::Pet => "Pet companion",
             Self::Bonsai => "Bonsai",
+            Self::Daily => "Lobby",
+            Self::Pet => "Pet",
+            Self::Tank => "Tank",
+            Self::Spacer => "Free space",
+        }
+    }
+
+    /// Whether the panel starts enabled, for new users and when a new panel
+    /// is backfilled into an existing user's stored list. The pet and the
+    /// tank start off: the rail is tight and they are opt-in.
+    pub fn default_enabled(self) -> bool {
+        match self {
+            Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
+            Self::Pet | Self::Tank => false,
         }
     }
 }
@@ -200,19 +414,22 @@ pub struct RightSidebarComponentSetting {
     pub enabled: bool,
 }
 
-/// Default component list: every panel, in default order, all enabled.
+/// Default component list: every panel, in default order, at its default
+/// on/off state.
 pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
     RightSidebarComponent::ALL
         .into_iter()
         .map(|component| RightSidebarComponentSetting {
             component,
-            enabled: true,
+            enabled: component.default_enabled(),
         })
         .collect()
 }
 
-/// Drop duplicates and backfill any missing panels (enabled) at the end so the
-/// list always covers every component exactly once, preserving stored order.
+/// Drop duplicates and backfill any missing panels at the end so the list
+/// always covers every component exactly once, preserving stored order.
+/// A backfilled panel takes its `default_enabled()`, the same as a new
+/// user gets it.
 pub fn normalize_right_sidebar_components(
     components: &[RightSidebarComponentSetting],
 ) -> Vec<RightSidebarComponentSetting> {
@@ -227,7 +444,7 @@ pub fn normalize_right_sidebar_components(
         if !result.iter().any(|s| s.component == component) {
             result.push(RightSidebarComponentSetting {
                 component,
-                enabled: true,
+                enabled: component.default_enabled(),
             });
         }
     }
@@ -236,27 +453,53 @@ pub fn normalize_right_sidebar_components(
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
+const INTERACTION_MODE_KEY: &str = "interaction_mode";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
-const ICECAST_STREAM_KEY: &str = "icecast_stream";
 const RADIO_STATION_KEY: &str = "radio_station";
+const RADIO_SLOTS_KEY: &str = "radio_slots";
 const NOTIFY_KINDS_KEY: &str = "notify_kinds";
 const NOTIFY_BELL_KEY: &str = "notify_bell";
 const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
-const SHOW_DASHBOARD_HEADER_KEY: &str = "show_dashboard_header";
 const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
+const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
+/// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
+/// as the JSON the page itself serializes; absent until first edited.
+const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
+const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
-const LAND_ON_HOME_KEY: &str = "land_on_home";
+const LANDING_PAGE_KEY: &str = "landing_page";
+const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
+const TERMINAL_IMAGES_KEY: &str = "terminal_images";
+/// Award categories the user keeps off their chat label. Read by the chat
+/// label SQL straight from `users.settings`, so the key is spelled there too.
+const HIDDEN_AWARD_CATEGORIES_KEY: &str = "hidden_award_categories";
+/// The edition (UTC date, ISO) whose login pop this account has had.
+const PAPER_SHOWN_ON_KEY: &str = "paper_shown_on";
+const TRANSLATE_TO_KEY: &str = "translate_to";
+const AUTO_TRANSLATE_KEY: &str = "auto_translate";
+const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
+const FIRST_CONTACT_GLITCH_HITS_KEY: &str = "first_contact_glitch_hits";
+const FIRST_CONTACT_NAME_HITS_KEY: &str = "first_contact_name_hits";
+const FIRST_CONTACT_WHISPER_HITS_KEY: &str = "first_contact_whisper_hits";
+const FIRST_CONTACT_WHISPER_AT_KEY: &str = "first_contact_whisper_at";
+const FIRST_CONTACT_INVITED_AT_KEY: &str = "first_contact_invited_at";
+const FIRST_CONTACT_GLITCH_DAY_KEY: &str = "first_contact_glitch_day";
+const FIRST_CONTACT_GLITCH_DAY_HITS_KEY: &str = "first_contact_glitch_day_hits";
+const FIRST_CONTACT_NAME_DAY_KEY: &str = "first_contact_name_day";
+const FIRST_CONTACT_NAME_DAY_HITS_KEY: &str = "first_contact_name_day_hits";
+const FIRST_CONTACT_BIO_KEY: &str = "first_contact_bio";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
+const FAVORITE_THEME_IDS_KEY: &str = "favorite_theme_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
 const TIMEZONE_KEY: &str = "timezone";
@@ -264,9 +507,19 @@ const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
-const BIRTHDAY_KEY: &str = "birthday";
 
 impl User {
+    /// Whether this account is one of the app's own actors (the ghost bots,
+    /// the `system` feed author). Set in `settings.bot` when the row is
+    /// ensured. Callers use it to keep player-to-player mechanics between
+    /// players: nobody tips the house.
+    pub fn is_bot(&self) -> bool {
+        self.settings
+            .get("bot")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(
@@ -290,36 +543,6 @@ impl User {
         Ok(row.map(Self::from))
     }
 
-    pub async fn ensure_ssh_key(
-        client: &impl GenericClient,
-        user_id: Uuid,
-        fingerprint: &str,
-    ) -> Result<()> {
-        client
-            .execute(
-                "INSERT INTO user_ssh_keys (user_id, fingerprint)
-                 VALUES ($1, $2)
-                 ON CONFLICT (fingerprint) DO UPDATE
-                 SET user_id = EXCLUDED.user_id,
-                     last_seen = current_timestamp,
-                     updated = current_timestamp",
-                &[&user_id, &fingerprint],
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn touch_ssh_key(client: &Client, fingerprint: &str) -> Result<()> {
-        client
-            .execute(
-                "UPDATE user_ssh_keys
-                 SET last_seen = current_timestamp, updated = current_timestamp
-                 WHERE fingerprint = $1",
-                &[&fingerprint],
-            )
-            .await?;
-        Ok(())
-    }
     pub async fn update_last_seen(&mut self, client: &Client) -> Result<()> {
         self.last_seen = Utc::now();
         client
@@ -370,7 +593,7 @@ impl User {
     /// Staff (admin/moderator) flags for the given users. Users with neither
     /// flag are omitted; values are `(is_admin, is_moderator)`.
     pub async fn staff_flags_by_ids(
-        client: &Client,
+        client: &impl GenericClient,
         user_ids: &[Uuid],
     ) -> Result<HashMap<Uuid, (bool, bool)>> {
         if user_ids.is_empty() {
@@ -460,48 +683,75 @@ impl User {
             return Ok(Vec::new());
         }
 
+        // The rankless milestone badges show whatever month they were earned,
+        // unlike the ranked boards. Bound as a parameter so the set lives in
+        // `profile_award` alone rather than being respelled in SQL.
+        let milestone_categories: Vec<&str> = MILESTONE_AWARD_CATEGORIES.to_vec();
         let rows = client
             .query(
                 "SELECT u.id,
                         u.username,
                         u.is_admin,
                         u.is_moderator,
-                        t.is_alive,
-                        t.growth_points,
-                        v2.badge_glyph AS bonsai_v2_badge_glyph,
-                        EXISTS (
-                            SELECT 1
-                            FROM user_purchases dynamic_up
-                            JOIN marketplace_items dynamic_bonsai
-                              ON dynamic_bonsai.id = dynamic_up.item_id
-                            WHERE dynamic_up.user_id = u.id
-                              AND dynamic_up.equipped_slot = $3
-                              AND dynamic_bonsai.sku = $4
-                        ) AS dynamic_bonsai_selected,
-                        flag.payload->>'emoji' AS chat_flag,
-                        badge.payload->>'emoji' AS chat_badge,
+                        t.badge_glyph AS bonsai_badge_glyph,
+                        flag_rental.payload->>'emoji' AS chat_flag,
+                        badge_rental.payload->>'emoji' AS chat_badge,
                         award.badges AS profile_award_badges
                  FROM users u
+                 -- The bonsai badge is precomputed by the tree's owner session
+                 -- (`bonsai_trees.badge_glyph`), never derived per message.
+                 -- No row yet means no glyph: the tree is planted at login.
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
-                 LEFT JOIN bonsai_v2_trees v2 ON v2.user_id = u.id
-                 LEFT JOIN user_purchases up
-                   ON up.user_id = u.id
-                  AND up.equipped_slot = $2
-                 LEFT JOIN marketplace_items badge
-                   ON badge.id = up.item_id
-                 LEFT JOIN user_purchases flag_up
-                   ON flag_up.user_id = u.id
-                  AND flag_up.equipped_slot = $5
-                 LEFT JOIN marketplace_items flag
-                   ON flag.id = flag_up.item_id
+                 -- A rental is the only thing that fills these two slots.
+                 -- Expiry is read-time: once `ends_at` passes the label goes
+                 -- bare, with no background job to run. Migration 165 cleared
+                 -- the last permanent equips (and migration 177 the bonsai
+                 -- variant, the last equip of any kind), so `equipped_slot`
+                 -- carries nothing; $2 and $3 are effect kinds here.
+                 LEFT JOIN LATERAL (
+                    SELECT e.payload
+                    FROM shop_consumable_effects e
+                    WHERE e.user_id = u.id
+                      AND e.room_id IS NULL
+                      AND e.effect_kind = $2
+                      AND e.active = true
+                      AND e.ends_at > current_timestamp
+                    ORDER BY e.ends_at DESC
+                    LIMIT 1
+                 ) badge_rental ON true
+                 LEFT JOIN LATERAL (
+                    SELECT e.payload
+                    FROM shop_consumable_effects e
+                    WHERE e.user_id = u.id
+                      AND e.room_id IS NULL
+                      AND e.effect_kind = $3
+                      AND e.active = true
+                      AND e.ends_at > current_timestamp
+                    ORDER BY e.ends_at DESC
+                    LIMIT 1
+                 ) flag_rental ON true
                  LEFT JOIN LATERAL (
                     SELECT string_agg(
                         CASE category
                           WHEN 'lateania_archdemon' THEN 'LMG'
                           WHEN 'lateania_frontier_king' THEN 'LKN'
                           WHEN 'lateania_sundering_deep' THEN 'LYS'
+                          WHEN 'lateania_kaethyr_ascendant' THEN 'LKA'
                           WHEN 'nethack_amulet' THEN 'NHA'
                           WHEN 'nethack_ascension' THEN 'NHY'
+                          WHEN 'dcss_orb' THEN 'DCO'
+                          WHEN 'dcss_win' THEN 'DCW'
+                          WHEN 'brogue_escape' THEN 'BRE'
+                          WHEN 'brogue_mastery' THEN 'BRM'
+                          WHEN 'greendragon_dragon' THEN 'GDS'
+                          WHEN 'darkroom_escape' THEN 'ADE'
+                          WHEN 'darkroom_beacon' THEN 'ADB'
+                          WHEN 'deadchannel_old_signal' THEN 'SIG'
+                          -- Monthly like the boards below, rankless like the
+                          -- milestones above: one holder, so no rank digit
+                          -- (`profile_award::is_rankless_award`).
+                          WHEN 'late_time' THEN 'LATE'
+                          WHEN 'top_drinkers' THEN 'DRNK'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -509,6 +759,7 @@ impl User {
                               WHEN 'tetris' THEN 'LA'
                               WHEN 'twenty_forty_eight' THEN '24#'
                               WHEN 'snake' THEN 'SN'
+                              WHEN 'artboard' THEN 'ART'
                               ELSE 'LB'
                             END
                           ) || rank::text
@@ -518,32 +769,53 @@ impl User {
                                  CASE category
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
+                                   WHEN 'artboard' THEN 6
+                                   WHEN 'late_time' THEN 7
+                                   WHEN 'top_drinkers' THEN 8
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4
                                    WHEN 'lateania_archdemon' THEN 10
                                    WHEN 'lateania_frontier_king' THEN 11
-                                   WHEN 'nethack_amulet' THEN 12
-                                   WHEN 'nethack_ascension' THEN 13
+                                   WHEN 'lateania_sundering_deep' THEN 12
+                                   WHEN 'lateania_kaethyr_ascendant' THEN 13
+                                   WHEN 'nethack_amulet' THEN 14
+                                   WHEN 'nethack_ascension' THEN 15
+                                   WHEN 'greendragon_dragon' THEN 16
+                                   WHEN 'dcss_orb' THEN 17
+                                   WHEN 'dcss_win' THEN 18
+                                   WHEN 'brogue_escape' THEN 19
+                                   WHEN 'brogue_mastery' THEN 20
+                                   WHEN 'darkroom_escape' THEN 21
+                                   WHEN 'darkroom_beacon' THEN 22
+                                   WHEN 'deadchannel_old_signal' THEN 23
                                    ELSE 99
                                  END
                     ) AS badges
                     FROM profile_awards pa
                     WHERE pa.user_id = u.id
-                      AND pa.rank <= $6
+                      AND pa.rank <= $4
+                      -- Badges the author hid in Settings, Tweaks, Chat badges
+                      -- (`extract_hidden_award_categories`). Hiding the top
+                      -- rung of a game ladder lets the next one show.
+                      AND NOT (COALESCE(u.settings->'hidden_award_categories', '[]'::jsonb) ? pa.category)
+                      -- The crown never joins the group: chat paints last
+                      -- month's winner as a glyph before the name instead
+                      -- (`profile_award::chat_award_categories`).
+                      AND pa.category <> $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'nethack_amulet', 'nethack_ascension')
+                        OR pa.category = ANY($5)
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
                 &[
                     &user_ids,
                     &CHAT_BADGE_SLOT,
-                    &BONSAI_VARIANT_SLOT,
-                    &DYNAMIC_BONSAI_SKU,
                     &CHAT_FLAG_SLOT,
                     &PROFILE_AWARD_RANK_LIMIT,
+                    &milestone_categories,
+                    &CROWN_AWARD_CATEGORY,
                 ],
             )
             .await?;
@@ -557,10 +829,7 @@ impl User {
                     username: row.get("username"),
                     is_admin: row.get("is_admin"),
                     is_moderator: row.get("is_moderator"),
-                    bonsai_is_alive: row.get("is_alive"),
-                    bonsai_growth_points: row.get("growth_points"),
-                    bonsai_v2_badge_glyph: row.get("bonsai_v2_badge_glyph"),
-                    dynamic_bonsai_selected: row.get("dynamic_bonsai_selected"),
+                    bonsai_badge_glyph: row.get("bonsai_badge_glyph"),
                     chat_flag: row.get("chat_flag"),
                     chat_badge: row.get("chat_badge"),
                     profile_award_badges: chat_profile_award_badges(profile_award_badges),
@@ -635,6 +904,22 @@ impl User {
         Ok(extract_uuid_ids(&settings, FRIEND_USER_IDS_KEY))
     }
 
+    /// Friends and ignores from one read. Both lists live in the same
+    /// `users.settings` document and the chat snapshot needs both on every
+    /// pass, so calling the two single-list helpers fetched the identical row
+    /// twice: 11.1M `SELECT settings` calls in an 18-day window, exactly 2.006
+    /// per snapshot.
+    pub async fn friend_and_ignored_user_ids(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<(Vec<Uuid>, Vec<Uuid>)> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok((
+            extract_uuid_ids(&settings, FRIEND_USER_IDS_KEY),
+            extract_uuid_ids(&settings, IGNORED_USER_IDS_KEY),
+        ))
+    }
+
     pub async fn favorite_room_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_favorite_room_ids(&settings))
@@ -650,9 +935,9 @@ impl User {
         Ok(extract_audio_source(&settings))
     }
 
-    pub async fn icecast_stream(client: &Client, user_id: Uuid) -> Result<IcecastStream> {
+    pub async fn radio_slots(client: &Client, user_id: Uuid) -> Result<RadioSlots> {
         let settings = Self::settings_for_user(client, user_id).await?;
-        Ok(extract_icecast_stream(&settings))
+        Ok(extract_radio_slots(&settings))
     }
 
     pub async fn radio_station(client: &Client, user_id: Uuid) -> Result<RadioStation> {
@@ -663,6 +948,11 @@ impl User {
     pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_start_with_music_muted(&settings))
+    }
+
+    pub async fn translate_mine_to_en(client: &Client, user_id: Uuid) -> Result<bool> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_translate_mine_to_en(&settings))
     }
 
     /// Atomically merge `audio_source` into `settings` without clobbering other keys.
@@ -679,6 +969,45 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Persist the chosen interaction mode (keyboard / mouse / hybrid).
+    pub async fn set_interaction_mode(
+        client: &Client,
+        user_id: Uuid,
+        mode: InteractionMode,
+    ) -> Result<()> {
+        let value = mode.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&INTERACTION_MODE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Store the Rice page's layout JSON in the settings blob.
+    pub async fn set_zen_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&ZEN_LAYOUT_KEY, layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -704,19 +1033,385 @@ impl User {
         Ok(())
     }
 
-    pub async fn set_icecast_stream(
+    /// Count one first-contact clock-glitch burst (stage 1). The counter is
+    /// what opens stage 2 once the ladder's share of bursts has been seen,
+    /// and it quiets the clock afterwards.
+    pub async fn record_first_contact_glitch_hit(client: &Client, user_id: Uuid) -> Result<()> {
+        Self::increment_first_contact_counter(client, FIRST_CONTACT_GLITCH_HITS_KEY, user_id).await
+    }
+
+    /// Count one first-contact name-flicker hit (stage 2). The counter is
+    /// what arms the stage-3 whisper for the next fresh connect, and it caps
+    /// the total flickers a person ever gets.
+    pub async fn record_first_contact_name_hit(client: &Client, user_id: Uuid) -> Result<()> {
+        Self::increment_first_contact_counter(client, FIRST_CONTACT_NAME_HITS_KEY, user_id).await
+    }
+
+    async fn increment_first_contact_counter(
+        client: &Client,
+        key: &str,
+        user_id: Uuid,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = jsonb_set(
+                         settings,
+                         ARRAY[$1::text],
+                         to_jsonb(COALESCE((settings->>$1)::int, 0) + 1)
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&key, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Claim one capped first-contact clock-glitch burst (stage 1). The
+    /// row is the only judge of both caps, so two devices on two replicas
+    /// cannot double a day: the increment lands only while the lifetime
+    /// counter is under `caps.total` and today's counter under
+    /// `caps.daily`, and the day rolls inside the same statement.
+    pub async fn claim_first_contact_glitch_burst(
         client: &Client,
         user_id: Uuid,
-        stream: IcecastStream,
-    ) -> Result<()> {
-        let value = stream.as_str();
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> Result<FirstContactHitClaim> {
+        Self::claim_first_contact_hit(
+            client,
+            FirstContactHitKeys {
+                hits: FIRST_CONTACT_GLITCH_HITS_KEY,
+                day: FIRST_CONTACT_GLITCH_DAY_KEY,
+                day_hits: FIRST_CONTACT_GLITCH_DAY_HITS_KEY,
+            },
+            user_id,
+            today,
+            caps,
+        )
+        .await
+    }
+
+    /// Claim one capped first-contact name-flicker hit (stage 2). Same
+    /// contract as [`User::claim_first_contact_glitch_burst`].
+    pub async fn claim_first_contact_name_hit(
+        client: &Client,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> Result<FirstContactHitClaim> {
+        Self::claim_first_contact_hit(
+            client,
+            FirstContactHitKeys {
+                hits: FIRST_CONTACT_NAME_HITS_KEY,
+                day: FIRST_CONTACT_NAME_DAY_KEY,
+                day_hits: FIRST_CONTACT_NAME_DAY_HITS_KEY,
+            },
+            user_id,
+            today,
+            caps,
+        )
+        .await
+    }
+
+    async fn claim_first_contact_hit(
+        client: &Client,
+        keys: FirstContactHitKeys,
+        user_id: Uuid,
+        today: chrono::NaiveDate,
+        caps: FirstContactHitCaps,
+    ) -> Result<FirstContactHitClaim> {
+        let today = today.format("%Y-%m-%d").to_string();
+        let total_cap = i32::try_from(caps.total).unwrap_or(i32::MAX);
+        let daily_cap = i32::try_from(caps.daily).unwrap_or(i32::MAX);
+        let won = client
+            .query_opt(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object(
+                         $1::text, COALESCE((settings->>$1)::int, 0) + 1,
+                         $2::text, $4::text,
+                         $3::text, CASE WHEN settings->>$2 = $4
+                                        THEN COALESCE((settings->>$3)::int, 0) + 1
+                                        ELSE 1 END
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $5
+                   AND COALESCE((settings->>$1)::int, 0) < $6
+                   AND (settings->>$2 IS DISTINCT FROM $4
+                        OR COALESCE((settings->>$3)::int, 0) < $7)
+                 RETURNING (settings->>$1)::int AS hits",
+                &[
+                    &keys.hits,
+                    &keys.day,
+                    &keys.day_hits,
+                    &today,
+                    &user_id,
+                    &total_cap,
+                    &daily_cap,
+                ],
+            )
+            .await?;
+        if let Some(row) = won {
+            let hits: i32 = row.get("hits");
+            return Ok(FirstContactHitClaim::Won {
+                hits: u32::try_from(hits).unwrap_or(0),
+            });
+        }
+        let row = client
+            .query_opt(
+                "SELECT COALESCE((settings->>$1)::int, 0) AS hits FROM users WHERE id = $2",
+                &[&keys.hits, &user_id],
+            )
+            .await?;
+        let Some(row) = row else {
+            bail!("user not found");
+        };
+        let hits: i32 = row.get("hits");
+        Ok(FirstContactHitClaim::Capped {
+            hits: u32::try_from(hits).unwrap_or(0),
+        })
+    }
+
+    /// Claim one delivery of the first-contact splash whisper (stage 3).
+    /// The row judges both limits: the increment lands only while the
+    /// delivery counter is under `cap` and the last delivery is at least
+    /// `gap` before `at` (or there was none), so two devices that both
+    /// played the held door in one window leave exactly one mark, and the
+    /// second whisper never lands the same evening as the first. The
+    /// stamp is what schedules the stage-4 invitation once the counter
+    /// reaches the cap. Returns whether this caller won.
+    pub async fn claim_first_contact_whisper(
+        client: &Client,
+        user_id: Uuid,
+        at: DateTime<Utc>,
+        gap: chrono::Duration,
+        cap: u32,
+    ) -> Result<bool> {
+        let value = at.to_rfc3339();
+        let cap = i32::try_from(cap).unwrap_or(i32::MAX);
+        let not_before = at - gap;
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object(
+                         $1::text, COALESCE((settings->>$1)::int, 0) + 1,
+                         $2::text, $3::text
+                     ),
+                     updated = current_timestamp
+                 WHERE id = $4
+                   AND COALESCE((settings->>$1)::int, 0) < $5
+                   AND (settings->>$2 IS NULL
+                        OR (settings->>$2)::timestamptz <= $6)",
+                &[
+                    &FIRST_CONTACT_WHISPER_HITS_KEY,
+                    &FIRST_CONTACT_WHISPER_AT_KEY,
+                    &value,
+                    &user_id,
+                    &cap,
+                    &not_before,
+                ],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Claim the right to screen this user's bio (the first-contact
+    /// eligibility gate). The verdict is keyed to a hash of the bio text:
+    /// the claim wins when no verdict exists for this hash, or when the one
+    /// that exists is not a pass and is older than `retry_after` (a pending
+    /// claim whose replica died, or a failure worth one more look). A won
+    /// claim stamps a pending verdict, so racing sessions on any number of
+    /// replicas spend exactly one AI call per bio text. Returns whether
+    /// this caller won.
+    pub async fn claim_first_contact_bio_screen(
+        client: &Client,
+        user_id: Uuid,
+        hash: &str,
+        now: DateTime<Utc>,
+        retry_after: chrono::Duration,
+    ) -> Result<bool> {
+        let stale_before = now - retry_after;
+        let pending = json!({
+            "hash": hash,
+            "verdict": FirstContactBioVerdict::Pending.as_str(),
+            "at": now.to_rfc3339(),
+        });
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3
+                   AND (settings->$1->>'hash' IS DISTINCT FROM $4
+                        OR (settings->$1->>'verdict' <> $5
+                            AND (settings->$1->>'at')::timestamptz < $6))",
+                &[
+                    &FIRST_CONTACT_BIO_KEY,
+                    &pending,
+                    &user_id,
+                    &hash,
+                    &FirstContactBioVerdict::Passed.as_str(),
+                    &stale_before,
+                ],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Record the screen's verdict for the bio text `hash` names. Lands only
+    /// while that text is still the one on record: a bio rewritten during
+    /// the call gets no stale verdict, and the next session claims a fresh
+    /// screen for it. Returns whether the verdict landed.
+    pub async fn set_first_contact_bio_verdict(
+        client: &Client,
+        user_id: Uuid,
+        hash: &str,
+        verdict: FirstContactBioVerdict,
+        at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let value = json!({
+            "hash": hash,
+            "verdict": verdict.as_str(),
+            "at": at.to_rfc3339(),
+        });
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
+                     updated = current_timestamp
+                 WHERE id = $3 AND settings->$1->>'hash' = $4",
+                &[&FIRST_CONTACT_BIO_KEY, &value, &user_id, &hash],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Claim the right to send this user their one first-contact invitation
+    /// (stage 4). Conditional on the stamp being absent, so of several
+    /// sessions noticing the due date at once exactly one sends the DM.
+    /// Returns whether this caller won the claim.
+    pub async fn claim_first_contact_invitation(
+        client: &Client,
+        user_id: Uuid,
+        at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let value = at.to_rfc3339();
         let updated = client
             .execute(
                 "UPDATE users
                  SET settings = settings || jsonb_build_object($1::text, $2::text),
                      updated = current_timestamp
+                 WHERE id = $3 AND NOT (settings ? $1)",
+                &[&FIRST_CONTACT_INVITED_AT_KEY, &value, &user_id],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Give back a won-but-unspent invitation claim: the send after the
+    /// claim failed, so the stamp comes off and a later session retries.
+    /// Only the claim's winner calls this, so a plain key removal is
+    /// enough; a stamp left behind here is a burned invitation.
+    pub async fn release_first_contact_invitation(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings - $1,
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&FIRST_CONTACT_INVITED_AT_KEY, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Wipe every first-contact chain mark (the admin `/haunt reset` test
+    /// hook): glitch hits, name hits, both daily counters, the whisper
+    /// counter and stamp, and the invitation stamp. The bio screen verdict stays: it is
+    /// a cache of a paid check on the bio text, not a rung of the chain.
+    pub async fn reset_first_contact(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings - $1::text[],
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[
+                    &vec![
+                        FIRST_CONTACT_GLITCH_HITS_KEY,
+                        FIRST_CONTACT_NAME_HITS_KEY,
+                        FIRST_CONTACT_WHISPER_HITS_KEY,
+                        FIRST_CONTACT_WHISPER_AT_KEY,
+                        FIRST_CONTACT_INVITED_AT_KEY,
+                        FIRST_CONTACT_GLITCH_DAY_KEY,
+                        FIRST_CONTACT_GLITCH_DAY_HITS_KEY,
+                        FIRST_CONTACT_NAME_DAY_KEY,
+                        FIRST_CONTACT_NAME_DAY_HITS_KEY,
+                    ],
+                    &user_id,
+                ],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Write one pinned slot: `Some(station)` pins it there and vacates any
+    /// other slot it held, `None` empties the slot. One statement against
+    /// the stored slots (the defaults when none are saved), never a whole
+    /// array from session memory, so two sessions pinning different slots
+    /// both land.
+    pub async fn set_radio_slot(
+        client: &Client,
+        user_id: Uuid,
+        index: usize,
+        slot: Option<RadioStation>,
+    ) -> Result<()> {
+        if index >= RADIO_SLOTS {
+            bail!("radio slot {index} is out of range");
+        }
+        let position = index as i32 + 1;
+        let value = match slot {
+            Some(station) => Value::String(station.as_str().to_string()),
+            None => Value::Null,
+        };
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, (
+                         SELECT jsonb_agg(
+                                    CASE
+                                        WHEN n = $4::int THEN $5::jsonb
+                                        WHEN stored.slots -> (n - 1) = $5::jsonb THEN 'null'::jsonb
+                                        ELSE coalesce(stored.slots -> (n - 1), 'null'::jsonb)
+                                    END
+                                    ORDER BY n)
+                         FROM generate_series(1, $6::int) AS n,
+                              (SELECT CASE
+                                          WHEN jsonb_typeof(settings -> $1::text) = 'array'
+                                          THEN settings -> $1::text
+                                          ELSE $2::jsonb
+                                      END AS slots) AS stored
+                     )),
+                     updated = current_timestamp
                  WHERE id = $3",
-                &[&ICECAST_STREAM_KEY, &value, &user_id],
+                &[
+                    &RADIO_SLOTS_KEY,
+                    &RadioSlots::default().to_json(),
+                    &user_id,
+                    &position,
+                    &value,
+                    &(RADIO_SLOTS as i32),
+                ],
             )
             .await?;
         if updated == 0 {
@@ -821,31 +1516,6 @@ impl User {
         Ok((true, ids))
     }
 
-    /// `(username, birthday MM-DD)` for every friend that has set a birthday.
-    /// Used to build connect-time birthday alerts.
-    pub async fn friend_birthdays(client: &Client, user_id: Uuid) -> Result<Vec<(String, String)>> {
-        let ids = Self::friend_user_ids(client, user_id).await?;
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let rows = client
-            .query(
-                "SELECT username, settings FROM users WHERE id = ANY($1)",
-                &[&ids],
-            )
-            .await?;
-        let mut out = Vec::new();
-        for row in &rows {
-            let username: String = row.get("username");
-            let settings: Value = row.get("settings");
-            if let Some(birthday) = extract_birthday(&settings) {
-                out.push((username, birthday));
-            }
-        }
-        out.sort();
-        Ok(out)
-    }
-
     /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
         let updated = client
@@ -882,6 +1552,25 @@ impl User {
         Ok(())
     }
 
+    pub async fn set_admin(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        is_admin: bool,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET is_admin = $1, updated = current_timestamp
+                 WHERE id = $2",
+                &[&is_admin, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     pub async fn rename(
         client: &impl GenericClient,
         user_id: Uuid,
@@ -910,6 +1599,47 @@ impl User {
         Ok(row.get("settings"))
     }
 
+    /// Claim this account's one login pop of the paper for `edition`. Wins
+    /// once per edition across every device and replica: the stamp is the
+    /// only judge, and ISO dates compare as text, so a later edition always
+    /// beats the stamp and the same or an older one never does.
+    pub async fn claim_paper_shown(
+        client: &Client,
+        user_id: Uuid,
+        edition: chrono::NaiveDate,
+    ) -> Result<bool> {
+        let value = edition.format("%Y-%m-%d").to_string();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3
+                   AND COALESCE(settings->>$1, '') < $2",
+                &[&PAPER_SHOWN_ON_KEY, &value, &user_id],
+            )
+            .await?;
+        Ok(updated == 1)
+    }
+
+    /// Take the paper's login stamp off (the admin `/paper reset` hook), so
+    /// the next session pops the paper again whatever edition is printed.
+    pub async fn clear_paper_shown(client: &Client, user_id: Uuid) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings - $1,
+                     updated = current_timestamp
+                 WHERE id = $2",
+                &[&PAPER_SHOWN_ON_KEY, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     pub async fn update_settings(client: &Client, user_id: Uuid, settings: &Value) -> Result<()> {
         let updated = client
             .execute(
@@ -932,10 +1662,9 @@ pub struct ChatAuthorMetadata {
     pub username: String,
     pub is_admin: bool,
     pub is_moderator: bool,
-    pub bonsai_is_alive: Option<bool>,
-    pub bonsai_growth_points: Option<i32>,
-    pub bonsai_v2_badge_glyph: Option<String>,
-    pub dynamic_bonsai_selected: bool,
+    /// The precomputed chat glyph from `bonsai_trees.badge_glyph`; `None`
+    /// until the user's first login plants a tree, empty while it is dead.
+    pub bonsai_badge_glyph: Option<String>,
     pub chat_flag: Option<String>,
     pub chat_badge: Option<String>,
     pub profile_award_badges: Option<String>,
@@ -943,20 +1672,11 @@ pub struct ChatAuthorMetadata {
 
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
-    // Collapse the lesser milestone when its superseding one is present:
-    // Yssgar implies the Frontier King implies the Archdemon, and an Ascension
-    // implies the Amulet. Profile views still show all; chat author labels
-    // show only the highest.
-    let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
-    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
-    let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
-    let badges = raw
-        .split_whitespace()
-        .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
-        .filter(|badge| !(has_frontier_king && *badge == "LMG"))
-        .filter(|badge| !(has_ascension && *badge == "NHA"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    // One badge per game: the lesser milestone drops out whenever the player
+    // also holds a higher one on that game's ladder (see `BADGE_LADDERS`).
+    // Profile views still list every award; chat author labels show only the
+    // top of each ladder, so a shelf of crowns cannot crowd out the message.
+    let badges = top_badge_per_game(raw.split_whitespace()).join(" ");
     (!badges.is_empty()).then_some(badges)
 }
 
@@ -981,11 +1701,15 @@ fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
     settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
 }
 
-pub fn extract_birthday(settings: &Value) -> Option<String> {
+/// The chosen interaction mode, or `None` if the user has never picked one -
+/// which is the signal to show the first-run onboarding prompt.
+pub fn extract_interaction_mode(settings: &Value) -> Option<InteractionMode> {
     settings
-        .get(BIRTHDAY_KEY)
+        .get(INTERACTION_MODE_KEY)
         .and_then(Value::as_str)
-        .and_then(crate::models::birthday::normalize_birthday)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(InteractionMode::from_settings_str)
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {
@@ -1005,19 +1729,21 @@ pub fn extract_audio_source(settings: &Value) -> AudioSource {
         .unwrap_or_default()
 }
 
-pub fn extract_icecast_stream(settings: &Value) -> IcecastStream {
-    settings
-        .get(ICECAST_STREAM_KEY)
-        .and_then(Value::as_str)
-        .map(IcecastStream::from_settings_str)
-        .unwrap_or_default()
-}
-
 pub fn extract_radio_station(settings: &Value) -> RadioStation {
     settings
         .get(RADIO_STATION_KEY)
         .and_then(Value::as_str)
         .map(RadioStation::from_settings_str)
+        .unwrap_or_default()
+}
+
+/// The user's pinned slots, or the defaults when they never pinned
+/// anything. The defaults do not depend on the current station, so a slot
+/// never moves because the user retuned.
+pub fn extract_radio_slots(settings: &Value) -> RadioSlots {
+    settings
+        .get(RADIO_SLOTS_KEY)
+        .and_then(RadioSlots::from_json)
         .unwrap_or_default()
 }
 
@@ -1082,13 +1808,6 @@ pub fn extract_text_brightness_adjustment(settings: &Value) -> i32 {
         .unwrap_or(0)
 }
 
-pub fn extract_show_dashboard_header(settings: &Value) -> bool {
-    settings
-        .get(SHOW_DASHBOARD_HEADER_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
 pub fn extract_show_right_sidebar(settings: &Value) -> bool {
     // Legacy `"custom"` predates the global component list and meant "shown";
     // treat it as on.
@@ -1115,6 +1834,7 @@ pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
         .map(str::trim)
     {
         Some("off") => RightSidebarMode::Off,
+        Some("auto") => RightSidebarMode::Auto,
         // Legacy per-screen `"custom"` collapses to On now that visibility is
         // governed by the global component list.
         Some("on" | "custom") => RightSidebarMode::On,
@@ -1156,11 +1876,43 @@ pub fn extract_right_sidebar_components(settings: &Value) -> Vec<RightSidebarCom
     normalize_right_sidebar_components(&parsed)
 }
 
+/// The user's bottom status bar. An absent key means "never customized" and
+/// yields the shipped defaults (Keyhints, station, voice, mentions), so this is also
+/// what every existing account reads until the customizer writes for the
+/// first time.
+pub fn extract_statusline_components(settings: &Value) -> Vec<StatusComponentSetting> {
+    let Some(values) = settings
+        .get(STATUSLINE_COMPONENTS_KEY)
+        .and_then(Value::as_array)
+    else {
+        return default_statusline_components();
+    };
+    parse_statusline_components(values)
+}
+
 pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
     settings
         .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// The account default for the room-list rail. Mirrors
+/// `extract_right_sidebar_mode`, including its legacy bool fallback: accounts
+/// that predate the mode key only stored `show_room_list_sidebar`, and the bool
+/// is still written alongside the mode so a rollback keeps working.
+pub fn extract_room_list_mode(settings: &Value) -> RoomListMode {
+    match settings
+        .get(ROOM_LIST_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some("off") => RoomListMode::Off,
+        Some("auto") => RoomListMode::Auto,
+        Some("on") => RoomListMode::On,
+        _ if extract_show_room_list_sidebar(settings) => RoomListMode::On,
+        _ => RoomListMode::Off,
+    }
 }
 
 /// Tweak: when true, pressing Enter in the chat composer sends the message
@@ -1184,14 +1936,86 @@ pub fn extract_start_with_music_muted(settings: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// Tweak: land on Home (Dashboard, page 1) instead of the Clubhouse (page 0)
-/// when a session starts. Opt-in; defaults to false so sessions land in the
-/// clubhouse tavern like today.
-pub fn extract_land_on_home(settings: &Value) -> bool {
+/// The language chat translations render into for this user. Defaults to
+/// English: inert for the English-reading majority (their messages are
+/// already in it), one settings flip for everyone else.
+pub fn extract_translate_to(settings: &Value) -> crate::models::message_translation::TranslateLang {
     settings
-        .get(LAND_ON_HOME_KEY)
+        .get(TRANSLATE_TO_KEY)
+        .and_then(Value::as_str)
+        .and_then(crate::models::message_translation::TranslateLang::from_key)
+        .unwrap_or(crate::models::message_translation::TranslateLang::En)
+}
+
+/// Tweak: auto-translate foreign-script messages arriving in the room being
+/// viewed (plus anything already cached). Opt-in; defaults to false so
+/// translation stays on-demand (`t`) until the user asks for more.
+pub fn extract_auto_translate(settings: &Value) -> bool {
+    settings
+        .get(AUTO_TRANSLATE_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Tweak: pre-translate this author's outgoing messages to English at send
+/// time, warming the shared cache so English readers see them without
+/// asking. Opt-in; defaults to false since it spends an API call per
+/// message the author writes.
+pub fn extract_translate_mine_to_en(settings: &Value) -> bool {
+    settings
+        .get(TRANSLATE_MINE_TO_EN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: where a session starts. Absent or unreadable values land in the
+/// Clubhouse, the front door.
+pub fn extract_landing_page(settings: &Value) -> LandingPage {
+    match settings.get(LANDING_PAGE_KEY).and_then(Value::as_str) {
+        Some(key) => LandingPage::from_key(key).unwrap_or(LandingPage::Clubhouse),
+        None => LandingPage::Clubhouse,
+    }
+}
+
+/// Tweak: the award badges hidden from the user's chat label. Unknown
+/// categories are dropped, so the stored list only ever names real badges.
+pub fn extract_hidden_award_categories(settings: &Value) -> Vec<String> {
+    let Some(entries) = settings
+        .get(HIDDEN_AWARD_CATEGORIES_KEY)
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let known = super::profile_award::all_award_categories();
+    known
+        .into_iter()
+        .filter(|category| entries.iter().any(|entry| entry.as_str() == Some(category)))
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// Tweak: how inline images reach the terminal. Absent or unreadable means
+/// `Auto`, the detected protocol.
+pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
+    match settings.get(TERMINAL_IMAGES_KEY).and_then(Value::as_str) {
+        Some(key) => TerminalImagesMode::from_key(key).unwrap_or(TerminalImagesMode::Auto),
+        None => TerminalImagesMode::Auto,
+    }
+}
+
+/// Tweak: open The Late Edition (the daily paper) once a day at login.
+/// Defaults to true; `/paper` still opens it by hand when off.
+pub fn extract_paper_at_login(settings: &Value) -> bool {
+    settings
+        .get(PAPER_AT_LOGIN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// The stored Rice layout, if the account ever edited one. Parsed by the
+/// page, which falls back to its default on anything unreadable.
+pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
+    settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit
@@ -1201,6 +2025,159 @@ pub fn extract_clubhouse_tutorial_done(settings: &Value) -> bool {
         .get(CLUBHOUSE_TUTORIAL_DONE_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// First-contact stage-1 clock-glitch bursts seen so far; defaults to 0.
+/// Opens stage 2 at the ladder's threshold and quiets the clock after.
+pub fn extract_first_contact_glitch_hits(settings: &Value) -> u32 {
+    extract_counter(settings, FIRST_CONTACT_GLITCH_HITS_KEY)
+}
+
+/// First-contact stage-2 name-flicker hits so far; defaults to 0. Arms the
+/// stage-3 whisper at the ladder's threshold, and caps total flickers per
+/// person.
+pub fn extract_first_contact_name_hits(settings: &Value) -> u32 {
+    extract_counter(settings, FIRST_CONTACT_NAME_HITS_KEY)
+}
+
+fn extract_counter(settings: &Value, key: &str) -> u32 {
+    settings
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|hits| hits.min(u32::MAX as u64) as u32)
+        .unwrap_or(0)
+}
+
+fn extract_rfc3339(settings: &Value, key: &str) -> Option<DateTime<Utc>> {
+    settings
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+        .map(|at| at.with_timezone(&Utc))
+}
+
+/// First-contact stage-3 whispers delivered so far; defaults to 0. The
+/// held door plays a capped number of times per person (GAME.md, First
+/// contact), each on a later day; the counter at its cap schedules the
+/// stage-4 invitation.
+pub fn extract_first_contact_whisper_hits(settings: &Value) -> u32 {
+    extract_counter(settings, FIRST_CONTACT_WHISPER_HITS_KEY)
+}
+
+/// When the last first-contact splash whisper was delivered, or `None`
+/// while none has been. Spaces the whispers apart and, once the counter
+/// is at its cap, starts the clock on the stage-4 invitation.
+pub fn extract_first_contact_whisper_at(settings: &Value) -> Option<DateTime<Utc>> {
+    extract_rfc3339(settings, FIRST_CONTACT_WHISPER_AT_KEY)
+}
+
+/// When the first-contact invitation DM was sent, or `None` while it is
+/// still ahead.
+pub fn extract_first_contact_invited_at(settings: &Value) -> Option<DateTime<Utc>> {
+    extract_rfc3339(settings, FIRST_CONTACT_INVITED_AT_KEY)
+}
+
+/// The keys a person only ever touches on purpose: the "touched settings"
+/// leg of the first-contact eligibility gate counts how many of these are
+/// present. Closed list; a key that every account gets written by default
+/// (audio source, tutorial done, the first-contact marks) does not belong
+/// here, since it would measure nothing.
+const TOUCHED_SETTINGS_KEYS: [&str; 11] = [
+    THEME_ID_KEY,
+    COUNTRY_KEY,
+    TIMEZONE_KEY,
+    IDE_KEY,
+    TERMINAL_KEY,
+    OS_KEY,
+    RIGHT_SIDEBAR_COMPONENTS_KEY,
+    RIGHT_SIDEBAR_MODE_KEY,
+    NOTIFY_KINDS_KEY,
+    TRANSLATE_TO_KEY,
+    FAVORITE_THEME_IDS_KEY,
+];
+
+/// How many deliberately-set settings this account carries (see
+/// [`TOUCHED_SETTINGS_KEYS`]).
+pub fn count_touched_settings(settings: &Value) -> usize {
+    TOUCHED_SETTINGS_KEYS
+        .iter()
+        .filter(|key| settings.get(**key).is_some_and(|value| !value.is_null()))
+        .count()
+}
+
+/// The screen's standing on one bio text, keyed by a hash of that text so
+/// a rewritten bio never inherits a verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstContactBioVerdict {
+    /// A session claimed the screen and the call is (or was) in flight.
+    Pending,
+    Passed,
+    Failed,
+}
+
+impl FirstContactBioVerdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "pending" => Some(Self::Pending),
+            "passed" => Some(Self::Passed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// The persisted bio screen: which text it judged, what it said, when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstContactBioScreen {
+    pub hash: String,
+    pub verdict: FirstContactBioVerdict,
+    pub at: DateTime<Utc>,
+}
+
+/// The bio screen on record, or `None` when no bio was ever screened (or
+/// the record is unreadable, which the gate treats the same way: screen
+/// again).
+pub fn extract_first_contact_bio_screen(settings: &Value) -> Option<FirstContactBioScreen> {
+    let record = settings.get(FIRST_CONTACT_BIO_KEY)?;
+    let hash = record.get("hash")?.as_str()?.to_string();
+    let verdict = FirstContactBioVerdict::from_key(record.get("verdict")?.as_str()?)?;
+    let at = DateTime::parse_from_rfc3339(record.get("at")?.as_str()?)
+        .ok()?
+        .with_timezone(&Utc);
+    Some(FirstContactBioScreen { hash, verdict, at })
+}
+
+/// The two caps a first-contact hit claim enforces in the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstContactHitCaps {
+    /// Hits allowed per UTC day.
+    pub daily: u32,
+    /// Hits allowed ever.
+    pub total: u32,
+}
+
+/// What a capped first-contact hit claim decided. Both carry the lifetime
+/// counter after the claim, so the caller's mirror stays honest either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstContactHitClaim {
+    Won { hits: u32 },
+    Capped { hits: u32 },
+}
+
+/// The three settings keys one capped counter lives in.
+#[derive(Clone, Copy)]
+struct FirstContactHitKeys {
+    hits: &'static str,
+    day: &'static str,
+    day_hits: &'static str,
 }
 
 /// Tweak: show text labels instead of flag emoji in the shop Flags tab for
@@ -1232,6 +2209,31 @@ pub fn extract_favorite_room_ids(settings: &Value) -> Vec<Uuid> {
         };
         if seen.insert(id) {
             out.push(id);
+        }
+    }
+    out
+}
+
+/// Theme ids the user has starred, in the order they starred them. Ids are
+/// opaque strings rather than uuids and are not validated against the theme
+/// table here: a theme that gets renamed or retired simply stops matching, and
+/// the stale entry is inert until the user unstars it.
+pub fn extract_favorite_theme_ids(settings: &Value) -> Vec<String> {
+    let Some(entries) = settings
+        .get(FAVORITE_THEME_IDS_KEY)
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(id) = entry.as_str().map(str::trim).filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if seen.insert(id.to_string()) {
+            out.push(id.to_string());
         }
     }
     out
@@ -1294,7 +2296,7 @@ pub fn extract_langs(settings: &Value) -> Vec<String> {
         Vec::new()
     };
 
-    normalize_profile_tags(raw_tags.iter().map(String::as_str))
+    crate::vocab::normalize_langs(raw_tags.iter().map(String::as_str))
 }
 
 fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
@@ -1304,30 +2306,6 @@ fn extract_trimmed_profile_text(settings: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-}
-
-fn normalize_profile_tags<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for value in values {
-        for raw in value.split(|c: char| c == ',' || c.is_whitespace()) {
-            let tag: String = raw
-                .trim()
-                .trim_matches('#')
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.'))
-                .collect();
-            if tag.is_empty() || tag.len() > 24 || !seen.insert(tag.clone()) {
-                continue;
-            }
-            out.push(tag);
-            if out.len() >= 8 {
-                return out;
-            }
-        }
-    }
-    out
 }
 
 pub fn sanitize_username_input(username: &str) -> String {
@@ -1357,8 +2335,12 @@ pub fn sanitize_username_input(username: &str) -> String {
         return "user".to_string();
     }
 
+    // A trailing dot goes with the trailing underscores: "thanks @alice."
+    // must read as alice and a full stop, never as a longer handle.
     let truncated = truncate_to_boundary(normalized, USERNAME_MAX_LEN);
-    let truncated = truncated.trim_matches('_');
+    let truncated = truncated
+        .trim_start_matches('_')
+        .trim_end_matches(['_', '.']);
     if truncated.is_empty() {
         "user".to_string()
     } else {
@@ -1371,246 +2353,5 @@ fn truncate_to_boundary(value: &str, max_len: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_theme_id_reads_trimmed_string() {
-        let settings = json!({ "theme_id": " purple " });
-        assert_eq!(extract_theme_id(&settings).as_deref(), Some("purple"));
-    }
-
-    #[test]
-    fn extract_theme_id_missing_returns_none() {
-        let settings = json!({});
-        assert_eq!(extract_theme_id(&settings), None);
-    }
-
-    #[test]
-    fn chat_profile_award_badges_prefer_frontier_king_over_archdemon() {
-        assert_eq!(
-            chat_profile_award_badges(Some("LMG LKN".to_string())).as_deref(),
-            Some("LKN")
-        );
-        assert_eq!(
-            chat_profile_award_badges(Some("AW1 LMG LKN CHIP2".to_string())).as_deref(),
-            Some("AW1 LKN CHIP2")
-        );
-    }
-
-    #[test]
-    fn chat_profile_award_badges_prefer_sundering_deep_over_the_lesser_crowns() {
-        assert_eq!(
-            chat_profile_award_badges(Some("LMG LKN LYS".to_string())).as_deref(),
-            Some("LYS")
-        );
-        assert_eq!(
-            chat_profile_award_badges(Some("AW1 LMG LYS CHIP2".to_string())).as_deref(),
-            Some("AW1 LYS CHIP2")
-        );
-    }
-
-    #[test]
-    fn chat_profile_award_badges_keep_archdemon_when_it_is_the_best_lateania_badge() {
-        assert_eq!(
-            chat_profile_award_badges(Some("AW1 LMG CHIP2".to_string())).as_deref(),
-            Some("AW1 LMG CHIP2")
-        );
-        assert_eq!(
-            chat_profile_award_badges(Some("LMG".to_string())).as_deref(),
-            Some("LMG")
-        );
-    }
-
-    #[test]
-    fn chat_profile_award_badges_prefer_ascension_over_amulet() {
-        // Ascension implies the Amulet, so the chat label collapses NHA into NHY.
-        assert_eq!(
-            chat_profile_award_badges(Some("NHA NHY".to_string())).as_deref(),
-            Some("NHY")
-        );
-        // The Amulet alone stands on its own.
-        assert_eq!(
-            chat_profile_award_badges(Some("AW1 NHA".to_string())).as_deref(),
-            Some("AW1 NHA")
-        );
-    }
-
-    #[test]
-    fn extract_bio_missing_returns_empty() {
-        let settings = json!({});
-        assert_eq!(extract_bio(&settings), "");
-    }
-
-    #[test]
-    fn extract_show_right_sidebar_defaults_to_true() {
-        let settings = json!({});
-        assert!(extract_show_right_sidebar(&settings));
-    }
-
-    #[test]
-    fn extract_show_dashboard_header_defaults_to_true() {
-        let settings = json!({});
-        assert!(extract_show_dashboard_header(&settings));
-    }
-
-    #[test]
-    fn extract_enable_background_color_defaults_to_true() {
-        let settings = json!({});
-        assert!(extract_enable_background_color(&settings));
-    }
-
-    #[test]
-    fn extract_text_brightness_adjustment_defaults_to_zero_and_clamps() {
-        assert_eq!(extract_text_brightness_adjustment(&json!({})), 0);
-        assert_eq!(
-            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 2 })),
-            2
-        );
-        assert_eq!(
-            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": 9 })),
-            5
-        );
-        assert_eq!(
-            extract_text_brightness_adjustment(&json!({ "text_brightness_adjustment": -9 })),
-            -5
-        );
-    }
-
-    #[test]
-    fn extract_enable_background_color_reads_explicit_false() {
-        let settings = json!({ "enable_background_color": false });
-        assert!(!extract_enable_background_color(&settings));
-    }
-
-    #[test]
-    fn extract_show_dashboard_header_reads_explicit_false() {
-        let settings = json!({ "show_dashboard_header": false });
-        assert!(!extract_show_dashboard_header(&settings));
-    }
-
-    #[test]
-    fn extract_show_right_sidebar_reads_explicit_false() {
-        let settings = json!({ "show_right_sidebar": false });
-        assert!(!extract_show_right_sidebar(&settings));
-    }
-
-    #[test]
-    fn extract_show_right_sidebar_prefers_new_mode() {
-        let settings = json!({
-            "show_right_sidebar": true,
-            "right_sidebar_mode": "off",
-        });
-        assert!(!extract_show_right_sidebar(&settings));
-    }
-
-    #[test]
-    fn extract_right_sidebar_mode_collapses_legacy_custom_to_on() {
-        let settings = json!({ "right_sidebar_mode": "custom" });
-        assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::On);
-    }
-
-    #[test]
-    fn extract_right_sidebar_mode_falls_back_to_legacy_bool() {
-        let settings = json!({ "show_right_sidebar": false });
-        assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::Off);
-    }
-
-    #[test]
-    fn extract_right_sidebar_components_defaults_to_all_enabled() {
-        let settings = json!({});
-        assert_eq!(
-            extract_right_sidebar_components(&settings),
-            default_right_sidebar_components()
-        );
-    }
-
-    #[test]
-    fn extract_right_sidebar_components_preserves_order_and_backfills() {
-        let settings = json!({
-            "right_sidebar_components": [
-                { "key": "bonsai", "enabled": false },
-                { "key": "music", "enabled": true },
-                { "key": "bogus", "enabled": true },
-            ]
-        });
-        let components = extract_right_sidebar_components(&settings);
-        // Stored order kept for known entries, unknown dropped, missing
-        // (visualizer, pet) backfilled enabled at the end.
-        assert_eq!(
-            components,
-            vec![
-                RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Bonsai,
-                    enabled: false,
-                },
-                RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Music,
-                    enabled: true,
-                },
-                RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Visualizer,
-                    enabled: true,
-                },
-                RightSidebarComponentSetting {
-                    component: RightSidebarComponent::Pet,
-                    enabled: true,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn extract_show_room_list_sidebar_defaults_to_true() {
-        let settings = json!({});
-        assert!(extract_show_room_list_sidebar(&settings));
-    }
-
-    #[test]
-    fn extract_show_room_list_sidebar_reads_explicit_false() {
-        let settings = json!({ "show_room_list_sidebar": false });
-        assert!(!extract_show_room_list_sidebar(&settings));
-    }
-
-    #[test]
-    fn extract_country_normalizes_uppercase() {
-        let settings = json!({ "country": " pl " });
-        assert_eq!(extract_country(&settings).as_deref(), Some("PL"));
-    }
-
-    #[test]
-    fn extract_timezone_reads_trimmed_value() {
-        let settings = json!({ "timezone": " Europe/Warsaw " });
-        assert_eq!(
-            extract_timezone(&settings).as_deref(),
-            Some("Europe/Warsaw")
-        );
-    }
-
-    #[test]
-    fn sanitize_username_input_trims_and_falls_back() {
-        assert_eq!(sanitize_username_input("  night-owl  "), "night-owl");
-        assert_eq!(sanitize_username_input("   "), "user");
-    }
-
-    #[test]
-    fn sanitize_username_input_replaces_spaces_and_invalid_chars() {
-        assert_eq!(sanitize_username_input("  night owl  "), "night_owl");
-        assert_eq!(sanitize_username_input("alice!!!bob"), "alice_bob");
-        assert_eq!(sanitize_username_input("@alice"), "alice");
-        assert_eq!(sanitize_username_input("a@b"), "ab");
-        assert_eq!(sanitize_username_input("...alice..."), "...alice...");
-    }
-
-    #[test]
-    fn sanitize_username_input_collapses_repeated_separators() {
-        assert_eq!(sanitize_username_input("a   b\t\tc"), "a_b_c");
-        assert_eq!(sanitize_username_input("a@@@b###c"), "ab_c");
-    }
-
-    #[test]
-    fn truncate_to_boundary_respects_char_boundaries() {
-        assert_eq!(truncate_to_boundary("abcdef", 4), "abcd");
-        assert_eq!(truncate_to_boundary("żółw", 3), "żół");
-    }
-}
+#[path = "user_internal_test.rs"]
+mod user_internal_test;

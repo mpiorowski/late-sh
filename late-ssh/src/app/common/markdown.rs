@@ -30,21 +30,34 @@ pub(crate) fn render_body_to_lines(
     body_style: Style,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let mut code_buffer: Option<Vec<&str>> = None;
+    let mut code_block: Option<CodeBlock<'_>> = None;
 
     for paragraph in body.split('\n') {
-        if let Some(buf) = code_buffer.as_mut() {
-            if paragraph.trim_start().starts_with("```") {
-                lines.extend(render_code_block(buf, width, &pad));
-                code_buffer = None;
-            } else {
-                buf.push(paragraph);
+        if let Some(block) = code_block.as_mut() {
+            match paragraph.trim_end().strip_suffix(FENCE) {
+                Some(before) => {
+                    if !before.trim().is_empty() {
+                        block.rows.push(before);
+                    }
+                    lines.extend(render_code_block(&block.shown_rows(), width, &pad));
+                    code_block = None;
+                }
+                None => block.rows.push(paragraph),
             }
             continue;
         }
 
-        if paragraph.trim_start().starts_with("```") {
-            code_buffer = Some(Vec::new());
+        if let Some(after) = paragraph.trim_start().strip_prefix(FENCE) {
+            match after.trim_end().strip_suffix(FENCE) {
+                // Opened and closed on one line: the text between is the code.
+                Some(code) => lines.extend(render_code_block(&[code], width, &pad)),
+                None => {
+                    code_block = Some(CodeBlock {
+                        opener: after,
+                        rows: Vec::new(),
+                    });
+                }
+            }
             continue;
         }
 
@@ -57,11 +70,38 @@ pub(crate) fn render_body_to_lines(
         lines.extend(render_block(block, width, &pad, body_style));
     }
 
-    if let Some(buf) = code_buffer {
-        lines.extend(render_code_block(&buf, width, &pad));
+    // A fence nobody closed still renders as a block.
+    if let Some(block) = code_block {
+        lines.extend(render_code_block(&block.shown_rows(), width, &pad));
     }
 
     lines
+}
+
+const FENCE: &str = "```";
+
+/// A fenced block being collected. `opener` is whatever followed the
+/// opening fence on its own line.
+struct CodeBlock<'a> {
+    opener: &'a str,
+    rows: Vec<&'a str>,
+}
+
+impl<'a> CodeBlock<'a> {
+    /// The rows to draw. The opener is a language tag, and hidden, only
+    /// when it is one word sitting over real code; anything else typed on
+    /// the fence line is code, so a message like "```oops" never renders
+    /// as an empty box.
+    fn shown_rows(&self) -> Vec<&'a str> {
+        let opener = self.opener.trim();
+        let is_language_tag = !opener.contains(char::is_whitespace) && !self.rows.is_empty();
+        match opener.is_empty() || is_language_tag {
+            true => self.rows.clone(),
+            false => std::iter::once(opener)
+                .chain(self.rows.iter().copied())
+                .collect(),
+        }
+    }
 }
 
 fn render_code_block(rows: &[&str], width: usize, pad: &Span<'static>) -> Vec<Line<'static>> {
@@ -379,7 +419,11 @@ fn push_plain(spans: &mut Vec<Span<'static>>, text: &str, style: Style) {
     if text.is_empty() {
         return;
     }
-    spans.extend(mention_spans(text, style));
+    // The one place plain prose reaches: inline code and fenced blocks are
+    // rendered elsewhere, so `:shortcode:` inside code stays literal, which is
+    // the whole reason the expansion lives down here rather than on the body.
+    let text = super::emoji::expand_shortcodes(text);
+    spans.extend(mention_spans(&text, style));
 }
 
 fn render_wrapped(
@@ -433,7 +477,9 @@ fn char_width(ch: char) -> usize {
     UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
-fn wrap_spans(
+/// Soft-wrap styled spans into rows, breaking at spaces when possible:
+/// the first row `first_width` wide, the rest `continuation_width`.
+pub(crate) fn wrap_spans(
     spans: &[Span<'static>],
     first_width: usize,
     continuation_width: usize,
@@ -589,200 +635,4 @@ pub(crate) fn pad_to_width(text: &str, width: usize) -> String {
     }
     out.push_str(&" ".repeat(width.saturating_sub(used)));
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lines_to_strings(lines: &[Line]) -> Vec<String> {
-        lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn renders_inline_bold_italic_code_strike() {
-        let lines = render_body_to_lines(
-            "**bold** *italic* `code` ***both*** ~~gone~~",
-            80,
-            Span::raw(""),
-            Style::default(),
-        );
-        let spans = &lines[0].spans;
-        assert!(spans.iter().any(|s| {
-            s.content.as_ref() == "bold" && s.style.add_modifier.contains(Modifier::BOLD)
-        }));
-        assert!(spans.iter().any(|s| {
-            s.content.as_ref() == "italic" && s.style.add_modifier.contains(Modifier::ITALIC)
-        }));
-        assert!(spans.iter().any(|s| {
-            s.content.as_ref().contains("code") && s.style.bg == Some(theme::BG_HIGHLIGHT())
-        }));
-        assert!(spans.iter().any(|s| {
-            s.content.as_ref() == "both"
-                && s.style.add_modifier.contains(Modifier::BOLD)
-                && s.style.add_modifier.contains(Modifier::ITALIC)
-        }));
-        assert!(spans.iter().any(|s| {
-            s.content.as_ref() == "gone" && s.style.add_modifier.contains(Modifier::CROSSED_OUT)
-        }));
-    }
-
-    #[test]
-    fn renders_link_with_underline_and_url() {
-        let lines = render_body_to_lines(
-            "see [docs](https://example.com) here",
-            80,
-            Span::raw(""),
-            Style::default(),
-        );
-        let link_text = lines[0]
-            .spans
-            .iter()
-            .find(|s| s.content.as_ref() == "docs")
-            .expect("link text");
-        assert_eq!(link_text.style.fg, Some(theme::AMBER()));
-        assert!(link_text.style.add_modifier.contains(Modifier::UNDERLINED));
-    }
-
-    #[test]
-    fn renders_heading_with_glyph() {
-        let lines = render_body_to_lines("# title", 80, Span::raw(""), Style::default());
-        let glyph = lines[0]
-            .spans
-            .iter()
-            .find(|s| s.content.as_ref() == "▍ ")
-            .expect("glyph span");
-        assert_eq!(glyph.style.fg, Some(theme::AMBER_GLOW()));
-    }
-
-    #[test]
-    fn renders_fenced_code_block() {
-        let lines = render_body_to_lines(
-            "```\nlet x = 1;\n**not bold**\n```",
-            80,
-            Span::raw(""),
-            Style::default(),
-        );
-        let rendered = lines_to_strings(&lines).join("\n");
-        assert!(rendered.contains("let x = 1;"));
-        assert!(rendered.contains("**not bold**"));
-        for line in &lines {
-            assert!(
-                line.spans
-                    .iter()
-                    .any(|s| s.style.bg == Some(theme::BG_HIGHLIGHT()))
-            );
-        }
-    }
-
-    #[test]
-    fn renders_inline_code_without_mention_highlight() {
-        let lines =
-            render_body_to_lines("look at `@graybeard`", 80, Span::raw(""), Style::default());
-        let code_span = lines[0]
-            .spans
-            .iter()
-            .find(|span| span.content.contains("@graybeard"))
-            .expect("code span");
-        assert!(!code_span.style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(code_span.style.bg, Some(theme::BG_HIGHLIGHT()));
-    }
-
-    #[test]
-    fn renders_inline_code_with_embedded_backtick() {
-        let lines = render_body_to_lines("``(╯`Д´)╯︵ ┻━┻``", 80, Span::raw(""), Style::default());
-        assert_eq!(lines_to_strings(&lines), vec![" (╯`Д´)╯︵ ┻━┻ "]);
-        assert!(
-            lines[0]
-                .spans
-                .iter()
-                .any(|span| span.content.contains("(╯`Д´)╯︵ ┻━┻")
-                    && span.style.bg == Some(theme::BG_HIGHLIGHT()))
-        );
-    }
-
-    #[test]
-    fn renders_ordered_list() {
-        let lines = render_body_to_lines(
-            "1. first\n2. second\n10. tenth",
-            80,
-            Span::raw(""),
-            Style::default(),
-        );
-        let strings = lines_to_strings(&lines);
-        assert_eq!(strings.len(), 3);
-        assert!(strings[0].starts_with("1. first"));
-        assert!(strings[1].starts_with("2. second"));
-        assert!(strings[2].starts_with("10. tenth"));
-    }
-
-    #[test]
-    fn ordered_list_continuations_align_under_text() {
-        let lines = render_body_to_lines("1. hello wide world", 8, Span::raw(""), Style::default());
-        let strings = lines_to_strings(&lines);
-        assert!(strings[0].starts_with("1. "));
-        for cont in &strings[1..] {
-            assert!(cont.starts_with("   "), "continuation {cont:?} misaligned");
-        }
-    }
-
-    #[test]
-    fn wrap_plain_line_preserves_leading_spaces() {
-        let result = wrap_plain_line("   hello", 40);
-        assert_eq!(result, vec!["   hello"]);
-    }
-
-    #[test]
-    fn wrap_plain_line_wraps_at_width() {
-        let result = wrap_plain_line("hello world", 7);
-        assert_eq!(result, vec!["hello ", "world"]);
-    }
-
-    #[test]
-    fn wrap_plain_line_breaks_long_word() {
-        let result = wrap_plain_line("abcdefgh", 4);
-        assert_eq!(result, vec!["abcd", "efgh"]);
-    }
-
-    #[test]
-    fn wrap_plain_line_respects_display_width() {
-        let result = wrap_plain_line("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", 10);
-        assert!(
-            result
-                .iter()
-                .all(|line| UnicodeWidthStr::width(line.as_str()) <= 10),
-            "wrapped rows exceeded display width: {result:?}"
-        );
-    }
-
-    #[test]
-    fn render_body_to_lines_respects_display_width() {
-        let lines = render_body_to_lines("(∩｀-´)⊃━☆ﾟ.*･｡ﾟ", 10, Span::raw(""), Style::default());
-        for line in lines_to_strings(&lines) {
-            assert!(
-                UnicodeWidthStr::width(line.as_str()) <= 10,
-                "line exceeded display width: {line:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn pad_to_width_respects_display_width() {
-        let padded = pad_to_width("ab｀", 4);
-        assert_eq!(UnicodeWidthStr::width(padded.as_str()), 4);
-    }
-
-    #[test]
-    fn wrap_plain_line_empty_returns_empty() {
-        let result = wrap_plain_line("", 40);
-        assert!(result.is_empty());
-    }
 }

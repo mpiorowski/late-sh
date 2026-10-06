@@ -6,25 +6,27 @@ use std::{
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use late_core::radio::Provider;
 use late_core::{
     MutexRecover,
     db::Db,
     models::{
         audio_ban::AudioBan,
         media_history_item::MediaHistoryItem,
-        media_history_vote::MediaHistoryVote,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
         media_source::MediaSource,
-        user::{AudioSource, IcecastStream, RadioStation, User},
+        user::{AudioSource, RadioSlots, RadioStation, User},
     },
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use uuid::Uuid;
 
-use super::youtube::YoutubeClient;
-use crate::{authz::Permissions, paired_clients::PairedClientRegistry, state::ActiveUsers};
+use super::{thumbnail::Thumbnail, youtube::YoutubeClient};
+use crate::{
+    authz::Permissions, metrics, paired_clients::PairedClientRegistry, state::ActiveUsers,
+};
 
 const QUEUE_SNAPSHOT_LIMIT: i64 = 50;
 const MAX_SUBMISSIONS_PER_WINDOW: i64 = 10;
@@ -48,6 +50,24 @@ pub struct AudioService {
     state: Arc<Mutex<QueueState>>,
     paired_clients: PairedClientRegistry,
     active_users: ActiveUsers,
+    /// Thumbnails of the tracks in the booth, by video id, fetched once per
+    /// replica as a track first shows up in a snapshot.
+    thumbnails: Arc<std::sync::Mutex<HashMap<String, ThumbnailSlot>>>,
+}
+
+enum ThumbnailSlot {
+    Fetching,
+    Ready(Thumbnail),
+    /// The fetch failed; the track keeps the drawn screen and is not retried
+    /// while it sits in the booth.
+    Failed,
+}
+
+/// How one thumbnail fetch ended, for `metrics::record_booth_thumbnail`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThumbnailFetch {
+    Fetched,
+    Failed,
 }
 
 #[derive(Default)]
@@ -99,8 +119,9 @@ pub enum AudioWsMessage {
     NowPlayingUpdate {
         mounts: HashMap<String, late_core::api_types::Track>,
     },
-    /// Nightride live metadata per station name. Empty map while the SSE
-    /// feed is down (clients fall back to station display names).
+    /// Live track per radio station key ([`pair_radio_tracks`]): the
+    /// third-party feeds plus the house mounts. A station is absent while
+    /// its feed has nothing (clients fall back to station display names).
     RadioMetaUpdate {
         stations: HashMap<String, super::radio_meta::svc::ArtistTitle>,
     },
@@ -123,11 +144,45 @@ pub fn now_playing_tracks(
         .collect()
 }
 
+/// The station map a paired client reads its radio track from: the
+/// third-party metadata plus the house mounts, which are radio stations to
+/// the client. A house track with no artist tag carries an empty artist.
+pub fn pair_radio_tracks(
+    radio_meta: &HashMap<String, super::radio_meta::svc::ArtistTitle>,
+    now_playing: &HashMap<String, late_core::api_types::NowPlaying>,
+) -> HashMap<String, super::radio_meta::svc::ArtistTitle> {
+    let mut stations = radio_meta.clone();
+    for (mount, np) in now_playing {
+        let Some(station) = RadioStation::from_key(mount) else {
+            continue;
+        };
+        match station.provider() {
+            Provider::House => {
+                stations.insert(
+                    mount.clone(),
+                    super::radio_meta::svc::ArtistTitle {
+                        artist: np.track.artist.clone().unwrap_or_default(),
+                        title: np.track.title.clone(),
+                    },
+                );
+            }
+            Provider::Nightride
+            | Provider::Plaza
+            | Provider::CodeRadio
+            | Provider::RadioParadise
+            | Provider::Fip
+            | Provider::RadioSwiss => {}
+        }
+    }
+    stations
+}
+
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
     TrustedSubmitQueued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     TrustedSubmitFailed {
         user_id: Uuid,
@@ -150,6 +205,7 @@ pub enum AudioEvent {
     BoothSubmitQueued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     BoothSubmitFailed {
         user_id: Uuid,
@@ -187,17 +243,10 @@ pub enum AudioEvent {
         votes: u32,
         threshold: u32,
     },
-    BoothHistoryVoteApplied {
-        user_id: Uuid,
-        score: i32,
-    },
-    BoothHistoryVoteFailed {
-        user_id: Uuid,
-        message: String,
-    },
     BoothHistoryRequeued {
         user_id: Uuid,
         position: i64,
+        reward_chips: i64,
     },
     BoothHistoryRequeueFailed {
         user_id: Uuid,
@@ -257,6 +306,13 @@ pub struct QueueItemView {
     pub vote_score: i32,
     #[serde(default)]
     pub unskippable: bool,
+    /// When the track was brought to the booth. For the live strip; paired
+    /// clients have no use for it.
+    #[serde(skip)]
+    pub queued_at: DateTime<Utc>,
+    /// For the live strip, once fetched (`attach_thumbnails`).
+    #[serde(skip)]
+    pub thumbnail: Option<Thumbnail>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,8 +325,6 @@ pub struct HistoryItemView {
     pub is_stream: bool,
     pub play_count: i32,
     pub last_played_at_ms: i64,
-    #[serde(default)]
-    pub vote_score: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +333,11 @@ pub struct SubmitQueueResponse {
     pub title: Option<String>,
     pub duration_ms: Option<i32>,
     pub position_in_queue: i64,
+    /// What bringing this track actually minted: zero when the submitter has
+    /// already been paid `SONG_QUEUE_MAX_PAID_PER_DAY` times today (UTC),
+    /// the only gate there is. Read from the grant, never from the constant,
+    /// so a banner can never promise chips that were not credited.
+    pub reward_chips: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -334,11 +393,19 @@ impl AudioService {
             state: Arc::new(Mutex::new(QueueState::default())),
             paired_clients,
             active_users,
+            thumbnails: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
     pub fn subscribe_snapshot(&self) -> watch::Receiver<QueueSnapshot> {
         self.snapshot_tx.subscribe()
+    }
+
+    /// The last published queue snapshot, straight from memory. Unlike
+    /// [`Self::snapshot`] this never touches the DB, so it is safe to call on
+    /// every request of a public HTTP route.
+    pub fn current_snapshot(&self) -> QueueSnapshot {
+        self.snapshot_tx.borrow().clone()
     }
 
     /// True once the YouTube Data API key is configured. Server-side YouTube
@@ -366,7 +433,8 @@ impl AudioService {
             // Seed without broadcasting: clients connecting later get the
             // current values from the on-connect catch-up burst.
             let mut last_mounts = now_playing_tracks(&now_playing_rx.borrow());
-            let mut last_stations = radio_meta_rx.borrow().clone();
+            let mut last_stations =
+                pair_radio_tracks(&radio_meta_rx.borrow(), &now_playing_rx.borrow());
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
@@ -374,22 +442,24 @@ impl AudioService {
                         if changed.is_err() {
                             break;
                         }
-                        let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
-                        if mounts != last_mounts {
-                            last_mounts = mounts.clone();
-                            let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
-                        }
                     }
                     changed = radio_meta_rx.changed() => {
                         if changed.is_err() {
                             break;
                         }
-                        let stations = radio_meta_rx.borrow_and_update().clone();
-                        if stations != last_stations {
-                            last_stations = stations.clone();
-                            let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
-                        }
                     }
+                }
+                let mounts = now_playing_tracks(&now_playing_rx.borrow_and_update());
+                if mounts != last_mounts {
+                    last_mounts = mounts.clone();
+                    let _ = ws_tx.send(AudioWsMessage::NowPlayingUpdate { mounts });
+                }
+                // A house track change moves the station map too.
+                let stations =
+                    pair_radio_tracks(&radio_meta_rx.borrow_and_update(), &now_playing_rx.borrow());
+                if stations != last_stations {
+                    last_stations = stations.clone();
+                    let _ = ws_tx.send(AudioWsMessage::RadioMetaUpdate { stations });
                 }
             }
         })
@@ -502,8 +572,8 @@ impl AudioService {
 
         let mut state = self.state.lock().await;
 
-        let item = {
-            let client = self.db.get().await?;
+        let (item, reward) = {
+            let mut client = self.db.get().await?;
             if AudioBan::is_active_for_user(&client, user_id).await? {
                 anyhow::bail!("audio ban: submitting blocked");
             }
@@ -515,9 +585,12 @@ impl AudioService {
                     anyhow::bail!("submission rate limit exceeded");
                 }
             }
+            if MediaQueueItem::youtube_is_active(&client, &video.video_id).await? {
+                anyhow::bail!("track is already in the queue");
+            }
 
             MediaQueueItem::insert_youtube(
-                &client,
+                &mut client,
                 user_id,
                 &video.video_id,
                 video.title.as_deref(),
@@ -527,6 +600,14 @@ impl AudioService {
             )
             .await?
         };
+        metrics::record_song_queued(reward);
+        tracing::info!(
+            user_id = %user_id,
+            item_id = %item.id,
+            external_id = %video.video_id,
+            reward_chips = reward.chips(),
+            "queued a youtube track"
+        );
 
         self.cancel_fallback(&mut state);
         if state.current_item_id.is_none() {
@@ -547,6 +628,7 @@ impl AudioService {
             title: item.title,
             duration_ms: item.duration_ms,
             position_in_queue,
+            reward_chips: reward.chips(),
         })
     }
 
@@ -582,6 +664,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::BoothSubmitQueued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {
@@ -613,6 +696,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::TrustedSubmitQueued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {
@@ -690,9 +774,9 @@ impl AudioService {
         User::audio_source(&client, user_id).await
     }
 
-    pub async fn read_icecast_stream(&self, user_id: Uuid) -> Result<IcecastStream> {
+    pub async fn read_radio_slots(&self, user_id: Uuid) -> Result<RadioSlots> {
         let client = self.db.get().await?;
-        User::icecast_stream(&client, user_id).await
+        User::radio_slots(&client, user_id).await
     }
 
     pub async fn read_radio_station(&self, user_id: Uuid) -> Result<RadioStation> {
@@ -700,12 +784,16 @@ impl AudioService {
         User::radio_station(&client, user_id).await
     }
 
-    pub async fn persist_icecast_stream(&self, user_id: Uuid, stream: IcecastStream) -> Result<()> {
+    /// Pinned slots are a keymap, not a playback choice: nothing is pushed
+    /// to paired clients. `slot` is the slot's new content (`None` unpins).
+    pub async fn persist_radio_slot(
+        &self,
+        user_id: Uuid,
+        index: usize,
+        slot: Option<RadioStation>,
+    ) -> Result<()> {
         let client = self.db.get().await?;
-        User::set_icecast_stream(&client, user_id, stream).await?;
-        drop(client);
-        self.paired_clients.set_icecast_stream(user_id, stream);
-        Ok(())
+        User::set_radio_slot(&client, user_id, index, slot).await
     }
 
     pub async fn persist_radio_station(&self, user_id: Uuid, station: RadioStation) -> Result<()> {
@@ -722,15 +810,10 @@ impl AudioService {
         active_audio_source_counts(&self.active_users).0
     }
 
-    /// Count of active users whose persisted audio source is Icecast/default.
-    pub fn icecast_source_count(&self) -> usize {
-        active_audio_source_counts(&self.active_users).1
-    }
-
-    /// Count of active users whose persisted audio source is the direct
-    /// radio preset.
+    /// Count of active users whose persisted audio source is radio (the
+    /// default for users who never picked one).
     pub fn radio_source_count(&self) -> usize {
-        active_audio_source_counts(&self.active_users).2
+        active_audio_source_counts(&self.active_users).1
     }
 
     fn update_active_audio_source(&self, user_id: Uuid, source: AudioSource) {
@@ -760,19 +843,20 @@ impl AudioService {
         });
     }
 
-    pub fn persist_icecast_stream_task(&self, user_id: Uuid, stream: IcecastStream) {
+    pub fn persist_radio_slot_task(&self, user_id: Uuid, index: usize, slot: Option<RadioStation>) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.persist_icecast_stream(user_id, stream).await {
+            if let Err(err) = service.persist_radio_slot(user_id, index, slot).await {
                 late_core::error_span!(
-                    "icecast_stream_persist_failed",
+                    "radio_slot_persist_failed",
                     error = ?err,
                     user_id = %user_id,
-                    "failed to persist icecast stream preference"
+                    index,
+                    "failed to persist radio slot"
                 );
                 service.publish_event(AudioEvent::AudioSourcePersistFailed {
                     user_id,
-                    message: "Failed to save stream preference".to_string(),
+                    message: "Failed to save radio slots".to_string(),
                 });
             }
         });
@@ -827,61 +911,14 @@ impl AudioService {
         Ok(score)
     }
 
-    pub async fn cast_history_vote(
-        &self,
-        user_id: Uuid,
-        history_item_id: Uuid,
-        value: i16,
-    ) -> Result<i32> {
-        if value != 1 && value != -1 {
-            anyhow::bail!("invalid vote value");
-        }
-
-        let client = self.db.get().await?;
-        if AudioBan::is_active_for_user(&client, user_id).await? {
-            anyhow::bail!("audio ban: voting blocked");
-        }
-        if MediaHistoryItem::find_by_id(&client, history_item_id)
-            .await?
-            .is_none()
-        {
-            anyhow::bail!("history item not found");
-        }
-        let score = MediaHistoryVote::upsert(&client, user_id, history_item_id, value).await?;
-        drop(client);
-
-        let mut state = self.state.lock().await;
-        self.publish_queue_update_with_guard(&mut state).await?;
-        Ok(score)
-    }
-
-    pub async fn clear_history_vote(&self, user_id: Uuid, history_item_id: Uuid) -> Result<i32> {
-        let client = self.db.get().await?;
-        if AudioBan::is_active_for_user(&client, user_id).await? {
-            anyhow::bail!("audio ban: voting blocked");
-        }
-        if MediaHistoryItem::find_by_id(&client, history_item_id)
-            .await?
-            .is_none()
-        {
-            anyhow::bail!("history item not found");
-        }
-        let score = MediaHistoryVote::delete_vote(&client, user_id, history_item_id).await?;
-        drop(client);
-
-        let mut state = self.state.lock().await;
-        self.publish_queue_update_with_guard(&mut state).await?;
-        Ok(score)
-    }
-
     pub async fn requeue_history_item(
         &self,
         user_id: Uuid,
         history_item_id: Uuid,
     ) -> Result<SubmitQueueResponse> {
         let mut state = self.state.lock().await;
-        let item = {
-            let client = self.db.get().await?;
+        let (item, reward) = {
+            let mut client = self.db.get().await?;
             if AudioBan::is_active_for_user(&client, user_id).await? {
                 anyhow::bail!("audio ban: submitting blocked");
             }
@@ -893,8 +930,11 @@ impl AudioService {
             let history = MediaHistoryItem::find_by_id(&client, history_item_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+            if MediaQueueItem::youtube_is_active(&client, &history.external_id).await? {
+                anyhow::bail!("track is already in the queue");
+            }
             MediaQueueItem::insert_youtube(
-                &client,
+                &mut client,
                 user_id,
                 &history.external_id,
                 history.title.as_deref(),
@@ -904,6 +944,14 @@ impl AudioService {
             )
             .await?
         };
+        metrics::record_song_queued(reward);
+        tracing::info!(
+            user_id = %user_id,
+            item_id = %item.id,
+            external_id = %item.external_id,
+            reward_chips = reward.chips(),
+            "re-queued a youtube track from history"
+        );
 
         self.cancel_fallback(&mut state);
         if state.current_item_id.is_none() {
@@ -924,6 +972,7 @@ impl AudioService {
             title: item.title,
             duration_ms: item.duration_ms,
             position_in_queue,
+            reward_chips: reward.chips(),
         })
     }
 
@@ -1098,43 +1147,6 @@ impl AudioService {
         });
     }
 
-    pub fn cast_history_vote_task(&self, user_id: Uuid, history_item_id: Uuid, value: i16) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            match service
-                .cast_history_vote(user_id, history_item_id, value)
-                .await
-            {
-                Ok(score) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteApplied { user_id, score });
-                }
-                Err(err) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteFailed {
-                        user_id,
-                        message: booth_history_error_message(&err),
-                    });
-                }
-            }
-        });
-    }
-
-    pub fn clear_history_vote_task(&self, user_id: Uuid, history_item_id: Uuid) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            match service.clear_history_vote(user_id, history_item_id).await {
-                Ok(score) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteApplied { user_id, score });
-                }
-                Err(err) => {
-                    service.publish_event(AudioEvent::BoothHistoryVoteFailed {
-                        user_id,
-                        message: booth_history_error_message(&err),
-                    });
-                }
-            }
-        });
-    }
-
     pub fn requeue_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -1143,6 +1155,7 @@ impl AudioService {
                     service.publish_event(AudioEvent::BoothHistoryRequeued {
                         user_id,
                         position: response.position_in_queue,
+                        reward_chips: response.reward_chips,
                     });
                 }
                 Err(err) => {
@@ -1350,7 +1363,7 @@ impl AudioService {
         });
     }
 
-    pub async fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
+    pub fn report_player_state(&self, report: PlayerStateReport) -> Result<()> {
         tracing::debug!(
             item_id = %report.item_id,
             state = ?report.state,
@@ -1407,7 +1420,7 @@ impl AudioService {
     pub fn report_player_state_task(&self, report: PlayerStateReport) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(err) = service.report_player_state(report).await {
+            if let Err(err) = service.report_player_state(report) {
                 late_core::error_span!(
                     "audio_player_state_failed",
                     error = ?err,
@@ -1814,12 +1827,24 @@ impl AudioService {
         state.sequence = state.sequence.saturating_add(1);
         let mut snapshot = self.load_snapshot(state.mode).await?;
         snapshot.skip_progress = self.compute_skip_progress(state, snapshot.current.as_ref());
-        // `send` fails without active receivers and would leave the watch at
-        // its constructor's empty value. Startup often publishes before any
-        // SSH session has opened the booth, so replace the retained value even
-        // when receiver_count == 0; later subscribers then see the real DB
-        // queue immediately after a restart.
-        self.snapshot_tx.send_replace(snapshot.clone());
+        // The thumbnails stay locked from the attach to the publish, and a
+        // fetch that lands takes the same lock to patch the published
+        // snapshot (`fetch_thumbnail_task`): it either is on this snapshot
+        // or patches it, never an older one this publish then replaces.
+        let to_fetch = {
+            let mut thumbnails = self.thumbnails.lock_recover();
+            let to_fetch = self.attach_thumbnails(&mut thumbnails, &mut snapshot);
+            // `send` fails without active receivers and would leave the watch
+            // at its constructor's empty value. Startup often publishes before
+            // any SSH session has opened the booth, so replace the retained
+            // value even when receiver_count == 0; later subscribers then see
+            // the real DB queue immediately after a restart.
+            self.snapshot_tx.send_replace(snapshot.clone());
+            to_fetch
+        };
+        for video_id in to_fetch {
+            self.fetch_thumbnail_task(video_id);
+        }
         let _ = self.ws_tx.send(AudioWsMessage::QueueUpdate {
             current: snapshot.current,
             queue: snapshot.queue,
@@ -1827,6 +1852,82 @@ impl AudioService {
             skip_progress: snapshot.skip_progress,
         });
         Ok(())
+    }
+
+    /// Put the thumbnails already fetched on the snapshot's tracks, mark
+    /// each track seen for the first time as fetching, and forget the ones
+    /// that left the booth. Returns the video ids to fetch. Without a
+    /// YouTube API key the YouTube side of the house is off (nothing can be
+    /// queued), and so is this.
+    fn attach_thumbnails(
+        &self,
+        thumbnails: &mut HashMap<String, ThumbnailSlot>,
+        snapshot: &mut QueueSnapshot,
+    ) -> Vec<String> {
+        let mut to_fetch = Vec::new();
+        if !self.youtube.has_api_key() {
+            return to_fetch;
+        }
+        let in_booth: HashSet<&str> = snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .map(|item| item.video_id.as_str())
+            .collect();
+        thumbnails.retain(|video_id, _| in_booth.contains(video_id.as_str()));
+        for item in snapshot.current.iter_mut().chain(snapshot.queue.iter_mut()) {
+            match thumbnails.get(&item.video_id) {
+                Some(ThumbnailSlot::Ready(thumbnail)) => {
+                    item.thumbnail = Some(thumbnail.clone());
+                }
+                Some(ThumbnailSlot::Fetching) | Some(ThumbnailSlot::Failed) => {}
+                None => {
+                    thumbnails.insert(item.video_id.clone(), ThumbnailSlot::Fetching);
+                    to_fetch.push(item.video_id.clone());
+                }
+            }
+        }
+        to_fetch
+    }
+
+    /// Fetch one thumbnail and put it on the published snapshot. Nobody
+    /// waits on this, so its failure is logged and counted here.
+    fn fetch_thumbnail_task(&self, video_id: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let slot = match svc.youtube.fetch_thumbnail(&video_id).await {
+                Ok(image) => {
+                    metrics::record_booth_thumbnail(ThumbnailFetch::Fetched);
+                    ThumbnailSlot::Ready(Arc::new(image))
+                }
+                Err(error) => {
+                    metrics::record_booth_thumbnail(ThumbnailFetch::Failed);
+                    tracing::warn!(error = ?error, %video_id, "failed to fetch booth thumbnail");
+                    ThumbnailSlot::Failed
+                }
+            };
+            let fetched = match &slot {
+                ThumbnailSlot::Ready(thumbnail) => Some(thumbnail.clone()),
+                ThumbnailSlot::Fetching | ThumbnailSlot::Failed => None,
+            };
+            // Locked through the patch, so a publish cannot read this slot
+            // as still fetching and then replace the patched snapshot.
+            let mut thumbnails = svc.thumbnails.lock_recover();
+            // A track that left the booth while this ran was forgotten by
+            // `attach_thumbnails`; it stays forgotten.
+            if let Some(entry) = thumbnails.get_mut(&video_id) {
+                *entry = slot;
+            }
+            if let Some(thumbnail) = fetched {
+                svc.snapshot_tx.send_modify(|snapshot| {
+                    for item in snapshot.current.iter_mut().chain(snapshot.queue.iter_mut()) {
+                        if item.video_id == video_id {
+                            item.thumbnail = Some(thumbnail.clone());
+                        }
+                    }
+                });
+            }
+        });
     }
 
     /// Compute the skip-vote progress for the currently playing item. Returns
@@ -1847,7 +1948,7 @@ impl AudioService {
     async fn load_snapshot(&self, mode: AudioMode) -> Result<QueueSnapshot> {
         let client = self.db.get().await?;
         let items = MediaQueueItem::list_snapshot(&client, QUEUE_SNAPSHOT_LIMIT).await?;
-        let history_items = MediaHistoryItem::list_ranked(&client, HISTORY_LIMIT).await?;
+        let history_items = MediaHistoryItem::list_recent(&client, HISTORY_LIMIT).await?;
         let user_ids = items
             .iter()
             .map(|(item, _)| item.submitter_id)
@@ -1869,10 +1970,7 @@ impl AudioService {
             audio_mode: mode,
             current,
             queue,
-            history: history_items
-                .into_iter()
-                .map(|(item, score)| history_item_view(item, score))
-                .collect(),
+            history: history_items.into_iter().map(history_item_view).collect(),
             skip_progress: None,
         })
     }
@@ -2071,17 +2169,16 @@ fn playback_known_duration(item: &MediaQueueItem) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
-fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize, usize) {
+fn active_audio_source_counts(active_users: &ActiveUsers) -> (usize, usize) {
     let active_users = active_users.lock_recover();
-    let (mut youtube, mut icecast, mut radio) = (0, 0, 0);
+    let (mut youtube, mut radio) = (0, 0);
     for user in active_users.values() {
         match user.audio_source {
             AudioSource::Youtube => youtube += 1,
-            AudioSource::Icecast => icecast += 1,
             AudioSource::Radio => radio += 1,
         }
     }
-    (youtube, icecast, radio)
+    (youtube, radio)
 }
 
 fn skip_threshold(youtube_source_total: usize) -> u32 {
@@ -2108,6 +2205,8 @@ fn booth_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from submitting audio".to_string()
+    } else if is_duplicate_track_error(&text) {
+        "Already in the queue".to_string()
     } else if text.contains("invalid url")
         || (text.contains("youtube") && text.contains("not found"))
     {
@@ -2173,6 +2272,8 @@ fn booth_history_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from audio history actions".to_string()
+    } else if is_duplicate_track_error(&text) {
+        "Already in the queue".to_string()
     } else if text.contains("rate limit") || text.contains("submission rate limit") {
         "Slow down - too many submissions".to_string()
     } else if text.contains("history item not found") {
@@ -2193,10 +2294,19 @@ fn booth_history_delete_error_message(err: &anyhow::Error) -> String {
     }
 }
 
+/// The queue holds a track once. The app-level guard produces the message;
+/// a submission that loses the race to `idx_media_queue_active_track` gets
+/// the same banner from the constraint violation.
+fn is_duplicate_track_error(text: &str) -> bool {
+    text.contains("already in the queue") || text.contains("idx_media_queue_active_track")
+}
+
 fn trusted_submit_error_message(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").to_ascii_lowercase();
     if text.contains("audio ban") {
         "Banned from submitting audio".to_string()
+    } else if is_duplicate_track_error(&text) {
+        "Already in the queue".to_string()
     } else if text.contains("invalid url")
         || text.contains("unsupported youtube url")
         || text.contains("invalid youtube video id")
@@ -2259,6 +2369,8 @@ fn queue_item_view(
 ) -> QueueItemView {
     QueueItemView {
         id: item.id,
+        queued_at: item.created,
+        thumbnail: None,
         video_id: item.external_id,
         title: item.title,
         channel: item.channel,
@@ -2275,7 +2387,7 @@ fn queue_item_view(
     }
 }
 
-fn history_item_view(item: MediaHistoryItem, vote_score: i32) -> HistoryItemView {
+fn history_item_view(item: MediaHistoryItem) -> HistoryItemView {
     HistoryItemView {
         id: item.id,
         video_id: item.external_id,
@@ -2285,29 +2397,9 @@ fn history_item_view(item: MediaHistoryItem, vote_score: i32) -> HistoryItemView
         is_stream: item.is_stream,
         play_count: item.play_count,
         last_played_at_ms: item.last_played_at.timestamp_millis(),
-        vote_score,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::skip_threshold;
-
-    #[test]
-    fn skip_threshold_floors_at_two_and_uses_thirty_percent_ceil() {
-        // Small rooms collapse to the floor: at least two YouTube-pref users
-        // must agree before a skip fires.
-        assert_eq!(skip_threshold(0), 2);
-        assert_eq!(skip_threshold(1), 2);
-        assert_eq!(skip_threshold(5), 2);
-        assert_eq!(skip_threshold(6), 2);
-        // 30% ceil kicks in above 6 paired clients.
-        assert_eq!(skip_threshold(7), 3);
-        assert_eq!(skip_threshold(10), 3);
-        assert_eq!(skip_threshold(11), 4);
-        assert_eq!(skip_threshold(20), 6);
-        assert_eq!(skip_threshold(21), 7);
-        assert_eq!(skip_threshold(100), 30);
-        assert_eq!(skip_threshold(101), 31);
-    }
-}
+#[path = "svc_internal_test.rs"]
+mod svc_internal_test;

@@ -1,5 +1,5 @@
 Third-Party Notices
-===================
+-------------------
 
 late.sh's own source is licensed under FSL-1.1-MIT (see LICENSE and
 LICENSING.md). This file lists third-party programs that late.sh bundles,
@@ -11,9 +11,10 @@ NetHack
 -------
 
 late.sh hosts NetHack as a door game (the "NetHack" screen). The game binary is
-compiled from official upstream source inside the service container (see the
-"nethack-build" stage in the Dockerfile) and is run as a local child process;
-players reach it remotely over the late.sh SSH server.
+compiled from official upstream source in the Dockerfile ("nethack-build"
+stage) and ships in the "runtime-nethack" image, where the late-nethack host
+runs it as a child process; players reach it remotely over the late.sh SSH
+server.
 
   Program:    NetHack 5.0.0
   License:    NetHack General Public License (NGPL)
@@ -60,3 +61,328 @@ NGPL compliance notes:
 
 NetHack is a trademark in some jurisdictions; the name is used here only to
 identify the game, not to imply endorsement by the NetHack DevTeam.
+
+
+dopewars
+--------
+
+late.sh hosts dopewars as a door game (the "dopewars" screen). The game binary
+is compiled from official upstream source in the Dockerfile ("dopewars-build"
+stage) and ships in the "runtime-dopewars" image, where the late-dopewars host
+runs it as a child process; players reach it remotely over the late.sh SSH
+server.
+
+  Program:    dopewars 1.6.2
+  License:    GNU General Public License, version 2 or later (GPL-2.0-or-later)
+              https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+  Copyright:  Copyright (C) 1998-2022 Ben Webb
+  Upstream:   https://dopewars.sourceforge.io/
+              https://github.com/benmwebb/dopewars
+  Installed:  Built from the official upstream 1.6.2 source release in the
+              Dockerfile ("dopewars-build" stage). The source tarball's SHA-256
+              is verified (sha256sum -c, fail-closed) before building.
+  Source:     The complete, corresponding machine-readable source is the pinned
+              upstream release tarball recorded in the Dockerfile
+              (DOPEWARS_URL / DOPEWARS_VERSION / DOPEWARS_SHA256), also
+              available from the upstream sites above. Our build recipe is the
+              Dockerfile.
+  Modified:   No. No source is patched; the build is configuration only
+              (terminal-only: --disable-gui-client --disable-gui-server
+              --enable-curses-client, plus a `make LIBS="-lncursesw"` link
+              workaround for the release Makefile's missing curses libs).
+
+GPLv2 compliance notes:
+
+  - dopewars' own copyright and license notices are part of the upstream source
+    tree we build and are left intact.
+  - late.sh does not distribute copies of the dopewars program to players; it
+    only lets them play it over the network. GPLv2 has no network-service
+    copyleft clause, so remote play does not trigger a source-distribution
+    obligation.
+  - If you redistribute a build of late.sh that includes the dopewars binary
+    (for example, by publishing the runtime-dopewars Docker image), GPLv2
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream tarball we compile) and
+    the Dockerfile build recipe with the distribution so recipients can obtain
+    and rebuild that source.
+
+
+BashQuest
+---------
+
+late.sh hosts BashQuest as a door game (the "BashQuest" screen). Unlike every
+other door in this file, bashquest.sh is a native late.sh original, not a
+foreign upstream program: it was written by Tony "Hardlygospel" Hosaroygard
+and is not otherwise part of the late.sh codebase or its FSL license. The
+script is fetched and pinned in the Dockerfile ("bashquest-build" stage) and
+ships in the "runtime-bashquest" image, where the late-bashquest host runs it
+as a child process; players reach it remotely over the late.sh SSH server.
+
+  Program:    BashQuest (bashquest.sh)
+  License:    GNU General Public License, version 3 (GPL-3.0)
+              https://www.gnu.org/licenses/gpl-3.0.html
+  Copyright:  Copyright (C) 2026 Tony Hosaroygard
+  Upstream:   https://github.com/hardlygospel/bashquest
+  Installed:  Fetched by commit pin from the upstream repository in the
+              Dockerfile ("bashquest-build" stage). The fetched file's
+              SHA-256 is verified (sha256sum -c, fail-closed) before use.
+  Source:     The complete, corresponding machine-readable source is the
+              pinned upstream commit recorded in the Dockerfile
+              (BASHQUEST_COMMIT / BASHQUEST_URL / BASHQUEST_SHA256), also
+              available from the upstream repository above. Our build recipe
+              is docker/doors/bashquest.Dockerfile.
+  Modified:   No. The script is used exactly as published; the only late.sh
+              addition is the BASHQUEST_AUTOLOGIN environment variable
+              bashquest.sh itself supports (an opt-in, backward-compatible
+              feature added upstream specifically to support this
+              integration, not a fork or patch).
+
+GPLv3 compliance notes:
+
+  - bashquest.sh's own copyright and license notices are part of the upstream
+    source and are left intact.
+  - late.sh does not distribute copies of bashquest.sh to players; it only
+    lets them play it over the network. GPLv3 does have a stronger
+    anti-circumvention posture than GPLv2 in places, but no network-service
+    copyleft clause either, so remote play does not trigger a
+    source-distribution obligation.
+  - If you redistribute a build of late.sh that includes bashquest.sh (for
+    example, by publishing the runtime-bashquest Docker image), GPLv3
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream commit we fetch) and
+    the docker/doors/bashquest.Dockerfile build recipe with the distribution
+    so recipients can obtain and rebuild that source.
+
+
+CodeKeep: The Pale
+------------------
+
+late.sh hosts CodeKeep: The Pale as a door game. The published npm package is
+installed into the dedicated `runtime-codekeep` image from a checked-in Bun
+lockfile, and the `late-codekeep` host runs it as a child process on a PTY.
+
+  Program:    CodeKeep: The Pale 1.0.9
+  License:    MIT License
+  Copyright:  Copyright (c) 2025 Jason Too
+  Upstream:   https://github.com/tooyipjee/codekeep
+              https://www.npmjs.com/package/codekeep
+  Installed:  Exact npm package version 1.0.9 plus lockfile-pinned transitive
+              dependencies. The lock records npm SHA-512 integrity values and
+              Docker builds use `bun install --frozen-lockfile`.
+  Modified:   No. late.sh supplies an isolated HOME and terminal PTY; the
+              upstream package is executed unchanged.
+
+The upstream MIT copyright and permission notice follows:
+
+  MIT License
+
+  Copyright (c) 2025 Jason Too
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+Dungeon Crawl Stone Soup
+------------------------
+
+late.sh hosts Dungeon Crawl Stone Soup as a door game (the "DCSS" screen). The
+console game binary is compiled from official upstream source in the Dockerfile
+("dcss-build" stage) and ships in the "runtime-dcss" image, where the late-dcss
+host runs it as a child process; players reach it remotely over the late.sh SSH
+server.
+
+  Program:    Dungeon Crawl Stone Soup 0.34.1 (console build)
+  License:    GNU General Public License, version 2 or later (GPL-2.0-or-later)
+              https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+              (see the release's LICENSE file; some bundled components carry
+              other GPL-compatible licenses, listed there)
+  Copyright:  Copyright (C) the Dungeon Crawl Stone Soup team; portions
+              Copyright (C) 1997-2005 Linley Henzell and contributors
+  Upstream:   https://crawl.develz.org/
+              https://github.com/crawl/crawl
+  Installed:  Built from the official upstream 0.34.1 source release in the
+              Dockerfile ("dcss-build" stage). The source tarball's SHA-256 is
+              verified (sha256sum -c, fail-closed) before building.
+  Source:     The complete, corresponding machine-readable source is the pinned
+              upstream release tarball recorded in the Dockerfile
+              (DCSS_URL / DCSS_VERSION / DCSS_SHA256), also available from the
+              upstream sites above. Our build recipe is the Dockerfile.
+  Modified:   No. No source is patched; the build is configuration only (the
+              default console target, installed with
+              `make install prefix=/opt/dcss NOWIZARD=y` -- the Makefile's own
+              knob that compiles out wizard/debug mode for hosts with untrusted
+              players).
+
+GPLv2 compliance notes:
+
+  - crawl's own copyright and license notices are part of the upstream source
+    tree we build and are left intact (the data tree in the image includes the
+    release's LICENSE and CREDITS files).
+  - late.sh does not distribute copies of the crawl program to players; it
+    only lets them play it over the network. GPLv2 has no network-service
+    copyleft clause, so remote play does not trigger a source-distribution
+    obligation.
+  - If you redistribute a build of late.sh that includes the crawl binary
+    (for example, by publishing the runtime-dcss Docker image), GPLv2
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream tarball we compile) and
+    the Dockerfile build recipe with the distribution so recipients can obtain
+    and rebuild that source.
+
+
+Brogue CE
+---------
+
+late.sh hosts Brogue Community Edition as a door game (the "Brogue" screen).
+The curses-only game binary is compiled from official upstream source in the
+Dockerfile ("brogue-build" stage) and ships in the "runtime-brogue" image,
+where the late-brogue host runs it as a child process; players reach it
+remotely over the late.sh SSH server.
+
+  Program:    Brogue Community Edition 1.15.1 (terminal/curses build)
+  License:    GNU Affero General Public License, version 3 (AGPL-3.0)
+              https://www.gnu.org/licenses/agpl-3.0.html
+  Copyright:  Copyright (C) 2009-2020 Brian Walker; Community Edition
+              maintained by Toby Mewett and contributors
+  Upstream:   https://github.com/tmewett/BrogueCE
+  Installed:  Built from the official upstream v1.15.1 source tag in the
+              Dockerfile ("brogue-build" stage). The source tarball's SHA-256
+              is verified (sha256sum -c, fail-closed) before building.
+  Source:     The complete, corresponding machine-readable source is the
+              pinned upstream tag tarball recorded in the Dockerfile
+              (BROGUE_URL / BROGUE_VERSION / BROGUE_SHA256) plus the one
+              patch below, both available from this repository. Our build
+              recipe is the Dockerfile.
+  Modified:   Yes, one patch: scripts/brogue_hangup_save.patch adds a
+              SIGHUP/SIGTERM handler to the curses platform that saves the
+              game in progress via upstream's own quitImmediately path, so a
+              dropped SSH connection or host redeploy does not lose the run.
+              The patch file ships in this repository next to the Dockerfile.
+
+AGPL-3.0 compliance notes:
+
+  - Brogue CE's own copyright and license notices are part of the upstream
+    source tree we build and are left intact.
+  - Unlike the GPLv2 games above, the AGPL DOES have a network clause
+    (section 13): users interacting with a MODIFIED version over a network
+    must be offered the corresponding source. We run a modified version (the
+    hangup-save patch), so the complete corresponding source (the pinned
+    upstream tarball plus scripts/brogue_hangup_save.patch and the Dockerfile
+    build recipe) must remain publicly available for as long as the door is
+    hosted; this repository satisfies that offer.
+  - If you redistribute a build of late.sh that includes the brogue binary
+    (for example, by publishing the runtime-brogue Docker image), AGPL-3.0
+    likewise requires making that corresponding source available to
+    recipients.
+
+Usurper
+-------
+
+late.sh hosts Usurper as a door game (the "Usurper" screen). The game binary is
+compiled from official upstream source in the Dockerfile ("usurper-build"
+stage) and ships in the "runtime-usurper" image, where the late-usurper host
+runs it as a child process; players reach it remotely over the late.sh SSH
+server.
+
+  Program:    Usurper 0.25 development line (USURPER.EXE + EDITOR.EXE,
+              x86_64-linux Free Pascal build)
+  License:    GNU General Public License, version 2 or later (GPL-2.0-or-later)
+              https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+  Copyright:  Copyright (C) 1993-2009 Jakob Dangarden / JAS Software;
+              ported by Rick Parrish, bugfixes by Dan Zingaro
+  Upstream:   https://www.usurper.info/
+              https://github.com/rickparrish/Usurper
+  Installed:  Built from a pinned upstream source commit in the Dockerfile
+              ("usurper-build" stage) with Debian's Free Pascal compiler,
+              using upstream's own build flags (build.ps1). The source
+              tarball's SHA-256 is verified (sha256sum -c, fail-closed)
+              before building.
+  Source:     The complete, corresponding machine-readable source is the
+              pinned upstream commit tarball recorded in the Dockerfile
+              (USURPER_URL / USURPER_COMMIT / USURPER_SHA256), also available
+              from the upstream sites above. Our build recipe is the
+              Dockerfile.
+  Modified:   No. No source is patched. The image additionally ships the
+              upstream RELEASE assets (TEXT/ screens, DOCS/, sample config)
+              and world data files generated by running the upstream EDITOR's
+              own "Reset Game" function at build time
+              (scripts/usurper_seed_data.py).
+
+GPLv2 compliance notes:
+
+  - Usurper's own copyright and license notices are part of the upstream
+    source tree we build and are left intact (the image includes the release's
+    COPYING file in the seed game tree).
+  - late.sh does not distribute copies of the Usurper program to players; it
+    only lets them play it over the network. GPLv2 has no network-service
+    copyleft clause, so remote play does not trigger a source-distribution
+    obligation.
+  - If you redistribute a build of late.sh that includes the Usurper binary
+    (for example, by publishing the runtime-usurper Docker image), GPLv2
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream tarball we compile) and
+    the Dockerfile build recipe with the distribution so recipients can obtain
+    and rebuild that source.
+
+
+A Dark Room
+-----------
+
+late.sh hosts a terminal port of A Dark Room as a door game (the "A Dark Room"
+screen). Unlike the other door games listed here, no upstream binary is run:
+this is a reimplementation in Rust, written against upstream's open-source web
+version, and it lives in this repository under
+late-ssh/src/app/door/darkroom/.
+
+  Program:    A Dark Room (web version)
+  License:    Mozilla Public License, version 2.0 (MPL-2.0), with the
+              Exhibit B "Incompatible With Secondary Licenses" notice
+              https://mozilla.org/MPL/2.0/
+  Copyright:  Copyright (c) Michael Townsend / Doublespeak Games
+  Upstream:   https://github.com/doublespeakgames/adarkroom
+              https://doublespeakgames.com/
+  Installed:  Not installed or bundled. The port is our own source; upstream's
+              balance data, timing constants and notification text were
+              transcribed from script/room.js, script/outside.js and
+              script/state_manager.js.
+  Modified:   Yes. The port reimplements the game for a terminal, covers the
+              room and village acts only, and deliberately changes the pacing:
+              upstream has no offline progress and runs on wall clock while the
+              browser tab is open, while this port credits time only while a
+              player's SSH session is connected, runs the village at a fraction
+              of upstream speed, and caps how much game time lands per day.
+
+MPL-2.0 compliance notes:
+
+  - MPL-2.0 is file-level copyleft. The files in this port that carry material
+    derived from upstream (late-ssh/src/app/door/darkroom/data.rs, model.rs,
+    sim.rs, event.rs, world.rs, world_data.rs, space.rs, scenes_village.rs,
+    scenes_encounters.rs, scenes_setpieces.rs and scenes_executioner.rs) each
+    carry the MPL-2.0 header
+    and the Exhibit B notice, and remain under MPL-2.0. The rest of the port
+    (pace.rs, persist.rs, svc.rs, state.rs, ui.rs, ui_event.rs, ui_world.rs,
+    screen.rs) is our own work under the repository's FSL-1.1-MIT.
+  - MPL §3.3 permits distributing the Larger Work (late.sh) under our own terms
+    provided the covered files stay under MPL-2.0, which is the arrangement
+    above.
+  - The source-availability obligation for the covered files is satisfied by
+    this repository being public. If you redistribute a build of late.sh, keep
+    those files' source available under MPL-2.0.
+  - MPL §2.3 grants no trademark rights. "A Dark Room" is Michael Townsend's;
+    the name is used here to credit the original, and the paid iOS, Android and
+    Steam versions are separate products we have no rights in.

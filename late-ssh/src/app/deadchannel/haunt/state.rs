@@ -1,0 +1,1253 @@
+//! First contact state machines (GAME.md, First contact): stage 1, the
+//! clock glitch ([`ClockGlitch`]), stage 2, the own-name flicker
+//! ([`NameFlicker`]), stage 3, the held door ([`WhisperState`]), and the
+//! eligibility gate ([`FirstContactGate`]) that decides who goes past
+//! stage 1.
+//!
+//! The whisper is delivered on the splash screen, twice per person ever:
+//! those times the splash does not skip. The scene plays on its own clock
+//! (the static pulses from the first frame, the voiced line types itself)
+//! and every key is swallowed, Esc included; a hard time cap opens the door
+//! no matter what. The last rung is the breakthrough ([`Breakthrough`]):
+//! once the invitation is due, the next own send tears the whole screen
+//! with the same static while a line says the voice got through, and the
+//! DM follows. Pure state machines: no I/O, no clock reads. `App` owns
+//! arming and the persistence.
+//!
+//! Replica rule (root CONTEXT.md): nothing here is a source of truth. The
+//! lifetime and daily caps are enforced by conditional claims on the user
+//! row; the machines only decide *when to ask* and hold their schedule
+//! while the row answers. Stage 1 fires for staff (admins and moderators)
+//! and nobody else, by decision in code; stages 2-4 need the gate on top.
+
+use chrono::{DateTime, Utc};
+use late_core::models::user::{FirstContactBioVerdict, FirstContactHitCaps, FirstContactHitClaim};
+use tokio::sync::oneshot;
+use uuid::Uuid;
+
+/// The game's first voice (stage 4): the character whose plea invites the
+/// chosen into `#deadchannel`. Rides the proven ghost-user plumbing
+/// (dedicated DB user, fixed fingerprint, @bartender's shape). The name
+/// comes from GAME.md's own note that "afterglow" was reserved for naming
+/// something inside the world; copy and name still face design review
+/// before the haunting reaches anyone but staff.
+pub(crate) const VOICE_USERNAME: &str = "afterglow";
+pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
+
+/// Hours between the last delivered whisper and the breakthrough coming
+/// due ("the day after the held door"); the next own send after that plays
+/// it, and the invitation DM follows. Twenty rather than twenty-four so a person
+/// who connects every evening, never at the same minute, is not slipped a
+/// whole day by a two-hour miss (pacing tuned 2026-09-09: the full ladder
+/// fits a week of daily connects). `/haunt invite` skips the wait.
+pub(crate) const INVITE_DELAY_HOURS: i64 = 20;
+
+/// How many times the held door plays per person: the first whisper
+/// notices you, the second says something is trying to get through, and
+/// the invitation follows the second. Enforced by the row
+/// (`User::claim_first_contact_whisper`).
+pub(crate) const WHISPER_TOTAL_CAP: u32 = 2;
+/// The least time between two whispers, so the second never lands the
+/// same evening as the first: it waits for a fresh connect on a later
+/// day. Twenty hours, not twenty-four, for the same reason as
+/// [`INVITE_DELAY_HOURS`]: "next evening" must not slip to the one after.
+/// Enforced by the row alongside the cap.
+pub(crate) const WHISPER_GAP_HOURS: i64 = 20;
+
+/// The invitation: a plea, not a pitch, ending with the only instruction
+/// the entire haunting ever gives. Placeholder pool of one until design
+/// review (GAME.md, stage 4); it persists as a real DM on purpose, so an
+/// invitation can be followed three days later.
+pub(crate) const INVITATION_PLEA: &str = "i don't have long on this channel. \
+there is a city under your clubhouse, behind the screen, and something old \
+is broadcasting at the bottom of it. the static has been trying your name \
+for weeks. we need runners. if you're willing: /join #deadchannel";
+
+/// What the breakthrough says while the screen tears: the voice got
+/// through, and it names itself, so the DM landing a moment later reads as
+/// the same voice rather than a stranger (the plea met cold was taken for
+/// spam). One line until design review, like the plea.
+pub(crate) const BREAKTHROUGH_LINE: &str =
+    "we finally reached you. afterglow is on the line, check your messages";
+
+/// How the invitation's once-ever claim came back to the session that
+/// asked. The task answers as soon as the claim is settled and sends the
+/// DM itself afterwards, once the scene has had time to say it is coming.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvitationClaim {
+    /// This session holds the claim: the breakthrough plays, the DM follows.
+    Won,
+    /// Another device or replica took it first: nothing plays here.
+    Taken,
+    /// The voice, the DM room, or the claim query failed, and the task
+    /// logged it: nothing plays, and the claim stays untaken.
+    Failed,
+}
+
+/// The eligibility gate (GAME.md, "the static chooses the invested"):
+/// stages 2-4 target people who have put in the hours, deliberately
+/// touched settings, and written a bio that reads as a person. Evaluated
+/// once at session bootstrap (the user row that already loads plus one
+/// primary-key read of `user_online_time`), and never stored: filling
+/// your bio tonight means the static can find you tomorrow. The
+/// thresholds are placeholders pending design review (GAME.md, Open
+/// questions, "First-contact tuning").
+///
+/// Tenure is connected time, not account age: an account that signed up
+/// a year ago and left is not invested, one that lived here for a week
+/// of evenings is. Read from the online-time leaderboard's table. Eight
+/// hours (was 168, tuned 2026-09-09): the ladder is paced for a week of
+/// daily connects, and a gate an hour-a-day person needs months to pass
+/// would make that pacing moot for everyone but old-timers.
+pub(crate) const ACTIVE_MIN_HOURS: i64 = 8;
+pub(crate) const BIO_MIN_CHARS: usize = 100;
+pub(crate) const TOUCHED_SETTINGS_MIN: usize = 2;
+/// A failed or stranded (pending) bio screen is claimed again after this
+/// long; a pass is final for that text.
+pub(crate) const BIO_RESCREEN_AFTER_HOURS: i64 = 24;
+
+/// Where the bio leg of the gate stands for the bio text on the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BioStanding {
+    /// Under [`BIO_MIN_CHARS`]: no screen is spent on it.
+    TooShort,
+    /// AI is switched off in this install and no pass is on record, so the
+    /// leg cannot pass. Failing closed on a nonrenewable resource.
+    AiOff,
+    /// No usable verdict for the current text (never screened, the text
+    /// changed, or the last verdict is stale): this session claims one.
+    Unscreened,
+    /// A screen is in flight, claimed by some session on some replica.
+    Pending,
+    Passed,
+    Failed,
+}
+
+/// What the gate said at connect: passed, or the first leg that failed in
+/// the order bootstrap checks them (the free legs before the paid bio
+/// one). The connect log carries it per person and the
+/// `late_ssh_first_contact_gate_total` counter tallies it, so a threshold
+/// can be tuned against how many it actually turns away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateVerdict {
+    Passed,
+    TooFewHours,
+    TooFewSettings,
+    BioTooShort,
+    BioAiOff,
+    BioUnscreened,
+    BioPending,
+    BioFailed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FirstContactGate {
+    /// Lifetime connected hours, as last flushed.
+    pub(crate) active_hours: i64,
+    pub(crate) touched_settings: usize,
+    pub(crate) bio_chars: usize,
+    pub(crate) bio: BioStanding,
+}
+
+impl FirstContactGate {
+    pub(crate) fn evaluate(
+        now: DateTime<Utc>,
+        online_milliseconds: i64,
+        settings: &serde_json::Value,
+        ai_enabled: bool,
+    ) -> Self {
+        let bio = late_core::models::user::extract_bio(settings);
+        let bio_chars = bio.chars().count();
+        let screen = late_core::models::user::extract_first_contact_bio_screen(settings);
+        let stale_after = chrono::Duration::hours(BIO_RESCREEN_AFTER_HOURS);
+        let standing = if bio_chars < BIO_MIN_CHARS {
+            BioStanding::TooShort
+        } else {
+            match screen {
+                Some(screen) if screen.hash == bio_hash(&bio) => match screen.verdict {
+                    FirstContactBioVerdict::Passed => BioStanding::Passed,
+                    FirstContactBioVerdict::Pending | FirstContactBioVerdict::Failed
+                        if now - screen.at >= stale_after =>
+                    {
+                        if ai_enabled {
+                            BioStanding::Unscreened
+                        } else {
+                            BioStanding::AiOff
+                        }
+                    }
+                    FirstContactBioVerdict::Pending => BioStanding::Pending,
+                    FirstContactBioVerdict::Failed => BioStanding::Failed,
+                },
+                // A verdict for other text, or none at all.
+                Some(_) | None => {
+                    if ai_enabled {
+                        BioStanding::Unscreened
+                    } else {
+                        BioStanding::AiOff
+                    }
+                }
+            }
+        };
+        Self {
+            active_hours: online_milliseconds / (60 * 60 * 1000),
+            touched_settings: late_core::models::user::count_touched_settings(settings),
+            bio_chars,
+            bio: standing,
+        }
+    }
+
+    /// All three legs hold: the static may choose this person.
+    pub(crate) fn passes(&self) -> bool {
+        self.verdict() == GateVerdict::Passed
+    }
+
+    pub(crate) fn verdict(&self) -> GateVerdict {
+        if self.active_hours < ACTIVE_MIN_HOURS {
+            return GateVerdict::TooFewHours;
+        }
+        if self.touched_settings < TOUCHED_SETTINGS_MIN {
+            return GateVerdict::TooFewSettings;
+        }
+        match self.bio {
+            BioStanding::Passed => GateVerdict::Passed,
+            BioStanding::TooShort => GateVerdict::BioTooShort,
+            BioStanding::AiOff => GateVerdict::BioAiOff,
+            BioStanding::Unscreened => GateVerdict::BioUnscreened,
+            BioStanding::Pending => GateVerdict::BioPending,
+            BioStanding::Failed => GateVerdict::BioFailed,
+        }
+    }
+
+    /// Whether bootstrap should claim a bio screen for this session. The
+    /// two free legs come first: a screen is a paid AI call, and a person
+    /// without the hours or the touched settings cannot pass the gate
+    /// whatever the verdict says, so their bio is not read until they can.
+    pub(crate) fn needs_bio_screen(&self) -> bool {
+        if !self.tenure_and_settings_pass() {
+            return false;
+        }
+        match self.bio {
+            BioStanding::Unscreened => true,
+            BioStanding::TooShort
+            | BioStanding::AiOff
+            | BioStanding::Pending
+            | BioStanding::Passed
+            | BioStanding::Failed => false,
+        }
+    }
+
+    fn tenure_and_settings_pass(&self) -> bool {
+        self.active_hours >= ACTIVE_MIN_HOURS && self.touched_settings >= TOUCHED_SETTINGS_MIN
+    }
+
+    /// Nothing passes, and nothing is worth screening: what bootstrap
+    /// returns for anyone who is not staff, and what test apps use so no stage
+    /// past 1 can arm unless a test arms one on purpose.
+    pub(crate) fn closed() -> Self {
+        Self {
+            active_hours: 0,
+            touched_settings: 0,
+            bio_chars: 0,
+            bio: BioStanding::TooShort,
+        }
+    }
+}
+
+/// The key a bio screen verdict is filed under: a rewritten bio never
+/// inherits a verdict. Sixteen hex characters of blake3 is plenty for one
+/// user's own history of bios.
+pub(crate) fn bio_hash(bio: &str) -> String {
+    blake3::hash(bio.trim().as_bytes()).to_hex()[..16].to_string()
+}
+
+pub(crate) fn glitch_caps() -> FirstContactHitCaps {
+    FirstContactHitCaps {
+        daily: GLITCH_DAILY_CAP,
+        total: GLITCH_TOTAL_CAP,
+    }
+}
+
+pub(crate) fn name_caps() -> FirstContactHitCaps {
+    FirstContactHitCaps {
+        daily: NAME_DAILY_CAP,
+        total: NAME_TOTAL_CAP,
+    }
+}
+
+/// This user's persisted first-contact marks, read from `users.settings`
+/// at session bootstrap. One bundle so the root config carries one field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FirstContactMarks {
+    /// Stage-1 clock-glitch bursts seen so far (opens stage 2 at
+    /// [`GLITCH_TOTAL_CAP`]; quiets the clock after).
+    pub(crate) glitch_hits: u32,
+    /// Stage-2 name-flicker hits so far (arms stage 3 at
+    /// [`NAME_TOTAL_CAP`]; caps stage 2).
+    pub(crate) name_hits: u32,
+    /// Stage-3 whispers delivered so far (the door plays
+    /// [`WHISPER_TOTAL_CAP`] times; the last one schedules stage 4).
+    pub(crate) whisper_hits: u32,
+    /// When the last stage-3 whisper was delivered (spaces the whispers
+    /// apart; at the cap, schedules stage 4).
+    pub(crate) whisper_at: Option<DateTime<Utc>>,
+    /// When the stage-4 invitation DM was sent.
+    pub(crate) invited_at: Option<DateTime<Utc>>,
+}
+
+impl FirstContactMarks {
+    pub(crate) fn from_settings(settings: &serde_json::Value) -> Self {
+        Self {
+            glitch_hits: late_core::models::user::extract_first_contact_glitch_hits(settings),
+            name_hits: late_core::models::user::extract_first_contact_name_hits(settings),
+            whisper_hits: late_core::models::user::extract_first_contact_whisper_hits(settings),
+            whisper_at: late_core::models::user::extract_first_contact_whisper_at(settings),
+            invited_at: late_core::models::user::extract_first_contact_invited_at(settings),
+        }
+    }
+
+    /// Whether the held door is owed at `now`: under the cap, and either
+    /// never played or played at least [`WHISPER_GAP_HOURS`] ago. The row
+    /// re-judges the same rule on delivery.
+    pub(crate) fn whisper_due(&self, now: DateTime<Utc>) -> bool {
+        if self.whisper_hits >= WHISPER_TOTAL_CAP {
+            return false;
+        }
+        match self.whisper_at {
+            None => true,
+            Some(at) => now - at >= chrono::Duration::hours(WHISPER_GAP_HOURS),
+        }
+    }
+
+    /// Whether every whisper has played: the stage-4 clock runs from
+    /// `whisper_at` only once this holds.
+    pub(crate) fn whispers_spent(&self) -> bool {
+        self.whisper_hits >= WHISPER_TOTAL_CAP
+    }
+
+    /// Whether the breakthrough is owed at `now`: every whisper played, the
+    /// last one at least [`INVITE_DELAY_HOURS`] ago, and no invitation yet.
+    /// The invitation claim re-judges the last leg on the row.
+    pub(crate) fn breakthrough_due(&self, now: DateTime<Utc>) -> bool {
+        if self.invited_at.is_some() || !self.whispers_spent() {
+            return false;
+        }
+        match self.whisper_at {
+            None => false,
+            Some(at) => now - at >= chrono::Duration::hours(INVITE_DELAY_HOURS),
+        }
+    }
+
+    /// Everything already spent: what test apps use so no stage can fire
+    /// under an admin-permission test unless a test arms one on purpose.
+    #[cfg(test)]
+    pub(crate) fn spent_for_tests() -> Self {
+        Self {
+            glitch_hits: u32::MAX,
+            name_hits: u32::MAX,
+            whisper_hits: u32::MAX,
+            whisper_at: Some(Utc::now()),
+            invited_at: Some(Utc::now()),
+        }
+    }
+}
+
+/// The haunting's one slot on `App`: every stage's machine and what armed
+/// them. The root owns the field; everything that reads or
+/// writes it goes through `svc.rs` (orchestration) or `ui.rs` (draw).
+pub(crate) struct HauntState {
+    /// Stage 3: the armed splash whisper. `Some` only while the splash is
+    /// holding the door for it.
+    pub(crate) whisper: Option<WhisperState>,
+    /// Stage 1: the clock-glitch scheduler. Session-local dice; the caps
+    /// live on the row.
+    pub(crate) clock_glitch: Option<ClockGlitch>,
+    /// Stage 2: the own-name flicker roller.
+    pub(crate) name_flicker: Option<NameFlicker>,
+    /// Stage 4: the breakthrough, the full-screen beat that carries the
+    /// invitation in. Armed with stage 2 (chosen only).
+    pub(crate) breakthrough: Option<Breakthrough>,
+    /// The invitation claim a due send asked for, while it is out;
+    /// `svc::tick` drains it.
+    pub(crate) pending_invitation: Option<oneshot::Receiver<InvitationClaim>>,
+    /// Stage 2 as the rest of the room sees it: somebody else's hit,
+    /// replayed here from the seed that rode the wire. Every session can
+    /// hold one, armed or not: witnessing is not a rung of the ladder, it
+    /// is being in the room when a rung is climbed.
+    pub(crate) witness: Option<ActiveHit>,
+    /// Persisted marks, mirrored at session start and kept honest
+    /// in-session from every won claim.
+    pub(crate) marks: FirstContactMarks,
+    /// The eligibility gate as evaluated at bootstrap (for `/haunt` status
+    /// and the arming decision).
+    pub(crate) gate: FirstContactGate,
+    /// Stage 1 armed for this session: staff only. Evaluated once at
+    /// arming.
+    pub(crate) stage1: bool,
+    /// Stages 2-4 armed: stage 1 plus the gate, or a funnel already entered
+    /// (eligibility gates entering, never continuing). `/haunt arm` forces
+    /// it for the session.
+    pub(crate) chosen: bool,
+    /// Capped hit claims in flight (at most one per machine). The machine
+    /// that asked holds its schedule until the row answers; `svc::tick`
+    /// drains these.
+    pub(crate) pending_claims: Vec<PendingClaim>,
+}
+
+impl HauntState {
+    /// Whether the splash may not self-expire this tick: an armed whisper
+    /// owns the release.
+    pub(crate) fn holds_splash_door(&self) -> bool {
+        self.whisper.is_some()
+    }
+
+    /// Whether the breakthrough is on screen: the render loop stays on its
+    /// hot cadence and input is swallowed while this holds.
+    pub(crate) fn breakthrough_playing(&self) -> bool {
+        self.breakthrough
+            .as_ref()
+            .is_some_and(Breakthrough::is_playing)
+    }
+
+    /// Drop an armed-but-unplayed whisper (test bootstrap).
+    pub(crate) fn clear_whisper(&mut self) {
+        self.whisper = None;
+    }
+}
+
+/// Which machine asked the row for a hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HitStage {
+    Glitch,
+    /// The room travels with the claim so the won beat can be put on the
+    /// wire without going back to the chat state for it: by the time the
+    /// row answers, the sender may be looking at another room.
+    Name {
+        message_id: Uuid,
+        room_id: Uuid,
+    },
+}
+
+/// One claim out on the row. An `Err` (or a dropped sender) means the row
+/// could not be asked; the machine defers.
+pub(crate) struct PendingClaim {
+    pub(crate) stage: HitStage,
+    pub(crate) rx: oneshot::Receiver<anyhow::Result<FirstContactHitClaim>>,
+}
+
+/// The `/haunt` admin controls, recorded by the composer and drained by
+/// `svc::tick`. Deliberately absent from help and autocomplete, and only
+/// ever parsed for admins: for everyone else the line posts as plain
+/// text, exactly as if the command did not exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HauntCommand {
+    /// `/haunt`: gate, marks, door and glitch state.
+    Status,
+    /// `/haunt arm`: arm every repeatable machine for this session, past
+    /// the gate, so a beat can be tested without a passing bio.
+    Arm,
+    /// `/haunt glitch`: fire a clock-glitch burst right now.
+    Glitch,
+    /// `/haunt name`: force the next own send to flicker.
+    Name,
+    /// `/haunt replay`: re-run the splash whisper now, ignoring the mark.
+    Replay,
+    /// `/haunt invite`: the next own send breaks through, skipping the
+    /// delay; the invitation DM follows as usual.
+    Invite,
+    /// `/haunt reset`: clear every first-contact chain mark for this user.
+    Reset,
+    /// `/haunt welcome`: post the runner's welcome on the wire for this
+    /// user now, as the invited join does for a fresh runner.
+    Welcome,
+}
+
+/// `Some(Some(command))` on a well-formed `/haunt` line, `Some(None)` on
+/// anything else after `/haunt` (usage banner), `None` when the line is
+/// not a haunt command at all.
+pub(crate) fn parse_haunt_command(body: &str) -> Option<Option<HauntCommand>> {
+    let rest = body.trim().strip_prefix("/haunt")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    Some(match words.as_slice() {
+        [] => Some(HauntCommand::Status),
+        ["arm"] => Some(HauntCommand::Arm),
+        ["glitch"] => Some(HauntCommand::Glitch),
+        ["name"] => Some(HauntCommand::Name),
+        ["replay"] => Some(HauntCommand::Replay),
+        ["invite"] => Some(HauntCommand::Invite),
+        ["reset"] => Some(HauntCommand::Reset),
+        ["welcome"] => Some(HauntCommand::Welcome),
+        _ => None,
+    })
+}
+
+/// Ticks are `App::splash_ticks`: one per world tick while the splash is
+/// up, 66ms each at the splash's hot cadence.
+///
+/// The base splash line finishes typing around tick 27; the voiced line
+/// starts right after it, on its own. Nothing waits for a keypress: people
+/// were missing the door.
+const VOICE_TICK: usize = 28;
+/// How long the fully typed line holds before the door opens.
+const LINGER_TICKS: usize = 24;
+/// The hard cap, from splash start: the door opens whatever the phase.
+/// A normal splash runs 90 ticks; the longest natural whisper releases
+/// around tick 122, so the cap is a backstop, not a beat.
+const HARD_CAP_TICKS: usize = 150;
+/// The static pulses on its own rhythm for the whole scene: one surge
+/// every this many ticks (~1.3s).
+const SURGE_PERIOD_TICKS: usize = 20;
+/// How long one static surge decays (~700ms).
+const SURGE_TICKS: usize = 11;
+/// How long the skip hint takes to dissolve once the voice starts (~1s).
+const DISSOLVE_TICKS: usize = 16;
+
+/// The voiced lines for the first held door: the static has noticed
+/// you. Screenshot-test vocabulary only (static, signal, city, channel,
+/// door); a repeated whisper is a bug report, not a haunting, so this
+/// pool grows under the same variety discipline as feed templates
+/// (GAME.md, Open questions) before it ever leaves staff scope.
+const WHISPER_LINES: [&str; 6] = [
+    "you were not supposed to notice this yet",
+    "the sky down here is the color of a dead channel",
+    "the rain in this city falls as static",
+    "something behind the screen just learned your name",
+    "the door is held. not yet.",
+    "there is a city under this room. it noticed you",
+];
+
+/// The voiced lines for the second held door, a later day: whatever
+/// noticed you is now trying to get through. The escalation is in the
+/// verb, the vocabulary stays the same.
+const WHISPER_LINES_SECOND: [&str; 4] = [
+    "something is trying to break in. do you see it?",
+    "it found the door. it is pushing from the other side",
+    "the static is not weather anymore. it is knocking",
+    "listen. that is not the signal dropping. that is something coming up",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WhisperPhase {
+    /// The door is held; the line has not started (until [`VOICE_TICK`]).
+    Held,
+    /// The line is typing itself, one char per tick since `from_tick`.
+    Typing { from_tick: usize },
+    /// The line is fully typed; it holds until `until_tick` so it lands.
+    Linger { until_tick: usize },
+    /// The door opened. `delivered` is false when the hard cap cut the
+    /// scene before the line finished: the once-ever
+    /// mark is only spent on a whisper that was actually read.
+    Released { delivered: bool },
+}
+
+/// What one `tick` decided, for the owner to act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WhisperTick {
+    Holding,
+    Released { delivered: bool },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WhisperState {
+    line: &'static str,
+    phase: WhisperPhase,
+    /// Per-user seed for the deterministic corruption patterns.
+    seed: u64,
+}
+
+impl WhisperState {
+    /// The door for this user's next whisper: `delivered_before` is how
+    /// many have already played, which picks the pool (the first door
+    /// notices you, every later one is something trying to get through).
+    pub(crate) fn for_user(user_id: Uuid, delivered_before: u32) -> Self {
+        Self::with_seed(user_id.as_u128() as u64, delivered_before)
+    }
+
+    fn with_seed(seed: u64, delivered_before: u32) -> Self {
+        let line = match delivered_before {
+            0 => WHISPER_LINES[(seed % WHISPER_LINES.len() as u64) as usize],
+            _ => WHISPER_LINES_SECOND[(seed % WHISPER_LINES_SECOND.len() as u64) as usize],
+        };
+        Self {
+            line,
+            phase: WhisperPhase::Held,
+            seed,
+        }
+    }
+
+    /// Advance one splash tick.
+    pub(crate) fn tick(&mut self, tick: usize) -> WhisperTick {
+        if let WhisperPhase::Released { delivered } = self.phase {
+            return WhisperTick::Released { delivered };
+        }
+        if tick >= HARD_CAP_TICKS {
+            let delivered = matches!(self.phase, WhisperPhase::Linger { .. });
+            self.phase = WhisperPhase::Released { delivered };
+            return WhisperTick::Released { delivered };
+        }
+        match self.phase {
+            WhisperPhase::Held => {
+                if tick >= VOICE_TICK {
+                    self.phase = WhisperPhase::Typing { from_tick: tick };
+                }
+            }
+            WhisperPhase::Typing { from_tick } => {
+                if tick.saturating_sub(from_tick) >= self.line.chars().count() {
+                    self.phase = WhisperPhase::Linger {
+                        until_tick: tick + LINGER_TICKS,
+                    };
+                }
+            }
+            WhisperPhase::Linger { until_tick } => {
+                if tick >= until_tick {
+                    self.phase = WhisperPhase::Released { delivered: true };
+                    return WhisperTick::Released { delivered: true };
+                }
+            }
+            WhisperPhase::Released { .. } => unreachable!("handled above"),
+        }
+        WhisperTick::Holding
+    }
+
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    pub(crate) fn line(&self) -> &'static str {
+        self.line
+    }
+
+    /// How many chars of the line are visible at `tick`, and whether it is
+    /// still typing (drives the cursor).
+    pub(crate) fn typed_chars(&self, tick: usize) -> (usize, bool) {
+        let len = self.line.chars().count();
+        match self.phase {
+            WhisperPhase::Held => (0, false),
+            WhisperPhase::Typing { from_tick } => {
+                let typed = tick.saturating_sub(from_tick).min(len);
+                (typed, typed < len)
+            }
+            WhisperPhase::Linger { .. } | WhisperPhase::Released { .. } => (len, false),
+        }
+    }
+
+    /// 0.0 (fresh burst) to 1.0 (faded) while a static surge is live. The
+    /// surges pulse on their own from the first splash tick until the door
+    /// opens; `None` between pulses and once released.
+    pub(crate) fn surge_progress(&self, tick: usize) -> Option<f32> {
+        if matches!(self.phase, WhisperPhase::Released { .. }) {
+            return None;
+        }
+        let since = tick % SURGE_PERIOD_TICKS;
+        (since < SURGE_TICKS).then(|| since as f32 / SURGE_TICKS as f32)
+    }
+
+    /// 0.0 to 1.0 skip-hint dissolution once the voice starts; `None`
+    /// while the hint is still intact.
+    pub(crate) fn dissolve_progress(&self, tick: usize) -> Option<f32> {
+        let since = tick.checked_sub(VOICE_TICK)?;
+        Some((since as f32 / DISSOLVE_TICKS as f32).min(1.0))
+    }
+}
+
+/// Stage 1: the deniable clock glitch. Ticks are `App::marquee_tick`
+/// (wall-derived 66ms units), so the schedule survives however sparsely
+/// the adaptive loop runs.
+///
+/// A glitch is only legible against stability, so the target is the
+/// sidebar clock (pinned core block, Home and Arcade). One burst swaps a
+/// character or two of the rendered time for glyph-alphabet characters,
+/// holds ~200ms, restores. Rolled per session with independent dice (two
+/// people almost never see it together), rare, render-layer only. The
+/// one DB touch per burst is the capped claim on the user row, which is
+/// what makes the daily and lifetime caps exact across devices and
+/// replicas: the machine says `Due`, holds its schedule, and starts only
+/// on a won claim.
+///
+/// How long one burst holds: 3 ticks (~200ms). One frame at 15fps is too
+/// fast to trust; this survives the sidebar's ~132ms wake cadence.
+const GLITCH_HOLD_TICKS: usize = 3;
+/// The first burst of a session comes early, so an hour-long evening
+/// sees one: the schedule is paced for a person who connects daily, and
+/// a burst that only comes due after the session ends is a day lost.
+const GLITCH_FIRST_MIN_TICKS: usize = 5 * 60 * 1000 / 66; // ~5 min
+const GLITCH_FIRST_MAX_TICKS: usize = 20 * 60 * 1000 / 66; // ~20 min
+/// Gap between bursts after the first: two fit inside an hour, so the
+/// daily cap, not the dice, is what spreads stage 1 over two days.
+const GLITCH_GAP_MIN_TICKS: usize = 20 * 60 * 1000 / 66; // ~20 min
+const GLITCH_GAP_MAX_TICKS: usize = 60 * 60 * 1000 / 66; // ~1 h
+/// When the burst comes due while the clock is off screen, or the row
+/// could not be asked, defer a little instead of spending it invisibly.
+const GLITCH_DEFER_MIN_TICKS: usize = 3 * 60 * 1000 / 66; // ~3 min
+const GLITCH_DEFER_MAX_TICKS: usize = 10 * 60 * 1000 / 66; // ~10 min
+/// At most this many bursts per UTC day per person (enforced by the row).
+pub(crate) const GLITCH_DAILY_CAP: u32 = 2;
+/// The ladder's share of clock bursts (the persisted counter): once this
+/// many have been seen, the clock goes quiet and stage 2 opens. The quiet
+/// is part of the escalation; whether unchosen users keep an unbounded
+/// ambient clock is a question for when the haunting leaves staff
+/// (GAME.md).
+pub(crate) const GLITCH_TOTAL_CAP: u32 = 3;
+/// Fuse on a forced burst: the `/haunt glitch` banner covers the sidebar
+/// clock for ~5s, so the burst waits it out.
+const GLITCH_FORCE_DELAY_TICKS: usize = 7 * 1000 / 66; // ~7 s
+
+/// What one `tick` decided. `Started` and `Ended` are the two frames the
+/// owner must actually paint; `Due` asks the owner to claim a burst.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlitchTick {
+    Idle,
+    /// The schedule came due with the clock on screen: claim one burst on
+    /// the row, then call `start` or `claim_capped`/`claim_failed`.
+    Due,
+    Started,
+    Ended,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ClockGlitch {
+    /// xorshift64 state: this session's independent dice.
+    rng: u64,
+    /// Tick the next burst comes due.
+    next_at: usize,
+    /// Tick the live burst started, while one is showing.
+    active_since: Option<usize>,
+    /// Tick a forced (`/haunt glitch`) burst fires, while its fuse burns.
+    forced_at: Option<usize>,
+    /// A claim is out on the row; the schedule holds until it answers.
+    claiming: bool,
+    /// Lifetime bursts, seeded from the persisted counter and refreshed by
+    /// every claim answer; at [`GLITCH_TOTAL_CAP`] the schedule goes quiet
+    /// and stage 2 opens.
+    total_hits: u32,
+}
+
+impl ClockGlitch {
+    pub(crate) fn new(seed: u64, now_tick: usize, total_hits: u32) -> Self {
+        let mut glitch = Self {
+            rng: seed | 1,
+            next_at: 0,
+            active_since: None,
+            forced_at: None,
+            claiming: false,
+            total_hits,
+        };
+        glitch.next_at = now_tick + glitch.roll(GLITCH_FIRST_MIN_TICKS, GLITCH_FIRST_MAX_TICKS);
+        glitch
+    }
+
+    /// Advance one world tick. `clock_visible` is whether the sidebar
+    /// clock is actually on screen; a burst never spends itself unseen.
+    pub(crate) fn tick(&mut self, tick: usize, clock_visible: bool) -> GlitchTick {
+        if let Some(since) = self.active_since {
+            if tick.saturating_sub(since) >= GLITCH_HOLD_TICKS {
+                self.active_since = None;
+                self.next_at = tick + self.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
+                return GlitchTick::Ended;
+            }
+            return GlitchTick::Idle;
+        }
+        if let Some(at) = self.forced_at {
+            // A burning fuse bypasses the schedule, the caps, and the
+            // visibility gate, exactly as the instant fire did: the admin
+            // asked for it and is watching.
+            if tick < at {
+                return GlitchTick::Idle;
+            }
+            self.forced_at = None;
+            self.claiming = false;
+            self.active_since = Some(tick);
+            self.total_hits = self.total_hits.saturating_add(1);
+            return GlitchTick::Started;
+        }
+        if self.claiming {
+            return GlitchTick::Idle;
+        }
+        if self.total_hits >= GLITCH_TOTAL_CAP {
+            // The ladder's share of bursts has been seen: the clock goes
+            // quiet for good, and the quiet is part of the escalation.
+            return GlitchTick::Idle;
+        }
+        if tick < self.next_at {
+            return GlitchTick::Idle;
+        }
+        if !clock_visible {
+            self.next_at = tick + self.roll(GLITCH_DEFER_MIN_TICKS, GLITCH_DEFER_MAX_TICKS);
+            return GlitchTick::Idle;
+        }
+        self.claiming = true;
+        GlitchTick::Due
+    }
+
+    /// The row granted the burst: show it now. `hits` is the lifetime
+    /// counter after the claim.
+    pub(crate) fn start(&mut self, tick: usize, hits: u32) {
+        self.claiming = false;
+        self.active_since = Some(tick);
+        self.total_hits = hits;
+    }
+
+    /// The row refused (today's or the lifetime cap): a full re-dice, and
+    /// the mirror takes the row's count so a spent share goes quiet here
+    /// too.
+    pub(crate) fn claim_capped(&mut self, tick: usize, hits: u32) {
+        self.claiming = false;
+        self.total_hits = hits;
+        self.next_at = tick + self.roll(GLITCH_GAP_MIN_TICKS, GLITCH_GAP_MAX_TICKS);
+    }
+
+    /// The row could not be asked: defer a little and try again.
+    pub(crate) fn claim_failed(&mut self, tick: usize) {
+        self.claiming = false;
+        self.next_at = tick + self.roll(GLITCH_DEFER_MIN_TICKS, GLITCH_DEFER_MAX_TICKS);
+    }
+
+    /// Lifetime bursts including this session's; the caller mirrors it into
+    /// the persisted marks on every `Started`.
+    pub(crate) fn total_hits(&self) -> u32 {
+        self.total_hits
+    }
+
+    /// The live burst's corruption seed while one is showing, for the
+    /// deterministic character swap at draw time.
+    pub(crate) fn corruption(&self, tick: usize) -> Option<u64> {
+        let since = self.active_since?;
+        (tick.saturating_sub(since) < GLITCH_HOLD_TICKS)
+            .then_some(self.rng ^ ((since as u64) << 1 | 1))
+    }
+
+    /// `/haunt glitch`: light a short fuse (the command banner covers the
+    /// sidebar clock for ~5s), then burst, bypassing schedule and caps.
+    /// Admin test hook only.
+    pub(crate) fn fire_now(&mut self, tick: usize) {
+        self.forced_at = Some(tick + GLITCH_FORCE_DELAY_TICKS);
+    }
+
+    /// Ticks until the next scheduled burst, for `/haunt` status.
+    pub(crate) fn next_in_ticks(&self, tick: usize) -> usize {
+        self.next_at.saturating_sub(tick)
+    }
+
+    /// xorshift64, then scaled into `min..max`.
+    fn roll(&mut self, min: usize, max: usize) -> usize {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        min + (self.rng as usize) % (max - min)
+    }
+}
+
+/// Stage 2: the corruption chooses you, and the target is your own name.
+/// In the sender's session only, immediately after their message lands
+/// (the one moment of guaranteed attention), the author label of that
+/// just-landed message renders with two or three characters from the
+/// glyph alphabet in two waves back to back, each with its own glyphs
+/// (~800ms, then a different corruption for ~800ms more), then heals. The
+/// body is never touched: the escalation over stage 1 is targeting, not
+/// content. It only rolls once
+/// stage 1 has run its course (`stage_open`), and only on a message that
+/// renders its own author header (the landing hook in `chat/state.rs`
+/// skips grouped continuations, whose label never draws). A natural hit
+/// is a claim on the row first (the daily and lifetime caps live there)
+/// and shows on the tick the claim comes back won.
+///
+/// How long one wave of a hit holds, in `App::marquee_tick` units
+/// (~800ms): well past the clock's ~200ms, because stage 2 is meant to be
+/// hard to miss.
+const NAME_WAVE_TICKS: usize = 12;
+/// Waves per hit (decided 2026-09-03): the label corrupts, then corrupts
+/// differently, then heals. Twice the hold of one wave, and the second
+/// wave rolls its own glyphs, so an eye that wrote the first off as a
+/// render hiccup is caught by the change.
+const NAME_WAVES: usize = 2;
+/// How long the whole hit holds.
+const NAME_HOLD_TICKS: usize = NAME_WAVE_TICKS * NAME_WAVES;
+/// One in a few sends. The daily cap already spaces hits a day apart;
+/// the dice only pick which send of the evening carries it, so a chance
+/// that let a whole evening pass unspent (it was 1-in-24) was a second
+/// pacing mechanism doing the cap's job badly.
+const NAME_CHANCE_ONE_IN: u64 = 3;
+/// At most one hit per UTC day per person (enforced by the row).
+pub(crate) const NAME_DAILY_CAP: u32 = 1;
+/// The ladder's share of name hits (the persisted counter): the third
+/// hit arms the stage-3 whisper for the next fresh connect. With the
+/// one-per-day cap, stage 2 takes three daily connects, and the whole
+/// ladder a week of them.
+pub(crate) const NAME_TOTAL_CAP: u32 = 3;
+
+/// The wave base for one hit: the session's dice mixed with the tick it
+/// started on, so two hits in one session never swap the same characters.
+/// Travels on the wire, which is what makes every screen in the room
+/// paint the same corruption.
+fn wave_seed(rng: u64, since: usize) -> u64 {
+    rng ^ ((since as u64) << 1 | 1)
+}
+
+/// What a landed own message rolled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NameRoll {
+    Miss,
+    /// The dice landed: claim one hit on the row, then `start` or
+    /// `claim_capped`/`claim_failed`.
+    Claim,
+    /// `/haunt name`: the hit is already showing, uncapped.
+    Forced,
+}
+
+/// The live hit: which message's author label is corrupted, since when,
+/// with which wave base, and which wave the rows were last rebuilt for.
+///
+/// One hit is painted by the person being haunted and by everyone else in
+/// the room, on their own tick clocks and never quite in step (a witness
+/// starts when the message reaches them). The seed is what keeps the
+/// theater identical anyway: it rides the wire, so every screen swaps the
+/// same characters in the same two waves.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ActiveHit {
+    message_id: Uuid,
+    since: usize,
+    seed: u64,
+    painted_wave: usize,
+}
+
+impl ActiveHit {
+    pub(crate) fn new(message_id: Uuid, since: usize, seed: u64) -> Self {
+        Self {
+            message_id,
+            since,
+            seed,
+            painted_wave: 0,
+        }
+    }
+
+    /// Advance one world tick; returns true on a repaint edge: the start of
+    /// the next wave (the caller repaints the label with that wave's
+    /// glyphs) and the heal. `None` back means the hit is over.
+    pub(crate) fn tick(hit: &mut Option<Self>, tick: usize) -> bool {
+        let Some(active) = hit.as_mut() else {
+            return false;
+        };
+        let elapsed = tick.saturating_sub(active.since);
+        if elapsed >= NAME_HOLD_TICKS {
+            *hit = None;
+            return true;
+        }
+        let wave = elapsed / NAME_WAVE_TICKS;
+        if wave == active.painted_wave {
+            return false;
+        }
+        active.painted_wave = wave;
+        true
+    }
+
+    /// The live corruption for the row builder: which message's author
+    /// label, and this wave's seed. Each wave hands out its own, so the
+    /// swapped glyphs change at the wave edge.
+    pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
+        let elapsed = tick.saturating_sub(self.since);
+        if elapsed >= NAME_HOLD_TICKS {
+            return None;
+        }
+        let wave = (elapsed / NAME_WAVE_TICKS) as u64;
+        Some((
+            self.message_id,
+            self.seed ^ wave.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        ))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NameFlicker {
+    /// xorshift64 state: the per-send dice.
+    rng: u64,
+    active: Option<ActiveHit>,
+    /// A claim is out on the row for this message's label.
+    claiming: Option<Uuid>,
+    /// Lifetime hits, seeded from the persisted counter and refreshed by
+    /// every claim answer; this is also the stage-3 arming counter.
+    total_hits: u32,
+    /// `/haunt name`: the next own send hits regardless of dice and caps.
+    force_next: bool,
+}
+
+impl NameFlicker {
+    pub(crate) fn new(seed: u64, total_hits: u32) -> Self {
+        Self {
+            rng: seed | 1,
+            active: None,
+            claiming: None,
+            total_hits,
+            force_next: false,
+        }
+    }
+
+    /// One of this session's own messages just landed. Rolls the dice.
+    /// `stage_open` is whether stage 1 has run its course (glitch hits at
+    /// the cap): the ladder never skips a rung, but a forced (`/haunt
+    /// name`) hit ignores it, and the caps, and shows at once.
+    pub(crate) fn note_own_message(
+        &mut self,
+        message_id: Uuid,
+        tick: usize,
+        stage_open: bool,
+    ) -> NameRoll {
+        if self.active.is_some() || self.claiming.is_some() {
+            return NameRoll::Miss;
+        }
+        if std::mem::take(&mut self.force_next) {
+            self.active = Some(ActiveHit::new(message_id, tick, wave_seed(self.rng, tick)));
+            // Saturating: the marks of a test app sit at the ceiling.
+            self.total_hits = self.total_hits.saturating_add(1);
+            return NameRoll::Forced;
+        }
+        if !stage_open || self.total_hits >= NAME_TOTAL_CAP {
+            return NameRoll::Miss;
+        }
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        if !self.rng.is_multiple_of(NAME_CHANCE_ONE_IN) {
+            return NameRoll::Miss;
+        }
+        self.claiming = Some(message_id);
+        NameRoll::Claim
+    }
+
+    /// The row granted the hit: corrupt `message_id`'s label from `tick`.
+    pub(crate) fn start(&mut self, message_id: Uuid, tick: usize, hits: u32) {
+        self.claiming = None;
+        self.active = Some(ActiveHit::new(message_id, tick, wave_seed(self.rng, tick)));
+        self.total_hits = hits;
+    }
+
+    /// The row refused (today's or the lifetime cap); the mirror takes the
+    /// row's count.
+    pub(crate) fn claim_capped(&mut self, hits: u32) {
+        self.claiming = None;
+        self.total_hits = hits;
+    }
+
+    /// The row could not be asked; the next send rolls again.
+    pub(crate) fn claim_failed(&mut self) {
+        self.claiming = None;
+    }
+
+    /// Advance one world tick; returns true on a repaint edge: the start
+    /// of the next wave (the caller repaints the label with that wave's
+    /// glyphs) and the heal (the caller repaints the healed label).
+    pub(crate) fn tick(&mut self, tick: usize) -> bool {
+        ActiveHit::tick(&mut self.active, tick)
+    }
+
+    /// The live hit for the row builder: which message's author label to
+    /// corrupt, and this wave's seed for the deterministic swap.
+    pub(crate) fn corruption(&self, tick: usize) -> Option<(Uuid, u64)> {
+        self.active.as_ref()?.corruption(tick)
+    }
+
+    /// The live hit's wave base, for the beat the room is told about
+    /// (`svc::publish_name_hit`). `None` while nothing is showing.
+    pub(crate) fn live_hit(&self) -> Option<(Uuid, u64)> {
+        self.active.as_ref().map(|hit| (hit.message_id, hit.seed))
+    }
+
+    pub(crate) fn total_hits(&self) -> u32 {
+        self.total_hits
+    }
+
+    /// `/haunt name`: force the next own send to hit. Admin test hook.
+    pub(crate) fn force_next(&mut self) {
+        self.force_next = true;
+    }
+}
+
+/// Stage 4, the breakthrough: the last rung, and the one that has to land.
+/// The invitation met cold, with nothing on screen before it, was taken for
+/// spam; so once it is due ([`FirstContactMarks::breakthrough_due`]), the
+/// next own send (the one moment of guaranteed attention, stage 2's reason)
+/// tears the whole screen: the held door's static pulses over everything,
+/// heavier, a line types itself in a gap torn out of the middle saying the
+/// voice got through, and the DM lands as the line finishes. Private to the
+/// person (no wire, nobody else's screen), input swallowed for the few
+/// seconds it plays, and never the message itself: the send already landed.
+///
+/// A due send is a claim first: the invitation task takes the once-ever
+/// stamp and answers before it sends anything, the scene plays on a won
+/// claim, and the same task sends the DM after [`Breakthrough::dm_delay`].
+/// Ticks are `App::marquee_tick` (66ms wall units), which is what lets that
+/// delay match what the eye sees.
+///
+/// Static alone before the voice starts (~500ms).
+const BREAKTHROUGH_VOICE_TICK: usize = 8;
+/// How long the typed line holds before the screen heals (~2s).
+const BREAKTHROUGH_LINGER_TICKS: usize = 30;
+/// Quicker pulses than the door's: this is the breach, not the knock. One
+/// surge every ~900ms, each fading over ~650ms.
+const BREAKTHROUGH_SURGE_PERIOD_TICKS: usize = 14;
+const BREAKTHROUGH_SURGE_TICKS: usize = 10;
+/// Wall length of one `marquee_tick`.
+const MARQUEE_TICK_MS: u64 = 66;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BreakthroughPhase {
+    /// Waiting for a due send.
+    Idle,
+    /// The invitation claim is out; no other send asks while it is.
+    Claiming,
+    /// On screen since `since`.
+    Playing { since: usize },
+    /// The ask failed (the task logged why): no send this session asks
+    /// again, so a broken voice or DM room costs one round of queries per
+    /// session, not one per send. `/haunt invite` re-opens it.
+    Failed,
+}
+
+/// What a landed own message decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BreakthroughRoll {
+    Wait,
+    /// Due (or forced): start the invitation task and hold for its claim.
+    Claim,
+}
+
+/// What one `tick` decided, for the owner to repaint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BreakthroughTick {
+    Idle,
+    Playing,
+    /// The scene just ended.
+    Ended,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Breakthrough {
+    phase: BreakthroughPhase,
+    /// Per-user seed for the static pattern.
+    seed: u64,
+    /// `/haunt invite`: the next own send claims whether or not it is due.
+    force_next: bool,
+}
+
+impl Breakthrough {
+    pub(crate) fn for_user(user_id: Uuid) -> Self {
+        Self::with_seed(user_id.as_u128() as u64)
+    }
+
+    fn with_seed(seed: u64) -> Self {
+        Self {
+            phase: BreakthroughPhase::Idle,
+            seed,
+            force_next: false,
+        }
+    }
+
+    /// A send this session submitted just succeeded. `due` is
+    /// [`FirstContactMarks::breakthrough_due`] right now.
+    pub(crate) fn note_own_send(&mut self, due: bool) -> BreakthroughRoll {
+        if self.phase != BreakthroughPhase::Idle {
+            return BreakthroughRoll::Wait;
+        }
+        let forced = std::mem::take(&mut self.force_next);
+        match forced || due {
+            true => {
+                self.phase = BreakthroughPhase::Claiming;
+                BreakthroughRoll::Claim
+            }
+            false => BreakthroughRoll::Wait,
+        }
+    }
+
+    /// The claim came back won: the scene starts now.
+    pub(crate) fn start(&mut self, tick: usize) {
+        self.phase = BreakthroughPhase::Playing { since: tick };
+    }
+
+    /// The claim came back taken by another device: nothing plays, and it
+    /// stops being due once the owner stamps the marks.
+    pub(crate) fn claim_taken(&mut self) {
+        self.phase = BreakthroughPhase::Idle;
+    }
+
+    /// The claim could not be asked: nothing plays, and this session stops
+    /// asking.
+    pub(crate) fn claim_failed(&mut self) {
+        self.phase = BreakthroughPhase::Failed;
+    }
+
+    /// Advance one world tick.
+    pub(crate) fn tick(&mut self, tick: usize) -> BreakthroughTick {
+        let BreakthroughPhase::Playing { since } = self.phase else {
+            return BreakthroughTick::Idle;
+        };
+        if tick.saturating_sub(since) >= Self::scene_ticks() {
+            self.phase = BreakthroughPhase::Idle;
+            return BreakthroughTick::Ended;
+        }
+        BreakthroughTick::Playing
+    }
+
+    fn scene_ticks() -> usize {
+        BREAKTHROUGH_VOICE_TICK + BREAKTHROUGH_LINE.chars().count() + BREAKTHROUGH_LINGER_TICKS
+    }
+
+    /// How long after the claim the DM should land: the moment the line has
+    /// finished typing.
+    pub(crate) fn dm_delay() -> std::time::Duration {
+        let ticks = (BREAKTHROUGH_VOICE_TICK + BREAKTHROUGH_LINE.chars().count()) as u64;
+        std::time::Duration::from_millis(ticks * MARQUEE_TICK_MS)
+    }
+
+    pub(crate) fn is_playing(&self) -> bool {
+        matches!(self.phase, BreakthroughPhase::Playing { .. })
+    }
+
+    pub(crate) fn phase(&self) -> BreakthroughPhase {
+        self.phase
+    }
+
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// How many chars of [`BREAKTHROUGH_LINE`] show at `tick`, and whether it
+    /// is still typing (drives the cursor). `None` while nothing plays.
+    pub(crate) fn typed_chars(&self, tick: usize) -> Option<(usize, bool)> {
+        let BreakthroughPhase::Playing { since } = self.phase else {
+            return None;
+        };
+        let len = BREAKTHROUGH_LINE.chars().count();
+        let Some(voiced) = tick
+            .saturating_sub(since)
+            .checked_sub(BREAKTHROUGH_VOICE_TICK)
+        else {
+            return Some((0, false));
+        };
+        let typed = voiced.min(len);
+        Some((typed, typed < len))
+    }
+
+    /// 0.0 (fresh burst) to 1.0 (faded) while a surge is live; `None`
+    /// between pulses and while nothing plays.
+    pub(crate) fn surge_progress(&self, tick: usize) -> Option<f32> {
+        let BreakthroughPhase::Playing { since } = self.phase else {
+            return None;
+        };
+        let into = tick.saturating_sub(since) % BREAKTHROUGH_SURGE_PERIOD_TICKS;
+        (into < BREAKTHROUGH_SURGE_TICKS).then(|| into as f32 / BREAKTHROUGH_SURGE_TICKS as f32)
+    }
+
+    /// `/haunt invite`: the next own send claims, due or not, even after a
+    /// failed ask this session. Admin test hook.
+    pub(crate) fn force_next(&mut self) {
+        if self.phase == BreakthroughPhase::Failed {
+            self.phase = BreakthroughPhase::Idle;
+        }
+        self.force_next = true;
+    }
+}
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

@@ -1,13 +1,18 @@
 use std::cell::Cell;
 
+use super::mouse::{Field, MouseState, Target};
 use chrono::{DateTime, Utc};
-use late_core::models::profile::{Profile, ProfileParams, normalize_profile_tags};
+use late_core::models::message_translation::TranslateLang;
+use late_core::models::profile::{Profile, ProfileParams};
+use late_core::models::profile_award::{ChatBadgeRow, chat_badge_rows};
 use late_core::models::rss_feed::RssFeed;
-use late_core::models::user::{
-    RightSidebarComponentSetting, RightSidebarMode, normalize_text_brightness_adjustment,
-    sanitize_username_input,
+use late_core::models::statusline::{
+    LabelMode, StatusComponent, StatusComponentSetting, StatusVariant,
 };
-use ratatui::layout::Rect;
+use late_core::models::user::{
+    InteractionMode, RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
+    normalize_text_brightness_adjustment, sanitize_username_input,
+};
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
@@ -15,6 +20,8 @@ use uuid::Uuid;
 
 use crate::app::common::theme;
 use crate::app::profile::svc::{IrcTokenStatus, ProfileEvent, ProfileService};
+use crate::app::referral::state::typed_invite_code;
+use crate::app::referral::svc::{InviteOverview, ReferralEvent, ReferralService};
 use crate::app::{
     chat::feeds::svc::{FeedEvent, FeedService, FeedSnapshot},
     common::primitives::Banner,
@@ -29,20 +36,37 @@ const LINK_CODE_MAX_LEN: usize = 16;
 const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 pub(crate) const SYSTEM_FIELD_MAX_LEN: usize = 48;
 pub(crate) const FEED_URL_MAX_LEN: usize = 2000;
-pub const BIO_MAX_LEN: usize = 1000;
-pub const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
-pub const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
+/// Room for a whole pasted `ssh invite-<code>@late.sh` and some slack.
+pub(crate) const INVITE_CODE_INPUT_MAX_LEN: usize = 40;
+pub(crate) const BIO_MAX_LEN: usize = 1000;
+pub(crate) const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
+pub(crate) const LINK_CONFIRM_MISMATCH: &str = "Typed username does not match the main username.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PickerKind {
+pub(crate) enum PickerKind {
     Country,
     Timezone,
+    Language,
+    InteractionMode,
+}
+
+pub(crate) const INTERACTION_MODES: [InteractionMode; 3] = [
+    InteractionMode::Keyboard,
+    InteractionMode::Mouse,
+    InteractionMode::Hybrid,
+];
+
+pub(crate) fn interaction_mode_label(mode: InteractionMode) -> &'static str {
+    match mode {
+        InteractionMode::Keyboard => "Keyboard",
+        InteractionMode::Mouse => "Mouse",
+        InteractionMode::Hybrid => "Hybrid",
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Row {
+pub(crate) enum Row {
     Username,
-    Birthday,
     Ide,
     Terminal,
     Os,
@@ -50,28 +74,35 @@ pub enum Row {
     Theme,
     Country,
     Timezone,
+    TranslateTo,
+    AutoTranslate,
+    TranslateMine,
     DirectMessages,
     Mentions,
     GameEvents,
+    Streams,
     Bell,
     Cooldown,
     NotifyFormat,
 }
 
 impl Row {
-    pub const ALL: [Row; 15] = [
+    pub(crate) const ALL: [Row; 18] = [
         Row::Username,
         Row::Country,
         Row::Timezone,
-        Row::Birthday,
         Row::Theme,
         Row::Ide,
         Row::Terminal,
         Row::Os,
         Row::Langs,
+        Row::TranslateTo,
+        Row::AutoTranslate,
+        Row::TranslateMine,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
+        Row::Streams,
         Row::Bell,
         Row::Cooldown,
         Row::NotifyFormat,
@@ -79,14 +110,16 @@ impl Row {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AccountRow {
+pub(crate) enum AccountRow {
+    Invites,
     LinkAccounts,
     IrcToken,
     DeleteAccount,
 }
 
 impl AccountRow {
-    pub const ALL: [AccountRow; 3] = [
+    pub(crate) const ALL: [AccountRow; 4] = [
+        AccountRow::Invites,
         AccountRow::LinkAccounts,
         AccountRow::IrcToken,
         AccountRow::DeleteAccount,
@@ -94,89 +127,122 @@ impl AccountRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TweakRow {
+pub(crate) enum TweakRow {
     // Appearance group.
     BackgroundColor,
     TextBrightness,
     RightSidebar,
     RoomListSidebar,
-    LoungeInfo,
-    // Compose / Music / Display / Startup groups.
+    // Input / Display / Startup groups. There is deliberately no music-mute
+    // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
+    // and a second control here would be a second source of truth for them.
     ComposerKeepFocused,
-    StartWithMusicMuted,
+    InteractionMode,
     FlagFallback,
-    LandOnHome,
+    TerminalImages,
+    ChatBadges,
+    LandingPage,
+    PaperAtLogin,
+    ArtSplash,
 }
 
 impl TweakRow {
-    pub const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 12] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
-        TweakRow::LoungeInfo,
         TweakRow::ComposerKeepFocused,
-        TweakRow::StartWithMusicMuted,
+        TweakRow::InteractionMode,
         TweakRow::FlagFallback,
-        TweakRow::LandOnHome,
+        TweakRow::TerminalImages,
+        TweakRow::ChatBadges,
+        TweakRow::LandingPage,
+        TweakRow::PaperAtLogin,
+        TweakRow::ArtSplash,
     ];
 }
 
+/// Which pane of the bottom status bar customizer the keys act on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LinkAccountStep {
+pub(crate) enum StatuslinePane {
+    /// The ordered segment list: reorder, enable, disable.
+    List,
+    /// The selected segment's dials.
+    Detail,
+}
+
+/// One dial in the customizer's detail pane.
+///
+/// Which of these a segment actually offers depends on the component, so the
+/// pane asks [`SettingsModalState::statusline_dials`] per selection instead of
+/// assuming every dial is present.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StatuslineDial {
+    Brief,
+    Label,
+    AutoHide,
+    /// The component's own dial, whatever it happens to be. The heading comes
+    /// from `StatusComponent::variant_title`.
+    Variant,
+}
+
+impl StatuslineDial {
+    pub(crate) fn title(self, setting: &StatusComponentSetting) -> &'static str {
+        match self {
+            Self::Brief => "Brief",
+            Self::Label => "Label",
+            Self::AutoHide => "Auto-hide",
+            // Only offered when the component has a dial, and a component with
+            // a dial always names it (locked by a `late-core` test).
+            Self::Variant => setting.component.variant_title().unwrap_or("Mode"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LinkAccountStep {
     EnterCode,
     Confirm,
     Pending,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LinkAccountEnterCodeFocus {
+pub(crate) enum LinkAccountEnterCodeFocus {
     GenerateCode,
     PeerCode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SystemField {
-    Birthday,
+pub(crate) enum SystemField {
     Ide,
     Terminal,
     Os,
-    Langs,
 }
 
 impl SystemField {
     pub(crate) fn from_row(row: Row) -> Option<Self> {
         match row {
-            Row::Birthday => Some(Self::Birthday),
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
-            Row::Langs => Some(Self::Langs),
             _ => None,
         }
     }
 
     fn value(self, profile: &Profile) -> Option<String> {
         match self {
-            Self::Birthday => profile.birthday.clone(),
             Self::Ide => profile.ide.clone(),
             Self::Terminal => profile.terminal.clone(),
             Self::Os => profile.os.clone(),
-            Self::Langs => (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
         }
     }
 
     fn set_value(self, profile: &mut Profile, text: String) {
         match self {
-            Self::Birthday => {
-                profile.birthday = late_core::models::birthday::normalize_birthday(&text);
-            }
             Self::Ide => profile.ide = normalize_optional_text(&text),
             Self::Terminal => profile.terminal = normalize_optional_text(&text),
             Self::Os => profile.os = normalize_optional_text(&text),
-            Self::Langs => {
-                profile.langs = normalize_profile_tags([text.as_str()]);
-            }
         }
     }
 }
@@ -185,11 +251,12 @@ impl SystemField {
 /// (identity/appearance/location/notifications); `Themes` is a fast browser
 /// for the expanded theme catalog; `Bio` is a separate full-width pane with
 /// the markdown editor + preview; `Tweaks` holds power-user toggles and the
-/// gem easter egg.
+/// gem easter egg; `Statusline` edits the bottom status bar.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Tab {
+pub(crate) enum Tab {
     Settings,
     Tweaks,
+    Statusline,
     Bio,
     Themes,
     Account,
@@ -197,19 +264,21 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub(crate) const ALL: [Tab; 7] = [
         Tab::Settings,
         Tab::Bio,
         Tab::Themes,
         Tab::Tweaks,
+        Tab::Statusline,
         Tab::Account,
         Tab::Feeds,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Tab::Settings => "Settings",
             Tab::Tweaks => "Tweaks",
+            Tab::Statusline => "Statusline",
             Tab::Bio => "Bio",
             Tab::Themes => "Themes",
             Tab::Account => "Account",
@@ -219,11 +288,15 @@ impl Tab {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThemeTreeRow {
+pub(crate) enum ThemeTreeRow {
     Group {
         group: theme::ThemeGroup,
         collapsed: bool,
     },
+    /// The starred-themes block that sits above the real groups. It is not a
+    /// `ThemeGroup` because no theme belongs to it: it is a view of themes that
+    /// live in the groups below.
+    FavoritesHeader { collapsed: bool },
     Theme {
         option_index: usize,
         last_in_group: bool,
@@ -231,7 +304,7 @@ pub enum ThemeTreeRow {
 }
 
 #[derive(Default)]
-pub struct PickerState {
+pub(crate) struct PickerState {
     pub kind: Option<PickerKind>,
     pub query: String,
     pub selected_index: usize,
@@ -239,7 +312,7 @@ pub struct PickerState {
     pub visible_height: Cell<usize>,
 }
 
-pub struct DeleteAccountDialogState {
+pub(crate) struct DeleteAccountDialogState {
     open: bool,
     input: TextArea<'static>,
     status: Option<String>,
@@ -256,19 +329,19 @@ impl DeleteAccountDialogState {
         }
     }
 
-    pub fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.open
     }
 
-    pub fn input(&self) -> &TextArea<'static> {
+    pub(crate) fn input(&self) -> &TextArea<'static> {
         &self.input
     }
 
-    pub fn status(&self) -> Option<&str> {
+    pub(crate) fn status(&self) -> Option<&str> {
         self.status.as_deref()
     }
 
-    pub fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.pending
     }
 }
@@ -276,7 +349,7 @@ impl DeleteAccountDialogState {
 /// Which action button is focused in the IRC token dialog. `Reset` and
 /// `Revoke` are only reachable when a token currently exists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum IrcTokenFocus {
+pub(crate) enum IrcTokenFocus {
     /// Create (no token yet) or Reset (token exists) — same slot.
     Primary,
     Revoke,
@@ -284,7 +357,7 @@ pub enum IrcTokenFocus {
 
 /// Settings → Account IRC token dialog. Drives mint/reset/revoke and shows a
 /// freshly minted token exactly once. See devdocs/FRD-IRCD.md §5.
-pub struct IrcTokenDialogState {
+pub(crate) struct IrcTokenDialogState {
     open: bool,
     /// `None` while the status load is in flight; `Some(None)` = no token;
     /// `Some(Some(_))` = an active token with metadata.
@@ -311,41 +384,95 @@ impl IrcTokenDialogState {
         }
     }
 
-    pub fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.open
     }
 
     /// `None` while loading, otherwise the current token status.
-    pub fn status(&self) -> Option<&Option<IrcTokenStatus>> {
+    pub(crate) fn status(&self) -> Option<&Option<IrcTokenStatus>> {
         self.status.as_ref()
     }
 
-    pub fn has_token(&self) -> bool {
+    pub(crate) fn has_token(&self) -> bool {
         matches!(self.status, Some(Some(_)))
     }
 
-    pub fn focus(&self) -> IrcTokenFocus {
+    pub(crate) fn focus(&self) -> IrcTokenFocus {
         self.focus
     }
 
-    pub fn revealed_token(&self) -> Option<&str> {
+    pub(crate) fn revealed_token(&self) -> Option<&str> {
         self.revealed_token.as_deref()
     }
 
-    pub fn confirming_revoke(&self) -> bool {
+    pub(crate) fn confirming_revoke(&self) -> bool {
         self.confirming_revoke
     }
 
-    pub fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.pending
     }
 
-    pub fn message(&self) -> Option<&str> {
+    pub(crate) fn message(&self) -> Option<&str> {
         self.message.as_deref()
     }
 }
 
-pub struct LinkAccountDialogState {
+/// Settings > Account > Invites: this account's invite command, the people
+/// it invited, and (in the account's first week, with no inviter yet) a
+/// field to name one. Read on open; there is no live refresh.
+pub(crate) struct InvitesDialogState {
+    open: bool,
+    /// `None` while loading.
+    overview: Option<InviteOverview>,
+    code_input: TextArea<'static>,
+    pending: bool,
+    /// The last answer, and whether it is a refusal.
+    message: Option<(String, bool)>,
+}
+
+impl InvitesDialogState {
+    fn new() -> Self {
+        Self {
+            open: false,
+            overview: None,
+            code_input: new_short_textarea(true),
+            pending: false,
+            message: None,
+        }
+    }
+
+    pub(crate) fn open(&self) -> bool {
+        self.open
+    }
+
+    pub(crate) fn overview(&self) -> Option<&InviteOverview> {
+        self.overview.as_ref()
+    }
+
+    pub(crate) fn code_input(&self) -> &TextArea<'static> {
+        &self.code_input
+    }
+
+    pub(crate) fn pending(&self) -> bool {
+        self.pending
+    }
+
+    /// Whether the code field is showing and takes keys.
+    pub(crate) fn accepts_code(&self) -> bool {
+        self.overview
+            .as_ref()
+            .is_some_and(|overview| overview.can_attach)
+    }
+
+    pub(crate) fn message(&self) -> Option<(&str, bool)> {
+        self.message
+            .as_ref()
+            .map(|(text, is_error)| (text.as_str(), *is_error))
+    }
+}
+
+pub(crate) struct LinkAccountDialogState {
     open: bool,
     step: LinkAccountStep,
     own_code: Option<String>,
@@ -380,60 +507,73 @@ impl LinkAccountDialogState {
         }
     }
 
-    pub fn open(&self) -> bool {
+    pub(crate) fn open(&self) -> bool {
         self.open
     }
 
-    pub fn step(&self) -> LinkAccountStep {
+    pub(crate) fn step(&self) -> LinkAccountStep {
         self.step
     }
 
-    pub fn own_code(&self) -> Option<&str> {
+    pub(crate) fn own_code(&self) -> Option<&str> {
         self.own_code.as_deref()
     }
 
-    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+    pub(crate) fn expires_at(&self) -> Option<DateTime<Utc>> {
         self.expires_at.as_ref().cloned()
     }
 
-    pub fn enter_code_focus(&self) -> LinkAccountEnterCodeFocus {
+    pub(crate) fn enter_code_focus(&self) -> LinkAccountEnterCodeFocus {
         self.enter_code_focus
     }
 
-    pub fn code_input(&self) -> &TextArea<'static> {
+    pub(crate) fn code_input(&self) -> &TextArea<'static> {
         &self.code_input
     }
 
-    pub fn peer_username(&self) -> Option<&str> {
+    pub(crate) fn peer_username(&self) -> Option<&str> {
         self.peer_username.as_deref()
     }
 
-    pub fn peer_created(&self) -> Option<DateTime<Utc>> {
+    pub(crate) fn peer_created(&self) -> Option<DateTime<Utc>> {
         self.peer_created.as_ref().cloned()
     }
 
-    pub fn keep_current(&self) -> bool {
+    pub(crate) fn keep_current(&self) -> bool {
         self.keep_current
     }
 
-    pub fn confirm_input(&self) -> &TextArea<'static> {
+    pub(crate) fn confirm_input(&self) -> &TextArea<'static> {
         &self.confirm_input
     }
 
-    pub fn status(&self) -> Option<&str> {
+    pub(crate) fn status(&self) -> Option<&str> {
         self.status.as_deref()
     }
 
-    pub fn pending(&self) -> bool {
+    pub(crate) fn pending(&self) -> bool {
         self.pending
     }
 }
 
-pub struct SettingsModalState {
+pub(crate) struct SettingsTick {
+    pub banner: Option<Banner>,
+    /// True when this tick drained any async result into the open modal.
+    pub changed: bool,
+}
+
+pub(crate) struct SettingsModalState {
+    pub(crate) mouse: MouseState,
     profile_service: ProfileService,
     feed_service: FeedService,
     user_id: Uuid,
     draft: Profile,
+    /// The two rail rows, held apart from `draft` on purpose. They belong to
+    /// this device (this SSH key), and `draft` is what `save()` writes to the
+    /// account: keeping them in `draft` would republish one device's layout as
+    /// the account default on any unrelated settings edit, and every key that
+    /// never stored a layout of its own would inherit it.
+    device_rails: (RoomListMode, RightSidebarMode),
     selected_tab: Tab,
     row_index: usize,
     account_row_index: usize,
@@ -442,6 +582,20 @@ pub struct SettingsModalState {
     theme_selected_row: usize,
     theme_scroll_offset: usize,
     theme_visible_height: Cell<usize>,
+    /// Live substring filter over the theme list. Empty means "show the tree".
+    /// With 100+ themes across 17 groups, scrolling to a theme you can already
+    /// name is the slow path (user feedback).
+    theme_query: String,
+    /// Whether keystrokes are editing [`Self::theme_query`].
+    theme_searching: bool,
+    /// Whether a search-time preview changed the theme without persisting it.
+    /// While the search is open every keystroke can move the preview, and each
+    /// `save()` is a detached task with no ordering, so racing one per key
+    /// could persist a theme other than the last one previewed. Settled by one
+    /// save when the search closes.
+    theme_preview_unsaved: bool,
+    /// Whether the starred-themes block at the top of the tree is folded away.
+    theme_favorites_collapsed: bool,
     theme_collapsed_groups: u32,
     editing_username: bool,
     username_input: TextArea<'static>,
@@ -455,38 +609,52 @@ pub struct SettingsModalState {
     irc_token: IrcTokenDialogState,
     right_sidebar_components_open: bool,
     right_sidebar_components_index: usize,
+    statusline_index: usize,
+    statusline_pane: StatuslinePane,
+    statusline_dial_index: usize,
+    chat_badges_open: bool,
+    chat_badges_index: usize,
     feeds: Vec<RssFeed>,
     feed_index: usize,
+    /// A clicked feed survives older snapshots that temporarily omit its UUID.
+    selected_feed_id: Option<Uuid>,
     editing_feed_url: bool,
     feed_url_input: TextArea<'static>,
     feed_snapshot_rx: watch::Receiver<FeedSnapshot>,
     feed_event_rx: broadcast::Receiver<FeedEvent>,
     profile_event_rx: broadcast::Receiver<ProfileEvent>,
+    referral_service: ReferralService,
+    referral_event_rx: broadcast::Receiver<ReferralEvent>,
+    invites: InvitesDialogState,
     /// Per-session gem easter egg on the Special tab. Persists across modal
     /// open/close cycles for the lifetime of the SSH session.
     gem: GemState,
-    /// On-screen rects for each tab in the strip, indexed by the tab's
-    /// position in `Tab::ALL`. `None` if the tab is currently hidden (e.g.
-    /// the Special tab before it's unlocked). Populated by the renderer
-    /// each frame.
-    tab_rects: Cell<[Option<Rect>; Tab::ALL.len()]>,
-    /// Bounds of the body area (whichever tab is showing). Used to gate
-    /// scroll-wheel events to the body, so the wheel doesn't move the
-    /// row cursor when the pointer is hovering over the tab strip or footer.
-    body_area: Cell<Rect>,
+    /// The live interaction mode (keyboard / mouse / hybrid), mirrored here for
+    /// the Input row to display. Seeded from the app when the modal opens; the
+    /// input handler applies changes on the app itself (they persist + flip the
+    /// mouse there), so this is display-only.
+    interaction_mode: late_core::models::user::InteractionMode,
 }
 
 impl SettingsModalState {
-    pub fn new(profile_service: ProfileService, feed_service: FeedService, user_id: Uuid) -> Self {
+    pub(crate) fn new(
+        profile_service: ProfileService,
+        feed_service: FeedService,
+        referral_service: ReferralService,
+        user_id: Uuid,
+    ) -> Self {
         let feed_snapshot_rx = feed_service.subscribe_snapshot();
         let feed_event_rx = feed_service.subscribe_events();
         let profile_event_rx = profile_service.subscribe_events();
+        let referral_event_rx = referral_service.subscribe_events();
         feed_service.list_task(user_id);
         Self {
+            mouse: MouseState::default(),
             profile_service,
             feed_service,
             user_id,
             draft: Profile::default(),
+            device_rails: (RoomListMode::On, RightSidebarMode::On),
             selected_tab: Tab::Settings,
             row_index: 0,
             account_row_index: 0,
@@ -495,6 +663,10 @@ impl SettingsModalState {
             theme_selected_row: 0,
             theme_scroll_offset: 0,
             theme_visible_height: Cell::new(1),
+            theme_query: String::new(),
+            theme_searching: false,
+            theme_preview_unsaved: false,
+            theme_favorites_collapsed: false,
             theme_collapsed_groups: 0,
             editing_username: false,
             username_input: new_short_textarea(false),
@@ -508,34 +680,80 @@ impl SettingsModalState {
             irc_token: IrcTokenDialogState::new(),
             right_sidebar_components_open: false,
             right_sidebar_components_index: 0,
+            statusline_index: 0,
+            statusline_pane: StatuslinePane::List,
+            statusline_dial_index: 0,
+            chat_badges_open: false,
+            chat_badges_index: 0,
             feeds: Vec::new(),
             feed_index: 0,
+            selected_feed_id: None,
             editing_feed_url: false,
             feed_url_input: new_short_textarea(false),
             feed_snapshot_rx,
             feed_event_rx,
             profile_event_rx,
+            referral_service,
+            referral_event_rx,
+            invites: InvitesDialogState::new(),
             gem: GemState::new(),
-            tab_rects: Cell::new([None; Tab::ALL.len()]),
-            body_area: Cell::new(Rect::new(0, 0, 0, 0)),
+            interaction_mode: late_core::models::user::InteractionMode::default(),
         }
     }
 
-    pub fn gem(&self) -> &GemState {
+    /// The interaction mode shown on the Input row.
+    pub(crate) fn interaction_mode(&self) -> late_core::models::user::InteractionMode {
+        self.interaction_mode
+    }
+
+    /// Sync the displayed interaction mode from the app (on open and on change).
+    pub(crate) fn set_interaction_mode_display(
+        &mut self,
+        mode: late_core::models::user::InteractionMode,
+    ) {
+        self.interaction_mode = mode;
+    }
+
+    /// The rail modes the two Appearance rows are editing: this device's, not
+    /// the account's. Read by their value spans and by the render/tick preview
+    /// while the modal is open; `App::sync_device_rails_from_settings` picks them
+    /// up and persists them onto the SSH key.
+    pub(crate) fn device_rails(&self) -> (RoomListMode, RightSidebarMode) {
+        self.device_rails
+    }
+
+    pub(crate) fn gem(&self) -> &GemState {
         &self.gem
     }
 
-    pub fn gem_mut(&mut self) -> &mut GemState {
+    pub(crate) fn gem_mut(&mut self) -> &mut GemState {
         &mut self.gem
     }
 
-    pub fn open_from_profile(&mut self, profile: &Profile) {
+    /// Load the draft from the account profile, and take the rail modes this
+    /// session is actually rendering with (`App::rail_modes`) separately: the two
+    /// rail rows are per device, so showing the account default would misreport
+    /// what the user is looking at, and writing it back would leak this device's
+    /// layout onto every other one.
+    pub(crate) fn open_from_profile(
+        &mut self,
+        profile: &Profile,
+        device_rails: (RoomListMode, RightSidebarMode),
+    ) {
+        self.mouse.reveal_selection();
         self.draft = profile.clone();
+        self.device_rails = device_rails;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
         self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
+        // A reserved chord (Ctrl+G) can close the modal over an open theme
+        // search, so reopening must not land back inside it with a stale
+        // query. The collapse states survive on purpose, like the groups'.
+        self.theme_query.clear();
+        self.theme_searching = false;
+        self.theme_preview_unsaved = false;
         self.editing_username = false;
         self.username_input = new_short_textarea(false);
         self.editing_system_field = None;
@@ -546,28 +764,45 @@ impl SettingsModalState {
         self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
         self.irc_token = IrcTokenDialogState::new();
+        self.invites = InvitesDialogState::new();
         self.right_sidebar_components_open = false;
         self.right_sidebar_components_index = 0;
+        self.statusline_index = 0;
+        self.statusline_pane = StatuslinePane::List;
+        self.statusline_dial_index = 0;
+        self.chat_badges_open = false;
+        self.chat_badges_index = 0;
         self.feed_service.list_task(self.user_id);
     }
 
-    pub fn tick(&mut self) -> Option<Banner> {
+    pub(crate) fn tick(&mut self) -> SettingsTick {
+        // Peek before draining: async results (feed list refresh, account
+        // link steps) mutate the open modal without necessarily raising a
+        // banner.
+        let changed = self.feed_snapshot_rx.has_changed().unwrap_or(false)
+            || !self.feed_event_rx.is_empty()
+            || !self.profile_event_rx.is_empty()
+            || !self.referral_event_rx.is_empty();
         self.drain_feed_snapshot();
+        self.drain_referral_events();
         let mut banner = self.drain_profile_events();
         if let Some(feed_banner) = self.drain_feed_events() {
             banner = Some(feed_banner);
         }
-        banner
+        if changed {
+            self.mouse.invalidate();
+        }
+        SettingsTick { banner, changed }
     }
 
-    pub fn selected_tab(&self) -> Tab {
+    pub(crate) fn selected_tab(&self) -> Tab {
         self.selected_tab
     }
 
     /// Switch to the neighboring tab. Auto-saves + ends any in-flight bio
     /// edit when leaving the Bio tab so the preview reflects the draft.
     /// Skips the Special tab while it's hidden (no bio/country/timezone).
-    pub fn cycle_tab(&mut self, forward: bool) {
+    pub(crate) fn cycle_tab(&mut self, forward: bool) {
         let visible = self.visible_tabs();
         let idx = visible
             .iter()
@@ -585,7 +820,7 @@ impl SettingsModalState {
     /// strip), running the same auto-save / edit-cleanup logic as `cycle_tab`.
     /// Ignored if the tab isn't currently visible (e.g. clicking a stale
     /// rect for the Special tab after it was hidden again).
-    pub fn select_tab(&mut self, next: Tab) {
+    pub(crate) fn select_tab(&mut self, next: Tab) {
         if !self.visible_tabs().contains(&next) || next == self.selected_tab {
             return;
         }
@@ -609,82 +844,113 @@ impl SettingsModalState {
         if self.selected_tab == Tab::Feeds && self.editing_feed_url {
             self.cancel_feed_url_edit();
         }
+        if self.selected_tab == Tab::Themes && self.theme_searching {
+            // Leaving mid-search closes it (persisting any pending preview),
+            // so returning to Themes never lands inside a stale query where
+            // j/k type instead of navigate.
+            self.cancel_theme_search();
+        }
         if next == Tab::Themes {
             self.sync_theme_index_to_draft();
         }
         self.selected_tab = next;
     }
 
-    pub fn set_tab_rects(&self, rects: [Option<Rect>; Tab::ALL.len()]) {
-        self.tab_rects.set(rects);
-    }
-
-    pub fn set_body_area(&self, area: Rect) {
-        self.body_area.set(area);
-    }
-
-    /// Hit-test the tab strip. Returns the tab whose cell contains the
-    /// (0-based ratatui) point, if any.
-    pub fn tab_at_point(&self, x: u16, y: u16) -> Option<Tab> {
-        let rects = self.tab_rects.get();
-        Tab::ALL
-            .iter()
-            .copied()
-            .zip(rects.iter())
-            .find_map(|(tab, slot)| slot.filter(|rect| rect_contains(*rect, x, y)).map(|_| tab))
-    }
-
-    pub fn body_contains(&self, x: u16, y: u16) -> bool {
-        rect_contains(self.body_area.get(), x, y)
-    }
-
     /// Tabs to show in the tab strip in display order. All tabs are always
     /// visible — there is no unlock gating.
-    pub fn visible_tabs(&self) -> Vec<Tab> {
+    pub(crate) fn visible_tabs(&self) -> Vec<Tab> {
         Tab::ALL.to_vec()
     }
 
-    pub fn set_modal_width(&mut self, _modal_width: u16) {
+    pub(crate) fn set_modal_width(&mut self, _modal_width: u16) {
         // TextArea wraps internally at render time; nothing to sync here.
     }
 
-    pub fn draft(&self) -> &Profile {
+    pub(crate) fn draft(&self) -> &Profile {
         &self.draft
     }
 
-    pub fn selected_row(&self) -> Row {
+    pub(crate) fn selected_row(&self) -> Row {
         Row::ALL[self.row_index]
     }
 
-    pub fn right_sidebar_components_open(&self) -> bool {
+    pub(crate) fn right_sidebar_components_open(&self) -> bool {
         self.right_sidebar_components_open
     }
 
-    pub fn open_right_sidebar_components(&mut self) {
+    pub(crate) fn open_right_sidebar_components(&mut self) {
         self.right_sidebar_components_open = true;
         self.right_sidebar_components_index = 0;
     }
 
-    pub fn close_right_sidebar_components(&mut self) {
+    pub(crate) fn close_right_sidebar_components(&mut self) {
         self.right_sidebar_components_open = false;
     }
 
-    pub fn right_sidebar_components_index(&self) -> usize {
+    pub(crate) fn right_sidebar_components_index(&self) -> usize {
         self.right_sidebar_components_index
     }
 
-    pub fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
+    pub(crate) fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
         &self.draft.right_sidebar_components
     }
 
-    pub fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
         let last = self.draft.right_sidebar_components.len().saturating_sub(1) as isize;
         self.right_sidebar_components_index =
             (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
     }
 
+    pub(crate) fn chat_badges_open(&self) -> bool {
+        self.chat_badges_open
+    }
+
+    pub(crate) fn open_chat_badges(&mut self) {
+        self.chat_badges_open = true;
+        self.chat_badges_index = 0;
+    }
+
+    pub(crate) fn close_chat_badges(&mut self) {
+        self.chat_badges_open = false;
+    }
+
+    pub(crate) fn chat_badges_index(&self) -> usize {
+        self.chat_badges_index
+    }
+
+    pub(crate) fn move_chat_badges_cursor(&mut self, delta: isize) {
+        let last = chat_badge_rows().len().saturating_sub(1) as isize;
+        self.chat_badges_index = (self.chat_badges_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// Whether a picker row shows on the chat label: a row is hidden only
+    /// when every category it covers is hidden.
+    pub(crate) fn chat_badge_row_shown(&self, row: &ChatBadgeRow) -> bool {
+        !row.categories.iter().all(|category| {
+            self.draft
+                .hidden_award_categories
+                .iter()
+                .any(|hidden| hidden == category)
+        })
+    }
+
+    /// Flip the selected row: hiding stores every category the row covers
+    /// (all rungs of a game ladder), showing removes them all.
+    pub(crate) fn toggle_chat_badge(&mut self) {
+        let Some(row) = chat_badge_rows().into_iter().nth(self.chat_badges_index) else {
+            return;
+        };
+        let shown = self.chat_badge_row_shown(&row);
+        let hidden = &mut self.draft.hidden_award_categories;
+        hidden.retain(|category| !row.categories.contains(&category.as_str()));
+        if shown {
+            hidden.extend(row.categories.iter().map(ToString::to_string));
+        }
+        self.save();
+    }
+
     /// Toggle the on/off state of the selected component.
-    pub fn toggle_right_sidebar_component(&mut self) {
+    pub(crate) fn toggle_right_sidebar_component(&mut self) {
         if let Some(setting) = self
             .draft
             .right_sidebar_components
@@ -697,7 +963,7 @@ impl SettingsModalState {
 
     /// Move the selected component up or down in the render order, keeping the
     /// cursor on the moved row.
-    pub fn move_right_sidebar_component(&mut self, delta: isize) {
+    pub(crate) fn move_right_sidebar_component(&mut self, delta: isize) {
         let len = self.draft.right_sidebar_components.len();
         if len == 0 {
             return;
@@ -713,25 +979,145 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn selected_account_row(&self) -> AccountRow {
+    pub(crate) fn statusline_index(&self) -> usize {
+        self.statusline_index
+    }
+
+    pub(crate) fn statusline_pane(&self) -> StatuslinePane {
+        self.statusline_pane
+    }
+
+    pub(crate) fn statusline_dial_index(&self) -> usize {
+        self.statusline_dial_index
+    }
+
+    pub(crate) fn statusline_components(&self) -> &[StatusComponentSetting] {
+        &self.draft.statusline_components
+    }
+
+    fn selected_statusline_component(&self) -> Option<&StatusComponentSetting> {
+        self.draft.statusline_components.get(self.statusline_index)
+    }
+
+    /// The dials the selected segment offers, in display order.
+    pub(crate) fn statusline_dials(&self) -> Vec<StatuslineDial> {
+        self.selected_statusline_component()
+            .map(|setting| statusline_dials_for(setting.component))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn selected_statusline_dial(&self) -> Option<StatuslineDial> {
+        self.statusline_dials()
+            .get(self.statusline_dial_index)
+            .copied()
+    }
+
+    pub(crate) fn move_statusline_cursor(&mut self, delta: isize) {
+        let last = self.draft.statusline_components.len().saturating_sub(1) as isize;
+        self.statusline_index = (self.statusline_index as isize + delta).clamp(0, last) as usize;
+        // The new segment may offer fewer dials than the old one.
+        self.clamp_statusline_dial();
+    }
+
+    /// Move the selected segment left or right along the bar, keeping the
+    /// cursor on it. The list reads top-to-bottom as the bar reads
+    /// left-to-right along the bottom border, so "up" is "further left".
+    pub(crate) fn move_statusline_component(&mut self, delta: isize) {
+        let len = self.draft.statusline_components.len();
+        if len == 0 {
+            return;
+        }
+        let from = self.statusline_index;
+        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
+        if to == from {
+            return;
+        }
+        let setting = self.draft.statusline_components.remove(from);
+        self.draft.statusline_components.insert(to, setting);
+        self.statusline_index = to;
+        self.save();
+    }
+
+    pub(crate) fn toggle_statusline_component(&mut self) {
+        if let Some(setting) = self
+            .draft
+            .statusline_components
+            .get_mut(self.statusline_index)
+        {
+            setting.enabled ^= true;
+            self.save();
+        }
+    }
+
+    pub(crate) fn focus_statusline_pane(&mut self, pane: StatuslinePane) {
+        // Nothing to focus on a segment with no dials at all.
+        if pane == StatuslinePane::Detail && self.statusline_dials().is_empty() {
+            return;
+        }
+        self.statusline_pane = pane;
+        self.clamp_statusline_dial();
+    }
+
+    pub(crate) fn move_statusline_dial(&mut self, delta: isize) {
+        let last = self.statusline_dials().len().saturating_sub(1) as isize;
+        self.statusline_dial_index =
+            (self.statusline_dial_index as isize + delta).clamp(0, last) as usize;
+    }
+
+    fn clamp_statusline_dial(&mut self) {
+        let last = self.statusline_dials().len().saturating_sub(1);
+        self.statusline_dial_index = self.statusline_dial_index.min(last);
+    }
+
+    /// Cycle the focused dial on the selected segment.
+    pub(crate) fn cycle_statusline_dial(&mut self, forward: bool) {
+        let Some(dial) = self.selected_statusline_dial() else {
+            return;
+        };
+        let Some(setting) = self
+            .draft
+            .statusline_components
+            .get_mut(self.statusline_index)
+        else {
+            return;
+        };
+        match dial {
+            StatuslineDial::Brief => setting.brief ^= true,
+            StatuslineDial::Label => {
+                setting.label = next_label_mode(setting.label, setting.component, forward);
+            }
+            StatuslineDial::AutoHide => setting.auto_hide ^= true,
+            StatuslineDial::Variant => {
+                let Some(next) =
+                    next_variant(setting.variant, setting.component.variants(), forward)
+                else {
+                    return;
+                };
+                setting.variant = Some(next);
+            }
+        }
+        self.save();
+    }
+
+    pub(crate) fn selected_account_row(&self) -> AccountRow {
         AccountRow::ALL[self.account_row_index]
     }
 
-    pub fn move_account_row(&mut self, delta: isize) {
+    pub(crate) fn move_account_row(&mut self, delta: isize) {
         let last = AccountRow::ALL.len().saturating_sub(1) as isize;
         self.account_row_index = (self.account_row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn selected_tweak_row(&self) -> TweakRow {
+    pub(crate) fn selected_tweak_row(&self) -> TweakRow {
         TweakRow::ALL[self.tweak_row_index]
     }
 
-    pub fn move_tweak_row(&mut self, delta: isize) {
+    pub(crate) fn move_tweak_row(&mut self, delta: isize) {
         let last = TweakRow::ALL.len().saturating_sub(1) as isize;
         self.tweak_row_index = (self.tweak_row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn toggle_selected_tweak(&mut self) {
+    pub(crate) fn toggle_selected_tweak(&mut self) {
         match self.selected_tweak_row() {
             TweakRow::BackgroundColor => {
                 self.draft.enable_background_color ^= true;
@@ -741,35 +1127,60 @@ impl SettingsModalState {
                 return;
             }
             TweakRow::RightSidebar => {
-                self.draft.right_sidebar_mode = self.draft.right_sidebar_mode.cycle(true);
-                self.draft.show_right_sidebar =
-                    self.draft.right_sidebar_mode != RightSidebarMode::Off;
+                self.device_rails.1 = self.device_rails.1.cycle(true);
             }
             TweakRow::RoomListSidebar => {
-                self.draft.show_room_list_sidebar ^= true;
-            }
-            TweakRow::LoungeInfo => {
-                self.draft.show_dashboard_header ^= true;
+                self.device_rails.0 = self.device_rails.0.cycle(true);
             }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
             }
-            TweakRow::StartWithMusicMuted => {
-                self.draft.start_with_music_muted ^= true;
-            }
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;
             }
-            TweakRow::LandOnHome => {
-                self.draft.land_on_home ^= true;
+            TweakRow::TerminalImages => {
+                self.draft.terminal_images = self.draft.terminal_images.cycle(true);
+            }
+            TweakRow::ChatBadges => {
+                // A list, not a value: Enter opens the picker instead.
+                self.open_chat_badges();
+                return;
+            }
+            TweakRow::LandingPage => {
+                self.draft.landing_page = self.draft.landing_page.cycle(true);
+            }
+            TweakRow::ArtSplash => {
+                self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(true);
+            }
+            TweakRow::PaperAtLogin => {
+                self.draft.paper_at_login ^= true;
+            }
+            TweakRow::InteractionMode => {
+                // Applied on the app (it flips the mouse live and persists on its
+                // own), so there's nothing to save through the profile draft.
+                return;
             }
         }
         self.save();
     }
 
-    pub fn cycle_selected_tweak(&mut self, forward: bool) {
+    pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
+            TweakRow::RightSidebar => self.device_rails.1 = self.device_rails.1.cycle(forward),
+            TweakRow::RoomListSidebar => self.device_rails.0 = self.device_rails.0.cycle(forward),
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            TweakRow::LandingPage => {
+                self.draft.landing_page = self.draft.landing_page.cycle(forward);
+                self.save();
+            }
+            TweakRow::ArtSplash => {
+                self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(forward);
+                self.save();
+            }
+            TweakRow::TerminalImages => {
+                self.draft.terminal_images = self.draft.terminal_images.cycle(forward);
+                self.save();
+            }
             _ => self.toggle_selected_tweak(),
         }
     }
@@ -781,11 +1192,11 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn link_account_dialog(&self) -> &LinkAccountDialogState {
+    pub(crate) fn link_account_dialog(&self) -> &LinkAccountDialogState {
         &self.link_account
     }
 
-    pub fn open_link_account_dialog(&mut self) {
+    pub(crate) fn open_link_account_dialog(&mut self) {
         self.link_account = LinkAccountDialogState {
             open: true,
             step: LinkAccountStep::EnterCode,
@@ -803,11 +1214,11 @@ impl SettingsModalState {
         };
     }
 
-    pub fn close_link_account_dialog(&mut self) {
+    pub(crate) fn close_link_account_dialog(&mut self) {
         self.link_account = LinkAccountDialogState::new();
     }
 
-    pub fn generate_link_account_code(&mut self) {
+    pub(crate) fn generate_link_account_code(&mut self) {
         if self.link_account.pending {
             return;
         }
@@ -816,7 +1227,7 @@ impl SettingsModalState {
         self.profile_service.create_account_link_code(self.user_id);
     }
 
-    pub fn move_link_account_enter_code_focus(&mut self, focus: LinkAccountEnterCodeFocus) {
+    pub(crate) fn move_link_account_enter_code_focus(&mut self, focus: LinkAccountEnterCodeFocus) {
         if self.link_account.step != LinkAccountStep::EnterCode {
             return;
         }
@@ -827,7 +1238,7 @@ impl SettingsModalState {
         );
     }
 
-    pub fn activate_link_account_enter_code(&mut self) {
+    pub(crate) fn activate_link_account_enter_code(&mut self) {
         match self.link_account.enter_code_focus {
             LinkAccountEnterCodeFocus::GenerateCode => self.generate_link_account_code(),
             LinkAccountEnterCodeFocus::PeerCode => self.submit_link_account_code(),
@@ -849,7 +1260,7 @@ impl SettingsModalState {
             .preview_account_link_code(self.user_id, code);
     }
 
-    pub fn select_link_account_main(&mut self, keep_current: bool) {
+    pub(crate) fn select_link_account_main(&mut self, keep_current: bool) {
         if self.link_account.keep_current != keep_current {
             self.link_account.keep_current = keep_current;
             self.link_account.confirm_input = new_short_textarea(true);
@@ -857,7 +1268,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn submit_link_account_confirmation(&mut self) {
+    pub(crate) fn submit_link_account_confirmation(&mut self) {
         if self.link_account.pending || self.link_account.step != LinkAccountStep::Confirm {
             return;
         }
@@ -888,7 +1299,7 @@ impl SettingsModalState {
             .complete_account_link(self.user_id, peer_user_id, code, kept_user_id);
     }
 
-    pub fn link_account_kept_username(&self) -> Option<String> {
+    pub(crate) fn link_account_kept_username(&self) -> Option<String> {
         if self.link_account.keep_current {
             Some(self.draft.username.clone())
         } else {
@@ -896,7 +1307,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn link_account_push(&mut self, ch: char) {
+    pub(crate) fn link_account_push(&mut self, ch: char) {
         match self.link_account.step {
             LinkAccountStep::EnterCode => {
                 if self.link_account.enter_code_focus != LinkAccountEnterCodeFocus::PeerCode {
@@ -926,71 +1337,71 @@ impl SettingsModalState {
         }
     }
 
-    pub fn link_account_backspace(&mut self) {
+    pub(crate) fn link_account_backspace(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_char();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_delete_right(&mut self) {
+    pub(crate) fn link_account_delete_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_next_char();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_delete_word_left(&mut self) {
+    pub(crate) fn link_account_delete_word_left(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_word();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_delete_word_right(&mut self) {
+    pub(crate) fn link_account_delete_word_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.delete_next_word();
             self.link_account.status = None;
         }
     }
 
-    pub fn link_account_cursor_left(&mut self) {
+    pub(crate) fn link_account_cursor_left(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::Back);
         }
     }
 
-    pub fn link_account_cursor_right(&mut self) {
+    pub(crate) fn link_account_cursor_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::Forward);
         }
     }
 
-    pub fn link_account_cursor_word_left(&mut self) {
+    pub(crate) fn link_account_cursor_word_left(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::WordBack);
         }
     }
 
-    pub fn link_account_cursor_word_right(&mut self) {
+    pub(crate) fn link_account_cursor_word_right(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::WordForward);
         }
     }
 
-    pub fn link_account_cursor_home(&mut self) {
+    pub(crate) fn link_account_cursor_home(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::Head);
         }
     }
 
-    pub fn link_account_cursor_end(&mut self) {
+    pub(crate) fn link_account_cursor_end(&mut self) {
         if let Some(input) = self.link_account_active_input_mut() {
             input.move_cursor(CursorMove::End);
         }
     }
 
-    pub fn clear_link_account_input(&mut self) {
+    pub(crate) fn clear_link_account_input(&mut self) {
         match self.link_account.step {
             LinkAccountStep::EnterCode => {
                 self.link_account.enter_code_focus = LinkAccountEnterCodeFocus::PeerCode;
@@ -1024,22 +1435,22 @@ impl SettingsModalState {
         self.link_account.confirm_input.lines().join("")
     }
 
-    pub fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
+    pub(crate) fn delete_account_dialog(&self) -> &DeleteAccountDialogState {
         &self.delete_account
     }
 
-    pub fn open_delete_account_dialog(&mut self) {
+    pub(crate) fn open_delete_account_dialog(&mut self) {
         self.delete_account.open = true;
         self.delete_account.input = new_short_textarea(true);
         self.delete_account.status = None;
         self.delete_account.pending = false;
     }
 
-    pub fn close_delete_account_dialog(&mut self) {
+    pub(crate) fn close_delete_account_dialog(&mut self) {
         self.delete_account = DeleteAccountDialogState::new();
     }
 
-    pub fn submit_delete_account_confirmation(&mut self) {
+    pub(crate) fn submit_delete_account_confirmation(&mut self) {
         if self.delete_account.pending {
             return;
         }
@@ -1053,86 +1464,165 @@ impl SettingsModalState {
         self.profile_service.delete_account(self.user_id);
     }
 
-    pub fn delete_account_push(&mut self, ch: char) {
+    pub(crate) fn delete_account_push(&mut self, ch: char) {
         if single_line_char_count(&self.delete_account.input) < DELETE_CONFIRM_USERNAME_MAX_LEN {
             self.delete_account.input.insert_char(ch);
             self.delete_account.status = None;
         }
     }
 
-    pub fn delete_account_backspace(&mut self) {
+    pub(crate) fn delete_account_backspace(&mut self) {
         self.delete_account.input.delete_char();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_delete_right(&mut self) {
+    pub(crate) fn delete_account_delete_right(&mut self) {
         self.delete_account.input.delete_next_char();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_delete_word_left(&mut self) {
+    pub(crate) fn delete_account_delete_word_left(&mut self) {
         self.delete_account.input.delete_word();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_delete_word_right(&mut self) {
+    pub(crate) fn delete_account_delete_word_right(&mut self) {
         self.delete_account.input.delete_next_word();
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_cursor_left(&mut self) {
+    pub(crate) fn delete_account_cursor_left(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::Back);
     }
 
-    pub fn delete_account_cursor_right(&mut self) {
+    pub(crate) fn delete_account_cursor_right(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::Forward);
     }
 
-    pub fn delete_account_cursor_word_left(&mut self) {
+    pub(crate) fn delete_account_cursor_word_left(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::WordBack);
     }
 
-    pub fn delete_account_cursor_word_right(&mut self) {
+    pub(crate) fn delete_account_cursor_word_right(&mut self) {
         self.delete_account
             .input
             .move_cursor(CursorMove::WordForward);
     }
 
-    pub fn delete_account_cursor_home(&mut self) {
+    pub(crate) fn delete_account_cursor_home(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::Head);
     }
 
-    pub fn delete_account_cursor_end(&mut self) {
+    pub(crate) fn delete_account_cursor_end(&mut self) {
         self.delete_account.input.move_cursor(CursorMove::End);
     }
 
-    pub fn clear_delete_account_confirmation(&mut self) {
+    pub(crate) fn clear_delete_account_confirmation(&mut self) {
         self.delete_account.input = new_short_textarea(true);
         self.delete_account.status = None;
     }
 
-    pub fn delete_account_text(&self) -> String {
+    pub(crate) fn delete_account_text(&self) -> String {
         self.delete_account.input.lines().join("")
     }
 
-    pub fn irc_token_dialog(&self) -> &IrcTokenDialogState {
+    pub(crate) fn invites_dialog(&self) -> &InvitesDialogState {
+        &self.invites
+    }
+
+    pub(crate) fn open_invites_dialog(&mut self) {
+        self.invites = InvitesDialogState::new();
+        self.invites.open = true;
+        // overview stays `None` (loading) until the service replies.
+        self.referral_service.load_overview_task(self.user_id);
+    }
+
+    pub(crate) fn close_invites_dialog(&mut self) {
+        self.invites = InvitesDialogState::new();
+    }
+
+    pub(crate) fn invites_code_input_mut(&mut self) -> &mut TextArea<'static> {
+        self.invites.message = None;
+        &mut self.invites.code_input
+    }
+
+    /// Enter in the code field. A shape that cannot be a code is refused
+    /// here, without a round trip.
+    pub(crate) fn submit_invite_code(&mut self) {
+        if self.invites.pending || !self.invites.accepts_code() {
+            return;
+        }
+        let typed = self.invites.code_input.lines().join("");
+        let Some(code) = typed_invite_code(&typed) else {
+            self.invites.message =
+                Some(("That does not look like an invite code.".to_string(), true));
+            return;
+        };
+        self.invites.pending = true;
+        self.invites.message = Some(("Checking the code...".to_string(), false));
+        self.referral_service.attach_task(
+            self.user_id,
+            code,
+            late_core::models::referral::ReferralSource::Settings,
+        );
+    }
+
+    fn drain_referral_events(&mut self) {
+        loop {
+            match self.referral_event_rx.try_recv() {
+                Ok(ReferralEvent::Overview { user_id, overview }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.overview = Some(overview);
+                    }
+                }
+                Ok(ReferralEvent::Attached { user_id, inviter }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.pending = false;
+                        self.invites.code_input = new_short_textarea(true);
+                        self.invites.message = Some((format!("Invited by @{inviter}."), false));
+                        self.referral_service.load_overview_task(self.user_id);
+                    }
+                }
+                Ok(ReferralEvent::Refused { user_id, refusal }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.pending = false;
+                        self.invites.message = Some((refusal.message().to_string(), true));
+                    }
+                }
+                Ok(ReferralEvent::Failed { user_id, message }) if user_id == self.user_id => {
+                    if self.invites.open {
+                        self.invites.pending = false;
+                        self.invites.message = Some((message, true));
+                    }
+                }
+                Ok(_) => {}
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(e) => {
+                    tracing::error!(%e, "failed to receive settings referral event");
+                    break;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn irc_token_dialog(&self) -> &IrcTokenDialogState {
         &self.irc_token
     }
 
-    pub fn open_irc_token_dialog(&mut self) {
+    pub(crate) fn open_irc_token_dialog(&mut self) {
         self.irc_token = IrcTokenDialogState::new();
         self.irc_token.open = true;
         // status stays `None` (loading) until the service replies.
         self.profile_service.load_irc_token_status(self.user_id);
     }
 
-    pub fn close_irc_token_dialog(&mut self) {
+    pub(crate) fn close_irc_token_dialog(&mut self) {
         self.irc_token = IrcTokenDialogState::new();
     }
 
     /// Move focus between the IRC token action buttons. Only meaningful while a
     /// token exists (Create-only state has a single button).
-    pub fn move_irc_token_focus(&mut self, focus: IrcTokenFocus) {
+    pub(crate) fn move_irc_token_focus(&mut self, focus: IrcTokenFocus) {
         if self.irc_token.revealed_token.is_some() || !self.irc_token.has_token() {
             return;
         }
@@ -1142,7 +1632,7 @@ impl SettingsModalState {
     }
 
     /// Dismiss the one-time token reveal and reload the (now-active) status.
-    pub fn dismiss_irc_token_reveal(&mut self) {
+    pub(crate) fn dismiss_irc_token_reveal(&mut self) {
         if self.irc_token.revealed_token.take().is_some() {
             self.irc_token.message = None;
             self.irc_token.status = None;
@@ -1153,7 +1643,7 @@ impl SettingsModalState {
 
     /// Activate the focused IRC token action (Enter). Mints/resets or arms and
     /// then performs a revoke. No-op while a request is in flight.
-    pub fn activate_irc_token_focus(&mut self) {
+    pub(crate) fn activate_irc_token_focus(&mut self) {
         if self.irc_token.revealed_token.is_some() {
             self.dismiss_irc_token_reveal();
             return;
@@ -1192,24 +1682,20 @@ impl SettingsModalState {
         }
     }
 
-    pub fn move_row(&mut self, delta: isize) {
+    pub(crate) fn move_row(&mut self, delta: isize) {
         let last = Row::ALL.len().saturating_sub(1) as isize;
         self.row_index = (self.row_index as isize + delta).clamp(0, last) as usize;
     }
 
-    pub fn theme_selected_row(&self) -> usize {
+    pub(crate) fn theme_selected_row(&self) -> usize {
         self.theme_selected_row
     }
 
-    pub fn theme_scroll_offset(&self) -> usize {
-        self.theme_scroll_offset
-    }
-
-    pub fn set_theme_visible_height(&self, height: usize) {
+    pub(crate) fn set_theme_visible_height(&self, height: usize) {
         self.theme_visible_height.set(height.max(1));
     }
 
-    pub fn move_theme_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_theme_cursor(&mut self, delta: isize) {
         let rows = self.theme_tree_rows();
         let last = rows.len().saturating_sub(1) as isize;
         self.theme_selected_row =
@@ -1222,13 +1708,27 @@ impl SettingsModalState {
         self.keep_theme_cursor_visible();
     }
 
-    pub fn theme_cursor_left(&mut self) {
+    pub(crate) fn theme_cursor_left(&mut self) {
         let rows = self.theme_tree_rows();
         match rows.get(self.theme_selected_row).copied() {
             Some(ThemeTreeRow::Group {
                 group,
                 collapsed: false,
             }) => self.collapse_theme_group(group),
+            Some(ThemeTreeRow::FavoritesHeader { collapsed: false }) => {
+                self.theme_favorites_collapsed = true;
+                self.keep_theme_cursor_visible();
+            }
+            // Inside the starred block, ← folds that block: collapsing the
+            // theme's real group instead would fold something the cursor is
+            // nowhere near.
+            Some(ThemeTreeRow::Theme { .. })
+                if self.theme_row_is_favorite_entry(self.theme_selected_row) =>
+            {
+                self.theme_favorites_collapsed = true;
+                self.theme_selected_row = 0;
+                self.keep_theme_cursor_visible();
+            }
             Some(ThemeTreeRow::Theme { option_index, .. }) => {
                 self.collapse_theme_group(theme::OPTIONS[option_index].group);
             }
@@ -1236,9 +1736,13 @@ impl SettingsModalState {
         }
     }
 
-    pub fn theme_cursor_right(&mut self) {
+    pub(crate) fn theme_cursor_right(&mut self) {
         let rows = self.theme_tree_rows();
         match rows.get(self.theme_selected_row).copied() {
+            Some(ThemeTreeRow::FavoritesHeader { collapsed: true }) => {
+                self.theme_favorites_collapsed = false;
+                self.keep_theme_cursor_visible();
+            }
             Some(ThemeTreeRow::Group {
                 group,
                 collapsed: true,
@@ -1261,7 +1765,7 @@ impl SettingsModalState {
         }
     }
 
-    pub fn toggle_theme_tree_row(&mut self) {
+    pub(crate) fn toggle_theme_tree_row(&mut self) {
         let rows = self.theme_tree_rows();
         if let Some(row) = rows.get(self.theme_selected_row).copied() {
             match row {
@@ -1272,12 +1776,16 @@ impl SettingsModalState {
                         self.collapse_theme_group(group);
                     }
                 }
+                ThemeTreeRow::FavoritesHeader { collapsed } => {
+                    self.theme_favorites_collapsed = !collapsed;
+                    self.keep_theme_cursor_visible();
+                }
                 ThemeTreeRow::Theme { option_index, .. } => self.select_theme_index(option_index),
             }
         }
     }
 
-    pub fn select_theme_index(&mut self, index: usize) {
+    pub(crate) fn select_theme_index(&mut self, index: usize) {
         let clamped = index.min(theme::OPTIONS.len().saturating_sub(1));
         self.expand_theme_group(theme::OPTIONS[clamped].group);
         self.theme_index = clamped;
@@ -1301,13 +1809,173 @@ impl SettingsModalState {
             self.draft.theme_id = Some(option.id.to_string());
             self.keep_theme_cursor_visible();
             if changed {
-                self.save();
+                // The render loop previews straight from the draft, so the
+                // save is persistence only; during a search it is deferred to
+                // `cancel_theme_search` (see `theme_preview_unsaved`).
+                match self.theme_searching {
+                    true => self.theme_preview_unsaved = true,
+                    false => self.save(),
+                }
             }
         }
     }
 
-    pub fn theme_tree_rows(&self) -> Vec<ThemeTreeRow> {
+    pub(crate) fn theme_query(&self) -> &str {
+        &self.theme_query
+    }
+
+    pub(crate) fn theme_searching(&self) -> bool {
+        self.theme_searching
+    }
+
+    /// Open the search line. The groups stay as they were: cancelling drops
+    /// you back into the same tree you left.
+    pub(crate) fn start_theme_search(&mut self) {
+        self.theme_searching = true;
+    }
+
+    /// Close the search line and go back to the full tree, with the cursor on
+    /// whichever theme is actually applied so the list is never left pointing
+    /// somewhere arbitrary.
+    pub(crate) fn cancel_theme_search(&mut self) {
+        self.theme_searching = false;
+        self.theme_query.clear();
+        if self.theme_preview_unsaved {
+            self.theme_preview_unsaved = false;
+            self.save();
+        }
+        self.theme_selected_row = self.theme_row_for_option(self.theme_index).unwrap_or(0);
+        self.keep_theme_cursor_visible();
+    }
+
+    pub(crate) fn push_theme_query_char(&mut self, ch: char) {
+        if ch.is_control() {
+            return;
+        }
+        self.theme_query.push(ch);
+        self.settle_theme_cursor_after_query_change();
+    }
+
+    pub(crate) fn backspace_theme_query(&mut self) {
+        self.theme_query.pop();
+        self.settle_theme_cursor_after_query_change();
+    }
+
+    pub(crate) fn clear_theme_query(&mut self) {
+        self.theme_query.clear();
+        self.settle_theme_cursor_after_query_change();
+    }
+
+    /// After the query changes the rows underneath are different ones, so the
+    /// cursor goes to the top and previews whatever landed there. An empty
+    /// result set previews nothing and leaves the applied theme alone.
+    fn settle_theme_cursor_after_query_change(&mut self) {
+        self.theme_selected_row = 0;
+        self.theme_scroll_offset = 0;
+        if let Some(ThemeTreeRow::Theme { option_index, .. }) = self.theme_tree_rows().first() {
+            self.apply_theme_index(*option_index);
+        }
+        self.keep_theme_cursor_visible();
+    }
+
+    pub(crate) fn theme_is_favorite(&self, option_index: usize) -> bool {
+        let Some(option) = theme::OPTIONS.get(option_index) else {
+            return false;
+        };
+        self.draft
+            .favorite_theme_ids
+            .iter()
+            .any(|id| id == option.id)
+    }
+
+    /// Star or unstar the theme under the cursor. Favorites are ordered by when
+    /// they were starred, so a newly starred theme joins the bottom of the
+    /// Favorites group rather than reshuffling the ones above it.
+    pub(crate) fn toggle_theme_favorite(&mut self) {
+        let rows = self.theme_tree_rows();
+        let Some(ThemeTreeRow::Theme { option_index, .. }) = rows.get(self.theme_selected_row)
+        else {
+            return;
+        };
+        let Some(option) = theme::OPTIONS.get(*option_index) else {
+            return;
+        };
+
+        match self
+            .draft
+            .favorite_theme_ids
+            .iter()
+            .position(|id| id == option.id)
+        {
+            Some(index) => {
+                self.draft.favorite_theme_ids.remove(index);
+            }
+            None => self.draft.favorite_theme_ids.push(option.id.to_string()),
+        }
+
+        // The Favorites group grows or shrinks above the cursor, so the row the
+        // cursor was on has moved. Follow the theme itself rather than the index.
+        let option_index = *option_index;
+        self.save();
+        self.theme_selected_row = self
+            .theme_row_for_option_in_groups(option_index)
+            .unwrap_or(self.theme_selected_row);
+        self.keep_theme_cursor_visible();
+    }
+
+    /// The starred themes, in starred order, as indices into `theme::OPTIONS`.
+    /// Ids that no longer name a theme are skipped rather than erroring: a
+    /// retired theme should not break the list it used to be in.
+    fn favorite_option_indices(&self) -> Vec<usize> {
+        self.draft
+            .favorite_theme_ids
+            .iter()
+            .filter_map(|id| theme::OPTIONS.iter().position(|option| option.id == *id))
+            .collect()
+    }
+
+    /// Rows for the theme list: the grouped tree, or a flat list of matches
+    /// while a search is running. Group headers are dropped from results
+    /// because a filtered list has nothing to collapse.
+    ///
+    /// Starred themes are repeated in a Favorites block at the top; they keep
+    /// their place in their own group too, so the tree still reads as the full
+    /// catalogue rather than one with holes cut in it.
+    pub(crate) fn theme_tree_rows(&self) -> Vec<ThemeTreeRow> {
+        let query = self.theme_query.trim().to_lowercase();
+        if !query.is_empty() {
+            let matches: Vec<usize> = theme::OPTIONS
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, option)| theme_matches(option, &query).then_some(idx))
+                .collect();
+            let last = matches.len().saturating_sub(1);
+            return matches
+                .into_iter()
+                .enumerate()
+                .map(|(idx, option_index)| ThemeTreeRow::Theme {
+                    option_index,
+                    last_in_group: idx == last,
+                })
+                .collect();
+        }
+
         let mut rows = Vec::new();
+        let favorites = self.favorite_option_indices();
+        if !favorites.is_empty() {
+            let collapsed = self.theme_favorites_collapsed;
+            rows.push(ThemeTreeRow::FavoritesHeader { collapsed });
+            if !collapsed {
+                let last = favorites.len().saturating_sub(1);
+                for (idx, option_index) in favorites.into_iter().enumerate() {
+                    rows.push(ThemeTreeRow::Theme {
+                        option_index,
+                        last_in_group: idx == last,
+                    });
+                }
+            }
+        }
+
         for group in theme::ThemeGroup::ALL {
             let collapsed = self.theme_group_collapsed(group);
             rows.push(ThemeTreeRow::Group { group, collapsed });
@@ -1388,6 +2056,29 @@ impl SettingsModalState {
         )
     }
 
+    /// The theme's row inside its own group, skipping the Favorites copy. A
+    /// starred theme appears twice; when the caller is following a theme the
+    /// cursor was already sitting on, the copy down in the tree is the one it
+    /// means, not the one that just appeared at the top.
+    fn theme_row_for_option_in_groups(&self, option_index: usize) -> Option<usize> {
+        self.theme_tree_rows().iter().rposition(
+            |row| matches!(row, ThemeTreeRow::Theme { option_index: row_index, .. } if *row_index == option_index),
+        )
+    }
+
+    /// Whether a row sits inside the starred block, which is always the run
+    /// directly under the header at the top of the tree.
+    fn theme_row_is_favorite_entry(&self, row: usize) -> bool {
+        let rows = self.theme_tree_rows();
+        if !matches!(
+            rows.first(),
+            Some(ThemeTreeRow::FavoritesHeader { collapsed: false })
+        ) {
+            return false;
+        }
+        row > 0 && row <= self.favorite_option_indices().len()
+    }
+
     fn first_theme_row_for_group(&self, group: theme::ThemeGroup) -> Option<usize> {
         self.theme_tree_rows().iter().position(|row| {
             matches!(
@@ -1398,23 +2089,32 @@ impl SettingsModalState {
         })
     }
 
-    pub fn editing_username(&self) -> bool {
+    pub(crate) fn editing_username(&self) -> bool {
         self.editing_username
     }
 
-    pub fn editing_system_field(&self) -> Option<SystemField> {
+    pub(crate) fn editing_system_field(&self) -> Option<SystemField> {
         self.editing_system_field
     }
 
-    pub fn editing_system_row(&self, row: Row) -> bool {
+    pub(crate) fn editing_system_row(&self, row: Row) -> bool {
         self.editing_system_field == SystemField::from_row(row)
     }
 
-    pub fn editing_bio(&self) -> bool {
+    pub(crate) fn editing_bio(&self) -> bool {
         self.editing_bio
     }
 
-    pub fn username_input(&self) -> &TextArea<'static> {
+    /// Whether a text field holds typing that is not in the draft yet. A
+    /// global chord that closes or reopens the modal now would drop it.
+    pub(crate) fn editing_text(&self) -> bool {
+        self.editing_username
+            || self.editing_system_field.is_some()
+            || self.editing_bio
+            || self.editing_feed_url
+    }
+
+    pub(crate) fn username_input(&self) -> &TextArea<'static> {
         &self.username_input
     }
 
@@ -1438,7 +2138,7 @@ impl SettingsModalState {
         self.username_input.lines().join("")
     }
 
-    pub fn system_input(&self) -> &TextArea<'static> {
+    pub(crate) fn system_input(&self) -> &TextArea<'static> {
         &self.system_input
     }
 
@@ -1446,23 +2146,23 @@ impl SettingsModalState {
         self.system_input.lines().join("")
     }
 
-    pub fn bio_input(&self) -> &TextArea<'static> {
+    pub(crate) fn bio_input(&self) -> &TextArea<'static> {
         &self.bio_input
     }
 
-    pub fn feeds(&self) -> &[RssFeed] {
+    pub(crate) fn feeds(&self) -> &[RssFeed] {
         &self.feeds
     }
 
-    pub fn feed_index(&self) -> usize {
+    pub(crate) fn feed_index(&self) -> usize {
         self.feed_index
     }
 
-    pub fn editing_feed_url(&self) -> bool {
+    pub(crate) fn editing_feed_url(&self) -> bool {
         self.editing_feed_url
     }
 
-    pub fn feed_url_input(&self) -> &TextArea<'static> {
+    pub(crate) fn feed_url_input(&self) -> &TextArea<'static> {
         &self.feed_url_input
     }
 
@@ -1470,42 +2170,99 @@ impl SettingsModalState {
         self.bio_input.lines().join("\n")
     }
 
-    pub fn picker(&self) -> &PickerState {
+    pub(crate) fn picker(&self) -> &PickerState {
         &self.picker
     }
 
-    pub fn picker_open(&self) -> bool {
+    pub(crate) fn picker_open(&self) -> bool {
         self.picker.kind.is_some()
     }
 
-    pub fn open_picker(&mut self, kind: PickerKind) {
+    pub(crate) fn open_picker(&mut self, kind: PickerKind) {
+        self.mouse.reset_pane(super::mouse::Pane::Picker);
+        self.mouse.reveal_selection();
         self.picker.kind = Some(kind);
         self.picker.query.clear();
-        self.picker.selected_index = 0;
+        self.picker.selected_index = match kind {
+            PickerKind::Language => TranslateLang::ALL
+                .iter()
+                .position(|lang| *lang == self.draft.translate_to)
+                .unwrap_or(0),
+            PickerKind::InteractionMode => INTERACTION_MODES
+                .iter()
+                .position(|mode| *mode == self.interaction_mode)
+                .unwrap_or(0),
+            _ => 0,
+        };
         self.picker.scroll_offset = 0;
     }
 
-    pub fn close_picker(&mut self) {
+    pub(crate) fn close_picker(&mut self) {
         self.picker = PickerState::default();
+        self.mouse.invalidate();
     }
 
-    pub fn filtered_countries(&self) -> Vec<&'static CountryOption> {
+    /// The tag picker closed on the langs row: canonical language tags,
+    /// saved at once like every other row here.
+    pub(crate) fn set_langs(&mut self, langs: Vec<String>) {
+        if self.draft.langs == langs {
+            return;
+        }
+        self.draft.langs = langs;
+        self.save();
+    }
+
+    pub(crate) fn filtered_countries(&self) -> Vec<&'static CountryOption> {
         filter_countries(&self.picker.query)
     }
 
-    pub fn filtered_timezones(&self) -> Vec<&'static str> {
+    pub(crate) fn filtered_timezones(&self) -> Vec<&'static str> {
         filter_timezones(&self.picker.query)
     }
 
-    pub fn picker_len(&self) -> usize {
+    pub(crate) fn picker_len(&self) -> usize {
         match self.picker.kind {
             Some(PickerKind::Country) => self.filtered_countries().len(),
             Some(PickerKind::Timezone) => self.filtered_timezones().len(),
+            Some(PickerKind::Language) => self.filtered_languages().len(),
+            Some(PickerKind::InteractionMode) => self.filtered_interaction_modes().len(),
             None => 0,
         }
     }
 
-    pub fn picker_move(&mut self, delta: isize) {
+    pub(crate) fn filtered_languages(&self) -> Vec<TranslateLang> {
+        let query = self.picker.query.trim().to_lowercase();
+        TranslateLang::ALL
+            .into_iter()
+            .filter(|lang| {
+                lang.label().to_lowercase().contains(&query) || lang.as_str().contains(&query)
+            })
+            .collect()
+    }
+
+    pub(crate) fn filtered_interaction_modes(&self) -> Vec<InteractionMode> {
+        let query = self.picker.query.trim().to_lowercase();
+        INTERACTION_MODES
+            .into_iter()
+            .filter(|mode| {
+                interaction_mode_label(*mode)
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .collect()
+    }
+
+    pub(crate) fn picker_interaction_mode(&self) -> Option<InteractionMode> {
+        (self.picker.kind == Some(PickerKind::InteractionMode))
+            .then(|| {
+                self.filtered_interaction_modes()
+                    .get(self.picker.selected_index)
+                    .copied()
+            })
+            .flatten()
+    }
+
+    pub(crate) fn picker_move(&mut self, delta: isize) {
         let len = self.picker_len();
         if len == 0 {
             self.picker.selected_index = 0;
@@ -1522,19 +2279,23 @@ impl SettingsModalState {
         }
     }
 
-    pub fn picker_push(&mut self, ch: char) {
+    pub(crate) fn picker_push(&mut self, ch: char) {
+        self.mouse.reset_pane(super::mouse::Pane::Picker);
+        self.mouse.reveal_selection();
         self.picker.query.push(ch);
         self.picker.selected_index = 0;
         self.picker.scroll_offset = 0;
     }
 
-    pub fn picker_backspace(&mut self) {
+    pub(crate) fn picker_backspace(&mut self) {
+        self.mouse.reset_pane(super::mouse::Pane::Picker);
+        self.mouse.reveal_selection();
         self.picker.query.pop();
         self.picker.selected_index = 0;
         self.picker.scroll_offset = 0;
     }
 
-    pub fn apply_picker_selection(&mut self) {
+    pub(crate) fn apply_picker_selection(&mut self) {
         let mut mutated = false;
         match self.picker.kind {
             Some(PickerKind::Country) => {
@@ -1551,6 +2312,17 @@ impl SettingsModalState {
                     mutated = true;
                 }
             }
+            Some(PickerKind::Language) => {
+                if let Some(lang) = self
+                    .filtered_languages()
+                    .get(self.picker.selected_index)
+                    .copied()
+                {
+                    self.draft.translate_to = lang;
+                    mutated = true;
+                }
+            }
+            Some(PickerKind::InteractionMode) => {} // Applied through App's setter by input.rs.
             None => {}
         }
         self.close_picker();
@@ -1559,19 +2331,19 @@ impl SettingsModalState {
         }
     }
 
-    pub fn start_username_edit(&mut self) {
+    pub(crate) fn start_username_edit(&mut self) {
         self.editing_system_field = None;
         self.editing_username = true;
         self.username_input = new_short_textarea(true);
         self.username_input.insert_str(&self.draft.username);
     }
 
-    pub fn cancel_username_edit(&mut self) {
+    pub(crate) fn cancel_username_edit(&mut self) {
         self.editing_username = false;
         self.username_input = new_short_textarea(false);
     }
 
-    pub fn submit_username(&mut self) {
+    pub(crate) fn submit_username(&mut self) {
         self.editing_username = false;
         let normalized = sanitize_username_input(self.username_text().trim());
         self.username_input = new_short_textarea(false);
@@ -1579,7 +2351,7 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn start_system_field_edit(&mut self, field: SystemField) {
+    pub(crate) fn start_system_field_edit(&mut self, field: SystemField) {
         self.editing_username = false;
         self.editing_system_field = Some(field);
         self.system_input = new_short_textarea(true);
@@ -1588,12 +2360,12 @@ impl SettingsModalState {
         }
     }
 
-    pub fn cancel_system_field_edit(&mut self) {
+    pub(crate) fn cancel_system_field_edit(&mut self) {
         self.editing_system_field = None;
         self.system_input = new_short_textarea(false);
     }
 
-    pub fn submit_system_field(&mut self) {
+    pub(crate) fn submit_system_field(&mut self) {
         let Some(field) = self.editing_system_field.take() else {
             return;
         };
@@ -1603,13 +2375,13 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn start_bio_edit(&mut self) {
+    pub(crate) fn start_bio_edit(&mut self) {
         self.editing_bio = true;
         move_bio_cursor_to_end(&mut self.bio_input);
         set_bio_cursor_visible(&mut self.bio_input, true);
     }
 
-    pub fn stop_bio_edit(&mut self) {
+    pub(crate) fn stop_bio_edit(&mut self) {
         self.editing_bio = false;
         self.draft.bio = self.bio_text().trim_end().to_string();
         reset_bio_view_to_top(&mut self.bio_input);
@@ -1617,34 +2389,37 @@ impl SettingsModalState {
         self.save();
     }
 
-    pub fn move_feed_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_feed_cursor(&mut self, delta: isize) {
         let len = self.feed_slot_count();
         if len == 0 {
             self.feed_index = 0;
             return;
         }
         self.feed_index = (self.feed_index as isize + delta).clamp(0, len as isize - 1) as usize;
+        self.selected_feed_id = self.feeds.get(self.feed_index).map(|feed| feed.id);
     }
 
-    pub fn feed_slot_count(&self) -> usize {
+    pub(crate) fn feed_slot_count(&self) -> usize {
         self.feeds.len() + 1
     }
 
-    pub fn feed_index_is_add_row(&self) -> bool {
+    pub(crate) fn feed_index_is_add_row(&self) -> bool {
         self.feed_index == self.feeds.len()
     }
 
-    pub fn start_feed_url_edit(&mut self) {
+    pub(crate) fn start_feed_url_edit(&mut self) {
+        self.feed_index = self.feeds.len();
+        self.selected_feed_id = None;
         self.editing_feed_url = true;
         self.feed_url_input = new_short_textarea(true);
     }
 
-    pub fn cancel_feed_url_edit(&mut self) {
+    pub(crate) fn cancel_feed_url_edit(&mut self) {
         self.editing_feed_url = false;
         self.feed_url_input = new_short_textarea(false);
     }
 
-    pub fn submit_feed_url(&mut self) {
+    pub(crate) fn submit_feed_url(&mut self) {
         let url = self.feed_url_input.lines().join("").trim().to_string();
         self.cancel_feed_url_edit();
         if url.is_empty() {
@@ -1653,17 +2428,18 @@ impl SettingsModalState {
         self.feed_service.add_feed_task(self.user_id, url);
     }
 
-    pub fn remove_selected_feed(&mut self) {
+    pub(crate) fn remove_selected_feed(&mut self) {
         if self.feed_index_is_add_row() {
             return;
         }
         let Some(feed) = self.feeds.get(self.feed_index) else {
             return;
         };
+        self.selected_feed_id = None;
         self.feed_service.delete_feed_task(self.user_id, feed.id);
     }
 
-    pub fn refresh_feeds(&self) {
+    pub(crate) fn refresh_feeds(&self) {
         self.feed_service.poll_once_task();
         self.feed_service.list_task(self.user_id);
     }
@@ -1672,7 +2448,20 @@ impl SettingsModalState {
         if let Ok(true) = self.feed_snapshot_rx.has_changed() {
             let snapshot = self.feed_snapshot_rx.borrow_and_update().clone();
             if snapshot.user_id == Some(self.user_id) {
+                let selected_id = self
+                    .selected_feed_id
+                    .or_else(|| self.feeds.get(self.feed_index).map(|feed| feed.id));
+                let was_add = self.selected_feed_id.is_none() && self.feed_index_is_add_row();
                 self.feeds = snapshot.feeds;
+                if was_add {
+                    self.feed_index = self.feeds.len();
+                } else if let Some(index) = self
+                    .feeds
+                    .iter()
+                    .position(|feed| Some(feed.id) == selected_id)
+                {
+                    self.feed_index = index;
+                }
                 self.feed_index = self
                     .feed_index
                     .min(self.feed_slot_count().saturating_sub(1));
@@ -1810,7 +2599,7 @@ impl SettingsModalState {
     /// Cycle the value of the currently selected row and auto-persist.
     /// Username/Country/Timezone don't cycle here (they open editors/pickers);
     /// this only fires for the toggle/enum rows.
-    pub fn cycle_setting(&mut self, forward: bool) {
+    pub(crate) fn cycle_setting(&mut self, forward: bool) {
         let mutated = match self.selected_row() {
             Row::Theme => {
                 let current = self
@@ -1834,6 +2623,10 @@ impl SettingsModalState {
                 toggle_kind(&mut self.draft.notify_kinds, "game_events");
                 true
             }
+            Row::Streams => {
+                toggle_kind(&mut self.draft.notify_kinds, "streams");
+                true
+            }
             Row::Bell => {
                 self.draft.notify_bell ^= true;
                 true
@@ -1849,7 +2642,19 @@ impl SettingsModalState {
                 );
                 true
             }
-            Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
+            Row::TranslateTo => {
+                self.draft.translate_to = self.draft.translate_to.cycle(forward);
+                true
+            }
+            Row::AutoTranslate => {
+                self.draft.auto_translate ^= true;
+                true
+            }
+            Row::TranslateMine => {
+                self.draft.translate_mine_to_en ^= true;
+                true
+            }
+            Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
         if mutated {
@@ -1857,43 +2662,132 @@ impl SettingsModalState {
         }
     }
 
-    pub fn save(&self) {
-        self.profile_service.edit_profile(
-            self.user_id,
-            ProfileParams {
-                username: self.draft.username.clone(),
-                bio: self.draft.bio.clone(),
-                country: self.draft.country.clone(),
-                timezone: self.draft.timezone.clone(),
-                ide: self.draft.ide.clone(),
-                terminal: self.draft.terminal.clone(),
-                os: self.draft.os.clone(),
-                langs: self.draft.langs.clone(),
-                notify_kinds: self.draft.notify_kinds.clone(),
-                notify_bell: self.draft.notify_bell,
-                notify_cooldown_mins: self.draft.notify_cooldown_mins,
-                notify_format: self.draft.notify_format.clone(),
-                theme_id: Some(
-                    self.draft
-                        .theme_id
-                        .clone()
-                        .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
-                ),
-                enable_background_color: self.draft.enable_background_color,
-                text_brightness_adjustment: self.draft.text_brightness_adjustment,
-                show_dashboard_header: self.draft.show_dashboard_header,
-                show_right_sidebar: self.draft.show_right_sidebar,
-                right_sidebar_mode: self.draft.right_sidebar_mode,
-                right_sidebar_components: self.draft.right_sidebar_components.clone(),
-                show_room_list_sidebar: self.draft.show_room_list_sidebar,
-                keep_composer_focused: self.draft.keep_composer_focused,
-                start_with_music_muted: self.draft.start_with_music_muted,
-                land_on_home: self.draft.land_on_home,
-                show_flag_fallback: self.draft.show_flag_fallback,
-                favorite_room_ids: self.draft.favorite_room_ids.clone(),
-                birthday: self.draft.birthday.clone(),
-            },
-        );
+    pub(crate) fn save(&self) {
+        self.profile_service
+            .edit_profile(self.user_id, Self::params(&self.draft));
+    }
+
+    fn params(draft: &Profile) -> ProfileParams {
+        ProfileParams {
+            username: draft.username.clone(),
+            bio: draft.bio.clone(),
+            country: draft.country.clone(),
+            timezone: draft.timezone.clone(),
+            ide: draft.ide.clone(),
+            terminal: draft.terminal.clone(),
+            os: draft.os.clone(),
+            langs: draft.langs.clone(),
+            notify_kinds: draft.notify_kinds.clone(),
+            notify_bell: draft.notify_bell,
+            notify_cooldown_mins: draft.notify_cooldown_mins,
+            notify_format: draft.notify_format.clone(),
+            theme_id: Some(
+                draft
+                    .theme_id
+                    .clone()
+                    .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+            ),
+            enable_background_color: draft.enable_background_color,
+            text_brightness_adjustment: draft.text_brightness_adjustment,
+            show_right_sidebar: draft.show_right_sidebar,
+            right_sidebar_mode: draft.right_sidebar_mode,
+            right_sidebar_components: draft.right_sidebar_components.clone(),
+            statusline_components: draft.statusline_components.clone(),
+            show_room_list_sidebar: draft.show_room_list_sidebar,
+            room_list_mode: draft.room_list_mode,
+            keep_composer_focused: draft.keep_composer_focused,
+            start_with_music_muted: draft.start_with_music_muted,
+            landing_page: draft.landing_page,
+            paper_at_login: draft.paper_at_login,
+            art_splash_mode: draft.art_splash_mode,
+            terminal_images: draft.terminal_images,
+            hidden_award_categories: draft.hidden_award_categories.clone(),
+            show_flag_fallback: draft.show_flag_fallback,
+            translate_to: draft.translate_to,
+            auto_translate: draft.auto_translate,
+            translate_mine_to_en: draft.translate_mine_to_en,
+            favorite_room_ids: draft.favorite_room_ids.clone(),
+            favorite_theme_ids: draft.favorite_theme_ids.clone(),
+        }
+    }
+
+    /// A click elsewhere leaves the open text editor the way its keyboard
+    /// submit does (Bio saves on Esc), so both inputs share one save path.
+    pub(crate) fn submit_text_edit(&mut self) {
+        if self.editing_username {
+            self.submit_username();
+        } else if self.editing_system_field.is_some() {
+            self.submit_system_field();
+        } else if self.editing_bio {
+            self.stop_bio_edit();
+        } else if self.editing_feed_url {
+            self.submit_feed_url();
+        }
+    }
+
+    pub(crate) fn select_mouse_target(&mut self, target: Target) {
+        match target {
+            Target::Row(row) | Target::RowCycle(row, _) => {
+                self.row_index = Row::ALL.iter().position(|r| *r == row).unwrap_or(0)
+            }
+            Target::Tweak(row) | Target::TweakCycle(row, _) => {
+                self.tweak_row_index = TweakRow::ALL.iter().position(|r| *r == row).unwrap_or(0)
+            }
+            Target::SidebarMode => {
+                self.tweak_row_index = TweakRow::ALL
+                    .iter()
+                    .position(|r| *r == TweakRow::RightSidebar)
+                    .unwrap_or(0)
+            }
+            Target::Account(row) => {
+                self.account_row_index = AccountRow::ALL.iter().position(|r| *r == row).unwrap_or(0)
+            }
+            Target::Theme(index) | Target::Star(index) => {
+                self.theme_selected_row = index.min(self.theme_tree_rows().len().saturating_sub(1))
+            }
+            Target::Status(index) | Target::StatusToggle(index) | Target::StatusMove(index, _) => {
+                self.statusline_index =
+                    index.min(self.statusline_components().len().saturating_sub(1));
+                self.clamp_statusline_dial();
+            }
+            Target::Dial(index) | Target::DialCycle(index, _) => {
+                self.statusline_dial_index =
+                    index.min(self.statusline_dials().len().saturating_sub(1))
+            }
+            Target::Sidebar(index) | Target::SidebarMove(index, _) => {
+                self.right_sidebar_components_index =
+                    index.min(self.right_sidebar_components().len().saturating_sub(1))
+            }
+            Target::Badge(index) => {
+                self.chat_badges_index = index.min(chat_badge_rows().len().saturating_sub(1))
+            }
+            Target::Pick(index) => {
+                self.picker.selected_index = index.min(self.picker_len().saturating_sub(1))
+            }
+            Target::Feed(id) => {
+                self.selected_feed_id = Some(id);
+                if let Some(index) = self.feeds.iter().position(|feed| feed.id == id) {
+                    self.feed_index = index;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn position_caret(&mut self, field: Field, col: usize) {
+        let input = match field {
+            Field::Username => &mut self.username_input,
+            Field::System => &mut self.system_input,
+            Field::Feed => &mut self.feed_url_input,
+            Field::InviteCode => &mut self.invites.code_input,
+            Field::LinkCode => {
+                self.move_link_account_enter_code_focus(LinkAccountEnterCodeFocus::PeerCode);
+                &mut self.link_account.code_input
+            }
+            Field::LinkConfirm => &mut self.link_account.confirm_input,
+            Field::DeleteConfirm => &mut self.delete_account.input,
+        };
+        input.move_cursor(CursorMove::Jump(0, col as u16));
     }
 }
 
@@ -1909,6 +2803,58 @@ fn cycle_notify_format(current: Option<&str>, forward: bool) -> &'static str {
         (idx + OPTIONS.len() - 1) % OPTIONS.len()
     };
     OPTIONS[next]
+}
+
+/// The dials a bottom status bar segment offers, in display order. Keyhints
+/// offers a brief display switch in addition to the list's enable switch. A
+/// status component with no inactive reading gets no auto-hide switch, and one
+/// with no variants gets no mode row, so the pane never shows a dead control.
+fn statusline_dials_for(component: StatusComponent) -> Vec<StatuslineDial> {
+    if component == StatusComponent::Shortcuts {
+        return vec![StatuslineDial::Brief];
+    }
+    let mut dials = vec![StatuslineDial::Label];
+    if component.can_auto_hide() {
+        dials.push(StatuslineDial::AutoHide);
+    }
+    if !component.variants().is_empty() {
+        dials.push(StatuslineDial::Variant);
+    }
+    dials
+}
+
+/// Advance a segment's component-specific dial. `None` when the component has
+/// no dial; an unrecognized stored variant restarts from the first.
+fn next_variant(
+    current: Option<StatusVariant>,
+    variants: &[StatusVariant],
+    forward: bool,
+) -> Option<StatusVariant> {
+    if variants.is_empty() {
+        return None;
+    }
+    let idx = current
+        .and_then(|current| variants.iter().position(|v| *v == current))
+        .unwrap_or(0);
+    let len = variants.len();
+    let next = if forward {
+        (idx + 1) % len
+    } else {
+        (idx + len - 1) % len
+    };
+    variants.get(next).copied()
+}
+
+/// Advance a segment's label mode, skipping `Text` for a component that has no
+/// word to show: for those, `Text` paints exactly what `None` paints, and a
+/// cycle position that visibly does nothing reads as a broken control.
+fn next_label_mode(current: LabelMode, component: StatusComponent, forward: bool) -> LabelMode {
+    let next = current.cycle(forward);
+    if next == LabelMode::Text && component.text_label().is_empty() {
+        next.cycle(forward)
+    } else {
+        next
+    }
 }
 
 fn toggle_kind(kinds: &mut Vec<String>, kind: &str) {
@@ -1993,40 +2939,14 @@ fn set_short_textarea_cursor_visible(ta: &mut TextArea<'static>, editing: bool) 
     ta.set_cursor_style(style);
 }
 
-fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
-    rect.width > 0
-        && rect.height > 0
-        && x >= rect.x
-        && x < rect.x + rect.width
-        && y >= rect.y
-        && y < rect.y + rect.height
+/// Whether a theme answers the search. The group name counts: "catppuccin"
+/// should find the whole family even though no single theme is called that.
+fn theme_matches(option: &theme::ThemeOption, query_lower: &str) -> bool {
+    option.label.to_lowercase().contains(query_lower)
+        || option.id.to_lowercase().contains(query_lower)
+        || option.group.label().to_lowercase().contains(query_lower)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_optional_text_trims_and_collapses_blank() {
-        assert_eq!(
-            normalize_optional_text("  VS   Code  ").as_deref(),
-            Some("VS Code")
-        );
-        assert_eq!(normalize_optional_text("   "), None);
-    }
-
-    #[test]
-    fn readonly_bio_textarea_resets_cursor_to_top() {
-        let input = bio_textarea_for_readonly_text("first line\nsecond line\nthird line");
-        assert_eq!(input.cursor(), (0usize, 0usize));
-    }
-
-    #[test]
-    fn move_bio_cursor_to_end_goes_to_last_line_end() {
-        let mut input = bio_textarea_for_readonly_text("first line\nsecond line\nthird line");
-
-        move_bio_cursor_to_end(&mut input);
-
-        assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

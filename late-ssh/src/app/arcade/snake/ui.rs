@@ -6,7 +6,9 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{CobraState, State, ThingOnScreen};
+use ratatui::style::Color;
+
+use super::state::{CobraState, State, ThingKind, ThingOnScreen};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, draw_game_overlay, keys_line, status_line,
 };
@@ -74,7 +76,7 @@ fn get_field_lines(state: &State) -> Vec<Line<'static>> {
     for row in field {
         let mut spans = Vec::with_capacity(row.len());
         for cell in row {
-            spans.push(cell_span(cell));
+            spans.push(cell_span(cell, &state.cobra.state));
         }
         lines.push(Line::from(spans));
     }
@@ -82,14 +84,37 @@ fn get_field_lines(state: &State) -> Vec<Line<'static>> {
     lines
 }
 
-fn cell_span(something: Option<&ThingOnScreen>) -> Span<'static> {
+fn cell_span(something: Option<&ThingOnScreen>, cobra: &CobraState) -> Span<'static> {
     match something {
         Some(thing) => Span::styled(
             cell_text(thing),
-            Style::default().fg(thing.color).bg(theme::BG_SELECTION()),
+            Style::default()
+                .fg(glyph_color(&thing.kind, cobra))
+                .bg(theme::BG_SELECTION()),
         ),
         None => Span::styled("  ", Style::default().bg(theme::BG_SELECTION())),
     }
+}
+
+/// Board glyph colors resolve here at draw time, not in the state: re-read
+/// every frame so a mid-level theme switch repaints glyphs together with the
+/// board, and passed through `legible_on_selection` because twelve AMOLED
+/// palettes reuse an accent as the very `bg_selection` the board paints on
+/// (e.g. `success` on Greenery), where the raw token renders fg == bg.
+fn glyph_color(kind: &ThingKind, cobra: &CobraState) -> Color {
+    let accent = match kind {
+        ThingKind::Food => theme::AMBER_GLOW(),
+        ThingKind::Drug => theme::MENTION(),
+        ThingKind::Rock => theme::TEXT_FAINT(),
+        // The powered-up snake wears the same color as the star that powered
+        // it up, so the effect reads at a glance on every palette.
+        ThingKind::Cobra => match cobra {
+            CobraState::PoweredUp => theme::MENTION(),
+            CobraState::Alive | CobraState::Dead => theme::SUCCESS(),
+        },
+        ThingKind::Edge => theme::TEXT_BRIGHT(),
+    };
+    theme::legible_on_selection(accent)
 }
 
 fn cell_text(thing: &ThingOnScreen) -> String {
@@ -102,3 +127,9 @@ fn cell_text(thing: &ThingOnScreen) -> String {
         _ => format!("{:<2}", thing.value),
     }
 }
+
+// A child of this module (not a sibling in mod.rs) so the palette sweep can
+// drive the private glyph color resolution directly.
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

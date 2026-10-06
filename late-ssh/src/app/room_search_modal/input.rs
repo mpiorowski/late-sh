@@ -1,14 +1,43 @@
-use crate::app::{common::primitives::Screen, input::ParsedInput, state::App};
+use crate::app::{
+    chat::state::RoomSlot, common::primitives::Banner, common::primitives::Screen,
+    input::ParsedInput, state::App,
+};
 
-use super::state::filtered_items;
+use super::state::{ModalQuery, PickerScope, filtered_items, parse_modal_query};
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
-    let len = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len();
+    let message_mode = matches!(
+        parse_modal_query(app.room_search_modal_state.query()),
+        ModalQuery::Messages(_)
+    );
+    let len = if message_mode {
+        app.chat.message_search.hits.len()
+    } else {
+        filtered_items(
+            &app.chat,
+            app.user_id,
+            PickerScope::for_screen(app.screen),
+            app.room_search_modal_state.query(),
+        )
+        .len()
+    };
     app.room_search_modal_state.clamp(len);
 
     match event {
-        ParsedInput::Byte(0x1B) => app.room_search_modal_state.close(),
-        ParsedInput::Byte(b'\r') => submit(app),
+        ParsedInput::Byte(0x1B) => {
+            app.room_search_modal_state.close();
+            app.chat.message_search.clear();
+        }
+        ParsedInput::Byte(b'\r') => {
+            if message_mode {
+                submit_message_jump(app);
+            } else {
+                submit(app);
+            }
+        }
+        // Ctrl+Y: copy the selected search hit's body (plain `y`/`c` are
+        // query text while the modal input is focused).
+        ParsedInput::Byte(0x19) if message_mode => copy_selected_hit(app),
         ParsedInput::Byte(0x7F | 0x08) => app.room_search_modal_state.backspace(),
         ParsedInput::CtrlBackspace => {
             app.room_search_modal_state.delete_word_left();
@@ -22,30 +51,136 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::PageDown => app.room_search_modal_state.move_selection(8, len),
         ParsedInput::PageUp => app.room_search_modal_state.move_selection(-8, len),
         ParsedInput::Char(ch) => app.room_search_modal_state.push(ch),
+        // Click a result row to select and jump to it; wheel moves the cursor.
+        // (Room list only; message-mode hits render as context and aren't 1:1
+        // with rows, so a click there just moves through them.)
+        ParsedInput::Mouse(mouse) => {
+            use crate::app::input::{MouseButton, MouseEventKind};
+            match mouse.kind {
+                MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+                    if !message_mode
+                        && let Some(index) = app.room_search_modal_state.item_at(mouse.y)
+                    {
+                        app.room_search_modal_state.set_selected(index);
+                        submit(app);
+                    }
+                }
+                MouseEventKind::ScrollDown => app.room_search_modal_state.move_selection(1, len),
+                MouseEventKind::ScrollUp => app.room_search_modal_state.move_selection(-1, len),
+                _ => {}
+            }
+        }
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             app.room_search_modal_state.push(byte as char);
         }
         _ => {}
     }
 
-    let len = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query()).len();
+    let message_mode = matches!(
+        parse_modal_query(app.room_search_modal_state.query()),
+        ModalQuery::Messages(_)
+    );
+    let len = if message_mode {
+        app.chat.message_search.hits.len()
+    } else {
+        filtered_items(
+            &app.chat,
+            app.user_id,
+            PickerScope::for_screen(app.screen),
+            app.room_search_modal_state.query(),
+        )
+        .len()
+    };
     app.room_search_modal_state.clamp(len);
 }
 
 fn submit(app: &mut App) {
-    let items = filtered_items(&app.chat, app.user_id, app.room_search_modal_state.query());
+    let items = filtered_items(
+        &app.chat,
+        app.user_id,
+        PickerScope::for_screen(app.screen),
+        app.room_search_modal_state.query(),
+    );
     let Some(item) = items.get(app.room_search_modal_state.selected()).cloned() else {
         return;
     };
 
+    close_into_room(app, item.slot);
+}
+
+/// Enter on a search hit: land in the hit's room, then select the message if
+/// it is (or becomes, once the tail loads) part of the loaded history.
+fn submit_message_jump(app: &mut App) {
+    let Some(hit) = app
+        .chat
+        .message_search
+        .hits
+        .get(app.room_search_modal_state.selected())
+    else {
+        return;
+    };
+    let room_id = hit.message.room_id;
+    let message_id = hit.message.id;
+
+    // A mention preview can reference a public room the user never joined.
+    // There is no room in the rail to land in, but the message is still
+    // readable (`list_page_for_viewer` admits public non-game rooms), so read
+    // it in the history modal instead of refusing the jump outright.
+    if !app.chat.rooms.iter().any(|(room, _)| room.id == room_id) {
+        app.room_search_modal_state.close();
+        app.chat.message_search.clear();
+        app.chat.open_history_at_message(room_id, message_id);
+        return;
+    }
+
+    close_into_room(app, RoomSlot::Room(room_id));
+    app.chat.message_search.clear();
+    if app.chat.message_is_loaded_in_room(room_id, message_id) {
+        app.chat.select_message_by_id_in_room(room_id, message_id);
+    } else {
+        app.chat.set_pending_search_jump(room_id, message_id);
+        // `sync_visible_chat_room` only requests a tail when the visible room
+        // changed; if the hit's room was already on screen no load would fire
+        // and the pending jump would never resolve. Request one explicitly so
+        // the jump either selects the message or falls through to the history
+        // modal as too old.
+        app.chat.request_room_tail(room_id);
+    }
+}
+
+fn close_into_room(app: &mut App, slot: RoomSlot) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.showcase.stop_composing();
-    app.chat.work.stop_composing();
     app.chat.close_news_modal();
-    app.chat.select_room_slot(item.slot);
     app.room_search_modal_state.close();
-    app.set_screen(Screen::Dashboard);
+    // On Zen with a chat tile focused, a room pick is that tile's: it
+    // rebinds the tile the way `[` `]` do and Home's selection stays put.
+    // Any other pick there (a feed, News, a chat tile not focused) moves
+    // Home's selection and stays on the page; everywhere else the room
+    // opens on Home.
+    if app.screen == Screen::Zen
+        && let RoomSlot::Room(room_id) = slot
+        && crate::app::zen::input::bind_focused_chat_to_room(app, room_id)
+    {
+        return;
+    }
+    app.chat.select_room_slot(slot);
+    if app.screen != Screen::Zen {
+        app.set_screen(Screen::Dashboard);
+    }
     app.sync_visible_chat_room();
+}
+
+fn copy_selected_hit(app: &mut App) {
+    let Some(hit) = app
+        .chat
+        .message_search
+        .hits
+        .get(app.room_search_modal_state.selected())
+    else {
+        return;
+    };
+    app.pending_clipboard = Some(hit.message.body.clone());
+    app.banner = Some(Banner::success("Message copied to clipboard!"));
 }

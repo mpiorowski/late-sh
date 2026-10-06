@@ -1,12 +1,17 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use super::award::NethackAwards;
-use super::milestone::{self, Milestone};
 use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus};
-use super::status;
+use crate::app::activity::event::ActivityGame;
+use crate::app::activity::publisher::ActivityPublisher;
+use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
+use crate::app::door::keys;
 use crate::render_signal::RenderSignal;
+
+// The launcher UI renders straight off the shared flow's status.
+pub use crate::app::door::arcade::HandleStatus;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -19,6 +24,12 @@ pub enum Mode {
 /// nethack's end-of-game `--More--`/disclosure prompts) so a stray `q` cannot
 /// reach the launcher's global quit and drop the whole SSH session.
 const EXIT_GRACE_TICKS: u8 = 10;
+
+/// Close a running game after this long without a single forwarded keystroke.
+/// Detached games (the player stepped out with ` and never came back) would
+/// otherwise hold a host child forever; the close is a clean SIGHUP-save on
+/// the host, so the run resumes on the next launch.
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
 
 pub struct State {
     user_id: uuid::Uuid,
@@ -41,27 +52,21 @@ pub struct State {
     /// while in the Launcher; while non-zero the launcher swallows input so a
     /// game's trailing keystrokes can't fall through to the global quit.
     exit_grace: u8,
-    /// Chip/badge grant sink for screen-scraped milestones. `None` on the
-    /// headless/test path (no DB), which disables milestone awards entirely.
-    awards: Option<NethackAwards>,
-    /// Once-per-session debounce for the Amulet milestone (account-level dedup
-    /// is enforced downstream by the lifetime reward template).
-    amulet_awarded: bool,
-    /// Once-per-session debounce for the Ascension milestone.
-    ascension_awarded: bool,
-    /// Whether an ascension *prelude* line has been seen this session. Required
-    /// before the ascend line is trusted, so a lone engraved/renamed string
-    /// can't spoof the win payout.
-    seen_ascension_prelude: bool,
-    /// Deepest dungeon level seen this session (from the `Dlvl:` status field).
-    /// A new maximum posts a "descended" activity event. `None` until the first
-    /// status line is parsed (the baseline, posted silently).
-    deepest_dlvl: Option<i32>,
-    /// Most recently parsed dungeon level. The tombstone screen hides the status
-    /// line, so the last value seen before death is the level the player died on.
-    last_dlvl: Option<i32>,
-    /// Once-per-session debounce for the death activity event.
-    death_noted: bool,
+    /// Feed publisher for the connect-based "started a NetHack game" event
+    /// (the one door event that is not log-derived; deaths, wins, and badges
+    /// all come from the log pipe in `app/door/ingest/`). `None` on the
+    /// headless/test path (no DB).
+    activity: Option<ActivityPublisher>,
+    /// When the last keystroke was forwarded to the game. A running game idle
+    /// past `IDLE_SHUTDOWN` is closed (host SIGHUP-saves), whether the player
+    /// is staring at it or has detached to another screen.
+    last_input: Instant,
+    /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
+    /// intent); the claimed handle becomes NetHack's `-u` playname.
+    handle: HandleFlow,
+    /// The account's .nethackrc content ("" = none), pushed to the host at
+    /// launch. Copied from the App's session-local rc map at screen entry.
+    rc: String,
 }
 
 impl State {
@@ -74,7 +79,9 @@ impl State {
         term: String,
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
-        awards: Option<NethackAwards>,
+        activity: Option<ActivityPublisher>,
+        handle_svc: Option<ArcadeHandleService>,
+        rc: String,
     ) -> Self {
         Self {
             user_id,
@@ -86,15 +93,17 @@ impl State {
             proxy: None,
             viewport: Rect::new(0, 0, 80, 24),
             term,
+            // A disabled door never looks the handle up.
+            handle: HandleFlow::new(
+                user_id,
+                if enabled { handle_svc } else { None },
+                repaint.clone(),
+            ),
             repaint,
             exit_grace: 0,
-            awards,
-            amulet_awarded: false,
-            ascension_awarded: false,
-            seen_ascension_prelude: false,
-            deepest_dlvl: None,
-            last_dlvl: None,
-            death_noted: false,
+            activity,
+            last_input: Instant::now(),
+            rc,
         }
     }
 
@@ -124,29 +133,33 @@ impl State {
         if !self.enabled || self.proxy.is_some() {
             return;
         }
+        let Some(playname) = self.handle.claimed() else {
+            // Handle not known yet: remember the intent (no-op if the prompt
+            // or retry hint is on screen); tick() launches when the in-flight
+            // lookup or claim lands on Claimed.
+            self.handle.request_launch();
+            return;
+        };
         self.proxy = Some(NethackProcess::spawn(ProcessConfig {
             host: self.host.clone(),
             port: self.port,
             secret: self.secret.clone(),
-            user_id: self.user_id,
+            playname,
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
+            rc: self.rc.clone(),
             repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
         self.exit_grace = 0;
-        // Fresh launch: re-arm the per-session milestone/event debounce so a new
-        // game/character can earn the (account-gated) awards again and re-post
-        // session events. Account-level dedup still prevents a second payout.
-        self.amulet_awarded = false;
-        self.ascension_awarded = false;
-        self.seen_ascension_prelude = false;
-        self.deepest_dlvl = None;
-        self.last_dlvl = None;
-        self.death_noted = false;
-        if let Some(awards) = &self.awards {
-            awards.note_event(self.user_id, "started a NetHack game".to_string());
+        self.last_input = Instant::now();
+        if let Some(activity) = &self.activity {
+            activity.game_event_task(
+                self.user_id,
+                ActivityGame::Nethack,
+                "started a NetHack game".to_string(),
+            );
         }
     }
 
@@ -165,82 +178,64 @@ impl State {
                 // nethack's end-of-game prompts, and those trailing keys must
                 // not reach the launcher's global `q` = quit-the-app handler.
                 self.exit_grace = EXIT_GRACE_TICKS;
-            } else {
-                // Still in-game: watch the screen for achievement milestones
-                // (Amulet pickup, ascension) plus feed events (descent, death).
-                self.scan_screen();
+            } else if self.last_input.elapsed() >= IDLE_SHUTDOWN {
+                // Idle too long (typically a detached game the player forgot):
+                // drop the proxy so the host SIGHUP-saves the run. No exit
+                // grace; an idle player has no trailing keystrokes in flight.
+                self.proxy = None;
+                self.mode = Mode::Launcher;
             }
-        } else if self.exit_grace > 0 {
+            return;
+        }
+        if self.exit_grace > 0 {
             self.exit_grace -= 1;
+        }
+        if self.handle.take_ready_launch() {
+            self.connect();
         }
     }
 
-    /// Scrape the live screen for milestone messages (Amulet pickup, ascension —
-    /// account-gated chip/badge grants) and feed events (new dungeon depth,
-    /// death — visible activity, no reward). Per-session debounce flags stop
-    /// repeats while a `--More--` message lingers across ticks; the ascend line
-    /// is only trusted once a prelude line has been seen this session.
-    fn scan_screen(&mut self) {
-        let Some(awards) = self.awards.as_ref() else {
-            return;
-        };
-        let awards = awards.clone();
-        let Some(text) = self.proxy.as_ref().map(|p| p.with_screen(|s| s.contents())) else {
-            return;
-        };
+    /// Snapshot of the arcade-handle lifecycle for the launcher UI.
+    pub fn handle_status(&self) -> HandleStatus {
+        self.handle.status()
+    }
 
-        // --- account-gated milestones (chips + badge) ---
-        let new_amulet = !self.amulet_awarded && milestone::has_amulet_pickup(&text);
-        if milestone::has_ascension_prelude(&text) {
-            self.seen_ascension_prelude = true;
-        }
-        let new_ascension = !self.ascension_awarded
-            && self.seen_ascension_prelude
-            && milestone::has_ascension_line(&text);
+    /// Whether the launcher still owes the player handle work (lookup, claim
+    /// prompt, retry). Keeps the NetHack screen up while no game is running;
+    /// once the handle is claimed an idle launcher bounces back to the Games
+    /// hub as before.
+    pub fn awaiting_handle(&self) -> bool {
+        self.enabled && self.handle.awaiting()
+    }
 
-        if new_amulet {
-            self.amulet_awarded = true;
-        }
-        if new_ascension {
-            // Ascension implies the Amulet; mark both so neither re-fires.
-            self.ascension_awarded = true;
-            self.amulet_awarded = true;
-        }
-        // Ascension's grant back-fills the Amulet award, so prefer it when both
-        // land on the same tick.
-        if new_ascension {
-            awards.grant(self.user_id, Milestone::Ascension);
-        } else if new_amulet {
-            awards.grant(self.user_id, Milestone::Amulet);
-        }
+    /// The claim prompt's compose buffer, for rendering.
+    pub fn entry_input(&self) -> &str {
+        self.handle.entry_input()
+    }
 
-        // --- feed events (visible, no reward) ---
-        if let Some(dlvl) = status::parse_dlvl(&text) {
-            self.last_dlvl = Some(dlvl);
-            match self.deepest_dlvl {
-                // First reading is the baseline (start level / resumed depth):
-                // record it silently so a resume doesn't post a fake descent.
-                None => self.deepest_dlvl = Some(dlvl),
-                Some(prev) if dlvl > prev => {
-                    self.deepest_dlvl = Some(dlvl);
-                    awards.note_event(
-                        self.user_id,
-                        format!("descended to NetHack dungeon level {dlvl}"),
-                    );
-                }
-                Some(_) => {}
+    /// Whether the one-time arcade-name claim modal is on screen.
+    pub fn name_modal_visible(&self) -> bool {
+        self.enabled && self.mode == Mode::Launcher && self.handle.modal_visible()
+    }
+
+    /// Close the claim modal (Esc); Enter or another launch attempt reopens it.
+    pub fn dismiss_name_modal(&mut self) {
+        self.handle.dismiss_modal();
+    }
+
+    /// Handle a Launcher-mode key byte. Returns true when consumed; unconsumed
+    /// keys fall through to the global keymap (tab switching, quit).
+    pub fn launcher_key(&mut self, byte: u8) -> bool {
+        if !self.enabled || self.mode == Mode::Running {
+            return false;
+        }
+        match self.handle.key(byte) {
+            HandleKeyResult::Launch => {
+                self.connect();
+                true
             }
-        }
-
-        if !self.death_noted && milestone::has_death(&text) {
-            self.death_noted = true;
-            // The tombstone hides the status line, so the last level parsed
-            // before death is the level the player died on.
-            let action = match self.last_dlvl {
-                Some(dlvl) => format!("died in NetHack on dungeon level {dlvl}"),
-                None => "died in NetHack".to_string(),
-            };
-            awards.note_event(self.user_id, action);
+            HandleKeyResult::Consumed => true,
+            HandleKeyResult::Ignored => false,
         }
     }
 
@@ -256,6 +251,25 @@ impl State {
         self.proxy.as_ref()
     }
 
+    /// Test-only: fabricate a Running state around a proxy pointed at a dead
+    /// address, so detach/idle paths can be exercised without a live host.
+    /// Needs a Tokio runtime (the proxy spawns its bridge task).
+    #[cfg(test)]
+    pub fn force_running_for_test(&mut self) {
+        self.proxy = Some(NethackProcess::spawn(ProcessConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            secret: "test-secret".into(),
+            playname: "tester".into(),
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+            rc: String::new(),
+            repaint: None,
+        }));
+        self.mode = Mode::Running;
+    }
+
     /// Intercept the F1 key before it reaches nethack. Returns true when the
     /// input was consumed and must NOT be forwarded as-is.
     ///
@@ -263,7 +277,7 @@ impl State {
     /// help key, and intercepting it also stops the raw F1 escape (`ESC O P`)
     /// from leaking into the game as stray commands. late.sh keeps no help UI
     /// of its own; `?` and F1 both open NetHack's in-game help.
-    pub fn intercept_input(&self, data: &[u8]) -> bool {
+    pub fn intercept_input(&mut self, data: &[u8]) -> bool {
         if is_f1(data) {
             self.forward_input(b"?");
             return true;
@@ -276,13 +290,30 @@ impl State {
     /// tracking (`?1003h`) on for its own UI, so the client streams motion
     /// reports whose leading `ESC` cancels every nethack menu (notably `?`).
     /// Stripping them is what makes in-game `?` actually work.
-    pub fn forward_input(&self, data: &[u8]) {
+    pub fn forward_input(&mut self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
-            let filtered = strip_input_noise(data);
-            if !filtered.is_empty() {
-                proxy.send_input(filtered);
+            let keys = keys_for_game(proxy, data);
+            if !keys.is_empty() {
+                self.last_input = Instant::now();
+                proxy.send_input(keys);
             }
         }
+    }
+}
+
+/// The exact bytes a client chunk becomes for the running game: terminal
+/// reports dropped. The tty windowport reads raw `getchar()` and decodes no
+/// escapes, so arrows never work there; the curses windowport (opt-in via
+/// `OPTIONS=windowtype:curses` in the player rc) asks the terminal for
+/// application cursor keys (`keypad(stdscr, TRUE)` in cursmain.c), but that
+/// request stops at our vt100 parser and never reaches the player's terminal,
+/// so the client keeps sending the CSI form the game cannot decode. See
+/// `app/door/keys.rs`.
+fn keys_for_game(proxy: &NethackProcess, data: &[u8]) -> Vec<u8> {
+    let filtered = strip_input_noise(data);
+    match proxy.with_screen(|screen| screen.application_cursor()) {
+        true => keys::to_application_cursor(&filtered),
+        false => filtered,
     }
 }
 
@@ -328,93 +359,5 @@ fn strip_input_noise(data: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn disabled_state() -> State {
-        State::new(
-            uuid::Uuid::nil(),
-            "127.0.0.1".to_string(),
-            2323,
-            String::new(),
-            "xterm".to_string(),
-            false,
-            None,
-            None,
-        )
-    }
-
-    #[test]
-    fn connect_is_a_no_op_when_disabled() {
-        let mut state = disabled_state();
-        assert!(!state.is_enabled());
-        state.connect();
-        assert!(state.proxy().is_none());
-        assert_eq!(state.mode(), Mode::Launcher);
-    }
-
-    #[test]
-    fn forward_input_without_proxy_is_a_no_op() {
-        let state = disabled_state();
-        // Must not panic when nothing is running.
-        state.forward_input(b"hjkl");
-    }
-
-    #[test]
-    fn strip_input_noise_drops_mouse_keeps_keys() {
-        // The `?` survives a motion report glued to it, which is exactly the
-        // case that used to cancel the help menu.
-        assert_eq!(strip_input_noise(b"\x1b[<35;10;5M?"), b"?");
-        assert_eq!(strip_input_noise(b"?\x1b[<35;10;5m"), b"?");
-        // Legacy X10 mouse and paste markers go too.
-        assert_eq!(strip_input_noise(b"a\x1b[Mabcb"), b"ab");
-        assert_eq!(strip_input_noise(b"\x1b[200~hi\x1b[201~"), b"hi");
-    }
-
-    #[test]
-    fn strip_input_noise_passes_keys_and_arrows() {
-        assert_eq!(strip_input_noise(b"hjkl"), b"hjkl");
-        // Arrow keys (ESC [ A …) must not be mistaken for mouse.
-        assert_eq!(strip_input_noise(b"\x1b[A\x1b[B"), b"\x1b[A\x1b[B");
-    }
-
-    #[test]
-    fn f1_is_consumed_and_other_keys_pass_through() {
-        let state = disabled_state();
-        // F1 (both encodings) is consumed: late.sh remaps it to nethack's `?`
-        // help, so it must not also be forwarded as the raw escape.
-        assert!(state.intercept_input(b"\x1bOP"));
-        assert!(state.intercept_input(b"\x1b[11~"));
-        // Everything else falls through to be forwarded to nethack verbatim,
-        // including a literal `?` (nethack's own help key).
-        assert!(!state.intercept_input(b"?"));
-        assert!(!state.intercept_input(b"hjkl"));
-    }
-
-    #[test]
-    fn exit_grace_opens_on_close_and_counts_down() {
-        let mut state = disabled_state();
-        // Simulate a game that has exited: in Running with no proxy, the next
-        // tick returns to the Launcher and opens the input grace.
-        state.mode = Mode::Running;
-        assert!(!state.in_exit_grace());
-        state.tick();
-        assert_eq!(state.mode(), Mode::Launcher);
-        assert!(state.in_exit_grace());
-        // The grace counts down once per tick and eventually clears, so the
-        // launcher does not swallow input forever.
-        for _ in 0..EXIT_GRACE_TICKS {
-            assert!(state.in_exit_grace());
-            state.tick();
-        }
-        assert!(!state.in_exit_grace());
-    }
-
-    #[test]
-    fn is_f1_matches_both_encodings() {
-        assert!(is_f1(b"\x1bOP"));
-        assert!(is_f1(b"\x1b[11~"));
-        assert!(!is_f1(b"\x1b[A"));
-        assert!(!is_f1(b"?"));
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

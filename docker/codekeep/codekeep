@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/local/bin/bun /opt/codekeep/node_modules/codekeep/dist/index.js "$@"

@@ -27,7 +27,7 @@ impl RoomScopedCommand {
 
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            Self::Sheet => "view character sheets",
+            Self::Sheet => "view a character sheet (/sheet @user)",
         }
     }
 
@@ -91,35 +91,71 @@ const fn room(command: RoomScopedCommand) -> Command {
 /// All slash commands: globals (kept alphabetical for readability) followed by
 /// room-scoped commands. `rank_command_matches` sorts matches before returning,
 /// so registry order does not affect the autocomplete display.
+///
+/// A description carries the argument shape inline (`/gift @user 50 [note]`)
+/// whenever the command takes one, since the popup is where a user learns the
+/// syntax: the usage banner only shows up after they have already got it
+/// wrong. Keep them at 46 columns or under. The popup sizes itself to the
+/// longest description in the match set and then clips to the composer width,
+/// so a long one silently truncates on an 80-col terminal.
 const COMMANDS: &[Command] = &[
-    global("active", "list active users"),
-    global("binds", "chat guide"),
-    global("brb", "go AFK and mute audio"),
+    global("active", "list users online right now"),
+    global("aquarium", "feed the tank (/aquarium feed, free, daily)"),
+    global("ban", "ban from your room (/ban @user [7d] [reason])"),
+    global("binds", "open the chat guide (same as ?)"),
+    global("brb", "post brb, go away (/brb [reason])"),
+    global("bug", "report a bug to #bugs (/bug <what broke>)"),
+    global("chips", "chip ledger (/chips @user; bare = you)"),
     global("coffee", "post coffee cup"),
-    global("dm", "open DM"),
+    global("crown", "the crown (/crown; /crown take to buy it)"),
+    global("cs", "cyberspace (/cs post, chat, link, unlink)"),
+    global("cyberspace", "open the cyberspace tab (alias /cs)"),
+    global("dm", "open a DM (/dm @user)"),
     global("exit", "quit confirm"),
-    global("friend", "mark user"),
+    global("friend", "mark a friend (/friend @user; bare lists)"),
     global("friends", "list friends"),
-    global("gift", "send chips"),
+    global("gift", "send chips (/gift @user 50 [note])"),
+    global("golive", "stream your screen (/golive <title>; stop)"),
+    global("guide", "open the guide (same as ?)"),
+    global("history", "browse this room's full history"),
     global("icons", "open icon picker"),
-    global("ignore", "mute user"),
-    global("invite", "add user"),
+    global("ignore", "mute a user (/ignore @user; bare lists)"),
+    global("invite", "add a user to this room (/invite @user)"),
+    global("jobs", "the Jobs shelf; post; admins: pull|release"),
+    global("join", "open/create a public room (/join #room)"),
+    global("kick", "remove a user from your room (/kick @user)"),
     global("leave", "leave room"),
-    global("list", "public rooms"),
-    global("me", "send action"),
+    global("list", "list public rooms"),
+    global("lobby", "open/close the Lobby (same as Ctrl+G)"),
+    global("me", "send an action line (/me waves)"),
     global("members", "room members"),
+    global("onboard", "take the first-visit tour again"),
+    global("pair", "shared coding scratchpad; both run /pair @user"),
+    global("paper", "graybeard's daily paper (/paper [YYYY-MM-DD])"),
     global("paste-image", "upload image from CLI clipboard"),
-    global("petname", "name your cat"),
-    global("poll", "start room poll"),
-    global("private", "new private room"),
-    global("profile", "view user profile"),
-    global("public", "open public room for everyone"),
-    global("roll", "roll dice (e.g. /roll 3d6)"),
+    global("petname", "name your pet (/petname Mochi; bare shows)"),
+    global("picker", "open the room picker (same as Ctrl+/)"),
+    global("poll", "start a Home room poll (2-3 options)"),
+    global("pot", "the weekly pot (/pot; /pot buy N for tickets)"),
+    global("private", "create a private room (/private #room)"),
+    global("profile", "view a profile (/profile @user; bare = you)"),
+    global("public", "open/create a public room (/public #room)"),
+    global("redraw", "repaint the screen (same as Ctrl+R)"),
+    global("roll", "roll dice (/roll 3d6 2d20; default d20)"),
+    global("roominfo", "set this room's topic and rules"),
+    global("rules", "show this room's rules"),
+    global("search", "search messages (?query in Ctrl+/)"),
     global("settings", "open settings"),
+    global("shop", "open the shop (badges, effects, companions)"),
+    global("suggest", "send an idea to #suggestions (/suggest <idea>)"),
+    global("summary", "AI catch-up of this room, or /summary 6h"),
     global("tea", "post tea cup"),
-    global("unfriend", "unmark user"),
-    global("unignore", "unmute user"),
-    global("upload", "upload image from url"),
+    global("unban", "lift a room ban (/unban @user)"),
+    global("unfriend", "remove a friend mark (/unfriend @user)"),
+    global("unignore", "unmute a user (/unignore @user)"),
+    global("upload", "upload an image by url (/upload <url>)"),
+    global("watch", "open someone's live stream (/watch @user)"),
+    global("zen", "open/close Zen (same as Ctrl+F)"),
     room(RoomScopedCommand::Sheet),
 ];
 
@@ -153,7 +189,7 @@ pub(crate) fn rank_command_matches(
         .filter(|cmd| cmd.name.starts_with(query_lower))
         .map(|cmd| MentionMatch {
             name: cmd.name.to_string(),
-            online: true,
+            presence: crate::app::chat::state::MatchPresence::Here,
             prefix: "/",
             description: Some(cmd.description),
         })
@@ -163,169 +199,5 @@ pub(crate) fn rank_command_matches(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn names(matches: &[MentionMatch]) -> Vec<&str> {
-        matches.iter().map(|m| m.name.as_str()).collect()
-    }
-
-    /// Minimal `ChatRoom` for scope tests; only `slug` affects command matching.
-    fn room_with_slug(slug: Option<&str>) -> ChatRoom {
-        ChatRoom {
-            id: uuid::Uuid::from_u128(1),
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            kind: "topic".to_string(),
-            visibility: "public".to_string(),
-            auto_join: false,
-            permanent: false,
-            slug: slug.map(str::to_string),
-            language_code: None,
-            dm_user_a: None,
-            dm_user_b: None,
-        }
-    }
-
-    #[test]
-    fn rank_command_matches_lists_user_commands_for_empty_query() {
-        let ranked = rank_command_matches("", None);
-        let ranked_names = names(&ranked);
-        assert_eq!(
-            ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-            vec!["active", "binds", "brb", "coffee"]
-        );
-        let mut sorted = ranked_names.clone();
-        sorted.sort_unstable();
-        assert_eq!(ranked_names, sorted);
-        assert!(ranked.iter().all(|m| m.prefix == "/"));
-        assert!(ranked.iter().all(|m| m.description.is_some()));
-        assert!(ranked_names.contains(&"petname"));
-        assert!(ranked_names.contains(&"poll"));
-        assert!(!ranked_names.contains(&"create-room"));
-        assert!(!ranked_names.contains(&"delete-room"));
-        assert!(!ranked_names.contains(&"fill-room"));
-        assert!(!ranked_names.contains(&"music"));
-    }
-
-    #[test]
-    fn rank_command_matches_excludes_admin_commands() {
-        assert!(rank_command_matches("delete", None).is_empty());
-        assert!(rank_command_matches("fill", None).is_empty());
-    }
-
-    #[test]
-    fn rank_command_matches_hides_exact_command() {
-        assert!(rank_command_matches("exit", None).is_empty());
-        assert_eq!(names(&rank_command_matches("ex", None)), vec!["exit"]);
-    }
-
-    #[test]
-    fn command_scope_availability() {
-        let dnd = room_with_slug(Some("dnd"));
-        let other = room_with_slug(Some("lounge"));
-        let no_slug = room_with_slug(None);
-
-        let room = CommandScope::Room(RoomScopedCommand::Sheet);
-        assert!(room.available_in(Some(&dnd)));
-        assert!(!room.available_in(Some(&other)));
-        assert!(!room.available_in(Some(&no_slug)));
-        assert!(!room.available_in(None));
-
-        // Global is available everywhere, including with no resolvable room.
-        assert!(CommandScope::Global.available_in(None));
-        assert!(CommandScope::Global.available_in(Some(&other)));
-    }
-
-    #[test]
-    fn rank_command_matches_includes_room_command_in_owning_room() {
-        let dnd = room_with_slug(Some("dnd"));
-        let ranked = rank_command_matches("sh", Some(&dnd));
-        let sheet = ranked
-            .iter()
-            .find(|m| m.name == "sheet")
-            .expect("/sheet should be available in #dnd");
-        assert_eq!(sheet.prefix, "/");
-        assert_eq!(sheet.description, Some("view character sheets"));
-    }
-
-    #[test]
-    fn rank_command_matches_excludes_room_command_elsewhere() {
-        let other = room_with_slug(Some("lounge"));
-        assert!(!names(&rank_command_matches("sh", Some(&other))).contains(&"sheet"));
-        assert!(!names(&rank_command_matches("sh", None)).contains(&"sheet"));
-    }
-
-    #[test]
-    fn rank_command_matches_hides_exact_room_command() {
-        let dnd = room_with_slug(Some("dnd"));
-        assert!(rank_command_matches("sheet", Some(&dnd)).is_empty());
-    }
-
-    #[test]
-    fn room_owns_command_only_in_owning_room() {
-        let dnd = room_with_slug(Some("dnd"));
-        let other = room_with_slug(Some("lounge"));
-
-        assert!(room_owns_command(&dnd, "sheet"));
-        assert!(!room_owns_command(&other, "sheet"));
-        // global commands are never "owned" by a room
-        assert!(!room_owns_command(&dnd, "active"));
-        // unknown command name
-        assert!(!room_owns_command(&dnd, "nope"));
-    }
-
-    #[test]
-    fn room_scoped_command_metadata_is_consistent() {
-        let command = room_scoped_command_named("sheet").expect("sheet command");
-        assert_eq!(command.name(), "sheet");
-        assert_eq!(command.description(), "view character sheets");
-        assert_eq!(command.room_slug(), "dnd");
-    }
-
-    #[test]
-    fn room_scoped_commands_are_registered() {
-        for command in RoomScopedCommand::ALL {
-            assert!(
-                COMMANDS.iter().any(
-                    |entry| matches!(entry.scope, CommandScope::Room(registered) if registered == *command)
-                ),
-                "room-scoped command /{} is missing from COMMANDS",
-                command.name()
-            );
-        }
-
-        for entry in COMMANDS.iter().filter_map(|entry| match entry.scope {
-            CommandScope::Room(command) => Some(command),
-            CommandScope::Global => None,
-        }) {
-            assert!(
-                RoomScopedCommand::ALL.contains(&entry),
-                "COMMANDS contains untracked room-scoped command /{}",
-                entry.name()
-            );
-        }
-    }
-
-    #[test]
-    fn room_commands_do_not_shadow_global_commands() {
-        // A room command sharing a name with a global command would be matched
-        // by the global handler in `submit_composer` first, silently defeating
-        // room scoping. Keep the two command namespaces disjoint.
-        let globals: Vec<&str> = COMMANDS
-            .iter()
-            .filter(|cmd| matches!(cmd.scope, CommandScope::Global))
-            .map(|cmd| cmd.name)
-            .collect();
-        for cmd in COMMANDS
-            .iter()
-            .filter(|cmd| matches!(cmd.scope, CommandScope::Room(_)))
-        {
-            assert!(
-                !globals.contains(&cmd.name),
-                "room command /{} collides with a global command",
-                cmd.name
-            );
-        }
-    }
-}
+#[path = "commands_test.rs"]
+mod commands_test;

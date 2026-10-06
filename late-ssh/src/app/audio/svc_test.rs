@@ -1,0 +1,217 @@
+use crate::{
+    app::audio::{svc::AudioService, youtube::YoutubeVideo},
+    paired_clients::PairedClientRegistry,
+};
+use late_core::{
+    models::media_queue_item::MediaQueueItem,
+    test_utils::{create_test_user, test_db},
+};
+
+#[tokio::test]
+async fn submit_adopts_existing_db_current_instead_of_hitting_singleton() {
+    let test = test_db().await;
+    let user = create_test_user(&test.db, "audio_submit_reconcile").await;
+
+    let existing_id = {
+        let mut client = test.db.get().await.expect("db client");
+        let (existing, _reward) = MediaQueueItem::insert_youtube(
+            &mut client,
+            user.id,
+            "aaaaaaaaaaa",
+            Some("already playing"),
+            None,
+            Some(60_000),
+            false,
+        )
+        .await
+        .expect("insert existing");
+        MediaQueueItem::mark_playing(&client, existing.id, chrono::Utc::now())
+            .await
+            .expect("mark playing")
+            .expect("playing row")
+            .id
+    };
+
+    // New service instance starts with empty in-memory state while DB already
+    // has a playing row. This is the prod stuck shape after a stale/draining
+    // pod lost current_item_id.
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        PairedClientRegistry::new("https://audio.late.sh"),
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    );
+    let response = service
+        .submit_validated_video(user.id, test_video("bbbbbbbbbbb", "queued"))
+        .await
+        .expect("submit should reconcile, not singleton-fail");
+
+    assert_eq!(response.position_in_queue, 1);
+    let client = test.db.get().await.expect("db client");
+    let current = MediaQueueItem::current_playing(&client)
+        .await
+        .expect("current")
+        .expect("still playing");
+    assert_eq!(current.id, existing_id);
+
+    let snapshot = MediaQueueItem::list_snapshot(&client, 10)
+        .await
+        .expect("snapshot");
+    assert!(snapshot.iter().any(|(item, _)| {
+        item.external_id == "bbbbbbbbbbb" && item.status == MediaQueueItem::STATUS_QUEUED
+    }));
+}
+
+#[tokio::test]
+async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
+    let test = test_db().await;
+    let user = create_test_user(&test.db, "audio_skip_reconcile").await;
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        PairedClientRegistry::new("https://audio.late.sh"),
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    );
+
+    let first = service
+        .submit_validated_video(user.id, test_video("ccccccccccc", "first"))
+        .await
+        .expect("queue first");
+
+    let second_id = {
+        let mut client = test.db.get().await.expect("db client");
+        MediaQueueItem::mark_played(&client, first.id, chrono::Utc::now())
+            .await
+            .expect("mark first played");
+        let (second, _reward) = MediaQueueItem::insert_youtube(
+            &mut client,
+            user.id,
+            "ddddddddddd",
+            Some("db current"),
+            None,
+            Some(60_000),
+            false,
+        )
+        .await
+        .expect("insert second");
+        MediaQueueItem::mark_playing(&client, second.id, chrono::Utc::now())
+            .await
+            .expect("mark second playing")
+            .expect("second playing")
+            .id
+    };
+
+    // Service memory still points at the first id, but DB says first is played
+    // and second is playing. The old update_status foot-gun would flip the
+    // first row from played -> skipped here.
+    let err = service
+        .force_skip()
+        .await
+        .expect_err("stale skip should ask for retry after reconcile");
+    assert!(format!("{err:#}").contains("track changed"));
+
+    let client = test.db.get().await.expect("db client");
+    let first_row = MediaQueueItem::find_by_id(&client, first.id)
+        .await
+        .expect("find first")
+        .expect("first exists");
+    assert_eq!(first_row.status, MediaQueueItem::STATUS_PLAYED);
+
+    let current = MediaQueueItem::current_playing(&client)
+        .await
+        .expect("current")
+        .expect("still playing");
+    assert_eq!(current.id, second_id);
+}
+
+/// The playlist holds a track once, whether it is the one playing or one
+/// waiting in line.
+#[tokio::test]
+async fn submitting_a_track_already_in_the_queue_is_rejected() {
+    let test = test_db().await;
+    let user = create_test_user(&test.db, "audio_submit_duplicate").await;
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        PairedClientRegistry::new("https://audio.late.sh"),
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    );
+
+    // First submission starts playing, second waits in the queue.
+    service
+        .submit_validated_video(user.id, test_video("eeeeeeeeeee", "now playing"))
+        .await
+        .expect("queue first");
+    service
+        .submit_validated_video(user.id, test_video("fffffffffff", "up next"))
+        .await
+        .expect("queue second");
+
+    let playing_again = service
+        .submit_validated_video(user.id, test_video("eeeeeeeeeee", "now playing"))
+        .await
+        .expect_err("the playing track must not queue again");
+    assert!(format!("{playing_again:#}").contains("already in the queue"));
+
+    let queued_again = service
+        .submit_validated_video(user.id, test_video("fffffffffff", "up next"))
+        .await
+        .expect_err("a queued track must not queue twice");
+    assert!(format!("{queued_again:#}").contains("already in the queue"));
+
+    let client = test.db.get().await.expect("db client");
+    let snapshot = MediaQueueItem::list_snapshot(&client, 10)
+        .await
+        .expect("snapshot");
+    assert_eq!(snapshot.len(), 2);
+}
+
+fn test_video(video_id: &str, title: &str) -> YoutubeVideo {
+    YoutubeVideo {
+        video_id: video_id.to_string(),
+        title: Some(title.to_string()),
+        channel: None,
+        duration_ms: Some(60_000),
+        is_stream: false,
+    }
+}
+
+/// House mounts are radio stations to a paired client, so their track rides
+/// the same map as the third-party ones.
+#[test]
+fn pair_radio_tracks_adds_the_house_mounts_to_the_radio_meta() {
+    use crate::app::audio::{radio_meta::svc::ArtistTitle, svc::pair_radio_tracks};
+    use late_core::api_types::{NowPlaying, Track};
+    use std::collections::HashMap;
+
+    let track = |artist: &str, title: &str| ArtistTitle {
+        artist: artist.to_string(),
+        title: title.to_string(),
+    };
+    let radio_meta = HashMap::from([("datawave".to_string(), track("Com Truise", "Flightwave"))]);
+    let mount = |artist: Option<&str>, title: &str| {
+        NowPlaying::new(Track {
+            artist: artist.map(str::to_string),
+            title: title.to_string(),
+            duration_seconds: Some(180),
+        })
+    };
+    let now_playing = HashMap::from([
+        (
+            "classical".to_string(),
+            mount(Some("A pianist"), "Nocturne"),
+        ),
+        ("chill".to_string(), mount(None, "untitled loop")),
+        // Not a catalogue station: never offered to the client.
+        ("staging".to_string(), mount(None, "test tone")),
+    ]);
+
+    assert_eq!(
+        pair_radio_tracks(&radio_meta, &now_playing),
+        HashMap::from([
+            ("datawave".to_string(), track("Com Truise", "Flightwave")),
+            ("classical".to_string(), track("A pianist", "Nocturne")),
+            ("chill".to_string(), track("", "untitled loop")),
+        ])
+    );
+}

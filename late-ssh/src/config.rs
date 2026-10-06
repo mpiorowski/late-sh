@@ -1,3 +1,11 @@
+//! All configuration lives here, keyed by `LATE_ENV`.
+//!
+//! The only values read from the process environment are `LATE_ENV` itself
+//! and secrets (credentials, API keys, shared identity secrets). Everything
+//! else is a literal in the profile functions below: `dev()` mirrors the
+//! local compose stack, `prod()` mirrors the k8s deployment. Changing a
+//! non-secret value means editing this file and deploying, on purpose.
+
 use anyhow::Context;
 use ipnet::IpNet;
 use late_core::db::DbConfig;
@@ -10,52 +18,85 @@ const DEV_TUNNEL_SECRET: &str = "dev-only-not-a-real-secret";
 
 use crate::app::voice::svc::VoiceConfig;
 
+/// Which environment this process runs as, from `LATE_ENV`.
+///
+/// Adding a variant forces every `match` below to spell out a complete
+/// profile for it; there is no fallback environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Env {
+    /// Local docker compose stack (`make start`).
+    Dev,
+    /// Second local compose instance (`make start-instance2`); identical to
+    /// `Dev` except for the ports the Makefile also overrides compose-side.
+    Dev2,
+    /// The k8s cluster deployed from `infra/`.
+    Prod,
+}
+
+impl Env {
+    fn from_process_env() -> anyhow::Result<Self> {
+        match required("LATE_ENV")?.as_str() {
+            "dev" => Ok(Self::Dev),
+            "dev2" => Ok(Self::Dev2),
+            "prod" => Ok(Self::Prod),
+            other => anyhow::bail!("LATE_ENV invalid: '{other}' (expected dev, dev2, or prod)"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Dev2 => "dev2",
+            Self::Prod => "prod",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AiConfig {
     pub enabled: bool,
     pub api_key: Option<String>,
-    pub model: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct WebTunnelConfig {
-    pub token: String,
-    pub username: String,
-    pub fingerprint: String,
-}
-
-/// Embedded ircd settings; see devdocs/FRD-IRCD.md. All env vars are optional
-/// so environments without `LATE_IRC_*` settings are unaffected until the
-/// listener is explicitly enabled. The root Makefile opts local dev in.
+/// Embedded ircd settings; see devdocs/FRD-IRCD.md.
 #[derive(Clone, Debug)]
 pub struct IrcConfig {
     pub enabled: bool,
     pub port: u16,
     pub tls_cert_path: Option<PathBuf>,
     pub tls_key_path: Option<PathBuf>,
+    pub proxy_protocol: bool,
+    pub proxy_trusted_cidrs: Vec<IpNet>,
     pub max_conns_global: usize,
     pub max_conns_per_user: usize,
     pub max_auth_failures_per_ip: usize,
     pub auth_failure_window_secs: u64,
 }
 
-impl Default for IrcConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            port: 6667,
-            tls_cert_path: None,
-            tls_key_path: None,
-            max_conns_global: 200,
-            max_conns_per_user: 3,
-            max_auth_failures_per_ip: 20,
-            auth_failure_window_secs: 300,
-        }
-    }
+/// Size cap for images this server will upload or fetch for rendering.
+/// Applies in every environment, including ones without upload storage.
+pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// How long a listener waits for a PROXY protocol header before giving up.
+/// Shared by the SSH and IRC accept paths.
+pub const PROXY_HEADER_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// S3/R2 object storage for image uploads. `Config.files` is `None` when the
+/// environment has no upload storage; every feature that uploads checks that
+/// instead of probing env vars.
+#[derive(Clone, Debug)]
+pub struct FilesConfig {
+    pub endpoint: String,
+    pub bucket: String,
+    pub public_base_url: String,
+    pub region: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub env: Env,
     pub ssh_port: u16,
     pub api_port: u16,
     pub icecast_url: String,
@@ -67,7 +108,6 @@ pub struct Config {
     pub max_conns_per_ip: usize,
     pub ssh_idle_timeout: u64,
     pub server_key_path: PathBuf,
-    pub allowed_origins: Vec<String>,
     pub frame_drop_log_every: u64,
     pub ssh_max_attempts_per_ip: usize,
     pub ssh_rate_limit_window_secs: u64,
@@ -78,11 +118,11 @@ pub struct Config {
     pub tunnel_port: u16,
     pub tunnel_shared_secret: String,
     pub tunnel_trusted_cidrs: Vec<IpNet>,
-    pub web_tunnel: WebTunnelConfig,
     pub ai: AiConfig,
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
     pub irc: IrcConfig,
+    pub files: Option<FilesConfig>,
     pub rebels_enabled: bool,
     pub rebels_host: String,
     pub rebels_port: u16,
@@ -91,20 +131,58 @@ pub struct Config {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
+    /// DCSS door game: reached over SSH like nethack. `enabled` gates only
+    /// the client; the host (`late-dcss`) is deployed unconditionally.
+    pub dcss_enabled: bool,
+    pub dcss_host: String,
+    pub dcss_port: u16,
+    pub dcss_secret: String,
+    /// Brogue door game: reached over SSH like dcss. `enabled` gates only
+    /// the client; the host (`late-brogue`) is deployed unconditionally.
+    pub brogue_enabled: bool,
+    pub brogue_host: String,
+    pub brogue_port: u16,
+    pub brogue_secret: String,
+    /// Usurper door game: reached over SSH like nethack. `enabled` gates only
+    /// the client; the host (`late-usurper`) is deployed unconditionally.
+    pub usurper_enabled: bool,
+    pub usurper_host: String,
+    pub usurper_port: u16,
+    pub usurper_secret: String,
     /// dopewars door game: reached over SSH like nethack. `enabled` gates only
     /// the client; the host (`late-dopewars`) is deployed unconditionally.
     pub dopewars_enabled: bool,
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// BashQuest door game: reached over SSH like dcss, identity carried by
+    /// the arcade handle. `enabled` gates only the client; the host
+    /// (`late-bashquest`) is deployed unconditionally.
+    pub bashquest_enabled: bool,
+    pub bashquest_host: String,
+    pub bashquest_port: u16,
+    pub bashquest_secret: String,
+    /// CodeKeep: The Pale door game (host `late-codekeep`).
+    pub codekeep_enabled: bool,
+    pub codekeep_host: String,
+    pub codekeep_port: u16,
+    pub codekeep_secret: String,
 }
 
+/// Read a required env value; empty or whitespace-only counts as unset.
 fn required(key: &str) -> anyhow::Result<String> {
-    std::env::var(key).with_context(|| format!("{key} must be set"))
+    let value = std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    value.with_context(|| format!("{key} must be set"))
 }
 
 fn required_non_empty(key: &str) -> anyhow::Result<String> {
-    non_empty_value(key, required(key)?)
+    non_empty_value(
+        key,
+        std::env::var(key).with_context(|| format!("{key} must be set"))?,
+    )
 }
 
 fn non_empty_value(key: &str, value: String) -> anyhow::Result<String> {
@@ -114,51 +192,91 @@ fn non_empty_value(key: &str, value: String) -> anyhow::Result<String> {
     Ok(value)
 }
 
-fn required_parse<T: std::str::FromStr>(key: &str) -> anyhow::Result<T>
-where
-    T::Err: std::fmt::Display,
-{
-    required(key)?
-        .parse()
-        .map_err(|e| anyhow::anyhow!("{key} invalid: {e}"))
+/// Read an optional env value; empty or whitespace-only counts as unset.
+/// Used only for personal dev keys that opt optional integrations in.
+fn optional(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
-fn required_bool(key: &str) -> anyhow::Result<bool> {
-    let v = required(key)?;
-    Ok(v == "1" || v.eq_ignore_ascii_case("true"))
-}
-
-fn parse_bool(key: &str, v: &str) -> anyhow::Result<bool> {
-    match v.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => anyhow::bail!("{key} invalid: expected boolean"),
+/// The production R2 bucket. Prod always carries it; dev opts in by setting
+/// both R2 credentials, so local uploads land in the same bucket prod serves.
+fn prod_files(access_key_id: String, secret_access_key: String) -> FilesConfig {
+    FilesConfig {
+        endpoint: "https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com".to_string(),
+        bucket: "late-sh-r-files".to_string(),
+        public_base_url: "https://files.late.sh".to_string(),
+        region: "auto".to_string(),
+        access_key_id,
+        secret_access_key,
     }
 }
 
-fn optional(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+/// Dev opt-in for AI: a key present enables the AI features, absent turns
+/// them off. Prod requires the key unconditionally.
+pub(crate) fn dev_ai(api_key: Option<String>) -> AiConfig {
+    match api_key {
+        Some(key) => AiConfig {
+            enabled: true,
+            api_key: Some(key),
+        },
+        None => AiConfig {
+            enabled: false,
+            api_key: None,
+        },
+    }
 }
 
-fn parse_cidrs(key: &str) -> anyhow::Result<Vec<IpNet>> {
-    required(key)?
+/// Dev opt-in for uploads: both credentials present enables the prod bucket,
+/// both absent disables uploads, a half-set pair is a startup error.
+pub(crate) fn dev_files(
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+) -> anyhow::Result<Option<FilesConfig>> {
+    match (access_key_id, secret_access_key) {
+        (Some(access_key_id), Some(secret_access_key)) => {
+            Ok(Some(prod_files(access_key_id, secret_access_key)))
+        }
+        (None, None) => Ok(None),
+        (Some(_), None) => {
+            anyhow::bail!(
+                "LATE_FILES_S3_ACCESS_KEY_ID is set without LATE_FILES_S3_SECRET_ACCESS_KEY"
+            )
+        }
+        (None, Some(_)) => {
+            anyhow::bail!(
+                "LATE_FILES_S3_SECRET_ACCESS_KEY is set without LATE_FILES_S3_ACCESS_KEY_ID"
+            )
+        }
+    }
+}
+
+fn parse_cidrs(label: &str, value: &str) -> anyhow::Result<Vec<IpNet>> {
+    value
         .split(',')
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            s.parse::<IpNet>()
-                .map_err(|e| anyhow::anyhow!("{key} invalid entry '{s}': {e}"))
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<IpNet>()
+                .map_err(|error| anyhow::anyhow!("{label} invalid entry '{entry}': {error}"))
         })
-        .collect::<anyhow::Result<Vec<_>>>()
+        .collect()
 }
 
-fn validate_tunnel_security(secret: &str, cidrs: &[IpNet]) -> anyhow::Result<()> {
-    if optional_bool("LATE_ALLOW_INSECURE_TUNNEL_DEV", false)? {
+fn validate_tunnel_security(
+    secret: &str,
+    cidrs: &[IpNet],
+    allow_insecure_dev: bool,
+) -> anyhow::Result<()> {
+    if allow_insecure_dev {
         return Ok(());
     }
     if secret == DEV_TUNNEL_SECRET {
         anyhow::bail!(
-            "LATE_TUNNEL_SHARED_SECRET uses the dev-only default; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+            "LATE_TUNNEL_SHARED_SECRET uses the dev-only default; use an explicit dev profile only for local compose"
         );
     }
     if cidrs
@@ -166,7 +284,7 @@ fn validate_tunnel_security(secret: &str, cidrs: &[IpNet]) -> anyhow::Result<()>
         .any(|cidr| cidr.contains(&IpAddr::from(Ipv4Addr::UNSPECIFIED)) && cidr.prefix_len() == 0)
     {
         anyhow::bail!(
-            "LATE_TUNNEL_TRUSTED_CIDRS contains 0.0.0.0/0; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+            "LATE_TUNNEL_TRUSTED_CIDRS contains 0.0.0.0/0; use an explicit dev profile only for local compose"
         );
     }
     if cidrs
@@ -174,34 +292,312 @@ fn validate_tunnel_security(secret: &str, cidrs: &[IpNet]) -> anyhow::Result<()>
         .any(|cidr| cidr.contains(&IpAddr::from(Ipv6Addr::UNSPECIFIED)) && cidr.prefix_len() == 0)
     {
         anyhow::bail!(
-            "LATE_TUNNEL_TRUSTED_CIDRS contains ::/0; set LATE_ALLOW_INSECURE_TUNNEL_DEV=1 only for local compose"
+            "LATE_TUNNEL_TRUSTED_CIDRS contains ::/0; use an explicit dev profile only for local compose"
         );
     }
     Ok(())
 }
 
-fn optional_bool(key: &str, default: bool) -> anyhow::Result<bool> {
-    match optional(key) {
-        Some(value) => parse_bool(key, &value),
-        None => Ok(default),
-    }
-}
-
-fn optional_parse<T: std::str::FromStr>(key: &str, default: T) -> anyhow::Result<T>
-where
-    T::Err: std::fmt::Display,
-{
-    match optional(key) {
-        Some(value) => value
-            .parse()
-            .map_err(|e| anyhow::anyhow!("{key} invalid: {e}")),
-        None => Ok(default),
-    }
+/// Ports that differ between the two local compose instances; everything else
+/// in the dev profile is identical. The compose-side half (host port mapping)
+/// lives in the root .env.dev / .env.dev2 templates and must stay in sync.
+struct DevInstance {
+    ssh_port: u16,
+    api_port: u16,
+    irc_port: u16,
+    web_port: u16,
+    /// Host-side LiveKit port. Client-facing only: browsers and the CLI
+    /// reach LiveKit through the compose port mapping, while this process
+    /// reaches it by service name inside the instance's own network.
+    livekit_host_port: u16,
 }
 
 impl Config {
+    pub fn load() -> anyhow::Result<Self> {
+        let config = match Env::from_process_env()? {
+            Env::Dev => Self::dev(
+                Env::Dev,
+                DevInstance {
+                    ssh_port: 2222,
+                    api_port: 4001,
+                    irc_port: 6667,
+                    web_port: 3000,
+                    livekit_host_port: 7880,
+                },
+            )?,
+            Env::Dev2 => Self::dev(
+                Env::Dev2,
+                DevInstance {
+                    ssh_port: 2223,
+                    api_port: 4001,
+                    irc_port: 6668,
+                    web_port: 3001,
+                    livekit_host_port: 7883,
+                },
+            )?,
+            Env::Prod => Self::prod()?,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Local docker compose stack. Secrets come from `.env`, copied from the
+    /// committed `.env.dev` / `.env.dev2` templates (shared with the
+    /// door-game and LiveKit containers), or from a personal `.env.local`.
+    fn dev(env: Env, instance: DevInstance) -> anyhow::Result<Self> {
+        Ok(Self {
+            env,
+            ssh_port: instance.ssh_port,
+            api_port: instance.api_port,
+            icecast_url: "http://icecast:8000".to_string(),
+            web_url: format!("http://localhost:{}", instance.web_port),
+            open_access: true,
+            force_admin: true,
+            db: DbConfig {
+                host: "postgres".to_string(),
+                port: 5432,
+                user: required("LATE_DB_USER")?,
+                password: required("LATE_DB_PASSWORD")?,
+                dbname: required("LATE_DB_NAME")?,
+                max_pool_size: 16,
+            },
+            max_conns_global: 10_000,
+            max_conns_per_ip: 3,
+            ssh_idle_timeout: 3600,
+            server_key_path: PathBuf::from("/app/server_key"),
+            frame_drop_log_every: 100,
+            ssh_max_attempts_per_ip: 30,
+            ssh_rate_limit_window_secs: 60,
+            ssh_proxy_protocol: false,
+            ssh_proxy_trusted_cidrs: Vec::new(),
+            ws_pair_max_attempts_per_ip: 30,
+            ws_pair_rate_limit_window_secs: 60,
+            tunnel_port: 4002,
+            tunnel_shared_secret: required_non_empty("LATE_TUNNEL_SHARED_SECRET")?,
+            tunnel_trusted_cidrs: parse_cidrs("tunnel trusted cidrs", "0.0.0.0/0")?,
+            // Personal opt-in: AI features stay off without a key.
+            ai: dev_ai(optional("LATE_AI_API_KEY")),
+            // Personal opt-in: link validation stays off without a key.
+            youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
+            voice: VoiceConfig::enabled(
+                // Client-facing: browsers and the CLI run on the host.
+                format!("ws://localhost:{}", instance.livekit_host_port),
+                // Server-to-server: this process runs in a container, where
+                // localhost is itself and not LiveKit.
+                "http://livekit:7880".to_string(),
+                required("LATE_LIVEKIT_API_KEY")?,
+                required("LATE_LIVEKIT_API_SECRET")?,
+                "late-voice".to_string(),
+            )?,
+            irc: IrcConfig {
+                enabled: true,
+                port: instance.irc_port,
+                tls_cert_path: None,
+                tls_key_path: None,
+                proxy_protocol: false,
+                proxy_trusted_cidrs: Vec::new(),
+                max_conns_global: 200,
+                max_conns_per_user: 3,
+                max_auth_failures_per_ip: 20,
+                auth_failure_window_secs: 300,
+            },
+            // Personal opt-in: setting both R2 credentials in .env.local
+            // points uploads at the prod bucket; without them, upload
+            // features report "disabled".
+            files: dev_files(
+                optional("LATE_FILES_S3_ACCESS_KEY_ID"),
+                optional("LATE_FILES_S3_SECRET_ACCESS_KEY"),
+            )?,
+            rebels_enabled: true,
+            rebels_host: "frittura.org".to_string(),
+            rebels_port: 3788,
+            rebels_secret: required("LATE_REBELS_SECRET")?,
+            nethack_enabled: true,
+            nethack_host: "service-nethack".to_string(),
+            nethack_port: 2323,
+            nethack_secret: required("LATE_NETHACK_SECRET")?,
+            dcss_enabled: true,
+            dcss_host: "service-dcss".to_string(),
+            dcss_port: 2325,
+            dcss_secret: required("LATE_DCSS_SECRET")?,
+            brogue_enabled: true,
+            brogue_host: "service-brogue".to_string(),
+            brogue_port: 2327,
+            brogue_secret: required("LATE_BROGUE_SECRET")?,
+            usurper_enabled: true,
+            usurper_host: "service-usurper".to_string(),
+            usurper_port: 2326,
+            usurper_secret: required("LATE_USURPER_SECRET")?,
+            dopewars_enabled: true,
+            dopewars_host: "service-dopewars".to_string(),
+            dopewars_port: 2324,
+            dopewars_secret: required("LATE_DOPEWARS_SECRET")?,
+            bashquest_enabled: true,
+            bashquest_host: "service-bashquest".to_string(),
+            bashquest_port: 2330,
+            bashquest_secret: required("LATE_BASHQUEST_SECRET")?,
+            codekeep_enabled: true,
+            codekeep_host: "service-codekeep".to_string(),
+            codekeep_port: 2328,
+            codekeep_secret: required("LATE_CODEKEEP_SECRET")?,
+        })
+    }
+
+    /// The k8s deployment. Secrets come from the env vars `infra/service-ssh.tf`
+    /// injects out of cluster secrets; every other value is pinned here.
+    fn prod() -> anyhow::Result<Self> {
+        Ok(Self {
+            env: Env::Prod,
+            ssh_port: 2222,
+            api_port: 4000,
+            icecast_url: "http://icecast-sv:8000".to_string(),
+            web_url: "https://late.sh".to_string(),
+            open_access: true,
+            force_admin: false,
+            db: DbConfig {
+                // CloudNativePG: rw service is stable, credentials are
+                // operator-generated and injected from the postgres-app secret.
+                host: "postgres-rw".to_string(),
+                port: 5432,
+                user: required("LATE_DB_USER")?,
+                password: required("LATE_DB_PASSWORD")?,
+                dbname: required("LATE_DB_NAME")?,
+                max_pool_size: 16,
+            },
+            max_conns_global: 1000,
+            max_conns_per_ip: 3,
+            ssh_idle_timeout: 3600,
+            server_key_path: PathBuf::from("/app/keys/server_key"),
+            frame_drop_log_every: 100,
+            ssh_max_attempts_per_ip: 30,
+            ssh_rate_limit_window_secs: 60,
+            // ingress-nginx terminates the edge and prepends PROXY v1; trust
+            // only the pod network and the node itself.
+            ssh_proxy_protocol: true,
+            ssh_proxy_trusted_cidrs: parse_cidrs(
+                "prod ssh proxy trusted cidrs",
+                "10.42.0.0/16,46.62.210.86/32",
+            )?,
+            ws_pair_max_attempts_per_ip: 30,
+            ws_pair_rate_limit_window_secs: 60,
+            tunnel_port: 4001,
+            tunnel_shared_secret: required_non_empty("LATE_TUNNEL_SHARED_SECRET")?,
+            tunnel_trusted_cidrs: parse_cidrs("tunnel trusted cidrs", "10.42.0.0/16")?,
+            ai: AiConfig {
+                enabled: true,
+                api_key: Some(required("LATE_AI_API_KEY")?),
+            },
+            youtube_api_key: Some(required("LATE_YOUTUBE_API_KEY")?),
+            voice: VoiceConfig::enabled(
+                // Client-facing: the public signaling endpoint through ingress.
+                "wss://rtc.late.sh".to_string(),
+                // Server-to-server: stay inside the cluster instead of
+                // looping back out through the public ingress.
+                "http://livekit-sv".to_string(),
+                required("LATE_LIVEKIT_API_KEY")?,
+                required("LATE_LIVEKIT_API_SECRET")?,
+                "late-voice".to_string(),
+            )?,
+            irc: IrcConfig {
+                enabled: true,
+                port: 6697,
+                tls_cert_path: Some(PathBuf::from("/etc/irc-tls/tls.crt")),
+                tls_key_path: Some(PathBuf::from("/etc/irc-tls/tls.key")),
+                proxy_protocol: true,
+                proxy_trusted_cidrs: parse_cidrs(
+                    "prod irc proxy trusted cidrs",
+                    "10.42.0.0/16,46.62.210.86/32",
+                )?,
+                max_conns_global: 200,
+                max_conns_per_user: 3,
+                max_auth_failures_per_ip: 20,
+                auth_failure_window_secs: 300,
+            },
+            files: Some(prod_files(
+                required("LATE_FILES_S3_ACCESS_KEY_ID")?,
+                required("LATE_FILES_S3_SECRET_ACCESS_KEY")?,
+            )),
+            rebels_enabled: true,
+            rebels_host: "frittura.org".to_string(),
+            rebels_port: 3788,
+            rebels_secret: required("LATE_REBELS_SECRET")?,
+            nethack_enabled: true,
+            nethack_host: "late-nethack-sv".to_string(),
+            nethack_port: 2323,
+            nethack_secret: required("LATE_NETHACK_SECRET")?,
+            dcss_enabled: true,
+            dcss_host: "late-dcss-sv".to_string(),
+            dcss_port: 2325,
+            dcss_secret: required("LATE_DCSS_SECRET")?,
+            brogue_enabled: true,
+            brogue_host: "late-brogue-sv".to_string(),
+            brogue_port: 2327,
+            brogue_secret: required("LATE_BROGUE_SECRET")?,
+            usurper_enabled: true,
+            usurper_host: "late-usurper-sv".to_string(),
+            usurper_port: 2326,
+            usurper_secret: required("LATE_USURPER_SECRET")?,
+            dopewars_enabled: true,
+            dopewars_host: "late-dopewars-sv".to_string(),
+            dopewars_port: 2324,
+            dopewars_secret: required("LATE_DOPEWARS_SECRET")?,
+            bashquest_enabled: true,
+            bashquest_host: "late-bashquest-sv".to_string(),
+            bashquest_port: 2330,
+            bashquest_secret: required("LATE_BASHQUEST_SECRET")?,
+            codekeep_enabled: true,
+            codekeep_host: "late-codekeep-sv".to_string(),
+            codekeep_port: 2328,
+            codekeep_secret: required("LATE_CODEKEEP_SECRET")?,
+        })
+    }
+
+    /// Cross-field invariants every profile must satisfy. Profiles are code,
+    /// so a violation is an authoring bug; failing at startup keeps it from
+    /// shipping quietly.
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        if self.ssh_proxy_protocol && self.ssh_proxy_trusted_cidrs.is_empty() {
+            anyhow::bail!("ssh proxy protocol requires non-empty trusted cidrs");
+        }
+        if self.irc.enabled {
+            if self.irc.proxy_protocol && self.irc.proxy_trusted_cidrs.is_empty() {
+                anyhow::bail!("irc proxy protocol requires non-empty trusted cidrs");
+            }
+            match (&self.irc.tls_cert_path, &self.irc.tls_key_path) {
+                (Some(_), Some(_)) | (None, None) => {}
+                (Some(_), None) => anyhow::bail!("irc tls cert is set without a key"),
+                (None, Some(_)) => anyhow::bail!("irc tls key is set without a cert"),
+            }
+        }
+        if self.ai.enabled && self.ai.api_key.as_deref().is_none_or(str::is_empty) {
+            anyhow::bail!("ai is enabled without an api key");
+        }
+        let door_secrets = [
+            ("rebels", self.rebels_enabled, &self.rebels_secret),
+            ("nethack", self.nethack_enabled, &self.nethack_secret),
+            ("dcss", self.dcss_enabled, &self.dcss_secret),
+            ("brogue", self.brogue_enabled, &self.brogue_secret),
+            ("usurper", self.usurper_enabled, &self.usurper_secret),
+            ("dopewars", self.dopewars_enabled, &self.dopewars_secret),
+            ("bashquest", self.bashquest_enabled, &self.bashquest_secret),
+            ("codekeep", self.codekeep_enabled, &self.codekeep_secret),
+        ];
+        for (name, enabled, secret) in door_secrets {
+            if enabled && secret.is_empty() {
+                anyhow::bail!("{name} is enabled without a shared secret");
+            }
+        }
+        validate_tunnel_security(
+            &self.tunnel_shared_secret,
+            &self.tunnel_trusted_cidrs,
+            self.env != Env::Prod,
+        )?;
+        Ok(())
+    }
+
     /// Log the full configuration at startup with human-readable descriptions.
     pub fn log_startup(&self) {
+        tracing::info!(env = self.env.as_str(), "profile: active LATE_ENV profile");
         tracing::info!(
             ssh_port = self.ssh_port,
             api_port = self.api_port,
@@ -219,7 +615,7 @@ impl Config {
         tracing::info!(
             icecast_url = %self.icecast_url,
             web_url = %self.web_url,
-            "audio: Icecast status endpoint and web pairing URL"
+            "audio: Icecast status endpoint and public web URL"
         );
         tracing::info!(
             max_global = self.max_conns_global,
@@ -251,7 +647,7 @@ impl Config {
         );
         tracing::info!(
             ai_enabled = self.ai.enabled,
-            ai_model = %self.ai.model,
+            ai_model = crate::app::ai::svc::AI_MODEL,
             has_key = self.ai.api_key.is_some(),
             "ai: @bot chat responder model and status"
         );
@@ -262,22 +658,26 @@ impl Config {
         tracing::info!(
             enabled = self.voice.enabled,
             livekit_url = ?self.voice.livekit_url,
+            livekit_api_url = ?self.voice.livekit_api_url,
             room = %self.voice.room_name,
             has_key = self.voice.api_key.is_some(),
             "voice: LiveKit RTC status"
         );
         tracing::info!(
-            username = %self.web_tunnel.username,
-            token_len = self.web_tunnel.token.len(),
-            "web-tunnel: browser TUI display route"
-        );
-        tracing::info!(
             enabled = self.irc.enabled,
             port = self.irc.port,
             tls = self.irc.tls_cert_path.is_some(),
+            proxy_protocol = self.irc.proxy_protocol,
+            proxy_trusted_cidrs = ?self.irc.proxy_trusted_cidrs,
             max_global = self.irc.max_conns_global,
             max_per_user = self.irc.max_conns_per_user,
             "irc: embedded ircd listener status"
+        );
+        tracing::info!(
+            enabled = self.files.is_some(),
+            bucket = self.files.as_ref().map(|f| f.bucket.as_str()),
+            public_base_url = self.files.as_ref().map(|f| f.public_base_url.as_str()),
+            "files: S3/R2 image upload storage status"
         );
         tracing::info!(
             enabled = self.rebels_enabled,
@@ -294,178 +694,47 @@ impl Config {
             "nethack: NetHack door-game host (late-nethack) target and status"
         );
         tracing::info!(
+            enabled = self.dcss_enabled,
+            host = %self.dcss_host,
+            port = self.dcss_port,
+            has_secret = !self.dcss_secret.is_empty(),
+            "dcss: DCSS door-game host (late-dcss) target and status"
+        );
+        tracing::info!(
+            enabled = self.brogue_enabled,
+            host = %self.brogue_host,
+            port = self.brogue_port,
+            has_secret = !self.brogue_secret.is_empty(),
+            "brogue: Brogue door-game host (late-brogue) target and status"
+        );
+        tracing::info!(
+            enabled = self.usurper_enabled,
+            host = %self.usurper_host,
+            port = self.usurper_port,
+            has_secret = !self.usurper_secret.is_empty(),
+            "usurper: Usurper door-game host (late-usurper) target and status"
+        );
+        tracing::info!(
             enabled = self.dopewars_enabled,
             host = %self.dopewars_host,
             port = self.dopewars_port,
             has_secret = !self.dopewars_secret.is_empty(),
             "dopewars: dopewars door-game host (late-dopewars) target and status"
         );
-    }
-
-    pub fn from_env() -> anyhow::Result<Self> {
-        let ai_enabled = required_bool("LATE_AI_ENABLED")?;
-        let ai_api_key = if ai_enabled {
-            Some(
-                optional("LATE_AI_API_KEY")
-                    .context("LATE_AI_API_KEY must be set when LATE_AI_ENABLED is true")?,
-            )
-        } else {
-            optional("LATE_AI_API_KEY")
-        };
-
-        let db = DbConfig {
-            host: required("LATE_DB_HOST")?,
-            port: required_parse("LATE_DB_PORT")?,
-            user: required("LATE_DB_USER")?,
-            password: required("LATE_DB_PASSWORD")?,
-            dbname: required("LATE_DB_NAME")?,
-            max_pool_size: required_parse("LATE_DB_POOL_SIZE")?,
-        };
-        let web_tunnel_token = required("LATE_WEB_TUNNEL_TOKEN")?;
-        if web_tunnel_token.trim().is_empty() {
-            anyhow::bail!("LATE_WEB_TUNNEL_TOKEN must not be empty");
-        }
-        let voice = if optional_bool("LATE_VOICE_ENABLED", false)? {
-            VoiceConfig::enabled(
-                required("LATE_LIVEKIT_URL")?,
-                required("LATE_LIVEKIT_API_KEY")?,
-                required("LATE_LIVEKIT_API_SECRET")?,
-                optional("LATE_VOICE_ROOM").unwrap_or_else(|| "late-voice".to_string()),
-            )?
-        } else {
-            VoiceConfig::disabled()
-        };
-
-        let rebels_enabled = optional_bool("LATE_REBELS_ENABLED", true)?;
-        let rebels_secret = if rebels_enabled {
-            optional("LATE_REBELS_SECRET")
-                .context("LATE_REBELS_SECRET must be set when LATE_REBELS_ENABLED is true")?
-        } else {
-            optional("LATE_REBELS_SECRET").unwrap_or_default()
-        };
-
-        let nethack_enabled = optional_bool("LATE_NETHACK_ENABLED", false)?;
-        let nethack_secret = if nethack_enabled {
-            optional("LATE_NETHACK_SECRET")
-                .context("LATE_NETHACK_SECRET must be set when LATE_NETHACK_ENABLED is true")?
-        } else {
-            optional("LATE_NETHACK_SECRET").unwrap_or_default()
-        };
-
-        let dopewars_enabled = optional_bool("LATE_DOPEWARS_ENABLED", false)?;
-        let dopewars_secret = if dopewars_enabled {
-            optional("LATE_DOPEWARS_SECRET")
-                .context("LATE_DOPEWARS_SECRET must be set when LATE_DOPEWARS_ENABLED is true")?
-        } else {
-            optional("LATE_DOPEWARS_SECRET").unwrap_or_default()
-        };
-
-        let tunnel_shared_secret = required_non_empty("LATE_TUNNEL_SHARED_SECRET")?;
-        let tunnel_trusted_cidrs = parse_cidrs("LATE_TUNNEL_TRUSTED_CIDRS")?;
-        validate_tunnel_security(&tunnel_shared_secret, &tunnel_trusted_cidrs)?;
-
-        Ok(Self {
-            ssh_port: required_parse("LATE_SSH_PORT")?,
-            api_port: required_parse("LATE_API_PORT")?,
-            icecast_url: required("LATE_ICECAST_URL")?,
-            web_url: required("LATE_WEB_URL")?,
-            open_access: required_bool("LATE_SSH_OPEN")?,
-            force_admin: required_bool("LATE_FORCE_ADMIN")?,
-            db,
-            max_conns_global: required_parse("LATE_MAX_CONNS_GLOBAL")?,
-            max_conns_per_ip: required_parse("LATE_MAX_CONNS_PER_IP")?,
-            ssh_idle_timeout: required_parse("LATE_SSH_IDLE_TIMEOUT")?,
-            server_key_path: PathBuf::from(required("LATE_SSH_KEY_PATH")?),
-            allowed_origins: required("LATE_ALLOWED_ORIGINS")?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect(),
-            frame_drop_log_every: required_parse("LATE_FRAME_DROP_LOG_EVERY")?,
-            ssh_max_attempts_per_ip: required_parse("LATE_SSH_MAX_ATTEMPTS_PER_IP")?,
-            ssh_rate_limit_window_secs: required_parse("LATE_SSH_RATE_LIMIT_WINDOW_SECS")?,
-            ssh_proxy_protocol: required_bool("LATE_SSH_PROXY_PROTOCOL")?,
-            ssh_proxy_trusted_cidrs: parse_cidrs("LATE_SSH_PROXY_TRUSTED_CIDRS")?,
-            ws_pair_max_attempts_per_ip: required_parse("LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP")?,
-            ws_pair_rate_limit_window_secs: required_parse("LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS")?,
-            tunnel_port: required_parse("LATE_TUNNEL_PORT")?,
-            tunnel_shared_secret,
-            tunnel_trusted_cidrs,
-            web_tunnel: WebTunnelConfig {
-                token: web_tunnel_token,
-                username: optional("LATE_WEB_TUNNEL_USERNAME")
-                    .unwrap_or_else(|| "web-demo".to_string()),
-                fingerprint: optional("LATE_WEB_TUNNEL_FINGERPRINT")
-                    .unwrap_or_else(|| "web-tunnel-demo".to_string()),
-            },
-            ai: AiConfig {
-                enabled: ai_enabled,
-                api_key: ai_api_key,
-                model: required("LATE_AI_MODEL")?,
-            },
-            youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
-            voice,
-            irc: {
-                let defaults = IrcConfig::default();
-                let enabled = optional_bool("LATE_IRC_ENABLED", defaults.enabled)?;
-                let tls_cert_path = optional("LATE_IRC_TLS_CERT").map(PathBuf::from);
-                let tls_key_path = optional("LATE_IRC_TLS_KEY").map(PathBuf::from);
-                if enabled {
-                    match (&tls_cert_path, &tls_key_path) {
-                        (Some(_), Some(_)) | (None, None) => {}
-                        (Some(_), None) => {
-                            anyhow::bail!(
-                                "LATE_IRC_TLS_KEY must be set when LATE_IRC_TLS_CERT is set"
-                            );
-                        }
-                        (None, Some(_)) => {
-                            anyhow::bail!(
-                                "LATE_IRC_TLS_CERT must be set when LATE_IRC_TLS_KEY is set"
-                            );
-                        }
-                    }
-                }
-                let default_port = if enabled && tls_cert_path.is_some() {
-                    6697
-                } else {
-                    defaults.port
-                };
-                IrcConfig {
-                    enabled,
-                    port: optional_parse("LATE_IRC_PORT", default_port)?,
-                    tls_cert_path,
-                    tls_key_path,
-                    max_conns_global: optional_parse(
-                        "LATE_IRC_MAX_CONNS_GLOBAL",
-                        defaults.max_conns_global,
-                    )?,
-                    max_conns_per_user: optional_parse(
-                        "LATE_IRC_MAX_CONNS_PER_USER",
-                        defaults.max_conns_per_user,
-                    )?,
-                    max_auth_failures_per_ip: optional_parse(
-                        "LATE_IRC_MAX_AUTH_FAILURES_PER_IP",
-                        defaults.max_auth_failures_per_ip,
-                    )?,
-                    auth_failure_window_secs: optional_parse(
-                        "LATE_IRC_AUTH_FAILURE_WINDOW_SECS",
-                        defaults.auth_failure_window_secs,
-                    )?,
-                }
-            },
-            rebels_enabled,
-            rebels_host: optional("LATE_REBELS_HOST").unwrap_or_else(|| "frittura.org".to_string()),
-            rebels_port: optional_parse("LATE_REBELS_PORT", 3788)?,
-            rebels_secret,
-            nethack_enabled,
-            nethack_host: optional("LATE_NETHACK_HOST").unwrap_or_else(|| "127.0.0.1".to_string()),
-            nethack_port: optional_parse("LATE_NETHACK_PORT", 2323)?,
-            nethack_secret,
-            dopewars_enabled,
-            dopewars_host: optional("LATE_DOPEWARS_HOST")
-                .unwrap_or_else(|| "127.0.0.1".to_string()),
-            dopewars_port: optional_parse("LATE_DOPEWARS_PORT", 2324)?,
-            dopewars_secret,
-        })
+        tracing::info!(
+            enabled = self.bashquest_enabled,
+            host = %self.bashquest_host,
+            port = self.bashquest_port,
+            has_secret = !self.bashquest_secret.is_empty(),
+            "bashquest: BashQuest door-game host (late-bashquest) target and status"
+        );
+        tracing::info!(
+            enabled = self.codekeep_enabled,
+            host = %self.codekeep_host,
+            port = self.codekeep_port,
+            has_secret = !self.codekeep_secret.is_empty(),
+            "codekeep: CodeKeep door-game host (late-codekeep) target and status"
+        );
     }
 }
 
@@ -488,14 +757,14 @@ mod tests {
     #[test]
     fn tunnel_security_rejects_dev_secret_without_dev_opt_in() {
         let cidrs = vec!["10.42.0.0/16".parse().unwrap()];
-        let err = validate_tunnel_security(DEV_TUNNEL_SECRET, &cidrs).unwrap_err();
+        let err = validate_tunnel_security(DEV_TUNNEL_SECRET, &cidrs, false).unwrap_err();
         assert!(format!("{err:#}").contains("dev-only default"));
     }
 
     #[test]
     fn tunnel_security_rejects_world_open_cidr_without_dev_opt_in() {
         let cidrs = vec!["0.0.0.0/0".parse().unwrap()];
-        let err = validate_tunnel_security("real-secret", &cidrs).unwrap_err();
+        let err = validate_tunnel_security("real-secret", &cidrs, false).unwrap_err();
         assert!(format!("{err:#}").contains("0.0.0.0/0"));
     }
 }

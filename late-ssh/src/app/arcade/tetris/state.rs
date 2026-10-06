@@ -48,6 +48,15 @@ impl PieceKind {
     }
 }
 
+/// One rendered board cell. The ghost is the landing preview for the piece
+/// in play, drawn only where nothing else is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cell {
+    Empty,
+    Ghost(PieceKind),
+    Block(PieceKind),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActivePiece {
     pub kind: PieceKind,
@@ -61,6 +70,11 @@ pub struct State {
     pub board: Board,
     pub current: ActivePiece,
     pub next: PieceKind,
+    /// The parked piece, empty until the first hold.
+    pub hold: Option<PieceKind>,
+    /// One hold per piece: set on hold, cleared when the next piece locks, so
+    /// hold cannot be spammed to stall the board indefinitely.
+    pub hold_used: bool,
     pub score: i32,
     pub best_score: i32,
     pub lines: u32,
@@ -85,6 +99,8 @@ impl State {
                 col: 3,
             },
             next: PieceKind::O,
+            hold: None,
+            hold_used: false,
             score: 0,
             best_score,
             lines: 0,
@@ -121,6 +137,8 @@ impl State {
             board,
             current,
             next: PieceKind::from_name(&game.next_kind),
+            hold: game.hold_kind.as_deref().map(PieceKind::from_name),
+            hold_used: game.hold_used,
             score: game.score,
             best_score: best_score.max(game.score),
             lines: game.lines.max(0) as u32,
@@ -214,6 +232,40 @@ impl State {
         false
     }
 
+    /// Park the piece in play and bring back whatever was parked before (or
+    /// the next piece, the first time). Refused when this piece has already
+    /// held: without that rule, hold/hold/hold swaps forever and gravity never
+    /// gets a turn.
+    ///
+    /// The swapped-in piece respawns at the top in its default rotation, so
+    /// holding can never squeeze a piece into a gap it could not otherwise
+    /// reach, and it fails rather than half-swapping when the spawn is blocked.
+    pub fn hold_piece(&mut self) -> bool {
+        if self.is_game_over || self.is_paused || self.hold_used {
+            return false;
+        }
+
+        let parked = self.current.kind;
+        let incoming = match self.hold {
+            Some(held) => held,
+            None => self.next,
+        };
+        let spawned = spawn_piece(incoming);
+        if self.collides(spawned) {
+            return false;
+        }
+
+        if self.hold.is_none() {
+            self.next = self.draw_from_bag();
+        }
+        self.hold = Some(parked);
+        self.current = spawned;
+        self.hold_used = true;
+        self.fall_ticks = 0;
+        self.persist_progress();
+        true
+    }
+
     pub fn toggle_pause(&mut self) {
         if !self.is_game_over {
             self.is_paused = !self.is_paused;
@@ -221,16 +273,44 @@ impl State {
         }
     }
 
-    pub fn board_with_active_piece(&self) -> Board {
-        let mut board = self.board;
-        if !self.is_game_over {
-            for (row, col) in piece_cells(self.current) {
+    /// What each cell shows: settled blocks, then the ghost where a hard drop
+    /// would land the piece, then the piece itself on top (so a ghost that
+    /// overlaps the piece, i.e. it is already resting, never shows).
+    pub fn view_cells(&self) -> [[Cell; BOARD_WIDTH]; BOARD_HEIGHT] {
+        let mut cells = self.board.map(|row| {
+            row.map(|cell| match cell {
+                Some(kind) => Cell::Block(kind),
+                None => Cell::Empty,
+            })
+        });
+        if self.is_game_over {
+            return cells;
+        }
+        let mut paint = |piece: ActivePiece, cell: Cell| {
+            for (row, col) in piece_cells(piece) {
                 if row >= 0 && row < BOARD_HEIGHT as i32 && col >= 0 && col < BOARD_WIDTH as i32 {
-                    board[row as usize][col as usize] = Some(self.current.kind);
+                    cells[row as usize][col as usize] = cell;
                 }
             }
+        };
+        paint(self.ghost_piece(), Cell::Ghost(self.current.kind));
+        paint(self.current, Cell::Block(self.current.kind));
+        cells
+    }
+
+    /// Where the current piece would lock if hard-dropped right now.
+    pub fn ghost_piece(&self) -> ActivePiece {
+        let mut ghost = self.current;
+        loop {
+            let below = ActivePiece {
+                row: ghost.row + 1,
+                ..ghost
+            };
+            if self.collides(below) {
+                return ghost;
+            }
+            ghost = below;
         }
-        board
     }
 
     pub fn gravity_ticks(&self) -> u32 {
@@ -303,6 +383,8 @@ impl State {
         self.current = spawn_piece(self.next);
         self.next = self.draw_from_bag();
         self.fall_ticks = 0;
+        // A locked piece hands the hold back to the next one.
+        self.hold_used = false;
 
         if self.collides(self.current) {
             self.is_game_over = true;
@@ -384,6 +466,8 @@ impl State {
             current_row: self.current.row,
             current_col: self.current.col,
             next_kind: self.next.name().to_string(),
+            hold_kind: self.hold.map(|kind| kind.name().to_string()),
+            hold_used: self.hold_used,
             is_game_over: self.is_game_over,
         });
     }
@@ -462,28 +546,5 @@ fn piece_offsets(kind: PieceKind, rotation: usize) -> [(i32, i32); 4] {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rotation_changes_t_piece_shape() {
-        let piece = ActivePiece {
-            kind: PieceKind::T,
-            rotation: 0,
-            row: 0,
-            col: 0,
-        };
-        let rotated = ActivePiece {
-            rotation: 1,
-            ..piece
-        };
-
-        assert_ne!(piece_cells(piece), piece_cells(rotated));
-    }
-
-    #[test]
-    fn line_clear_score_scales_with_level() {
-        assert_eq!(line_clear_score(1, 1), 100);
-        assert_eq!(line_clear_score(4, 3), 2400);
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;

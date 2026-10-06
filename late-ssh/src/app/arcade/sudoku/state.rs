@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::mpsc::{self, Receiver, Sender},
 };
 
@@ -9,17 +9,29 @@ use rumenx_sudoku::{Board, Difficulty, set_rand_seed};
 use uuid::Uuid;
 
 use super::svc::SudokuService;
+use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::sudoku::{Game, GameParams};
 
 pub type Grid = [[u8; 9]; 9];
 pub type Mask = [[bool; 9]; 9];
 /// Pencil marks: one bitmask per cell, bit `n-1` set means candidate `n` is
-/// noted. Player solving aid, kept alongside the board but not (yet) persisted
-/// to the DB, so notes survive mode/difficulty switches within a session but
-/// reset on reconnect.
+/// noted. Player solving aid, saved to the DB alongside the board, so notes
+/// survive mode/difficulty switches and reconnects alike.
 pub type Notes = [[u16; 9]; 9];
 
+/// The nine legal candidate bits. Anything above them is noise from a hand-
+/// edited or future-shaped row and is dropped on restore.
+const NOTE_MASK: u16 = 0x01ff;
+
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
+/// The metric label of each row of `DIFFICULTIES`, in the same order.
+/// Sized by the table, so a new difficulty must be labeled to build.
+const DIFFICULTY_METRICS: [ArcadeDifficulty; DIFFICULTIES.len()] = [
+    ArcadeDifficulty::Easy,
+    ArcadeDifficulty::Medium,
+    ArcadeDifficulty::Hard,
+];
+const MAX_UNDO: usize = 50;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -89,7 +101,11 @@ pub struct State {
     pub cursor: (usize, usize),
     pub is_game_over: bool,
     pub reset_pending: Option<ResetKind>,
+    undo_stack: VecDeque<BoardSnapshot>,
     daily_snapshots: HashMap<String, BoardSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     daily_generation_rx: Option<Receiver<DailyGenerationResult>>,
     pub svc: SudokuService,
@@ -140,7 +156,9 @@ impl State {
             cursor: (0, 0),
             is_game_over: false,
             reset_pending: None,
+            undo_stack: VecDeque::new(),
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             daily_generation_rx: (pending_daily_generations > 0).then_some(daily_generation_rx),
             svc,
@@ -149,19 +167,50 @@ impl State {
         state
     }
 
+    /// Roll the daily boards forward when the UTC date changes under a live
+    /// session; see `minesweeper::state::State::ensure_current_daily` for why
+    /// only a long-lived connection needs this. Generation is slow enough to
+    /// run off-thread, so the boards arrive through the same channel the
+    /// session's first load uses and the screen shows its loading state until
+    /// they do. Returns true when the boards moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        self.daily_snapshots.clear();
+
+        let (tx, rx) = mpsc::channel();
+        for &dk in &DIFFICULTIES {
+            spawn_daily_generation(dk.to_string(), self.svc.clone(), tx.clone());
+        }
+        self.daily_generation_rx = Some(rx);
+
+        if self.mode == Mode::Daily {
+            self.reset_pending = None;
+            self.load_mode_snapshot_for_selected_difficulty();
+        }
+        true
+    }
+
     pub fn ensure_loaded(&mut self) {
         self.load_mode_snapshot_for_selected_difficulty();
     }
 
-    pub fn poll_daily_generation(&mut self) {
+    /// Returns true when a generated board arrived (or fallbacks installed),
+    /// changing what the sudoku screen renders.
+    pub fn poll_daily_generation(&mut self) -> bool {
         let Some(rx) = self.daily_generation_rx.take() else {
-            return;
+            return false;
         };
 
+        let mut changed = false;
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
                 Ok(result) => {
+                    changed = true;
                     let should_apply = self.mode == Mode::Daily
                         && self.difficulty_key() == result.difficulty_key
                         && !self.daily_snapshots.contains_key(&result.difficulty_key);
@@ -183,7 +232,9 @@ impl State {
             self.daily_generation_rx = Some(rx);
         } else {
             self.install_daily_fallbacks_for_missing();
+            changed = true;
         }
+        changed
     }
 
     pub fn is_loading(&self) -> bool {
@@ -192,6 +243,43 @@ impl State {
 
     pub fn difficulty_key(&self) -> &'static str {
         DIFFICULTIES[self.selected_difficulty]
+    }
+
+    /// Index of the first daily difficulty with player marks on the board and
+    /// no win yet: the live board when it is the active daily, the stored
+    /// snapshot otherwise. Untouched generated boards never match.
+    pub fn first_unfinished_daily(&self) -> Option<usize> {
+        DIFFICULTIES.iter().enumerate().find_map(|(index, dk)| {
+            let started = if self.mode == Mode::Daily && index == self.selected_difficulty {
+                !self.is_game_over
+                    && board_has_player_marks(&self.grid, &self.fixed_mask, &self.notes)
+            } else {
+                self.daily_snapshots.get(*dk).is_some_and(|snapshot| {
+                    !snapshot.is_game_over
+                        && board_has_player_marks(
+                            &snapshot.grid,
+                            &snapshot.fixed_mask,
+                            &snapshot.notes,
+                        )
+                })
+            };
+            started.then_some(index)
+        })
+    }
+
+    /// True while the active board is a daily (not a personal board). The
+    /// backtick workspace cycle only counts daily boards as stops.
+    pub fn is_daily_active(&self) -> bool {
+        self.mode == Mode::Daily
+    }
+
+    /// Jump straight to a daily board: the backtick workspace entry path.
+    pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
+        self.store_active_snapshot();
+        self.mode = Mode::Daily;
+        self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
+        self.load_mode_snapshot_for_selected_difficulty();
     }
 
     pub fn show_personal(&mut self) {
@@ -235,26 +323,60 @@ impl State {
     }
 
     fn save_async(&self) {
-        self.svc.save_game_task(GameParams {
+        // Pure state tests drive this without a runtime; prod always has one
+        // and must fail loudly if that ever stops being true.
+        #[cfg(test)]
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.svc.save_game_task(self.save_params());
+    }
+
+    fn save_params(&self) -> GameParams {
+        GameParams {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_seed: self.seed as i64,
             grid: serde_json::to_value(self.grid).unwrap_or_default(),
             fixed_mask: serde_json::to_value(self.fixed_mask).unwrap_or_default(),
+            notes: serde_json::to_value(self.notes).unwrap_or_default(),
             is_game_over: self.is_game_over,
             score: 0,
-        });
+        }
     }
 
     // --- Interaction ---
+
+    pub fn undo(&mut self) -> bool {
+        if self.is_game_over || self.is_loading() {
+            return false;
+        }
+        self.clear_reset_pending();
+        if let Some(snapshot) = self.undo_stack.pop_back() {
+            self.seed = snapshot.seed;
+            self.grid = snapshot.grid;
+            self.fixed_mask = snapshot.fixed_mask;
+            self.notes = snapshot.notes;
+            self.is_game_over = snapshot.is_game_over;
+            self.store_active_snapshot();
+            self.save_async();
+            true
+        } else {
+            false
+        }
+    }
 
     pub fn reset_board(&mut self) {
         if self.is_game_over || self.is_loading() {
             return;
         }
         self.clear_reset_pending();
+        self.push_undo();
         for r in 0..9 {
             for c in 0..9 {
                 if !self.fixed_mask[r][c] {
@@ -286,8 +408,10 @@ impl State {
         if self.fixed_mask[r][c] || self.grid[r][c] != 0 {
             return;
         }
+        self.push_undo();
         self.notes[r][c] ^= 1 << (val - 1);
         self.store_active_snapshot();
+        self.save_async();
     }
 
     /// Wipe every pencil mark from the cursor cell.
@@ -298,8 +422,10 @@ impl State {
         self.clear_reset_pending();
         let (r, c) = self.cursor;
         if self.notes[r][c] != 0 {
+            self.push_undo();
             self.notes[r][c] = 0;
             self.store_active_snapshot();
+            self.save_async();
         }
     }
 
@@ -319,9 +445,11 @@ impl State {
         }
         self.clear_reset_pending();
         let (r, c) = self.cursor;
-        if self.fixed_mask[r][c] {
+        if self.fixed_mask[r][c] || self.grid[r][c] == val {
             return;
         }
+
+        self.push_undo();
 
         self.grid[r][c] = val;
 
@@ -350,6 +478,20 @@ impl State {
         self.reset_pending = None;
     }
 
+    pub fn daily_date(&self) -> NaiveDate {
+        self.daily_date
+    }
+
+    /// Tell the dashboard this board ended.
+    fn record_finish(&self, finish: ArcadeFinish) {
+        let mode = match self.mode {
+            Mode::Daily => ArcadeMode::Daily,
+            Mode::Personal => ArcadeMode::Personal,
+        };
+        let difficulty = DIFFICULTY_METRICS[self.selected_difficulty];
+        self.svc.record_finish(mode, difficulty, finish);
+    }
+
     fn check_win(&mut self) {
         let mut s = String::with_capacity(81);
         for r in 0..9 {
@@ -367,11 +509,29 @@ impl State {
         {
             self.is_game_over = true;
             self.store_active_snapshot();
+            self.record_finish(ArcadeFinish::Won);
             if self.mode == Mode::Daily {
-                self.svc
-                    .record_win_task(self.user_id, self.difficulty_key().to_string(), 1);
+                self.svc.record_win_task(
+                    self.user_id,
+                    self.difficulty_key().to_string(),
+                    self.daily_date,
+                    1,
+                );
             }
         }
+    }
+
+    fn push_undo(&mut self) {
+        if self.undo_stack.len() >= MAX_UNDO {
+            self.undo_stack.pop_front();
+        }
+        self.undo_stack.push_back(BoardSnapshot {
+            seed: self.seed,
+            grid: self.grid,
+            fixed_mask: self.fixed_mask,
+            notes: self.notes,
+            is_game_over: self.is_game_over,
+        });
     }
 
     fn apply_snapshot(&mut self, snapshot: BoardSnapshot) {
@@ -381,6 +541,7 @@ impl State {
         self.notes = snapshot.notes;
         self.is_game_over = snapshot.is_game_over;
         self.cursor = (0, 0);
+        self.undo_stack.clear();
     }
 
     fn clear_board(&mut self) {
@@ -390,6 +551,7 @@ impl State {
         self.notes = [[0; 9]; 9];
         self.is_game_over = false;
         self.cursor = (0, 0);
+        self.undo_stack.clear();
     }
 
     fn store_active_snapshot(&mut self) {
@@ -608,13 +770,56 @@ fn snapshot_from_game(game: &Game) -> BoardSnapshot {
         }
     }
 
+    let mut notes = notes_from_value(&game.notes);
+    for r in 0..9 {
+        for c in 0..9 {
+            // A given clue or a filled cell has nothing left to guess at, and
+            // the live board enforces that in `toggle_note`/`set_digit`. Hold
+            // the same line on restore so a stale row cannot smuggle marks
+            // into a settled cell.
+            if fixed_mask[r][c] || grid[r][c] != 0 {
+                notes[r][c] = 0;
+            }
+        }
+    }
+
     BoardSnapshot {
         seed: game.puzzle_seed as u64,
         grid,
         fixed_mask,
-        notes: [[0; 9]; 9],
+        notes,
         is_game_over: game.is_game_over,
     }
+}
+
+/// Pencil marks out of a persisted board. Only an exact 9x9 matrix of
+/// non-negative numbers is accepted; anything else restores as "no notes"
+/// rather than as a half-understood mark set, since a bad row must never take
+/// a session's bootstrap down with it.
+fn notes_from_value(value: &serde_json::Value) -> Notes {
+    let mut notes: Notes = [[0; 9]; 9];
+
+    let Some(rows) = value.as_array().filter(|rows| rows.len() == 9) else {
+        return notes;
+    };
+
+    for (r, row_val) in rows.iter().enumerate() {
+        let Some(cells) = row_val.as_array().filter(|cells| cells.len() == 9) else {
+            return [[0; 9]; 9];
+        };
+        for (c, cell) in cells.iter().enumerate() {
+            let Some(bits) = cell.as_u64() else {
+                return [[0; 9]; 9];
+            };
+            notes[r][c] = (bits & NOTE_MASK as u64) as u16;
+        }
+    }
+
+    notes
+}
+
+fn board_has_player_marks(grid: &Grid, fixed_mask: &Mask, notes: &Notes) -> bool {
+    (0..9).any(|r| (0..9).any(|c| (!fixed_mask[r][c] && grid[r][c] != 0) || notes[r][c] != 0))
 }
 
 fn is_current_daily_game(puzzle_date: Option<NaiveDate>, today: NaiveDate) -> bool {
@@ -629,112 +834,5 @@ fn puzzle_date_for_mode(mode: Mode, today: NaiveDate) -> Option<NaiveDate> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::NaiveDate;
-
-    fn test_state() -> State {
-        let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
-        State::new(
-            Uuid::nil(),
-            SudokuService::new(db, tokio::sync::broadcast::channel(4).0),
-            Vec::new(),
-        )
-    }
-
-    #[test]
-    fn reset_confirmation_is_per_action_kind() {
-        let mut state = test_state();
-
-        // Two presses of the same key confirm and fire.
-        assert!(!state.request_reset(ResetKind::Reset));
-        assert!(state.request_reset(ResetKind::Reset));
-        assert_eq!(state.reset_pending, None);
-
-        // A press for a different kind re-arms for that kind instead of
-        // firing the originally-armed action.
-        assert!(!state.request_reset(ResetKind::NewBoard));
-        assert!(!state.request_reset(ResetKind::Reset));
-        assert_eq!(state.reset_pending, Some(ResetKind::Reset));
-        assert!(state.request_reset(ResetKind::Reset));
-        assert_eq!(state.reset_pending, None);
-    }
-
-    #[test]
-    fn same_seed_generates_same_board() {
-        let a = generate_board_from_seed(42, Difficulty::Medium).to_string();
-        let b = generate_board_from_seed(42, Difficulty::Medium).to_string();
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn different_seeds_generate_different_boards() {
-        let a = generate_board_from_seed(42, Difficulty::Medium).to_string();
-        let b = generate_board_from_seed(43, Difficulty::Medium).to_string();
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn different_difficulties_generate_different_clue_counts() {
-        let easy = generate_board_from_seed(42, Difficulty::Easy).to_string();
-        let hard = generate_board_from_seed(42, Difficulty::Hard).to_string();
-        let easy_clues = easy.bytes().filter(|&b| b != b'0').count();
-        let hard_clues = hard.bytes().filter(|&b| b != b'0').count();
-        assert!(easy_clues > hard_clues);
-    }
-
-    #[test]
-    fn current_daily_game_must_match_today() {
-        let today = NaiveDate::from_ymd_opt(2026, 3, 25).expect("date");
-        assert!(is_current_daily_game(Some(today), today));
-        assert!(!is_current_daily_game(
-            NaiveDate::from_ymd_opt(2026, 3, 24),
-            today
-        ));
-    }
-
-    #[test]
-    fn puzzle_date_only_exists_for_daily() {
-        let today = NaiveDate::from_ymd_opt(2026, 3, 25).expect("date");
-        assert_eq!(puzzle_date_for_mode(Mode::Daily, today), Some(today));
-        assert_eq!(puzzle_date_for_mode(Mode::Personal, today), None);
-    }
-
-    #[test]
-    fn snapshot_from_game_restores_grid_mask_and_seed() {
-        let mut grid = [[0u8; 9]; 9];
-        let mut fixed_mask = [[false; 9]; 9];
-        grid[0][0] = 1;
-        fixed_mask[0][0] = true;
-
-        let game = Game {
-            id: Uuid::nil(),
-            created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
-            user_id: Uuid::nil(),
-            mode: "personal".to_string(),
-            difficulty_key: "medium".to_string(),
-            puzzle_date: None,
-            puzzle_seed: 123,
-            grid: serde_json::to_value(grid).expect("grid json"),
-            fixed_mask: serde_json::to_value(fixed_mask).expect("mask json"),
-            is_game_over: true,
-            score: 0,
-        };
-
-        let snapshot = snapshot_from_game(&game);
-
-        assert_eq!(snapshot.seed, 123);
-        assert_eq!(snapshot.grid[0][0], 1);
-        assert!(snapshot.fixed_mask[0][0]);
-        assert!(snapshot.is_game_over);
-    }
-
-    #[test]
-    fn difficulty_key_maps_correctly() {
-        assert_eq!(difficulty_from_key("easy"), Difficulty::Easy);
-        assert_eq!(difficulty_from_key("medium"), Difficulty::Medium);
-        assert_eq!(difficulty_from_key("hard"), Difficulty::Hard);
-        assert_eq!(difficulty_from_key("unknown"), Difficulty::Medium);
-    }
-}
+#[path = "state_test.rs"]
+mod state_test;
