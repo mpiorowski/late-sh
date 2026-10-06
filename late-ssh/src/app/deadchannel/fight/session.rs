@@ -6,6 +6,9 @@
 //! (`sim::odds`), read once when it opens and again when the mirror moves,
 //! never per frame.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -14,6 +17,9 @@ use super::road::Node;
 use super::sim::{ODDS_FIGHTS, Threat, odds};
 use super::state::{Applied, Call, Command, Pick, Quarry, Refusal, Sheet};
 use super::svc::{FightOutcome, FightService};
+
+/// What every command answers on a process draining for a deploy.
+const DRAINING_LINE: &str = "the city is moving under you. reconnect to keep going.";
 
 /// Lines of the exchange the scene shows.
 const SCENE_KEEP: usize = 10;
@@ -73,6 +79,9 @@ pub(crate) struct FightSession {
     username: String,
     svc: FightService,
     action_in_flight: bool,
+    /// The process is shutting down for a deploy (`State::is_draining`):
+    /// a newer one owns the rows, and this one stops changing them.
+    is_draining: Arc<AtomicBool>,
     /// Crate-visible so a test can put an answer on the wire the way the
     /// service would.
     pub(crate) outcome_tx: mpsc::UnboundedSender<FightOutcome>,
@@ -80,7 +89,12 @@ pub(crate) struct FightSession {
 }
 
 impl FightSession {
-    pub(crate) fn new(user_id: Uuid, username: String, svc: FightService) -> Self {
+    pub(crate) fn new(
+        user_id: Uuid,
+        username: String,
+        svc: FightService,
+        is_draining: Arc<AtomicBool>,
+    ) -> Self {
         let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
         Self {
             sheet: None,
@@ -91,6 +105,7 @@ impl FightSession {
             username,
             svc,
             action_in_flight: false,
+            is_draining,
             outcome_tx,
             outcome_rx,
         }
@@ -341,9 +356,15 @@ impl FightSession {
     /// Ask the service to run `command`. One action is out at a time: every
     /// `act_task` holds a pooled connection while it waits for the row
     /// lock, so a held key must not queue one per repeat. A press made
-    /// while an answer is pending is dropped.
+    /// while an answer is pending is dropped. On a draining process
+    /// nothing is sent at all: every command in the undercity (a step, a
+    /// card, a counter) answers with the word to reconnect.
     pub(crate) fn request(&mut self, command: Command) -> bool {
         if self.action_in_flight {
+            return false;
+        }
+        if self.is_draining.load(Ordering::Relaxed) {
+            self.unanswered(DRAINING_LINE, DRAINING_LINE);
             return false;
         }
         self.action_in_flight = true;
@@ -384,24 +405,29 @@ impl FightSession {
                 }
                 FightOutcome::ActionFailed => {
                     self.action_in_flight = false;
-                    match &mut self.scene {
-                        Some(scene) => {
-                            scene.waiting = false;
-                            scene.failed = true;
-                            scene.latest = 1;
-                            scene
-                                .lines
-                                .push("the static is not answering. try again.".to_string());
-                        }
-                        None => {
-                            self.till =
-                                Some("nobody at the counter is answering. try again.".to_string());
-                        }
-                    }
+                    self.unanswered(
+                        "the static is not answering. try again.",
+                        "nobody at the counter is answering. try again.",
+                    );
                 }
             }
         }
         changed
+    }
+
+    /// A command that got no answer from the row: the word on the scene
+    /// when one is open (marked `failed`, so Esc leaves it), else at the
+    /// till.
+    fn unanswered(&mut self, on_scene: &str, at_till: &str) {
+        match &mut self.scene {
+            Some(scene) => {
+                scene.waiting = false;
+                scene.failed = true;
+                scene.latest = 1;
+                scene.lines.push(on_scene.to_string());
+            }
+            None => self.till = Some(at_till.to_string()),
+        }
     }
 
     /// Put an answer where it was asked for: on the scene when one is

@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::test_utils::create_test_user;
 use tokio::time::{Duration, timeout};
@@ -31,7 +34,7 @@ async fn session_with_runner(name: &str) -> (late_core::test_utils::TestDb, Figh
         chat,
         ChipService::new(test_db.db.clone()),
     );
-    let session = FightSession::new(user.id, "mira".to_string(), svc);
+    let session = FightSession::new(user.id, "mira".to_string(), svc, Arc::default());
     (test_db, session)
 }
 
@@ -258,6 +261,28 @@ async fn a_card_refused_keeps_the_scene_and_a_step_refused_ends_it() {
     let scene = session.scene.as_ref().expect("the scene");
     assert!(scene.over);
     assert_eq!(scene.lines, vec!["your signal is down.".to_string()]);
+}
+
+/// On a process draining for a deploy nothing in the undercity reaches the
+/// row: a step and a counter both answer with the word to reconnect.
+#[tokio::test]
+async fn a_draining_process_sends_nothing_and_says_to_reconnect() {
+    let (_test_db, mut session) = session_with_runner("fight-session-drain").await;
+    session.step_up();
+    answered(&mut session).await;
+    session.is_draining.store(true, Ordering::Relaxed);
+    let word = Some("the city is moving under you. reconnect to keep going.");
+
+    assert!(!session.request(Command::Patch));
+    assert_eq!(session.till.as_deref(), word, "at the counter");
+
+    session.enter();
+    let scene = session.scene.as_ref().expect("the step opened its scene");
+    assert!(scene.failed && !scene.waiting, "esc leaves it");
+    assert_eq!(scene.lines.last().map(String::as_str), word);
+    assert!(!session.action_in_flight, "nothing went out");
+    let sheet = session.sheet.as_ref().expect("the mirror");
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY, "no step was taken");
 }
 
 /// The row refuses a fight with no piles (the exchange loop's shape, which
