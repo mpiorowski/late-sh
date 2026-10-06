@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false, 0);
+        draw_landing(frame, area, false, false, false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -36,12 +36,22 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
             theme::SUCCESS(),
         ),
     );
-    render_landing(frame, area, launch, 0);
+    render_landing(frame, area, launch, Vec::new(), 0);
 }
 
 /// Brogue landing copy with the classic one-line Launch block, used by the
-/// Games hub when Brogue is selected (the hub has no per-session door state).
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, scroll: u16) -> u16 {
+/// Games hub when Brogue is selected (the hub has no per-session door state),
+/// plus the player's own `t` switch for seeing watcher chat beside their
+/// game. Who is playing right now is the hub rail's `live` section, not this
+/// page.
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    enabled: bool,
+    live: bool,
+    show_watch_chat: bool,
+    scroll: u16,
+) -> u16 {
     let action_line = if live {
         landing::action(
             ">",
@@ -62,11 +72,23 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, sc
             Style::default().fg(theme::ERROR()),
         ))
     };
-    render_landing(frame, area, vec![action_line], scroll)
+    let watch_chat = if enabled {
+        vec![landing::watch_chat_hint(show_watch_chat)]
+    } else {
+        Vec::new()
+    };
+    render_landing(frame, area, vec![action_line], watch_chat, scroll)
 }
 
-/// The landing body around a caller-supplied Launch block.
-fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scroll: u16) -> u16 {
+/// The landing body around a caller-supplied Launch block, closed by any
+/// extra launch-time hints (`launch_hints`).
+fn render_landing(
+    frame: &mut Frame,
+    area: Rect,
+    launch: Vec<Line<'static>>,
+    launch_hints: Vec<Line<'static>>,
+    scroll: u16,
+) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -130,6 +152,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scr
         landing::heading("Launch"),
     ]);
     lines.extend(launch);
+    lines.extend(launch_hints);
     lines.extend([
         Line::from(""),
         landing::heading("Once Inside"),
@@ -303,8 +326,9 @@ fn reset_door_area(buf: &mut ratatui::buffer::Buffer, area: Rect) {
 /// vt100 erases with the current attributes (BCE), so every cell the game
 /// never repaints carries that bg. Left unkeyed it renders as the viewer's
 /// palette slot 0, which modern terminal themes often tint blue-gray, and the
-/// canvas shows as a gray frame instead of the terminal default.
-fn clear_canvas_black(buf: &mut ratatui::buffer::Buffer, area: Rect) {
+/// canvas shows as a gray frame instead of the terminal default. The watch
+/// view (`door/spectate/ui.rs`) keys a watched brogue screen the same way.
+pub(crate) fn clear_canvas_black(buf: &mut ratatui::buffer::Buffer, area: Rect) {
     for y in area.y..area.y.saturating_add(area.height) {
         for x in area.x..area.x.saturating_add(area.width) {
             let Some(cell) = buf.cell_mut((x, y)) else {

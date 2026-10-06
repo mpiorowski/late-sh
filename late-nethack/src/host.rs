@@ -5,6 +5,8 @@ use russh::ChannelId;
 use russh::server::Handle;
 use tokio::sync::{mpsc, watch};
 
+use crate::watch::{LiveHandle, LiveRegistry};
+
 /// How long to wait for NetHack's hangup-save after SIGHUP before falling back
 /// to SIGKILL. The save (and the all-important getlock-slot release) normally
 /// completes in well under a second; the bound just stops a wedged child from
@@ -69,6 +71,7 @@ pub(crate) struct PtyHost {
 impl PtyHost {
     pub(crate) fn spawn(
         cfg: HostConfig,
+        live: std::sync::Arc<LiveRegistry>,
         handle: Handle,
         channel: ChannelId,
         shutdown_rx: watch::Receiver<bool>,
@@ -86,7 +89,7 @@ impl PtyHost {
         // fail, so an Err here always means the channel was never closed.
         let cleanup = handle.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel, shutdown_rx).await {
+            if let Err(e) = run_bridge(cfg, live, cmd_rx, handle, channel, shutdown_rx).await {
                 tracing::warn!(error = ?e, "nethack host bridge ended with error");
                 let _ = cleanup.eof(channel).await;
                 let _ = cleanup.close(channel).await;
@@ -106,6 +109,7 @@ impl PtyHost {
 
 async fn run_bridge(
     cfg: HostConfig,
+    live: std::sync::Arc<LiveRegistry>,
     mut cmd_rx: mpsc::Receiver<Command>,
     handle: Handle,
     channel: ChannelId,
@@ -201,6 +205,10 @@ async fn run_bridge(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("failed to start nethack ({})", cfg.bin))?;
+
+    // Listed for watchers from spawn to teardown; dropping it at the end of
+    // this function unlists the game and closes its watch sessions.
+    let live_game = live.register(&cfg.playname, cfg.cols, cfg.rows);
     drop(slave);
 
     // Blocking reader: pump child output to the SSH channel. Runs on its own
@@ -229,6 +237,7 @@ async fn run_bridge(
     let stop = bridge_loop(
         &mut cmd_rx,
         &mut out_rx,
+        &live_game,
         &master,
         &mut child,
         &handle,
@@ -236,6 +245,8 @@ async fn run_bridge(
         &mut shutdown_rx,
     )
     .await;
+    // The game is over for its watchers even while a hangup-save runs below.
+    drop(live_game);
 
     // Close the SSH channel first so the late-ssh client returns to its launcher
     // immediately; any (possibly slow) save below then runs out of band.
@@ -284,9 +295,11 @@ async fn run_bridge(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn bridge_loop(
     cmd_rx: &mut mpsc::Receiver<Command>,
     out_rx: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+    live_game: &LiveHandle,
     master: &std::sync::Arc<std::fs::File>,
     child: &mut tokio::process::Child,
     handle: &Handle,
@@ -314,13 +327,17 @@ async fn bridge_loop(
                         return StopReason::ChildExited;
                     }
                 }
-                Some(Command::Resize { cols, rows }) => set_winsize(master, cols, rows),
+                Some(Command::Resize { cols, rows }) => {
+                    set_winsize(master, cols, rows);
+                    live_game.resize(cols, rows);
+                }
                 // PtyHost dropped (client closed the channel, e.g. a rollout): the
                 // child is still live, so SIGHUP-save it.
                 None => return StopReason::Teardown,
             },
             out = out_rx.recv() => match out {
                 Some(bytes) => {
+                    live_game.feed(&bytes);
                     if handle.data(channel, bytes).await.is_err() {
                         // SSH channel to late-ssh gone (client disconnect) while the
                         // child is still live: SIGHUP-save it.

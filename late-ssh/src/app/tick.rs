@@ -481,16 +481,19 @@ impl App {
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
-        let own_door_game = crate::app::door::spectate::chat::own_running_game(self).and_then(
-            |(game, playname)| crate::app::door::spectate::state::LiveGameKey::new(game, &playname),
-        );
+        let own_door_games: Vec<_> = crate::app::door::spectate::chat::own_running_games(self)
+            .into_iter()
+            .filter_map(|(game, playname)| {
+                crate::app::door::spectate::state::LiveGameKey::new(game, &playname)
+            })
+            .collect();
         changed |= self.live.tick(
             &self.daily,
             &self.audio,
             self.chat.news.all_articles(),
             &self.chat.live_streams,
             &self.live_games.live_rows(),
-            own_door_game,
+            &own_door_games,
             reading,
             picture_settings,
         );
@@ -581,10 +584,13 @@ impl App {
             state.tick();
         }
         // The live-game rosters feed the hub rail's live rows and the watcher
-        // count in a running DCSS game's chrome: drain always, pay a frame
-        // only where one of them is drawn.
+        // count in a running watchable game's chrome: drain always, pay a
+        // frame only where one of them is drawn.
         let rosters_changed = self.live_games.tick();
-        changed |= rosters_changed && matches!(self.screen, Screen::Games | Screen::Dcss);
+        changed |= rosters_changed
+            && (self.screen == Screen::Games
+                || crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
+                    .is_some());
         // The watch chat: the watchers' pane and the player's own pane each
         // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);

@@ -220,17 +220,18 @@ struct DrawContext<'a> {
     /// Every live game on a watchable door: the hub rail's live rows and
     /// the watch view's header.
     live_rows: Vec<crate::app::door::spectate::state::LiveRow>,
-    /// Watchers on this player's own running DCSS game, for its chrome.
-    dcss_watchers: Option<usize>,
+    /// Watchers on this player's own running game on the watchable door
+    /// whose screen is up, for its chrome.
+    own_watchers: Option<usize>,
     /// The watch chat on show: the watched player's room on the Games hub,
-    /// this player's own room beside their running DCSS game. `None` until
-    /// this session is in the room.
+    /// this player's own room beside their running game on a watchable
+    /// door's screen. `None` until this session is in the room.
     watch_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     /// Whether this player's running game makes room for watcher chat (the
     /// `show_watch_chat` setting), and the newest line for the one-row form
     /// of it.
     show_watch_chat: bool,
-    dcss_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
+    own_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -445,15 +446,14 @@ impl App {
         let brogue_live = HubGame::Brogue.live_screen(self).is_some();
         let darkroom_live = HubGame::Darkroom.live_screen(self).is_some();
         let greendragon_live = HubGame::GreenDragon.live_screen(self).is_some();
-        let dcss_watchers = match self.dcss_state.as_ref().map(|state| state.handle_status()) {
-            Some(crate::app::door::arcade::HandleStatus::Claimed(handle)) => {
-                self.live_games.watchers_of(
-                    crate::app::door::spectate::state::SpectateGame::Dcss,
-                    &handle,
-                )
-            }
-            Some(_) | None => None,
-        };
+        // The watchable door whose screen is up, where this player's own
+        // game shows its watchers and their chat.
+        let own_screen_game =
+            crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
+        let own_watchers = own_screen_game.and_then(|game| {
+            let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
+            self.live_games.watchers_of(game, &handle)
+        });
         let games_hub_roster = HubGame::roster(self.is_runner());
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
@@ -645,22 +645,22 @@ impl App {
         let chat_usernames = &render_usernames;
         // One watch chat is on show at a time: the watched player's room on
         // the Games hub, this player's own room beside their running game.
-        let watch_chat_room_id = if self.screen == Screen::Games {
-            self.spectate_chat_room_id()
-        } else if self.screen == Screen::Dcss {
-            self.own_watch_chat_room_id()
-        } else {
-            None
+        let watch_chat_room_id = match (self.screen, own_screen_game) {
+            (Screen::Games, _) => self.spectate_chat_room_id(),
+            (_, Some(game)) => self.own_watch_chat_room_id(game),
+            (_, None) => None,
         };
         // The newest thing a watcher said, for the one-row form of the chat
         // a narrow terminal shows under this player's own running game.
-        let dcss_watch_line = self.own_watch_chat_room_id().and_then(|room_id| {
-            crate::app::door::spectate::chat::latest_line(
-                self.chat.messages_for_room(room_id),
-                chat_usernames,
-                chrono::Utc::now(),
-            )
-        });
+        let own_watch_line = own_screen_game
+            .and_then(|game| self.own_watch_chat_room_id(game))
+            .and_then(|room_id| {
+                crate::app::door::spectate::chat::latest_line(
+                    self.chat.messages_for_room(room_id),
+                    chat_usernames,
+                    chrono::Utc::now(),
+                )
+            });
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
@@ -1534,10 +1534,10 @@ impl App {
                         greendragon_live,
                         spectate_state: self.spectate_state.as_ref(),
                         live_rows,
-                        dcss_watchers,
+                        own_watchers,
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
-                        dcss_watch_line,
+                        own_watch_line,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -2145,54 +2145,68 @@ impl App {
                     crate::app::door::rebels::render::draw_page(frame, content_area, state);
                 }
             }
+            // The watchable doors: a running game makes room for its
+            // watchers' chat when the player keeps that on, a read-only pane
+            // on the right or one row underneath on a narrow terminal. The
+            // room comes off the PTY, never over the game.
             Screen::Nethack => {
                 if let Some(state) = ctx.nethack_state.as_deref_mut() {
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Nethack,
+                        ctx.show_watch_chat && state.is_running(),
+                        content_area,
+                    );
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::nethack::render::draw_page(frame, content_area, state);
+                    state.set_viewport(game_area);
+                    crate::app::door::nethack::render::draw_page(frame, game_area, state);
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Dcss => {
                 if let Some(state) = ctx.dcss_state.as_deref_mut() {
-                    // A running game makes room for its watchers' chat when
-                    // the player keeps that on: a read-only pane on the
-                    // right, or one row underneath on a narrow terminal. The
-                    // room comes off the PTY, never over the game.
-                    use crate::app::door::spectate::ui::OwnChat;
-                    let (game_area, own_chat) = if ctx.show_watch_chat && state.is_running() {
-                        crate::app::door::spectate::ui::own_game_split(content_area)
-                    } else {
-                        (content_area, OwnChat::Hidden)
-                    };
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Dcss,
+                        ctx.show_watch_chat && state.is_running(),
+                        content_area,
+                    );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::dcss::render::draw_page(frame, game_area, state);
-                    match own_chat {
-                        OwnChat::Pane { rule, pane } => {
-                            crate::app::door::spectate::ui::draw_own_chat_pane(
-                                frame,
-                                rule,
-                                pane,
-                                ctx.watch_chat_view.take(),
-                                ctx.dcss_watchers,
-                                terminal_images,
-                            );
-                        }
-                        OwnChat::Line(row) => crate::app::door::spectate::ui::draw_watch_line(
-                            frame,
-                            row,
-                            ctx.dcss_watch_line.as_ref(),
-                            ctx.dcss_watchers,
-                        ),
-                        OwnChat::Hidden => {}
-                    }
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Brogue => {
                 if let Some(state) = ctx.brogue_state.as_deref_mut() {
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Brogue,
+                        ctx.show_watch_chat && state.is_running(),
+                        content_area,
+                    );
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::brogue::render::draw_page(frame, content_area, state);
+                    state.set_viewport(game_area);
+                    crate::app::door::brogue::render::draw_page(frame, game_area, state);
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Usurper => {
@@ -2787,6 +2801,29 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.icon_picker_open
 }
 
+/// `· 2 watching` in a running watchable game's chrome. Being watched is
+/// never hidden from the player, whatever their watch-chat setting.
+fn own_watchers_span(watchers: Option<usize>) -> Option<Span<'static>> {
+    let watchers = watchers.filter(|n| *n > 0)?;
+    Some(Span::styled(
+        format!("\u{b7} {watchers} watching "),
+        Style::default().fg(theme::AMBER_GLOW()),
+    ))
+}
+
+/// A watchable door's content area split between its game and the player's
+/// own watch chat, when `chat_wanted` (the setting is on and the game runs).
+fn own_chat_split(
+    game: crate::app::door::spectate::state::SpectateGame,
+    chat_wanted: bool,
+    area: Rect,
+) -> (Rect, crate::app::door::spectate::ui::OwnChat) {
+    match chat_wanted {
+        true => crate::app::door::spectate::ui::own_game_split(area, game),
+        false => (area, crate::app::door::spectate::ui::OwnChat::Hidden),
+    }
+}
+
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " late.sh ",
@@ -2919,6 +2956,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· ? help · S save · ` step out · Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
+            spans.extend(own_watchers_span(ctx.own_watchers));
         }
     }
 
@@ -2939,13 +2977,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
-            // Being watched is never hidden from the player.
-            if let Some(watchers) = ctx.dcss_watchers.filter(|n| *n > 0) {
-                spans.push(Span::styled(
-                    format!("· {watchers} watching "),
-                    Style::default().fg(theme::AMBER_GLOW()),
-                ));
-            }
+            spans.extend(own_watchers_span(ctx.own_watchers));
         }
     }
 
@@ -2966,6 +2998,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
+            spans.extend(own_watchers_span(ctx.own_watchers));
         }
     }
 

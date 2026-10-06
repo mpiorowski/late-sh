@@ -1,8 +1,9 @@
 //! A door game on the live strip (`app/live/`): somebody started a game the
 //! house can watch, so the room sees who and where they are, and can hop
-//! into the watch with a key. A drawn dungeon room sits in the picture
-//! column; the words beside it are the door, where the player is and who
-//! else is watching, and who is playing.
+//! into the watch with a key. A drawing of the door's own dungeon sits in
+//! the picture column (a crawl room, a NetHack room, a Brogue cavern); the
+//! words beside it are the door, where the player is and who else is
+//! watching, and who is playing.
 
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -32,12 +33,12 @@ pub struct DoorGameStripView {
 /// Every live game on the watchable doors' rosters, stamped with when it
 /// started: a game is news when it starts. The rosters come from the door
 /// hosts, so every replica reads the same stamps. The viewer's own running
-/// game is never offered: there is nothing to hop into.
-pub(crate) fn candidates(live: &[LiveRow], own: Option<LiveGameKey>) -> Vec<LiveCandidate> {
+/// games are never offered: there is nothing to hop into.
+pub(crate) fn candidates(live: &[LiveRow], own: &[LiveGameKey]) -> Vec<LiveCandidate> {
     live.iter()
         .filter_map(|row| {
             let key = LiveGameKey::new(row.game, &row.entry.playname)?;
-            if Some(key) == own {
+            if own.contains(&key) {
                 return None;
             }
             Some(LiveCandidate {
@@ -109,30 +110,89 @@ fn whereabouts(entry: &LiveGame) -> String {
 }
 
 /// The door's picture: the watched screen lives behind the key, never in
-/// the strip, so each door gets a drawing of itself.
+/// the strip, so each door gets a drawing of itself in its own dungeon's
+/// vocabulary.
 fn picture(game: SpectateGame) -> Vec<Line<'static>> {
     match game {
-        SpectateGame::Dcss => dungeon_room(),
+        SpectateGame::Dcss => framed(&DCSS_ROOM, dcss_glyph),
+        SpectateGame::Nethack => framed(&NETHACK_ROOM, nethack_glyph),
+        SpectateGame::Brogue => framed(&BROGUE_CAVE, brogue_glyph),
     }
 }
 
-/// A walled room with the player's `@` in it and a door out, framed like a
-/// screen.
-fn dungeon_room() -> Vec<Line<'static>> {
-    const ROOM: [&str; 5] = [
-        "    ###########    ",
-        "    #.........#    ",
-        "    #....@....+..  ",
-        "    #.........#    ",
-        "    ###########    ",
-    ];
+/// A walled crawl room with the player's `@` in it and a door out.
+const DCSS_ROOM: [&str; 5] = [
+    "    ###########    ",
+    "    #.........#    ",
+    "    #....@....+..  ",
+    "    #.........#    ",
+    "    ###########    ",
+];
+
+fn dcss_glyph(ch: char) -> Style {
+    match ch {
+        '@' => player_style(),
+        '#' | '+' => Style::default().fg(theme::TEXT_DIM()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
+    }
+}
+
+/// A NetHack room: `-` and `|` walls, the player beside their little dog, a
+/// fountain, gold, the downstairs, and a door onto a corridor.
+const NETHACK_ROOM: [&str; 5] = [
+    "  -----------      ",
+    "  |...{.....|      ",
+    "  |.@.d.....+####  ",
+    "  |.....$..>|   #  ",
+    "  -----------      ",
+];
+
+fn nethack_glyph(ch: char) -> Style {
+    match ch {
+        '@' => player_style(),
+        'd' => Style::default().fg(theme::TEXT_BRIGHT()),
+        '{' => Style::default().fg(theme::CHAT_AUTHOR()),
+        '$' => Style::default().fg(theme::BADGE_GOLD()),
+        '+' => Style::default().fg(theme::AMBER_DIM()),
+        '>' => Style::default().fg(theme::TEXT()),
+        '-' | '|' => Style::default().fg(theme::TEXT_DIM()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
+    }
+}
+
+/// A Brogue cavern: ragged walls, grass, deep water, a potion, and the
+/// stairs down.
+const BROGUE_CAVE: [&str; 5] = [
+    "   ####   ######   ",
+    "  ##\"\"\"####..!.##  ",
+    "  #\"\"@\"\"\"...~~~.#  ",
+    "  ##..\"\"...~~~~>#  ",
+    "   #############   ",
+];
+
+fn brogue_glyph(ch: char) -> Style {
+    match ch {
+        '@' => player_style(),
+        '"' => Style::default().fg(theme::BONSAI_LEAF()),
+        '~' => Style::default().fg(theme::CHAT_AUTHOR()),
+        '!' => Style::default().fg(theme::MENTION()),
+        '>' => Style::default().fg(theme::TEXT()),
+        '#' => Style::default().fg(theme::TEXT_DIM()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
+    }
+}
+
+/// The player's `@`, the one lit glyph in every picture.
+fn player_style() -> Style {
+    Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// `rows` framed like a screen, each glyph styled by `glyph`.
+fn framed(rows: &[&str], glyph: fn(char) -> Style) -> Vec<Line<'static>> {
     let inner = usize::from(PICTURE_COLS) - 2;
     let frame = Style::default().fg(theme::BORDER_DIM());
-    let wall = Style::default().fg(theme::TEXT_DIM());
-    let floor = Style::default().fg(theme::TEXT_FAINT());
-    let player = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .add_modifier(Modifier::BOLD);
     let edge = |left: &str, right: &str| {
         Line::from(Span::styled(
             format!("{left}{}{right}", "─".repeat(inner)),
@@ -140,16 +200,12 @@ fn dungeon_room() -> Vec<Line<'static>> {
         ))
     };
     let mut lines = vec![edge("╭", "╮")];
-    for row in ROOM {
+    for row in rows {
         let mut spans = vec![Span::styled("│".to_string(), frame)];
-        spans.extend(row.chars().map(|ch| {
-            let style = match ch {
-                '@' => player,
-                '#' | '+' => wall,
-                _ => floor,
-            };
-            Span::styled(ch.to_string(), style)
-        }));
+        spans.extend(
+            row.chars()
+                .map(|ch| Span::styled(ch.to_string(), glyph(ch))),
+        );
         spans.push(Span::styled("│".to_string(), frame));
         lines.push(Line::from(spans));
     }

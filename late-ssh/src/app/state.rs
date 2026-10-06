@@ -830,11 +830,11 @@ pub struct App {
     /// only on the Games hub, which draws it in place of the sidebar.
     pub(crate) spectate_state: Option<crate::app::door::spectate::state::State>,
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
-    /// This player's tie to the watch-chat room of their own running game,
-    /// held while it runs and the `show_watch_chat` setting is on
-    /// (`door::spectate::chat`): the room behind the read-only pane beside
-    /// the game.
-    pub(crate) own_watch_chat: Option<crate::app::door::spectate::state::ChatLink>,
+    /// This player's ties to the watch-chat rooms of their own running games,
+    /// one per watchable door with a game running, held while it runs and the
+    /// `show_watch_chat` setting is on (`door::spectate::chat`): the rooms
+    /// behind the read-only pane beside each game.
+    pub(crate) own_watch_chats: Vec<crate::app::door::spectate::state::ChatLink>,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
     /// host so curses gets a real terminfo entry.
@@ -1126,7 +1126,14 @@ impl App {
             // The watched player's chat, while this session watches one.
             Screen::Games => self.spectate_chat_room_id(),
             // The watchers' chat beside this player's own running game.
-            Screen::Dcss => self.own_watch_chat_room_id(),
+            Screen::Dcss => {
+                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Dcss)
+            }
+            Screen::Nethack => self
+                .own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Nethack),
+            Screen::Brogue => {
+                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Brogue)
+            }
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
             _ => None,
@@ -1744,7 +1751,7 @@ impl App {
             dcss_secret: config.dcss_secret,
             spectate_state: None,
             live_games: config.live_games,
-            own_watch_chat: None,
+            own_watch_chats: Vec::new(),
             brogue_state: None,
             brogue_term: config.term.clone(),
             brogue_enabled: config.brogue_enabled,
@@ -2054,6 +2061,16 @@ impl App {
                 port: self.dcss_port,
                 key: crate::app::door::dcss::identity::derive_client_key(&self.dcss_secret),
             },
+            SpectateGame::Nethack => WatchTarget {
+                host: self.nethack_host.clone(),
+                port: self.nethack_port,
+                key: crate::app::door::nethack::identity::derive_client_key(&self.nethack_secret),
+            },
+            SpectateGame::Brogue => WatchTarget {
+                host: self.brogue_host.clone(),
+                port: self.brogue_port,
+                key: crate::app::door::brogue::identity::derive_client_key(&self.brogue_secret),
+            },
         };
         self.spectate_state = Some(State::new(
             game,
@@ -2121,10 +2138,17 @@ impl App {
         self.chat.room_by_id(room_id).map(|room| room.id)
     }
 
-    /// The watch-chat room of this player's own running game, once this
+    /// The watch-chat room of this player's own running `game`, once this
     /// session is in it.
-    pub(crate) fn own_watch_chat_room_id(&self) -> Option<Uuid> {
-        let room_id = self.own_watch_chat.as_ref()?.room_id()?;
+    pub(crate) fn own_watch_chat_room_id(
+        &self,
+        game: crate::app::door::spectate::state::SpectateGame,
+    ) -> Option<Uuid> {
+        let room_id = self
+            .own_watch_chats
+            .iter()
+            .find(|link| link.game() == game)?
+            .room_id()?;
         self.chat.room_by_id(room_id).map(|room| room.id)
     }
 

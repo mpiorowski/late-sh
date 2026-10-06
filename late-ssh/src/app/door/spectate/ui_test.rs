@@ -39,13 +39,31 @@ fn duration_label_reads_minutes_then_hours() {
 
 #[test]
 fn the_chat_docks_right_when_wide_then_below_when_tall() {
+    let dcss = SpectateGame::Dcss;
     // Wide enough for crawl's 80 columns, the rule and the chat column.
-    assert_eq!(chat_dock(Rect::new(0, 0, 121, 30)), ChatDock::Right);
+    assert_eq!(chat_dock(Rect::new(0, 0, 121, 30), dcss), ChatDock::Right);
     // Not wide enough, but 24 rows of game fit above the rule and the strip.
-    assert_eq!(chat_dock(Rect::new(0, 0, 120, 34)), ChatDock::Below);
+    assert_eq!(chat_dock(Rect::new(0, 0, 120, 34), dcss), ChatDock::Below);
     // Neither: the watched screen keeps the whole view.
-    assert_eq!(chat_dock(Rect::new(0, 0, 120, 33)), ChatDock::Hidden);
-    assert_eq!(chat_dock(Rect::new(0, 0, 80, 24)), ChatDock::Hidden);
+    assert_eq!(chat_dock(Rect::new(0, 0, 120, 33), dcss), ChatDock::Hidden);
+    assert_eq!(chat_dock(Rect::new(0, 0, 80, 24), dcss), ChatDock::Hidden);
+}
+
+/// Brogue's grid is 100x34, so its chat needs that much more room before it
+/// docks; a view that would dock beside crawl leaves Brogue whole.
+#[test]
+fn a_brogue_watch_docks_only_around_its_whole_grid() {
+    let brogue = SpectateGame::Brogue;
+    assert_eq!(
+        chat_dock(Rect::new(0, 0, 121, 30), brogue),
+        ChatDock::Hidden
+    );
+    assert_eq!(chat_dock(Rect::new(0, 0, 141, 30), brogue), ChatDock::Right);
+    assert_eq!(
+        chat_dock(Rect::new(0, 0, 140, 43), brogue),
+        ChatDock::Hidden
+    );
+    assert_eq!(chat_dock(Rect::new(0, 0, 140, 44), brogue), ChatDock::Below);
 }
 
 #[test]
@@ -101,7 +119,7 @@ fn a_dock_below_keeps_the_header_the_full_width() {
 #[test]
 fn a_players_chat_never_costs_crawl_its_minimum_screen() {
     assert_eq!(
-        own_game_split(Rect::new(1, 1, 121, 30)),
+        own_game_split(Rect::new(1, 1, 121, 30), SpectateGame::Dcss),
         (
             Rect::new(1, 1, 80, 30),
             OwnChat::Pane {
@@ -111,14 +129,45 @@ fn a_players_chat_never_costs_crawl_its_minimum_screen() {
         )
     );
     assert_eq!(
-        own_game_split(Rect::new(1, 1, 100, 25)),
+        own_game_split(Rect::new(1, 1, 100, 25), SpectateGame::Dcss),
         (
             Rect::new(1, 1, 100, 24),
             OwnChat::Line(Rect::new(1, 25, 100, 1))
         )
     );
     let small = Rect::new(1, 1, 100, 24);
-    assert_eq!(own_game_split(small), (small, OwnChat::Hidden));
+    assert_eq!(
+        own_game_split(small, SpectateGame::Dcss),
+        (small, OwnChat::Hidden)
+    );
+}
+
+/// A Brogue player keeps the whole 100x34 grid: the pane and the line each
+/// need that much room left over.
+#[test]
+fn a_brogue_players_chat_never_costs_the_grid() {
+    let roomy_for_crawl = Rect::new(1, 1, 121, 34);
+    assert_eq!(
+        own_game_split(roomy_for_crawl, SpectateGame::Brogue),
+        (roomy_for_crawl, OwnChat::Hidden)
+    );
+    assert_eq!(
+        own_game_split(Rect::new(1, 1, 120, 35), SpectateGame::Brogue),
+        (
+            Rect::new(1, 1, 120, 34),
+            OwnChat::Line(Rect::new(1, 35, 120, 1))
+        )
+    );
+    assert_eq!(
+        own_game_split(Rect::new(1, 1, 141, 34), SpectateGame::Brogue),
+        (
+            Rect::new(1, 1, 100, 34),
+            OwnChat::Pane {
+                rule: Rect::new(101, 1, 1, 34),
+                pane: Rect::new(102, 1, 40, 34),
+            }
+        )
+    );
 }
 
 #[test]

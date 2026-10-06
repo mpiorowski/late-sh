@@ -577,6 +577,32 @@ async fn main() -> anyhow::Result<()> {
             singleton_shutdown.clone(),
         )
     });
+    let _nethack_roster_task = state.config.nethack_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Nethack,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.nethack_host.clone(),
+                port: state.config.nethack_port,
+                key: late_ssh::app::door::nethack::identity::derive_client_key(
+                    &state.config.nethack_secret,
+                ),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _brogue_roster_task = state.config.brogue_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Brogue,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.brogue_host.clone(),
+                port: state.config.brogue_port,
+                key: late_ssh::app::door::brogue::identity::derive_client_key(
+                    &state.config.brogue_secret,
+                ),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
 
     let mut tasks = JoinSet::new();
     let api_state = state.clone();

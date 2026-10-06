@@ -160,12 +160,12 @@ impl HubGame {
         use crate::app::door::spectate::state::SpectateGame;
         match self {
             HubGame::Dcss => Some(SpectateGame::Dcss),
+            HubGame::Nethack => Some(SpectateGame::Nethack),
+            HubGame::Brogue => Some(SpectateGame::Brogue),
             HubGame::NightCity
             | HubGame::Lateania
             | HubGame::Minecraft
             | HubGame::Rebels
-            | HubGame::Nethack
-            | HubGame::Brogue
             | HubGame::Usurper
             | HubGame::GreenDragon
             | HubGame::Dopewars

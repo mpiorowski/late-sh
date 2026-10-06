@@ -53,6 +53,19 @@ pub fn action(marker: &str, key: &str, label: &str, color: Color) -> Line<'stati
 
 /// A `key  label` hint row. `pad` sizes the key column to the landing's longest
 /// key so the labels line up.
+/// The watchable doors' `t` line: whether this player sees their watchers'
+/// chat beside their own running game.
+pub fn watch_chat_hint(show_watch_chat: bool) -> Line<'static> {
+    hint(
+        "t",
+        match show_watch_chat {
+            true => "watcher chat beside your game: shown",
+            false => "watcher chat beside your game: hidden",
+        },
+        8,
+    )
+}
+
 pub fn hint(key: &str, label: &str, pad: usize) -> Line<'static> {
     Line::from(vec![
         Span::raw("  "),

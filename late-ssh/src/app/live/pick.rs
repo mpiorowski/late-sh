@@ -39,8 +39,9 @@ pub enum LiveSource {
     /// A stream that went live, by the streamer's user id (one stream per
     /// user).
     Stream(Uuid),
-    /// A door game somebody started that others can watch (DCSS today), by
-    /// its door and the player's handle (one live game per player per door).
+    /// A door game somebody started that others can watch (DCSS, NetHack or
+    /// Brogue), by its door and the player's handle (one live game per
+    /// player per door).
     DoorGame(LiveGameKey),
 }
 

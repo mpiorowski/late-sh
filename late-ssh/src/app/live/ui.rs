@@ -10,7 +10,7 @@
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
 //! (`audio/booth/live.rs`), a News article its ASCII art
 //! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`), a
-//! door game a drawn dungeon room (`door/spectate/live.rs`).
+//! door game its own door's dungeon in ASCII (`door/spectate/live.rs`).
 
 use std::cell::Cell;
 

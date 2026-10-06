@@ -19,27 +19,62 @@ use late_core::models::leaderboard::DoorGame;
 use uuid::Uuid;
 
 use super::proxy::{LiveGame, SpectateProcess, WatchStatus, WatchTarget};
+use crate::app::common::primitives::Screen;
 use crate::render_signal::RenderSignal;
 
 /// The doors whose hosts serve watch sessions. A new variant breaks the build
-/// at its roster task, its watch target, and its label.
+/// at its roster task, its watch target, its running game, its label, and
+/// its live-strip picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpectateGame {
     Dcss,
+    Nethack,
+    Brogue,
 }
 
 impl SpectateGame {
-    pub const ALL: [Self; 1] = [Self::Dcss];
+    /// In the Games hub's card order, which is the order its rail lists
+    /// their live games in.
+    pub const ALL: [Self; 3] = [Self::Dcss, Self::Nethack, Self::Brogue];
 
     pub const fn door_game(self) -> DoorGame {
         match self {
             Self::Dcss => DoorGame::Dcss,
+            Self::Nethack => DoorGame::Nethack,
+            Self::Brogue => DoorGame::Brogue,
         }
     }
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Dcss => "DCSS",
+            Self::Nethack => "NetHack",
+            Self::Brogue => "Brogue",
+        }
+    }
+
+    /// The door's own screen, where its player runs the game.
+    pub const fn screen(self) -> Screen {
+        match self {
+            Self::Dcss => Screen::Dcss,
+            Self::Nethack => Screen::Nethack,
+            Self::Brogue => Screen::Brogue,
+        }
+    }
+
+    /// The watchable door whose screen `screen` is, if any.
+    pub fn of_screen(screen: Screen) -> Option<Self> {
+        Self::ALL.into_iter().find(|game| game.screen() == screen)
+    }
+
+    /// `(cols, rows)`: the smallest screen the game draws its whole UI
+    /// into. Watcher chat only takes room from a game, a player's own or a
+    /// watched one, where the game keeps at least this much.
+    pub const fn screen_min(self) -> (u16, u16) {
+        match self {
+            Self::Dcss | Self::Nethack => (80, 24),
+            // Brogue's fixed grid.
+            Self::Brogue => (100, 34),
         }
     }
 }

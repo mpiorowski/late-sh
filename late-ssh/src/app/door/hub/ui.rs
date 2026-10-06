@@ -327,6 +327,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.nethack_enabled,
             view.nethack_live,
+            view.show_watch_chat,
             scroll,
         ),
         HubGame::Dcss => crate::app::door::dcss::render::draw_landing(
@@ -342,6 +343,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.brogue_enabled,
             view.brogue_live,
+            view.show_watch_chat,
             scroll,
         ),
         HubGame::Usurper => crate::app::door::usurper::render::draw_landing(
@@ -629,7 +631,7 @@ fn live_status(row: &LiveRow) -> String {
 }
 
 /// `text` cut to `width` cells, ending in an ellipsis when it was cut. Rail
-/// text is ASCII (arcade handles, crawl's place names).
+/// text is ASCII (arcade handles, the hosts' place names).
 fn fit(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
@@ -659,11 +661,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     let hints: &[(&str, &str)] = match selected {
         HubGame::NightCity => &[switch, scroll, ("Enter", "descend")],
         HubGame::Minecraft => &[switch, scroll],
-        HubGame::Dcss => &[switch, scroll, ("Enter", "play"), ("s", "watch")],
+        HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => {
+            &[switch, scroll, ("Enter", "play"), ("s", "watch")]
+        }
         HubGame::Lateania
         | HubGame::Rebels
-        | HubGame::Nethack
-        | HubGame::Brogue
         | HubGame::Usurper
         | HubGame::GreenDragon
         | HubGame::Dopewars

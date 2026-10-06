@@ -1,9 +1,9 @@
 // The watch-session SSH client: connects to a door host as the reserved
 // `late_watch` username and either follows the roster of live games
 // (`list`) or one player's screen (`game:<playname>`). The username, env var,
-// and both wire shapes mirror the host side (`late-dcss/src/watch.rs`), the
-// same cross-crate contract style as the stats session; keep the copies in
-// sync.
+// and both wire shapes mirror the host side (`src/watch.rs` in each of
+// `late-dcss`, `late-nethack` and `late-brogue`), the same cross-crate
+// contract style as the stats session; keep the copies in sync.
 //
 // Roster blocks are text:
 // `game\t<playname>\t<started_unix>\t<watchers>\t<status>\n` per game,
@@ -42,7 +42,8 @@ const FRAME_RESET: u8 = b'R';
 const FRAME_DIFF: u8 = b'D';
 
 /// Largest frame the client accepts. A full redraw of the biggest terminal
-/// crawl draws into is well under this; anything larger is a broken stream.
+/// a door game draws into is well under this; anything larger is a broken
+/// stream.
 const MAX_FRAME_LEN: usize = 4 * 1024 * 1024;
 
 const SETUP_TIMEOUT: Duration = Duration::from_secs(10);

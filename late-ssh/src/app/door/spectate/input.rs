@@ -24,7 +24,8 @@ use crate::app::state::App;
 /// `None` for a preview, or when this session is not watching.
 pub fn chat_room_id(app: &App) -> Option<Uuid> {
     let room_id = app.spectate_chat_room_id()?;
-    match chat_dock(crate::app::input::app_content_area(app)) {
+    let game = app.spectate_state.as_ref()?.game();
+    match chat_dock(crate::app::input::app_content_area(app), game) {
         ChatDock::Right | ChatDock::Below => Some(room_id),
         ChatDock::Hidden => None,
     }

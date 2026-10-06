@@ -1,4 +1,4 @@
-// The watch sessions: read-only spectating of live crawl games. late-ssh
+// The watch sessions: read-only spectating of live NetHack games. late-ssh
 // connects with the reserved `late_watch` username (inside the reserved
 // `late_*` handle namespace, so no player can ever claim it) and names what it
 // wants in one env request before the shell:
@@ -7,8 +7,9 @@
 //   change, `game\t<playname>\t<started_unix>\t<watchers>\t<status>\n` per
 //   game, closed by `end\n`. The first block lands on connect, so a fresh
 //   client never waits for a change to learn who is playing. `status` is one
-//   short line on where the player is (`hud_status`), empty until crawl has
-//   drawn its HUD; the roster is re-read every few seconds so it keeps up.
+//   short line on where the player is (`hud_status`), empty until NetHack
+//   has drawn its status lines; the roster is re-read every few seconds so it
+//   keeps up.
 // - `LATE_DOOR_WATCH=game:<playname>` streams that player's screen. Frames
 //   are `[tag u8][len u32 BE][payload]`: `R` (reset) carries `cols u16 BE`,
 //   `rows u16 BE`, then a full redraw; `D` (diff) carries the bytes that turn
@@ -21,7 +22,7 @@
 // `contents_diff`). Replaying raw bytes instead would need a watcher that
 // joins mid-game to reconstruct terminal state the screen does not show
 // (scroll regions, the alternate screen, charsets), and any miss would
-// corrupt their view until crawl's next full redraw. Diffs are absolute cell
+// corrupt their view until NetHack's next full redraw. Diffs are absolute cell
 // writes, so a watcher is exactly as right as the host's parser.
 //
 // There is no path from a watch session to a game's input: the session holds
@@ -29,7 +30,9 @@
 //
 // The username, env var, and both wire shapes are duplicated in late-ssh's
 // spectate client (`late-ssh/src/app/door/spectate/proxy.rs`), the same
-// cross-crate contract style as `stats.rs`; keep the copies in sync.
+// cross-crate contract style as `stats.rs`; keep the copies in sync. The
+// same module lives in `late-dcss` and `late-brogue`; only the status reader
+// differs per game.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -51,7 +54,7 @@ pub(crate) const FRAME_RESET: u8 = b'R';
 /// Diff frame: bytes that turn the previous frame into the current screen.
 pub(crate) const FRAME_DIFF: u8 = b'D';
 
-/// Coalescing window between screen frames. crawl writes a turn as many small
+/// Coalescing window between screen frames. NetHack writes a turn as many small
 /// chunks; one diff per window keeps a watcher at most ~20 frames a second no
 /// matter how chatty the game is.
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
@@ -63,9 +66,6 @@ const LIST_INTERVAL: Duration = Duration::from_millis(500);
 /// How often a roster session re-reads the games' statuses with nothing else
 /// changing. A block goes out only when it differs from the last one sent.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Longest place name the roster carries; anything longer is not a place.
-const PLACE_MAX_CHARS: usize = 24;
 
 /// What a watch session asked for, parsed from [`WATCH_ENV_VAR`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,7 +92,8 @@ pub(crate) struct ListedGame {
     pub(crate) playname: String,
     pub(crate) started_unix: u64,
     pub(crate) watchers: usize,
-    /// Where the player is, `XL3 Lair:2`; empty until the HUD was seen.
+    /// Where the player is, `Xp3 Dlvl:4`; empty until the status line was
+    /// seen.
     pub(crate) status: String,
 }
 
@@ -112,34 +113,29 @@ pub(crate) fn encode_list(games: &[ListedGame]) -> Vec<u8> {
     out
 }
 
-/// Where a player is, read off crawl's HUD in the mirrored screen's text:
-/// `XL3 Lair:2` from the `XL:  3 Next: 40%  Place: Lair:2` line. `None` when
-/// the HUD is not on screen (a menu, the map, a full-screen prompt), so the
-/// caller keeps what it last read.
+/// Where a player is, read off NetHack's bottom status line in the mirrored
+/// screen's text: `Xp3 Dlvl:4` from `Dlvl:4 $:12 HP:20(20) ... Xp:3/40`.
+/// `None` when no status line is on screen (a menu, the inventory, a
+/// full-screen prompt), so the caller keeps what it last read. A polymorphed
+/// player shows `HD:` instead of `Xp:`, which reads as the depth alone.
 pub(crate) fn hud_status(contents: &str) -> Option<String> {
-    let place = contents.lines().find_map(|line| {
-        let value = line.split_once("Place:")?.1.trim_start();
-        // The field ends at the next gap; branch names carry single spaces.
-        let value = value.split("  ").next()?.trim();
-        let plausible = !value.is_empty()
-            && value.chars().count() <= PLACE_MAX_CHARS
-            && !value.chars().any(char::is_control);
-        plausible.then_some(value)
-    })?;
-    let level = contents.lines().find_map(|line| {
-        let digits: String = line
-            .split_once("XL:")?
-            .1
-            .trim_start()
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .collect();
-        (!digits.is_empty()).then_some(digits)
-    });
-    Some(match level {
-        Some(level) => format!("XL{level} {place}"),
-        None => place.to_string(),
+    let line = contents.lines().rev().find(|line| line.contains("Dlvl:"))?;
+    let depth = number_after(line, "Dlvl:")?;
+    Some(match number_after(line, "Xp:") {
+        Some(level) => format!("Xp{level} Dlvl:{depth}"),
+        None => format!("Dlvl:{depth}"),
     })
+}
+
+/// The digits right after `label` on `line`, `None` when there are none.
+fn number_after(line: &str, label: &str) -> Option<String> {
+    let digits: String = line
+        .split_once(label)?
+        .1
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    (!digits.is_empty()).then_some(digits)
 }
 
 fn encode_frame(tag: u8, payload: &[u8]) -> Vec<u8> {
@@ -178,7 +174,7 @@ pub(crate) fn screen_frame(
     }
 }
 
-/// One live crawl game: the host-side mirror of the player's screen, plus the
+/// One live NetHack game: the host-side mirror of the player's screen, plus the
 /// pulse watchers wait on.
 pub(crate) struct LiveGame {
     started_unix: u64,
@@ -187,8 +183,8 @@ pub(crate) struct LiveGame {
     /// the game ends, which is what closes its watch sessions.
     ended: watch::Sender<bool>,
     watchers: AtomicUsize,
-    /// The last status read off the HUD (`hud_status`), kept while the HUD
-    /// is covered. Refreshed whenever the roster is listed.
+    /// The last status read off the status line (`hud_status`), kept while
+    /// it is covered. Refreshed whenever the roster is listed.
     status: Mutex<String>,
 }
 
@@ -201,8 +197,8 @@ impl LiveGame {
             .clone()
     }
 
-    /// Re-read the status off the screen, keeping the last one while the HUD
-    /// is covered, and return what now stands.
+    /// Re-read the status off the screen, keeping the last one while the
+    /// status line is covered, and return what now stands.
     fn refresh_status(&self) -> String {
         let contents = self
             .parser

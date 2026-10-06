@@ -43,25 +43,64 @@ enum RoomSlot {
 
 type ChatRooms = Arc<Mutex<HashMap<(SpectateGame, String), RoomSlot>>>;
 
+/// One door's published roster: the roster task's sender, and this holder's
+/// read position on it.
+#[derive(Clone)]
+struct RosterFeed {
+    tx: Arc<watch::Sender<Roster>>,
+    rx: watch::Receiver<Roster>,
+}
+
+impl RosterFeed {
+    fn new() -> Self {
+        let (tx, rx) = watch::channel(Arc::new(Vec::new()));
+        Self {
+            tx: Arc::new(tx),
+            rx,
+        }
+    }
+
+    /// Whether the roster changed since this holder last looked. Marks it
+    /// seen.
+    fn tick(&mut self) -> bool {
+        match self.rx.has_changed() {
+            Ok(true) => {
+                self.rx.borrow_and_update();
+                true
+            }
+            Ok(false) | Err(_) => false,
+        }
+    }
+}
+
 /// The published rosters plus this holder's read position, and the shared
 /// watch-chat room cache. Cloned into every session, so each clone tracks its
 /// own "seen" for [`Self::tick`].
 #[derive(Clone)]
 pub struct LiveGamesService {
     db: Db,
-    dcss_tx: Arc<watch::Sender<Roster>>,
-    dcss: watch::Receiver<Roster>,
+    dcss: RosterFeed,
+    nethack: RosterFeed,
+    brogue: RosterFeed,
     chat_rooms: ChatRooms,
 }
 
 impl LiveGamesService {
     pub fn new(db: Db) -> Self {
-        let (dcss_tx, dcss) = watch::channel(Arc::new(Vec::new()));
         Self {
             db,
-            dcss_tx: Arc::new(dcss_tx),
-            dcss,
+            dcss: RosterFeed::new(),
+            nethack: RosterFeed::new(),
+            brogue: RosterFeed::new(),
             chat_rooms: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn feed(&self, game: SpectateGame) -> &RosterFeed {
+        match game {
+            SpectateGame::Dcss => &self.dcss,
+            SpectateGame::Nethack => &self.nethack,
+            SpectateGame::Brogue => &self.brogue,
         }
     }
 
@@ -121,9 +160,7 @@ impl LiveGamesService {
 
     /// The live games of `game`, oldest first.
     pub fn roster(&self, game: SpectateGame) -> Roster {
-        match game {
-            SpectateGame::Dcss => self.dcss.borrow().clone(),
-        }
+        self.feed(game).rx.borrow().clone()
     }
 
     /// Every live game across the watchable doors, in the order the Games
@@ -153,21 +190,17 @@ impl LiveGamesService {
     /// a block from the host, so app flows can be driven without a door host.
     #[cfg(test)]
     pub(crate) fn publish_roster_for_tests(&self, game: SpectateGame, roster: Vec<LiveGame>) {
-        let publish = match game {
-            SpectateGame::Dcss => &self.dcss_tx,
-        };
-        publish.send_replace(Arc::new(roster));
+        self.feed(game).tx.send_replace(Arc::new(roster));
     }
 
-    /// Whether a roster changed since this holder last looked. Marks it seen.
+    /// Whether any roster changed since this holder last looked. Marks them
+    /// all seen.
     pub fn tick(&mut self) -> bool {
-        match self.dcss.has_changed() {
-            Ok(true) => {
-                self.dcss.borrow_and_update();
-                true
-            }
-            Ok(false) | Err(_) => false,
-        }
+        // Every feed is drained, so none is left reading as changed.
+        let dcss = self.dcss.tick();
+        let nethack = self.nethack.tick();
+        let brogue = self.brogue.tick();
+        dcss || nethack || brogue
     }
 
     /// Spawn `game`'s roster loop: connect, follow, publish; on any end
@@ -179,9 +212,7 @@ impl LiveGamesService {
         target: WatchTarget,
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
-        let publish = match game {
-            SpectateGame::Dcss => self.dcss_tx.clone(),
-        };
+        let publish = self.feed(game).tx.clone();
         tokio::spawn(async move {
             loop {
                 let (tx, mut rx) = mpsc::channel::<Vec<LiveGame>>(8);

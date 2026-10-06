@@ -1,0 +1,87 @@
+# Door Spectating Context
+
+## Metadata
+- Scope: read-only spectating of live roguelike door games (DCSS, NetHack, Brogue) and the per-player watch chat: the client in `late-ssh/src/app/door/spectate`, its wiring in `late-ssh/src/app` (state/input/render/tick, the hub rail, the live strip, the workspace cycle), and the host half, `src/watch.rs` in each of `late-dcss`, `late-nethack` and `late-brogue`.
+- Primary audience: LLM agents changing the watch view, the hub's live rows, the watch chat, the live strip's door-game source, or a door host's watch sessions.
+- Status: Active
+- Parent context: `../../../../../CONTEXT.md`. Each door's own context (`../dcss/CONTEXT.md`, `../nethack/CONTEXT.md`, `../brogue/CONTEXT.md`) owns its game, transport and host; this file owns what the three share.
+
+---
+
+## 1. Summary [STABLE]
+
+- **Read-only, in-app, no streaming service.** Every live game registers in its host's `LiveRegistry` (`watch.rs`) from spawn to teardown, and the host bridge feeds a host-side `vt100::Parser` the same bytes the player gets (plus window changes). late-ssh opens watch sessions as the reserved `late_watch` username (the `late_stats` shape, so no player can claim it) with one env request, `LATE_DOOR_WATCH`:
+  - `list` streams the roster: one `game\t<playname>\t<started_unix>\t<watchers>\t<status>` line per game, closed by `end`, a block per change, the first on connect. `status` is where the player is, read off the game's own screen in the mirror by the host's `hud_status`, kept while a menu covers it, empty until first seen, re-read every 5s with a block sent only when one differs.
+  - `game:<playname>` streams that player's screen as framed `[tag][len u32 BE][payload]` messages: `R` resets to `cols, rows` plus a full `contents_formatted` redraw, `D` applies a `contents_diff` against the last frame sent, coalesced to one frame per 50ms.
+- **Watchers get screen diffs, never the raw byte stream.** A watcher who joins mid-game cannot rebuild terminal state the screen does not show (scroll regions, the alternate screen, charsets) from a replay, so it would drift until the game's next full redraw; diffs are absolute cell writes computed from the host's mirror, so a watcher is exactly as right as that mirror. A watch session holds the game's `LiveGame` only, never its `PtyHost`, so there is no path to the child's input, and the host ignores a watch session's data.
+- **One `watch.rs` per host, three copies.** The hosts are separate crates with no shared library (the `stats.rs` and `identity.rs` precedent), so the module is duplicated; the wire shapes, registry, and stream loops are identical, and what differs is per game:
+
+  | Door | Status | Read off | Mirror parse |
+  |---|---|---|---|
+  | DCSS | `XL3 Lair:2` | crawl's HUD, `XL:` and `Place:` | plain `vt100` |
+  | NetHack | `Xp3 Dlvl:4` (`Dlvl:4` while polymorphed) | the bottom status line, `Dlvl:` and `Xp:` | plain `vt100` |
+  | Brogue | `Depth 4` | the sidebar's foot, `-- Depth: 4 --` | HVP rewritten to CUP, and the grid brogue announces (`ESC [ 8 ; 34 ; 100 t`) honored, clamped to the player's window |
+
+  Brogue's mirror needs the same two fixes as late-ssh's Brogue client (`../brogue/CONTEXT.md` §1): without the HVP rewrite the mirror smears, and without the grid size a watcher gets the empty slack of a big window around a 100x34 game.
+- **The roster, client side.** `svc.rs` `LiveGamesService` follows each door's roster once per process (one task per door in `main.rs`, gated on that door's `*_enabled` flag; an empty roster while the stream is down, 10s retry) and every session reads it. `live_rows` lists every live game in the hub's card order (DCSS, NetHack, Brogue), oldest first within a door.
+- **The rail.** The Games hub's rail pins a `live` section under its cards (`hub/ui.rs`: a rule, a red `● live` header, then each live game on two rows, the handle and the host's status, or how long they have been in until there is one; a rail too short for both keeps the section at its bottom and scrolls the cards above it; at most half the rail, then a window that follows the watched game plus a `+N more`). Those rows belong to the rail's one selection (`hub::state::rail_step`: cards, then live rows, wrapping at both ends, so Up from the first card is the shortcut to the last live game).
+- **Two modes** (`state::WatchMode`). **A preview is the rail sitting on a live row**: no card is selected and the watched screen alone draws in the landing's place (`hub::ui::watch_pane_area`), the rail still beside it, so stepping the rail is how one browses games; it has no chat and joins no room. `Enter` **opens** it: the watched screen across the whole page with the watch chat docked beside it, the rail gone. An open watch is the last stop on the backtick workspace cycle (`workspace::cycle`, `GameWorkspace::Watch`), so `` ` `` toggles between it and Home chat with the stream kept up. `s` on a roguelike's card previews that door's longest-running game; `Esc` closes an open watch back to its preview, then a preview back to the cards; leaving page 3 drops a preview, an open watch ends once it has been off screen for `state::AWAY_WINDOW` (5 min, the same window a detached Lateania world keeps its cycle stop; a watch is passive, so time away from it, not time without a key, is what counts), and the game ending drops either.
+- **The live strip.** A game that just started is a live strip source (`LiveSource::DoorGame`, `live.rs`, `../../live/CONTEXT.md`): `o` or a click opens the watch directly, from any page. The viewer's own running games are never offered. Each door draws its own dungeon in the picture column (`live.rs::picture`): a `#`-walled crawl room, a NetHack room with `-`/`|` walls, the little dog, a fountain and a corridor, and a Brogue cavern with grass and deep water.
+- **The watched screen is the player's size, not the watcher's**: a smaller one is centered, a larger one is cropped to a window that follows the cursor (crawl and NetHack park it on the `@`). A watched Brogue screen has its black canvas keyed out (`brogue::render::clear_canvas_black`) exactly as the player's own screen does.
+- **Never hidden.** Spectating is on for everyone, and a running game's chrome shows `N watching` from the same roster, on all three door screens.
+- **Watch chat: the watchers talk, the player only reads.** Each player has one permanent chat room per door (`ChatRoom::get_or_create_watch_room`: `kind='game'`, `game_kind='watch'`, slug `<door key>-<handle lowercased>`, e.g. `dcss-mat`, `nethack-mat`, `brogue-mat`, written verbatim because the usual slug normalizing folds `_` into `-` and would merge two handles; hidden from the rail, Mentions and IRC like every game room, history kept between runs). `LiveGamesService` resolves a room the first time anyone needs it and caches the id for the life of the process (`resolve_chat_room_task`; a failure clears the slot and counts on `late_ssh_door_watch_chat_room_failures_total{game}`). A session reaches a room through a `state::ChatLink` (resolve once, join once through the public game-room join path), driven from `App::tick` by `chat.rs`.
+  - **Watchers** hold a link on their watch, driven only once it is open (a preview joins no room, so browsing the rail costs nothing). The open watch docks the room's ordinary embedded chat pane beside the watched screen (`ui::chat_dock`: a 40-column pane on the right, its rule running the full height of the page and teeing into the composer's borders, else an 8-row strip underneath, else no pane; each only where the watched game keeps its whole minimum screen, `SpectateGame::screen_min`: 80x24 for crawl and NetHack, Brogue's 100x34). The open watch's keys are the active-room split's: `i` writes, `j`/`k` and the arrows select messages and the message keys then act on them, Ctrl+D/Ctrl+U, the page keys and the wheel scroll, Esc peels the selection before it closes the watch.
+  - **The player** holds one link per watchable door with a game of theirs running, detached ones included (`App::own_watch_chats`), and gets that room read-only beside the game on screen (`ui::own_game_split`, with the same per-game minimum): the same 40-column pane on the right (`chat::ui::draw_embedded_room_messages`: messages only, no composer, selection or click target, under one faint `watcher chat · N watching` row), else one row under the game for the newest message, shown for ten minutes (`chat::latest_line`), or a faint `N watching` when the room is quiet. Either way the room comes off the PTY and is never drawn over the game. The player cannot type there: every key still goes to the game, so answering means stepping out. The `show_watch_chat` profile setting (`users.settings`, default on, one setting for all three doors) turns the player's side off; it is flipped with `t` on any roguelike's hub card, which is also how to change it mid-game (step out with the backtick, `t`, Enter). Off hides the chat from the player only: the watchers keep talking.
+- **Metrics.** `late_ssh_door_watch_streams_total{game,outcome}` (`closed` by the host, `left` by the viewer, `failed`; the stream task records its own outcome, so a viewer dropping the watch counts too), `late_ssh_door_watch_roster_failures_total{game}`, `late_ssh_door_watch_chat_room_failures_total{game}`. The hosts log watch sessions with `tracing` and carry no metrics of their own.
+
+---
+
+## 2. Module Map [STABLE]
+
+### Client — `late-ssh/src/app/door/spectate/`
+
+| File | Responsibility |
+|---|---|
+| `mod.rs` | Module declarations + framing comment. Declaration-only. |
+| `state.rs` | `SpectateGame` (the closed roster of watchable doors and each one's door key, label, screen, and minimum screen), `LiveGameKey`, `LiveRow`, `ChatLink`, and the per-session watch `State` with its end rules (`end_reason`). |
+| `proxy.rs` | The `late_watch` SSH client: roster and frame decoders, `run_roster_stream`, and `SpectateProcess` (one watched game's stream into a shared parser). The wire shapes mirror the hosts' `watch.rs`. |
+| `svc.rs` | `LiveGamesService`: one published roster per door (`start_task` per door from `main.rs`), `live_rows`, watcher counts, and the process-wide watch-chat room cache. |
+| `input.rs` | Preview and open-watch keys, `Esc`, the hub's `s` (`watch_first`), and `o` on the live strip (`open_live_game`). |
+| `chat.rs` | Drives the watcher's and the player's chat links from `App::tick`; `own_running_games`/`own_running_handle` (which doors this session runs a game on), and the player's one-row line. |
+| `ui.rs` | The watch view (header, fitted screen, docked chat), `chat_dock`, `own_game_split`, `draw_own_chat`. |
+| `live.rs` | The door-game live strip source: candidates, the strip body, and each door's own picture. |
+
+### Hosts — `src/watch.rs` in `late-dcss/`, `late-nethack/`, `late-brogue/`
+
+`LiveRegistry` of live games (host-side mirror + pulse per game, watcher counts), `late_watch` request parsing, the roster block and screen-frame encoders (`encode_list`, `screen_frame`), the per-game `hud_status`, and the per-session list/game stream loops (`WatchHost`). Wired in each host's `host.rs` (register at spawn, feed every output chunk and window change, drop before any hangup-save) and `server.rs` (the `SessionHost::Watch` arm for the reserved username).
+
+---
+
+## 3. Critical Invariants [STABLE]
+
+- **Watchers only ever get diffs from the host's mirror, never the child's raw output.** The mirror must be fed every chunk the player's channel gets and every window change (`bridge_loop`), or watchers drift from the player. `LiveHandle` drop is what unlists a game and closes its watch sessions; it is dropped as soon as the bridge loop stops, before any hangup-save.
+- The watch wire shapes (username, env var, roster lines, frame tags) live in four places: each host's `watch.rs` and `proxy.rs` here. Keep them in sync, and ship the hosts before a client that depends on a shape change.
+- **The mirror parses like the player's own client.** A door whose late-ssh client rewrites or interprets the stream before its parser (Brogue's HVP normalizer and resize callback) needs the same on its host mirror, or watchers see a different screen than the player.
+- **The watch chat never takes a key from the player.** Their side is drawn and nothing else; anything interactive for the player has to live off the game screen. The pane (or the row) is reserved by the setting alone (not by whether anyone is watching), so the PTY is not resized every time a watcher comes or goes.
+- **Neither chat ever costs a game its minimum screen** (`SpectateGame::screen_min`). A door added to `SpectateGame` must say what its game needs.
+- **Live games are never listed on a door's landing.** They are the rail's `live` section, visible whichever card is selected; a landing is about its own game. A status is screen-scraped on the host, so it is a hint, never a fact to build on: a game's layout change empties it, and the row falls back to the time in.
+- The renderer and the input layer both ask `ui::chat_dock` whether the open watch has a pane (`input::chat_room_id`), so the chat keys are live exactly when the pane is drawn. The pane's composer is the watch room's alone: `App::open_watch` drops a draft carried in from another room (a #lounge line half typed when the strip was clicked, which would otherwise draw under the watch chat and still send to #lounge), and a watch can close or end under an open composer (Esc, the game ended), so `App::close_watch` and `App::stop_spectating` drop the draft and the selection with it.
+
+---
+
+## 4. Tests And Verification [STABLE]
+
+- Host `watch_test.rs` (all three): a mid-game joiner following frames ends with the player's exact screen (cells, attributes, cursor, size) through the alternate screen, a scroll region, a hidden cursor and a resize; unchanged screens send nothing; request parsing refuses names the registry cannot hold (each host's own name cap); the registry unlists on handle drop, survives a relaunch racing the old teardown, and counts watchers; `hud_status` reads the game's own status and is `None` while it is covered, and the roster keeps the last status meanwhile. Brogue's also pins the mirror positioning HVP like CUP across a split read and holding the announced grid clamped to the window.
+- Client `*_test.rs` here: the frame and roster decoders across chunk splits and broken streams, when a preview and an open watch end (an open one after five minutes off screen), the live game key (a handle inline, nothing else), the live strip body (`live_test.rs`: every game but your own offered at its start, its words, hint and one-row form, and each door's own picture fitting the picture column), the viewport fit (center vs follow-the-cursor crop), the chat link (one resolve, one join), where the chat docks per game, that a right dock runs from the top of the view and its rule tees into the composer, that neither a dock nor the player's pane or row costs a game its minimum screen (Brogue's 100x34 included), and the player's line (newest message on one row, `/me` actions, the ten-minute cutoff).
+- `hub/state_test.rs` and `hub/ui_test.rs` cover the rail: the wrap through cards and live rows, clicks on both of a live game's rows, the section pinned under scrolling cards on a short rail, and the window that follows the watched game when the section overflows.
+- `dashboard_flow_test.rs` drives a live game from the strip into the open watch and backtick out and back; `input_flow_test.rs` opens a watch from Zen and lands `s` on the NetHack card on a NetHack game while DCSS has live games too. All over rosters published with `LiveGamesService::publish_roster_for_tests` (no door host).
+- `late-core` `chat_room_test.rs` covers the watch room itself: one per player per door, case never forks it, underscores never merge two players, a non-handle gets none.
+
+---
+
+## 5. Deferred / Future Work [VOLATILE]
+
+- **A per-player opt-out of being watched**, if players ask for one: a flag pushed at launch like the rc, which the host checks before registering the game. The `show_watch_chat` setting is not that: it only hides the chat from the player.
+- **Watch chat on a small terminal.** An open watch too small to dock the pane (80x24 and the like, 100x34 for Brogue) has no chat at all, and says so in its header; a key that swaps the watched screen for the chat would cover it.
+- **Watch-room memberships are never dropped.** A watcher stays a member of every player's room they have watched (the stream rooms behave the same), which only costs rows in `chat_room_members`; leaving on watch end needs a quiet leave path, since the chat one banners and deselects.
+- The hosts carry no metrics; watch sessions surface only in their logs and in late-ssh's stream outcomes.

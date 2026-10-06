@@ -62,14 +62,7 @@ pub fn draw_landing(
         ))
     };
     let watch_chat = if enabled {
-        vec![landing::hint(
-            "t",
-            match show_watch_chat {
-                true => "watcher chat beside your game: shown",
-                false => "watcher chat beside your game: hidden",
-            },
-            8,
-        )]
+        vec![landing::watch_chat_hint(show_watch_chat)]
     } else {
         Vec::new()
     };

@@ -4,7 +4,12 @@
 // page: the header over the screen, and the watch chat docked beside it
 // (`chat_dock`). The screen is the player's size, not ours: a smaller one is
 // centered, a larger one is cropped to a window that follows the cursor
-// (crawl parks it on the `@`).
+// (crawl and NetHack park it on the `@`). Brogue's black canvas is keyed out
+// the way its own door screen keys it, so the theme shows through.
+//
+// The chat only ever docks where the game keeps its whole minimum screen
+// (`SpectateGame::screen_min`): 80x24 for crawl and NetHack, Brogue's fixed
+// 100x34.
 //
 // `own_game_split` and the two drawers under it are the other end of the
 // same chat: what a player sees of it around their own running game, a
@@ -18,7 +23,7 @@ use ratatui::widgets::Paragraph;
 
 use super::chat::WatchLine;
 use super::proxy::{LiveGame, WatchStatus};
-use super::state::{State, WatchMode};
+use super::state::{SpectateGame, State, WatchMode};
 use crate::app::chat::ui::{
     EmbeddedRoomChatView, draw_embedded_room_chat, draw_embedded_room_messages,
 };
@@ -26,10 +31,6 @@ use crate::app::common::theme;
 use crate::app::door::rebels::render::blit_screen_from;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
-/// The narrowest and shortest screen crawl draws into. The chat only docks
-/// where the watched screen keeps at least this much.
-const SCREEN_MIN_COLS: u16 = 80;
-const SCREEN_MIN_ROWS: u16 = 24;
 const DOCK_RIGHT_WIDTH: u16 = 40;
 const DOCK_BELOW_HEIGHT: u16 = 8;
 
@@ -44,14 +45,15 @@ pub enum ChatDock {
     Hidden,
 }
 
-/// The dock for a watch view drawn into `area` (header row included). The
-/// renderer and the input layer both ask this, so the chat keys are live
+/// The dock for a watch of `game` drawn into `area` (header row included).
+/// The renderer and the input layer both ask this, so the chat keys are live
 /// exactly when the pane is on screen.
-pub fn chat_dock(area: Rect) -> ChatDock {
+pub fn chat_dock(area: Rect, game: SpectateGame) -> ChatDock {
+    let (min_cols, min_rows) = game.screen_min();
     let body_height = area.height.saturating_sub(1);
-    if area.width > SCREEN_MIN_COLS + DOCK_RIGHT_WIDTH {
+    if area.width > min_cols + DOCK_RIGHT_WIDTH {
         ChatDock::Right
-    } else if body_height > SCREEN_MIN_ROWS + DOCK_BELOW_HEIGHT {
+    } else if body_height > min_rows + DOCK_BELOW_HEIGHT {
         ChatDock::Below
     } else {
         ChatDock::Hidden
@@ -177,7 +179,7 @@ pub fn draw(
 ) {
     let dock = match pane {
         WatchPane::Preview => ChatDock::Hidden,
-        WatchPane::Open(_) => chat_dock(area),
+        WatchPane::Open(_) => chat_dock(area, view.state.game()),
     };
     let layout = watch_layout(area, dock);
     let body = layout.screen;
@@ -219,6 +221,12 @@ pub fn draw(
                 };
                 blit_screen_from(buf, target, screen, y.src, x.src);
             });
+            match view.state.game() {
+                SpectateGame::Brogue => {
+                    crate::app::door::brogue::render::clear_canvas_black(buf, body);
+                }
+                SpectateGame::Dcss | SpectateGame::Nethack => {}
+            }
         }
     }
 }
@@ -327,21 +335,22 @@ pub enum OwnChat {
     Pane { rule: Rect, pane: Rect },
     /// One row under the game, on a terminal too narrow for the pane.
     Line(Rect),
-    /// No room for either without costing crawl its 80x24.
+    /// No room for either without costing the game its minimum screen.
     Hidden,
 }
 
-/// Split a player's own game area into the game and the watchers' chat. The
-/// chat comes off the game's PTY, never over it, and only where the game
-/// keeps the 80x24 crawl needs.
-pub fn own_game_split(area: Rect) -> (Rect, OwnChat) {
-    if area.width > SCREEN_MIN_COLS + DOCK_RIGHT_WIDTH {
+/// Split a player's own `game` area into the game and the watchers' chat.
+/// The chat comes off the game's PTY, never over it, and only where the game
+/// keeps its whole minimum screen.
+pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
+    let (min_cols, min_rows) = game.screen_min();
+    if area.width > min_cols + DOCK_RIGHT_WIDTH {
         return match dock_areas(area, ChatDock::Right) {
             (game, Some((rule, pane))) => (game, OwnChat::Pane { rule, pane }),
             (game, None) => (game, OwnChat::Hidden),
         };
     }
-    if area.height <= SCREEN_MIN_ROWS {
+    if area.height <= min_rows {
         return (area, OwnChat::Hidden);
     }
     let game = Rect {
@@ -356,10 +365,29 @@ pub fn own_game_split(area: Rect) -> (Rect, OwnChat) {
     (game, OwnChat::Line(row))
 }
 
+/// Draw what `own_game_split` made room for beside a player's own running
+/// game: the read-only pane, or the one row underneath.
+pub fn draw_own_chat(
+    frame: &mut Frame,
+    own_chat: OwnChat,
+    chat: Option<EmbeddedRoomChatView<'_>>,
+    line: Option<&WatchLine>,
+    watchers: Option<usize>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    match own_chat {
+        OwnChat::Pane { rule, pane } => {
+            draw_own_chat_pane(frame, rule, pane, chat, watchers, terminal_images);
+        }
+        OwnChat::Line(row) => draw_watch_line(frame, row, line, watchers),
+        OwnChat::Hidden => {}
+    }
+}
+
 /// The pane beside a player's own running game: their watchers' chat, read
 /// only. One faint header row says what it is (the player has no composer to
 /// say it for them), then the room's messages.
-pub fn draw_own_chat_pane(
+fn draw_own_chat_pane(
     frame: &mut Frame,
     rule: Rect,
     pane: Rect,
@@ -392,7 +420,7 @@ pub fn draw_own_chat_pane(
 /// said, or a faint word that people are watching and quiet. Blank when
 /// nobody is there, so the row costs a player without an audience nothing
 /// but the row.
-pub fn draw_watch_line(
+fn draw_watch_line(
     frame: &mut Frame,
     area: Rect,
     line: Option<&WatchLine>,

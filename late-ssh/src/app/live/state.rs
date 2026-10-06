@@ -94,7 +94,7 @@ impl LiveState {
     /// session's News snapshot and `streams` its copy of the stream
     /// registry (`ChatState::live_streams`). `door_games` are the live games
     /// on the watchable doors (`LiveGamesService::live_rows`), and
-    /// `own_door_game` the viewer's own running one. `reading` is
+    /// `own_door_games` the viewer's own running ones. `reading` is
     /// whether the viewer has a message selected in the card: the strip then
     /// holds its height. `picture_settings` is how this session's terminal
     /// paints an image. True when what the strip draws changed.
@@ -105,7 +105,7 @@ impl LiveState {
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
-        own_door_game: Option<LiveGameKey>,
+        own_door_games: &[LiveGameKey],
         reading: bool,
         picture_settings: InlineImageRenderSettings,
     ) -> bool {
@@ -113,7 +113,7 @@ impl LiveState {
         candidates.extend(audio.live_candidates());
         candidates.extend(news_live::candidates(articles));
         candidates.extend(stream_live::candidates(streams));
-        candidates.extend(door_live::candidates(door_games, own_door_game));
+        candidates.extend(door_live::candidates(door_games, own_door_games));
         let changed = self.refresh(&candidates, Instant::now(), Utc::now(), reading);
         let thumbnail = match self.showing() {
             Some(LiveSource::BoothTrack(item_id)) => audio

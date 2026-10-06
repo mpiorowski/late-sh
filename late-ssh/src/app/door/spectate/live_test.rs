@@ -31,7 +31,7 @@ fn text(spans: &[Span<'_>]) -> String {
 fn every_live_game_but_your_own_is_offered_stamped_with_its_start() {
     let live = [row("mat", "XL3 Lair:2", 0), row("eggy", "", 1)];
 
-    let offered = candidates(&live, Some(key("eggy")));
+    let offered = candidates(&live, &[key("eggy")]);
 
     assert_eq!(offered.len(), 1);
     assert_eq!(offered[0].source, LiveSource::DoorGame(key("mat")));
@@ -39,7 +39,7 @@ fn every_live_game_but_your_own_is_offered_stamped_with_its_start() {
         offered[0].updated,
         Utc.timestamp_opt(STARTED as i64, 0).unwrap()
     );
-    assert_eq!(candidates(&live, None).len(), 2);
+    assert_eq!(candidates(&live, &[]).len(), 2);
 }
 
 #[test]
@@ -81,4 +81,41 @@ fn a_game_without_a_status_reads_its_time_in() {
 
     assert!(words[2].ends_with(" in"), "{}", words[2]);
     assert!(!words[2].contains("watching"));
+}
+
+/// Each door draws its own dungeon, framed to exactly the picture column, and
+/// carries its own name and status.
+#[test]
+fn every_door_draws_its_own_picture_in_the_picture_column() {
+    let statuses = [
+        (SpectateGame::Dcss, "XL3 Lair:2"),
+        (SpectateGame::Nethack, "Xp3 Dlvl:4"),
+        (SpectateGame::Brogue, "Depth 4"),
+    ];
+    let pictures: Vec<Vec<String>> = statuses
+        .into_iter()
+        .map(|(game, status)| {
+            let live = [LiveRow {
+                game,
+                ..row("mat", status, 0)
+            }];
+            let key = LiveGameKey::new(game, "mat").expect("a handle");
+            let strip = view(&live, key).expect("a listed game has a view");
+            let body = body(60, &strip);
+            let words: Vec<String> = body.words.iter().map(|spans| text(spans)).collect();
+            assert_eq!(words[1], game.label());
+            assert_eq!(words[2], status);
+            body.picture.iter().map(|line| text(&line.spans)).collect()
+        })
+        .collect();
+
+    for lines in &pictures {
+        assert!(lines.len() <= usize::from(PICTURE_ROWS));
+        for line in lines {
+            assert_eq!(line.chars().count(), usize::from(PICTURE_COLS), "{line:?}");
+        }
+    }
+    assert_ne!(pictures[0], pictures[1]);
+    assert_ne!(pictures[0], pictures[2]);
+    assert_ne!(pictures[1], pictures[2]);
 }
