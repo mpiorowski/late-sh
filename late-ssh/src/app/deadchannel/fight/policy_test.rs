@@ -48,7 +48,8 @@ const MIXED: [Card; 5] = [
 
 /// The `Auto` key: all in against a plain hit and while the glyph
 /// gathers, two blocks up on the turn the heavy lands, the kill whenever
-/// the hand holds it.
+/// the hand holds it, and energy left over on a guard when something is
+/// landing.
 #[test]
 fn auto_hits_until_a_heavy_lands_and_takes_the_kill() {
     let hit = table(MIXED, Intent::Hit, Intent::Hit);
@@ -101,8 +102,10 @@ fn auto_hits_until_a_heavy_lands_and_takes_the_kill() {
         vec![Card::Surge, Card::Strike]
     );
 
-    // What is left over shakes static out; a wipe does it for free when
-    // a heavy calls for the block anyway.
+    // What is left over goes on a guard against the hit, and the wipe is
+    // the guard that takes the static with it; with nothing landing it
+    // shakes static out a card at a time. When a heavy calls for the
+    // block anyway, the wipe goes up ahead of the hits.
     let noisy = [
         Card::Static,
         Card::Strike,
@@ -111,8 +114,10 @@ fn auto_hits_until_a_heavy_lands_and_takes_the_kill() {
         Card::Static,
     ];
     let spare = table(noisy, Intent::Hit, Intent::Hit);
+    assert_eq!(cards(&spare, &auto(&spare)), vec![Card::Strike, Card::Wipe]);
+    let quiet = table(noisy, Intent::Charge, Intent::Heavy);
     assert_eq!(
-        cards(&spare, &auto(&spare)),
+        cards(&quiet, &auto(&quiet)),
         vec![Card::Strike, Card::Static, Card::Static]
     );
     let walled = table(noisy, Intent::Heavy, Intent::Hit);
@@ -278,7 +283,8 @@ fn auto_plays_the_drafted_cards_the_obvious_way() {
     );
 
     // The heavy lands: the mute takes it whole, no block goes up, and
-    // the energy left still hits. Against a plain hit it stays put.
+    // the energy left still hits. Against a plain hit it stays put, and
+    // the energy the two strikes leave goes on a block.
     let mute = [
         Card::Block,
         Card::Mute,
@@ -294,7 +300,7 @@ fn auto_plays_the_drafted_cards_the_obvious_way() {
     let plain = table(mute, Intent::Hit, Intent::Hit);
     assert_eq!(
         cards(&plain, &auto(&plain)),
-        vec![Card::Strike, Card::Strike]
+        vec![Card::Strike, Card::Strike, Card::Block]
     );
 
     // A ground with static in hand is three strikes for one energy: it

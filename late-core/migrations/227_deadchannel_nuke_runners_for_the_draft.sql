@@ -1,0 +1,12 @@
+-- The draft and the retuned round (migration 226; GAME.md, "The draft")
+-- change what every level is worth: new cards at levels 3, 6, 9, and 12,
+-- harder hits, a bigger Old Signal. A runner part way up the old ladder
+-- holds levels and a kit earned under other rules and no cards for the
+-- drafts already passed, so every sheet goes back to a fresh one and the
+-- climb is tested from the first step.
+--
+-- The nuke (migration 222, as redefined by 226) keeps the row, the look,
+-- and the leave and guide stamps, clears the day's road and the drafted
+-- cards, bumps `reset_generation` so a mark earned again is paid, and
+-- leaves `unpaid_mark` standing.
+SELECT deadchannel_nuke_runners();

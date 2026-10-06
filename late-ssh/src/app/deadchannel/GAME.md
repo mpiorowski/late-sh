@@ -1,4 +1,4 @@
-# GAME.md — deadchannel, the character layer of late.sh
+# GAME.md: deadchannel, the character layer of late.sh
 
 Status: **seed doc, vision + decisions.** Successor to DRAGON.md (removed
 2026-08-07; its thesis survives here, its "extend Green Dragon" framing does
@@ -1057,12 +1057,13 @@ never does.
   Signal instead of a glyph. A dropped signal against it costs what any
   drop costs, and the exp lost usually puts the gate a day or two of
   glyphs away again.
-- **The numbers.** 245 signal, 39 attack, 22 defense, tuned for the
-  round, not LoGD's dragon (300 / 45 / 25, numbers for an exchange
-  loop). From the top of the wall a first kill lands about one try in
-  two on the `Auto` key and nine in ten for a runner reading the hand;
-  a glass of static on ice makes the key near sure. Held by the arena's
-  contract (`fight/BALANCE.md`). Revisit when the bands ship.
+- **The numbers.** 290 signal, 39 attack, 22 defense, tuned for the
+  round and the drafted deck, not LoGD's dragon (300 / 45 / 25, numbers
+  for an exchange loop). From the top of the wall a first kill lands
+  about one try in two on the `Auto` key and nine in ten for a runner
+  reading the hand, whatever was drafted; a glass of static on ice makes
+  the key near sure. Held by the arena's contract for every build
+  (`fight/BALANCE.md`). Revisit when the bands ship.
 - **What the kill takes:** level back to 1, exp to 0, weapon and armor to
   tier 0, bits to the starting 50, the locker emptied, the crystals gone. The climb is a
   real climb again, and nothing saved for it carries over.

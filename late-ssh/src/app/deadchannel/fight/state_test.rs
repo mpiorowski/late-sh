@@ -27,8 +27,8 @@ fn fresh() -> Sheet {
 /// What the fixed-dice fight leaves of a fresh runner's ten signal, and
 /// the static it leaves in the deck
 /// (`a_fight_to_the_end_with_fixed_dice_lands_on_one_state`).
-const FIXED_FIGHT_SIGNAL: i32 = 7;
-const FIXED_FIGHT_STATIC: u8 = 2;
+const FIXED_FIGHT_SIGNAL: i32 = 9;
+const FIXED_FIGHT_STATIC: u8 = 0;
 
 /// The first step of every day's road: a glyph in every lane.
 const STEP_IN: Command = Command::Step {
@@ -612,7 +612,7 @@ fn the_bright_glyph_is_harder_pays_double_bits_and_leaves_a_crystal() {
     );
     let fight = sheet.fight.clone().expect("a fight on the row");
     assert_eq!(fight.name(), "bright dead pixels");
-    // Over the dead pixels of level 8: a third more signal, 15% more
+    // Over the dead pixels of level 8: half as much signal again, 15% more
     // attack and defense rounded up, twice the bits, the same exp.
     let (_, _, plain) = RULES.foe(8);
     assert_eq!((plain.attack, plain.defense), (15, 11));
@@ -624,7 +624,7 @@ fn the_bright_glyph_is_harder_pays_double_bits_and_leaves_a_crystal() {
             fight.foe_bits,
             fight.foe_exp
         ),
-        (plain.signal * 135 / 100, 18, 13, plain.bits * 2, plain.exp)
+        (plain.signal * 150 / 100, 18, 13, plain.bits * 2, plain.exp)
     );
 
     // Put down, it always leaves one, and the wire hears.
@@ -1681,7 +1681,7 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     // The drift: hits, gathers, comes down for double.
     sheet.fight = Some(a_fight(2, 500, 8, 0, 0));
     let hit = sheet.powers(the_fight(&sheet)).hit;
-    assert_eq!(hit, 11, "170% of 8 attack less a quarter of defense 5");
+    assert_eq!(hit, 12, "185% of 8 attack less a quarter of defense 5");
 
     // Block over the hit: it holds, nothing lands, no static, and what
     // is left of it stands.
@@ -1690,10 +1690,10 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     assert_eq!(held.applied, Applied::Round);
     assert_eq!(
         held.lines,
-        vec!["it hits you for 11. your block holds.".to_string()]
+        vec!["it hits you for 12. your block holds.".to_string()]
     );
     let fight = the_fight(&sheet);
-    assert_eq!((sheet.signal, fight.block, fight.turn), (50, 4, 1));
+    assert_eq!((sheet.signal, fight.block, fight.turn), (50, 3, 1));
     assert_eq!(fight.piles.static_cards(), 0);
     assert_eq!(
         (fight.energy, fight.piles.hand.iter().flatten().count()),
@@ -1705,21 +1705,21 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     let gathered = sheet.apply(Command::EndTurn, &mut rng);
     assert_eq!(
         gathered.lines,
-        vec!["the drift gathers itself. the next one lands for 22.".to_string()]
+        vec!["the drift gathers itself. the next one lands for 24.".to_string()]
     );
-    assert_eq!((sheet.signal, the_fight(&sheet).block), (50, 4));
+    assert_eq!((sheet.signal, the_fight(&sheet).block), (50, 3));
 
-    // The heavy: the block takes its four, the rest lands, static follows.
+    // The heavy: the block takes its three, the rest lands, static follows.
     let heavy = sheet.apply(Command::EndTurn, &mut rng);
     assert_eq!(
         heavy.lines,
         vec![
-            "it comes down on you for 22. your block takes 4, you take 18.".to_string(),
+            "it comes down on you for 24. your block takes 3, you take 21.".to_string(),
             STATIC_LINE.to_string()
         ]
     );
     let fight = the_fight(&sheet);
-    assert_eq!((sheet.signal, fight.block), (32, 0));
+    assert_eq!((sheet.signal, fight.block), (29, 0));
     assert_eq!(fight.piles.static_cards(), 1);
 }
 

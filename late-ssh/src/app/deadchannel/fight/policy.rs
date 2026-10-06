@@ -310,7 +310,14 @@ fn score(turn: &Turn, table: &Table) -> f64 {
         true => -1.0e9,
         false => 0.0,
     };
-    dead + f64::from(turn.damage) * per_point - f64::from(taken)
+    // Of two turns otherwise as good: the one that leaves more block
+    // standing (it may meet a hit two turns out, and the energy is gone
+    // at the end of the turn either way), and then the one that spends
+    // less, so energy is not thrown at a static card a wipe is about to
+    // take anyway.
+    let standing = f64::from(left) * 1.0e-3;
+    let thrift = f64::from(turn.spent) * 1.0e-6;
+    dead + f64::from(turn.damage) * per_point - f64::from(taken) + standing - thrift
         + f64::from(mended)
         + (turn.cleared as f64 - noise) * STATIC_WEIGHT * hit
         + f64::from(banked) * BANKED_WEIGHT
@@ -336,7 +343,8 @@ fn search(turn: &Turn, table: &Table, best: &mut (f64, Vec<usize>)) {
 
 /// A turn read properly: every order of every affordable set of cards
 /// weighed, the best played. The slots, in order, before ending the turn.
-/// Of two turns as good, the one found first: the lower slots.
+/// Of two turns as good, the one with more block left standing, then the
+/// cheaper one, and then the one found first: the lower slots.
 pub fn sharp(table: &Table) -> Vec<usize> {
     let open = Turn::open(table);
     let mut best = (score(&open, table), Vec::new());

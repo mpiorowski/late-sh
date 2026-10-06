@@ -40,7 +40,7 @@ with the road's cursor on it.
   `Refusal::WrongCall` and the ration is kept, as is the bright call
   asked of a plain glyph's node.
 - It is the glyph of the runner's level lifted (`bright_foe_for_level`):
-  `BRIGHT_SIGNAL_PERCENT` (135) of the signal, `BRIGHT_EDGE_PERCENT`
+  `BRIGHT_SIGNAL_PERCENT` (150) of the signal, `BRIGHT_EDGE_PERCENT`
   (115, rounded up) of the attack and defense, `BRIGHT_BITS_TIMES` (2)
   the bits, the plain glyph's exp, the same pattern of moves. The exp
   stays plain on purpose: every road has the same five fights whichever
