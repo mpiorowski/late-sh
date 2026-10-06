@@ -7,10 +7,10 @@
 //!   more: a burn first, for the energy; finish the glyph if the hand
 //!   can; on the turn a heavy lands, mute it or put two guards up; hit
 //!   with everything else, the best rate first; and spend what is left
-//!   shaking static out. It never
-//!   blocks a plain hit and never thinks a turn ahead: the block that
-//!   could have gone up while the glyph was gathering is the hand's to
-//!   find.
+//!   on a guard against whatever is landing, then on shaking static out.
+//!   It never gives up a hit to block a plain one and never thinks a turn
+//!   ahead: the block that could have gone up while the glyph was
+//!   gathering is the hand's to find.
 //! - [`sharp`] is a runner who reads the hand: every order of every
 //!   affordable set of cards is played out and weighed, signal against
 //!   signal. It lives here for the sim and the arena, where the gap
@@ -200,6 +200,29 @@ impl Turn {
         }
     }
 
+    /// Guards up against `incoming` until it is covered, the energy runs
+    /// out, or `most` cards have gone up: the bulwark first, then the
+    /// wipe ahead of the blocks while there is static for it to take and
+    /// behind them when there is none.
+    fn guard(&mut self, table: &Table, incoming: i32, most: usize) {
+        let wipes = self.slots_of(Card::Wipe);
+        let blocks = self.slots_of(Card::Block);
+        let mut guards = self.slots_of(Card::Bulwark);
+        match self.statics_in_hand() > 0 {
+            true => guards.extend(wipes.iter().chain(&blocks)),
+            false => guards.extend(blocks.iter().chain(&wipes)),
+        }
+        let mut up = 0;
+        for slot in guards {
+            if self.block >= incoming || up == most {
+                break;
+            }
+            if self.play(table, slot) {
+                up += 1;
+            }
+        }
+    }
+
     /// A burn, when the hand holds one: it is free, and it only gives.
     fn burn(&mut self, table: &Table) {
         if let Some(slot) = self.slots_of(Card::Burn).into_iter().next() {
@@ -222,9 +245,9 @@ pub fn auto(table: &Table) -> Vec<usize> {
     }
     let mut turn = Turn::open(table);
     turn.burn(table);
-    // Guard only on the turn a heavy lands: a mute when the hand holds
-    // one, else never more than [`AUTO_GUARDS`] cards of block. The rest
-    // of the turn still hits.
+    // Ahead of the hits, guard only on the turn a heavy lands: a mute
+    // when the hand holds one, else never more than [`AUTO_GUARDS`] cards
+    // of block. The rest of the turn still hits.
     let heavy = match table.now {
         Intent::Heavy => table.powers.hit * 2,
         Intent::Hit | Intent::Charge | Intent::Noise => 0,
@@ -235,27 +258,15 @@ pub fn auto(table: &Table) -> Vec<usize> {
         (true, None) | (false, _) => false,
     };
     if !muted {
-        // The wipe ahead of the blocks while there is static to wipe,
-        // behind them when there is none; the bulwark ahead of both.
-        let wipes = turn.slots_of(Card::Wipe);
-        let blocks = turn.slots_of(Card::Block);
-        let mut guards = turn.slots_of(Card::Bulwark);
-        match turn.statics_in_hand() > 0 {
-            true => guards.extend(wipes.iter().chain(&blocks)),
-            false => guards.extend(blocks.iter().chain(&wipes)),
-        }
-        let mut up = 0;
-        for slot in guards {
-            if turn.block >= heavy || up == AUTO_GUARDS {
-                break;
-            }
-            if turn.play(table, slot) {
-                up += 1;
-            }
-        }
+        turn.guard(table, heavy, AUTO_GUARDS);
     }
     turn.hit(table);
-    // What is left shakes static out.
+    // What is left goes up against whatever is landing this turn, and
+    // then shakes static out.
+    if !turn.muted {
+        let cards = turn.hand.len();
+        turn.guard(table, table.incoming(table.now), cards);
+    }
     for slot in turn.slots_of(Card::Static) {
         turn.play(table, slot);
     }

@@ -37,19 +37,19 @@ const SWEEP: &[(&str, Rules)] = &[
         },
     ),
     (
-        "boss340 jab75",
+        "boss350 jab75",
         Rules {
-            old_signal: boss(340, 39),
+            old_signal: boss(350, 39),
             jab_percent: 75,
             ..RULES
         },
     ),
     (
-        "boss320 jab75 b50",
+        "boss320 jab75 hits185",
         Rules {
             old_signal: boss(320, 39),
             jab_percent: 75,
-            block_percent: 50,
+            hit_percent: 185,
             ..RULES
         },
     ),
