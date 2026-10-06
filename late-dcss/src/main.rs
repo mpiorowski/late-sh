@@ -16,6 +16,7 @@ mod publish;
 mod rc;
 mod server;
 mod stats;
+mod watch;
 
 use std::sync::Arc;
 use std::time::Duration;

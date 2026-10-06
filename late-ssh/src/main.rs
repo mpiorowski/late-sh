@@ -261,6 +261,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
     );
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
+    let live_games = late_ssh::app::door::spectate::svc::LiveGamesService::new();
     let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
@@ -465,6 +466,7 @@ async fn main() -> anyhow::Result<()> {
         greendragon_service,
         darkroom_service,
         arcade_handle_service,
+        live_games,
         door_rc_service,
         daily_service,
         bonsai_service,
@@ -555,6 +557,22 @@ async fn main() -> anyhow::Result<()> {
                 host: state.config.brogue_host.clone(),
                 port: state.config.brogue_port,
                 secret: state.config.brogue_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+
+    // The live-game rosters behind spectating: one roster stream per door
+    // whose host serves watch sessions, gated on that door's client flag.
+    let _dcss_roster_task = state.config.dcss_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Dcss,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.dcss_host.clone(),
+                port: state.config.dcss_port,
+                key: late_ssh::app::door::dcss::identity::derive_client_key(
+                    &state.config.dcss_secret,
+                ),
             },
             singleton_shutdown.clone(),
         )

@@ -189,9 +189,25 @@ pub fn to_ratatui_color(c: vt100::Color) -> Color {
 /// Blit a vt100 screen into `area` of `buf`. The screen must already be sized to
 /// `area.width x area.height` (the proxy resizes the parser on layout changes).
 pub fn blit_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
+    blit_screen_from(buf, area, screen, 0, 0);
+}
+
+/// Blit the window of `screen` starting at (`origin_row`, `origin_col`) into
+/// `area`: how a spectator fits a player's larger screen into a smaller
+/// viewport. Cells past the screen's edge are left untouched.
+pub fn blit_screen_from(
+    buf: &mut Buffer,
+    area: Rect,
+    screen: &vt100::Screen,
+    origin_row: u16,
+    origin_col: u16,
+) {
     for row in 0..area.height {
         for col in 0..area.width {
-            let Some(src) = screen.cell(row, col) else {
+            let Some(src) = screen.cell(
+                origin_row.saturating_add(row),
+                origin_col.saturating_add(col),
+            ) else {
                 continue;
             };
             let x = area.x + col;
@@ -237,7 +253,8 @@ pub fn blit_screen(buf: &mut Buffer, area: Rect, screen: &vt100::Screen) {
     // which navigate purely by moving the cursor, are visible at all.
     if !screen.hide_cursor() {
         let (row, col) = screen.cursor_position();
-        if row < area.height
+        if let (Some(row), Some(col)) = (row.checked_sub(origin_row), col.checked_sub(origin_col))
+            && row < area.height
             && col < area.width
             && let Some(dst) = buf.cell_mut((area.x + col, area.y + row))
         {

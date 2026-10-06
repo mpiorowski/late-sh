@@ -983,6 +983,7 @@ impl russh::server::Handler for ClientHandler {
             greendragon_service: self.state.greendragon_service.clone(),
             darkroom_service: self.state.darkroom_service.clone(),
             arcade_handle_service: self.state.arcade_handle_service.clone(),
+            live_games: self.state.live_games.clone(),
             door_rc_service: self.state.door_rc_service.clone(),
             initial_door_rcs,
             daily_service: self.state.daily_service.clone(),

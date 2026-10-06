@@ -318,6 +318,9 @@ pub struct SessionConfig {
     /// Accessor for the account's arcade handle (the public door-game name;
     /// crawl's `-name`), claimed once from the DCSS launcher.
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    /// The door hosts' live-game rosters, followed once per process: the
+    /// hub's watch list and a player's own watcher count.
+    pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// Accessor for the account's door rc files (.nethackrc / DCSS init.txt),
     /// edited from the Games hub config box and pushed to the hosts at launch.
     pub door_rc_service: crate::app::door::rc::DoorRcService,
@@ -819,6 +822,10 @@ pub struct App {
     pub(crate) dcss_host: String,
     pub(crate) dcss_port: u16,
     pub(crate) dcss_secret: String,
+    /// The live game this session is watching, while it watches one. Held
+    /// only on the Games hub, which draws it in place of the sidebar.
+    pub(crate) spectate_state: Option<crate::app::door::spectate::state::State>,
+    pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
     /// host so curses gets a real terminfo entry.
@@ -1720,6 +1727,8 @@ impl App {
             dcss_host: config.dcss_host,
             dcss_port: config.dcss_port,
             dcss_secret: config.dcss_secret,
+            spectate_state: None,
+            live_games: config.live_games,
             brogue_state: None,
             brogue_term: config.term.clone(),
             brogue_enabled: config.brogue_enabled,
@@ -2010,6 +2019,35 @@ impl App {
         // Dropping the State drops the process; the host then SIGHUP-saves the
         // child crawl so the run resumes next launch.
         self.dcss_state = None;
+    }
+
+    /// Watch `playname`'s live `game`, replacing any watch already open.
+    pub(crate) fn start_spectating(
+        &mut self,
+        game: crate::app::door::spectate::state::SpectateGame,
+        playname: String,
+    ) {
+        use crate::app::door::spectate::proxy::WatchTarget;
+        use crate::app::door::spectate::state::{SpectateGame, State};
+
+        let target = match game {
+            SpectateGame::Dcss => WatchTarget {
+                host: self.dcss_host.clone(),
+                port: self.dcss_port,
+                key: crate::app::door::dcss::identity::derive_client_key(&self.dcss_secret),
+            },
+        };
+        self.spectate_state = Some(State::new(
+            game,
+            playname,
+            target,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    pub(crate) fn stop_spectating(&mut self) {
+        // Dropping the State aborts the stream; the host unlists the watcher.
+        self.spectate_state = None;
     }
 
     pub(crate) fn enter_brogue(&mut self) {

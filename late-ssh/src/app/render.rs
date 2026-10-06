@@ -211,6 +211,13 @@ struct DrawContext<'a> {
     brogue_live: bool,
     darkroom_live: bool,
     greendragon_live: bool,
+    /// The live game this session is watching; the hub draws it instead of
+    /// its selector while one is held.
+    spectate_state: Option<&'a crate::app::door::spectate::state::State>,
+    /// DCSS's live games: the hub's watch list and the watch view's header.
+    dcss_roster: std::sync::Arc<Vec<crate::app::door::spectate::proxy::LiveGame>>,
+    /// Watchers on this player's own running DCSS game, for its chrome.
+    dcss_watchers: Option<usize>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -425,6 +432,15 @@ impl App {
         let brogue_live = HubGame::Brogue.live_screen(self).is_some();
         let darkroom_live = HubGame::Darkroom.live_screen(self).is_some();
         let greendragon_live = HubGame::GreenDragon.live_screen(self).is_some();
+        let dcss_watchers = match self.dcss_state.as_ref().map(|state| state.handle_status()) {
+            Some(crate::app::door::arcade::HandleStatus::Claimed(handle)) => {
+                self.live_games.watchers_of(
+                    crate::app::door::spectate::state::SpectateGame::Dcss,
+                    &handle,
+                )
+            }
+            Some(_) | None => None,
+        };
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
@@ -1412,6 +1428,11 @@ impl App {
                         brogue_live,
                         darkroom_live,
                         greendragon_live,
+                        spectate_state: self.spectate_state.as_ref(),
+                        dcss_roster: self
+                            .live_games
+                            .roster(crate::app::door::spectate::state::SpectateGame::Dcss),
+                        dcss_watchers,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1894,38 +1915,52 @@ impl App {
                 &ctx.clubhouse_state.tour_fight,
                 ctx.clubhouse_state.username(),
             ),
-            Screen::Games => {
-                crate::app::door::hub::ui::draw_games_hub(
-                    frame,
-                    content_area,
-                    &crate::app::door::hub::ui::HubView {
-                        selected: ctx.games_hub_selected,
-                        scroll: ctx.games_hub_scroll,
-                        max_scroll: ctx.games_hub_max_scroll,
-                        delete_confirm: ctx.door_delete_confirm,
-                        rebels_enabled: ctx.rebels_enabled,
-                        nethack_enabled: ctx.nethack_enabled,
-                        dcss_enabled: ctx.dcss_enabled,
-                        brogue_enabled: ctx.brogue_enabled,
-                        usurper_enabled: ctx.usurper_enabled,
-                        dopewars_enabled: ctx.dopewars_enabled,
-                        bashquest_enabled: ctx.bashquest_enabled,
-                        codekeep_enabled: ctx.codekeep_enabled,
-                        lateania_online: ctx.lateania_online,
-                        lateania_slots: ctx.lateania_slots.clone(),
-                        lateania_slot_cursor: ctx.lateania_slot_cursor,
-                        lateania_live: ctx.lateania_live,
-                        nethack_live: ctx.nethack_live,
-                        dcss_live: ctx.dcss_live,
-                        brogue_live: ctx.brogue_live,
-                        darkroom_live: ctx.darkroom_live,
-                        greendragon_live: ctx.greendragon_live,
-                        rc_modal: ctx.door_rc_modal.map(|(game, content)| {
-                            crate::app::door::hub::ui::RcModalView { game, content }
-                        }),
-                    },
-                );
-            }
+            // A watch owns the hub while this session holds one.
+            Screen::Games => match ctx.spectate_state {
+                Some(state) => {
+                    let roster = match state.game() {
+                        crate::app::door::spectate::state::SpectateGame::Dcss => &ctx.dcss_roster,
+                    };
+                    crate::app::door::spectate::ui::draw(
+                        frame,
+                        content_area,
+                        &crate::app::door::spectate::ui::SpectateView { state, roster },
+                    );
+                }
+                None => {
+                    crate::app::door::hub::ui::draw_games_hub(
+                        frame,
+                        content_area,
+                        &crate::app::door::hub::ui::HubView {
+                            selected: ctx.games_hub_selected,
+                            scroll: ctx.games_hub_scroll,
+                            max_scroll: ctx.games_hub_max_scroll,
+                            delete_confirm: ctx.door_delete_confirm,
+                            rebels_enabled: ctx.rebels_enabled,
+                            nethack_enabled: ctx.nethack_enabled,
+                            dcss_enabled: ctx.dcss_enabled,
+                            brogue_enabled: ctx.brogue_enabled,
+                            usurper_enabled: ctx.usurper_enabled,
+                            dopewars_enabled: ctx.dopewars_enabled,
+                            bashquest_enabled: ctx.bashquest_enabled,
+                            codekeep_enabled: ctx.codekeep_enabled,
+                            lateania_online: ctx.lateania_online,
+                            lateania_slots: ctx.lateania_slots.clone(),
+                            lateania_slot_cursor: ctx.lateania_slot_cursor,
+                            lateania_live: ctx.lateania_live,
+                            nethack_live: ctx.nethack_live,
+                            dcss_live: ctx.dcss_live,
+                            brogue_live: ctx.brogue_live,
+                            darkroom_live: ctx.darkroom_live,
+                            greendragon_live: ctx.greendragon_live,
+                            dcss_roster: &ctx.dcss_roster,
+                            rc_modal: ctx.door_rc_modal.map(|(game, content)| {
+                                crate::app::door::hub::ui::RcModalView { game, content }
+                            }),
+                        },
+                    );
+                }
+            },
             Screen::Lateania => {
                 crate::app::door::lateania::screen::GAME.draw(
                     frame,
@@ -2736,6 +2771,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
+            // Being watched is never hidden from the player.
+            if let Some(watchers) = ctx.dcss_watchers.filter(|n| *n > 0) {
+                spans.push(Span::styled(
+                    format!("· {watchers} watching "),
+                    Style::default().fg(theme::AMBER_GLOW()),
+                ));
+            }
         }
     }
 

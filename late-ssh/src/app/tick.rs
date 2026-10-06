@@ -571,6 +571,32 @@ impl App {
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
         }
+        // The live-game rosters feed the hub's watch list and the watcher
+        // count in a running DCSS game's chrome: drain always, pay a frame
+        // only where one of them is drawn.
+        let rosters_changed = self.live_games.tick();
+        changed |= rosters_changed && matches!(self.screen, Screen::Games | Screen::Dcss);
+        // A watch lives only on the Games hub. Leaving the hub ends it, and
+        // so does the watched game ending (or its stream dropping): back to
+        // the hub with a word on why the screen went away.
+        let watch_end = self
+            .spectate_state
+            .as_ref()
+            .and_then(|state| state.end_reason(self.screen == Screen::Games));
+        match watch_end {
+            Some(crate::app::door::spectate::state::WatchEnd::LeftHub) => {
+                self.stop_spectating();
+                changed = true;
+            }
+            Some(crate::app::door::spectate::state::WatchEnd::GameEnded(playname)) => {
+                self.banner = Some(crate::app::common::primitives::Banner::info(&format!(
+                    "{playname}'s game is no longer running."
+                )));
+                self.stop_spectating();
+                changed = true;
+            }
+            None => {}
+        }
         // A detached roguelike whose game has ended (death, save, idle
         // shutdown, network drop) has nothing left to resume: drop the state
         // so the hub card and backtick cycle stop advertising a live game.

@@ -1265,6 +1265,13 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
 
     let selected = app.games_hub_state.selected_game();
 
+    // While this session watches a live game the watch view owns the hub:
+    // its own keys switch games, and no hub key (Enter, the sidebar, `c`)
+    // reaches the hidden selector behind it.
+    if app.spectate_state.is_some() {
+        return crate::app::door::spectate::input::handle_event(app, event);
+    }
+
     // The rc config modal is fully modal while open: `x` clears the stored
     // config, paste replaces it (handle_bracketed_paste), Esc closes it
     // (dispatch_escape), and every other key is swallowed.
@@ -1402,6 +1409,15 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         {
             app.door_rc_modal = selected.rc_game();
             true
+        }
+        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
+            match selected.spectate_game() {
+                Some(game) => {
+                    crate::app::door::spectate::input::watch_first(app, game);
+                    true
+                }
+                None => false,
+            }
         }
         _ => false,
     }
@@ -2363,10 +2379,12 @@ fn dispatch_escape(app: &mut App) {
         app.set_screen(Screen::Dashboard);
         return;
     }
-    // Esc from the Games hub closes the rc config modal, cancels a pending
-    // reset prompt, and otherwise drops back to Home.
+    // Esc from the Games hub stops watching, closes the rc config modal,
+    // cancels a pending reset prompt, and otherwise drops back to Home.
     if ctx.screen == Screen::Games {
-        if app.door_rc_modal.is_some() {
+        if app.spectate_state.is_some() {
+            app.stop_spectating();
+        } else if app.door_rc_modal.is_some() {
             app.door_rc_modal = None;
         } else if app.door_delete_confirm {
             app.door_delete_confirm = false;

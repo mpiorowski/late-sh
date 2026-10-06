@@ -366,6 +366,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             db.clone(),
         ),
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        live_games: crate::app::door::spectate::svc::LiveGamesService::new(),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
@@ -626,6 +627,7 @@ fn make_app_with_chat_service_and_permissions(
         nethack_secret: String::new(),
         nethack_activity: None,
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        live_games: crate::app::door::spectate::svc::LiveGamesService::new(),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
@@ -884,6 +886,7 @@ pub fn make_app_with_paired_client(
         nethack_secret: String::new(),
         nethack_activity: None,
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        live_games: crate::app::door::spectate::svc::LiveGamesService::new(),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,

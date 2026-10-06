@@ -50,6 +50,8 @@ pub struct HubView<'a> {
     /// not left, and not yet idled out.
     pub darkroom_live: bool,
     pub greendragon_live: bool,
+    /// DCSS's live games, listed on its landing for the `s` watch key.
+    pub dcss_roster: &'a [crate::app::door::spectate::proxy::LiveGame],
     /// The rc config modal, drawn over the hub while open.
     pub rc_modal: Option<RcModalView<'a>>,
 }
@@ -197,6 +199,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.dcss_enabled,
             view.dcss_live,
+            view.dcss_roster,
             scroll,
         ),
         HubGame::Brogue => crate::app::door::brogue::render::draw_landing(
@@ -421,10 +424,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     let scroll = ("ctrl j k", "scroll");
     let hints: &[(&str, &str)] = match selected {
         HubGame::Minecraft => &[switch, scroll],
+        HubGame::Dcss => &[switch, scroll, ("Enter", "play"), ("s", "watch")],
         HubGame::Lateania
         | HubGame::Rebels
         | HubGame::Nethack
-        | HubGame::Dcss
         | HubGame::Brogue
         | HubGame::Usurper
         | HubGame::GreenDragon

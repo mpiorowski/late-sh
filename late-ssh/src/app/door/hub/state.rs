@@ -3,7 +3,9 @@
 //! sidebar of games on the left with the selected game's full landing page
 //! rendered beside it — not a scroll. Up/down (or j/k, h/l) change the
 //! selection; Enter launches the selected game; Ctrl+J/K (or Ctrl+Down/Up)
-//! scroll a landing too long for the terminal. Adding a future door game is a
+//! scroll a landing too long for the terminal; `s` on a watchable card opens
+//! the read-only watch view (`door::spectate`), which replaces the selector
+//! until Esc. Adding a future door game is a
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
 //! new top-level screen. Minecraft is the one card with nothing to launch: the
 //! server is played from the game client, so its landing is information only.
@@ -118,6 +120,26 @@ impl HubGame {
             HubGame::Lateania
             | HubGame::Minecraft
             | HubGame::Rebels
+            | HubGame::Brogue
+            | HubGame::Usurper
+            | HubGame::GreenDragon
+            | HubGame::Dopewars
+            | HubGame::Bashquest
+            | HubGame::Codekeep
+            | HubGame::Darkroom => None,
+        }
+    }
+
+    /// The watchable door behind this card, for the doors whose hosts serve
+    /// watch sessions (the hub's `s` key).
+    pub fn spectate_game(self) -> Option<crate::app::door::spectate::state::SpectateGame> {
+        use crate::app::door::spectate::state::SpectateGame;
+        match self {
+            HubGame::Dcss => Some(SpectateGame::Dcss),
+            HubGame::Lateania
+            | HubGame::Minecraft
+            | HubGame::Rebels
+            | HubGame::Nethack
             | HubGame::Brogue
             | HubGame::Usurper
             | HubGame::GreenDragon

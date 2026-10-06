@@ -470,6 +470,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         greendragon_service: state.greendragon_service.clone(),
         darkroom_service: state.darkroom_service.clone(),
         arcade_handle_service: state.arcade_handle_service.clone(),
+        live_games: state.live_games.clone(),
         door_rc_service: state.door_rc_service.clone(),
         initial_door_rcs,
         daily_service: state.daily_service.clone(),

@@ -3823,6 +3823,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "vt100",
 ]
 
 [[package]]
