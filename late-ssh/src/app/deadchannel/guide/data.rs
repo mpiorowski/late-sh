@@ -362,10 +362,10 @@ pub const SECTIONS: &[Section] = &[
                 "*level 3*, for a strike. *jab*: free, hits for half a strike. or *siphon*: a strike that mends you for half of what it hits.",
             ),
             Block::Rule(
-                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
+                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds three blocks.",
             ),
             Block::Rule(
-                "*level 9*, for a strike. *burn*: free, two more energy this turn, and a static card into your deck. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
+                "*level 9*, for a strike, and both put static to work. *burn*: free, one more energy this turn, and one more again for every static card in your hand, burned up. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
             ),
             Block::Rule(
                 "*level 12*, for a strike. *sever*: a strike that hits twice as hard once the glyph is at half its signal or less. or *mute*: two energy, and whatever the glyph meant to do this turn does nothing. a glyph that is only gathering has nothing to mute.",

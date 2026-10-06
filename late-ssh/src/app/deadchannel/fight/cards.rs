@@ -7,9 +7,9 @@
 //! new card: one of two, the same two for everybody at that level, and
 //! the one taken goes in over a strike or a block ([`deck`]). Four drafts,
 //! sixteen decks, every one of them small enough for the arena to fight
-//! (`fight/BALANCE.md`). Every new card's number is one of the four the
-//! basic cards already print ([`Card::effect`]), so the wall still prices
-//! all of it.
+//! (`fight/BALANCE.md`). Every new card's number is a share of the strike
+//! or the block the basic cards already print (`data::Rules`,
+//! [`Card::effect`]), so the wall still prices all of it.
 //!
 //! Static is the one card nobody chose: a hit that lands puts one in the
 //! discard pile, and it rides the deck for the rest of the day's road.
@@ -52,9 +52,10 @@ pub enum Card {
     /// Hits for a block's worth and for every point of block standing;
     /// the block stays.
     Riposte,
-    /// Two blocks and half of a third, for two energy.
+    /// Three blocks in one card, for two energy.
     Bulwark,
-    /// Two energy now, and a static card into your deck.
+    /// An energy for nothing, and one more for every static card in the
+    /// hand, which burns up for good.
     Burn,
     /// A strike, and one more for every static card in the hand, which
     /// goes with it for good.
@@ -78,7 +79,7 @@ pub struct Draft {
 
 /// The drafts, in the order they are owed. Each is a question with no
 /// right answer: tempo or sustain, armor as a weapon or as a wall, static
-/// as fuel or as ammunition, the finisher or the cut-out.
+/// burned for energy or thrown for damage, the finisher or the cut-out.
 pub const DRAFTS: [Draft; 4] = [
     Draft {
         level: 3,
@@ -149,23 +150,10 @@ pub struct Effect {
     pub mend: i32,
     /// Energy handed back this turn.
     pub energy: u8,
-    /// Static cards into the deck.
-    pub static_in: usize,
     /// Every static card in the hand leaves the deck.
     pub clears_hand: bool,
     /// The glyph's move this turn does nothing.
     pub mutes: bool,
-}
-
-/// Half of `n`, rounded up: a jab's share of a strike, a siphon's mend.
-fn half(n: i32) -> i32 {
-    (n + 1) / 2
-}
-
-/// Two and a half of `n`, the half rounded up: the surge's share of a
-/// strike (`Rules::surge` is this), the bulwark's of a block.
-fn two_and_a_half(n: i32) -> i32 {
-    n * 2 + half(n)
 }
 
 /// The deck every runner carries, before the day puts static in it.
@@ -227,8 +215,8 @@ impl Card {
             Card::Jab => "free. hits for half a strike",
             Card::Siphon => "a strike that mends you for half of what it hits",
             Card::Riposte => "hits for a block's worth plus all the block you have up",
-            Card::Bulwark => "two energy. holds two blocks and a half",
-            Card::Burn => "free. two more energy now, one static card in your deck",
+            Card::Bulwark => "two energy. holds three blocks",
+            Card::Burn => "free. +1 energy, and +1 per static card in hand, burned",
             Card::Ground => "a strike, plus one per static card in hand. they go too",
             Card::Sever => "a strike. twice as hard once the glyph is at half or less",
             Card::Mute => "two energy. the glyph's move this turn does nothing",
@@ -259,12 +247,12 @@ impl Card {
                 ..none
             },
             Card::Jab => Effect {
-                damage: half(powers.strike),
+                damage: powers.jab,
                 ..none
             },
             Card::Siphon => Effect {
                 damage: powers.strike,
-                mend: half(powers.strike),
+                mend: powers.mend,
                 ..none
             },
             Card::Riposte => Effect {
@@ -272,22 +260,22 @@ impl Card {
                 ..none
             },
             Card::Bulwark => Effect {
-                block: two_and_a_half(powers.block),
+                block: powers.bulwark,
                 ..none
             },
             Card::Burn => Effect {
-                energy: BURN_ENERGY,
-                static_in: 1,
+                energy: powers.burn + board.statics_in_hand as u8,
+                clears_hand: true,
                 ..none
             },
             Card::Ground => Effect {
-                damage: powers.strike * (1 + board.statics_in_hand as i32),
+                damage: powers.strike + powers.ground * board.statics_in_hand as i32,
                 clears_hand: true,
                 ..none
             },
             Card::Sever => Effect {
                 damage: match board.foe_signal * 2 <= board.foe_max_signal {
-                    true => powers.strike * 2,
+                    true => powers.sever,
                     false => powers.strike,
                 },
                 ..none
@@ -300,9 +288,6 @@ impl Card {
         }
     }
 }
-
-/// Energy a burn hands back.
-pub const BURN_ENERGY: u8 = 2;
 
 /// The three piles of a fight in progress. The hand keeps its slots: a
 /// played card leaves a hole, so the number on a card is the number you

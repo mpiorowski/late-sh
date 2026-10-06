@@ -138,6 +138,16 @@ pub struct Powers {
     pub block: i32,
     /// The glyph's hit before your block; a heavy is twice it.
     pub hit: i32,
+    /// The drafted cards': a jab's hit, what a siphon mends, a bulwark's
+    /// hold, a burn's energy before static feeds it, what a ground adds
+    /// for each static card in the hand, and a sever's hit once the
+    /// glyph is at half.
+    pub jab: i32,
+    pub mend: i32,
+    pub bulwark: i32,
+    pub burn: u8,
+    pub ground: i32,
+    pub sever: i32,
 }
 
 impl Fight {
@@ -829,11 +839,18 @@ impl Sheet {
 
     pub fn powers_under(&self, rules: &Rules, fight: &Fight) -> Powers {
         let strike = rules.strike(self.attack(), fight.foe_defense);
+        let block = rules.block(self.defense());
         Powers {
             strike,
             surge: rules.surge(strike),
-            block: rules.block(self.defense()),
+            block,
             hit: rules.hit(fight.foe_attack, self.defense()),
+            jab: rules.share(strike, rules.jab_percent),
+            mend: rules.share(strike, rules.siphon_mend_percent),
+            bulwark: rules.share(block, rules.bulwark_percent),
+            burn: rules.burn_energy,
+            ground: rules.share(strike, rules.ground_percent),
+            sever: rules.share(strike, rules.sever_percent),
         }
     }
 
@@ -1668,7 +1685,6 @@ impl Sheet {
         fight.block += effect.block;
         let mended = effect.mend.min(self.max_signal() - self.signal).max(0);
         self.signal += mended;
-        let burned = fight.piles.add_static(effect.static_in);
         fight.muted = fight.muted || effect.mutes;
         let name = fight.name();
         let damage = effect.damage;
@@ -1698,13 +1714,10 @@ impl Sheet {
             },
             Card::Riposte => format!("you hit back with your guard. {damage} into the {name}."),
             Card::Bulwark => format!("you dig in. block {}.", fight.block),
-            Card::Burn => match burned {
-                0 => format!(
-                    "you burn hot. +{} energy. your deck cannot hold any more static.",
-                    effect.energy
-                ),
-                _ => format!(
-                    "you burn hot. +{} energy, and a static card into your deck.",
+            Card::Burn => match wiped {
+                0 => format!("you burn hot. +{} energy.", effect.energy),
+                n => format!(
+                    "you burn {n} static off your hand. +{} energy.",
                     effect.energy
                 ),
             },
@@ -1749,7 +1762,10 @@ impl Sheet {
                 powers.hit * 2
             )),
             (true, Intent::Hit | Intent::Heavy | Intent::Noise) => {
-                lines.push(format!("the {} moves, and nothing comes out.", fight.name()));
+                lines.push(format!(
+                    "the {} moves, and nothing comes out.",
+                    fight.name()
+                ));
             }
             (false, Intent::Hit) => self.struck(&mut fight, powers.hit, false, &mut lines),
             (false, Intent::Heavy) => self.struck(&mut fight, powers.hit * 2, true, &mut lines),

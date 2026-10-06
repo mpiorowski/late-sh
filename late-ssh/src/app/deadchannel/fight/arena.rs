@@ -441,7 +441,9 @@ impl BuildReading {
             matchup(&rules, &Recipe::level_kit(level, &build), pick, Hand::Auto)
                 .expect("the fight starts")
         };
-        let fair: Vec<Matchup> = (2..=MAX_LEVEL).map(|level| fight(level, Pick::Fair)).collect();
+        let fair: Vec<Matchup> = (2..=MAX_LEVEL)
+            .map(|level| fight(level, Pick::Fair))
+            .collect();
         let low = |odds: &mut dyn Iterator<Item = f64>| odds.fold(f64::MAX, f64::min);
         Self {
             build,
@@ -1148,7 +1150,10 @@ fn day_table(name: &str, climbs: &[Climb], days: usize) -> String {
         "### {name}\n\n| day | level: low, median, high | kit | cards | kills (bright) | runs | dropped | earned | gear | patch | bits at dusk | crystals |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     );
     for day in 0..days {
-        let on: Vec<&Day> = climbs.iter().filter_map(|climb| climb.days.get(day)).collect();
+        let on: Vec<&Day> = climbs
+            .iter()
+            .filter_map(|climb| climb.days.get(day))
+            .collect();
         if on.len() * 2 < climbs.len() {
             break;
         }
@@ -1614,13 +1619,35 @@ fn report(rules: Rules) -> String {
 fn sweep(candidates: &[(&str, Rules)]) -> String {
     let mut out = String::from(Reading::HEADER);
     let mut missed = String::new();
+    let mut drafts = String::new();
     for (name, rules) in candidates {
         let reading = Reading::take(*rules);
         out.push_str(&reading.row(name));
         for miss in reading.misses() {
             missed.push_str(&format!("- {name}: {miss}\n"));
         }
+        drafts.push_str(&format!("| {name} |"));
+        for spread in draft_spreads(&reading.builds) {
+            for option in 0..spread.options.len() {
+                drafts.push_str(&format!(
+                    " {:.1}, {:.0}% |",
+                    spread.days[option],
+                    spread.boss[option] * 100.0
+                ));
+            }
+        }
+        drafts.push('\n');
     }
+    out.push_str("\nEvery draft's options on the key, each over the builds that carry it: the mean day of the mark, and the Old Signal.\n\n| rules |");
+    for draft in &DRAFTS {
+        for option in draft.options {
+            out.push_str(&format!(" {} |", option.name()));
+        }
+    }
+    out.push_str("\n|---|");
+    out.push_str(&"---|".repeat(DRAFTS.len() * 2));
+    out.push('\n');
+    out.push_str(&drafts);
     if !missed.is_empty() {
         out.push_str("\nMissed targets:\n\n");
         out.push_str(&missed);

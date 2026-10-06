@@ -460,6 +460,14 @@ pub struct Rules {
     pub cache_percent: i64,
     /// The Old Signal's numbers.
     pub old_signal: FoeTier,
+    /// The drafted cards' numbers, each a share of a strike or a block
+    /// (`cards.rs`; a card's rule line says the same number in words).
+    pub jab_percent: i32,
+    pub siphon_mend_percent: i32,
+    pub bulwark_percent: i32,
+    pub burn_energy: u8,
+    pub ground_percent: i32,
+    pub sever_percent: i32,
 }
 
 /// The rules the game is played under.
@@ -481,6 +489,12 @@ pub const RULES: Rules = Rules {
     rest_mend_percent: REST_MEND_PERCENT,
     cache_percent: CACHE_PERCENT,
     old_signal: OLD_SIGNAL_TIER,
+    jab_percent: JAB_PERCENT,
+    siphon_mend_percent: SIPHON_MEND_PERCENT,
+    bulwark_percent: BULWARK_PERCENT,
+    burn_energy: BURN_ENERGY,
+    ground_percent: GROUND_PERCENT,
+    sever_percent: SEVER_PERCENT,
 };
 
 impl Rules {
@@ -525,6 +539,12 @@ impl Rules {
     /// twice this.
     pub fn hit(&self, foe_attack: u32, defense: u32) -> i32 {
         ((foe_attack.saturating_sub(defense / 4) * self.hit_percent / 100) as i32).max(1)
+    }
+
+    /// `percent` of `n`, rounded up: how a drafted card's number comes
+    /// off a strike or a block.
+    pub fn share(&self, n: i32, percent: i32) -> i32 {
+        (n * percent + 99) / 100
     }
 
     /// The bits in a cache on the road for a runner of `level`.
@@ -640,6 +660,24 @@ pub const HIT_PERCENT: u32 = 170;
 /// one block never stops one hit whole, so blocking is a choice and not a
 /// reflex (GAME.md, "The round").
 pub const BLOCK_PERCENT: u32 = 60;
+
+/// The drafted cards (`cards.rs`), each as a percentage of the strike or
+/// the block it is built on, rounded up. The card's rule line and the
+/// guide say the same number in words: move them together.
+///
+/// A jab, of a strike.
+pub const JAB_PERCENT: i32 = 50;
+/// What a siphon mends, of a strike.
+pub const SIPHON_MEND_PERCENT: i32 = 50;
+/// A bulwark, of a block.
+pub const BULWARK_PERCENT: i32 = 300;
+/// Energy a burn hands back before any static feeds it; each static card
+/// it burns is one more.
+pub const BURN_ENERGY: u8 = 1;
+/// What a ground adds for each static card in the hand, of a strike.
+pub const GROUND_PERCENT: i32 = 100;
+/// A sever once the glyph is at half its signal or less, of a strike.
+pub const SEVER_PERCENT: i32 = 200;
 
 /// Static cards a `Noise` turn puts into the deck.
 pub const NOISE_CARDS: usize = 2;

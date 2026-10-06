@@ -272,7 +272,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     sheet.peak_level = 3;
     sheet.signal = sheet.max_signal();
     let client = test_db.db.get().await.expect("db client");
-    DeadchannelRunner::store_sheet(&client, sheet.to_write())
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
         .await
         .expect("the sheet stored");
     session.reload();
@@ -287,7 +287,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
 
     assert!(session.take_card(1));
     answered(&mut session).await;
-    let sheet = session.sheet.as_ref().expect("the mirror");
+    let sheet = session.sheet.clone().expect("the mirror");
     assert_eq!(sheet.cards, vec![draft.options[1]]);
     assert_eq!(session.draft(), None);
     assert_eq!(
@@ -298,7 +298,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     assert!(!session.take_card(0), "nothing is owed: the key is free");
 
     // The row kept it, and the road is open again.
-    let row = DeadchannelRunner::lock_standing(&client, sheet.user_id)
+    let row = DeadchannelRunner::lock_standing(&**client, sheet.user_id)
         .await
         .expect("the row")
         .expect("a standing runner");

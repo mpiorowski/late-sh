@@ -478,10 +478,7 @@ fn card_text(card: Card, powers: &Powers, board: &Board) -> [String; 2] {
         Card::Jab => [hit, "free".to_string()],
         Card::Siphon => [hit, format!("mend {}", effect.mend)],
         Card::Riposte => [hit, "+block up".to_string()],
-        Card::Burn => [
-            format!("+{} energy", effect.energy),
-            "+1 static".to_string(),
-        ],
+        Card::Burn => [format!("+{} energy", effect.energy), "-static".to_string()],
         Card::Ground => [hit, "x static".to_string()],
         Card::Sever => [hit, "x2 < half".to_string()],
         Card::Mute => ["its move".to_string(), "= nothing".to_string()],
@@ -662,10 +659,7 @@ fn intent_word(intent: Intent) -> &'static str {
 /// tick, the one thing on a glyph's scene that moves.
 fn intent_spans(fight: &Fight, powers: &Powers, live: bool, tick: u64) -> Vec<Span<'static>> {
     if fight.muted && fight.intent() != Intent::Charge {
-        return vec![Span::styled(
-            "▸ muted. nothing lands",
-            lit(Neon::White),
-        )];
+        return vec![Span::styled("▸ muted. nothing lands", lit(Neon::White))];
     }
     let (line, style) = match fight.intent() {
         Intent::Hit => (format!("▸ hits for {}", powers.hit), glow(Neon::Red)),

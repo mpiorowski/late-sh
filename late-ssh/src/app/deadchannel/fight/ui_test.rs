@@ -623,11 +623,11 @@ fn the_drafted_cards_print_what_they_would_do_now() {
     );
     assert!(screen.contains("╰ free ─────╯"), "{screen}");
     for text in [
-        format!("hit {}", (powers.strike + 1) / 2),
+        format!("hit {}", powers.jab),
         // A block's worth and the five standing.
         format!("hit {}", powers.block + 5),
         // A strike, and one more for the static card beside it.
-        format!("hit {}", powers.strike * 2),
+        format!("hit {}", powers.strike + powers.ground),
         "+block up".to_string(),
         "x static".to_string(),
         "= nothing".to_string(),
@@ -639,7 +639,9 @@ fn the_drafted_cards_print_what_they_would_do_now() {
     sheet.fight.as_mut().expect("a fight").muted = true;
     // The howler opens gathering, and a charge is no move to mute.
     assert!(
-        render(&sheet, &scene, 0).join("\n").contains("▸ gathering."),
+        render(&sheet, &scene, 0)
+            .join("\n")
+            .contains("▸ gathering."),
         "{screen}"
     );
     sheet.fight.as_mut().expect("a fight").turn = 1;
@@ -668,7 +670,7 @@ fn a_draft_owed_takes_the_road_panel() {
             "a new card",
             "level 6. it takes the place of a block, until the mark",
             "[1] riposte hits for a block's worth plus all the block you have up",
-            "[2] bulwark two energy. holds two blocks and a half",
+            "[2] bulwark two energy. holds three blocks",
             "[1] [2] take one",
             "drafted: siphon",
         ] {

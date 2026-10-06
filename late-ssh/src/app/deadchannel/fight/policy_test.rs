@@ -14,12 +14,17 @@ fn table(hand: [Card; 5], now: Intent, next: Intent) -> Table {
         foe_max_signal: 100,
         signal: 50,
         max_signal: 50,
-        static_room: 5,
         powers: Powers {
             strike: 5,
             surge: 13,
             block: 4,
             hit: 6,
+            jab: 3,
+            mend: 3,
+            bulwark: 12,
+            burn: 1,
+            ground: 5,
+            sever: 10,
         },
         now,
         next,
@@ -132,9 +137,11 @@ fn sharp_weighs_the_whole_turn() {
     // Noise with a hit after it: block banked now is block for then, and
     // nothing is coming this turn to waste a card on beyond that.
     let quiet = table(MIXED, Intent::Noise, Intent::Noise);
+    let mut plays = cards(&quiet, &sharp(&quiet));
+    plays.sort_by_key(|card| card.name());
     assert_eq!(
-        cards(&quiet, &sharp(&quiet)),
-        vec![Card::Surge, Card::Strike],
+        plays,
+        vec![Card::Strike, Card::Surge],
         "nothing lands this turn or the next: all in"
     );
 
@@ -218,7 +225,9 @@ fn a_policy_only_plays_what_the_turn_can_pay_for() {
                         left -= i32::from(card.cost());
                         assert!(left >= 0, "{hand:?} {now:?} {energy}: {plays:?}");
                         if card == Card::Burn {
-                            left += 2;
+                            // One for nothing; the hands here hold no
+                            // static beside a burn.
+                            left += 1;
                         }
                     }
                 }
@@ -227,9 +236,9 @@ fn a_policy_only_plays_what_the_turn_can_pay_for() {
     }
 }
 
-/// The key with the drafted cards: the free ones always, a burn when the
-/// hand has more to play than the energy covers, a mute over the wall
-/// when a heavy lands, the best hit for the energy first.
+/// The key with the drafted cards: the free ones always, the burn ahead
+/// of everything for its energy, a mute over the wall when a heavy lands,
+/// the best hit for the energy first.
 #[test]
 fn auto_plays_the_drafted_cards_the_obvious_way() {
     // A jab is free: it goes first and the three energy still hit.
@@ -249,43 +258,24 @@ fn auto_plays_the_drafted_cards_the_obvious_way() {
         vec![Card::Jab, Card::Strike, Card::Strike, Card::Strike]
     );
 
-    // A burn pays for the whole hand: the surge, both strikes, the jab.
+    // A burn goes first: a fourth energy, and the static beside it
+    // burned up for a fifth. That pays for the surge and all three
+    // strikes, and nothing is left to shake out.
     let burn = table(
         [
             Card::Burn,
             Card::Surge,
             Card::Strike,
+            Card::Static,
             Card::Strike,
-            Card::Jab,
         ],
         Intent::Hit,
         Intent::Hit,
     );
     assert_eq!(
         cards(&burn, &auto(&burn)),
-        vec![
-            Card::Burn,
-            Card::Jab,
-            Card::Surge,
-            Card::Strike,
-            Card::Strike
-        ]
+        vec![Card::Burn, Card::Surge, Card::Strike, Card::Strike]
     );
-    // With nothing to spend it on, the burn stays in the hand.
-    let mut idle = table(
-        [
-            Card::Burn,
-            Card::Strike,
-            Card::Block,
-            Card::Block,
-            Card::Block,
-        ],
-        Intent::Hit,
-        Intent::Hit,
-    );
-    idle.hand[2] = None;
-    idle.hand[3] = None;
-    assert_eq!(cards(&idle, &auto(&idle)), vec![Card::Strike]);
 
     // The heavy lands: the mute takes it whole, no block goes up, and
     // the energy left still hits. Against a plain hit it stays put.

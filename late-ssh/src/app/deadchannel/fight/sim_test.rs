@@ -221,7 +221,11 @@ fn the_sims_auto_turn_is_the_auto_keys_turn() {
     sheet.signal = sheet.max_signal();
     sheet.weapon_tier = 8;
     sheet.armor_tier = 8;
-    sheet.cards = vec![DRAFTS[0].options[0], DRAFTS[1].options[0], DRAFTS[2].options[0]];
+    sheet.cards = vec![
+        DRAFTS[0].options[0],
+        DRAFTS[1].options[0],
+        DRAFTS[2].options[0],
+    ];
     sheet.road.static_cards = 2;
     let (mut by_key, mut by_sim) = (sheet.clone(), sheet);
     let (mut key_rng, mut sim_rng) = (StdRng::seed_from_u64(11), StdRng::seed_from_u64(11));
@@ -259,8 +263,14 @@ fn a_journal_tells_the_climb_it_was_kept_of() {
         Some(Event::Dusk { day, .. }) if *day == marked
     ));
     let count = |is: fn(&Event) -> bool| events.iter().filter(|event| is(event)).count();
-    assert_eq!(count(|event| matches!(event, Event::Dawn { .. })), told.days.len());
-    assert_eq!(count(|event| matches!(event, Event::Dusk { .. })), told.days.len());
+    assert_eq!(
+        count(|event| matches!(event, Event::Dawn { .. })),
+        told.days.len()
+    );
+    assert_eq!(
+        count(|event| matches!(event, Event::Dusk { .. })),
+        told.days.len()
+    );
     assert_eq!(count(|event| matches!(event, Event::Slain { .. })), 1);
     assert_eq!(
         count(|event| matches!(event, Event::Met { .. })) as u32,

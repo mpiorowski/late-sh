@@ -262,8 +262,9 @@ pub struct Climb {
 /// the day held.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Day {
-    /// At dusk. The level on the day of the mark is the top one: the
-    /// reset is the next climb's.
+    /// At dusk. On the day of the mark the level, the kit, and the cards
+    /// are the ones the Old Signal was put down with; the signal, the
+    /// bits, and the crystals are what the reset left.
     pub level: i32,
     pub signal: i32,
     pub weapon_tier: i32,
@@ -350,18 +351,51 @@ impl Snapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// A day begins: the roll has refilled the signal and the rations.
-    Dawn { day: u32, sheet: Snapshot },
-    Drafted { card: Card, over: Card },
-    Patched { restored: i32, paid: i64 },
-    Borrowed { amount: i64, fee: i64 },
-    Outfitted { slot: Slot, tier: i32, paid: i64 },
-    Carted { slot: Slot, tier: i32, crystals: i32 },
-    Drank { drink: Drink },
+    Dawn {
+        day: u32,
+        sheet: Snapshot,
+    },
+    Drafted {
+        card: Card,
+        over: Card,
+    },
+    Patched {
+        restored: i32,
+        paid: i64,
+    },
+    Borrowed {
+        amount: i64,
+        fee: i64,
+    },
+    Outfitted {
+        slot: Slot,
+        tier: i32,
+        paid: i64,
+    },
+    Carted {
+        slot: Slot,
+        tier: i32,
+        crystals: i32,
+    },
+    Drank {
+        drink: Drink,
+    },
     /// A step down the road, onto `node`.
-    Step { step: i32, lane: u8, node: Node },
-    Mended { restored: i32, signal: i32 },
-    Cleared { cards: usize },
-    Cached { bits: i64 },
+    Step {
+        step: i32,
+        lane: u8,
+        node: Node,
+    },
+    Mended {
+        restored: i32,
+        signal: i32,
+    },
+    Cleared {
+        cards: usize,
+    },
+    Cached {
+        bits: i64,
+    },
     /// A fight begins.
     Met {
         foe: String,
@@ -385,7 +419,9 @@ pub enum Event {
         /// The runner's, after the glyph moved.
         signal: i32,
     },
-    Ran { signal: i32 },
+    Ran {
+        signal: i32,
+    },
     Won {
         turns: u32,
         signal: i32,
@@ -395,11 +431,20 @@ pub enum Event {
         leveled: Option<i32>,
         static_cards: u8,
     },
-    Fell { turns: u32, bits_lost: i64 },
+    Fell {
+        turns: u32,
+        bits_lost: i64,
+    },
     /// The Old Signal put down.
-    Slain { turns: u32 },
+    Slain {
+        turns: u32,
+    },
     /// The day ends.
-    Dusk { day: u32, sheet: Snapshot, today: Day },
+    Dusk {
+        day: u32,
+        sheet: Snapshot,
+        today: Day,
+    },
 }
 
 /// Where a climb writes what it did. `Off` for the batches the bands are
@@ -570,18 +615,25 @@ impl Run<'_> {
     }
 
     fn dusk(&mut self) {
-        let marked = self.report.marked_on == Some(self.day);
+        // On the day of the mark the day's record is the runner who put
+        // the Old Signal down: the reset is the next climb's first dawn.
+        let (level, (weapon_tier, armor_tier), drafted) =
+            match self.report.kit_on[MAX_LEVEL as usize] {
+                Some(kit) => (MAX_LEVEL, kit, DRAFTS.len()),
+                None => (
+                    self.sheet.level,
+                    (self.sheet.weapon_tier, self.sheet.armor_tier),
+                    self.sheet.cards.len(),
+                ),
+            };
         self.today = Day {
-            level: match marked {
-                true => MAX_LEVEL,
-                false => self.sheet.level,
-            },
+            level,
             signal: self.sheet.signal,
-            weapon_tier: self.sheet.weapon_tier,
-            armor_tier: self.sheet.armor_tier,
+            weapon_tier,
+            armor_tier,
             bits: self.sheet.bits,
             crystals: self.sheet.crystals,
-            drafted: self.sheet.cards.len(),
+            drafted,
             ..self.today
         };
         self.report.days.push(self.today);
@@ -702,10 +754,12 @@ impl Run<'_> {
             false => [Slot::Armor, Slot::Weapon],
         };
         for slot in slots {
-            let affordable = (self.sheet.tier_of(slot) + 1..=MAX_TIER).rev().find(|tier| {
-                self.sheet.outfit_price_under(&self.rules, slot, *tier) + reserve
-                    <= self.sheet.bits
-            });
+            let affordable = (self.sheet.tier_of(slot) + 1..=MAX_TIER)
+                .rev()
+                .find(|tier| {
+                    self.sheet.outfit_price_under(&self.rules, slot, *tier) + reserve
+                        <= self.sheet.bits
+                });
             if let Some(tier) = affordable
                 && let Applied::Outfitted { slot, tier, paid } =
                     self.act(Command::Outfit { slot, tier })

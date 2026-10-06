@@ -1,53 +1,86 @@
 use super::{Reading, publish, report, runs, sweep};
-use crate::app::deadchannel::fight::data::{RULES, Rules};
+use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
 
 /// The candidates `make deadchannel-sweep` reads side by side. Edit this
 /// list for the question at hand; the first row is always the live game.
 const SWEEP: &[(&str, Rules)] = &[
     ("live", RULES),
     (
-        "hits 150%",
-        Rules {
-            hit_percent: 150,
-            ..RULES
-        },
-    ),
-    (
-        "hits 190%",
-        Rules {
-            hit_percent: 190,
-            ..RULES
-        },
-    ),
-    (
-        "blocks 50%",
+        "b50 boss290",
         Rules {
             block_percent: 50,
+            old_signal: boss(290, 39),
             ..RULES
         },
     ),
     (
-        "blocks 70%",
+        "b50 boss290 jab100",
         Rules {
-            block_percent: 70,
+            block_percent: 50,
+            old_signal: boss(290, 39),
+            jab_percent: 100,
             ..RULES
         },
     ),
     (
-        "glyph signal 115%",
+        "b50 boss290 jab100 burn2",
         Rules {
-            foe_signal_percent: 115,
+            block_percent: 50,
+            old_signal: boss(290, 39),
+            jab_percent: 100,
+            burn_energy: 2,
             ..RULES
         },
     ),
     (
-        "patch 50%",
+        "b50 boss290 jab100 burn2 ground50",
         Rules {
-            patch_percent: 50,
+            block_percent: 50,
+            old_signal: boss(290, 39),
+            jab_percent: 100,
+            burn_energy: 2,
+            ground_percent: 50,
+            ..RULES
+        },
+    ),
+    (
+        "b55 boss290 jab100 burn2",
+        Rules {
+            block_percent: 55,
+            old_signal: boss(290, 39),
+            jab_percent: 100,
+            burn_energy: 2,
+            ..RULES
+        },
+    ),
+    (
+        "boss290 jab100 burn2",
+        Rules {
+            old_signal: boss(290, 39),
+            jab_percent: 100,
+            burn_energy: 2,
+            ..RULES
+        },
+    ),
+    (
+        "boss290 jab75 burn2",
+        Rules {
+            old_signal: boss(290, 39),
+            jab_percent: 75,
+            burn_energy: 2,
             ..RULES
         },
     ),
 ];
+
+/// The Old Signal with `signal` and `attack`, its defense the live one.
+const fn boss(signal: i32, attack: u32) -> FoeTier {
+    FoeTier {
+        signal,
+        attack,
+        ..RULES.old_signal
+    }
+}
 
 /// Every table for the live rules. `make deadchannel-arena`.
 #[test]

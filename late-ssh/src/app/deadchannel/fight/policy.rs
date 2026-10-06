@@ -4,9 +4,10 @@
 //!
 //! - [`auto`] is the game's own `Auto` key (GAME.md, "The round": the
 //!   daily floor for the ambient runner). It is the obvious turn and no
-//!   more: finish the glyph if the hand can; on the turn a heavy lands,
-//!   mute it or put two guards up; hit with everything else, the best
-//!   rate first; and spend what is left shaking static out. It never
+//!   more: a burn first, for the energy; finish the glyph if the hand
+//!   can; on the turn a heavy lands, mute it or put two guards up; hit
+//!   with everything else, the best rate first; and spend what is left
+//!   shaking static out. It never
 //!   blocks a plain hit and never thinks a turn ahead: the block that
 //!   could have gone up while the glyph was gathering is the hand's to
 //!   find.
@@ -19,7 +20,7 @@
 //! The road's threat word is the fight played out on `auto`
 //! (`sim::odds`): it is the floor, and a hand played well beats the word.
 
-use super::cards::{Board, Card, Effect, STATIC_CAP};
+use super::cards::{Board, Card, Effect};
 use super::data::{Intent, NOISE_CARDS, Rules};
 use super::state::{Fight, Powers, Sheet};
 
@@ -35,8 +36,6 @@ pub struct Table {
     /// The runner's signal, and its max.
     pub signal: i32,
     pub max_signal: i32,
-    /// Static the deck still has room for.
-    pub static_room: usize,
     pub powers: Powers,
     /// What the glyph does at the end of this turn, and of the next.
     pub now: Intent,
@@ -53,7 +52,6 @@ impl Table {
             foe_max_signal: fight.foe_max_signal,
             signal: sheet.signal,
             max_signal: sheet.max_signal(),
-            static_room: STATIC_CAP.saturating_sub(fight.piles.static_cards()),
             powers: sheet.powers_under(rules, fight),
             now: fight.intent(),
             next: fight.intent_in(1),
@@ -82,9 +80,8 @@ struct Turn {
     damage: i32,
     /// Mended so far, before the signal's max caps it.
     mend: i32,
-    /// Static out of the deck, and into it.
+    /// Static out of the deck.
     cleared: usize,
-    added: usize,
     muted: bool,
     /// Energy paid.
     spent: u8,
@@ -101,7 +98,6 @@ impl Turn {
             damage: 0,
             mend: 0,
             cleared: 0,
-            added: 0,
             muted: false,
             spent: 0,
             plays: Vec::new(),
@@ -161,8 +157,6 @@ impl Turn {
                 }
             }
         }
-        let room = (table.static_room + self.cleared).saturating_sub(self.added);
-        self.added += effect.static_in.min(room);
         self.plays.push(slot);
         true
     }
@@ -206,20 +200,9 @@ impl Turn {
         }
     }
 
-    /// A burn, when the hand holds one and has more to play than the
-    /// energy covers.
+    /// A burn, when the hand holds one: it is free, and it only gives.
     fn burn(&mut self, table: &Table) {
-        let Some(slot) = self.slots_of(Card::Burn).into_iter().next() else {
-            return;
-        };
-        let wanted: u8 = self
-            .hand
-            .iter()
-            .flatten()
-            .filter(|card| **card != Card::Burn)
-            .map(|card| card.cost())
-            .sum();
-        if wanted > self.energy {
+        if let Some(slot) = self.slots_of(Card::Burn).into_iter().next() {
             self.play(table, slot);
         }
     }
@@ -293,8 +276,8 @@ const STRIKES_A_TURN: f64 = 2.5;
 /// What a turn played this far is worth, were it ended here.
 fn score(turn: &Turn, table: &Table) -> f64 {
     if turn.damage >= table.foe_signal {
-        // The kill, the cheapest way to it, and no static bought for it.
-        return 1.0e6 - f64::from(turn.spent) - turn.added as f64;
+        // The kill, and the cheapest way to it.
+        return 1.0e6 - f64::from(turn.spent);
     }
     let hit = f64::from(table.powers.hit);
     let per_point = hit / (STRIKES_A_TURN * f64::from(table.powers.strike.max(1)));
@@ -318,7 +301,7 @@ fn score(turn: &Turn, table: &Table) -> f64 {
     };
     dead + f64::from(turn.damage) * per_point - f64::from(taken)
         + f64::from(mended)
-        + (turn.cleared as f64 - turn.added as f64 - noise) * STATIC_WEIGHT * hit
+        + (turn.cleared as f64 - noise) * STATIC_WEIGHT * hit
         + f64::from(banked) * BANKED_WEIGHT
 }
 

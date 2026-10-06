@@ -166,6 +166,12 @@ fn every_card_does_what_it_says() {
         surge: 25,
         block: 6,
         hit: 9,
+        jab: 5,
+        mend: 5,
+        bulwark: 18,
+        burn: 1,
+        ground: 10,
+        sever: 20,
     };
     let board = Board {
         block: 4,
@@ -217,12 +223,13 @@ fn every_card_does_what_it_says() {
             ),
             // A block's worth and the four standing.
             (Card::Riposte, Effect { damage: 10, ..none }),
-            (Card::Bulwark, Effect { block: 15, ..none }),
+            (Card::Bulwark, Effect { block: 18, ..none }),
+            // One for nothing, and one for each of the two static cards.
             (
                 Card::Burn,
                 Effect {
-                    energy: 2,
-                    static_in: 1,
+                    energy: 3,
+                    clears_hand: true,
                     ..none
                 }
             ),
