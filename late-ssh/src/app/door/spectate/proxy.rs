@@ -22,11 +22,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use late_core::models::leaderboard::DoorGame;
+use late_core::shutdown::CancellationToken;
 use russh::client::{self, Config, Handler};
 use russh::keys::PublicKey;
 use russh::{ChannelMsg, Disconnect};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::metrics::DoorWatchOutcome;
@@ -327,10 +327,11 @@ pub enum WatchStatus {
 }
 
 /// One session's read-only view of a player's game. Owns a background task
-/// that applies the host's frames to a shared `vt100::Parser`; dropping the
-/// process aborts the task, which closes the connection.
+/// that applies the host's frames to a shared `vt100::Parser`. Dropping the
+/// process cancels the task through `stop`; the task itself records how the
+/// watch ended, so a viewer leaving counts the same as the host closing.
 pub struct SpectateProcess {
-    task: JoinHandle<()>,
+    stop: CancellationToken,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<WatchStatus>>,
 }
@@ -344,23 +345,30 @@ impl SpectateProcess {
     ) -> Self {
         let parser = Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0)));
         let status = Arc::new(Mutex::new(WatchStatus::Connecting));
+        let stop = CancellationToken::new();
         let task_parser = parser.clone();
         let task_status = status.clone();
-        let task = tokio::spawn(async move {
-            let result = run_game_stream(
+        let task_stop = stop.clone();
+        tokio::spawn(async move {
+            let stream = run_game_stream(
                 &target,
                 &playname,
                 &task_parser,
                 &task_status,
                 repaint.as_ref(),
-            )
-            .await;
-            let outcome = match result {
-                Ok(()) => DoorWatchOutcome::Closed,
-                Err(e) => {
-                    tracing::warn!(error = ?e, game = game.key(), playname = %playname, "watch stream failed");
-                    DoorWatchOutcome::Failed
-                }
+            );
+            let outcome = tokio::select! {
+                result = stream => match result {
+                    Ok(()) => DoorWatchOutcome::Closed,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, game = game.key(), playname = %playname, "watch stream failed");
+                        DoorWatchOutcome::Failed
+                    }
+                },
+                // The viewer ended the watch (another row, left the hub, the
+                // away window): dropping the stream future drops its
+                // connection, which is how the host learns the watcher left.
+                () = task_stop.cancelled() => DoorWatchOutcome::Left,
             };
             crate::metrics::record_door_watch_stream(game, outcome);
             *task_status.lock().expect("status mutex") = WatchStatus::Ended;
@@ -369,7 +377,7 @@ impl SpectateProcess {
             }
         });
         Self {
-            task,
+            stop,
             parser,
             status,
         }
@@ -388,7 +396,7 @@ impl SpectateProcess {
 
 impl Drop for SpectateProcess {
     fn drop(&mut self) {
-        self.task.abort();
+        self.stop.cancel();
     }
 }
 

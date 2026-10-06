@@ -2069,11 +2069,22 @@ impl App {
         self.spectate_state = None;
     }
 
-    /// Enter on the previewed live row: the watch takes the whole page and
-    /// its chat docks beside it.
+    /// Enter on the previewed live row (or `o` on the live strip): the watch
+    /// takes the whole page and its chat docks beside it.
     pub(crate) fn open_watch(&mut self) {
-        if let Some(state) = self.spectate_state.as_mut() {
-            state.open();
+        let Some(state) = self.spectate_state.as_mut() else {
+            return;
+        };
+        state.open();
+        // The pane's composer is the watch room's alone. A draft carried in
+        // from another room (a #lounge line half typed when the strip was
+        // clicked) would draw under the watch chat while Enter still sent it
+        // to the room it was started in.
+        let keeps_draft = self
+            .spectate_chat_room_id()
+            .is_some_and(|room_id| self.chat.composer_room_id() == Some(room_id));
+        if !keeps_draft {
+            self.chat.reset_composer();
         }
     }
 

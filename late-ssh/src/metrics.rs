@@ -454,9 +454,11 @@ pub enum SshRejectReason {
 /// How a viewer's watch stream of a live door game ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoorWatchOutcome {
-    /// The host closed the stream: the game ended, was never live, or the
-    /// viewer left.
+    /// The host closed the stream: the game ended, or was never live.
     Closed,
+    /// The viewer ended the watch: another rail row, leaving the hub with a
+    /// preview, the off-screen window running out.
+    Left,
     /// Connect, auth, or a broken frame stream.
     Failed,
 }
@@ -2644,6 +2646,7 @@ mod inner {
     fn door_watch_outcome_label(outcome: DoorWatchOutcome) -> &'static str {
         match outcome {
             DoorWatchOutcome::Closed => "closed",
+            DoorWatchOutcome::Left => "left",
             DoorWatchOutcome::Failed => "failed",
         }
     }

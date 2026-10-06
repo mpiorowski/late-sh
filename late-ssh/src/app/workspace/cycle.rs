@@ -83,8 +83,10 @@ impl WorkspaceBase {
 
 /// The game side of the chain: every screen a stop can be on, the Arcade
 /// lobby included (a daily is started there without a screen change).
-/// Crossing from a page onto this side is going into the games.
-fn is_game_side(screen: Screen) -> bool {
+/// Crossing from a page onto this side is going into the games. The Games
+/// hub is a page, but an open watch drawn over it is a stop, so the hub
+/// counts as game side exactly while the session holds one.
+fn is_game_side(app: &App, screen: Screen) -> bool {
     match screen {
         Screen::DailyMatch
         | Screen::HouseTable
@@ -95,8 +97,8 @@ fn is_game_side(screen: Screen) -> bool {
         | Screen::Lateania
         | Screen::Darkroom
         | Screen::GreenDragon => true,
+        Screen::Games => watch_open(app),
         Screen::Dashboard
-        | Screen::Games
         | Screen::Rebels
         | Screen::Dopewars
         | Screen::Bashquest
@@ -121,11 +123,11 @@ fn is_game_side(screen: Screen) -> bool {
 /// the page its `Ctrl+F` hands back; a fresh chord has already stamped its
 /// own, so the restore only fills an empty one.
 pub(crate) fn note_screen_change(app: &mut App, next: Screen) {
-    if is_game_side(next) && !is_game_side(app.screen) {
+    if is_game_side(app, next) && !is_game_side(app, app.screen) {
         app.workspace_base = WorkspaceBase::leaving(app);
     }
     if next == Screen::Zen
-        && is_game_side(app.screen)
+        && is_game_side(app, app.screen)
         && app.zen_return_screen.is_none()
         && let WorkspaceBase::Zen { back } = app.workspace_base
     {

@@ -4536,6 +4536,79 @@ async fn backtick_from_zen_hops_through_the_games_and_comes_home_to_zen() {
     assert_eq!(app.screen, Screen::Dashboard);
 }
 
+/// A watch opened from Zen (`o` on its Live tile showing a live door game)
+/// is a trip into the games like any other stop: backtick comes home to
+/// Zen, and Zen still knows the page its `Ctrl+F` hands back.
+#[tokio::test]
+async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+    use crate::app::zen::state::{KindPick, TileKind};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-watch-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-watch-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    let started_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("wall clock after the unix epoch")
+        .as_secs()
+        - 30;
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+
+    // Zen opened over the Leaderboards, with a Live tile showing the game.
+    app.set_screen(Screen::Leaderboard);
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "w tend").await;
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Lobby)
+        .expect("the default has a lobby");
+    app.zen.open_kind_picker();
+    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
+        app.zen.move_kind_picker(1);
+    }
+    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    // The tile draws the strip's one-row form.
+    wait_for_render_contains(&mut app, "dcss crawler").await;
+
+    // No render runs from here: the test door host is unreachable, so a
+    // tick would see the stream end and drop the watch.
+    app.handle_input(b"o");
+    assert_eq!(app.screen, Screen::Games, "o opens the watch");
+    assert_eq!(
+        app.spectate_state.as_ref().map(|state| state.mode()),
+        Some(WatchMode::Open)
+    );
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Zen, "backtick comes home to Zen");
+    app.handle_input(b"\x06");
+    assert_eq!(
+        app.screen,
+        Screen::Leaderboard,
+        "and Zen still hands back the page it was opened over"
+    );
+}
+
 #[tokio::test]
 async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
     use crate::app::common::primitives::Screen;

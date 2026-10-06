@@ -807,3 +807,63 @@ async fn o_on_a_live_door_game_opens_the_watch_and_backtick_toggles_it_with_home
     assert_eq!(app.screen, Screen::Games, "and backtick hops back in");
     assert_eq!(watch(&app).map(|(_, _, mode)| mode), Some(WatchMode::Open));
 }
+
+/// A #lounge draft belongs to #lounge. Clicking a live door game on the strip
+/// while one is half typed opens the watch without it: the watch chat's
+/// composer is the watch room's alone. Carried along, the draft would draw
+/// under the watch's messages while Enter still sent it to #lounge.
+#[tokio::test]
+async fn opening_a_watch_from_the_strip_drops_a_lounge_draft() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{proxy::LiveGame, state::SpectateGame};
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "strip-draft-me").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), me.id, "strip-draft-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a card the full strip fits");
+    let started_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("wall clock after the unix epoch")
+        .as_secs()
+        - 30;
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+    wait_for_render_contains(&mut app, "o or click to watch").await;
+
+    app.handle_input(b"i");
+    app.handle_input(b"nice sling");
+    assert!(app.chat.is_composing(), "i opens the lounge composer");
+    assert_eq!(app.chat.composer_room_id(), Some(lounge.id));
+
+    // The frame records where the strip is; the click lands on it. No
+    // render runs after the click: the test door host is unreachable, so a
+    // tick would see the stream end and drop the watch.
+    render_plain(&mut app);
+    let (strip, _) = app.live.hit.get().expect("the strip is on the card");
+    app.handle_input(format!("\x1b[<0;{};{}M", strip.x + 1, strip.y + 1).as_bytes());
+    assert_eq!(app.screen, Screen::Games, "the click opens the watch");
+    assert!(
+        app.spectate_state.as_ref().is_some_and(|state| state.is_open()),
+        "on the open watch"
+    );
+    assert!(
+        !app.chat.is_composing(),
+        "the lounge draft does not come along into the watch"
+    );
+    assert_eq!(app.chat.composer_room_id(), None);
+}
