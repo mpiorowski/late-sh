@@ -62,7 +62,7 @@ const TRACK: Rgb = [0.30, 0.30, 0.36];
 const STREET: Rgb = [0.20, 0.21, 0.26];
 const BEACON: Rgb = [1.0, 0.18, 0.18];
 
-pub(crate) struct LandingView<'a> {
+pub struct LandingView<'a> {
     /// The runner's sheet mirror (`fight/session.rs`); `None` until the
     /// reload lands.
     pub sheet: Option<&'a Sheet>,
@@ -161,7 +161,7 @@ fn far_towers(cells: &mut Cells, layer: &mut [Vec<Layer>], street_row: usize, t:
             for row in street_row.saturating_sub(h)..street_row {
                 cells[row][col] = (' ', on(SKY_FAR, SKY_FAR));
                 layer[row][col] = Layer::Far;
-                let lit = hash(col as u64 * 31 + row as u64, 13 + t / 97) % 17 == 0;
+                let lit = hash(col as u64 * 31 + row as u64, 13 + t / 97).is_multiple_of(17);
                 if lit {
                     cells[row][col] = ('·', on(scale(WINDOW_WARM, 0.45), SKY_FAR));
                 }
@@ -225,7 +225,7 @@ fn near_towers(
                     ][(hash(tower, 5) % 5) as usize];
                     let col = x + 1 + (hash(tower, 6) % (w as u64 - 3)) as usize;
                     // A sign shorts out now and then, a few ticks at a time.
-                    let burning = hash(tower, 8 + t / 3) % 13 != 0;
+                    let burning = !hash(tower, 8 + t / 3).is_multiple_of(13);
                     let style = match burning {
                         true => on(neon_rgb(neon), FACE).add_modifier(Modifier::BOLD),
                         false => on(scale(neon_rgb(neon), 0.22), FACE),
@@ -265,12 +265,12 @@ fn near_towers(
 /// One cell of a tower face: a window on every other column and row, lit
 /// or not, the rest bare face.
 fn window(dx: usize, dy: usize, col: usize, row: usize, t: u64) -> (char, Style) {
-    if dx % 2 == 0 || dy % 2 == 0 {
+    if dx.is_multiple_of(2) || dy.is_multiple_of(2) {
         return (' ', on(FACE, FACE));
     }
     let seed = hash(col as u64, row as u64);
     // Some windows change their minds, slowly.
-    let flip = hash(seed, t / 41) % 9 == 0;
+    let flip = hash(seed, t / 41).is_multiple_of(9);
     let kind = (seed % 10) as u8;
     let rgb = match (kind, flip) {
         (0..=3, false) | (8, true) => WINDOW_WARM,
@@ -323,7 +323,7 @@ fn name_sign(cells: &mut Cells, layer: &mut [Vec<Layer>], name: &[Vec<NameCell>]
             if x >= width {
                 continue;
             }
-            let shorted = hash(*letter as u64, t / 4) % 29 == 0;
+            let shorted = hash(*letter as u64, t / 4).is_multiple_of(29);
             let rgb = match shorted {
                 true => scale(neon_rgb(*neon), 0.25),
                 false => neon_rgb(*neon),
@@ -378,9 +378,9 @@ fn rain(cells: &mut Cells, layer: &[Vec<Layer>], street_row: usize, t: u64) {
 /// rings where the rain lands.
 fn street(cells: &mut Cells, street_row: usize, signs: &[HungSign], t: u64) {
     let width = cells[0].len();
-    for col in 0..width {
-        let ring = hash(col as u64, t / 2) % 23 == 0;
-        cells[street_row][col] = match ring {
+    for (col, cell) in cells[street_row].iter_mut().enumerate() {
+        let ring = hash(col as u64, t / 2).is_multiple_of(23);
+        *cell = match ring {
             true => ('∘', ink(RAIN)),
             false => ('▁', ink(STREET)),
         };

@@ -978,19 +978,29 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         Err(SheetError::Fight("unknown glyph kind 99".to_string()))
     );
 
-    // A fight from before the round has no deck to play: the row is
-    // wrong, loudly (migration 225 dropped every one of them).
+    // A fight with no piles is the exchange loop's, written by a binary
+    // from before the round still draining its sessions. There is no deck
+    // to play it with: it reads as no fight, the day handed back whole,
+    // and the runner is never locked out of the row.
     let deckless = DeadchannelRunner {
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 1}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": []
         })),
+        rations_left: 6,
+        kills_today: 2,
+        runs_today: 1,
+        road: Some(serde_json::json!({
+            "path": [{"lane": 1, "mark": "won"}], "static_cards": 2
+        })),
         ..row.clone()
     };
-    assert!(matches!(
-        Sheet::from_row(&deckless),
-        Err(SheetError::Fight(_))
-    ));
+    let handed_back = Sheet::from_row(&deckless).expect("a sheet");
+    assert_eq!(handed_back.fight, None);
+    assert_eq!(handed_back.rations_left, RATIONS_PER_DAY);
+    assert_eq!((handed_back.kills_today, handed_back.runs_today), (0, 0));
+    assert_eq!(handed_back.road, RoadRun::default());
+    assert_eq!(handed_back.signal, 10, "the signal is left as it stood");
 
     // A fight, a hand, and a road round-trip through the row, with the
     // glass and the crystals.

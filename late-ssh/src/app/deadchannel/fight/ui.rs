@@ -1639,10 +1639,8 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                         1 => "1 glyph down".to_string(),
                         n => format!("{n} glyphs down"),
                     };
-                    let reason = match reason {
-                        Some(reason) => reason,
-                        None => "the road is walked. the static will keep until the roll.",
-                    };
+                    let reason = reason
+                        .unwrap_or("the road is walked. the static will keep until the roll.");
                     lines.push(Line::from(Span::styled(format!("    {reason}"), text)));
                     lines.push(Line::from(Span::styled(
                         format!(
