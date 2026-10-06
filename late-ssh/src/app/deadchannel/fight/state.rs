@@ -832,6 +832,13 @@ impl Sheet {
         self.fight.is_none() && (self.is_down() || self.rations_left <= 0)
     }
 
+    /// Whether the plain thing to do at a rest is to clear the deck: the
+    /// signal is whole, so a mend would buy nothing, and there is static
+    /// to shake out. Otherwise it is the mend.
+    pub fn rest_clears(&self) -> bool {
+        self.signal >= self.max_signal() && self.road.static_cards > 0
+    }
+
     /// The numbers on the cards against `fight`'s glyph.
     pub fn powers(&self, fight: &Fight) -> Powers {
         self.powers_under(&RULES, fight)
@@ -1827,7 +1834,7 @@ impl Sheet {
             lines.extend(outcome.lines);
             match outcome.applied {
                 Applied::Played { .. } => {}
-                Applied::Won { .. } | Applied::Slain { .. } | Applied::Refused(_) => {
+                Applied::Won { .. } | Applied::Slain { .. } => {
                     return Outcome {
                         applied: outcome.applied,
                         lines,

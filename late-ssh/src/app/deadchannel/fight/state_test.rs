@@ -1959,6 +1959,19 @@ fn a_rest_mends_the_signal_or_clears_the_deck() {
     assert_eq!(clean, before);
 }
 
+/// The plain call at a rest (Enter) is the mend, unless the mend would
+/// buy nothing and the deck has static to shake out.
+#[test]
+fn the_plain_call_at_a_rest_clears_only_when_whole_with_static() {
+    let mut sheet = fresh();
+    sheet.signal = sheet.max_signal();
+    assert!(!sheet.rest_clears(), "whole and clean: the mend");
+    sheet.road.static_cards = 2;
+    assert!(sheet.rest_clears(), "whole with static: the clear");
+    sheet.signal -= 1;
+    assert!(!sheet.rest_clears(), "hurt: the mend comes first");
+}
+
 /// A cache pays a share of what the glyph of your level pays, and the
 /// bits machine takes its half of that like of anything else.
 #[test]

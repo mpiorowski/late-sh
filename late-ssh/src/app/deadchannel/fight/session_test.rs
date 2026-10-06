@@ -5,9 +5,10 @@ use tokio::time::{Duration, timeout};
 use super::{FightSession, Scene};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
-use crate::app::deadchannel::fight::data::FOES;
+use crate::app::deadchannel::fight::data::{FOES, RATIONS_PER_DAY, RULES};
+use crate::app::deadchannel::fight::road::{Mark, Node};
 use crate::app::deadchannel::fight::state::{Applied, Call, Outcome, Refusal};
-use crate::app::deadchannel::fight::state::{Command, Pick};
+use crate::app::deadchannel::fight::state::{Command, Pick, Sheet};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
@@ -119,6 +120,7 @@ async fn walking_up_opens_the_road_and_a_step_onto_a_glyph_opens_the_scene() {
         "the reload's sheet reads the fair fight"
     );
     assert_eq!(picker.lower, None, "nothing below the flicker");
+    assert_eq!(picker.bright, None, "no bright glyph on the first step");
     assert_eq!(session.open_lanes(), vec![0, 1, 2]);
 
     // The cursor walks the open lanes and holds at the ends.
@@ -256,6 +258,104 @@ async fn a_card_refused_keeps_the_scene_and_a_step_refused_ends_it() {
     let scene = session.scene.as_ref().expect("the scene");
     assert!(scene.over);
     assert_eq!(scene.lines, vec!["your signal is down.".to_string()]);
+}
+
+/// Stand `sheet` in front of the first rest of its day's road, nothing
+/// walked yet so every lane is in reach. Returns the rest's lane.
+fn before_the_first_rest(sheet: &mut Sheet) -> u8 {
+    let (step, lane) = sheet
+        .todays_road()
+        .steps
+        .iter()
+        .enumerate()
+        .find_map(|(step, lanes)| {
+            lanes
+                .iter()
+                .position(|node| *node == Node::Rest)
+                .map(|lane| (step, lane as u8))
+        })
+        .expect("every road has a rest");
+    sheet.rations_left = RATIONS_PER_DAY - step as i32;
+    lane
+}
+
+/// A step taken from a road whose mirror is stale: a fight landed on the
+/// row behind the session's back, so the rest's step resumes it, and the
+/// fight gets its scene instead of an empty word on the road.
+#[tokio::test]
+async fn a_step_that_finds_a_fight_on_the_row_opens_its_scene() {
+    let (test_db, mut session) = session_with_runner("fight-session-stale").await;
+    session.step_up();
+    answered(&mut session).await;
+    let mut sheet = session.sheet.clone().expect("the mirror landed");
+    let lane = before_the_first_rest(&mut sheet);
+    let client = test_db.db.get().await.expect("db client");
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("the sheet stored");
+    session.reload();
+    answered(&mut session).await;
+    // The fight the mirror never saw, written the way the fight loop writes.
+    sheet.engage(&RULES, Pick::Fair, &mut rand::thread_rng());
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("the fight stored");
+
+    session.picker.as_mut().expect("the road is open").lane = lane;
+    session.enter();
+    assert!(session.picker_open(), "a rest is taken from the road");
+    answered(&mut session).await;
+
+    assert!(!session.picker_open());
+    assert_eq!(
+        session.scene,
+        Some(Scene {
+            lines: vec![FOES[0].arrives.to_string()],
+            latest: 1,
+            over: false,
+            waiting: false,
+            old_signal: false,
+            failed: false,
+        })
+    );
+}
+
+/// In front of a quiet step no fight is played out for a threat word, and
+/// Enter at a rest clears the deck when the signal is whole and there is
+/// static in it.
+#[tokio::test]
+async fn a_rest_reads_no_threat_and_enter_clears_a_whole_runners_static() {
+    let (test_db, mut session) = session_with_runner("fight-session-rest").await;
+    session.step_up();
+    answered(&mut session).await;
+    // In front of the day's first rest, whole, static in the deck, written
+    // the way the fight loop writes.
+    let mut sheet = session.sheet.clone().expect("the mirror landed");
+    let lane = before_the_first_rest(&mut sheet);
+    sheet.signal = sheet.max_signal();
+    sheet.road.static_cards = 2;
+    let client = test_db.db.get().await.expect("db client");
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("the sheet stored");
+    session.reload();
+    answered(&mut session).await;
+
+    let picker = session.picker.as_mut().expect("the road stays open");
+    assert_eq!(
+        (picker.fair, picker.lower, picker.bright),
+        (None, None, None),
+        "a quiet step shows no threat word"
+    );
+    picker.lane = lane;
+    session.enter();
+    answered(&mut session).await;
+    let sheet = session.sheet.as_ref().expect("the mirror");
+    assert_eq!(sheet.road.static_cards, 0);
+    assert_eq!(
+        sheet.road.path.last().map(|trace| (trace.lane, trace.mark)),
+        Some((lane, Mark::Cleared))
+    );
 }
 
 /// A draft owed, through the service and the row: the step keys do

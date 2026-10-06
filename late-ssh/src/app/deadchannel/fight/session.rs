@@ -50,8 +50,10 @@ pub struct Picker {
     pub lane: u8,
     /// The threat of each pick from the mirror as it stands (its signal,
     /// its kit, the static in its deck); `None` when no fight would start
-    /// (the signal down, the rations spent, nothing below the flicker) or
-    /// before the mirror landed.
+    /// (the signal down, the rations spent, nothing below the flicker),
+    /// when no lane the next step reaches holds its node (a rest or a
+    /// cache shows no threat, and a draft owed is shown ahead of any
+    /// step), or before the mirror landed.
     pub fair: Option<Threat>,
     pub lower: Option<Threat>,
     pub bright: Option<Threat>,
@@ -231,13 +233,17 @@ impl FightSession {
     }
 
     /// Enter on the road: the plain thing to do with the node under the
-    /// cursor. A glyph is fought, a rest mends, a cache is taken.
+    /// cursor. A glyph is fought, a rest mends (or clears the deck when
+    /// the signal is whole and there is static in it, `Sheet::rest_clears`),
+    /// a cache is taken.
     pub(crate) fn enter(&mut self) {
-        let call = match self.node_ahead() {
-            Some(Node::Glyph) | None => Call::Fight(Pick::Fair),
-            Some(Node::Bright) => Call::Fight(Pick::Bright),
-            Some(Node::Rest) => Call::Mend,
-            Some(Node::Cache) => Call::Take,
+        let rest_clears = self.sheet.as_ref().is_some_and(Sheet::rest_clears);
+        let call = match (self.node_ahead(), rest_clears) {
+            (Some(Node::Glyph) | None, _) => Call::Fight(Pick::Fair),
+            (Some(Node::Bright), _) => Call::Fight(Pick::Bright),
+            (Some(Node::Rest), true) => Call::Clear,
+            (Some(Node::Rest), false) => Call::Mend,
+            (Some(Node::Cache), _) => Call::Take,
         };
         self.call(call);
     }
@@ -298,22 +304,33 @@ impl FightSession {
 
     /// The road's threat words from the mirror as it stands, and the
     /// cursor onto the nearest open lane if the mirror moved the one it
-    /// was on out of reach.
+    /// was on out of reach. Only the fights the panel can show are played
+    /// out: the nodes on the lanes the next step reaches, and none of
+    /// them while a draft is on the panel instead of a step.
     fn read_odds(&mut self) {
         let lanes = self.open_lanes();
         let Some(picker) = &mut self.picker else {
             return;
         };
         picker.lane = lanes[nearest(&lanes, picker.lane)];
-        let threat = |pick| {
-            self.sheet
+        let ahead: Vec<Node> = match &self.sheet {
+            Some(sheet) if sheet.draft().is_none() => lanes
+                .iter()
+                .filter_map(|lane| sheet.node_ahead(*lane))
+                .collect(),
+            Some(_) | None => Vec::new(),
+        };
+        let threat = |node, pick| match ahead.contains(&node) {
+            true => self
+                .sheet
                 .as_ref()
                 .and_then(|sheet| odds(sheet, pick, ODDS_FIGHTS))
-                .map(Threat::of)
+                .map(Threat::of),
+            false => None,
         };
-        picker.fair = threat(Pick::Fair);
-        picker.lower = threat(Pick::Lower);
-        picker.bright = threat(Pick::Bright);
+        picker.fair = threat(Node::Glyph, Pick::Fair);
+        picker.lower = threat(Node::Glyph, Pick::Lower);
+        picker.bright = threat(Node::Bright, Pick::Bright);
     }
 
     /// Stepping up to the counter again: the last word is not repeated.
@@ -390,8 +407,14 @@ impl FightSession {
     /// Put an answer where it was asked for: on the scene when one is
     /// open, else at the till (a counter's panel, or the road, which shows
     /// it as the last step's word). A resumed fight shows the row's memory
-    /// of it; a started one begins fresh; everything else appends.
+    /// of it, opening the scene if none was; a started one begins fresh;
+    /// everything else appends.
     fn show(&mut self, applied: Applied, lines: Vec<String>) {
+        // A step sent from the road (a rest, a cache) that found a fight
+        // on the row the mirror had not seen: the fight gets its scene.
+        if self.scene.is_none() && applied == Applied::Resumed {
+            self.open_scene();
+        }
         let Some(scene) = &mut self.scene else {
             self.till = Some(lines.join(" "));
             return;

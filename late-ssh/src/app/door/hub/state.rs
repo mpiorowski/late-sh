@@ -256,25 +256,26 @@ impl State {
     pub fn select_next(&mut self, roster: &[HubGame]) {
         let last = roster.len() - 1;
         let index = self.selected(roster).saturating_add(1).min(last);
-        self.select_game(roster[index]);
+        self.select_game(roster, roster[index]);
     }
 
     /// Move the selection one game up the sidebar, clamped at the first game.
     pub fn select_prev(&mut self, roster: &[HubGame]) {
         let index = self.selected(roster).saturating_sub(1);
-        self.select_game(roster[index]);
+        self.select_game(roster, roster[index]);
     }
 
     pub fn select(&mut self, roster: &[HubGame], index: usize) {
         if let Some(game) = roster.get(index) {
-            self.select_game(*game);
+            self.select_game(roster, *game);
         }
     }
 
     /// A different game starts at the top of its landing; re-selecting the
-    /// same one keeps the reader's place.
-    pub fn select_game(&mut self, game: HubGame) {
-        if self.selected != Some(game) {
+    /// one `roster` already shows (the top card too, before any choice was
+    /// made) keeps the reader's place.
+    pub fn select_game(&mut self, roster: &[HubGame], game: HubGame) {
+        if self.selected_game(roster) != game {
             self.scroll = 0;
         }
         self.selected = Some(game);

@@ -1363,7 +1363,11 @@ fn node_lines(
                 .mend(sheet.max_signal())
                 .min(sheet.max_signal() - sheet.signal);
             let statics = sheet.road.static_cards;
-            keys.extend([Span::styled("   [Enter] ", key), Span::styled("mend", text)]);
+            let plain = match sheet.rest_clears() {
+                true => "clear",
+                false => "mend",
+            };
+            keys.extend([Span::styled("   [Enter] ", key), Span::styled(plain, text)]);
             vec![
                 Line::from(vec![
                     Span::styled("  ▸ ", key),

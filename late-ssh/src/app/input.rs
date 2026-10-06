@@ -1420,7 +1420,8 @@ fn open_door_rc_modal(app: &mut App, game: late_core::models::door_rc::DoorRcGam
         late_core::models::door_rc::DoorRcGame::Nethack => HubGame::Nethack,
         late_core::models::door_rc::DoorRcGame::Dcss => HubGame::Dcss,
     };
-    app.games_hub_state.select_game(hub_game);
+    app.games_hub_state
+        .select_game(HubGame::roster(app.is_runner()), hub_game);
     app.set_screen(Screen::Games);
     app.door_rc_modal = Some(game);
 }

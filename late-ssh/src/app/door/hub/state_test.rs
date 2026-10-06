@@ -87,7 +87,7 @@ fn night_city_heads_the_runner_roster_only() {
 #[test]
 fn selection_survives_the_roster_changing() {
     let mut s = State::default();
-    s.select_game(HubGame::Nethack);
+    s.select_game(runner(), HubGame::Nethack);
     assert_eq!(s.selected_game(public()), HubGame::Nethack);
     assert_eq!(s.selected_game(runner()), HubGame::Nethack);
 
