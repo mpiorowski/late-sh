@@ -657,22 +657,10 @@ impl Sheet {
     }
 
     /// The row, typed. The fight and the road are JSON and can be wrong.
-    ///
-    /// One wrong shape is expected and is not an error: a fight with no
-    /// `piles` is the exchange loop's, written by a binary from before the
-    /// round that is still draining its sessions beside this one. There is
-    /// no deck to play it with, so it reads as no fight and the day is
-    /// handed back whole (the rations, the day's tally, the road), the
-    /// steps on the row and the steps on the road agreeing again. The next
-    /// command that changes the row stores it that way.
     pub fn from_row(row: &DeadchannelRunner) -> Result<Self, SheetError> {
-        let deckless = row
-            .fight
-            .as_ref()
-            .is_some_and(|fight| fight.get("piles").is_none());
-        let fight = match (&row.fight, deckless) {
-            (None, _) | (Some(_), true) => None,
-            (Some(value), false) => {
+        let fight = match &row.fight {
+            None => None,
+            Some(value) => {
                 let fight: Fight = match serde_json::from_value(value.clone()) {
                     Ok(fight) => fight,
                     Err(error) => return Err(SheetError::Fight(error.to_string())),
@@ -722,7 +710,7 @@ impl Sheet {
                 )));
             }
         }
-        let mut sheet = Self {
+        Ok(Self {
             user_id: row.user_id,
             level: row.level,
             exp: row.exp,
@@ -745,14 +733,7 @@ impl Sheet {
             drink,
             road,
             cards,
-        };
-        if deckless {
-            sheet.rations_left = RATIONS_PER_DAY;
-            sheet.kills_today = 0;
-            sheet.runs_today = 0;
-            sheet.road = RoadRun::default();
-        }
-        Ok(sheet)
+        })
     }
 
     pub fn to_write(&self) -> SheetWrite {

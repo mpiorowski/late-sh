@@ -34,7 +34,8 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // the day's run on the road, JSON the app parses, `None` before the first
 // step and after the day roll. `cards` (migration 226) is the cards drafted
 // on the way up, a JSON list of card names the app parses, `None` before
-// the first draft and after a mark or the ledge.
+// the first draft and after a mark or the ledge. A stored `fight` always
+// has `piles` (the check of migration 228).
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;

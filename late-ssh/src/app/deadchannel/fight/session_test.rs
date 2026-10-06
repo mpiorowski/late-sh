@@ -260,6 +260,23 @@ async fn a_card_refused_keeps_the_scene_and_a_step_refused_ends_it() {
     assert_eq!(scene.lines, vec!["your signal is down.".to_string()]);
 }
 
+/// The row refuses a fight with no piles (the exchange loop's shape, which
+/// the round cannot read), so a draining pre-round binary cannot store one.
+#[tokio::test]
+async fn the_row_refuses_a_fight_with_no_piles() {
+    let (test_db, mut session) = session_with_runner("fight-session-piles").await;
+    session.step_up();
+    answered(&mut session).await;
+    let mut write = session.sheet.clone().expect("the mirror landed").to_write();
+    write.fight = Some(serde_json::json!({"quarry": {"glyph": 0}, "log": []}));
+    let client = test_db.db.get().await.expect("db client");
+    assert!(
+        DeadchannelRunner::store_sheet(&**client, write)
+            .await
+            .is_err()
+    );
+}
+
 /// Stand `sheet` in front of the first rest of its day's road, nothing
 /// walked yet so every lane is in reach. Returns the rest's lane.
 fn before_the_first_rest(sheet: &mut Sheet) -> u8 {
