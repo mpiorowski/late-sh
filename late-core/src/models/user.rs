@@ -477,6 +477,7 @@ const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
+const SHOW_WATCH_CHAT_KEY: &str = "show_watch_chat";
 const TERMINAL_IMAGES_KEY: &str = "terminal_images";
 /// Award categories the user keeps off their chat label. Read by the chat
 /// label SQL straight from `users.settings`, so the key is spelled there too.
@@ -2008,6 +2009,16 @@ pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
 pub fn extract_paper_at_login(settings: &Value) -> bool {
     settings
         .get(PAPER_AT_LOGIN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Whether a player sees their watchers' chat under a running door game
+/// (toggled from the door's landing). Defaults to true; off hides it from
+/// the player only, the watchers keep talking.
+pub fn extract_show_watch_chat(settings: &Value) -> bool {
+    settings
+        .get(SHOW_WATCH_CHAT_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }

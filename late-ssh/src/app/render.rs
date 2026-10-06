@@ -221,6 +221,13 @@ struct DrawContext<'a> {
     dcss_roster: std::sync::Arc<Vec<crate::app::door::spectate::proxy::LiveGame>>,
     /// Watchers on this player's own running DCSS game, for its chrome.
     dcss_watchers: Option<usize>,
+    /// The watch view's chat pane; `None` until this session is in the
+    /// watched player's room.
+    spectate_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Whether this player's running game gives a row to watcher chat (the
+    /// `show_watch_chat` setting), and the newest line for it.
+    show_watch_chat: bool,
+    dcss_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -633,6 +640,16 @@ impl App {
             username_directory_snapshot.as_deref(),
         );
         let chat_usernames = &render_usernames;
+        let spectate_chat_room_id = self.spectate_chat_room_id();
+        // The newest thing a watcher said, for the row under this player's
+        // own running game.
+        let dcss_watch_line = self.own_watch_chat_room_id().and_then(|room_id| {
+            crate::app::door::spectate::chat::latest_line(
+                self.chat.messages_for_room(room_id),
+                chat_usernames,
+                chrono::Utc::now(),
+            )
+        });
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
@@ -1124,6 +1141,71 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
+        // The watch view's chat: the watched player's room, beside their
+        // screen.
+        let spectate_chat_view =
+            spectate_chat_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                messages_inset: 1,
+                title: "Watch Chat",
+                messages: self.chat.messages_for_room(chat_room_id),
+                overlay: self.chat.overlay(),
+                image_modal,
+                rows_cache: &mut self.spectate_chat_rows_cache,
+                rows_versions: chat::ui::ChatRowsVersions {
+                    room_id: Some(chat_room_id),
+                    room_version: self.chat.room_version(chat_room_id),
+                    chat_ctx_epoch: self.chat.context_epoch(),
+                    app_ctx_epoch: self.chat_ctx_epoch,
+                },
+                usernames: chat_usernames,
+                countries: chat_countries,
+                friend_user_ids: self.chat.friend_user_ids(),
+                live_user_ids: &self.chat.live_user_ids,
+                message_reactions,
+                message_gilds,
+                inline_images: &self.chat.inline_image_cache,
+                dividers: crate::app::chat::ui::ChatDividers {
+                    afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                    left_app: self.chat.device_left_at(),
+                },
+                current_user_id: self.user_id,
+                voice_channel_id: self
+                    .chat
+                    .voice_channels_by_room_id
+                    .get(&chat_room_id)
+                    .map(|channel| channel.id),
+                voice_snapshot,
+                voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                selected_message_id: self.chat.selected_message_id,
+                selected_image_message: self
+                    .chat
+                    .selected_message_has_inline_image_in_room(chat_room_id),
+                highlighted_message_id: self.chat.highlighted_message_id,
+                reaction_picker_active: self.chat.is_reaction_leader_active(),
+                composer: self.chat.composer(),
+                composer_inert: false,
+                composing: self.chat.composing,
+                mention_matches: &self.chat.mention_ac.matches,
+                mention_selected: self.chat.mention_ac.selected,
+                mention_active: self.chat.mention_ac.active,
+                reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                is_editing: self.chat.edited_message_id.is_some(),
+                bonsai_glyphs,
+                chat_badges,
+                profile_award_badges,
+                drunk_levels: &self.drunk_levels,
+                name_flair: &self.name_flair,
+                away_user_ids: &self.away_user_ids,
+                name_flicker,
+                translations: &self.chat.translations,
+                translation_hidden: &self.chat.translation_hidden,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
+                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                selection_scroll: Some(&self.chat.selection_scroll),
+            });
         // Every chat tile draws a composer, focused or not: an input box
         // that appears and disappears as the focus walks moves every row
         // under the reader. Only the active tile's composer is live, so the
@@ -1438,6 +1520,9 @@ impl App {
                             .live_games
                             .roster(crate::app::door::spectate::state::SpectateGame::Dcss),
                         dcss_watchers,
+                        spectate_chat_view,
+                        show_watch_chat: self.profile_state.profile().show_watch_chat,
+                        dcss_watch_line,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1930,6 +2015,8 @@ impl App {
                         frame,
                         content_area,
                         &crate::app::door::spectate::ui::SpectateView { state, roster },
+                        ctx.spectate_chat_view.take(),
+                        terminal_images,
                     );
                 }
                 None => {
@@ -1960,6 +2047,7 @@ impl App {
                             darkroom_live: ctx.darkroom_live,
                             greendragon_live: ctx.greendragon_live,
                             dcss_roster: &ctx.dcss_roster,
+                            show_watch_chat: ctx.show_watch_chat,
                             rc_modal: ctx.door_rc_modal.map(|(game, content)| {
                                 crate::app::door::hub::ui::RcModalView { game, content }
                             }),
@@ -2027,9 +2115,25 @@ impl App {
             }
             Screen::Dcss => {
                 if let Some(state) = ctx.dcss_state.as_deref_mut() {
+                    // A running game gives its bottom row to the watchers'
+                    // chat when the player keeps that on; the row is taken
+                    // off the PTY, never drawn over the game.
+                    let (game_area, watch_row) = if ctx.show_watch_chat && state.is_running() {
+                        crate::app::door::spectate::ui::watch_row_split(content_area)
+                    } else {
+                        (content_area, None)
+                    };
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::dcss::render::draw_page(frame, content_area, state);
+                    state.set_viewport(game_area);
+                    crate::app::door::dcss::render::draw_page(frame, game_area, state);
+                    if let Some(row) = watch_row {
+                        crate::app::door::spectate::ui::draw_watch_line(
+                            frame,
+                            row,
+                            ctx.dcss_watch_line.as_ref(),
+                            ctx.dcss_watchers,
+                        );
+                    }
                 }
             }
             Screen::Brogue => {

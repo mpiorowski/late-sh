@@ -28,7 +28,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false, &[], 0);
+        draw_landing(frame, area, false, false, &[], false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -41,13 +41,15 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 
 /// DCSS landing copy with the classic one-line Launch block, used by the Games
 /// hub when DCSS is selected (the hub has no per-session door state), plus
-/// who is playing right now for the hub's `s` watch key.
+/// who is playing right now for the hub's `s` watch key and the player's own
+/// `t` switch for seeing watcher chat under their game.
 pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     enabled: bool,
     live: bool,
     roster: &[LiveGame],
+    show_watch_chat: bool,
     scroll: u16,
 ) -> u16 {
     let action_line = if live {
@@ -66,7 +68,16 @@ pub fn draw_landing(
         ))
     };
     let watch = if enabled {
-        watch_block(roster)
+        let mut lines = vec![landing::hint(
+            "t",
+            match show_watch_chat {
+                true => "watcher chat under your game: shown",
+                false => "watcher chat under your game: hidden",
+            },
+            8,
+        )];
+        lines.extend(watch_block(roster));
+        lines
     } else {
         Vec::new()
     };

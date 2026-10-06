@@ -18,10 +18,11 @@ use super::user::{
     extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
     extract_paper_at_login, extract_right_sidebar_components, extract_right_sidebar_mode,
     extract_room_list_mode, extract_show_flag_fallback, extract_show_right_sidebar,
-    extract_show_room_list_sidebar, extract_start_with_music_muted, extract_statusline_components,
-    extract_terminal, extract_terminal_images, extract_text_brightness_adjustment,
-    extract_theme_id, extract_timezone, extract_translate_mine_to_en, extract_translate_to,
-    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    extract_show_room_list_sidebar, extract_show_watch_chat, extract_start_with_music_muted,
+    extract_statusline_components, extract_terminal, extract_terminal_images,
+    extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
+    extract_translate_mine_to_en, extract_translate_to, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -67,6 +68,8 @@ pub struct Profile {
     pub landing_page: LandingPage,
     /// Tweak: open The Late Edition once a day at login.
     pub paper_at_login: bool,
+    /// Show the watchers' chat under this player's own running door game.
+    pub show_watch_chat: bool,
     pub art_splash_mode: ArtSplashMode,
     pub terminal_images: TerminalImagesMode,
     pub hidden_award_categories: Vec<String>,
@@ -120,6 +123,7 @@ impl Default for Profile {
             start_with_music_muted: false,
             landing_page: LandingPage::Clubhouse,
             paper_at_login: true,
+            show_watch_chat: true,
             art_splash_mode: ArtSplashMode::Sfw,
             terminal_images: TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
@@ -160,6 +164,7 @@ pub struct ProfileParams {
     pub start_with_music_muted: bool,
     pub landing_page: LandingPage,
     pub paper_at_login: bool,
+    pub show_watch_chat: bool,
     pub art_splash_mode: ArtSplashMode,
     pub terminal_images: TerminalImagesMode,
     pub hidden_award_categories: Vec<String>,
@@ -226,7 +231,7 @@ impl Profile {
     /// enable_background_color/text_brightness_adjustment/
     /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
     /// show_room_list_sidebar/room_list_mode/keep_composer_focused/
-    /// start_with_music_muted/show_flag_fallback into settings via
+    /// start_with_music_muted/show_flag_fallback/show_watch_chat into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -328,10 +333,11 @@ impl Profile {
                          'terminal_images', $31::text,
                          'hidden_award_categories', $32::jsonb,
                          'statusline_components', $33::jsonb,
-                         'art_splash_mode', $34::text
+                         'art_splash_mode', $34::text,
+                         'show_watch_chat', $35::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $35
+                 WHERE id = $36
                  RETURNING *",
                 &[
                     &params.username,
@@ -368,6 +374,7 @@ impl Profile {
                     &hidden_award_categories_json,
                     &statusline_components_json,
                     &params.art_splash_mode.as_str(),
+                    &params.show_watch_chat,
                     &user_id,
                 ],
             )
@@ -404,6 +411,7 @@ impl Profile {
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
             landing_page: extract_landing_page(&user.settings),
             paper_at_login: extract_paper_at_login(&user.settings),
+            show_watch_chat: extract_show_watch_chat(&user.settings),
             art_splash_mode: extract_art_splash_mode(&user.settings),
             terminal_images: extract_terminal_images(&user.settings),
             hidden_award_categories: extract_hidden_award_categories(&user.settings),

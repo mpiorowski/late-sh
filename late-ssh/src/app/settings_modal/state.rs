@@ -2699,6 +2699,7 @@ impl SettingsModalState {
             start_with_music_muted: draft.start_with_music_muted,
             landing_page: draft.landing_page,
             paper_at_login: draft.paper_at_login,
+            show_watch_chat: draft.show_watch_chat,
             art_splash_mode: draft.art_splash_mode,
             terminal_images: draft.terminal_images,
             hidden_award_categories: draft.hidden_award_categories.clone(),

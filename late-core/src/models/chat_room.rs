@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::arcade_handle::handle_shape_valid;
 use super::game_room::GameKind;
+use super::leaderboard::DoorGame;
 
 crate::model! {
     table = "chat_rooms";
@@ -333,6 +335,37 @@ impl ChatRoom {
                  DO UPDATE SET updated = current_timestamp
                  RETURNING *",
                 &[&slug, &owner],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// Permanent watch-chat room for one player's runs of a door game:
+    /// where the people spectating that player talk. `kind='game'` (hidden
+    /// from the Home rail, Mentions and IRC, joinable by anyone through the
+    /// public game-room join path), `game_kind='watch'`, slug
+    /// `{door}-{playname}`. The playname is the player's arcade handle,
+    /// which is immutable and unique case-insensitively, so the lowercased
+    /// handle is written as it stands: `normalize_game_slug` folds `_` into
+    /// `-` and would merge `a_b` with `a__b`. Chat history persists between
+    /// runs.
+    pub async fn get_or_create_watch_room(
+        client: &Client,
+        door: DoorGame,
+        playname: &str,
+    ) -> Result<Self> {
+        if !handle_shape_valid(playname) {
+            bail!("cannot create watch room for malformed playname {playname:?}");
+        }
+        let slug = format!("{}-{}", door.key(), playname.to_ascii_lowercase());
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                 VALUES ('game', 'public', false, $1, 'watch')
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug],
             )
             .await?;
         Ok(Self::from(row))

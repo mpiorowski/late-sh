@@ -2686,6 +2686,22 @@ mod inner {
         door_watch_roster_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
+    fn door_watch_chat_room_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_watch_chat_room_failures_total")
+                .with_description(
+                    "Failures to resolve a player's watch-chat room (the lookup or its first create), by game",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_watch_chat_room_failure(game: DoorGame) {
+        door_watch_chat_room_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
+
     fn online_time_flush_result_label(result: OnlineTimeFlushResult) -> &'static str {
         match result {
             OnlineTimeFlushResult::Flushed => "flushed",
@@ -2831,6 +2847,7 @@ mod inner {
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_door_watch_stream(_game: DoorGame, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: DoorGame) {}
+    pub fn record_door_watch_chat_room_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
 }
 

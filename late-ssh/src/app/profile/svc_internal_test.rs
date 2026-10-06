@@ -112,6 +112,7 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
         start_with_music_muted: false,
         landing_page: LandingPage::Clubhouse,
         paper_at_login: true,
+        show_watch_chat: true,
         art_splash_mode: ArtSplashMode::Sfw,
         terminal_images: TerminalImagesMode::Auto,
         hidden_award_categories: Vec::new(),

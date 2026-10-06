@@ -692,6 +692,8 @@ pub struct App {
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Row cache for the watch view's chat pane.
+    pub(crate) spectate_chat_rows_cache: chat::ui::ChatRowsCache,
     /// The Zen pages' current-room chat, its own cache like the others.
     /// One rows cache per chat tile, in layout order; sized to the tiles
     /// each frame.
@@ -826,6 +828,11 @@ pub struct App {
     /// only on the Games hub, which draws it in place of the sidebar.
     pub(crate) spectate_state: Option<crate::app::door::spectate::state::State>,
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
+    /// This player's tie to the watch-chat room of their own running game,
+    /// held while it runs and the `show_watch_chat` setting is on
+    /// (`door::spectate::chat`). While held, the game gives up its bottom
+    /// row to the watchers' newest line.
+    pub(crate) own_watch_chat: Option<crate::app::door::spectate::state::ChatLink>,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
     /// host so curses gets a real terminfo entry.
@@ -1114,6 +1121,10 @@ impl App {
             Screen::DailyMatch => self.daily.board_chat_room_id(),
             // The open house table's permanent chat room.
             Screen::HouseTable => self.house.chat_room_id(),
+            // The watched player's chat, while this session watches one.
+            Screen::Games => self.spectate_chat_room_id(),
+            // The watchers' chat under this player's own running game.
+            Screen::Dcss => self.own_watch_chat_room_id(),
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
             _ => None,
@@ -1644,6 +1655,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            spectate_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             zen_chat_rows_caches: Vec::new(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),
@@ -1730,6 +1742,7 @@ impl App {
             dcss_secret: config.dcss_secret,
             spectate_state: None,
             live_games: config.live_games,
+            own_watch_chat: None,
             brogue_state: None,
             brogue_term: config.term.clone(),
             brogue_enabled: config.brogue_enabled,
@@ -2031,6 +2044,8 @@ impl App {
         use crate::app::door::spectate::proxy::WatchTarget;
         use crate::app::door::spectate::state::{SpectateGame, State};
 
+        // Switching games is leaving one watch for another.
+        self.stop_spectating();
         let target = match game {
             SpectateGame::Dcss => WatchTarget {
                 host: self.dcss_host.clone(),
@@ -2047,8 +2062,33 @@ impl App {
     }
 
     pub(crate) fn stop_spectating(&mut self) {
+        // The watch can end under an open composer or a selected message (the
+        // game ended, the session left the hub): neither may outlive the
+        // pane it belonged to.
+        if let Some(room_id) = self.spectate_chat_room_id() {
+            if self.chat.composer_room_id() == Some(room_id) {
+                self.chat.reset_composer();
+            }
+            if self.chat.selected_message_body_in_room(room_id).is_some() {
+                self.chat.clear_message_selection();
+            }
+        }
         // Dropping the State aborts the stream; the host unlists the watcher.
         self.spectate_state = None;
+    }
+
+    /// The chat room the watch view shows: the watched player's room, once
+    /// this session is in it.
+    pub(crate) fn spectate_chat_room_id(&self) -> Option<Uuid> {
+        let room_id = self.spectate_state.as_ref()?.chat().room_id()?;
+        self.chat.room_by_id(room_id).map(|room| room.id)
+    }
+
+    /// The watch-chat room of this player's own running game, once this
+    /// session is in it.
+    pub(crate) fn own_watch_chat_room_id(&self) -> Option<Uuid> {
+        let room_id = self.own_watch_chat.as_ref()?.room_id()?;
+        self.chat.room_by_id(room_id).map(|room| room.id)
     }
 
     pub(crate) fn enter_brogue(&mut self) {

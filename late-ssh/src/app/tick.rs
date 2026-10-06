@@ -580,6 +580,9 @@ impl App {
         // only where one of them is drawn.
         let rosters_changed = self.live_games.tick();
         changed |= rosters_changed && matches!(self.screen, Screen::Games | Screen::Dcss);
+        // The watch chat: the watchers' pane and the player's line each hang
+        // on a room that resolves and joins in the background.
+        changed |= crate::app::door::spectate::chat::tick(self);
         // A watch lives only on the Games hub. Leaving the hub ends it, and
         // so does the watched game ending (or its stream dropping): back to
         // the hub with a word on why the screen went away.

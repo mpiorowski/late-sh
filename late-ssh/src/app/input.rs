@@ -82,7 +82,9 @@ impl InputContext {
 fn screen_has_chat_pane(screen: Screen) -> bool {
     matches!(
         screen,
-        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen
+        // Games draws a pane only while this session watches a live game
+        // (the watch chat); the hub proper resolves to no room.
+        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen | Screen::Games
     )
 }
 
@@ -1422,8 +1424,25 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                 None => false,
             }
         }
+        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T')
+            if selected.spectate_game().is_some() =>
+        {
+            toggle_show_watch_chat(app);
+            true
+        }
         _ => false,
     }
+}
+
+/// The `t` key on a watchable door's landing: flip whether this player sees
+/// their watchers' chat under their own game. It is the player's view only;
+/// the watchers keep talking either way.
+fn toggle_show_watch_chat(app: &mut App) {
+    let message = match app.profile_state.toggle_show_watch_chat() {
+        true => "Watcher chat shown under your game.",
+        false => "Watcher chat hidden. Your watchers can still talk to each other.",
+    };
+    app.banner = Some(crate::app::common::primitives::Banner::success(message));
 }
 
 /// Jump to the Games hub with `game` selected in the sidebar and its rc config
@@ -2384,11 +2403,12 @@ fn dispatch_escape(app: &mut App) {
         app.set_screen(Screen::Dashboard);
         return;
     }
-    // Esc from the Games hub stops watching, closes the rc config modal,
-    // cancels a pending reset prompt, and otherwise drops back to Home.
+    // Esc from the Games hub peels the watch (a selected chat message, then
+    // the watch itself), closes the rc config modal, cancels a pending reset
+    // prompt, and otherwise drops back to Home.
     if ctx.screen == Screen::Games {
         if app.spectate_state.is_some() {
-            app.stop_spectating();
+            crate::app::door::spectate::input::handle_escape(app);
         } else if app.door_rc_modal.is_some() {
             app.door_rc_modal = None;
         } else if app.door_delete_confirm {
@@ -2961,13 +2981,15 @@ pub(crate) struct PendingChatProfileOpen {
 /// clicks, message-scroll clicks, wheel/page scroll — so they always agree
 /// on which room an interaction belongs to. Screens outside
 /// `screen_has_chat_pane` resolve to `None`, as do pane screens with no
-/// room on show (no active table, pre-109 match, synthetic Home entry).
+/// room on show (no active table, pre-109 match, synthetic Home entry, a
+/// Games hub that is not watching anyone).
 fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
         Screen::Dashboard => app.chat.selected_room_id,
         Screen::DailyMatch => app.daily.board_chat_room_id(),
         Screen::HouseTable => app.house.chat_room_id(),
         Screen::Zen => app.zen_chat_room_id(),
+        Screen::Games => crate::app::door::spectate::input::chat_room_id(app),
         _ => None,
     }
 }
@@ -3192,7 +3214,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
     true
 }
 
-fn app_content_area(app: &App) -> Rect {
+pub(crate) fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
     let (_, right_sidebar_mode) = app.rail_modes();

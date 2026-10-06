@@ -5,7 +5,8 @@
 //! selection; Enter launches the selected game; Ctrl+J/K (or Ctrl+Down/Up)
 //! scroll a landing too long for the terminal; `s` on a watchable card opens
 //! the read-only watch view (`door::spectate`), which replaces the selector
-//! until Esc. Adding a future door game is a
+//! until Esc, and `t` there flips whether the player sees their own
+//! watchers' chat. Adding a future door game is a
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
 //! new top-level screen. Minecraft is the one card with nothing to launch: the
 //! server is played from the game client, so its landing is information only.

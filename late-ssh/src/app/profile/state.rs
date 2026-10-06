@@ -79,6 +79,14 @@ impl ProfileState {
         added
     }
 
+    /// Flip whether this player sees their watchers' chat under a running
+    /// door game. Returns the new value.
+    pub fn toggle_show_watch_chat(&mut self) -> bool {
+        self.profile.show_watch_chat ^= true;
+        self.save_profile();
+        self.profile.show_watch_chat
+    }
+
     pub fn move_favorite_room(&mut self, room_id: Uuid, delta: isize) -> bool {
         let Some(index) = self
             .profile
@@ -211,6 +219,7 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         start_with_music_muted: profile.start_with_music_muted,
         landing_page: profile.landing_page,
         paper_at_login: profile.paper_at_login,
+        show_watch_chat: profile.show_watch_chat,
         art_splash_mode: profile.art_splash_mode,
         terminal_images: profile.terminal_images,
         hidden_award_categories: profile.hidden_award_categories.clone(),

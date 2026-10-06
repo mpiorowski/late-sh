@@ -55,6 +55,9 @@ pub struct HubView<'a> {
     pub greendragon_live: bool,
     /// DCSS's live games, listed on its landing for the `s` watch key.
     pub dcss_roster: &'a [crate::app::door::spectate::proxy::LiveGame],
+    /// The `show_watch_chat` setting, shown (and flipped with `t`) on the
+    /// watchable doors' landings.
+    pub show_watch_chat: bool,
     /// The rc config modal, drawn over the hub while open.
     pub rc_modal: Option<RcModalView<'a>>,
     /// What Night City's landing reads. Only drawn when it is on the roster.
@@ -209,6 +212,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.dcss_enabled,
             view.dcss_live,
             view.dcss_roster,
+            view.show_watch_chat,
             scroll,
         ),
         HubGame::Brogue => crate::app::door::brogue::render::draw_landing(
