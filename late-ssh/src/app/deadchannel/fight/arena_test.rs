@@ -6,68 +6,58 @@ use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
 const SWEEP: &[(&str, Rules)] = &[
     ("live", RULES),
     (
-        "b50 boss290",
+        "boss290",
         Rules {
-            block_percent: 50,
             old_signal: boss(290, 39),
             ..RULES
         },
     ),
     (
-        "b50 boss290 jab100",
+        "boss320",
         Rules {
-            block_percent: 50,
-            old_signal: boss(290, 39),
-            jab_percent: 100,
+            old_signal: boss(320, 39),
             ..RULES
         },
     ),
     (
-        "b50 boss290 jab100 burn2",
+        "boss320 jab75",
         Rules {
-            block_percent: 50,
-            old_signal: boss(290, 39),
-            jab_percent: 100,
-            burn_energy: 2,
+            old_signal: boss(320, 39),
+            jab_percent: 75,
             ..RULES
         },
     ),
     (
-        "b50 boss290 jab100 burn2 ground50",
+        "boss320 jab75 burn2",
         Rules {
-            block_percent: 50,
-            old_signal: boss(290, 39),
-            jab_percent: 100,
-            burn_energy: 2,
-            ground_percent: 50,
-            ..RULES
-        },
-    ),
-    (
-        "b55 boss290 jab100 burn2",
-        Rules {
-            block_percent: 55,
-            old_signal: boss(290, 39),
-            jab_percent: 100,
-            burn_energy: 2,
-            ..RULES
-        },
-    ),
-    (
-        "boss290 jab100 burn2",
-        Rules {
-            old_signal: boss(290, 39),
-            jab_percent: 100,
-            burn_energy: 2,
-            ..RULES
-        },
-    ),
-    (
-        "boss290 jab75 burn2",
-        Rules {
-            old_signal: boss(290, 39),
+            old_signal: boss(320, 39),
             jab_percent: 75,
             burn_energy: 2,
+            ..RULES
+        },
+    ),
+    (
+        "boss340 jab75",
+        Rules {
+            old_signal: boss(340, 39),
+            jab_percent: 75,
+            ..RULES
+        },
+    ),
+    (
+        "boss320 jab75 b50",
+        Rules {
+            old_signal: boss(320, 39),
+            jab_percent: 75,
+            block_percent: 50,
+            ..RULES
+        },
+    ),
+    (
+        "boss320 att44 jab75",
+        Rules {
+            old_signal: boss(320, 44),
+            jab_percent: 75,
             ..RULES
         },
     ),
