@@ -19,6 +19,9 @@ pub struct RcModalView<'a> {
 
 /// View data the renderer needs for one frame of the Games hub.
 pub struct HubView<'a> {
+    /// The cards this session sees ([`HubGame::roster`]); `selected` and the
+    /// sidebar rows index into it.
+    pub roster: &'static [HubGame],
     pub selected: usize,
     /// Rows the selected landing is scrolled down (`hub::state::State`).
     pub scroll: u16,
@@ -54,6 +57,8 @@ pub struct HubView<'a> {
     pub dcss_roster: &'a [crate::app::door::spectate::proxy::LiveGame],
     /// The rc config modal, drawn over the hub while open.
     pub rc_modal: Option<RcModalView<'a>>,
+    /// What Night City's landing reads. Only drawn when it is on the roster.
+    pub night_city: crate::app::deadchannel::city::landing::LandingView<'a>,
 }
 
 impl HubView<'_> {
@@ -68,7 +73,8 @@ impl HubView<'_> {
             HubGame::Brogue => self.brogue_live,
             HubGame::Darkroom => self.darkroom_live,
             HubGame::GreenDragon => self.greendragon_live,
-            HubGame::Minecraft
+            HubGame::NightCity
+            | HubGame::Minecraft
             | HubGame::Rebels
             | HubGame::Usurper
             | HubGame::Dopewars
@@ -88,7 +94,7 @@ const MIN_WIDTH: u16 = 60;
 const MIN_HEIGHT: u16 = 6;
 
 /// One row of the sidebar: a muted group header, a selectable game (index
-/// into [`HubGame::ALL`]), a blank separator between groups, or the faint
+/// into the session's roster), a blank separator between groups, or the faint
 /// always-on backtick hint at the top (the games that detach and hop:
 /// Lateania, the roguelikes, and the two native remakes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,10 +108,10 @@ enum SidebarRow {
 /// The sidebar rows in display order: the ` hop hint leads the whole nav,
 /// then each group opens with its header, groups separated by a blank row.
 /// Shared by the renderer and the click hit test so they cannot drift.
-fn sidebar_rows() -> Vec<SidebarRow> {
+fn sidebar_rows(roster: &[HubGame]) -> Vec<SidebarRow> {
     let mut rows = vec![SidebarRow::HopHint, SidebarRow::Blank];
     let mut current_group = None;
-    for (i, game) in HubGame::ALL.iter().enumerate() {
+    for (i, game) in roster.iter().enumerate() {
         let group = game.group();
         if current_group != Some(group) {
             if current_group.is_some() {
@@ -163,14 +169,17 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
         },
     ];
 
-    let selected = view.selected.min(HubGame::ALL.len() - 1);
+    let selected = view.selected.min(view.roster.len() - 1);
     draw_sidebar(frame, body[0], selected, view);
 
     // The selected game owns the pane beside the sidebar, rendered with its
     // real landing (logo, stats, actions) and scrolled by the hub's offset.
     // Each landing reports how far it could scroll; input clamps to that.
     let scroll = view.scroll;
-    let max_scroll = match HubGame::ALL[selected] {
+    let max_scroll = match view.roster[selected] {
+        HubGame::NightCity => {
+            crate::app::deadchannel::city::landing::draw(frame, body[1], &view.night_city, scroll)
+        }
         HubGame::Lateania => crate::app::door::lateania::screen::draw_landing(
             frame,
             body[1],
@@ -248,7 +257,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     };
     view.max_scroll.set(max_scroll);
 
-    draw_footer(frame, layout[1], HubGame::ALL[selected]);
+    draw_footer(frame, layout[1], view.roster[selected]);
 
     if let Some(modal) = &view.rc_modal {
         draw_rc_modal(frame, area, modal);
@@ -368,7 +377,7 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
     };
     frame.render_widget(block, area);
 
-    let rows = sidebar_rows();
+    let rows = sidebar_rows(view.roster);
     let scroll = sidebar_scroll(&rows, selected, inner.height as usize);
     let pad = usize::from(inner.width).saturating_sub(2);
     let lines: Vec<Line> = rows
@@ -381,16 +390,24 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
                 Style::default().fg(theme::TEXT_MUTED()),
             )),
             SidebarRow::Game(i) => {
-                let style = if *i == selected {
-                    Style::default()
+                let game = view.roster[*i];
+                // Night City burns in its own neon on both row styles: the
+                // one card on the shelf that is a place, not a game.
+                let style = match (game, *i == selected) {
+                    (HubGame::NightCity, true) => {
+                        crate::app::deadchannel::city::landing::sidebar_selected()
+                    }
+                    (HubGame::NightCity, false) => {
+                        crate::app::deadchannel::city::landing::sidebar_idle()
+                    }
+                    (_, true) => Style::default()
                         .fg(theme::BG_SELECTION())
                         .bg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme::TEXT_DIM())
+                        .add_modifier(Modifier::BOLD),
+                    (_, false) => Style::default().fg(theme::TEXT_DIM()),
                 };
-                let label = HubGame::ALL[*i].label();
-                if view.is_live(HubGame::ALL[*i]) {
+                let label = game.label();
+                if view.is_live(game) {
                     // A detached game in progress: a green pip after the name,
                     // on both the selected and unselected row styles.
                     let livepad = pad.saturating_sub(label.len() + 2);
@@ -418,11 +435,13 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
 }
 
 /// The hub footer. Minecraft has nothing to launch, so its card drops the
-/// Enter hint rather than advertising a key that does nothing.
+/// Enter hint rather than advertising a key that does nothing; Night City's
+/// Enter goes down, not into a game.
 fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     let switch = ("\u{2191} \u{2193}  or  j k", "switch game");
     let scroll = ("ctrl j k", "scroll");
     let hints: &[(&str, &str)] = match selected {
+        HubGame::NightCity => &[switch, scroll, ("Enter", "descend")],
         HubGame::Minecraft => &[switch, scroll],
         HubGame::Dcss => &[switch, scroll, ("Enter", "play"), ("s", "watch")],
         HubGame::Lateania
@@ -441,9 +460,16 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
 
 /// Which sidebar game (if any) sits at terminal cell `(x, y)`, given the hub
 /// body rect (the same area `draw_games_hub` renders into). Mirrors the
-/// layout above (breathing row, footer row, right rule column); `selected`
-/// reproduces the scroll position. Used for click-to-select.
-pub fn sidebar_hit_test(area: Rect, selected: usize, x: u16, y: u16) -> Option<usize> {
+/// layout above (breathing row, footer row, right rule column); `roster`
+/// and `selected` reproduce the rows and the scroll position. Returns an
+/// index into `roster`. Used for click-to-select.
+pub fn sidebar_hit_test(
+    area: Rect,
+    roster: &[HubGame],
+    selected: usize,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         return None;
     }
@@ -456,7 +482,7 @@ pub fn sidebar_hit_test(area: Rect, selected: usize, x: u16, y: u16) -> Option<u
     if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height {
         return None;
     }
-    let rows = sidebar_rows();
+    let rows = sidebar_rows(roster);
     let scroll = sidebar_scroll(&rows, selected, usize::from(inner.height));
     match rows.get(scroll + usize::from(y - inner.y)) {
         Some(SidebarRow::Game(i)) => Some(*i),

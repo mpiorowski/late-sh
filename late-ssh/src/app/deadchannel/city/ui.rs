@@ -153,7 +153,7 @@ pub(crate) struct CityView<'a> {
     pub sheet: Option<&'a Sheet>,
     /// The fight scene, when one is open over the street.
     pub scene: Option<&'a FightScene>,
-    /// The picker before a step in, when it is open over the street.
+    /// The road before a step, when it is open over the street.
     pub picker: Option<&'a FightPicker>,
     /// The counter's last word (`fight/session.rs`): the armorer's, patch's,
     /// the locker's, the machine's, or the ledge's, for whichever is open.
@@ -174,7 +174,7 @@ pub(crate) struct CityView<'a> {
 }
 
 type Cells = Vec<Vec<(char, Style)>>;
-pub(super) type Rgb = [f32; 3];
+pub(crate) type Rgb = [f32; 3];
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     if area.width < 4 || area.height < 4 {
@@ -250,8 +250,8 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     draw_street_line(frame, area, &view);
     draw_popover(frame, area, &view);
     draw_panel(frame, area, &view);
-    // The sheet strip, the picker, and the fight scene (`fight/ui.rs`): the
-    // runner's budget while walking, the picker or the scene over
+    // The sheet strip, the road, and the fight scene (`fight/ui.rs`): the
+    // runner's budget while walking, the road or the scene over
     // everything when one is open. The two are never open together.
     if let Some(picker) = view.picker {
         fight_ui::draw_picker(
@@ -262,6 +262,8 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
                 picker,
                 look: view.look,
                 own_username: view.own_username,
+                tick: t,
+                word: view.till,
             },
         );
     }
@@ -299,7 +301,7 @@ fn camera_origin(player: usize, viewport: usize, map_len: usize) -> usize {
 // ------------------------------------------------------------- palette
 
 /// The neon colors, fixed: the city's own palette.
-pub(super) fn neon_rgb(neon: Neon) -> Rgb {
+pub(crate) fn neon_rgb(neon: Neon) -> Rgb {
     match neon {
         Neon::Cyan => [0.15, 0.85, 1.0],
         Neon::Magenta => [1.0, 0.30, 0.80],
@@ -358,7 +360,7 @@ pub(crate) fn tint_rgb(tint: Tint) -> Rgb {
     }
 }
 
-pub(super) fn scale(c: Rgb, k: f32) -> Rgb {
+pub(crate) fn scale(c: Rgb, k: f32) -> Rgb {
     [c[0] * k, c[1] * k, c[2] * k]
 }
 

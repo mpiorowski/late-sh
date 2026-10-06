@@ -1,44 +1,51 @@
 use crate::app::door::hub::state::*;
 
+fn public() -> &'static [HubGame] {
+    HubGame::roster(false)
+}
+
+fn runner() -> &'static [HubGame] {
+    HubGame::roster(true)
+}
+
 #[test]
 fn selection_clamps_at_both_ends() {
     let mut s = State::default();
-    assert_eq!(s.selected_game(), HubGame::Lateania);
-    s.select_prev();
-    assert_eq!(s.selected_game(), HubGame::Lateania);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Dcss);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Nethack);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Brogue);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Darkroom);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Minecraft);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::GreenDragon);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Usurper);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Dopewars);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Bashquest);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Rebels);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Codekeep);
-    s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Codekeep);
+    assert_eq!(s.selected_game(public()), HubGame::Lateania);
+    s.select_prev(public());
+    assert_eq!(s.selected_game(public()), HubGame::Lateania);
+    let mut walked = vec![s.selected_game(public())];
+    for _ in 0..public().len() {
+        s.select_next(public());
+        walked.push(s.selected_game(public()));
+    }
+    assert_eq!(
+        walked,
+        [
+            HubGame::Lateania,
+            HubGame::Dcss,
+            HubGame::Nethack,
+            HubGame::Brogue,
+            HubGame::Darkroom,
+            HubGame::Minecraft,
+            HubGame::GreenDragon,
+            HubGame::Usurper,
+            HubGame::Dopewars,
+            HubGame::Bashquest,
+            HubGame::Rebels,
+            HubGame::Codekeep,
+            HubGame::Codekeep,
+        ],
+    );
 }
 
 #[test]
 fn select_jumps_directly() {
     let mut s = State::default();
-    s.select(6);
-    assert_eq!(s.selected_game(), HubGame::GreenDragon);
-    s.select(99);
-    assert_eq!(s.selected_game(), HubGame::GreenDragon);
+    s.select(public(), 6);
+    assert_eq!(s.selected_game(public()), HubGame::GreenDragon);
+    s.select(public(), 99);
+    assert_eq!(s.selected_game(public()), HubGame::GreenDragon);
 }
 
 #[test]
@@ -46,6 +53,7 @@ fn all_games_are_listed_in_order() {
     assert_eq!(
         HubGame::ALL.map(HubGame::label),
         [
+            "Night City",
             "Lateania",
             "DCSS",
             "NetHack",
@@ -60,6 +68,33 @@ fn all_games_are_listed_in_order() {
             "CodeKeep"
         ],
     );
+}
+
+/// Night City is a runner's card: first in the house for them, nowhere for
+/// anyone else.
+#[test]
+fn night_city_heads_the_runner_roster_only() {
+    assert_eq!(runner()[0], HubGame::NightCity);
+    assert_eq!(&runner()[1..], public());
+    assert!(!public().contains(&HubGame::NightCity));
+    assert_eq!(HubGame::NightCity.group(), HubGroup::House);
+    assert_eq!(State::default().selected_game(runner()), HubGame::NightCity);
+}
+
+/// The selection is a game, not a row: joining #deadchannel puts Night
+/// City above it without moving it, and leaving with Night City selected
+/// falls back to the top of the roster that is left.
+#[test]
+fn selection_survives_the_roster_changing() {
+    let mut s = State::default();
+    s.select_game(runner(), HubGame::Nethack);
+    assert_eq!(s.selected_game(public()), HubGame::Nethack);
+    assert_eq!(s.selected_game(runner()), HubGame::Nethack);
+
+    let mut s = State::default();
+    s.select_prev(runner());
+    assert_eq!(s.selected_game(runner()), HubGame::NightCity);
+    assert_eq!(s.selected_game(public()), HubGame::Lateania);
 }
 
 /// The sidebar renders one header per group, so a group's games must sit
@@ -96,9 +131,9 @@ fn scroll_clamps_to_the_measured_range_and_resets_on_switch() {
     assert_eq!(s.scroll(), 2);
     s.scroll_up();
     assert_eq!(s.scroll(), 1);
-    s.select(0);
+    s.select(public(), 0);
     assert_eq!(s.scroll(), 1, "re-selecting the same game keeps the place");
-    s.select_next();
+    s.select_next(public());
     assert_eq!(s.scroll(), 0);
 }
 

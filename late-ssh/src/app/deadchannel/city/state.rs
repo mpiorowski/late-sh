@@ -30,9 +30,9 @@ pub enum Enter {
     Leave,
     /// Look over the ledge: the lower city fills the screen until Enter.
     Ledge,
-    /// Walk up to the static: the screen is the forest (`fight/`). The
-    /// picker opens over the street (or a waiting fight resumes), and a
-    /// pick spends a ration against a glyph in the scene.
+    /// Walk up to the static: the screen is where the road starts
+    /// (`fight/`). The road opens over the street (or a waiting fight
+    /// resumes), and a step spends a ration on what waits on its lane.
     Fight,
 }
 

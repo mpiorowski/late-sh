@@ -1,5 +1,5 @@
 //! City input: roguelike walking (arrows/hjkl, Shift+arrow or HJKL to
-//! run), Enter at a landmark (a shop panel, a street line, the picker at
+//! run), Enter at a landmark (a shop panel, a street line, the road at
 //! the screen, or the wire out), `f` to walk up to the static and `p` to
 //! open patch from anywhere on the street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
@@ -9,8 +9,8 @@
 //! `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page opens it (the site guide's key, taken over
-//! down here: the street has its own). While the fight picker or scene is
-//! open every key goes to `fight/input.rs`. Returns `false` for anything it
+//! down here: the street has its own). While the road or the fight scene
+//! is open every key goes to `fight/input.rs`. Returns `false` for anything it
 //! does not own so global keys (page digits, Tab, `q`) keep working. While a panel is open, or the
 //! runner is looking over the ledge, every other typed key is swallowed:
 //! the walk keys, so the runner does not wander under the box, and the
@@ -26,6 +26,27 @@ use super::data;
 use super::map::Landmark;
 use super::state::Enter;
 use crate::app::deadchannel::fight::state::{Command, Drink, Slot};
+
+/// Go down into the city: `0` on the Lounge, or Enter on Night City's card
+/// in the Games hub. Callers hold the runner gate (`App::is_runner`). A
+/// descent always lands on the street: a panel or the ledge left open on
+/// the way up does not carry over.
+pub fn descend(app: &mut App) {
+    app.city.dismiss();
+    app.fight.close();
+    app.tailor.close();
+    app.guide.state.close();
+    // The descent is a touch: the sheet re-reads (and the day rolls if it
+    // turned) before the strip shows it.
+    app.fight.reload();
+    // The first descent opens the guide by itself, once per runner
+    // (`app/deadchannel/guide`).
+    app.guide.descend();
+    // On the shared street from here until the session ends
+    // (`deadchannel/street`).
+    app.street.descend();
+    app.set_screen(Screen::City);
+}
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.guide.state.is_open() {
@@ -76,7 +97,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     // `f` walks up to the static from anywhere on the street, not only at
-    // one of its three screens. Same path as Enter there: the picker, or a
+    // one of its three screens. Same path as Enter there: the road, or a
     // waiting fight straight back in.
     if let Some(b'f' | b'F') = event_byte(event) {
         app.music_prefix_armed = false;

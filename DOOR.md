@@ -16,11 +16,10 @@ Status: **research notes.**
 - **TradeWars 2002 is a no-go on license** (proprietary, EIS/Pritchett own the
   trademark). The open path is **twclone** (GPL-2 clone), which would be a port,
   not the real thing.
-- **The cheapest native port we have found is A Dark Room** (MPL-2.0, 8.5k lines
-  of dependency-free jQuery, no server, no DB). It is a whole new *shelf* for
-  late.sh, not just a door: minimalist text incrementals. See the deep dive
-  below. The gates are brand etiquette and one design call, not license or
-  effort.
+- **The cheapest native port we found was A Dark Room** (MPL-2.0, 8.5k lines
+  of dependency-free jQuery, no server, no DB), and it is shipped, whole. It
+  is a new *shelf* for late.sh, not just a door: minimalist text
+  incrementals. See the deep dive below.
 - **MUDs are parked** (see bottom). Almost all the demand is for *doors*, not
   MUDs, and MUDs fight late.sh's quick-session format. Licensing is fine if we
   ever want one (DikuMUD LGPL, Evennia BSD), but it's not on the roadmap.
@@ -63,7 +62,7 @@ worth owning. Licensing is the gate before any of this matters.
 | **twclone** | GPL-2.0 (v1.0.0-rc1, Dec 2025). The README claims MIT, but the actual LICENSE/COPYING files are GPLv2 (GitHub detects GPL-2.0) | Independent TradeWars clone, **fully rewritten and now headless**: a TCP server with a **pure JSON protocol** and a **PostgreSQL** backend. No BBS, no DOSBox, no telnet/ANSI. The clean way to get TradeWars-like gameplay - but still a release candidate with ~175 open issues and federation/economy/NPC systems deferred. See deep dive below. |
 | **Brogue CE** | AGPL-3.0 | The most beautiful pure-terminal roguelike ever made, and the friendliest of the classics: short runs, no grinding, stunning colored ASCII. Community Edition is actively maintained, builds a curses/terminal binary on Linux, saves per player, and public dgamelaunch servers already host it → **pattern 2, drop into the nethack/dcss host shape.** AGPL is fine for us: we build from source and can point at the pinned tarball. Best "third dungeon" candidate. |
 | **Angband 4.2** | GPL-2.0 (dual-licensed Angband licence / GPLv2) | The third giant lineage next to NetHack and Crawl. Long-form dungeon diving, rock-solid ncurses build (`-mgcu`), per-user saves, still maintained → **pattern 2.** Opens the door to celebrated variants later (Sil-Q, FrogComposband), which reuse the same shape. |
-| **A Dark Room** | MPL-2.0 (`LICENSE.md` + `package.json`, marked "Incompatible With Secondary Licenses") | The minimalist incremental everyone remembers: light a fire, build a village, walk an ASCII wasteland. Browser JS, so **pattern 1** - but by far the cheapest pattern-1 target we have seen (no server, no DB, no build step). Audited 2026-07-25, see the incremental shelf below. MPL is file-level copyleft and coexists with our FSL. |
+| **A Dark Room** | MPL-2.0 (`LICENSE.md` + `package.json`, marked "Incompatible With Secondary Licenses") | **Shipped, the whole classic game** (the Dark Room door, `late-ssh/src/app/door/darkroom/`). The minimalist incremental everyone remembers: light a fire, build a village, walk an ASCII wasteland. Browser JS, so **pattern 1** - and by far the cheapest pattern-1 target we have seen (no server, no DB, no build step). See the incremental shelf below. MPL is file-level copyleft and coexists with our FSL. |
 | **Evolve** | MPL-2.0 | Ooze-to-space-empire incremental, 1.2k stars, genuinely deep endgame. Same clean license story as A Dark Room, and the same pattern-1 requirement - but it is 4,690 commits of content with an enormous UI surface. Green on law, huge on effort. That is not a door, that is a second Lateania. |
 | **Antimatter Dimensions** | MIT | The genre's biggest number-go-up game and the cleanest license on this whole page. All numbers and tabs, so it renders in a terminal trivially. The open question is fit, not law: it is a 1000-hour optimization spreadsheet with no story and no aesthetic, the opposite pole of the genre from A Dark Room. |
 | **Progress Quest** | Source released 2011, reported BSD. The Bitbucket Mercurial repo is gone, so **verify the license on whichever mirror we take** before shipping | The original zero-player RPG, and conceptually the most BBS-shaped idea in the genre: it plays itself, you log in to watch the bar fill. Tiny. A Python terminal edition already exists (`rr-/pq-cli`), so **pattern 2 is on the table** as well as a trivial native port. Best charm-per-hour on the list. |
@@ -318,10 +317,9 @@ late.sh has a chip economy. Shipping a door called "A Dark Room" next to it,
 without asking, is a good way to become the thing he complained about, even
 though the MPL permits it.
 
-**Recommendation:** email him first. `michael@doublespeakgames.com` is right
-there in `package.json`. A yes costs one email and buys a good story we can put
-in #lounge. A no saves us the entire port. Either way: credit prominently, and
-never put it behind chips or donations.
+**Done:** he was emailed about the name before the door opened
+(`michael@doublespeakgames.com`, from `package.json`). The standing rule
+either way: credit prominently, and never put it behind chips or donations.
 
 ### A Dark Room: code audit (2026-07-25, shallow clone of `main`)
 
@@ -422,16 +420,19 @@ lands harder on an SSH server than it ever did on the web.
    the dragon ships**: a fresh small universe per season (`bigbang` makes
    regeneration cheap), a daily turn ration, "highest net worth by Sunday",
    #lounge coronation, universe dies. Do not build the always-on version.
-7. **A Dark Room** - **v1 playable 2026-07-28, room + village acts.**
+7. **A Dark Room** - **done, shipped: the whole classic game.**
    Native Rust port (pattern 1), the first game on the incremental shelf.
    Both gates are closed: Townsend was emailed about **the name** (the MPL
    covers the code, so the email is etiquette plus trademark, not permission),
-   and the **pacing question is decided** - see below. Built so far: the fire,
-   room temperature, the full builder arc, the forest unlock, gathering and
-   traps, huts/population, the worker income economy, and buildings through the
-   smokehouse. Still to come: the wasteland, the path/outfitting screen,
-   combat and events, the workshop crafting tier, the trading post's buy menu,
-   and the ship endgame. See `late-ssh/src/app/door/darkroom/CONTEXT.md`.
+   and the **pacing question is decided** (see "The incremental shelf"
+   above). Everything upstream's web version plays is in: the fire and the
+   builder arc, the forest, traps, huts and population, the worker income
+   economy, the trading post's buy menu, the workshop crafting tier, the
+   event pool, the compass and the path, the wasteland with its generated
+   map and every setpiece, the mines, the ravaged battleship and the
+   fabricator, the ship, the ascent, and both endings. Deliberately cut:
+   upstream's prestige and scoring, the `cache` landmark, and its marketing
+   event. See `late-ssh/src/app/door/darkroom/CONTEXT.md`.
    **Progress Quest** is the natural cheap follow-up on this shelf.
 
 MUDs are intentionally **not** in this list anymore - see Parked below.

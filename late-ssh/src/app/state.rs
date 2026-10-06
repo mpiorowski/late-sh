@@ -1320,6 +1320,7 @@ impl App {
             config.user_id,
             config.username.clone(),
             config.fight_service.clone(),
+            config.is_draining.clone(),
         );
         // A standing runner's sheet is on the frame HUD from the first
         // frame, not from the first descent; the read also rolls the day.

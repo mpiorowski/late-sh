@@ -860,7 +860,8 @@ async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     // Walk the hub sidebar down to NetHack and open the config box. The step
     // count comes from the selector order itself, so a game inserted above
     // NetHack moves the cursor here instead of opening another game's config.
-    let steps = HubGame::ALL
+    // A fresh account is no runner, so its roster has no Night City.
+    let steps = HubGame::roster(false)
         .iter()
         .position(|game| *game == HubGame::Nethack)
         .expect("nethack is in the selector");
@@ -5694,7 +5695,7 @@ async fn the_first_descent_opens_the_guide_and_the_question_mark_reopens_it() {
     app.handle_input(b"0");
     // The chrome names the key, and the first descent opens the guide by
     // itself once the claim answers.
-    wait_for_render_contains(&mut app, " Undercity · f fight · p patch · ? guide ").await;
+    wait_for_render_contains(&mut app, " Undercity · f road · p patch · ? guide ").await;
     wait_for_render_contains(&mut app, "the street, explained").await;
     // It opens at the top: the whole game in one screen.
     wait_for_render_contains(&mut app, "the short version").await;
@@ -5773,8 +5774,8 @@ async fn p_opens_patch_from_anywhere_on_the_street() {
     wait_for_render_not_contains(&mut app, " Esc closes ").await;
 }
 
-/// Esc over a live fight is the run, not a way out: the exchange gets a
-/// run line (away, or caught turning) and the scene stays up either way.
+/// A scene whose last answer was the service failing is not a fight to be
+/// trapped in: Esc closes it instead of running.
 #[tokio::test]
 async fn esc_closes_a_scene_the_static_stopped_answering() {
     use crate::app::deadchannel::fight::svc::FightOutcome;
@@ -5819,9 +5820,9 @@ async fn esc_closes_a_scene_the_static_stopped_answering() {
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "[Enter] step in").await;
+    wait_for_render_contains(&mut app, "[Enter] fight").await;
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "[a] attack").await;
+    wait_for_render_contains(&mut app, "[a] auto turn").await;
 
     // The service fails to answer the next command: an outage, as the
     // session would hear it.
@@ -5843,7 +5844,7 @@ async fn esc_closes_a_scene_the_static_stopped_answering() {
 
 #[tokio::test]
 async fn esc_in_a_fight_is_a_run() {
-    use crate::app::deadchannel::fight::data::{RUN_FAILED_LINES, RUN_LINES};
+    use crate::app::deadchannel::fight::data::RUN_LINES;
     use crate::app::deadchannel::runner::state::Look;
     use crate::app::deadchannel::runner::svc::RunnerEntry;
     use late_core::models::deadchannel_runner::DeadchannelRunner;
@@ -5886,18 +5887,17 @@ async fn esc_in_a_fight_is_a_run() {
     app.handle_input(b"0");
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "[Enter] step in").await;
+    wait_for_render_contains(&mut app, "[Enter] fight").await;
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "[a] attack").await;
+    wait_for_render_contains(&mut app, "[a] auto turn").await;
 
-    // The roll goes either way; both answers are run lines, and neither
-    // closes the scene.
+    // No dice: the flicker's hit lands on the way out, and the runner is
+    // out. The scene stays up, over, on the getaway line.
     app.handle_input(b"\x1b");
     let deadline = Instant::now() + Duration::from_secs(5);
-    let run_lines = RUN_LINES.iter().chain(RUN_FAILED_LINES.iter());
     let frame = loop {
         let frame = render_plain(&mut app);
-        if run_lines.clone().any(|line| frame.contains(line)) {
+        if RUN_LINES.iter().any(|line| frame.contains(line)) {
             break frame;
         }
         assert!(
@@ -5911,9 +5911,51 @@ async fn esc_in_a_fight_is_a_run() {
         "expected the scene to stay up after the run; frame={frame:?}"
     );
     assert!(
-        frame.contains("[Enter] back to the street") || frame.contains("[a] attack"),
-        "expected the scene over (away) or still on (caught); frame={frame:?}"
+        frame.contains("it hits you for "),
+        "expected the hit on the way out; frame={frame:?}"
     );
+    assert!(
+        frame.contains("[Enter] back to the road"),
+        "expected the scene over; frame={frame:?}"
+    );
+
+    // Enter goes back to the road: the step is spent, the next one waits.
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, " the road ").await;
+    wait_for_render_contains(&mut app, "rations 9/10").await;
+}
+
+/// The hand takes its digits while a fight is on: `1` to `5` play the
+/// card in that slot and never switch pages, `e` ends the turn, and the
+/// glyph answers.
+#[tokio::test]
+async fn the_number_keys_play_cards_and_e_ends_the_turn() {
+    let (_test_db, mut app, _) = runner_on_the_street("undercity-cards-it", 100, 34, |_| {}).await;
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "[Enter] fight").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "[1-5] play").await;
+    wait_for_render_contains(&mut app, "energy ██ ██ ██").await;
+
+    // Whatever was dealt, slot one holds a card that costs something.
+    app.handle_input(b"1");
+    wait_for_render_not_contains(&mut app, "energy ██ ██ ██").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" Undercity "),
+        "a card key is not a page switch; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("╭ 1 "),
+        "the played slot is empty; frame={frame:?}"
+    );
+
+    // The turn ends: the flicker hits, and a full hand is back.
+    app.handle_input(b"e");
+    wait_for_render_contains(&mut app, "it hits you for ").await;
+    wait_for_render_contains(&mut app, "energy ██ ██ ██").await;
+    wait_for_render_contains(&mut app, "╭ 1 ").await;
 }
 
 /// A runner on the street: the row shaped by `shape` on today's day,
@@ -5976,22 +6018,22 @@ async fn runner_on_the_street(
     (test_db, app, user.id)
 }
 
-/// A spent runner's `f` opens the picker on the reason, and Enter (what
+/// A spent runner's `f` opens the road on the reason, and Enter (what
 /// its key row offers) lands back on the street: no scene opens only to
-/// repeat the refusal the picker already showed.
+/// repeat the refusal the road already showed.
 #[tokio::test]
-async fn enter_on_a_spent_runners_picker_lands_back_on_the_street() {
+async fn enter_on_a_spent_runners_road_lands_back_on_the_street() {
     let (_test_db, mut app, _) = runner_on_the_street("undercity-spent-it", 100, 30, |sheet| {
         sheet.rations_left = 0
     })
     .await;
 
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "you are spent for today. the static will keep.").await;
+    wait_for_render_contains(&mut app, "the road is walked. the static will keep").await;
     wait_for_render_contains(&mut app, "[Enter] back to the street").await;
 
     app.handle_input(b"\r");
-    wait_for_render_not_contains(&mut app, "you are spent for today").await;
+    wait_for_render_not_contains(&mut app, "the road is walked").await;
     assert_render_not_contains_for(&mut app, " the end of the row ", Duration::from_millis(300))
         .await;
     let frame = render_plain(&mut app);
@@ -6078,36 +6120,42 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     wait_for_render_contains(&mut app, " Home ").await;
 }
 
-/// The picker at its tallest (the bright glyph, the fair fight, and the
-/// step down all on offer) fits a classic 80 by 24 terminal under the
-/// app's frame: every offer's key and the key row are on screen.
+/// The road and the scene both fit a classic 80 by 24 terminal under the
+/// app's frame: the map, the node under the cursor with its step-down
+/// key, and the key row are on screen, and so is the whole hand.
 #[tokio::test]
-async fn the_picker_with_all_three_offers_fits_an_80_by_24_terminal() {
-    use crate::app::deadchannel::fight::data::{RATIONS_PER_DAY, bright_steps};
-    use crate::app::deadchannel::fight::svc::FightService;
-
-    let [bright_step, _] = bright_steps(FightService::today());
-    let (_test_db, mut app, _) = runner_on_the_street("undercity-picker-24-it", 80, 24, |sheet| {
+async fn the_road_and_the_hand_fit_an_80_by_24_terminal() {
+    let (_test_db, mut app, _) = runner_on_the_street("undercity-road-24-it", 80, 24, |sheet| {
         sheet.level = 2;
         sheet.peak_level = 2;
         sheet.signal = 20;
-        sheet.rations_left = RATIONS_PER_DAY - (bright_step - 1);
     })
     .await;
 
     app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "[b]").await;
+    wait_for_render_contains(&mut app, "[Enter] fight").await;
     let frame = render_plain(&mut app);
     for needle in [
-        "[b]",
-        "[f]",
-        "[g]",
-        "[Enter] step in",
-        "esc back to the street",
+        " the road ",
+        "▸ [f]",
+        "hiss  lv 2",
+        "[▚]",
+        "[g] flicker, half pay",
+        "esc back",
     ] {
         assert!(
             frame.contains(needle),
-            "expected {needle:?} on an 80 by 24 picker; frame={frame:?}"
+            "expected {needle:?} on an 80 by 24 road; frame={frame:?}"
+        );
+    }
+
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "[1-5] play").await;
+    let frame = render_plain(&mut app);
+    for needle in ["╭ 1 ", "╭ 5 ", "energy ██ ██ ██", "[e] end turn", "[r] run"] {
+        assert!(
+            frame.contains(needle),
+            "expected {needle:?} on an 80 by 24 scene; frame={frame:?}"
         );
     }
 }

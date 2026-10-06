@@ -180,6 +180,10 @@ impl App {
             self.city.tick(self.marquee_tick as u64);
             changed = true;
         }
+        if anim_half && crate::app::door::hub::state::animates(self) {
+            // Night City's card in the Games hub rains on the same edge.
+            changed = true;
+        }
 
         // Expire a stale paired-clipboard wait here rather than inside
         // chat.tick(): the registry slot must be cancelled along with it, so
@@ -1355,6 +1359,7 @@ impl App {
         // to the aquarium's quarter tier it drops to ~3.8fps.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
+            || crate::app::door::hub::state::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())

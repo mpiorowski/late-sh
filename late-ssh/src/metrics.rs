@@ -218,10 +218,20 @@ pub enum FirstContactBeat {
 pub enum FightBeat {
     Started,
     SteppedDown,
-    /// A step in against a bright glyph.
+    /// A step onto a bright glyph's node.
     Bright,
     Resumed,
+    /// A card played, the fight still on.
+    Played,
+    /// A turn ended, both standing.
     Round,
+    /// A card drafted into the deck.
+    Drafted,
+    /// A rest on the road spent on the signal, or on the deck.
+    Mended,
+    Cleared,
+    /// A cache on the road taken.
+    Cached,
     Won,
     /// The Old Signal put down: a mark and the reset.
     Slain,
@@ -1437,7 +1447,12 @@ mod inner {
             FightBeat::SteppedDown => "stepped_down",
             FightBeat::Bright => "bright",
             FightBeat::Resumed => "resumed",
+            FightBeat::Played => "played",
             FightBeat::Round => "round",
+            FightBeat::Drafted => "drafted",
+            FightBeat::Mended => "mended",
+            FightBeat::Cleared => "cleared",
+            FightBeat::Cached => "cached",
             FightBeat::Won => "won",
             FightBeat::Slain => "slain",
             FightBeat::Lost => "lost",
@@ -1893,6 +1908,7 @@ mod inner {
             ShareCardKind::RubiksCube => "rubiks_cube",
             ShareCardKind::SlidingPuzzle => "sliding_puzzle",
             ShareCardKind::Day => "day",
+            ShareCardKind::Road => "road",
         }
     }
 

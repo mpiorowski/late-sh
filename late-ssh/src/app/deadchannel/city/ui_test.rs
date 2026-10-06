@@ -298,7 +298,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                         sheet,
                         scene: None,
                         picker: None,
-                        till: Some("patch works fast. +18 signal, back to full. 27 bits."),
+                        till: Some("patch works fast. +18 signal, back to full. 54 bits."),
                         tailor: tailor_ui::MirrorView {
                             draft: None,
                             word: None,
@@ -344,9 +344,9 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
         screen.contains("signal 12/30      on hand 100 bits"),
         "{screen}"
     );
-    assert!(screen.contains("[p] patch to full for 27 bits"), "{screen}");
+    assert!(screen.contains("[p] patch to full for 54 bits"), "{screen}");
     assert!(
-        screen.contains("patch works fast. +18 signal, back to full. 27 bits."),
+        screen.contains("patch works fast. +18 signal, back to full. 54 bits."),
         "{screen}"
     );
 

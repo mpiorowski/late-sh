@@ -1,46 +1,96 @@
-use super::{Reading, publish, report, sweep};
-use crate::app::deadchannel::fight::data::{RULES, Rules};
+use super::{Reading, publish, report, runs, sweep};
+use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
 
 /// The candidates `make deadchannel-sweep` reads side by side. Edit this
 /// list for the question at hand; the first row is always the live game.
 const SWEEP: &[(&str, Rules)] = &[
     ("live", RULES),
     (
-        "prices 200%",
+        "boss 280",
         Rules {
-            price_percent: 200,
+            old_signal: boss(280, 39),
             ..RULES
         },
     ),
     (
-        "prices 250%",
+        "boss 300",
         Rules {
-            price_percent: 250,
+            old_signal: boss(300, 39),
             ..RULES
         },
     ),
     (
-        "patch 100%",
+        "hits 175%",
         Rules {
-            patch_percent: 100,
+            hit_percent: 175,
             ..RULES
         },
     ),
     (
-        "the old game: prices 100%, patch 100%",
+        "hits 195%",
         Rules {
-            price_percent: 100,
-            patch_percent: 100,
+            hit_percent: 195,
+            ..RULES
+        },
+    ),
+    (
+        "blocks 55%",
+        Rules {
+            block_percent: 55,
+            ..RULES
+        },
+    ),
+    (
+        "blocks 65%",
+        Rules {
+            block_percent: 65,
+            ..RULES
+        },
+    ),
+    (
+        "bright 135%",
+        Rules {
+            bright_signal_percent: 135,
+            ..RULES
+        },
+    ),
+    (
+        "jab 50%",
+        Rules {
+            jab_percent: 50,
+            ..RULES
+        },
+    ),
+    (
+        "sever 200%",
+        Rules {
+            sever_percent: 200,
             ..RULES
         },
     ),
 ];
+
+/// The Old Signal with `signal` and `attack`, its defense the live one.
+const fn boss(signal: i32, attack: u32) -> FoeTier {
+    FoeTier {
+        signal,
+        attack,
+        ..RULES.old_signal
+    }
+}
 
 /// Every table for the live rules. `make deadchannel-arena`.
 #[test]
 #[ignore = "the report: run it with make deadchannel-arena"]
 fn arena_report() {
     publish("deadchannel-arena.md", &report(RULES));
+}
+
+/// Whole runs, start to finish, for the live rules. `make deadchannel-run`.
+#[test]
+#[ignore = "the printed runs: run it with make deadchannel-run"]
+fn arena_run() {
+    publish("deadchannel-run.md", &runs(RULES));
 }
 
 /// One reading per candidate in [`SWEEP`]. `make deadchannel-sweep`.

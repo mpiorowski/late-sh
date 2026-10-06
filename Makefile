@@ -115,6 +115,14 @@ deadchannel-arena:
 deadchannel-sweep:
 	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_sweep)'"
 
+# Whole simulated runs, start to finish: one seeded climb a player from a
+# fresh row to the first mark, every shop visit, step, and turn, written to
+# late-ssh/target/deadchannel-run.md. Read it to see what a day of the
+# rules is like.
+.PHONY: deadchannel-run
+deadchannel-run:
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_run)'"
+
 # Full pre-merge sweep, and the only place the otel feature is exercised:
 # clippy + tests run the whole workspace WITH --features otel, so the real
 # telemetry/metrics code (the config prod ships) is compiled and linted here.
