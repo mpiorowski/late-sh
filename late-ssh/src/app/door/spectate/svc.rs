@@ -1,7 +1,7 @@
 // Orchestration for the live-game rosters: one connect-with-retry task per
 // door whose host serves watch sessions (spawned from main.rs), following the
 // host's `list` stream and publishing each block as a snapshot every session
-// reads. The roster drives the hub's watch list, the `w` key's target, and
+// reads. The roster drives the hub's watch list, the `s` key's target, and
 // the watcher count a player sees in their own game's chrome.
 //
 // While the stream is down the published roster is empty, never stale: a
