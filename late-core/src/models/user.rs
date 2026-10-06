@@ -2013,7 +2013,7 @@ pub fn extract_paper_at_login(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-/// Whether a player sees their watchers' chat under a running door game
+/// Whether a player sees their watchers' chat beside a running door game
 /// (toggled from the door's landing). Defaults to true; off hides it from
 /// the player only, the watchers keep talking.
 pub fn extract_show_watch_chat(settings: &Value) -> bool {

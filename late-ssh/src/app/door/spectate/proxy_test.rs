@@ -71,7 +71,7 @@ fn a_broken_frame_stream_is_an_error() {
 
 #[test]
 fn roster_blocks_decode_across_chunks() {
-    let wire = b"game\talice\t100\t2\ngame\tbob\t200\t0\nend\nend\n";
+    let wire = b"game\talice\t100\t2\tXL3 Lair:2\ngame\tbob\t200\t0\t\nend\nend\n";
     let mut decoder = RosterDecoder::default();
     let mut rosters = Vec::new();
     for chunk in wire.chunks(5) {
@@ -85,11 +85,13 @@ fn roster_blocks_decode_across_chunks() {
                     playname: "alice".to_string(),
                     started_unix: 100,
                     watchers: 2,
+                    status: "XL3 Lair:2".to_string(),
                 },
                 LiveGame {
                     playname: "bob".to_string(),
                     started_unix: 200,
                     watchers: 0,
+                    status: String::new(),
                 },
             ],
             // The last game ended: an empty block clears the roster.
@@ -101,11 +103,16 @@ fn roster_blocks_decode_across_chunks() {
 #[test]
 fn a_malformed_roster_line_is_an_error() {
     assert!(matches!(
-        RosterDecoder::default().push(b"game\talice\tsoon\t2\n"),
+        RosterDecoder::default().push(b"game\talice\tsoon\t2\t\n"),
         Err(WireError::MalformedRosterLine(_))
     ));
     assert!(matches!(
         RosterDecoder::default().push(b"player\talice\n"),
+        Err(WireError::MalformedRosterLine(_))
+    ));
+    // A line without the status field is a host from before it existed.
+    assert!(matches!(
+        RosterDecoder::default().push(b"game\talice\t100\t2\n"),
         Err(WireError::MalformedRosterLine(_))
     ));
 }

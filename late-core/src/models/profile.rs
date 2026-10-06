@@ -68,7 +68,7 @@ pub struct Profile {
     pub landing_page: LandingPage,
     /// Tweak: open The Late Edition once a day at login.
     pub paper_at_login: bool,
-    /// Show the watchers' chat under this player's own running door game.
+    /// Show the watchers' chat beside this player's own running door game.
     pub show_watch_chat: bool,
     pub art_splash_mode: ArtSplashMode,
     pub terminal_images: TerminalImagesMode,

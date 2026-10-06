@@ -8,11 +8,6 @@ use super::state::{Mode, State};
 use crate::app::common::theme;
 use crate::app::door::landing;
 use crate::app::door::rebels::render::blit_screen;
-use crate::app::door::spectate::proxy::LiveGame;
-use crate::app::door::spectate::ui::{duration_label, minutes_since};
-
-/// How many live games the hub landing lists by name before summing the rest.
-const WATCH_LIST_MAX: usize = 5;
 
 /// Draw the DCSS page below the top bar: the Launcher when idle, the live
 /// embedded vt100 widget once the process is running.
@@ -28,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false, &[], false, 0);
+        draw_landing(frame, area, false, false, false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -41,14 +36,13 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 
 /// DCSS landing copy with the classic one-line Launch block, used by the Games
 /// hub when DCSS is selected (the hub has no per-session door state), plus
-/// who is playing right now for the hub's `s` watch key and the player's own
-/// `t` switch for seeing watcher chat under their game.
+/// the player's own `t` switch for seeing watcher chat beside their game.
+/// Who is playing right now is the hub rail's `live` section, not this page.
 pub fn draw_landing(
     frame: &mut Frame,
     area: Rect,
     enabled: bool,
     live: bool,
-    roster: &[LiveGame],
     show_watch_chat: bool,
     scroll: u16,
 ) -> u16 {
@@ -67,62 +61,28 @@ pub fn draw_landing(
             Style::default().fg(theme::ERROR()),
         ))
     };
-    let watch = if enabled {
-        let mut lines = vec![landing::hint(
+    let watch_chat = if enabled {
+        vec![landing::hint(
             "t",
             match show_watch_chat {
-                true => "watcher chat under your game: shown",
-                false => "watcher chat under your game: hidden",
+                true => "watcher chat beside your game: shown",
+                false => "watcher chat beside your game: hidden",
             },
             8,
-        )];
-        lines.extend(watch_block(roster));
-        lines
+        )]
     } else {
         Vec::new()
     };
-    render_landing(frame, area, vec![action_line], watch, scroll)
+    render_landing(frame, area, vec![action_line], watch_chat, scroll)
 }
 
-/// The Watch Live section: who is in the dungeon right now, and the key.
-fn watch_block(roster: &[LiveGame]) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(""), landing::heading("Watch Live")];
-    if roster.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  Nobody is in the dungeon right now.",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )));
-        return lines;
-    }
-    for game in roster.iter().take(WATCH_LIST_MAX) {
-        let mut detail = format!("{} in", duration_label(minutes_since(game.started_unix)));
-        if game.watchers > 0 {
-            detail.push_str(&format!(" \u{b7} {} watching", game.watchers));
-        }
-        lines.push(landing::stat(&game.playname, &detail, 22));
-    }
-    if roster.len() > WATCH_LIST_MAX {
-        lines.push(Line::from(Span::styled(
-            format!("  and {} more", roster.len() - WATCH_LIST_MAX),
-            Style::default().fg(theme::TEXT_FAINT()),
-        )));
-    }
-    lines.push(landing::action(
-        ">",
-        "s",
-        "watch over their shoulder (\u{2190}/\u{2192} switch, Esc back)",
-        theme::AMBER_GLOW(),
-    ));
-    lines
-}
-
-/// The landing body around a caller-supplied Launch block and the optional
-/// Watch Live section beneath it.
+/// The landing body around a caller-supplied Launch block, closed by any
+/// extra launch-time hints (`launch_hints`).
 fn render_landing(
     frame: &mut Frame,
     area: Rect,
     launch: Vec<Line<'static>>,
-    watch: Vec<Line<'static>>,
+    launch_hints: Vec<Line<'static>>,
     scroll: u16,
 ) -> u16 {
     let inner = Layout::default()
@@ -188,7 +148,7 @@ fn render_landing(
     ]);
     lines.extend(launch);
     lines.push(landing::hint("c", "customize your init.txt (paste box)", 8));
-    lines.extend(watch);
+    lines.extend(launch_hints);
     lines.extend([
         Line::from(""),
         landing::heading("Once Inside"),

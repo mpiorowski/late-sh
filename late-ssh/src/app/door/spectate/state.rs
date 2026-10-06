@@ -1,7 +1,8 @@
 // Per-session spectating state: which live game this session watches, and the
-// read-only stream doing it. Watching lives inside the Games hub: while a
-// `State` is held the hub draws the watched screen instead of its sidebar and
-// landing, and leaving the hub ends the watch (`App::tick`).
+// read-only stream doing it. Watching lives inside the Games hub: a watch is
+// the hub's rail sitting on one of its live rows, so while a `State` is held
+// the hub draws the watched screen where the selected card's landing would
+// be, and leaving the hub ends the watch (`App::tick`).
 //
 // `ChatLink` is a session's tie to a player's watch-chat room. A watch holds
 // one (the pane beside the watched screen); a player holds one for their own
@@ -23,6 +24,8 @@ pub enum SpectateGame {
 }
 
 impl SpectateGame {
+    pub const ALL: [Self; 1] = [Self::Dcss];
+
     pub const fn door_game(self) -> DoorGame {
         match self {
             Self::Dcss => DoorGame::Dcss,
@@ -34,6 +37,14 @@ impl SpectateGame {
             Self::Dcss => "DCSS",
         }
     }
+}
+
+/// One live game on the Games hub's rail: which door it is in, and the host's
+/// roster entry for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveRow {
+    pub game: SpectateGame,
+    pub entry: LiveGame,
 }
 
 /// One session's link to a player's watch-chat room: the room is resolved
@@ -123,6 +134,13 @@ impl State {
         }
     }
 
+    /// This watch's row among the hub rail's live rows; `None` once the
+    /// roster no longer lists the game.
+    pub fn row_in(&self, live: &[LiveRow]) -> Option<usize> {
+        live.iter()
+            .position(|row| row.game == self.game && row.entry.playname == self.playname)
+    }
+
     pub fn chat(&self) -> &ChatLink {
         &self.chat
     }
@@ -169,24 +187,6 @@ fn end_reason(on_hub: bool, status: WatchStatus, playname: &str) -> Option<Watch
         (true, WatchStatus::Ended) => Some(WatchEnd::GameEnded(playname.to_string())),
         (true, WatchStatus::Connecting | WatchStatus::Watching) => None,
     }
-}
-
-/// The game to switch to from `current`, one step forward or back through
-/// the roster, wrapping at the ends. `None` when there is nobody else to
-/// watch. A `current` that has left the roster steps from the start.
-pub fn step_target<'a>(roster: &'a [LiveGame], current: &str, forward: bool) -> Option<&'a str> {
-    let others = roster.iter().filter(|g| g.playname != current).count();
-    if others == 0 {
-        return None;
-    }
-    let len = roster.len();
-    let next = match roster.iter().position(|g| g.playname == current) {
-        Some(at) if forward => (at + 1) % len,
-        Some(at) => (at + len - 1) % len,
-        None if forward => 0,
-        None => len - 1,
-    };
-    Some(roster[next].playname.as_str())
 }
 
 #[cfg(test)]

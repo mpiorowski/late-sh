@@ -575,13 +575,13 @@ impl App {
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
         }
-        // The live-game rosters feed the hub's watch list and the watcher
+        // The live-game rosters feed the hub rail's live rows and the watcher
         // count in a running DCSS game's chrome: drain always, pay a frame
         // only where one of them is drawn.
         let rosters_changed = self.live_games.tick();
         changed |= rosters_changed && matches!(self.screen, Screen::Games | Screen::Dcss);
-        // The watch chat: the watchers' pane and the player's line each hang
-        // on a room that resolves and joins in the background.
+        // The watch chat: the watchers' pane and the player's own pane each
+        // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);
         // A watch lives only on the Games hub. Leaving the hub ends it, and
         // so does the watched game ending (or its stream dropping): back to

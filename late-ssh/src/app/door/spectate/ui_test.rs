@@ -68,12 +68,55 @@ fn a_docked_chat_leaves_crawl_its_minimum_screen() {
     assert_eq!(dock_areas(body, ChatDock::Hidden), (body, None));
 }
 
+/// A chat docked on the right runs the full height of the view, so its rule
+/// meets the frame's top border; the header sits over the screen alone.
 #[test]
-fn the_watch_row_never_costs_crawl_its_24_rows() {
+fn a_right_dock_runs_from_the_top_of_the_view() {
+    let layout = watch_layout(Rect::new(19, 1, 130, 40), ChatDock::Right);
     assert_eq!(
-        watch_row_split(Rect::new(1, 1, 100, 25)),
-        (Rect::new(1, 1, 100, 24), Some(Rect::new(1, 25, 100, 1)))
+        layout,
+        WatchLayout {
+            header: Rect::new(19, 1, 89, 1),
+            screen: Rect::new(19, 2, 89, 39),
+            chat: Some((Rect::new(108, 1, 1, 40), Rect::new(109, 1, 40, 40))),
+        }
     );
-    let exact = Rect::new(1, 1, 100, 24);
-    assert_eq!(watch_row_split(exact), (exact, None));
+}
+
+#[test]
+fn a_dock_below_keeps_the_header_the_full_width() {
+    let layout = watch_layout(Rect::new(0, 0, 100, 34), ChatDock::Below);
+    assert_eq!(
+        layout,
+        WatchLayout {
+            header: Rect::new(0, 0, 100, 1),
+            screen: Rect::new(0, 1, 100, 24),
+            chat: Some((Rect::new(0, 25, 100, 1), Rect::new(0, 26, 100, 8))),
+        }
+    );
+}
+
+/// The player's own game: a pane on the right when wide, one row underneath
+/// when only tall, nothing when neither leaves crawl its 80x24.
+#[test]
+fn a_players_chat_never_costs_crawl_its_minimum_screen() {
+    assert_eq!(
+        own_game_split(Rect::new(1, 1, 121, 30)),
+        (
+            Rect::new(1, 1, 80, 30),
+            OwnChat::Pane {
+                rule: Rect::new(81, 1, 1, 30),
+                pane: Rect::new(82, 1, 40, 30),
+            }
+        )
+    );
+    assert_eq!(
+        own_game_split(Rect::new(1, 1, 100, 25)),
+        (
+            Rect::new(1, 1, 100, 24),
+            OwnChat::Line(Rect::new(1, 25, 100, 1))
+        )
+    );
+    let small = Rect::new(1, 1, 100, 24);
+    assert_eq!(own_game_split(small), (small, OwnChat::Hidden));
 }

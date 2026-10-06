@@ -217,15 +217,18 @@ struct DrawContext<'a> {
     /// The live game this session is watching; the hub draws it instead of
     /// its selector while one is held.
     spectate_state: Option<&'a crate::app::door::spectate::state::State>,
-    /// DCSS's live games: the hub's watch list and the watch view's header.
-    dcss_roster: std::sync::Arc<Vec<crate::app::door::spectate::proxy::LiveGame>>,
+    /// Every live game on a watchable door: the hub rail's live rows and
+    /// the watch view's header.
+    live_rows: Vec<crate::app::door::spectate::state::LiveRow>,
     /// Watchers on this player's own running DCSS game, for its chrome.
     dcss_watchers: Option<usize>,
-    /// The watch view's chat pane; `None` until this session is in the
-    /// watched player's room.
-    spectate_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
-    /// Whether this player's running game gives a row to watcher chat (the
-    /// `show_watch_chat` setting), and the newest line for it.
+    /// The watch chat on show: the watched player's room on the Games hub,
+    /// this player's own room beside their running DCSS game. `None` until
+    /// this session is in the room.
+    watch_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Whether this player's running game makes room for watcher chat (the
+    /// `show_watch_chat` setting), and the newest line for the one-row form
+    /// of it.
     show_watch_chat: bool,
     dcss_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
@@ -640,9 +643,17 @@ impl App {
             username_directory_snapshot.as_deref(),
         );
         let chat_usernames = &render_usernames;
-        let spectate_chat_room_id = self.spectate_chat_room_id();
-        // The newest thing a watcher said, for the row under this player's
-        // own running game.
+        // One watch chat is on show at a time: the watched player's room on
+        // the Games hub, this player's own room beside their running game.
+        let watch_chat_room_id = if self.screen == Screen::Games {
+            self.spectate_chat_room_id()
+        } else if self.screen == Screen::Dcss {
+            self.own_watch_chat_room_id()
+        } else {
+            None
+        };
+        // The newest thing a watcher said, for the one-row form of the chat
+        // a narrow terminal shows under this player's own running game.
         let dcss_watch_line = self.own_watch_chat_room_id().and_then(|room_id| {
             crate::app::door::spectate::chat::latest_line(
                 self.chat.messages_for_room(room_id),
@@ -1141,16 +1152,16 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
-        // The watch view's chat: the watched player's room, beside their
-        // screen.
-        let spectate_chat_view =
-            spectate_chat_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+        // The watch chat: docked beside the watched screen for a watcher,
+        // read-only beside their own game for the player.
+        let watch_chat_view =
+            watch_chat_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
                 messages_inset: 1,
                 title: "Watch Chat",
                 messages: self.chat.messages_for_room(chat_room_id),
                 overlay: self.chat.overlay(),
                 image_modal,
-                rows_cache: &mut self.spectate_chat_rows_cache,
+                rows_cache: &mut self.watch_chat_rows_cache,
                 rows_versions: chat::ui::ChatRowsVersions {
                     room_id: Some(chat_room_id),
                     room_version: self.chat.room_version(chat_room_id),
@@ -1516,11 +1527,9 @@ impl App {
                         darkroom_live,
                         greendragon_live,
                         spectate_state: self.spectate_state.as_ref(),
-                        dcss_roster: self
-                            .live_games
-                            .roster(crate::app::door::spectate::state::SpectateGame::Dcss),
+                        live_rows: self.live_games.live_rows(),
                         dcss_watchers,
-                        spectate_chat_view,
+                        watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         dcss_watch_line,
                         greendragon_state: self.greendragon_state.as_ref(),
@@ -2005,62 +2014,69 @@ impl App {
                 &ctx.clubhouse_state.tour_fight,
                 ctx.clubhouse_state.username(),
             ),
-            // A watch owns the hub while this session holds one.
-            Screen::Games => match ctx.spectate_state {
-                Some(state) => {
-                    let roster = match state.game() {
-                        crate::app::door::spectate::state::SpectateGame::Dcss => &ctx.dcss_roster,
-                    };
+            Screen::Games => {
+                // The rail's selection sits on a live row while this session
+                // watches one; the watch then draws in the landing's place.
+                let live_selected = ctx
+                    .spectate_state
+                    .and_then(|state| state.row_in(&ctx.live_rows));
+                crate::app::door::hub::ui::draw_games_hub(
+                    frame,
+                    content_area,
+                    &crate::app::door::hub::ui::HubView {
+                        roster: ctx.games_hub_roster,
+                        selected: ctx.games_hub_selected,
+                        scroll: ctx.games_hub_scroll,
+                        max_scroll: ctx.games_hub_max_scroll,
+                        delete_confirm: ctx.door_delete_confirm,
+                        rebels_enabled: ctx.rebels_enabled,
+                        nethack_enabled: ctx.nethack_enabled,
+                        dcss_enabled: ctx.dcss_enabled,
+                        brogue_enabled: ctx.brogue_enabled,
+                        usurper_enabled: ctx.usurper_enabled,
+                        dopewars_enabled: ctx.dopewars_enabled,
+                        bashquest_enabled: ctx.bashquest_enabled,
+                        codekeep_enabled: ctx.codekeep_enabled,
+                        lateania_online: ctx.lateania_online,
+                        lateania_slots: ctx.lateania_slots.clone(),
+                        lateania_slot_cursor: ctx.lateania_slot_cursor,
+                        lateania_live: ctx.lateania_live,
+                        nethack_live: ctx.nethack_live,
+                        dcss_live: ctx.dcss_live,
+                        brogue_live: ctx.brogue_live,
+                        darkroom_live: ctx.darkroom_live,
+                        greendragon_live: ctx.greendragon_live,
+                        live: &ctx.live_rows,
+                        live_selected,
+                        watching: ctx.spectate_state.is_some(),
+                        show_watch_chat: ctx.show_watch_chat,
+                        rc_modal: ctx.door_rc_modal.map(|(game, content)| {
+                            crate::app::door::hub::ui::RcModalView { game, content }
+                        }),
+                        night_city: crate::app::deadchannel::city::landing::LandingView {
+                            sheet: ctx.city_sheet,
+                            street: ctx.city_street,
+                            own_user_id: ctx.city_own_user_id,
+                            tick: ctx.marquee_tick,
+                        },
+                    },
+                );
+                if let (Some(state), Some(pane)) = (
+                    ctx.spectate_state,
+                    crate::app::door::hub::ui::watch_pane_area(content_area),
+                ) {
                     crate::app::door::spectate::ui::draw(
                         frame,
-                        content_area,
-                        &crate::app::door::spectate::ui::SpectateView { state, roster },
-                        ctx.spectate_chat_view.take(),
+                        pane,
+                        &crate::app::door::spectate::ui::SpectateView {
+                            state,
+                            entry: live_selected.map(|index| &ctx.live_rows[index].entry),
+                        },
+                        ctx.watch_chat_view.take(),
                         terminal_images,
                     );
                 }
-                None => {
-                    crate::app::door::hub::ui::draw_games_hub(
-                        frame,
-                        content_area,
-                        &crate::app::door::hub::ui::HubView {
-                            roster: ctx.games_hub_roster,
-                            selected: ctx.games_hub_selected,
-                            scroll: ctx.games_hub_scroll,
-                            max_scroll: ctx.games_hub_max_scroll,
-                            delete_confirm: ctx.door_delete_confirm,
-                            rebels_enabled: ctx.rebels_enabled,
-                            nethack_enabled: ctx.nethack_enabled,
-                            dcss_enabled: ctx.dcss_enabled,
-                            brogue_enabled: ctx.brogue_enabled,
-                            usurper_enabled: ctx.usurper_enabled,
-                            dopewars_enabled: ctx.dopewars_enabled,
-                            bashquest_enabled: ctx.bashquest_enabled,
-                            codekeep_enabled: ctx.codekeep_enabled,
-                            lateania_online: ctx.lateania_online,
-                            lateania_slots: ctx.lateania_slots.clone(),
-                            lateania_slot_cursor: ctx.lateania_slot_cursor,
-                            lateania_live: ctx.lateania_live,
-                            nethack_live: ctx.nethack_live,
-                            dcss_live: ctx.dcss_live,
-                            brogue_live: ctx.brogue_live,
-                            darkroom_live: ctx.darkroom_live,
-                            greendragon_live: ctx.greendragon_live,
-                            dcss_roster: &ctx.dcss_roster,
-                            show_watch_chat: ctx.show_watch_chat,
-                            rc_modal: ctx.door_rc_modal.map(|(game, content)| {
-                                crate::app::door::hub::ui::RcModalView { game, content }
-                            }),
-                            night_city: crate::app::deadchannel::city::landing::LandingView {
-                                sheet: ctx.city_sheet,
-                                street: ctx.city_street,
-                                own_user_id: ctx.city_own_user_id,
-                                tick: ctx.marquee_tick,
-                            },
-                        },
-                    );
-                }
-            },
+            }
             Screen::Lateania => {
                 crate::app::door::lateania::screen::GAME.draw(
                     frame,
@@ -2115,24 +2131,37 @@ impl App {
             }
             Screen::Dcss => {
                 if let Some(state) = ctx.dcss_state.as_deref_mut() {
-                    // A running game gives its bottom row to the watchers'
-                    // chat when the player keeps that on; the row is taken
-                    // off the PTY, never drawn over the game.
-                    let (game_area, watch_row) = if ctx.show_watch_chat && state.is_running() {
-                        crate::app::door::spectate::ui::watch_row_split(content_area)
+                    // A running game makes room for its watchers' chat when
+                    // the player keeps that on: a read-only pane on the
+                    // right, or one row underneath on a narrow terminal. The
+                    // room comes off the PTY, never over the game.
+                    use crate::app::door::spectate::ui::OwnChat;
+                    let (game_area, own_chat) = if ctx.show_watch_chat && state.is_running() {
+                        crate::app::door::spectate::ui::own_game_split(content_area)
                     } else {
-                        (content_area, None)
+                        (content_area, OwnChat::Hidden)
                     };
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::dcss::render::draw_page(frame, game_area, state);
-                    if let Some(row) = watch_row {
-                        crate::app::door::spectate::ui::draw_watch_line(
+                    match own_chat {
+                        OwnChat::Pane { rule, pane } => {
+                            crate::app::door::spectate::ui::draw_own_chat_pane(
+                                frame,
+                                rule,
+                                pane,
+                                ctx.watch_chat_view.take(),
+                                ctx.dcss_watchers,
+                                terminal_images,
+                            );
+                        }
+                        OwnChat::Line(row) => crate::app::door::spectate::ui::draw_watch_line(
                             frame,
                             row,
                             ctx.dcss_watch_line.as_ref(),
                             ctx.dcss_watchers,
-                        );
+                        ),
+                        OwnChat::Hidden => {}
                     }
                 }
             }

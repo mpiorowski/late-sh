@@ -319,7 +319,7 @@ pub struct SessionConfig {
     /// crawl's `-name`), claimed once from the DCSS launcher.
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     /// The door hosts' live-game rosters, followed once per process: the
-    /// hub's watch list and a player's own watcher count.
+    /// hub rail's live rows and a player's own watcher count.
     pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// Accessor for the account's door rc files (.nethackrc / DCSS init.txt),
     /// edited from the Games hub config box and pushed to the hosts at launch.
@@ -692,8 +692,10 @@ pub struct App {
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
-    /// Row cache for the watch view's chat pane.
-    pub(crate) spectate_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Row cache for the door watch chat: the pane beside a watched screen,
+    /// or beside this player's own running game. One screen draws it at a
+    /// time, and the cache is keyed by room and width.
+    pub(crate) watch_chat_rows_cache: chat::ui::ChatRowsCache,
     /// The Zen pages' current-room chat, its own cache like the others.
     /// One rows cache per chat tile, in layout order; sized to the tiles
     /// each frame.
@@ -830,8 +832,8 @@ pub struct App {
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// This player's tie to the watch-chat room of their own running game,
     /// held while it runs and the `show_watch_chat` setting is on
-    /// (`door::spectate::chat`). While held, the game gives up its bottom
-    /// row to the watchers' newest line.
+    /// (`door::spectate::chat`): the room behind the read-only pane beside
+    /// the game.
     pub(crate) own_watch_chat: Option<crate::app::door::spectate::state::ChatLink>,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
@@ -1123,7 +1125,7 @@ impl App {
             Screen::HouseTable => self.house.chat_room_id(),
             // The watched player's chat, while this session watches one.
             Screen::Games => self.spectate_chat_room_id(),
-            // The watchers' chat under this player's own running game.
+            // The watchers' chat beside this player's own running game.
             Screen::Dcss => self.own_watch_chat_room_id(),
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
@@ -1655,7 +1657,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
-            spectate_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            watch_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             zen_chat_rows_caches: Vec::new(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),

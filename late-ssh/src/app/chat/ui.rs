@@ -3353,7 +3353,7 @@ pub(crate) fn embedded_chat_layout(
 pub fn draw_embedded_room_chat(
     frame: &mut Frame,
     area: Rect,
-    view: EmbeddedRoomChatView<'_>,
+    mut view: EmbeddedRoomChatView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
@@ -3377,6 +3377,60 @@ pub fn draw_embedded_room_chat(
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    draw_embedded_messages(frame, messages_area, &mut view, terminal_images);
+
+    draw_composer_block(
+        frame,
+        composer_area,
+        &ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
+            inert: view.composer_inert,
+        },
+    );
+    record_composer_mouse_target(
+        view.composer,
+        composer_area,
+        view.composer_rect_slot,
+        view.composer_viewport_top_slot,
+    );
+}
+
+/// An embedded room drawn to be read and nothing else: its messages fill
+/// `area`, and there is no composer, selection, overlay or click target.
+/// The door watch chat as the player being watched sees it
+/// (`app/door/spectate`): every key they press belongs to their game.
+pub fn draw_embedded_room_messages(
+    frame: &mut Frame,
+    area: Rect,
+    mut view: EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    view.overlay = None;
+    view.image_modal = None;
+    view.chat_hit_slot = None;
+    view.selected_message_id = None;
+    view.highlighted_message_id = None;
+    draw_embedded_messages(frame, area, &mut view, terminal_images);
+}
+
+/// The message half of an embedded room chat: the voice strip when the room
+/// has one, then the message rows, the overlay and the image modal.
+fn draw_embedded_messages(
+    frame: &mut Frame,
+    messages_area: Rect,
+    view: &mut EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let layout = embedded_chat_layout(
         messages_area,
         view.messages_inset,
@@ -3468,31 +3522,6 @@ pub fn draw_embedded_room_chat(
     if let Some(image_modal) = view.image_modal {
         draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
     }
-
-    draw_composer_block(
-        frame,
-        composer_area,
-        &ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-            inert: view.composer_inert,
-        },
-    );
-    record_composer_mouse_target(
-        view.composer,
-        composer_area,
-        view.composer_rect_slot,
-        view.composer_viewport_top_slot,
-    );
 }
 
 struct RoomListRows {

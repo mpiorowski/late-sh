@@ -57,16 +57,18 @@ fn encode_list_writes_one_line_per_game_then_end() {
             playname: "alice".to_string(),
             started_unix: 100,
             watchers: 2,
+            status: "XL3 Lair:2".to_string(),
         },
         ListedGame {
             playname: "bob".to_string(),
             started_unix: 200,
             watchers: 0,
+            status: String::new(),
         },
     ]);
     assert_eq!(
         String::from_utf8(block).unwrap(),
-        "game\talice\t100\t2\ngame\tbob\t200\t0\nend\n"
+        "game\talice\t100\t2\tXL3 Lair:2\ngame\tbob\t200\t0\t\nend\n"
     );
     assert_eq!(encode_list(&[]), b"end\n");
 }
@@ -164,4 +166,46 @@ fn watchers_are_counted_while_they_watch() {
     assert_eq!(registry.list()[0].watchers, 1);
     drop(guard);
     assert_eq!(registry.list()[0].watchers, 0);
+}
+
+#[test]
+fn hud_status_reads_level_and_place_off_crawls_hud() {
+    let hud = "mateu the Shooter\nCoglin\nHealth: 10/16\n\
+               XL:  1 Next: 10%  Place: Dungeon:1\nNoise: ---------  Time: 48.6 (0.0)";
+    assert_eq!(hud_status(hud), Some("XL1 Dungeon:1".to_string()));
+    // Branch names carry single spaces; the field ends at the next gap.
+    assert_eq!(
+        hud_status("XL: 12 Next:  3%  Place: Orcish Mines:2    Gold: 40"),
+        Some("XL12 Orcish Mines:2".to_string())
+    );
+    // A place with no level beside it still reads.
+    assert_eq!(hud_status("Place: Temple"), Some("Temple".to_string()));
+}
+
+#[test]
+fn hud_status_is_none_while_the_hud_is_covered() {
+    assert_eq!(hud_status(""), None);
+    assert_eq!(hud_status("Inventory: 12/52 slots\n a - a +0 rapier"), None);
+    assert_eq!(hud_status("Place:   "), None);
+    assert_eq!(
+        hud_status(&format!("Place: {}", "x".repeat(PLACE_MAX_CHARS + 1))),
+        None
+    );
+}
+
+/// The roster keeps the last status it read while a menu covers the HUD.
+#[test]
+fn the_roster_keeps_a_status_while_the_hud_is_covered() {
+    let registry = LiveRegistry::new();
+    let handle = registry.register("alice", 80, 24);
+    assert_eq!(registry.list()[0].status, "");
+
+    handle.feed(b"\x1b[2J\x1b[1;1HXL:  4 Next: 20%  Place: Lair:1");
+    assert_eq!(registry.list()[0].status, "XL4 Lair:1");
+
+    handle.feed(b"\x1b[2J\x1b[1;1HInventory: 12/52 slots");
+    assert_eq!(registry.list()[0].status, "XL4 Lair:1");
+
+    handle.feed(b"\x1b[2J\x1b[1;1HXL:  5 Next:  0%  Place: Lair:2");
+    assert_eq!(registry.list()[0].status, "XL5 Lair:2");
 }

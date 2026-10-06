@@ -5,9 +5,10 @@
 // - a watcher's link lives on their watch (`spectate::state::State`) and
 //   feeds the chat pane beside the watched screen, where they read and type;
 // - a player's link (`App::own_watch_chat`) lives while their own game runs
-//   and feeds the one line under it. The player only reads: every key they
-//   press still goes to the game. The `show_watch_chat` profile setting turns
-//   their line off; the watchers keep talking either way.
+//   and feeds the read-only pane beside it (one line under it on a narrow
+//   terminal). The player only reads: every key they press still goes to the
+//   game. The `show_watch_chat` profile setting turns their side off; the
+//   watchers keep talking either way.
 //
 // `tick` drives both links from `App::tick`.
 
@@ -29,7 +30,7 @@ use crate::usernames::UsernameLookup;
 const LINE_FRESH_MINUTES: i64 = 10;
 
 /// Drive this session's watch-chat links. Returns whether the watch pane or
-/// the player's line gained or lost its room.
+/// the player's own pane gained or lost its room.
 pub fn tick(app: &mut App) -> bool {
     let mut changed = false;
 
@@ -99,7 +100,8 @@ fn drive(
     }
 }
 
-/// The newest watcher message, as the player reads it under their game.
+/// The newest watcher message, as the player reads it on the one row under
+/// their game when the terminal is too narrow for the pane.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WatchLine {
     pub author: String,

@@ -1,8 +1,8 @@
 // Orchestration for the live-game rosters: one connect-with-retry task per
 // door whose host serves watch sessions (spawned from main.rs), following the
 // host's `list` stream and publishing each block as a snapshot every session
-// reads. The roster drives the hub's watch list, the `s` key's target, and
-// the watcher count a player sees in their own game's chrome.
+// reads. The roster drives the live rows on the hub's rail, the `s` key's
+// target, and the watcher count a player sees in their own game's chrome.
 //
 // While the stream is down the published roster is empty, never stale: a
 // list of games nobody can open is worse than no list.
@@ -24,7 +24,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::proxy::{LiveGame, WatchTarget, run_roster_stream};
-use super::state::SpectateGame;
+use super::state::{LiveRow, SpectateGame};
 use crate::render_signal::RenderSignal;
 
 /// Backoff between roster-stream attempts (host restarts, rollouts, network
@@ -124,6 +124,21 @@ impl LiveGamesService {
         match game {
             SpectateGame::Dcss => self.dcss.borrow().clone(),
         }
+    }
+
+    /// Every live game across the watchable doors, in the order the Games
+    /// hub's rail lists them: door by door, oldest game first.
+    pub fn live_rows(&self) -> Vec<LiveRow> {
+        SpectateGame::ALL
+            .into_iter()
+            .flat_map(|game| {
+                let roster = self.roster(game);
+                (0..roster.len()).map(move |index| LiveRow {
+                    game,
+                    entry: roster[index].clone(),
+                })
+            })
+            .collect()
     }
 
     /// Watchers on `playname`'s game, `None` when it is not listed.

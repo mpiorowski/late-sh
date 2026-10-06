@@ -7,8 +7,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::state::HubGame;
+use super::state::{HubGame, RailEntry};
 use crate::app::common::{primitives::hint_line, theme};
+use crate::app::door::spectate::state::LiveRow;
+use crate::app::door::spectate::ui::{duration_label, minutes_since};
 
 /// The rc config modal, when open: which game's file plus the stored content.
 pub struct RcModalView<'a> {
@@ -53,8 +55,14 @@ pub struct HubView<'a> {
     /// not left, and not yet idled out.
     pub darkroom_live: bool,
     pub greendragon_live: bool,
-    /// DCSS's live games, listed on its landing for the `s` watch key.
-    pub dcss_roster: &'a [crate::app::door::spectate::proxy::LiveGame],
+    /// Every game someone is playing right now on a watchable door: the
+    /// rail's `live` section, one selectable row each.
+    pub live: &'a [LiveRow],
+    /// The live row this session is watching, when it is still listed.
+    pub live_selected: Option<usize>,
+    /// This session is watching a live game: no card is selected, and the
+    /// landing pane is left to the watch view (`watch_pane_area`).
+    pub watching: bool,
     /// The `show_watch_chat` setting, shown (and flipped with `t`) on the
     /// watchable doors' landings.
     pub show_watch_chat: bool,
@@ -128,6 +136,113 @@ fn sidebar_rows(roster: &[HubGame]) -> Vec<SidebarRow> {
     rows
 }
 
+/// One row of the rail's `live` section, under the cards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveSectionRow {
+    /// The breathing row between the cards and the rule.
+    Gap,
+    Rule,
+    Header,
+    /// Nobody is playing.
+    Nobody,
+    /// A live game's name (index into the live rows).
+    Name(usize),
+    /// The status line under a name.
+    Status(usize),
+    /// How many live games the section had no room for.
+    More(usize),
+}
+
+/// The shortest rail that carries a `live` section. Below it the cards keep
+/// every row.
+const LIVE_SECTION_MIN_RAIL: usize = 10;
+
+/// The `live` section for a rail `height` rows tall. It may take up to half
+/// the rail: every live game on two rows (name, status) while they fit,
+/// otherwise a window that keeps the selected one in view plus a count of
+/// the rest.
+fn live_section_rows(live: usize, selected: Option<usize>, height: usize) -> Vec<LiveSectionRow> {
+    if height < LIVE_SECTION_MIN_RAIL {
+        return Vec::new();
+    }
+    let mut rows = vec![
+        LiveSectionRow::Gap,
+        LiveSectionRow::Rule,
+        LiveSectionRow::Header,
+    ];
+    if live == 0 {
+        rows.push(LiveSectionRow::Nobody);
+        return rows;
+    }
+    let room = (height / 2).saturating_sub(rows.len());
+    let (start, shown) = if live * 2 <= room {
+        (0, live)
+    } else {
+        let shown = (room.saturating_sub(1) / 2).max(1);
+        let start = match selected {
+            Some(index) if index >= shown => index + 1 - shown,
+            Some(_) | None => 0,
+        };
+        (start.min(live - shown), shown)
+    };
+    for index in start..start + shown {
+        rows.push(LiveSectionRow::Name(index));
+        rows.push(LiveSectionRow::Status(index));
+    }
+    if shown < live {
+        rows.push(LiveSectionRow::More(live - shown));
+    }
+    rows
+}
+
+/// One visible row of the rail: a row of the card list, or of the `live`
+/// section under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RailRow {
+    Card(SidebarRow),
+    Live(LiveSectionRow),
+}
+
+/// The rail's visible rows for a viewport `height` rows tall: the card list
+/// (scrolled to keep the selected card in view when it does not fit), then
+/// the `live` section straight under it, pinned to the bottom of a rail too
+/// short for both. Shared by the renderer and the click hit test so they
+/// cannot drift.
+fn rail_rows(
+    roster: &[HubGame],
+    selected: usize,
+    live: usize,
+    live_selected: Option<usize>,
+    height: usize,
+) -> Vec<RailRow> {
+    let section = live_section_rows(live, live_selected, height);
+    let cards = sidebar_rows(roster);
+    let cards_height = cards.len().min(height.saturating_sub(section.len()));
+    let scroll = sidebar_scroll(&cards, selected, cards_height);
+    cards
+        .into_iter()
+        .skip(scroll)
+        .take(cards_height)
+        .map(RailRow::Card)
+        .chain(section.into_iter().map(RailRow::Live))
+        .collect()
+}
+
+/// The pane beside the rail where the watch view draws while this session
+/// watches a live game: the landing's place, plus the breathing row under
+/// the top border. `None` under the hub's too-small guard.
+pub fn watch_pane_area(area: Rect) -> Option<Rect> {
+    if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
+        return None;
+    }
+    Some(Rect {
+        x: area.x + SIDEBAR_WIDTH,
+        width: area.width - SIDEBAR_WIDTH,
+        height: area.height - 1,
+        ..area
+    })
+}
+
 /// First visible row for a viewport `height` rows tall: 0 while everything
 /// fits, otherwise the window follows the selected game's row, roughly
 /// centered, clamped to the list ends.
@@ -175,6 +290,14 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     let selected = view.selected.min(view.roster.len() - 1);
     draw_sidebar(frame, body[0], selected, view);
 
+    // A watch owns the pane beside the rail while this session holds one;
+    // the caller draws it into `watch_pane_area`.
+    if view.watching {
+        view.max_scroll.set(0);
+        draw_watch_footer(frame, layout[1]);
+        return;
+    }
+
     // The selected game owns the pane beside the sidebar, rendered with its
     // real landing (logo, stats, actions) and scrolled by the hub's offset.
     // Each landing reports how far it could scroll; input clamps to that.
@@ -211,7 +334,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.dcss_enabled,
             view.dcss_live,
-            view.dcss_roster,
             view.show_watch_chat,
             scroll,
         ),
@@ -381,61 +503,151 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
     };
     frame.render_widget(block, area);
 
-    let rows = sidebar_rows(view.roster);
-    let scroll = sidebar_scroll(&rows, selected, inner.height as usize);
+    let rows = rail_rows(
+        view.roster,
+        selected,
+        view.live.len(),
+        view.live_selected,
+        inner.height as usize,
+    );
     let pad = usize::from(inner.width).saturating_sub(2);
     let lines: Vec<Line> = rows
         .iter()
-        .skip(scroll)
-        .take(inner.height as usize)
         .map(|row| match row {
-            SidebarRow::Header(label) => Line::from(Span::styled(
-                format!(" {label}"),
-                Style::default().fg(theme::TEXT_MUTED()),
-            )),
-            SidebarRow::Game(i) => {
-                let game = view.roster[*i];
-                // Night City burns in its own neon on both row styles: the
-                // one card on the shelf that is a place, not a game.
-                let style = match (game, *i == selected) {
-                    (HubGame::NightCity, true) => {
-                        crate::app::deadchannel::city::landing::sidebar_selected()
-                    }
-                    (HubGame::NightCity, false) => {
-                        crate::app::deadchannel::city::landing::sidebar_idle()
-                    }
-                    (_, true) => Style::default()
-                        .fg(theme::BG_SELECTION())
-                        .bg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                    (_, false) => Style::default().fg(theme::TEXT_DIM()),
-                };
-                let label = game.label();
-                if view.is_live(game) {
-                    // A detached game in progress: a green pip after the name,
-                    // on both the selected and unselected row styles.
-                    let livepad = pad.saturating_sub(label.len() + 2);
-                    Line::from(vec![
-                        Span::styled(format!("  {label} "), style),
-                        Span::styled("\u{25cf}", style.fg(theme::SUCCESS())),
-                        Span::styled(format!("{:<livepad$}", ""), style),
-                    ])
-                } else {
-                    Line::from(Span::styled(format!("  {label:<pad$}"), style))
-                }
-            }
-            // The standing invitation atop the nav: Lateania and the
-            // roguelikes detach on ` and hop between each other and chat.
-            // Faint on purpose; the green pip carries the "live right now"
-            // signal.
-            SidebarRow::HopHint => Line::from(Span::styled(
-                "  ` hop in & out",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )),
-            SidebarRow::Blank => Line::default(),
+            RailRow::Card(row) => card_row_line(*row, selected, pad, view),
+            RailRow::Live(row) => live_row_line(*row, usize::from(inner.width), view),
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn card_row_line(row: SidebarRow, selected: usize, pad: usize, view: &HubView) -> Line<'static> {
+    match row {
+        SidebarRow::Header(label) => Line::from(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme::TEXT_MUTED()),
+        )),
+        SidebarRow::Game(i) => {
+            let game = view.roster[i];
+            // While a live game is being watched the rail's selection is on
+            // its row, so no card wears the selected style.
+            let is_selected = i == selected && !view.watching;
+            // Night City burns in its own neon on both row styles: the
+            // one card on the shelf that is a place, not a game.
+            let style = match (game, is_selected) {
+                (HubGame::NightCity, true) => {
+                    crate::app::deadchannel::city::landing::sidebar_selected()
+                }
+                (HubGame::NightCity, false) => {
+                    crate::app::deadchannel::city::landing::sidebar_idle()
+                }
+                (_, true) => selected_row_style(),
+                (_, false) => Style::default().fg(theme::TEXT_DIM()),
+            };
+            let label = game.label();
+            if view.is_live(game) {
+                // A detached game in progress: a green pip after the name,
+                // on both the selected and unselected row styles.
+                let livepad = pad.saturating_sub(label.len() + 2);
+                Line::from(vec![
+                    Span::styled(format!("  {label} "), style),
+                    Span::styled("\u{25cf}", style.fg(theme::SUCCESS())),
+                    Span::styled(format!("{:<livepad$}", ""), style),
+                ])
+            } else {
+                Line::from(Span::styled(format!("  {label:<pad$}"), style))
+            }
+        }
+        // The standing invitation atop the nav: Lateania and the
+        // roguelikes detach on ` and hop between each other and chat.
+        // Faint on purpose; the green pip carries the "live right now"
+        // signal.
+        SidebarRow::HopHint => Line::from(Span::styled(
+            "  ` hop in & out",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        SidebarRow::Blank => Line::default(),
+    }
+}
+
+fn selected_row_style() -> Style {
+    Style::default()
+        .fg(theme::BG_SELECTION())
+        .bg(theme::AMBER())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// One row of the `live` section, `width` cells wide. The section wears the
+/// on-air red the stream tags use, so it never reads as one more group of
+/// cards.
+fn live_row_line(row: LiveSectionRow, width: usize, view: &HubView) -> Line<'static> {
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    match row {
+        LiveSectionRow::Gap => Line::default(),
+        LiveSectionRow::Rule => Line::from(Span::styled(
+            "\u{2500}".repeat(width),
+            Style::default().fg(theme::BORDER_DIM()),
+        )),
+        LiveSectionRow::Header => Line::from(Span::styled(
+            " \u{25cf} live",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )),
+        LiveSectionRow::Nobody => Line::from(Span::styled("  nobody playing", faint)),
+        LiveSectionRow::Name(i) => {
+            let pad = width.saturating_sub(2);
+            let name = fit(&view.live[i].entry.playname, pad);
+            let style = match view.live_selected == Some(i) {
+                true => selected_row_style(),
+                false => Style::default().fg(theme::TEXT_DIM()),
+            };
+            Line::from(Span::styled(format!("  {name:<pad$}"), style))
+        }
+        LiveSectionRow::Status(i) => Line::from(Span::styled(
+            format!(
+                "   {}",
+                fit(&live_status(&view.live[i]), width.saturating_sub(3))
+            ),
+            faint,
+        )),
+        LiveSectionRow::More(count) => Line::from(Span::styled(format!("  +{count} more"), faint)),
+    }
+}
+
+/// What a live row says under the player's name: where they are, as the host
+/// read it off the game, or how long they have been in until it has.
+fn live_status(row: &LiveRow) -> String {
+    if row.entry.status.is_empty() {
+        format!(
+            "{} in",
+            duration_label(minutes_since(row.entry.started_unix))
+        )
+    } else {
+        row.entry.status.clone()
+    }
+}
+
+/// `text` cut to `width` cells, ending in an ellipsis when it was cut. Rail
+/// text is ASCII (arcade handles, crawl's place names).
+fn fit(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+    cut.push('\u{2026}');
+    cut
+}
+
+/// The footer while a live game is being watched: the landing keys are gone
+/// with the landing.
+fn draw_watch_footer(frame: &mut Frame, area: Rect) {
+    let hints: &[(&str, &str)] = &[
+        ("\u{2191} \u{2193}  or  j k", "switch"),
+        ("i", "chat"),
+        ("Esc", "back"),
+    ];
+    frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 
 /// The hub footer. Minecraft has nothing to launch, so its card drops the
@@ -462,18 +674,22 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 
-/// Which sidebar game (if any) sits at terminal cell `(x, y)`, given the hub
+/// Which rail entry (if any) sits at terminal cell `(x, y)`, given the hub
 /// body rect (the same area `draw_games_hub` renders into). Mirrors the
-/// layout above (breathing row, footer row, right rule column); `roster`
-/// and `selected` reproduce the rows and the scroll position. Returns an
-/// index into `roster`. Used for click-to-select.
+/// layout above (breathing row, footer row, right rule column); `roster`,
+/// `selected`, `live` and `live_selected` reproduce the rows and the scroll
+/// position. A card answers with its index into `roster`, a live game (its
+/// name row or its status row) with its index among the live rows. Used for
+/// click-to-select.
 pub fn sidebar_hit_test(
     area: Rect,
     roster: &[HubGame],
     selected: usize,
+    live: usize,
+    live_selected: Option<usize>,
     x: u16,
     y: u16,
-) -> Option<usize> {
+) -> Option<RailEntry> {
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         return None;
     }
@@ -486,10 +702,28 @@ pub fn sidebar_hit_test(
     if x < inner.x || x >= inner.x + inner.width || y < inner.y || y >= inner.y + inner.height {
         return None;
     }
-    let rows = sidebar_rows(roster);
-    let scroll = sidebar_scroll(&rows, selected, usize::from(inner.height));
-    match rows.get(scroll + usize::from(y - inner.y)) {
-        Some(SidebarRow::Game(i)) => Some(*i),
-        Some(SidebarRow::Header(_) | SidebarRow::Blank | SidebarRow::HopHint) | None => None,
+    let rows = rail_rows(
+        roster,
+        selected,
+        live,
+        live_selected,
+        usize::from(inner.height),
+    );
+    match rows.get(usize::from(y - inner.y)) {
+        Some(RailRow::Card(SidebarRow::Game(i))) => Some(RailEntry::Card(*i)),
+        Some(RailRow::Live(LiveSectionRow::Name(i) | LiveSectionRow::Status(i))) => {
+            Some(RailEntry::Live(*i))
+        }
+        Some(
+            RailRow::Card(SidebarRow::Header(_) | SidebarRow::Blank | SidebarRow::HopHint)
+            | RailRow::Live(
+                LiveSectionRow::Gap
+                | LiveSectionRow::Rule
+                | LiveSectionRow::Header
+                | LiveSectionRow::Nobody
+                | LiveSectionRow::More(_),
+            ),
+        )
+        | None => None,
     }
 }

@@ -4,9 +4,11 @@
 // wants in one env request before the shell:
 //
 // - `LATE_DOOR_WATCH=list` streams the roster of live games: one block per
-//   change, `game\t<playname>\t<started_unix>\t<watchers>\n` per game, closed
-//   by `end\n`. The first block lands on connect, so a fresh client never
-//   waits for a change to learn who is playing.
+//   change, `game\t<playname>\t<started_unix>\t<watchers>\t<status>\n` per
+//   game, closed by `end\n`. The first block lands on connect, so a fresh
+//   client never waits for a change to learn who is playing. `status` is one
+//   short line on where the player is (`hud_status`), empty until crawl has
+//   drawn its HUD; the roster is re-read every few seconds so it keeps up.
 // - `LATE_DOOR_WATCH=game:<playname>` streams that player's screen. Frames
 //   are `[tag u8][len u32 BE][payload]`: `R` (reset) carries `cols u16 BE`,
 //   `rows u16 BE`, then a full redraw; `D` (diff) carries the bytes that turn
@@ -58,6 +60,13 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 /// lands as one block.
 const LIST_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How often a roster session re-reads the games' statuses with nothing else
+/// changing. A block goes out only when it differs from the last one sent.
+const STATUS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Longest place name the roster carries; anything longer is not a place.
+const PLACE_MAX_CHARS: usize = 24;
+
 /// What a watch session asked for, parsed from [`WATCH_ENV_VAR`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum WatchRequest {
@@ -83,6 +92,8 @@ pub(crate) struct ListedGame {
     pub(crate) playname: String,
     pub(crate) started_unix: u64,
     pub(crate) watchers: usize,
+    /// Where the player is, `XL3 Lair:2`; empty until the HUD was seen.
+    pub(crate) status: String,
 }
 
 /// One roster block: every game line, then the `end` terminator.
@@ -91,14 +102,44 @@ pub(crate) fn encode_list(games: &[ListedGame]) -> Vec<u8> {
     for game in games {
         out.extend_from_slice(
             format!(
-                "game\t{}\t{}\t{}\n",
-                game.playname, game.started_unix, game.watchers
+                "game\t{}\t{}\t{}\t{}\n",
+                game.playname, game.started_unix, game.watchers, game.status
             )
             .as_bytes(),
         );
     }
     out.extend_from_slice(b"end\n");
     out
+}
+
+/// Where a player is, read off crawl's HUD in the mirrored screen's text:
+/// `XL3 Lair:2` from the `XL:  3 Next: 40%  Place: Lair:2` line. `None` when
+/// the HUD is not on screen (a menu, the map, a full-screen prompt), so the
+/// caller keeps what it last read.
+pub(crate) fn hud_status(contents: &str) -> Option<String> {
+    let place = contents.lines().find_map(|line| {
+        let value = line.split_once("Place:")?.1.trim_start();
+        // The field ends at the next gap; branch names carry single spaces.
+        let value = value.split("  ").next()?.trim();
+        let plausible = !value.is_empty()
+            && value.chars().count() <= PLACE_MAX_CHARS
+            && !value.chars().any(char::is_control);
+        plausible.then_some(value)
+    })?;
+    let level = contents.lines().find_map(|line| {
+        let digits: String = line
+            .split_once("XL:")?
+            .1
+            .trim_start()
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (!digits.is_empty()).then_some(digits)
+    });
+    Some(match level {
+        Some(level) => format!("XL{level} {place}"),
+        None => place.to_string(),
+    })
 }
 
 fn encode_frame(tag: u8, payload: &[u8]) -> Vec<u8> {
@@ -146,6 +187,9 @@ pub(crate) struct LiveGame {
     /// the game ends, which is what closes its watch sessions.
     ended: watch::Sender<bool>,
     watchers: AtomicUsize,
+    /// The last status read off the HUD (`hud_status`), kept while the HUD
+    /// is covered. Refreshed whenever the roster is listed.
+    status: Mutex<String>,
 }
 
 impl LiveGame {
@@ -155,6 +199,23 @@ impl LiveGame {
             .expect("live parser mutex")
             .screen()
             .clone()
+    }
+
+    /// Re-read the status off the screen, keeping the last one while the HUD
+    /// is covered, and return what now stands.
+    fn refresh_status(&self) -> String {
+        let contents = self
+            .parser
+            .lock()
+            .expect("live parser mutex")
+            .screen()
+            .contents();
+        let mut status = self.status.lock().expect("live status mutex");
+        match hud_status(&contents) {
+            Some(read) => *status = read,
+            None => {}
+        }
+        status.clone()
     }
 }
 
@@ -189,6 +250,7 @@ impl LiveRegistry {
             parser: Mutex::new(vt100::Parser::new(rows.max(1), cols.max(1), 0)),
             ended: watch::channel(false).0,
             watchers: AtomicUsize::new(0),
+            status: Mutex::new(String::new()),
         });
         self.games
             .lock()
@@ -211,7 +273,8 @@ impl LiveRegistry {
     }
 
     /// The roster, sorted by start time (oldest first) so the client's order
-    /// is stable across blocks.
+    /// is stable across blocks. Reads each game's status off its screen on
+    /// the way.
     pub(crate) fn list(&self) -> Vec<ListedGame> {
         let mut games: Vec<ListedGame> = self
             .games
@@ -222,6 +285,7 @@ impl LiveRegistry {
                 playname: playname.clone(),
                 started_unix: game.started_unix,
                 watchers: game.watchers.load(Ordering::Relaxed),
+                status: game.refresh_status(),
             })
             .collect();
         games.sort_by(|a, b| {
@@ -369,18 +433,27 @@ async fn run_list(
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let mut roster = registry.subscribe_roster();
+    let mut sent: Option<Vec<u8>> = None;
     loop {
         roster.borrow_and_update();
-        if handle
-            .data(channel, encode_list(&registry.list()))
-            .await
-            .is_err()
-        {
-            return;
+        let block = encode_list(&registry.list());
+        if sent.as_ref() != Some(&block) {
+            if handle.data(channel, block.clone()).await.is_err() {
+                return;
+            }
+            sent = Some(block);
         }
-        match wait_for(&mut roster, &mut stop_rx, &mut shutdown_rx).await {
-            Wake::Changed => tokio::time::sleep(LIST_INTERVAL).await,
-            Wake::Stop => return,
+        // A roster change wakes this at once; with none, the timeout brings
+        // it round to re-read the statuses.
+        let wake = tokio::time::timeout(
+            STATUS_INTERVAL,
+            wait_for(&mut roster, &mut stop_rx, &mut shutdown_rx),
+        )
+        .await;
+        match wake {
+            Ok(Wake::Changed) => tokio::time::sleep(LIST_INTERVAL).await,
+            Ok(Wake::Stop) => return,
+            Err(_elapsed) => {}
         }
     }
 }

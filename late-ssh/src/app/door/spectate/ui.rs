@@ -1,15 +1,16 @@
-// The watch view, drawn by the Games hub in place of its sidebar and landing
-// while this session spectates. One header row (who, which game, how long,
-// who else is watching, the keys), then the player's screen with the watch
-// chat docked beside it (`chat_dock`). The screen is the player's size, not
-// ours: a smaller one is centered, a larger one is cropped to a window that
-// follows the cursor (crawl parks it on the `@`).
+// The watch view, drawn beside the Games hub's rail (in the landing's place)
+// while this session sits on one of the rail's live rows. One header row
+// (who, which game, how long, who else is watching), then the player's
+// screen with the watch chat docked beside it (`chat_dock`). The screen is
+// the player's size, not ours: a smaller one is centered, a larger one is
+// cropped to a window that follows the cursor (crawl parks it on the `@`).
 //
-// `draw_watch_line` is the other end of the same chat: the one row a player
-// sees under their own running game.
+// `own_game_split` and the two drawers under it are the other end of the
+// same chat: what a player sees of it around their own running game, a
+// read-only pane on the right, or one row underneath on a narrow terminal.
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -17,7 +18,9 @@ use ratatui::widgets::Paragraph;
 use super::chat::WatchLine;
 use super::proxy::{LiveGame, WatchStatus};
 use super::state::State;
-use crate::app::chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat};
+use crate::app::chat::ui::{
+    EmbeddedRoomChatView, draw_embedded_room_chat, draw_embedded_room_messages,
+};
 use crate::app::common::theme;
 use crate::app::door::rebels::render::blit_screen_from;
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -54,6 +57,46 @@ pub fn chat_dock(area: Rect) -> ChatDock {
     }
 }
 
+/// The watch view's pieces inside its `area`.
+#[derive(Debug, PartialEq, Eq)]
+struct WatchLayout {
+    header: Rect,
+    screen: Rect,
+    /// The rule and the chat pane, when the chat is docked.
+    chat: Option<(Rect, Rect)>,
+}
+
+/// Lay the watch view out. A chat docked on the right takes the full height
+/// of the view, so its rule runs from the frame's top border down and the
+/// header sits over the watched screen alone; a chat docked below leaves the
+/// header the full width.
+fn watch_layout(area: Rect, dock: ChatDock) -> WatchLayout {
+    let header_over = |area: Rect| {
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        (rows[0], rows[1])
+    };
+    match dock {
+        ChatDock::Right => {
+            let (left, chat) = dock_areas(area, ChatDock::Right);
+            let (header, screen) = header_over(left);
+            WatchLayout {
+                header,
+                screen,
+                chat,
+            }
+        }
+        ChatDock::Below | ChatDock::Hidden => {
+            let (header, body) = header_over(area);
+            let (screen, chat) = dock_areas(body, dock);
+            WatchLayout {
+                header,
+                screen,
+                chat,
+            }
+        }
+    }
+}
+
 /// The watched screen's area, then the rule and the chat pane when docked.
 fn dock_areas(body: Rect, dock: ChatDock) -> (Rect, Option<(Rect, Rect)>) {
     match dock {
@@ -81,8 +124,9 @@ fn dock_areas(body: Rect, dock: ChatDock) -> (Rect, Option<(Rect, Rect)>) {
 
 pub struct SpectateView<'a> {
     pub state: &'a State,
-    /// The watched game's roster, for the position and watcher count.
-    pub roster: &'a [LiveGame],
+    /// The watched game's roster entry, for how long it has run and who else
+    /// is watching; `None` once the roster no longer lists it.
+    pub entry: Option<&'a LiveGame>,
 }
 
 /// One axis of the fit: where to start reading the player's screen, how far
@@ -123,16 +167,13 @@ pub fn draw(
     chat: Option<EmbeddedRoomChatView<'_>>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
     let dock = match chat {
         Some(_) => chat_dock(area),
         None => ChatDock::Hidden,
     };
-    let (body, chat_areas) = dock_areas(layout[1], dock);
-    if let (Some(chat), Some((rule, pane))) = (chat, chat_areas) {
+    let layout = watch_layout(area, dock);
+    let body = layout.screen;
+    if let (Some(chat), Some((rule, pane))) = (chat, layout.chat) {
         draw_rule(frame, rule);
         draw_embedded_room_chat(frame, pane, chat, terminal_images);
     }
@@ -141,7 +182,7 @@ pub fn draw(
     let cropped = cols > body.width || rows > body.height;
     draw_header(
         frame,
-        layout[0],
+        layout.header,
         view,
         cropped.then_some((cols, rows)),
         dock,
@@ -190,7 +231,7 @@ fn draw_header(
         ),
         Span::styled(format!(" \u{b7} {}", view.state.game().label()), dim),
     ];
-    if let Some(game) = view.roster.iter().find(|g| g.playname == playname) {
+    if let Some(game) = view.entry {
         spans.push(Span::styled(
             format!(
                 " \u{b7} {} in",
@@ -212,19 +253,19 @@ fn draw_header(
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
-    let mut keys = Vec::new();
+    // The hub's footer carries the keys; the header only says when the chat
+    // has no room to dock, since `i` then does nothing.
     match dock {
-        ChatDock::Right | ChatDock::Below => keys.push(Span::styled("i chat \u{b7} ", dim)),
-        ChatDock::Hidden => {}
+        ChatDock::Right | ChatDock::Below => {}
+        ChatDock::Hidden => frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "widen the terminal to chat ",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )))
+            .alignment(Alignment::Right),
+            area,
+        ),
     }
-    if view.roster.len() > 1 {
-        keys.push(Span::styled("\u{2190}/\u{2192} switch \u{b7} ", dim));
-    }
-    keys.push(Span::styled("Esc back ", dim));
-    frame.render_widget(
-        Paragraph::new(Line::from(keys)).alignment(Alignment::Right),
-        area,
-    );
 }
 
 /// The line between the watched screen and the chat: a column when the rule
@@ -244,12 +285,30 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Split a player's own game area into the game and the watch line's row
-/// under it. The row comes off the game's PTY, so it is only taken where the
-/// game keeps the 24 rows crawl needs; a shorter terminal shows no line.
-pub fn watch_row_split(area: Rect) -> (Rect, Option<Rect>) {
+/// How a player's own running game shares its area with the watchers' chat.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OwnChat {
+    /// A read-only pane on the right, behind a rule: the same dock the
+    /// watchers get.
+    Pane { rule: Rect, pane: Rect },
+    /// One row under the game, on a terminal too narrow for the pane.
+    Line(Rect),
+    /// No room for either without costing crawl its 80x24.
+    Hidden,
+}
+
+/// Split a player's own game area into the game and the watchers' chat. The
+/// chat comes off the game's PTY, never over it, and only where the game
+/// keeps the 80x24 crawl needs.
+pub fn own_game_split(area: Rect) -> (Rect, OwnChat) {
+    if area.width > SCREEN_MIN_COLS + DOCK_RIGHT_WIDTH {
+        return match dock_areas(area, ChatDock::Right) {
+            (game, Some((rule, pane))) => (game, OwnChat::Pane { rule, pane }),
+            (game, None) => (game, OwnChat::Hidden),
+        };
+    }
     if area.height <= SCREEN_MIN_ROWS {
-        return (area, None);
+        return (area, OwnChat::Hidden);
     }
     let game = Rect {
         height: area.height - 1,
@@ -260,10 +319,42 @@ pub fn watch_row_split(area: Rect) -> (Rect, Option<Rect>) {
         height: 1,
         ..area
     };
-    (game, Some(row))
+    (game, OwnChat::Line(row))
 }
 
-/// The one row under a player's own running game: the newest thing a watcher
+/// The pane beside a player's own running game: their watchers' chat, read
+/// only. One faint header row says what it is (the player has no composer to
+/// say it for them), then the room's messages.
+pub fn draw_own_chat_pane(
+    frame: &mut Frame,
+    rule: Rect,
+    pane: Rect,
+    chat: Option<EmbeddedRoomChatView<'_>>,
+    watchers: Option<usize>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    draw_rule(frame, rule);
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(pane);
+    let header = match watchers {
+        Some(watchers) if watchers > 0 => format!(" watcher chat \u{b7} {watchers} watching"),
+        Some(_) | None => " watcher chat".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            header,
+            Style::default().fg(theme::TEXT_FAINT()),
+        ))),
+        rows[0],
+    );
+    // No room yet (it is still resolving, or the join has not landed): the
+    // pane stays reserved and empty rather than resizing the game later.
+    if let Some(chat) = chat {
+        draw_embedded_room_messages(frame, rows[1], chat, terminal_images);
+    }
+}
+
+/// The one row under a player's own running game, where the terminal is too
+/// narrow for the pane: the newest thing a watcher
 /// said, or a faint word that people are watching and quiet. Blank when
 /// nobody is there, so the row costs a player without an audience nothing
 /// but the row.
@@ -336,7 +427,7 @@ pub fn minutes_since(started_unix: u64) -> u64 {
 }
 
 /// `12m`, `3h 05m`: how long a game has been running, for the header and the
-/// hub's watch list.
+/// hub rail's live rows.
 pub fn duration_label(minutes: u64) -> String {
     if minutes < 60 {
         format!("{minutes}m")

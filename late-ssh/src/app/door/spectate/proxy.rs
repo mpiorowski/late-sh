@@ -5,8 +5,10 @@
 // same cross-crate contract style as the stats session; keep the copies in
 // sync.
 //
-// Roster blocks are text: `game\t<playname>\t<started_unix>\t<watchers>\n`
-// per game, closed by `end\n`. Screen frames are binary,
+// Roster blocks are text:
+// `game\t<playname>\t<started_unix>\t<watchers>\t<status>\n` per game,
+// closed by `end\n`; `status` is the host's one line on where the player is
+// and may be empty. Screen frames are binary,
 // `[tag u8][len u32 BE][payload]`: `R` resets the watcher's parser to
 // `cols u16 BE`, `rows u16 BE` and redraws it from the rest of the payload,
 // `D` applies a diff. The parser therefore always holds the player's
@@ -61,6 +63,9 @@ pub struct LiveGame {
     pub playname: String,
     pub started_unix: u64,
     pub watchers: usize,
+    /// Where the player is, as the host read it off the game (`XL3 Lair:2`);
+    /// empty until it has.
+    pub status: String,
 }
 
 /// Why a stream from the host could not be read.
@@ -189,8 +194,9 @@ fn parse_roster_line(line: &str) -> Result<LiveGame, WireError> {
         parts.next(),
         parts.next(),
         parts.next(),
+        parts.next(),
     ) {
-        (Some("game"), Some(playname), Some(started), Some(watchers), None)
+        (Some("game"), Some(playname), Some(started), Some(watchers), Some(status), None)
             if !playname.is_empty() =>
         {
             match (started.parse(), watchers.parse()) {
@@ -198,6 +204,7 @@ fn parse_roster_line(line: &str) -> Result<LiveGame, WireError> {
                     playname: playname.to_string(),
                     started_unix,
                     watchers,
+                    status: status.to_string(),
                 }),
                 (Err(_), _) | (_, Err(_)) => Err(malformed()),
             }

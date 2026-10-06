@@ -1042,7 +1042,7 @@ Embedded game chat:
 - Uses `EmbeddedRoomChatView`.
 - Composer is capped at 4 visible lines.
 - Game-backed chat rooms are joined through their surface's idempotent `join_game_room_chat` (fired from `App::tick`), not the Home room rail.
-- The door watch view (`app/door/spectate`) is the one pane that lives inside another page: `Screen::Games` is in the pane roster (`app/input.rs::screen_has_chat_pane`) but resolves to a room only while the session is watching and the pane is docked. The player being watched gets no pane, only the room's newest message as one row under their game (`door/dcss/CONTEXT.md` §1).
+- The door watch view (`app/door/spectate`) is the one pane that lives inside another page: `Screen::Games` is in the pane roster (`app/input.rs::screen_has_chat_pane`) but resolves to a room only while the session is watching and the pane is docked. The player being watched gets the same room read-only beside their own game through `draw_embedded_room_messages` (the message half of `draw_embedded_room_chat`: no composer, selection, overlay or click target), or its newest message as one row on a narrow terminal (`door/dcss/CONTEXT.md` §1).
 
 Message rendering:
 - Local message storage is newest-first.
