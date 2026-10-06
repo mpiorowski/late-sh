@@ -68,7 +68,9 @@ Remove, and Refresh; selection follows its UUID across asynchronous replacement.
 A click away from an open text editor (username, system field, Bio, feed URL)
 submits it exactly as its keyboard submit does (`submit_text_edit`), then the
 click acts. There is one save path for both inputs: saves are fire-and-forget
-and a failure surfaces as the usual banner. An empty feed URL is dropped
+and a failure surfaces as the usual banner. Each save carries the whole draft,
+so `ProfileService::edit_profile` runs one writer per user that saves drafts in
+order and collapses a burst into its newest draft. An empty feed URL is dropped
 quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
 Closing Settings with `[x]` during a theme search keeps the theme the search
 previewed, as Esc does. The Invites dialog's code field takes the caret on

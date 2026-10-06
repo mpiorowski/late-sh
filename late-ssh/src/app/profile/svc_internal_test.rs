@@ -75,3 +75,74 @@ async fn interaction_mode_saves_latest_choice_while_an_earlier_write_is_blocked(
         Some(InteractionMode::Hybrid)
     );
 }
+
+#[tokio::test]
+async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked() {
+    use crate::test_helpers::{new_test_db, wait_until};
+    use late_core::models::statusline::default_statusline_components;
+    use late_core::models::user::{
+        ArtSplashMode, LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode,
+        default_right_sidebar_components,
+    };
+    use late_core::test_utils::create_test_user;
+
+    let draft = |ide: &str| ProfileParams {
+        username: "ordered-edits".to_string(),
+        bio: String::new(),
+        country: None,
+        timezone: None,
+        ide: Some(ide.to_string()),
+        terminal: None,
+        os: None,
+        langs: Vec::new(),
+        notify_kinds: Vec::new(),
+        notify_bell: false,
+        notify_cooldown_mins: 0,
+        notify_format: None,
+        theme_id: None,
+        enable_background_color: false,
+        text_brightness_adjustment: 0,
+        show_right_sidebar: true,
+        right_sidebar_mode: RightSidebarMode::On,
+        right_sidebar_components: default_right_sidebar_components(),
+        statusline_components: default_statusline_components(),
+        show_room_list_sidebar: true,
+        room_list_mode: RoomListMode::On,
+        keep_composer_focused: false,
+        start_with_music_muted: false,
+        landing_page: LandingPage::Clubhouse,
+        paper_at_login: true,
+        art_splash_mode: ArtSplashMode::Sfw,
+        terminal_images: TerminalImagesMode::Auto,
+        hidden_award_categories: Vec::new(),
+        show_flag_fallback: false,
+        translate_to: late_core::models::message_translation::TranslateLang::En,
+        auto_translate: false,
+        translate_mine_to_en: false,
+        favorite_room_ids: Vec::new(),
+        favorite_theme_ids: Vec::new(),
+    };
+
+    let db = new_test_db().await;
+    let user = create_test_user(&db.db, "ordered-edits").await;
+    let service = ProfileService::new(db.db.clone(), Default::default());
+    let mut client = db.db.get().await.unwrap();
+    let transaction = client.transaction().await.unwrap();
+    transaction
+        .query_one("SELECT id FROM users WHERE id = $1 FOR UPDATE", &[&user.id])
+        .await
+        .unwrap();
+
+    // Every save carries the whole draft, so the newest one must land last.
+    for ide in ["vim", "helix", "zed", "emacs"] {
+        service.edit_profile(user.id, draft(ide));
+    }
+    transaction.commit().await.unwrap();
+    wait_until(
+        || async { service.profile_edit_writes.lock_recover().is_empty() },
+        "profile edit writes drained",
+    )
+    .await;
+    let saved = Profile::load(&client, user.id).await.unwrap();
+    assert_eq!(saved.ide.as_deref(), Some("emacs"));
+}
