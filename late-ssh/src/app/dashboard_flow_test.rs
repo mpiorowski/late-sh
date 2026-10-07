@@ -1083,3 +1083,50 @@ async fn opening_a_watch_from_the_strip_drops_a_lounge_draft() {
     );
     assert_eq!(app.chat.composer_room_id(), None);
 }
+
+#[tokio::test]
+async fn zz_scratch_show_live_panel() {
+    use crate::app::door::spectate::{proxy::LiveGame, state::SpectateGame};
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "scratch-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "scratch-flow-it");
+    app.resize(120, 30).expect("resize");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![
+            LiveGame { playname: "mat".into(), started_unix: now - 12 * 60, watchers: 0, status: "XL3 Lair:2".into() },
+            LiveGame { playname: "longhandle".into(), started_unix: now - 125 * 60, watchers: 0, status: "".into() },
+        ],
+    );
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Nethack,
+        vec![LiveGame { playname: "eggy".into(), started_unix: now - 60, watchers: 0, status: "Xp1 Dlvl:1".into() }],
+    );
+    let key = crate::app::door::spectate::state::LiveGameKey::new(SpectateGame::Dcss, "mat").unwrap();
+    let _w1 = app.live_games.open_watch(key, uuid::Uuid::now_v7());
+    let _w2 = app.live_games.open_watch(key, uuid::Uuid::now_v7());
+    let _w3 = app.live_games.open_watch(key, uuid::Uuid::now_v7());
+    app.chat.live_streams = vec![crate::app::stream::registry::LiveStreamView {
+        user_id: uuid::Uuid::now_v7(),
+        username: "dax".into(),
+        title: "late night coding".into(),
+        room_id: uuid::Uuid::now_v7(),
+        voice_channel_id: uuid::Uuid::now_v7(),
+        stream_id: "s1".into(),
+        live: true,
+        went_live_at: Some(chrono::Utc::now()),
+        watching: 7,
+        watch_url: String::new(),
+    }];
+    wait_for_render_contains(&mut app, "── live").await;
+    app.tick();
+    app.reset_render();
+    let bytes = app.render().expect("render");
+    let mut parser = vt100::Parser::new(30, 120, 0);
+    parser.process(&bytes);
+    println!("FRAME_START\n{}\nFRAME_END", parser.screen().contents());
+}
