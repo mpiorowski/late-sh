@@ -858,7 +858,9 @@ async fn opening_a_watch_from_the_strip_drops_a_lounge_draft() {
     app.handle_input(format!("\x1b[<0;{};{}M", strip.x + 1, strip.y + 1).as_bytes());
     assert_eq!(app.screen, Screen::Games, "the click opens the watch");
     assert!(
-        app.spectate_state.as_ref().is_some_and(|state| state.is_open()),
+        app.spectate_state
+            .as_ref()
+            .is_some_and(|state| state.is_open()),
         "on the open watch"
     );
     assert!(

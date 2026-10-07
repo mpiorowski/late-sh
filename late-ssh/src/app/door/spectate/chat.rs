@@ -9,9 +9,10 @@
 // - a player's links (`App::own_watch_chats`, one per watchable door with a
 //   game of theirs running, detached ones included) live while those games
 //   run and feed the read-only pane beside the game on screen (one line
-//   under it on a narrow terminal). The player only reads: every key they
-//   press still goes to the game. The `show_watch_chat` profile setting turns
-//   their side off; the watchers keep talking either way.
+//   under it on a narrow terminal). The player reads, and answers from the
+//   pane: F2 or a click there opens the room's composer, the one time keys
+//   leave the game (`App::handle_input`). The `show_watch_chat` profile
+//   setting turns their side off; the watchers keep talking either way.
 //
 // `tick` drives both links from `App::tick`.
 
@@ -50,13 +51,25 @@ pub fn tick(app: &mut App) -> bool {
     // game starts (or the setting comes on), dropped when it ends (or the
     // setting goes off).
     let wanted = own_games(app);
-    let held = app.own_watch_chats.len();
-    app.own_watch_chats.retain(|link| {
-        wanted
-            .iter()
-            .any(|(game, name)| link.game() == *game && link.playname() == name)
-    });
-    changed |= app.own_watch_chats.len() != held;
+    let (kept, dropped): (Vec<ChatLink>, Vec<ChatLink>) =
+        std::mem::take(&mut app.own_watch_chats)
+            .into_iter()
+            .partition(|link| {
+                wanted
+                    .iter()
+                    .any(|(game, name)| link.game() == *game && link.playname() == name)
+            });
+    app.own_watch_chats = kept;
+    changed |= !dropped.is_empty();
+    // A composer open in a dropped link's room (the game ended, or `t`
+    // turned the pane off) has nowhere left to send: it closes with the link.
+    for link in dropped {
+        if let Some(room_id) = link.room_id()
+            && app.chat.composer_room_id() == Some(room_id)
+        {
+            app.chat.reset_composer();
+        }
+    }
     for (game, name) in wanted {
         let linked = app
             .own_watch_chats

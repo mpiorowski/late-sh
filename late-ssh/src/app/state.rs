@@ -835,6 +835,10 @@ pub struct App {
     /// `show_watch_chat` setting is on (`door::spectate::chat`): the rooms
     /// behind the read-only pane beside each game.
     pub(crate) own_watch_chats: Vec<crate::app::door::spectate::state::ChatLink>,
+    /// The pane beside this player's own running game, as the last frame
+    /// drew it (`None` after a frame with the one-row form, or no chat):
+    /// where a click opens their composer (`door::spectate::input`).
+    pub(crate) own_chat_hit: std::cell::Cell<Option<Rect>>,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
     /// host so curses gets a real terminfo entry.
@@ -1752,6 +1756,7 @@ impl App {
             spectate_state: None,
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
+            own_chat_hit: std::cell::Cell::new(None),
             brogue_state: None,
             brogue_term: config.term.clone(),
             brogue_enabled: config.brogue_enabled,
@@ -2772,6 +2777,25 @@ impl App {
         {
             state.forward_input(data);
             return;
+        }
+        // The player's own watch chat (`door/spectate`): while its composer
+        // is open the keys are the composer's, not the running game's (Enter
+        // sends and hands them back, Esc discards), and F2 or a click on the
+        // pane opens it. Only where the last frame drew the pane: the one-row
+        // form stays read-only, and there F2 is the game's.
+        if let Some(game) = crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
+            && let Some(room_id) = self.own_watch_chat_room_id(game)
+        {
+            if self.chat.is_composing() && self.chat.composer_room_id() == Some(room_id) {
+                crate::app::input::handle(self, data);
+                return;
+            }
+            if let Some(pane) = self.own_chat_hit.get()
+                && crate::app::door::spectate::input::wants_own_chat(data, pane)
+            {
+                self.chat.start_composing_in_room(room_id);
+                return;
+            }
         }
         // Same passthrough for the locally-hosted nethack process, except F1,
         // which late.sh remaps to nethack's own `?` help (so the raw F1 escape

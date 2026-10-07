@@ -13,8 +13,10 @@
 // 100x34.
 //
 // `own_game_split` and the two drawers under it are the other end of the
-// same chat: what a player sees of it around their own running game, a
-// read-only pane on the right, or one row underneath on a narrow terminal.
+// same chat: what a player sees of it around their own running game, a pane
+// on the right, or one row underneath on a narrow terminal. The pane takes
+// the room's composer at its foot once F2 or a click opens it
+// (`input::wants_own_chat`); the row stays read-only.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -352,6 +354,20 @@ pub enum OwnChat {
     Hidden,
 }
 
+impl OwnChat {
+    /// The pane, where a click opens the player's composer; `None` for the
+    /// row, which has none.
+    pub fn pane(&self) -> Option<Rect> {
+        match self {
+            Self::Pane { pane, .. } => Some(*pane),
+            Self::Line(_) | Self::Hidden => None,
+        }
+    }
+}
+
+/// The foot of the player's pane until their composer opens there.
+pub const OWN_CHAT_HINT: &str = " F2 or click: write to your watchers";
+
 /// Split a player's own `game` area into the game and the watchers' chat.
 /// The chat comes off the game's PTY, never over it, and only where the game
 /// keeps its whole minimum screen.
@@ -379,33 +395,38 @@ pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
 }
 
 /// Draw what `own_game_split` made room for beside a player's own running
-/// game: the read-only pane, or the one row underneath.
+/// game: the pane (with the player's composer open in it when `composing`),
+/// or the read-only row underneath.
 pub fn draw_own_chat(
     frame: &mut Frame,
     own_chat: OwnChat,
     chat: Option<EmbeddedRoomChatView<'_>>,
     line: Option<&WatchLine>,
     watchers: Option<usize>,
+    composing: bool,
     terminal_images: &mut TerminalImageFrame,
 ) {
     match own_chat {
         OwnChat::Pane { rule, pane } => {
-            draw_own_chat_pane(frame, rule, pane, chat, watchers, terminal_images);
+            draw_own_chat_pane(frame, rule, pane, chat, watchers, composing, terminal_images);
         }
         OwnChat::Line(row) => draw_watch_line(frame, row, line, watchers),
         OwnChat::Hidden => {}
     }
 }
 
-/// The pane beside a player's own running game: their watchers' chat, read
-/// only. One faint header row says what it is (the player has no composer to
-/// say it for them), then the room's messages.
+/// The pane beside a player's own running game: their watchers' chat. One
+/// faint header row says what it is, then the room's messages. The foot is
+/// the player's way in: a hint row until F2 or a click opens the room's
+/// ordinary composer there, which then names its own keys (Enter sends, Esc
+/// hands the keys back to the game).
 fn draw_own_chat_pane(
     frame: &mut Frame,
     rule: Rect,
     pane: Rect,
     chat: Option<EmbeddedRoomChatView<'_>>,
     watchers: Option<usize>,
+    composing: bool,
     terminal_images: &mut TerminalImageFrame,
 ) {
     draw_rule(frame, rule);
@@ -422,9 +443,26 @@ fn draw_own_chat_pane(
         rows[0],
     );
     // No room yet (it is still resolving, or the join has not landed): the
-    // pane stays reserved and empty rather than resizing the game later.
-    if let Some(chat) = chat {
-        draw_embedded_room_messages(frame, rows[1], chat, terminal_images);
+    // pane stays reserved and empty rather than resizing the game later, and
+    // without the hint, since F2 has nowhere to write until then.
+    let Some(chat) = chat else {
+        return;
+    };
+    match composing {
+        true => {
+            let _composer = draw_embedded_room_chat(frame, rows[1], chat, terminal_images);
+        }
+        false => {
+            let body = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(rows[1]);
+            draw_embedded_room_messages(frame, body[0], chat, terminal_images);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    OWN_CHAT_HINT,
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ))),
+                body[1],
+            );
+        }
     }
 }
 

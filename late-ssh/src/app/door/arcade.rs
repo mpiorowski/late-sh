@@ -118,6 +118,13 @@ impl HandleFlow {
         self.status.lock().expect("handle mutex").clone()
     }
 
+    /// Stand the flow on a claimed handle without a lookup, for flows that
+    /// need a running door under a known player.
+    #[cfg(test)]
+    pub fn force_claimed_for_test(&mut self, handle: &str) {
+        *self.status.lock().expect("handle mutex") = HandleStatus::Claimed(handle.to_string());
+    }
+
     /// The claimed handle, if the account has one.
     pub fn claimed(&self) -> Option<String> {
         match self.status() {

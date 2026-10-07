@@ -9,7 +9,14 @@
 // then closes the watch back to its preview, then leaves the preview
 // (`dispatch_escape`). While the composer is open no key reaches this
 // handler at all (the composer gate in `app/input.rs`).
+//
+// The player's own pane, beside their running game, has two inputs of its
+// own, read ahead of the game's passthrough in `App::handle_input`: F2 or a
+// click on the pane (`wants_own_chat`) opens the chat composer in their
+// watchers' room. From there the composer owns the keys until Enter sends
+// or Esc discards, and the game has them again.
 
+use ratatui::layout::Rect;
 use uuid::Uuid;
 
 use super::state::{LiveGameKey, SpectateGame, WatchMode};
@@ -151,3 +158,65 @@ pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
     app.set_screen(crate::app::common::primitives::Screen::Games);
     true
 }
+
+/// F2 in both encodings a terminal sends it (SS3 `ESC O Q`, CSI
+/// `ESC [ 12 ~`), matched as a whole input chunk like the doors' F1 remap.
+/// None of the three roguelikes binds it.
+pub fn is_f2(data: &[u8]) -> bool {
+    data == b"\x1bOQ" || data == b"\x1b[12~"
+}
+
+/// Whether a chunk of raw input, read ahead of a running game's
+/// passthrough, asks for the player's own watch-chat composer: F2, or a left
+/// click on `pane` (the pane as the last frame drew it). Everything else is
+/// the game's.
+pub fn wants_own_chat(data: &[u8], pane: Rect) -> bool {
+    if is_f2(data) {
+        return true;
+    }
+    match sgr_left_press(data) {
+        Some((x, y)) => {
+            x >= pane.x
+                && x < pane.x.saturating_add(pane.width)
+                && y >= pane.y
+                && y < pane.y.saturating_add(pane.height)
+        }
+        None => false,
+    }
+}
+
+/// The first SGR left-button press in `data` (`ESC [ < 0 ; x ; y M`, with
+/// any modifier), as 0-based cells. Motion, drags, releases and the wheel
+/// are not presses. The games strip every mouse report, so nothing read
+/// here is taken from them.
+fn sgr_left_press(data: &[u8]) -> Option<(u16, u16)> {
+    let mut rest = data;
+    while let Some(start) = rest.windows(3).position(|window| window == b"\x1b[<") {
+        let seq = &rest[start + 3..];
+        let end = seq.iter().position(|byte| *byte == b'M' || *byte == b'm')?;
+        let (params, action) = (&seq[..end], seq[end]);
+        rest = &seq[end + 1..];
+        if action != b'M' {
+            continue;
+        }
+        let mut fields = params
+            .split(|byte| *byte == b';')
+            .map(|field| std::str::from_utf8(field).ok()?.parse::<u16>().ok());
+        let (Some(Some(button)), Some(Some(x)), Some(Some(y))) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        // The low bits name the button (0 is left); 32 marks motion, 64 the
+        // wheel. Shift, Alt and Ctrl (4, 8, 16) still click.
+        if button & 0b0110_0011 != 0 {
+            continue;
+        }
+        return Some((x.checked_sub(1)?, y.checked_sub(1)?));
+    }
+    None
+}
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

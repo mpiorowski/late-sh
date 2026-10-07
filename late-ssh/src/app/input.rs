@@ -92,7 +92,20 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
 /// plus the Clubhouse, which composes into #lounge (speech bubbles) without
 /// drawing a pane. Used for the composer-priority gate and chat overlays.
 fn screen_composes_chat(screen: Screen) -> bool {
-    screen_has_chat_pane(screen) || matches!(screen, Screen::Clubhouse | Screen::Nightcap)
+    screen_has_chat_pane(screen)
+        || matches!(
+            screen,
+            Screen::Clubhouse
+                | Screen::Nightcap
+                // A roguelike's player composes into their own watch-chat
+                // room, opened by F2 or a click on its pane ahead of the
+                // game's passthrough (`App::handle_input`). The composer
+                // only opens from a running game, so with none open these
+                // screens behave as before.
+                | Screen::Nethack
+                | Screen::Dcss
+                | Screen::Brogue
+        )
 }
 
 fn is_chat_composer_context(ctx: InputContext) -> bool {
@@ -2462,6 +2475,16 @@ fn dispatch_escape(app: &mut App) {
                 .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
         }
         app.set_screen(Screen::Dashboard);
+        return;
+    }
+    // Esc in a running roguelike with the player's own watch-chat composer
+    // open discards it and hands the keys back to the game. No other Esc on
+    // those screens reaches here while a game runs: it is the game's
+    // (`App::handle_input`).
+    if crate::app::door::spectate::state::SpectateGame::of_screen(ctx.screen).is_some()
+        && app.chat.composing
+    {
+        app.chat.reset_composer();
         return;
     }
     // Esc from the Games hub peels the watch (a selected chat message, an

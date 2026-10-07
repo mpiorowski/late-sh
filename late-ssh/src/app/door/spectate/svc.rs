@@ -193,6 +193,22 @@ impl LiveGamesService {
         self.feed(game).tx.send_replace(Arc::new(roster));
     }
 
+    /// Publish `room_id` as the resolved watch-chat room of `playname`'s
+    /// runs of `game`, as `resolve_chat_room_task` does once the lookup
+    /// lands, so a flow can hold a link's room without awaiting it.
+    #[cfg(test)]
+    pub(crate) fn publish_chat_room_for_tests(
+        &self,
+        game: SpectateGame,
+        playname: &str,
+        room_id: Uuid,
+    ) {
+        self.chat_rooms
+            .lock()
+            .expect("watch chat rooms mutex")
+            .insert((game, playname.to_string()), RoomSlot::Ready(room_id));
+    }
+
     /// Whether any roster changed since this holder last looked. Marks them
     /// all seen.
     pub fn tick(&mut self) -> bool {

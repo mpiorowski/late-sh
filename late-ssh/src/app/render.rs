@@ -432,6 +432,12 @@ struct DrawContext<'a> {
     zen_care: crate::app::zen::ui::Care,
     zen_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     live_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+    /// The pane beside this player's own running game, published for the
+    /// click that opens its composer; cleared every frame like the hits.
+    own_chat_hit: &'a std::cell::Cell<Option<Rect>>,
+    /// Whether the chat composer is open in this player's own watch-chat
+    /// room: their pane then draws it in place of the F2 hint.
+    own_chat_composing: bool,
 }
 
 impl App {
@@ -460,6 +466,7 @@ impl App {
         self.last_pet_rect.set(None);
         self.last_pet_frame.set(None);
         self.live.hit.set(None);
+        self.own_chat_hit.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -650,6 +657,12 @@ impl App {
             (_, Some(game)) => self.own_watch_chat_room_id(game),
             (_, None) => None,
         };
+        // The player's own composer: open in their room, on their game's
+        // screen (`App::handle_input` opens it on F2 or a click on the pane).
+        let own_chat_composing = own_screen_game.is_some()
+            && watch_chat_room_id.is_some()
+            && self.chat.is_composing()
+            && self.chat.composer_room_id() == watch_chat_room_id;
         // The newest thing a watcher said, for the one-row form of the chat
         // a narrow terminal shows under this player's own running game.
         let own_watch_line = own_screen_game
@@ -1535,6 +1548,7 @@ impl App {
                         spectate_state: self.spectate_state.as_ref(),
                         live_rows,
                         own_watchers,
+                        own_chat_composing,
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         own_watch_line,
@@ -1728,6 +1742,7 @@ impl App {
                         zen_care,
                         zen_live_strip,
                         live_hit: &self.live.hit,
+                        own_chat_hit: &self.own_chat_hit,
                     },
                     &mut terminal_image_frame,
                 );
@@ -2159,12 +2174,14 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::nethack::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
                         ctx.own_watchers,
+                        ctx.own_chat_composing,
                         terminal_images,
                     );
                 }
@@ -2179,12 +2196,14 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::dcss::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
                         ctx.own_watchers,
+                        ctx.own_chat_composing,
                         terminal_images,
                     );
                 }
@@ -2199,12 +2218,14 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::brogue::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
                         ctx.own_watchers,
+                        ctx.own_chat_composing,
                         terminal_images,
                     );
                 }
