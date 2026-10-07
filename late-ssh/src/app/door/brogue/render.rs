@@ -128,7 +128,11 @@ fn render_landing(
             8,
         ),
         landing::stat("runs", "short and deadly: a good one fits in an evening", 8),
-        landing::stat("screen", "roomiest at 100x34; smaller terminals crop the map", 8),
+        landing::stat(
+            "screen",
+            "needs 100x34; a smaller terminal gets brogue's resize prompt, not the map",
+            8,
+        ),
         Line::from(""),
         flavor_headline(),
         flavor_quote(),
@@ -290,8 +294,9 @@ fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
 /// vt100 ignores it by default), so the screen is usually exactly 100x34 while
 /// the viewport is larger; brogue is the only door whose grid does not fill its
 /// area, so it is the only one where the anchor is visible. The slack goes to
-/// the right and bottom edges. A viewport smaller than the grid clamps, and
-/// ncurses crops the far edge (see the landing's "roomiest at 100x34" copy).
+/// the right and bottom edges. A viewport smaller than the grid clamps, which
+/// only ever holds brogue's own resize prompt: it never draws the map below
+/// 100x34 (see the landing's "needs 100x34" copy).
 fn grid_rect(area: Rect, screen: &vt100::Screen) -> Rect {
     let (rows, cols) = screen.size();
     Rect::new(area.x, area.y, cols.min(area.width), rows.min(area.height))

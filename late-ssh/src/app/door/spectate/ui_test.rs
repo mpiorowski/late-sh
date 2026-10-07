@@ -30,6 +30,19 @@ fn the_crop_window_stops_at_the_screens_edges() {
     assert_eq!(fit_axis(120, 80, 119).src, 40);
 }
 
+/// A game that hides its cursor (Brogue) leaves it after the last cell it
+/// repainted, so a crop that followed it would jump every frame: the crop
+/// pins to the top-left instead. A shown cursor (crawl, NetHack on the `@`)
+/// is followed.
+#[test]
+fn a_hidden_cursor_anchors_the_crop_top_left() {
+    let mut parser = vt100::Parser::new(34, 100, 0);
+    parser.process(b"\x1b[11;51H@");
+    assert_eq!(crop_anchor(parser.screen()), (10, 51));
+    parser.process(b"\x1b[?25l");
+    assert_eq!(crop_anchor(parser.screen()), (0, 0));
+}
+
 #[test]
 fn duration_label_reads_minutes_then_hours() {
     assert_eq!(duration_label(0), "0m");

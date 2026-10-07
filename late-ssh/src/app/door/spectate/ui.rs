@@ -3,9 +3,10 @@
 // the player's screen alone. Opened (Enter on the row) it takes the whole
 // page: the header over the screen, and the watch chat docked beside it
 // (`chat_dock`). The screen is the player's size, not ours: a smaller one is
-// centered, a larger one is cropped to a window that follows the cursor
-// (crawl and NetHack park it on the `@`). Brogue's black canvas is keyed out
-// the way its own door screen keys it, so the theme shows through.
+// centered, a larger one is cropped to a window around the game's cursor
+// (crawl and NetHack park it on the `@`), or pinned top-left while the game
+// hides its cursor (`crop_anchor`; Brogue). Brogue's black canvas is keyed
+// out the way its own door screen keys it, so the theme shows through.
 //
 // The chat only ever docks where the game keeps its whole minimum screen
 // (`SpectateGame::screen_min`): 80x24 for crawl and NetHack, Brogue's fixed
@@ -161,6 +162,18 @@ pub fn fit_axis(screen_len: u16, view_len: u16, cursor: u16) -> AxisFit {
     }
 }
 
+/// Where a cropped window centers on the player's screen, `(row, col)`: the
+/// cursor while the game shows one (crawl and NetHack park it on the `@`),
+/// the top-left corner while the game hides it. Brogue hides its cursor,
+/// repaints only the cells that changed and leaves the cursor after the last
+/// one, so a window following it would jump every frame.
+pub fn crop_anchor(screen: &vt100::Screen) -> (u16, u16) {
+    match screen.hide_cursor() {
+        true => (0, 0),
+        false => screen.cursor_position(),
+    }
+}
+
 /// What the watch view draws around the watched screen.
 pub enum WatchPane<'a> {
     /// The preview beside the hub's rail: the screen alone.
@@ -210,9 +223,9 @@ pub fn draw(
         WatchStatus::Watching => {
             let buf = frame.buffer_mut();
             view.state.with_screen(|screen| {
-                let (cursor_row, cursor_col) = screen.cursor_position();
-                let x = fit_axis(cols, body.width, cursor_col);
-                let y = fit_axis(rows, body.height, cursor_row);
+                let (anchor_row, anchor_col) = crop_anchor(screen);
+                let x = fit_axis(cols, body.width, anchor_col);
+                let y = fit_axis(rows, body.height, anchor_row);
                 let target = Rect {
                     x: body.x + x.dst,
                     y: body.y + y.dst,
