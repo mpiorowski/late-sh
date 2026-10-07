@@ -8,7 +8,7 @@
 // opened across the page with its chat; `chat` ties a session to a player's
 // watch-chat room (the watchers' pane, the player's read-only one); `live`
 // puts a game that just started on the live strip (`app/live`), drawn in its
-// own door's ASCII. See `door/dcss/CONTEXT.md` §1.
+// own door's ASCII. See `door/spectate/CONTEXT.md` §1.
 pub mod chat;
 pub mod input;
 pub mod live;
