@@ -19,10 +19,9 @@
 use ratatui::layout::Rect;
 use uuid::Uuid;
 
-use super::state::{LiveGameKey, SpectateGame, WatchMode};
+use super::state::{LiveGameKey, WatchMode};
 use super::ui::{ChatDock, chat_dock};
 use crate::app::chat::input as chat_input;
-use crate::app::common::primitives::Banner;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
@@ -117,21 +116,6 @@ pub fn handle_escape(app: &mut App) {
     match mode(app) {
         Some(WatchMode::Open) => app.close_watch(),
         Some(WatchMode::Preview) | None => app.stop_spectating(),
-    }
-}
-
-/// The `s` key on a watchable door's card: jump the rail to that door's
-/// longest-running live game, previewed.
-pub fn watch_first(app: &mut App, game: SpectateGame) {
-    let roster = app.live_games.roster(game);
-    match roster.first() {
-        Some(first) => app.start_spectating(game, first.playname.clone()),
-        None => {
-            app.banner = Some(Banner::error(&format!(
-                "Nobody is playing {} right now.",
-                game.label()
-            )));
-        }
     }
 }
 

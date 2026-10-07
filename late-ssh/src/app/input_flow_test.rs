@@ -4610,52 +4610,6 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
     );
 }
 
-/// `s` on a watchable card previews that door's longest-running game, never
-/// another door's: with DCSS and NetHack both live, the NetHack card's `s`
-/// lands on the NetHack player.
-#[tokio::test]
-async fn s_on_the_nethack_card_previews_a_nethack_game() {
-    use crate::app::common::primitives::Screen;
-    use crate::app::door::hub::state::HubGame;
-    use crate::app::door::spectate::{
-        proxy::LiveGame,
-        state::{SpectateGame, WatchMode},
-    };
-
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "nethack-watch-viewer").await;
-    let mut app = make_app(test_db.db.clone(), viewer.id, "nethack-watch-flow-it");
-    let roster = |playname: &str, started_unix: u64| {
-        vec![LiveGame {
-            playname: playname.to_string(),
-            started_unix,
-            watchers: 0,
-            status: String::new(),
-        }]
-    };
-    app.live_games
-        .publish_roster_for_tests(SpectateGame::Dcss, roster("crawler", 100));
-    app.live_games
-        .publish_roster_for_tests(SpectateGame::Nethack, roster("hacker", 200));
-
-    // A fresh account is no runner, so its roster has no Night City.
-    let steps = HubGame::roster(false)
-        .iter()
-        .position(|game| *game == HubGame::Nethack)
-        .expect("nethack is in the selector");
-    app.set_screen(Screen::Games);
-    app.handle_input(&b"j".repeat(steps));
-    // No render runs from here: the test door host is unreachable, so a tick
-    // would see the stream end and drop the watch.
-    app.handle_input(b"s");
-
-    let state = app.spectate_state.as_ref().expect("s starts a watch");
-    assert_eq!(
-        (state.game(), state.playname(), state.mode()),
-        (SpectateGame::Nethack, "hacker", WatchMode::Preview)
-    );
-}
-
 /// A player answers their watchers without leaving the game: F2, or a click
 /// on the pane, opens the chat composer in their own watch-chat room, the
 /// keys are the composer's until Esc hands them back, and the one-row form

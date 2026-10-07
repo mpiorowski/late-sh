@@ -661,10 +661,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     let hints: &[(&str, &str)] = match selected {
         HubGame::NightCity => &[switch, scroll, ("Enter", "descend")],
         HubGame::Minecraft => &[switch, scroll],
-        HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => {
-            &[switch, scroll, ("Enter", "play"), ("s", "watch")]
-        }
-        HubGame::Lateania
+        HubGame::Dcss
+        | HubGame::Nethack
+        | HubGame::Brogue
+        | HubGame::Lateania
         | HubGame::Rebels
         | HubGame::Usurper
         | HubGame::GreenDragon

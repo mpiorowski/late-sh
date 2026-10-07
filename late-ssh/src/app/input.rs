@@ -1489,15 +1489,6 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             app.door_rc_modal = selected.rc_game();
             true
         }
-        ParsedInput::Byte(b's' | b'S') | ParsedInput::Char('s' | 'S') => {
-            match selected.spectate_game() {
-                Some(game) => {
-                    crate::app::door::spectate::input::watch_first(app, game);
-                    true
-                }
-                None => false,
-            }
-        }
         ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T')
             if selected.spectate_game().is_some() =>
         {
