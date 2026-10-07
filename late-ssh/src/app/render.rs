@@ -223,6 +223,7 @@ struct DrawContext<'a> {
     /// The same games as the sidebar's Live panel lists them, with who is
     /// watching each, and the panel's click slot.
     live_panel_rows: Vec<crate::app::live::panel::LivePanelRow>,
+    live_panel_now: chrono::DateTime<chrono::Utc>,
     live_panel_hit: &'a std::cell::Cell<
         Option<(
             Rect,
@@ -728,10 +729,13 @@ impl App {
         // The live games on the watchable doors: the hub rail's live rows,
         // and a live strip source.
         let live_rows = self.live_games.live_rows();
+        let live_panel_now = chrono::Utc::now();
         let live_panel_rows = crate::app::live::panel::rows(
             &self.chat.live_streams,
             &live_rows,
+            self.chat.news.all_articles(),
             self.live_games.open_watches(),
+            live_panel_now,
         );
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
@@ -1578,6 +1582,7 @@ impl App {
                         spectate_state: self.spectate_state.as_ref(),
                         live_rows,
                         live_panel_rows,
+                        live_panel_now,
                         live_panel_hit: &self.live.panel_hit,
                         own_watchers,
                         watch_others,
@@ -2509,6 +2514,7 @@ impl App {
                     live: crate::app::live::panel::LivePanelProps {
                         rows: &ctx.live_panel_rows,
                         hit: ctx.live_panel_hit,
+                        now: ctx.live_panel_now,
                     },
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
