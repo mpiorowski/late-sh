@@ -826,9 +826,15 @@ pub struct App {
     pub(crate) dcss_host: String,
     pub(crate) dcss_port: u16,
     pub(crate) dcss_secret: String,
-    /// The live game this session is watching, while it watches one. Held
-    /// only on the Games hub, which draws it in place of the sidebar.
+    /// The live game this session is watching on the Games hub, previewed
+    /// beside the rail or open across the page. Held only on the hub.
     pub(crate) spectate_state: Option<crate::app::door::spectate::state::State>,
+    /// The open watches this session stepped away from, one per game:
+    /// leaving the hub moves the open one here, still streaming (without
+    /// repainting the session), so the hub shows its cards on the next visit
+    /// while each stays a stop on the backtick cycle. Each ends on its game
+    /// ending or `spectate::state::AWAY_WINDOW` off screen (`App::tick`).
+    pub(crate) away_watches: Vec<crate::app::door::spectate::state::State>,
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// This player's ties to the watch-chat rooms of their own running games,
     /// one per watchable door with a game running, held while it runs and the
@@ -1754,6 +1760,7 @@ impl App {
             dcss_port: config.dcss_port,
             dcss_secret: config.dcss_secret,
             spectate_state: None,
+            away_watches: Vec::new(),
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
             own_chat_hit: std::cell::Cell::new(None),
@@ -2058,7 +2065,9 @@ impl App {
         use crate::app::door::spectate::proxy::WatchTarget;
         use crate::app::door::spectate::state::{SpectateGame, State};
 
-        // Switching games is leaving one watch for another.
+        // Switching games keeps an open watch (it steps away) and drops a
+        // preview.
+        self.step_away_from_watch();
         self.stop_spectating();
         let target = match game {
             SpectateGame::Dcss => WatchTarget {
@@ -2098,6 +2107,9 @@ impl App {
             return;
         };
         state.open();
+        let key = state.key();
+        // One watch per game: a kept one of the same game is this one now.
+        self.away_watches.retain(|away| away.key() != key);
         // The pane's composer is the watch room's alone. A draft carried in
         // from another room (a #lounge line half typed when the strip was
         // clicked) would draw under the watch chat while Enter still sent it
@@ -2108,6 +2120,37 @@ impl App {
         if !keeps_draft {
             self.chat.reset_composer();
         }
+    }
+
+    /// Leaving the hub (or the watch, for another) with the watch open
+    /// steps away from it: it keeps streaming off screen, and the hub's next
+    /// visit shows its cards. A preview stays where it is, for `App::tick`
+    /// or the caller to end.
+    fn step_away_from_watch(&mut self) {
+        use crate::app::door::spectate::state::WatchMode;
+        match self.spectate_state.as_ref().map(|state| state.mode()) {
+            Some(WatchMode::Open) => {
+                self.clear_watch_chat_focus();
+                let mut state = self.spectate_state.take().expect("an open watch");
+                state.step_away(std::time::Instant::now());
+                self.away_watches.push(state);
+            }
+            Some(WatchMode::Preview) | None => {}
+        }
+    }
+
+    /// Back onto the kept watch of `key` (the backtick cycle, `o` on the
+    /// live strip), in place of whatever the hub held: an open watch there
+    /// steps away in turn. The caller puts the hub on screen.
+    pub(crate) fn resume_watch(&mut self, key: crate::app::door::spectate::state::LiveGameKey) {
+        let Some(index) = self.away_watches.iter().position(|away| away.key() == key) else {
+            return;
+        };
+        let mut state = self.away_watches.remove(index);
+        self.step_away_from_watch();
+        self.stop_spectating();
+        state.resume();
+        self.spectate_state = Some(state);
     }
 
     /// Esc out of an open watch: back to the preview beside the rail.
@@ -2544,6 +2587,9 @@ impl App {
         crate::app::workspace::cycle::note_screen_change(self, screen);
 
         let screen_changed = self.screen != screen;
+        if screen_changed && self.screen == Screen::Games {
+            self.step_away_from_watch();
+        }
         // Leaving Zen writes any layout edit the debounce still holds, and
         // forgets where Ctrl+F came from however the page was left (a digit,
         // a tour step), so a later Ctrl+F on Zen never hands back a stale

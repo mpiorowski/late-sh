@@ -481,19 +481,12 @@ impl App {
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
-        let own_door_games: Vec<_> = crate::app::door::spectate::chat::own_running_games(self)
-            .into_iter()
-            .filter_map(|(game, playname)| {
-                crate::app::door::spectate::state::LiveGameKey::new(game, &playname)
-            })
-            .collect();
         changed |= self.live.tick(
             &self.daily,
             &self.audio,
             self.chat.news.all_articles(),
             &self.chat.live_streams,
             &self.live_games.live_rows(),
-            &own_door_games,
             reading,
             picture_settings,
         );
@@ -595,21 +588,15 @@ impl App {
         // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);
         // A preview lives only on the Games hub, so leaving the hub ends it.
-        // An open watch outlives a hop away until it has been off screen for
-        // `AWAY_WINDOW`; the stamp below is what that measures from. The
-        // watched game ending (or its stream dropping) ends either, with a
-        // word on why the screen went away.
+        // An open watch is only ever on the hub: leaving steps away from it
+        // (`App::away_watches`, below). The watched game ending (or its
+        // stream dropping) ends either, with a word on why it went away.
         let now = std::time::Instant::now();
         let on_hub = self.screen == Screen::Games;
-        let watch_end = match self.spectate_state.as_mut() {
-            Some(state) => {
-                if on_hub {
-                    state.mark_seen(now);
-                }
-                state.end_reason(on_hub, now)
-            }
-            None => None,
-        };
+        let watch_end = self
+            .spectate_state
+            .as_ref()
+            .and_then(|state| state.end_reason(on_hub, now));
         match watch_end {
             Some(
                 crate::app::door::spectate::state::WatchEnd::LeftHub
@@ -626,6 +613,28 @@ impl App {
                 changed = true;
             }
             None => {}
+        }
+        // A kept watch ends with its game, or once it has been off screen
+        // for `AWAY_WINDOW`, quietly: nobody is looking at it.
+        let mut index = 0;
+        while index < self.away_watches.len() {
+            match self.away_watches[index].end_reason(false, now) {
+                Some(crate::app::door::spectate::state::WatchEnd::GameEnded(playname)) => {
+                    self.banner = Some(crate::app::common::primitives::Banner::info(&format!(
+                        "{playname}'s game is no longer running."
+                    )));
+                    self.away_watches.remove(index);
+                    changed = true;
+                }
+                Some(crate::app::door::spectate::state::WatchEnd::WentAway) => {
+                    self.away_watches.remove(index);
+                    changed = true;
+                }
+                Some(crate::app::door::spectate::state::WatchEnd::LeftHub) => {
+                    unreachable!("only a preview leaves with the hub, and a kept watch is open")
+                }
+                None => index += 1,
+            }
         }
         // A detached roguelike whose game has ended (death, save, idle
         // shutdown, network drop) has nothing left to resume: drop the state

@@ -17,6 +17,7 @@
 //
 // There is no input path: the client never writes to the channel.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -335,6 +336,11 @@ pub struct SpectateProcess {
     stop: CancellationToken,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<WatchStatus>>,
+    /// Whether a frame should repaint the session. Off for a watch kept off
+    /// screen: its frames still land in the parser, so it is current the
+    /// moment it is back, but a game nobody is looking at never drives the
+    /// session's render loop.
+    on_screen: Arc<AtomicBool>,
 }
 
 impl SpectateProcess {
@@ -347,15 +353,18 @@ impl SpectateProcess {
         let parser = Arc::new(Mutex::new(vt100::Parser::new(24, 80, 0)));
         let status = Arc::new(Mutex::new(WatchStatus::Connecting));
         let stop = CancellationToken::new();
+        let on_screen = Arc::new(AtomicBool::new(true));
         let task_parser = parser.clone();
         let task_status = status.clone();
         let task_stop = stop.clone();
+        let task_on_screen = on_screen.clone();
         tokio::spawn(async move {
             let stream = run_game_stream(
                 &target,
                 &playname,
                 &task_parser,
                 &task_status,
+                &task_on_screen,
                 repaint.as_ref(),
             );
             let outcome = tokio::select! {
@@ -366,8 +375,8 @@ impl SpectateProcess {
                         DoorWatchOutcome::Failed
                     }
                 },
-                // The viewer ended the watch (another row, left the hub, the
-                // away window): dropping the stream future drops its
+                // The viewer ended the watch (another row, left the hub, Esc,
+                // the away window): dropping the stream future drops its
                 // connection, which is how the host learns the watcher left.
                 () = task_stop.cancelled() => DoorWatchOutcome::Left,
             };
@@ -381,7 +390,13 @@ impl SpectateProcess {
             stop,
             parser,
             status,
+            on_screen,
         }
+    }
+
+    /// Whether this watch is drawn: its frames repaint the session only then.
+    pub fn set_on_screen(&self, on_screen: bool) {
+        self.on_screen.store(on_screen, Ordering::Release);
     }
 
     pub fn status(&self) -> WatchStatus {
@@ -406,6 +421,7 @@ async fn run_game_stream(
     playname: &str,
     parser: &Mutex<vt100::Parser>,
     status: &Mutex<WatchStatus>,
+    on_screen: &AtomicBool,
     repaint: Option<&Arc<RenderSignal>>,
 ) -> Result<()> {
     let (session, mut channel) = open_watch(target, &format!("game:{playname}")).await?;
@@ -427,7 +443,9 @@ async fn run_game_stream(
                         }
                     }
                     *status.lock().expect("status mutex") = WatchStatus::Watching;
-                    if let Some(sig) = repaint {
+                    if let Some(sig) = repaint
+                        && on_screen.load(Ordering::Acquire)
+                    {
                         sig.wake();
                     }
                 }

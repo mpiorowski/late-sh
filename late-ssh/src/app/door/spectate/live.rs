@@ -32,15 +32,12 @@ pub struct DoorGameStripView {
 
 /// Every live game on the watchable doors' rosters, stamped with when it
 /// started: a game is news when it starts. The rosters come from the door
-/// hosts, so every replica reads the same stamps. The viewer's own running
-/// games are never offered: there is nothing to hop into.
-pub(crate) fn candidates(live: &[LiveRow], own: &[LiveGameKey]) -> Vec<LiveCandidate> {
+/// hosts, so every replica reads the same stamps. The viewer's own games are
+/// offered like anyone else's: a live surface never filters the viewer out.
+pub(crate) fn candidates(live: &[LiveRow]) -> Vec<LiveCandidate> {
     live.iter()
         .filter_map(|row| {
             let key = LiveGameKey::new(row.game, &row.entry.playname)?;
-            if own.contains(&key) {
-                return None;
-            }
             Some(LiveCandidate {
                 source: LiveSource::DoorGame(key),
                 updated: started_at(&row.entry)?,

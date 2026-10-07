@@ -25,21 +25,25 @@ fn text(spans: &[Span<'_>]) -> String {
 }
 
 /// A game joins the queue when it starts, stamped with the host's start
-/// time, which every replica reads the same. The viewer's own running game
-/// is never offered.
+/// time, which every replica reads the same. Nothing is filtered: whoever
+/// is looking, their own game included, every live game is offered.
 #[test]
-fn every_live_game_but_your_own_is_offered_stamped_with_its_start() {
+fn every_live_game_is_offered_stamped_with_its_start() {
     let live = [row("mat", "XL3 Lair:2", 0), row("eggy", "", 1)];
 
-    let offered = candidates(&live, &[key("eggy")]);
+    let offered = candidates(&live);
 
-    assert_eq!(offered.len(), 1);
-    assert_eq!(offered[0].source, LiveSource::DoorGame(key("mat")));
+    let started = Utc.timestamp_opt(STARTED as i64, 0).unwrap();
     assert_eq!(
-        offered[0].updated,
-        Utc.timestamp_opt(STARTED as i64, 0).unwrap()
+        offered
+            .iter()
+            .map(|candidate| (candidate.source, candidate.updated))
+            .collect::<Vec<_>>(),
+        vec![
+            (LiveSource::DoorGame(key("mat")), started),
+            (LiveSource::DoorGame(key("eggy")), started),
+        ]
     );
-    assert_eq!(candidates(&live, &[]).len(), 2);
 }
 
 #[test]

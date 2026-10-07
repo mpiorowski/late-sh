@@ -19,7 +19,7 @@ use crate::app::{
     chat::news::live::{self as news_live, ArticleStripView},
     door::spectate::{
         live::{self as door_live, DoorGameStripView},
-        state::{LiveGameKey, LiveRow},
+        state::LiveRow,
     },
     files::inline_image::InlineImageRenderSettings,
     lobby::daily::{live::MatchStripView, state::DailyState},
@@ -93,8 +93,7 @@ impl LiveState {
     /// Read the sources and decide what the strip shows. `articles` is the
     /// session's News snapshot and `streams` its copy of the stream
     /// registry (`ChatState::live_streams`). `door_games` are the live games
-    /// on the watchable doors (`LiveGamesService::live_rows`), and
-    /// `own_door_games` the viewer's own running ones. `reading` is
+    /// on the watchable doors (`LiveGamesService::live_rows`). `reading` is
     /// whether the viewer has a message selected in the card: the strip then
     /// holds its height. `picture_settings` is how this session's terminal
     /// paints an image. True when what the strip draws changed.
@@ -106,7 +105,6 @@ impl LiveState {
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
-        own_door_games: &[LiveGameKey],
         reading: bool,
         picture_settings: InlineImageRenderSettings,
     ) -> bool {
@@ -114,7 +112,7 @@ impl LiveState {
         candidates.extend(audio.live_candidates());
         candidates.extend(news_live::candidates(articles));
         candidates.extend(stream_live::candidates(streams));
-        candidates.extend(door_live::candidates(door_games, own_door_games));
+        candidates.extend(door_live::candidates(door_games));
         let changed = self.refresh(&candidates, Instant::now(), Utc::now(), reading);
         let thumbnail = match self.showing() {
             Some(LiveSource::BoothTrack(item_id)) => audio

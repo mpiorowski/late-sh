@@ -96,7 +96,7 @@ fn own_games(app: &App) -> Vec<(SpectateGame, String)> {
 
 /// This session's own running games on the watchable doors, by door and the
 /// player's handle.
-pub(crate) fn own_running_games(app: &App) -> Vec<(SpectateGame, String)> {
+fn own_running_games(app: &App) -> Vec<(SpectateGame, String)> {
     SpectateGame::ALL
         .into_iter()
         .filter_map(|game| Some((game, own_running_handle(app, game)?)))

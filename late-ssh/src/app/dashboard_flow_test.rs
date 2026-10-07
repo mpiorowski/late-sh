@@ -743,8 +743,10 @@ async fn r_on_a_news_story_replies_in_lounge_with_its_title_quoted() {
 /// Somebody starts a DCSS game: it goes up on the live strip, `o` opens the
 /// watch on it (the game across the Games page, its chat beside it), and the
 /// watch is a stop on the backtick cycle, so `` ` `` toggles between it and
-/// Home. No render runs between the keys: the test door host is unreachable,
-/// so a tick would see the stream end and drop the watch.
+/// Home. Reaching the Games page by its number shows the hub's cards, and
+/// the watch is still on the cycle. No render runs between the keys: the
+/// test door host is unreachable, so a tick would see the stream end and
+/// drop the watch.
 #[tokio::test]
 async fn o_on_a_live_door_game_opens_the_watch_and_backtick_toggles_it_with_home() {
     use crate::app::common::primitives::Screen;
@@ -797,15 +799,95 @@ async fn o_on_a_live_door_game_opens_the_watch_and_backtick_toggles_it_with_home
 
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Dashboard, "backtick hops home");
-    assert_eq!(
-        watch(&app).map(|(_, _, mode)| mode),
-        Some(WatchMode::Open),
-        "with the watch kept open"
-    );
 
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Games, "and backtick hops back in");
     assert_eq!(watch(&app).map(|(_, _, mode)| mode), Some(WatchMode::Open));
+
+    app.handle_input(b"1");
+    app.handle_input(b"3");
+    assert_eq!(app.screen, Screen::Games, "3 is the Games page");
+    assert_eq!(
+        watch(&app),
+        None,
+        "its cards, with no watch drawn over them"
+    );
+
+    app.handle_input(b"1");
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Games, "the watch is still on the cycle");
+    assert_eq!(
+        watch(&app),
+        Some((SpectateGame::Dcss, "crawler".to_string(), WatchMode::Open)),
+        "the same open watch"
+    );
+}
+
+/// Two watches kept at once: open one from the hub's rail, go Home, come back
+/// with `3` (the cards, no watch), open another, and the backtick cycles
+/// Home, the first, the second, Home. No render runs between the keys: the
+/// test door hosts are unreachable, so a tick would see the streams end.
+#[tokio::test]
+async fn every_watch_opened_stays_a_stop_on_the_backtick_cycle() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "two-watches-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "two-watches-flow-it");
+    app.resize(160, 40).expect("resize");
+    let live = |playname: &str| LiveGame {
+        playname: playname.to_string(),
+        started_unix: 1_790_000_000,
+        watchers: 0,
+        status: String::new(),
+    };
+    app.live_games
+        .publish_roster_for_tests(SpectateGame::Dcss, vec![live("crawler")]);
+    app.live_games
+        .publish_roster_for_tests(SpectateGame::Nethack, vec![live("digger")]);
+    let watch = |app: &crate::app::state::App| {
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.playname().to_string(), state.mode()))
+    };
+    let open = |playname: &str| Some((playname.to_string(), WatchMode::Open));
+
+    // Up from the top card wraps to the rail's last live row (digger), then
+    // the one above it (crawler).
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    app.handle_input(b"k");
+    app.handle_input(b"\r");
+    assert_eq!(watch(&app), open("crawler"), "the first watch is open");
+
+    app.handle_input(b"1");
+    app.handle_input(b"3");
+    assert_eq!(app.screen, Screen::Games);
+    assert_eq!(watch(&app), None, "3 shows the cards");
+    app.handle_input(b"k");
+    app.handle_input(b"\r");
+    assert_eq!(watch(&app), open("digger"), "the second watch is open");
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "the last watch hops home");
+    app.handle_input(b"`");
+    assert_eq!(
+        (app.screen, watch(&app)),
+        (Screen::Games, open("crawler")),
+        "then the first watch"
+    );
+    app.handle_input(b"`");
+    assert_eq!(
+        (app.screen, watch(&app)),
+        (Screen::Games, open("digger")),
+        "then the second"
+    );
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "and home again");
 }
 
 /// A #lounge draft belongs to #lounge. Clicking a live door game on the strip
