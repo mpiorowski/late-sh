@@ -28,6 +28,8 @@ use super::ui::{duration_label, minutes_since};
 pub struct DoorGameStripView {
     pub key: LiveGameKey,
     pub entry: LiveGame,
+    /// People with this game's watch open (`LiveGamesService::watchers_of`).
+    pub watching: usize,
 }
 
 /// Every live game on the watchable doors' rosters, stamped with when it
@@ -51,13 +53,19 @@ fn started_at(entry: &LiveGame) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(i64::try_from(entry.started_unix).ok()?, 0)
 }
 
-/// One live game as the strip paints it. `None` once it ended.
-pub(crate) fn view(live: &[LiveRow], key: LiveGameKey) -> Option<DoorGameStripView> {
+/// One live game as the strip paints it, `watching` the people with its
+/// watch open. `None` once it ended.
+pub(crate) fn view(
+    live: &[LiveRow],
+    key: LiveGameKey,
+    watching: usize,
+) -> Option<DoorGameStripView> {
     live.iter()
         .find(|row| row.game == key.game() && row.entry.playname == key.playname())
         .map(|row| DoorGameStripView {
             key,
             entry: row.entry.clone(),
+            watching,
         })
 }
 
@@ -223,9 +231,9 @@ fn word_rows(budget: usize, strip: &DoorGameStripView) -> Vec<Vec<Span<'static>>
             .fg(theme::TEXT())
             .add_modifier(Modifier::BOLD),
     )];
-    let watching = match strip.entry.watchers {
+    let watching = match strip.watching {
         0 => String::new(),
-        watchers => format!(" · {watchers} watching"),
+        watching => format!(" · {watching} watching"),
     };
     rows[2] = vec![Span::styled(
         truncate_chars(&format!("{}{watching}", whereabouts(&strip.entry)), budget),

@@ -4,13 +4,13 @@ use super::*;
 
 const STARTED: u64 = 1_790_000_000;
 
-fn row(playname: &str, status: &str, watchers: usize) -> LiveRow {
+fn row(playname: &str, status: &str) -> LiveRow {
     LiveRow {
         game: SpectateGame::Dcss,
         entry: LiveGame {
             playname: playname.to_string(),
             started_unix: STARTED,
-            watchers,
+            watchers: 0,
             status: status.to_string(),
         },
     }
@@ -29,7 +29,7 @@ fn text(spans: &[Span<'_>]) -> String {
 /// is looking, their own game included, every live game is offered.
 #[test]
 fn every_live_game_is_offered_stamped_with_its_start() {
-    let live = [row("mat", "XL3 Lair:2", 0), row("eggy", "", 1)];
+    let live = [row("mat", "XL3 Lair:2"), row("eggy", "")];
 
     let offered = candidates(&live);
 
@@ -48,16 +48,16 @@ fn every_live_game_is_offered_stamped_with_its_start() {
 
 #[test]
 fn a_game_no_longer_listed_has_no_view() {
-    let live = [row("mat", "", 0)];
+    let live = [row("mat", "")];
 
-    assert!(view(&live, key("mat")).is_some());
-    assert!(view(&live, key("eggy")).is_none());
+    assert!(view(&live, key("mat"), 0).is_some());
+    assert!(view(&live, key("eggy"), 0).is_none());
 }
 
 #[test]
 fn the_body_names_the_door_where_they_are_who_watches_and_the_key() {
-    let live = [row("mat", "XL3 Lair:2", 2)];
-    let strip = view(&live, key("mat")).expect("a listed game has a view");
+    let live = [row("mat", "XL3 Lair:2")];
+    let strip = view(&live, key("mat"), 2).expect("a listed game has a view");
 
     let body = body(60, &strip);
     let words: Vec<String> = body.words.iter().map(|spans| text(spans)).collect();
@@ -74,8 +74,8 @@ fn the_body_names_the_door_where_they_are_who_watches_and_the_key() {
 /// strip says how long they have been in; nobody watching says nothing.
 #[test]
 fn a_game_without_a_status_reads_its_time_in() {
-    let live = [row("mat", "", 0)];
-    let strip = view(&live, key("mat")).expect("a listed game has a view");
+    let live = [row("mat", "")];
+    let strip = view(&live, key("mat"), 0).expect("a listed game has a view");
 
     let words: Vec<String> = body(60, &strip)
         .words
@@ -101,10 +101,10 @@ fn every_door_draws_its_own_picture_in_the_picture_column() {
         .map(|(game, status)| {
             let live = [LiveRow {
                 game,
-                ..row("mat", status, 0)
+                ..row("mat", status)
             }];
             let key = LiveGameKey::new(game, "mat").expect("a handle");
-            let strip = view(&live, key).expect("a listed game has a view");
+            let strip = view(&live, key, 0).expect("a listed game has a view");
             let body = body(60, &strip);
             let words: Vec<String> = body.words.iter().map(|spans| text(spans)).collect();
             assert_eq!(words[1], game.label());

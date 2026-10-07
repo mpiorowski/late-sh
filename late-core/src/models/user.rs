@@ -323,7 +323,7 @@ impl RoomListMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 6;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 7;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
 /// listed here: it is always pinned at the top of the sidebar. The
@@ -331,6 +331,9 @@ pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 6;
 /// `Music`, see `common/sidebar.rs`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarComponent {
+    /// What the house can watch right now: the live games on the
+    /// watchable doors, a row each.
+    Live,
     Music,
     Bonsai,
     Daily,
@@ -353,6 +356,7 @@ impl RightSidebarComponent {
     /// `from_key`; the pet panel came back under a new key so an old stored
     /// "pet" entry cannot switch it on.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
+        Self::Live,
         Self::Daily,
         Self::Music,
         Self::Spacer,
@@ -363,6 +367,7 @@ impl RightSidebarComponent {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Live => "live",
             Self::Music => "music",
             Self::Bonsai => "bonsai",
             Self::Daily => "daily",
@@ -374,6 +379,7 @@ impl RightSidebarComponent {
 
     pub fn from_key(key: &str) -> Option<Self> {
         match key.trim() {
+            "live" => Some(Self::Live),
             "music" => Some(Self::Music),
             "bonsai" => Some(Self::Bonsai),
             "daily" => Some(Self::Daily),
@@ -386,6 +392,7 @@ impl RightSidebarComponent {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Live => "Live",
             Self::Music => "Audio playback",
             Self::Bonsai => "Bonsai",
             Self::Daily => "Lobby",
@@ -397,10 +404,11 @@ impl RightSidebarComponent {
 
     /// Whether the panel starts enabled, for new users and when a new panel
     /// is backfilled into an existing user's stored list. The pet and the
-    /// tank start off: the rail is tight and they are opt-in.
+    /// tank start off: the rail is tight and they are opt-in. Live starts
+    /// on: a game nobody can see is a game nobody watches.
     pub fn default_enabled(self) -> bool {
         match self {
-            Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
+            Self::Live | Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
             Self::Pet | Self::Tank => false,
         }
     }

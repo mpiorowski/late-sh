@@ -220,9 +220,20 @@ struct DrawContext<'a> {
     /// Every live game on a watchable door: the hub rail's live rows and
     /// the watch view's header.
     live_rows: Vec<crate::app::door::spectate::state::LiveRow>,
+    /// The same games as the sidebar's Live panel lists them, with who is
+    /// watching each, and the panel's click slot.
+    live_panel_rows: Vec<crate::app::live::panel::LivePanelRow>,
+    live_panel_hit: &'a std::cell::Cell<
+        Option<(
+            Rect,
+            [Option<crate::app::live::pick::LiveSource>; crate::app::live::panel::LIVE_PANEL_ROWS],
+        )>,
+    >,
     /// Watchers on this player's own running game on the watchable door
     /// whose screen is up, for its chrome.
     own_watchers: Option<usize>,
+    /// People other than this one with the held watch open, for its header.
+    watch_others: usize,
     /// The watch chat on show: the watched player's room on the Games hub,
     /// this player's own room beside their running game on a watchable
     /// door's screen. `None` until this session is in the room.
@@ -455,7 +466,11 @@ impl App {
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
         let own_watchers = own_screen_game.and_then(|game| {
             let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
-            self.live_games.watchers_of(game, &handle)
+            let key = crate::app::door::spectate::state::LiveGameKey::new(game, &handle)?;
+            Some(self.live_games.watchers_of(key))
+        });
+        let watch_others = self.spectate_state.as_ref().map_or(0, |state| {
+            self.live_games.others_watching(state.key(), self.user_id)
         });
         let games_hub_roster = HubGame::roster(self.is_runner());
         // Clear last-frame mouse hit-test rects so screens that don't draw
@@ -463,6 +478,7 @@ impl App {
         self.last_pet_rect.set(None);
         self.last_pet_frame.set(None);
         self.live.hit.set(None);
+        self.live.panel_hit.set(None);
         self.own_chat_hit.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
@@ -712,6 +728,11 @@ impl App {
         // The live games on the watchable doors: the hub rail's live rows,
         // and a live strip source.
         let live_rows = self.live_games.live_rows();
+        let live_panel_rows = crate::app::live::panel::rows(
+            &self.chat.live_streams,
+            &live_rows,
+            self.live_games.open_watches(),
+        );
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
         let dashboard_live_strip = if home_selected {
@@ -722,6 +743,7 @@ impl App {
                 self.chat.news.all_articles(),
                 &self.chat.live_streams,
                 &live_rows,
+                &self.live_games,
             )
         } else {
             None
@@ -738,6 +760,7 @@ impl App {
                 self.chat.news.all_articles(),
                 &self.chat.live_streams,
                 &live_rows,
+                &self.live_games,
             )
         } else {
             None
@@ -792,6 +815,7 @@ impl App {
                     self.chat.news.all_articles(),
                     &self.chat.live_streams,
                     &live_rows,
+                    &self.live_games,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
         } else {
@@ -1553,7 +1577,10 @@ impl App {
                         greendragon_live,
                         spectate_state: self.spectate_state.as_ref(),
                         live_rows,
+                        live_panel_rows,
+                        live_panel_hit: &self.live.panel_hit,
                         own_watchers,
+                        watch_others,
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         own_watch_line,
@@ -2051,6 +2078,7 @@ impl App {
                             entry: state
                                 .row_in(&ctx.live_rows)
                                 .map(|index| &ctx.live_rows[index].entry),
+                            others_watching: ctx.watch_others,
                         },
                         crate::app::door::spectate::ui::WatchPane::Open(
                             ctx.watch_chat_view.take().map(Box::new),
@@ -2116,6 +2144,7 @@ impl App {
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
                             entry: live_selected.map(|index| &ctx.live_rows[index].entry),
+                            others_watching: ctx.watch_others,
                         },
                         crate::app::door::spectate::ui::WatchPane::Preview,
                         terminal_images,
@@ -2477,6 +2506,10 @@ impl App {
                     radio_slots: ctx.radio_slots,
                     radio_now_playing: ctx.radio_now_playing,
                     daily: ctx.daily,
+                    live: crate::app::live::panel::LivePanelProps {
+                        rows: &ctx.live_panel_rows,
+                        hit: ctx.live_panel_hit,
+                    },
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
                     active_friends: ctx.zen_active_friends,

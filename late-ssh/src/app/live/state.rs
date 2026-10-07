@@ -30,6 +30,7 @@ use crate::app::{
 };
 
 use super::pick::{Featured, LiveCandidate, LiveSource, aim_overlay, pick_queued};
+use crate::app::door::spectate::svc::LiveGamesService;
 
 /// What the strip paints, by source.
 pub enum LiveStripView<'a> {
@@ -83,6 +84,10 @@ pub struct LiveState {
     /// Where the strip drew this frame and what it showed, for the click
     /// that opens it. Render-recorded, cleared before every draw.
     pub hit: Cell<Option<(Rect, LiveSource)>>,
+    /// Where the sidebar's Live panel drew this frame and what is on each
+    /// of its rows, for the click that opens one. Render-recorded, cleared
+    /// before every draw.
+    pub panel_hit: Cell<Option<(Rect, [Option<LiveSource>; super::panel::LIVE_PANEL_ROWS])>>,
 }
 
 impl LiveState {
@@ -230,6 +235,7 @@ impl LiveState {
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
+        live_games: &LiveGamesService,
     ) -> Option<LiveStripView<'a>> {
         match self.showing()? {
             LiveSource::DailyMatch(match_id) => {
@@ -254,7 +260,8 @@ impl LiveState {
                 stream_live::view(streams, streamer_id).map(LiveStripView::Stream)
             }
             LiveSource::DoorGame(key) => {
-                door_live::view(door_games, key).map(LiveStripView::DoorGame)
+                door_live::view(door_games, key, live_games.watchers_of(key))
+                    .map(LiveStripView::DoorGame)
             }
         }
     }

@@ -130,9 +130,12 @@ fn dock_areas(body: Rect, dock: ChatDock) -> (Rect, Option<(Rect, Rect)>) {
 
 pub struct SpectateView<'a> {
     pub state: &'a State,
-    /// The watched game's roster entry, for how long it has run and who else
-    /// is watching; `None` once the roster no longer lists it.
+    /// The watched game's roster entry, for where the player is and how
+    /// long they have run; `None` once the roster no longer lists it.
     pub entry: Option<&'a LiveGame>,
+    /// People other than this session's user with this watch open
+    /// (`LiveGamesService::others_watching`).
+    pub others_watching: usize,
 }
 
 /// One axis of the fit: where to start reading the player's screen, how far
@@ -282,11 +285,12 @@ fn draw_header(
             ),
             dim,
         ));
-        // The roster counts this session too.
-        let others = game.watchers.saturating_sub(1);
-        if others > 0 {
-            spans.push(Span::styled(format!(" \u{b7} {others} also watching"), dim));
-        }
+    }
+    if view.others_watching > 0 {
+        spans.push(Span::styled(
+            format!(" \u{b7} {} also watching", view.others_watching),
+            dim,
+        ));
     }
     if let Some((cols, rows)) = cropped {
         spans.push(Span::styled(

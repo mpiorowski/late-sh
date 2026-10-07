@@ -21,6 +21,7 @@ use late_core::models::leaderboard::DoorGame;
 use uuid::Uuid;
 
 use super::proxy::{LiveGame, SpectateProcess, WatchStatus, WatchTarget};
+use super::svc::OpenWatch;
 use crate::app::common::primitives::Screen;
 use crate::render_signal::RenderSignal;
 
@@ -207,7 +208,9 @@ pub struct State {
     game: SpectateGame,
     playname: String,
     process: SpectateProcess,
-    mode: WatchMode,
+    /// Held while the watch is open: its place in the process-wide count of
+    /// who is watching (`svc::OpenWatches`). `None` is a preview.
+    open: Option<OpenWatch>,
     /// When the watch last stepped off screen, for `AWAY_WINDOW`. Only read
     /// while it is off screen.
     seen_at: Instant,
@@ -229,27 +232,32 @@ impl State {
             chat: ChatLink::new(game, playname.clone()),
             playname,
             process,
-            mode: WatchMode::Preview,
+            open: None,
             seen_at: Instant::now(),
         }
     }
 
     pub fn mode(&self) -> WatchMode {
-        self.mode
+        match self.open {
+            Some(_) => WatchMode::Open,
+            None => WatchMode::Preview,
+        }
     }
 
     pub fn is_open(&self) -> bool {
-        self.mode == WatchMode::Open
+        self.open.is_some()
     }
 
-    /// Enter on the previewed row.
-    pub fn open(&mut self) {
-        self.mode = WatchMode::Open;
+    /// Enter on the previewed row. `open` is this session's place in the
+    /// count of who is watching, held until the watch closes or ends.
+    pub fn open(&mut self, open: OpenWatch) {
+        self.open = Some(open);
     }
 
-    /// Esc out of an open watch: back to the preview beside the rail.
+    /// Esc out of an open watch: back to the preview beside the rail, and
+    /// out of the count.
     pub fn close(&mut self) {
-        self.mode = WatchMode::Preview;
+        self.open = None;
     }
 
     /// This watch's row among the hub rail's live rows; `None` once the
@@ -310,7 +318,7 @@ impl State {
             true => Duration::ZERO,
             false => now.saturating_duration_since(self.seen_at),
         };
-        end_reason(self.mode, on_hub, away, self.status(), &self.playname)
+        end_reason(self.mode(), on_hub, away, self.status(), &self.playname)
     }
 }
 

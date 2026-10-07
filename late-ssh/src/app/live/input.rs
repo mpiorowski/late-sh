@@ -47,6 +47,22 @@ pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
     }
 }
 
+/// A left-click on a row of the sidebar's Live panel opens what the row
+/// lists, as the strip's click does. A blank slot or the `+N more` row
+/// opens nothing.
+pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
+    let Some((rect, sources)) = app.live.panel_hit.get() else {
+        return false;
+    };
+    if !rect.contains(Position { x, y }) {
+        return false;
+    }
+    match sources.get(usize::from(y - rect.y)) {
+        Some(Some(source)) => open(app, *source),
+        Some(None) | None => false,
+    }
+}
+
 fn open(app: &mut App, source: LiveSource) -> bool {
     match source {
         // Never offered (`LiveState::opens`): the board left the lobby.

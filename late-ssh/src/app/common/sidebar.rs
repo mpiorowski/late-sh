@@ -54,6 +54,7 @@ const PET_HEIGHT: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 const TANK_HEIGHT: u16 = aquarium_ui::MINI_TANK_HEIGHT;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT;
+const LIVE_HEIGHT: u16 = crate::app::live::panel::LIVE_PANEL_HEIGHT;
 
 pub(crate) struct SidebarProps<'a> {
     /// Ordered panels with their on/off state. Render order is top to bottom;
@@ -96,6 +97,9 @@ pub(crate) struct SidebarProps<'a> {
     pub radio_now_playing: Option<&'a str>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::lobby::daily::state::DailyState,
+    /// The Live panel: what the house can watch, and where to record the
+    /// click targets.
+    pub live: crate::app::live::panel::LivePanelProps<'a>,
     /// Unseen-challenge glow for the panel's status row.
     pub lobby_glow: bool,
     /// Humans currently connected (bots excluded), for the core presence row.
@@ -126,7 +130,8 @@ impl SidebarOwnership {
         match component {
             RightSidebarComponent::Pet => self.pet,
             RightSidebarComponent::Tank => self.tank,
-            RightSidebarComponent::Music
+            RightSidebarComponent::Live
+            | RightSidebarComponent::Music
             | RightSidebarComponent::Bonsai
             | RightSidebarComponent::Daily
             | RightSidebarComponent::Spacer => true,
@@ -170,7 +175,8 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     for component in &visible {
         match component {
             RightSidebarComponent::Spacer => constraints.push(Constraint::Fill(1)),
-            RightSidebarComponent::Music
+            RightSidebarComponent::Live
+            | RightSidebarComponent::Music
             | RightSidebarComponent::Bonsai
             | RightSidebarComponent::Daily
             | RightSidebarComponent::Pet
@@ -235,6 +241,9 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
         let body = inset(layout[i]);
         i += 1;
         match component {
+            RightSidebarComponent::Live => {
+                crate::app::live::panel::draw_live_inline(frame, body, &props.live);
+            }
             RightSidebarComponent::Music => {
                 draw_music_stage(
                     frame,
@@ -327,6 +336,7 @@ fn pet_neighbours(visible: &[RightSidebarComponent], pet_idx: usize) -> Neighbou
 /// rail has left.
 fn component_height(component: RightSidebarComponent) -> u16 {
     match component {
+        RightSidebarComponent::Live => LIVE_HEIGHT,
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
@@ -341,7 +351,8 @@ fn component_height(component: RightSidebarComponent) -> u16 {
 fn rail_rows(component: RightSidebarComponent) -> u16 {
     match component {
         RightSidebarComponent::Spacer => 0,
-        RightSidebarComponent::Music
+        RightSidebarComponent::Live
+        | RightSidebarComponent::Music
         | RightSidebarComponent::Bonsai
         | RightSidebarComponent::Daily
         | RightSidebarComponent::Pet
@@ -549,6 +560,7 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
 /// bodies free of title rows: the divider IS the title.
 fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
     match component {
+        RightSidebarComponent::Live => "live",
         RightSidebarComponent::Music => "music",
         RightSidebarComponent::Bonsai => "bonsai",
         RightSidebarComponent::Daily => "lobby",

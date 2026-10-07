@@ -890,6 +890,138 @@ async fn every_watch_opened_stays_a_stop_on_the_backtick_cycle() {
     assert_eq!(app.screen, Screen::Dashboard, "and home again");
 }
 
+/// Who is watching is the people with the watch open, counted in the
+/// process: a preview counts nobody, opening counts you, stepping away keeps
+/// counting you, Esc back to the preview drops you. Another user holding the
+/// same watch open is one other, however it is looked at.
+#[tokio::test]
+async fn an_open_watch_counts_its_watcher_until_it_closes() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{LiveGameKey, SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "watch-count-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "watch-count-flow-it");
+    app.resize(160, 40).expect("resize");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+    let key = LiveGameKey::new(SpectateGame::Dcss, "crawler").expect("a handle");
+    let someone_else = uuid::Uuid::now_v7();
+    let _their_watch = app.live_games.open_watch(key, someone_else);
+    let mode = |app: &crate::app::state::App| app.spectate_state.as_ref().map(|state| state.mode());
+
+    // Up from the top card wraps to the rail's live row: the preview.
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    assert_eq!(mode(&app), Some(WatchMode::Preview));
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        1,
+        "a preview counts nobody"
+    );
+    assert_eq!(app.live_games.others_watching(key, me.id), 1);
+
+    app.handle_input(b"\r");
+    assert_eq!(mode(&app), Some(WatchMode::Open));
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        2,
+        "opening the watch counts you"
+    );
+    assert_eq!(
+        app.live_games.others_watching(key, me.id),
+        1,
+        "but not among the others"
+    );
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        2,
+        "an away watch still counts"
+    );
+
+    app.handle_input(b"`");
+    // Esc in the open watch (`spectate::input::handle_escape`). A bare Esc
+    // byte is only flushed by a tick, and a tick here would see the
+    // unreachable test host end the stream, so the key's effect is called.
+    app.close_watch();
+    assert_eq!(
+        mode(&app),
+        Some(WatchMode::Preview),
+        "Esc closes the watch to its preview"
+    );
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        1,
+        "and takes you out of the count"
+    );
+
+    drop(_their_watch);
+    assert_eq!(app.live_games.watchers_of(key), 0);
+}
+
+/// The sidebar's Live panel lists the live door games under its rule, who
+/// and where, and a click on a row opens that game's watch, as the strip's
+/// click does. A click on a blank slot opens nothing.
+#[tokio::test]
+async fn a_click_on_a_live_panel_row_opens_the_watch() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "live-panel-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "live-panel-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a width that shows the rail");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: "XL3 Lair:2".to_string(),
+        }],
+    );
+    wait_for_render_contains(&mut app, "── live").await;
+    wait_for_render_contains(&mut app, "crawler XL3 Lair:2").await;
+    let (rect, _) = app
+        .live
+        .panel_hit
+        .get()
+        .expect("the panel recorded its rows");
+    let click = |app: &mut crate::app::state::App, row: u16| {
+        app.handle_input(format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + row + 1).as_bytes());
+    };
+
+    click(&mut app, 3);
+    assert_eq!(app.screen, Screen::Dashboard, "a blank slot opens nothing");
+
+    click(&mut app, 0);
+    assert_eq!(app.screen, Screen::Games, "the row opens the Games page");
+    assert_eq!(
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.playname().to_string(), state.mode())),
+        Some(("crawler".to_string(), WatchMode::Open)),
+        "on the open watch of that game"
+    );
+}
+
 /// A #lounge draft belongs to #lounge. Clicking a live door game on the strip
 /// while one is half typed opens the watch without it: the watch chat's
 /// composer is the watch room's alone. Carried along, the draft would draw

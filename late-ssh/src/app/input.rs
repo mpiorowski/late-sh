@@ -2884,6 +2884,11 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
         return true;
     }
+    // The sidebar's Live panel is drawn under the same modals as the pet.
+    if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_panel_click(app, x, y)
+    {
+        return true;
+    }
     // A click on a Zen tile focuses it, then falls through so the composer
     // and the messages of that tile still take the click. A modal over the
     // page takes the click itself, the same guard the pet click uses.

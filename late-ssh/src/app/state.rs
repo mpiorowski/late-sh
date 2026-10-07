@@ -2106,8 +2106,8 @@ impl App {
         let Some(state) = self.spectate_state.as_mut() else {
             return;
         };
-        state.open();
         let key = state.key();
+        state.open(self.live_games.open_watch(key, self.user_id));
         // One watch per game: a kept one of the same game is this one now.
         self.away_watches.retain(|away| away.key() != key);
         // The pane's composer is the watch room's alone. A draft carried in
