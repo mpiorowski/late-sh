@@ -202,10 +202,24 @@ pub(crate) struct ComposerBlockView<'a> {
     /// When true, Enter sends without closing the composer and Alt+S is a
     /// no-op. Drives the title-hint tier swap.
     pub keep_composer_focused: bool,
-    /// A composer that takes no keys: a Zen chat tile that is not the
-    /// focused one keeps its strip so the rows never jump, but `i`, `j`,
-    /// and `k` act on the focused tile, so it must not advertise them.
-    pub inert: bool,
+    /// Whether the composer takes keys, and if not, what focuses it.
+    pub inert: ComposerInert,
+}
+
+/// A composer that takes no keys keeps its strip so the rows never jump,
+/// and its title and placeholder say what focuses it instead of naming keys
+/// that act elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerInert {
+    /// The composer takes keys (or is the screen's one composer).
+    No,
+    /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
+    /// the focused tile.
+    ZenTile,
+    /// The pane beside a player's own running roguelike: every key is the
+    /// game's until F2 or a click on the pane opens the composer
+    /// (`door/spectate`).
+    OwnWatchChat,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -247,8 +261,18 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
 }
 
 fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> String {
-    if view.inert {
-        return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+    match view.inert {
+        ComposerInert::ZenTile => {
+            return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+        }
+        ComposerInert::OwnWatchChat => {
+            return pick_title_that_fits(
+                block_width,
+                &[" Compose (F2 or click) ", " (F2 or click) ", " F2 ", ""],
+            )
+            .to_string();
+        }
+        ComposerInert::No => {}
     }
     if !view.composing {
         return pick_title_that_fits(
@@ -456,11 +480,21 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
-    if view.inert {
-        return Paragraph::new(Line::from(Span::styled(
-            "Tab or a click focuses this tile · i writes",
-            dim,
-        )));
+    match view.inert {
+        ComposerInert::ZenTile => {
+            return Paragraph::new(Line::from(Span::styled(
+                "Tab or a click focuses this tile · i writes",
+                dim,
+            )));
+        }
+        ComposerInert::OwnWatchChat => {
+            return Paragraph::new(Line::from(Span::styled(
+                // Fits the 40-column pane: 38 cells of text.
+                "F2 or click: write to your watchers",
+                dim,
+            )));
+        }
+        ComposerInert::No => {}
     }
 
     if view.composing {
@@ -1150,7 +1184,7 @@ pub fn draw_dashboard_chat_card(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
-                inert: false,
+                inert: ComposerInert::No,
             },
             composer_text_width,
         ));
@@ -1302,7 +1336,7 @@ pub fn draw_dashboard_chat_card(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
-            inert: false,
+            inert: ComposerInert::No,
         },
     );
     record_composer_mouse_target(
@@ -3268,10 +3302,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
-    /// The composer strip is drawn but takes no keys: a Zen chat tile that
-    /// is not the focused one. It keeps its strip so the rows never jump
-    /// and says so instead of naming keys that act on the focused tile.
-    pub composer_inert: bool,
+    /// Whether the composer strip takes keys, and if not, what focuses it
+    /// (the strip stays either way, so the rows never jump).
+    pub composer_inert: ComposerInert,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3621,7 +3654,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
-                        inert: false,
+                        inert: ComposerInert::No,
                     },
                     composer_text_width,
                 ),
@@ -5683,7 +5716,7 @@ fn draw_selected_content(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
-                inert: false,
+                inert: ComposerInert::No,
             },
         );
         record_composer_mouse_target(

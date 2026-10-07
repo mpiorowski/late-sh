@@ -435,9 +435,6 @@ struct DrawContext<'a> {
     /// The pane beside this player's own running game, published for the
     /// click that opens its composer; cleared every frame like the hits.
     own_chat_hit: &'a std::cell::Cell<Option<Rect>>,
-    /// Whether the chat composer is open in this player's own watch-chat
-    /// room: their pane then draws it in place of the F2 hint.
-    own_chat_composing: bool,
 }
 
 impl App {
@@ -659,6 +656,7 @@ impl App {
         };
         // The player's own composer: open in their room, on their game's
         // screen (`App::handle_input` opens it on F2 or a click on the pane).
+        // Until then their pane's strip is inert and says so.
         let own_chat_composing = own_screen_game.is_some()
             && watch_chat_room_id.is_some()
             && self.chat.is_composing()
@@ -1084,7 +1082,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_inert: false,
+                    composer_inert: chat::ui::ComposerInert::No,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1149,7 +1147,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_inert: false,
+                    composer_inert: chat::ui::ComposerInert::No,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1214,7 +1212,12 @@ impl App {
                 highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
-                composer_inert: false,
+                // The player's own pane keeps the strip inert until F2 or a
+                // click opens it; a watcher's pane (Games) composes as is.
+                composer_inert: match (own_screen_game.is_some(), own_chat_composing) {
+                    (true, false) => chat::ui::ComposerInert::OwnWatchChat,
+                    (true, true) | (false, _) => chat::ui::ComposerInert::No,
+                },
                 composing: self.chat.composing,
                 mention_matches: &self.chat.mention_ac.matches,
                 mention_selected: self.chat.mention_ac.selected,
@@ -1302,7 +1305,10 @@ impl App {
                     } else {
                         &idle_composer
                     },
-                    composer_inert: !active,
+                    composer_inert: match active {
+                        true => chat::ui::ComposerInert::No,
+                        false => chat::ui::ComposerInert::ZenTile,
+                    },
                     composing: active && self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1412,7 +1418,7 @@ impl App {
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-            inert: false,
+            inert: chat::ui::ComposerInert::No,
         });
         let (clubhouse_composer, nightcap_composer) = match screen {
             Screen::Clubhouse => (embedded_composer, None),
@@ -1548,7 +1554,6 @@ impl App {
                         spectate_state: self.spectate_state.as_ref(),
                         live_rows,
                         own_watchers,
-                        own_chat_composing,
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         own_watch_line,
@@ -2181,7 +2186,6 @@ impl App {
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
                         ctx.own_watchers,
-                        ctx.own_chat_composing,
                         terminal_images,
                     );
                 }
@@ -2203,7 +2207,6 @@ impl App {
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
                         ctx.own_watchers,
-                        ctx.own_chat_composing,
                         terminal_images,
                     );
                 }
@@ -2225,7 +2228,6 @@ impl App {
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
                         ctx.own_watchers,
-                        ctx.own_chat_composing,
                         terminal_images,
                     );
                 }

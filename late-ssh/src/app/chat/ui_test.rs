@@ -1023,7 +1023,7 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         mention_matches: &[],
         mention_selected: 0,
         keep_composer_focused: false,
-        inert: false,
+        inert: ComposerInert::No,
     }
 }
 

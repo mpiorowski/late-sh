@@ -4706,8 +4706,10 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
         .expect("the player's own room");
     assert_eq!(room_id, room.id);
 
-    // The frame draws the pane with its hint and records where it is.
+    // The frame draws the pane with its inert composer strip, which names
+    // the way in, and records where the pane is.
     let plain = render_plain(&mut app);
+    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
     assert!(
         plain.contains("F2 or click: write to your watchers"),
         "{plain}"
@@ -4730,6 +4732,11 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
         app.chat.composer().lines().join("\n"),
         "hi all",
         "typed keys are the composer's, not the game's"
+    );
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("hi all") && !plain.contains("Compose (F2 or click)"),
+        "the same strip, now open: {plain}"
     );
 
     // Esc discards and hands the keys back to the game. A lone Esc is held
