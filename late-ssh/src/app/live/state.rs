@@ -98,6 +98,7 @@ impl LiveState {
     /// whether the viewer has a message selected in the card: the strip then
     /// holds its height. `picture_settings` is how this session's terminal
     /// paints an image. True when what the strip draws changed.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn tick(
         &mut self,
         daily: &DailyState,

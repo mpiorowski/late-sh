@@ -2052,7 +2052,9 @@ impl App {
                                 .row_in(&ctx.live_rows)
                                 .map(|index| &ctx.live_rows[index].entry),
                         },
-                        crate::app::door::spectate::ui::WatchPane::Open(ctx.watch_chat_view.take()),
+                        crate::app::door::spectate::ui::WatchPane::Open(
+                            ctx.watch_chat_view.take().map(Box::new),
+                        ),
                         terminal_images,
                     );
                 }

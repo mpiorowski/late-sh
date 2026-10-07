@@ -4702,7 +4702,10 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     crate::app::input::flush_pending_escape(&mut app);
     assert!(!app.chat.is_composing(), "Esc closes the composer");
     app.handle_input(b"j");
-    assert!(!app.chat.is_composing(), "and the keys are the game's again");
+    assert!(
+        !app.chat.is_composing(),
+        "and the keys are the game's again"
+    );
     assert_eq!(app.screen, Screen::Nethack);
 
     // A click on the pane opens it too (SGR coordinates are 1-based).

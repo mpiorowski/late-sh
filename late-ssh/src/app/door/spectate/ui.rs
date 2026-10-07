@@ -29,9 +29,7 @@ use ratatui::widgets::Paragraph;
 use super::chat::WatchLine;
 use super::proxy::{LiveGame, WatchStatus};
 use super::state::{SpectateGame, State, WatchMode};
-use crate::app::chat::ui::{
-    EmbeddedRoomChatView, draw_embedded_room_chat,
-};
+use crate::app::chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat};
 use crate::app::common::theme;
 use crate::app::door::rebels::render::blit_screen_from;
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -184,7 +182,8 @@ pub enum WatchPane<'a> {
     Preview,
     /// An open watch: the chat docked beside the screen. The chat view is
     /// `None` until this session is in the room; the dock stays reserved.
-    Open(Option<EmbeddedRoomChatView<'a>>),
+    /// Boxed: the view dwarfs the data-less `Preview`.
+    Open(Option<Box<EmbeddedRoomChatView<'a>>>),
 }
 
 pub fn draw(
@@ -203,7 +202,7 @@ pub fn draw(
     if let (WatchPane::Open(chat), Some((rule, chat_area))) = (pane, layout.chat) {
         draw_rule(frame, rule);
         if let Some(chat) = chat {
-            let composer = draw_embedded_room_chat(frame, chat_area, chat, terminal_images);
+            let composer = draw_embedded_room_chat(frame, chat_area, *chat, terminal_images);
             join_rule_to_composer(frame, rule, composer);
         }
     }
@@ -366,7 +365,6 @@ impl OwnChat {
         }
     }
 }
-
 
 /// Split a player's own `game` area into the game and the watchers' chat.
 /// The chat comes off the game's PTY, never over it, and only where the game

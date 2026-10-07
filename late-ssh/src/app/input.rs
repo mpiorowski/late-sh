@@ -1322,12 +1322,10 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         use crate::app::door::spectate::{input as spectate_input, state::WatchMode};
         match spectate_input::mode(app) {
             Some(WatchMode::Open) => return spectate_input::handle_open_event(app, event),
-            Some(WatchMode::Preview) => {
-                if spectate_input::handle_preview_event(app, event) {
-                    return true;
-                }
+            Some(WatchMode::Preview) if spectate_input::handle_preview_event(app, event) => {
+                return true;
             }
-            None => {}
+            Some(WatchMode::Preview) | None => {}
         }
     }
 

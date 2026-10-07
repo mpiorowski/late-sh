@@ -51,14 +51,13 @@ pub fn tick(app: &mut App) -> bool {
     // game starts (or the setting comes on), dropped when it ends (or the
     // setting goes off).
     let wanted = own_games(app);
-    let (kept, dropped): (Vec<ChatLink>, Vec<ChatLink>) =
-        std::mem::take(&mut app.own_watch_chats)
-            .into_iter()
-            .partition(|link| {
-                wanted
-                    .iter()
-                    .any(|(game, name)| link.game() == *game && link.playname() == name)
-            });
+    let (kept, dropped): (Vec<ChatLink>, Vec<ChatLink>) = std::mem::take(&mut app.own_watch_chats)
+        .into_iter()
+        .partition(|link| {
+            wanted
+                .iter()
+                .any(|(game, name)| link.game() == *game && link.playname() == name)
+        });
     app.own_watch_chats = kept;
     changed |= !dropped.is_empty();
     // A composer open in a dropped link's room (the game ended, or `t`
