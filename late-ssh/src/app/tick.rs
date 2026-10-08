@@ -1113,8 +1113,9 @@ impl App {
             changed = true;
         }
         // The ascii pieces (`app/ascii`) are pure functions of the shared
-        // clock: a new frame on every half edge while one is drawn.
-        changed |= anim_half && self.ascii_visible();
+        // clock: a new frame on every edge of a drawn piece's cadence, the
+        // half edge for the lively ones and the 1Hz edge for the slow.
+        changed |= self.ascii_edge(anim_half, one_hz);
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -1376,8 +1377,12 @@ impl App {
     pub fn wake_hint(&self) -> Duration {
         // The screensaver covers everything else, so nothing under it earns
         // a faster tier, and the pointer moving over it never wakes it hot.
-        if self.screensaver().is_some() {
-            return ANIM_HALF_TICK;
+        // The slow piece rides the idle floor's 1Hz edge.
+        if let Some(piece) = self.screensaver() {
+            return match crate::app::ascii::piece::cadence(piece) {
+                crate::app::ascii::piece::Cadence::Half => ANIM_HALF_TICK,
+                crate::app::ascii::piece::Cadence::Slow => IDLE_TICK,
+            };
         }
         let hot = self.show_splash
             || self.haunt.breakthrough_playing()
@@ -1406,7 +1411,7 @@ impl App {
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
-            || self.ascii_visible()
+            || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
@@ -1421,13 +1426,36 @@ impl App {
         IDLE_TICK
     }
 
-    /// Whether an ascii piece is on screen: the away screensaver, or a Zen
-    /// ascii tile that is drawn (not zoomed away). Gates the half-edge
-    /// repaint and the wake tier.
-    fn ascii_visible(&self) -> bool {
-        self.screensaver().is_some()
-            || (self.screen == Screen::Zen
-                && self.zen.draws(crate::app::zen::state::TileKind::Ascii))
+    /// The ascii pieces on screen: the away screensaver's, or the Zen ascii
+    /// tiles' that are drawn (not zoomed away).
+    fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
+        match (self.screensaver(), self.screen) {
+            (Some(piece), _) => vec![piece],
+            (None, Screen::Zen) => self.zen.drawn_pieces(),
+            (None, _) => Vec::new(),
+        }
+    }
+
+    /// Whether a piece on screen plays a new frame on this tick: the lively
+    /// ones on the half edge, the slow one on the 1Hz edge.
+    fn ascii_edge(&self, anim_half: bool, one_hz: bool) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| match cadence(piece) {
+                Cadence::Half => anim_half,
+                Cadence::Slow => one_hz,
+            })
+    }
+
+    /// Whether a piece on screen plays at the half tier, which earns it.
+    /// The slow piece asks for nothing: the idle floor already carries the
+    /// 1Hz edge it plays on.
+    fn lively_ascii_visible(&self) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| cadence(piece) == Cadence::Half)
     }
 
     /// Whether the reef is actually on screen: the Zen page draws it for

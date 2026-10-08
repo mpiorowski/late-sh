@@ -761,17 +761,19 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
 }
 
 #[test]
-fn screensaver_reads_the_choice_and_falls_back_to_the_aurora() {
+fn screensaver_reads_the_choice_and_falls_back_to_the_misty_forest() {
     use crate::models::user::{
         AsciiPiece, Scene, SceneStyle, Screensaver, TextPiece, extract_screensaver,
     };
-    assert_eq!(
-        extract_screensaver(&json!({})),
-        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots))
-    );
+    let misty_forest = Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots));
+    assert_eq!(extract_screensaver(&json!({})), misty_forest);
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "off" })),
         Screensaver::Off
+    );
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "aurora_fjord" })),
+        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots))
     );
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "lava_lamp" })),
@@ -785,7 +787,7 @@ fn screensaver_reads_the_choice_and_falls_back_to_the_aurora() {
     // default rather than switching the screensaver off.
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "night_coast" })),
-        Screensaver::DEFAULT
+        misty_forest
     );
     // Every stored key reads back as itself.
     for saver in
@@ -808,6 +810,8 @@ fn screensaver_cycle_walks_off_then_every_piece() {
         seen,
         vec![
             Screensaver::Off,
+            Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots)),
+            Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Pixels)),
             Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots)),
             Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels)),
             Screensaver::Piece(AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Dots)),

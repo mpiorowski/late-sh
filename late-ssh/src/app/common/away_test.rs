@@ -125,26 +125,96 @@ fn away_glyph_is_not_a_purchasable_badge() {
 
 #[test]
 fn only_a_person_counts_as_presence() {
-    // Keys, pastes, clicks, drags, and scrolls are a person.
-    assert!(is_presence_input(b"j"));
-    assert!(is_presence_input(b"\x1b[A"));
-    assert!(is_presence_input(b"\x1b[200~hello\x1b[201~"));
-    assert!(is_presence_input(b"\x1b[<0;20;5M"), "left press");
-    assert!(is_presence_input(b"\x1b[<0;20;5m"), "left release");
-    assert!(is_presence_input(b"\x1b[<32;21;5M"), "left drag");
-    assert!(is_presence_input(b"\x1b[<64;20;5M"), "wheel up");
+    let person = |data: &[u8]| match presence_input(data) {
+        PresenceInput::Person { event_end, .. } => Some(event_end),
+        PresenceInput::Nobody | PresenceInput::Partial { .. } => None,
+    };
+    // Keys, pastes, clicks, drags, and scrolls are a person; the first
+    // thing they did ends where the next one starts.
+    assert_eq!(person(b"j"), Some(1));
+    assert_eq!(person(b"jk"), Some(1), "the second key is theirs too");
+    assert_eq!(person(b"\xc3\xa9j"), Some(2), "one UTF-8 character");
+    assert_eq!(person(b"\x1b"), Some(1), "Esc alone is the Esc key");
+    assert_eq!(person(b"\x1bj"), Some(2), "Alt and a key");
+    assert_eq!(person(b"\x1b[A"), Some(3));
+    assert_eq!(person(b"\x1bOP"), Some(3), "F1");
+    assert_eq!(person(b"\x1b[200~hello\x1b[201~x"), Some(17), "a whole paste");
+    assert_eq!(person(b"\x1b[<0;20;5M"), Some(10), "left press");
+    assert_eq!(person(b"\x1b[<0;20;5m"), Some(10), "left release");
+    assert_eq!(person(b"\x1b[<32;21;5M"), Some(11), "left drag");
+    assert_eq!(person(b"\x1b[<64;20;5M"), Some(11), "wheel up");
     // The pointer crossing the terminal (motion bit, no button; with or
     // without a modifier held), and focus reports, are not.
-    assert!(!is_presence_input(b""));
-    assert!(!is_presence_input(b"\x1b[<35;20;5M"));
-    assert!(!is_presence_input(b"\x1b[<39;20;5M"), "shift held");
-    assert!(!is_presence_input(b"\x1b[I"));
-    assert!(!is_presence_input(b"\x1b[O"));
+    assert_eq!(presence_input(b""), PresenceInput::Nobody);
+    assert_eq!(presence_input(b"\x1b[<35;20;5M"), PresenceInput::Nobody);
+    assert_eq!(
+        presence_input(b"\x1b[<39;20;5M"),
+        PresenceInput::Nobody,
+        "shift held"
+    );
+    assert_eq!(presence_input(b"\x1b[I"), PresenceInput::Nobody);
+    assert_eq!(presence_input(b"\x1b[O"), PresenceInput::Nobody);
     // A burst of moves in one chunk is still nobody; one key in it is a
-    // person.
-    assert!(!is_presence_input(
-        b"\x1b[<35;20;5M\x1b[<35;21;5M\x1b[<35;22;6M"
-    ));
-    assert!(is_presence_input(b"\x1b[<35;20;5M\x1b[<35;21;5Mx"));
-    assert!(is_presence_input(b"\x1b[<35;20;5M\x1b[<0;21;5M"));
+    // person, whose event ends past the moves before it.
+    assert_eq!(
+        presence_input(b"\x1b[<35;20;5M\x1b[<35;21;5M\x1b[<35;22;6M"),
+        PresenceInput::Nobody
+    );
+    assert_eq!(person(b"\x1b[<35;20;5M\x1b[<35;21;5Mx"), Some(23));
+    assert_eq!(person(b"\x1b[<35;20;5M\x1b[<0;21;5M"), Some(21));
+}
+
+/// A chunk boundary can fall inside a report. The cut-off tail is held,
+/// not classified: half a mouse move is not a person, and neither is its
+/// other half once the two are read together.
+#[test]
+fn a_report_cut_in_two_is_read_whole() {
+    assert_eq!(
+        presence_input(b"\x1b[<35;2"),
+        PresenceInput::Partial { held_from: 0 }
+    );
+    assert_eq!(
+        presence_input(b"\x1b[<35;20;5M\x1b[<35;2"),
+        PresenceInput::Partial { held_from: 11 }
+    );
+    assert_eq!(presence_input(b"\x1b["), PresenceInput::Partial { held_from: 0 });
+    assert_eq!(presence_input(b"\x1bO"), PresenceInput::Partial { held_from: 0 });
+    assert_eq!(
+        presence_input(b"\x1bP>|kitty"),
+        PresenceInput::Partial { held_from: 0 },
+        "a reply to a query, cut before its terminator"
+    );
+    // Joined with the rest, the move is nobody and the click a person.
+    assert_eq!(presence_input(b"\x1b[<35;20;5M"), PresenceInput::Nobody);
+    assert_eq!(
+        presence_input(b"\x1b[<0;20;5M"),
+        PresenceInput::Person {
+            event_end: 10,
+            paste_open: false
+        }
+    );
+    // A key before the cut-off tail is a person already; the tail is the
+    // parser's to finish.
+    assert_eq!(
+        presence_input(b"x\x1b[<35;2"),
+        PresenceInput::Person {
+            event_end: 1,
+            paste_open: false
+        }
+    );
+}
+
+/// A paste the chunk opens and does not close is a person's, and runs on:
+/// `paste_end` finds where a later chunk closes it.
+#[test]
+fn a_paste_runs_on_past_the_chunk_that_opens_it() {
+    assert_eq!(
+        presence_input(b"\x1b[200~hel"),
+        PresenceInput::Person {
+            event_end: 9,
+            paste_open: true
+        }
+    );
+    assert_eq!(paste_end(b"lo\x1b[201~X"), Some(8));
+    assert_eq!(paste_end(b"lo"), None);
 }

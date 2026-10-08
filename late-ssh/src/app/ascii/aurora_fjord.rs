@@ -539,6 +539,11 @@ fn land() -> &'static Land {
     LAND.get_or_init(Land::build)
 }
 
+/// Build the land now (`piece::warm`), so no frame has to.
+pub(crate) fn warm() {
+    land();
+}
+
 const RAYS: usize = 4 * W;
 
 fn ray(arr: &[f32], u: f64) -> f64 {

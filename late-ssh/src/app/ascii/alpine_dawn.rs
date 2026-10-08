@@ -270,6 +270,11 @@ fn land() -> &'static Land {
     LAND.get_or_init(build_land)
 }
 
+/// Build the land now (`piece::warm`), so no frame has to.
+pub(crate) fn warm() {
+    land();
+}
+
 fn build_land() -> Land {
     let peaks = peaks();
     let light = {

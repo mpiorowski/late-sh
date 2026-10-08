@@ -111,6 +111,11 @@ async fn main() -> anyhow::Result<()> {
     let _telemetry = late_core::telemetry::init_telemetry("late-ssh")
         .context("failed to initialize telemetry")?;
 
+    // The ascii scenes build their land once per process (alpine dawn
+    // raymarches for about half a second): do it here, off the runtime's
+    // workers, rather than under the first away session's app lock.
+    tokio::task::spawn_blocking(late_ssh::app::ascii::piece::warm);
+
     // Load configuration from environment
     let config = Config::load().context("failed to load configuration")?;
     config.log_startup();

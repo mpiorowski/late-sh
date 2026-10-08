@@ -3,8 +3,8 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, styl
 
 use super::draw_piece;
 use crate::app::ascii::{
-    alpine_dawn, aurora_fjord, donut,
-    piece::{Shade, pixel},
+    alpine_dawn, aurora_fjord, donut, misty_forest,
+    piece::{SLOW_FRAME_MS, Shade, pixel},
 };
 
 fn draw(piece: AsciiPiece, cols: u16, rows: u16) -> Buffer {
@@ -49,6 +49,7 @@ fn text_art_larger_than_the_area_keeps_its_middle() {
 #[test]
 fn a_scene_covers_every_cell_on_its_own_ground_in_either_style() {
     for (scene, [r, g, b]) in [
+        (Scene::MistyForest, misty_forest::GROUND),
         (Scene::AuroraFjord, aurora_fjord::GROUND),
         (Scene::AlpineDawn, alpine_dawn::GROUND),
     ] {
@@ -144,4 +145,78 @@ fn an_empty_area_draws_nothing() {
         *terminal.backend().buffer(),
         Buffer::empty(Rect::new(0, 0, 10, 4))
     );
+}
+
+/// The slow piece earns its place as the default screensaver by moving a
+/// few cells a frame: on a full 200x50 terminal, in dots, one second of
+/// wall time changes a bounded handful of cells, so an away session under
+/// it ships about a kilobyte a second rather than a repaint. The budget is
+/// the contract; `SLOW_RATE` and `SLOW_FRAME_MS` are tuned to it (the
+/// count grows linearly with the play step: about a hundred cells per
+/// hundredth of a second of play).
+#[test]
+fn the_slow_piece_moves_a_few_cells_a_frame() {
+    const BUDGET: usize = 100;
+    let piece = AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots);
+    let draw_at = |clock_ms: u64| {
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
+        terminal
+            .draw(|frame| draw_piece(frame, Rect::new(0, 0, 200, 50), piece, clock_ms))
+            .expect("draw");
+        terminal.backend().buffer().clone()
+    };
+    let mut worst = 0;
+    for second in [0u64, 7, 30, 61, 240, 1200] {
+        let before = draw_at(second * SLOW_FRAME_MS);
+        let after = draw_at((second + 1) * SLOW_FRAME_MS);
+        let changed = before
+            .content()
+            .iter()
+            .zip(after.content().iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        worst = worst.max(changed);
+        assert!(
+            changed <= BUDGET,
+            "second {second} to {}: {changed} cells changed, over the {BUDGET} budget",
+            second + 1
+        );
+        assert!(changed > 0, "second {second}: the forest froze");
+    }
+    eprintln!("slow piece: at most {worst} cells change per frame");
+}
+
+#[test]
+fn experiment_pace_and_picture() {
+    use super::draw_dots;
+    use std::io::Write;
+    let draw_scene = |scene: &crate::app::ascii::piece::ShadedFrame| {
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
+        terminal.draw(|frame| draw_dots(frame, Rect::new(0, 0, 200, 50), scene)).expect("draw");
+        terminal.backend().buffer().clone()
+    };
+    let diff = |a: &Buffer, b: &Buffer| a.content().iter().zip(b.content().iter()).filter(|(x, y)| x != y).count();
+    for (air, beams) in [(0.005, 0.005), (0.01, 0.01), (0.005, 0.05), (0.005, 0.1), (0.002, 0.1), (0.0, 0.1), (0.0, 0.2)] {
+        let mut worst = 0;
+        let mut total = 0;
+        for second in [0u64, 7, 30, 61, 240, 1200] {
+            let s = second as f64;
+            let before = draw_scene(&misty_forest::shade(s * air, s * beams));
+            let after = draw_scene(&misty_forest::shade((s + 1.0) * air, (s + 1.0) * beams));
+            let d = diff(&before, &after);
+            worst = worst.max(d);
+            total += d;
+        }
+        eprintln!("air {air} beams {beams}: worst {worst} mean {}", total / 6);
+    }
+    // picture dump: cell glyph codepoint and fg rgb per cell, ground first
+    let scene = misty_forest::shade(1.0, 1.0);
+    let buffer = draw_scene(&scene);
+    let mut out = std::fs::File::create(std::env::var("DUMP").unwrap_or("/dev/null".into())).unwrap();
+    writeln!(out, "{} {} {} {} {}", 200, 50, scene.ground[0], scene.ground[1], scene.ground[2]).unwrap();
+    for cell in buffer.content().iter() {
+        let cp = cell.symbol().chars().next().unwrap() as u32;
+        let (r, g, b) = match cell.fg { Color::Rgb(r, g, b) => (r, g, b), _ => (0, 0, 0) };
+        writeln!(out, "{cp} {r} {g} {b}").unwrap();
+    }
 }

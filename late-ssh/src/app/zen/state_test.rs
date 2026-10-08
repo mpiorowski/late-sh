@@ -333,8 +333,11 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
         zen.focused_piece(),
         Some(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels))
     );
-    assert!(zen.cycle_focused_piece(false));
-    assert!(zen.cycle_focused_piece(false));
+    // Back past the aurora and the misty forest's two styles, off the
+    // front of the list onto its end.
+    for _ in 0..4 {
+        assert!(zen.cycle_focused_piece(false));
+    }
     assert_eq!(zen.focused_piece(), Some(donut), "it wraps");
 
     let stored = serde_json::to_string(&zen.rice).expect("serialize");
@@ -371,4 +374,39 @@ fn a_layout_without_pieces_reads_back_unchanged() {
     assert!(!stored.contains("piece"));
     let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
     assert_eq!(restored, RiceLayout::default());
+}
+
+/// A piece key this build does not know (one dropped later, or a deploy
+/// rolled back past it) costs that tile its pick, not the user the whole
+/// layout: the tile plays the default and every other leaf reads as
+/// stored.
+#[test]
+fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
+    use late_core::models::user::{AsciiPiece, TextPiece};
+    let room = Uuid::from_u128(7);
+    let stored = serde_json::json!({
+        "root": {
+            "node": "split",
+            "dir": "row",
+            "share": 500,
+            "first": { "node": "leaf", "kind": "ascii", "piece": "night_coast" },
+            "second": {
+                "node": "split",
+                "dir": "column",
+                "share": 400,
+                "first": { "node": "leaf", "kind": "chat", "room": room },
+                "second": { "node": "leaf", "kind": "ascii", "piece": "donut" }
+            }
+        },
+        "look": Look::default()
+    });
+    let restored = RiceLayout::from_json(Some(&stored));
+    assert_ne!(restored, RiceLayout::default(), "the layout survives");
+    assert_eq!(restored.root.piece_at(0), Some(DEFAULT_PIECE));
+    assert_eq!(restored.root.kind_at(1), Some(TileKind::Chat));
+    assert_eq!(restored.root.leaf_rooms()[1], Some(room));
+    assert_eq!(
+        restored.root.piece_at(2),
+        Some(AsciiPiece::Text(TextPiece::Donut))
+    );
 }

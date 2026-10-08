@@ -4,17 +4,18 @@
 use late_core::models::user::{AsciiPiece, SceneStyle, TextPiece};
 use ratatui::{Frame, layout::Rect, style::Color};
 
-use super::piece::{Picture, Shade, ShadedFrame, TextFrame, picture, pixel};
+use super::piece::{Picture, Shade, ShadedFrame, TextFrame, frame_index, picture, pixel};
 use crate::app::common::theme;
 
-/// Draw `piece` at frame edge `frame_index` over `area`.
-pub(crate) fn draw_piece(frame: &mut Frame, area: Rect, piece: AsciiPiece, frame_index: u64) {
+/// Draw `piece` over `area` as it stands at `clock_ms` on the shared clock
+/// (`piece::clock_now`): the frame edge is the piece's own, by its cadence.
+pub(crate) fn draw_piece(frame: &mut Frame, area: Rect, piece: AsciiPiece, clock_ms: u64) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let picture = picture(
         piece,
-        frame_index,
+        frame_index(piece, clock_ms),
         area.width as usize,
         area.height as usize,
     );
@@ -101,7 +102,7 @@ fn bayer(col: usize, row: usize) -> f64 {
 /// is a 2x2 of its dots, 0 to 4 of them lit by the row's brightness (ordered
 /// dither at scene coordinates), the cell in the one ink its lit rows
 /// share, on the ground.
-fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
+pub(crate) fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let at = sampling(area, scene);
     let [gr, gg, gb] = scene.ground;
     let ground = Color::Rgb(gr, gg, gb);

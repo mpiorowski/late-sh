@@ -9,17 +9,20 @@
 
 ## 1. What it is
 
-Five pieces ported to Rust from ascii.rest (https://github.com/bas3line/ascii,
-MIT, `LICENSE-ascii-rest` beside this file names the commit): two colour
-scenes, **aurora fjord** (aurora over a fjord, a lit cabin) and **alpine
-dawn** (first light on snow peaks over a misty lake), each drawn in one of
-two styles (`SceneStyle`: **dots**, the original's halftone as braille, or
-**pixels**, solid half-blocks in true colour), and three text pieces,
-**plasma**, **lava lamp**, and **donut**. `late_core::models::user::AsciiPiece`
+Six pieces ported to Rust from ascii.rest (https://github.com/bas3line/ascii,
+MIT, `LICENSE-ascii-rest` beside this file names the commit): three colour
+scenes, **misty forest** (pine ridges fading into morning fog, sunbeams
+slanting through; the slow piece, see Cadence), **aurora fjord** (aurora
+over a fjord, a lit cabin) and **alpine dawn** (first light on snow peaks
+over a misty lake), each drawn in one of two styles (`SceneStyle`:
+**dots**, the original's halftone as braille, or **pixels**, solid
+half-blocks in true colour), and three text pieces, **plasma**, **lava
+lamp**, and **donut**. `late_core::models::user::AsciiPiece`
 (`Scene(Scene, SceneStyle)` or `Text(TextPiece)`) is the closed list of
-choices, seven today; `AsciiPiece::ALL` is the picker's order. It is stored
-by key (`as_str`: `aurora_fjord`, `aurora_fjord_pixels`, `donut`, ...) in
-the Zen layout and in `users.settings.screensaver`.
+choices, nine today; `AsciiPiece::ALL` is the picker's order, the
+screensaver's default first. It is stored by key (`as_str`: `misty_forest`,
+`aurora_fjord_pixels`, `donut`, ...) in the Zen layout and in
+`users.settings.screensaver`.
 
 Two surfaces draw them, both through `ui::draw_piece`:
 
@@ -29,17 +32,24 @@ Two surfaces draw them, both through `ui::draw_piece`:
   closes; the pick is saved with the layout); `Z` zooms it over the page.
 - **The away screensaver**: while a session is away (`/brb`, or
   `common::away::AWAY_AFTER` without a person's input), `App::screensaver`
-  names the piece from Settings, Tweaks, `Screensaver` (the aurora in dots
-  by default; Off turns it off; Enter on the row opens the settings modal's
-  shared picker over Off and every piece, Left/Right cycle them), and
+  names the piece from Settings, Tweaks, `Screensaver` (the misty forest
+  in dots by default: the slow piece, which costs an away session about
+  what idling did; the lively pieces and Off are the choices; Enter on the
+  row opens the settings modal's shared picker over Off and every piece,
+  Left/Right cycle them), and
   `render.rs` draws it over the whole frame
-  ahead of every page and modal, with no click targets. The input that
-  brings the session back is swallowed in `App::handle_input`, so the
-  waking key never acts on the page under it (a door game included).
-  A bare mouse move or a focus report is not a person
-  (`common::away::is_presence_input`): it neither holds off the away clock
-  (`App::last_active_at`) nor drops the screensaver. `/brb` syncs away at
-  once, so the screensaver is up on the frame after the Enter.
+  ahead of every page and modal, with no click targets. The one thing a
+  person did that brings the session back is swallowed in
+  `App::handle_input` (`common::away::PresenceInput::Person` says where it
+  ends), so the waking key never acts on the page under it (a door game
+  included); what follows it in the same chunk is the page's, and a paste
+  that wakes the session is swallowed to its close across chunks
+  (`App::waking_paste_open`). A bare mouse move or a focus report is not a
+  person (`common::away::presence_input`): it neither holds off the away
+  clock (`App::last_active_at`) nor drops the screensaver, and a report a
+  chunk boundary cuts in two is held (`App::presence_held`) and read whole
+  with the next chunk. `/brb` syncs away at once, so the screensaver is up
+  on the frame after the Enter.
   `late_ssh_screensavers_total{trigger=idle|brb,piece}` counts each one
   put up (`App::sync_away`).
 
@@ -48,7 +58,8 @@ Two surfaces draw them, both through `ui::draw_piece`:
 ```text
 late-ssh/src/app/ascii/
 |-- mod.rs              # module declarations only
-|-- piece.rs            # TextFrame / ShadedFrame / Picture, the frame clock, the shared frame cache, JS helpers
+|-- piece.rs            # TextFrame / ShadedFrame / Picture, the frame clock, the shared frame cache, the startup warm-up, JS helpers
+|-- misty_forest.rs     # scene: forest, fog banks, cloud and beams built once (OnceLock), drifted per frame; the slow piece
 |-- aurora_fjord.rs     # scene: land built once (OnceLock), sky + water per frame
 |-- alpine_dawn.rs      # scene: the range raymarched once (OnceLock), tinted + mirrored per frame
 |-- plasma.rs           # the field, drawn at whatever size it is given
@@ -66,10 +77,22 @@ late-ssh/src/app/ascii/
   `frame(t, cols, rows)`) holds no state between frames, so a frame is the
   same for every session and every replica: nothing to sync, nothing to
   persist.
-- **One clock.** `piece::frame_index_now` counts `FRAME_MS` (132ms, the
-  half tier) edges since the process's first ask, shared by every
-  session, so two people away at once watch the same frame. `seconds`
-  turns an edge into play time.
+- **One clock, two cadences.** `piece::clock_now` is milliseconds since
+  the process's first ask, shared by every session, so two people away at
+  once watch the same frame; `piece::frame_index` turns it into a piece's
+  own edge by its `Cadence`, and `seconds` an edge into play time.
+  `Cadence::Half` (every lively piece): a frame every `FRAME_MS` (132ms,
+  the half tier) at the wall clock's pace. `Cadence::Slow` (the misty
+  forest): a frame every `SLOW_FRAME_MS` (1s, the 1Hz edge the idle floor
+  already takes) with play time at `SLOW_RATE` (0.005) of the wall clock,
+  a crawl. What a session pays for a piece is the cells that change per
+  frame times the frames per second, and the halftone flips about a
+  hundred cells per hundredth of a second of the forest's play, so the
+  slow piece moves a few dozen dots a second on a 200x50 terminal
+  (`ui_test.rs`, `the_slow_piece_moves_a_few_cells_a_frame`, holds the
+  budget): about a kilobyte a second per away session, against tens of
+  kilobytes a frame for a lively scene. That is what lets the screensaver
+  default to on.
 - **One frame per edge for the process.** `piece::picture` serves the
   fixed-size pieces (the scenes, lava lamp, donut) from a process-wide cache
   keyed by piece and edge; it computes outside the lock, and two sessions
@@ -93,10 +116,13 @@ late-ssh/src/app/ascii/
   weighted by their dots), on the ground. Text art is centred, cropped
   evenly when larger than the area, in one theme ink per piece
   (`ui::ink`).
-- **Cadence.** A drawn Zen ascii tile, or the screensaver, repaints on the
-  half edge and asks `wake_hint` for `ANIM_HALF_TICK`; the
-  screensaver returns that tier ahead of every other check, since it covers
-  everything and a pointer moving over it must not open the hot window.
+- **Cadence in the tick.** A drawn Zen ascii tile, or the screensaver,
+  repaints on its cadence's edge (`App::ascii_edge`: the half edge for a
+  lively piece, the 1Hz edge for the slow one) and a lively one asks
+  `wake_hint` for `ANIM_HALF_TICK` (`App::lively_ascii_visible`); the slow
+  piece asks for nothing, the idle floor carries its edge. The screensaver
+  returns its tier ahead of every other check, since it covers everything
+  and a pointer moving over it must not open the hot window.
 
 ## 4. Porting a piece
 
@@ -131,10 +157,14 @@ late-ssh/src/app/ascii/
   draw order (about a tenth of lit cells differ from an exact lookup). The
   ports look up exactly; the `fixtures/*_t1.colors` were recorded from the
   originals with that cache removed. The dots do not depend on it.
-- Alpine dawn raymarches its range on first use (`OnceLock`): about half a
-  second of one core, once per process, on the first frame asked for.
+- Alpine dawn raymarches its range once per process (`OnceLock`), about
+  half a second of one core. `piece::warm` builds it and the aurora's land
+  on a blocking thread at startup (`main.rs`), so no session pays it under
+  the app lock; a test binary pays it on the first scene test.
 - ascii.rest's `paper` (a light page flipping the ramp) is not ported:
   every piece draws its dark-ground ramp.
-- The screensaver's bandwidth (a full-screen two-colour picture at ~7.5fps per away
-  session) has not been measured; `late_ssh_render*` and the
-  output-budget metrics are where it would show.
+- A lively piece as the screensaver (a full-screen two-colour picture at
+  ~7.5fps per away session) has not had its bandwidth measured on the
+  wire; `late_ssh_render*` and the output-budget metrics are where it
+  would show. The default is the slow piece for that reason: its cost is
+  pinned by the cell budget test, not estimated.

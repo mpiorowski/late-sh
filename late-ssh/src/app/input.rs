@@ -3550,6 +3550,8 @@ pub(crate) fn open_message_search_modal_globally(app: &mut App, query: &str) {
 
 fn open_settings_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
+    // A piece picker left open over Zen would take the modal's keys.
+    app.piece_picker.close();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -3655,6 +3657,8 @@ fn open_bonsai_modal_globally(app: &mut App) {
 
 pub(crate) fn open_daily_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
+    // A piece picker left open over Zen would take the modal's keys.
+    app.piece_picker.close();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;

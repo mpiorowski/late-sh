@@ -113,8 +113,15 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         room: Option<Uuid>,
         /// The piece an ascii tile plays; `None` (the stored default) is
-        /// [`DEFAULT_PIECE`]. Other kinds ignore it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// [`DEFAULT_PIECE`]. Other kinds ignore it. A key this build does
+        /// not know (a piece dropped, a rolled-back deploy) reads as `None`
+        /// rather than failing the whole layout, which `from_json` would
+        /// replace with the default, room bindings and all.
+        #[serde(
+            default,
+            deserialize_with = "known_piece",
+            skip_serializing_if = "Option::is_none"
+        )]
         piece: Option<AsciiPiece>,
     },
     Split {
@@ -127,6 +134,16 @@ pub enum Node {
 
 /// What a new ascii tile plays.
 pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
+
+/// A stored `piece` key: a piece this build knows, or `None` for one it
+/// does not, so the tile falls back to [`DEFAULT_PIECE`] and the rest of
+/// the layout reads as stored.
+fn known_piece<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AsciiPiece>, D::Error> {
+    let key: Option<String> = Option::deserialize(deserializer)?;
+    Ok(key.as_deref().and_then(AsciiPiece::from_key))
+}
 
 /// Per-mille bounds for a split's first child, so neither side is ever
 /// handed the whole split.
@@ -209,6 +226,23 @@ impl Node {
 
     pub fn kind_at(&self, ordinal: usize) -> Option<TileKind> {
         self.leaf_kinds().get(ordinal).copied()
+    }
+
+    /// The piece of every ascii leaf, in layout order.
+    pub fn ascii_pieces(&self) -> Vec<AsciiPiece> {
+        match self {
+            Node::Leaf {
+                kind: TileKind::Ascii,
+                piece,
+                ..
+            } => vec![piece.unwrap_or(DEFAULT_PIECE)],
+            Node::Leaf { .. } => Vec::new(),
+            Node::Split { first, second, .. } => {
+                let mut pieces = first.ascii_pieces();
+                pieces.extend(second.ascii_pieces());
+                pieces
+            }
+        }
     }
 
     /// The piece the leaf at `ordinal` plays, when it is an ascii tile.
@@ -666,6 +700,15 @@ impl ZenState {
     /// The piece the focused tile plays, when it is an ascii tile.
     pub fn focused_piece(&self) -> Option<AsciiPiece> {
         self.rice.root.piece_at(self.focus)
+    }
+
+    /// The pieces the page draws: every ascii tile's, or zoomed, the
+    /// focused tile's when it is one. What the tick paces its edges by.
+    pub fn drawn_pieces(&self) -> Vec<AsciiPiece> {
+        match self.zoomed {
+            true => self.focused_piece().into_iter().collect(),
+            false => self.rice.root.ascii_pieces(),
+        }
     }
 
     /// Give the focused ascii tile a piece; `false` when the focused tile is

@@ -1,6 +1,8 @@
+use crate::app::state::App;
 use crate::test_helpers::{
     SessionWorld, make_app, make_app_in_world, new_test_db, render_plain, wait_for_render_contains,
 };
+use late_core::test_utils::TestDb;
 use late_core::models::leaderboard::{LeaderboardData, LeaderboardEntry};
 use late_core::test_utils::create_test_user;
 use std::sync::Arc;
@@ -191,28 +193,59 @@ async fn a_pointer_over_the_terminal_does_not_hold_off_away() {
     assert!(app.away);
 }
 
-/// Away with the Tweak at its default, the aurora covers the screen. The
-/// pointer crossing it changes nothing, and the key that drops it is
-/// swallowed: `?` over the screensaver opens no guide, the next one does.
-#[tokio::test]
-async fn the_key_that_drops_the_screensaver_is_swallowed() {
+/// A session on Home with the aurora chosen as its screensaver, thirty
+/// quiet minutes in: the aurora covers the screen.
+async fn app_under_the_aurora(name: &str) -> (TestDb, App) {
     use crate::app::common::away::AWAY_AFTER;
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "saver-key").await;
+    let user = create_test_user(&test_db.db, name).await;
     let mut app = make_app_in_world(
         test_db.db.clone(),
         user.id,
-        "saver",
+        name,
         SessionWorld::default(),
     );
     app.set_screen(crate::app::common::primitives::Screen::Dashboard);
+    let aurora = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
+    app.profile_state.profile.screensaver = Screensaver::Piece(aurora);
     assert_eq!(app.screensaver(), None, "a session that is here has none");
-
     app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
-    let aurora = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
     assert_eq!(app.screensaver(), Some(aurora));
+    (test_db, app)
+}
+
+/// The Tweak defaults to the misty forest in dots, the slow piece: an away
+/// session with the default setting is under it.
+#[tokio::test]
+async fn the_screensaver_defaults_to_the_misty_forest() {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "saver-default").await;
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "saver-default",
+        SessionWorld::default(),
+    );
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert!(app.away);
+    assert_eq!(
+        app.screensaver(),
+        Some(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots))
+    );
+}
+
+/// Away with the aurora chosen, it covers the screen. The pointer crossing
+/// it changes nothing, and the key that drops it is swallowed: `?` over the
+/// screensaver opens no guide, the next one does.
+#[tokio::test]
+async fn the_key_that_drops_the_screensaver_is_swallowed() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-key").await;
+    let aurora = app.screensaver().expect("the aurora is up");
 
     app.handle_input(b"\x1b[<35;20;5M");
     assert_eq!(app.screensaver(), Some(aurora));
@@ -224,4 +257,52 @@ async fn the_key_that_drops_the_screensaver_is_swallowed() {
 
     app.handle_input(b"?");
     assert!(app.show_help, "the next key is");
+}
+
+/// Only the one thing that woke the session is swallowed. A second key in
+/// the same chunk (a fast typist, a slow link) is the page's.
+#[tokio::test]
+async fn the_rest_of_the_waking_chunk_is_the_pages() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-chunk").await;
+    app.handle_input(b"??");
+    assert_eq!(app.screensaver(), None);
+    assert!(app.show_help, "the second `?` opened the guide");
+}
+
+/// A chunk boundary inside a mouse report: neither half wakes the session.
+/// The first is held until the second completes it, and the two read as
+/// the bare move they are; the same split through a click is a person.
+#[tokio::test]
+async fn a_report_cut_in_two_does_not_wake_the_screensaver() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-split").await;
+    let aurora = app.screensaver().expect("the aurora is up");
+    app.handle_input(b"\x1b[<35;2");
+    assert_eq!(app.screensaver(), Some(aurora), "half a move is held");
+    app.handle_input(b"0;5M");
+    assert_eq!(app.screensaver(), Some(aurora), "the other half is nobody");
+    assert!(app.away);
+
+    app.handle_input(b"\x1b[<0;2");
+    assert_eq!(app.screensaver(), Some(aurora), "half a click is held too");
+    app.handle_input(b"0;5M");
+    assert_eq!(app.screensaver(), None, "whole, it is a person");
+    assert!(!app.away);
+}
+
+/// A paste that wakes the session is swallowed to its close, across as
+/// many chunks as it spans: nothing pasted reaches the page as keys (here
+/// `q`, which would open the quit confirm), and the key after the close
+/// is the page's.
+#[tokio::test]
+async fn a_paste_that_wakes_the_screensaver_is_swallowed_whole() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-paste").await;
+    app.handle_input(b"\x1b[200~q");
+    assert_eq!(app.screensaver(), None, "the paste woke the session");
+    assert!(!app.away);
+    assert!(!app.show_quit_confirm, "the pasted q is not a key");
+
+    app.handle_input(b"q\x1b[201~?");
+    assert!(!app.show_quit_confirm, "nor is the rest of the paste");
+    assert!(app.is_running());
+    assert!(app.show_help, "the key after the close is the page's");
 }

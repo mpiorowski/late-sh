@@ -195,15 +195,18 @@ impl LandingPage {
 /// `SceneStyle`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Scene {
+    /// The slow one: fog and sunbeams through pines, played at a crawl.
+    MistyForest,
     AuroraFjord,
     AlpineDawn,
 }
 
 impl Scene {
-    pub const ALL: [Scene; 2] = [Scene::AuroraFjord, Scene::AlpineDawn];
+    pub const ALL: [Scene; 3] = [Scene::MistyForest, Scene::AuroraFjord, Scene::AlpineDawn];
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::MistyForest => "misty_forest",
             Self::AuroraFjord => "aurora_fjord",
             Self::AlpineDawn => "alpine_dawn",
         }
@@ -212,6 +215,7 @@ impl Scene {
     /// Lowercase display name, the way ascii.rest names its pieces.
     pub fn label(self) -> &'static str {
         match self {
+            Self::MistyForest => "misty forest",
             Self::AuroraFjord => "aurora fjord",
             Self::AlpineDawn => "alpine dawn",
         }
@@ -278,9 +282,11 @@ pub enum AsciiPiece {
 }
 
 impl AsciiPiece {
-    /// Picker and cycle order: each scene in both styles, then the text
-    /// pieces.
-    pub const ALL: [AsciiPiece; 7] = [
+    /// Picker and cycle order: each scene in both styles, the screensaver's
+    /// default first, then the text pieces.
+    pub const ALL: [AsciiPiece; 9] = [
+        AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots),
+        AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Pixels),
         AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots),
         AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels),
         AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Dots),
@@ -292,6 +298,8 @@ impl AsciiPiece {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Scene(Scene::MistyForest, SceneStyle::Dots) => "misty_forest",
+            Self::Scene(Scene::MistyForest, SceneStyle::Pixels) => "misty_forest_pixels",
             Self::Scene(Scene::AuroraFjord, SceneStyle::Dots) => "aurora_fjord",
             Self::Scene(Scene::AuroraFjord, SceneStyle::Pixels) => "aurora_fjord_pixels",
             Self::Scene(Scene::AlpineDawn, SceneStyle::Dots) => "alpine_dawn",
@@ -344,7 +352,9 @@ impl<'de> Deserialize<'de> for AsciiPiece {
 }
 
 /// Tweak: what covers the screen while the session is away (`/brb`, or 30
-/// quiet minutes). On by default, playing the aurora.
+/// quiet minutes). On by default, playing the misty forest in dots: the
+/// slow piece, a frame a second that moves a few cells, so an away session
+/// costs about what an idle one did. The lively pieces are a choice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Screensaver {
     Off,
@@ -353,7 +363,7 @@ pub enum Screensaver {
 
 impl Screensaver {
     pub const DEFAULT: Screensaver =
-        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots));
+        Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots));
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -2208,7 +2218,7 @@ pub fn extract_landing_page(settings: &Value) -> LandingPage {
 }
 
 /// Tweak: what plays over the screen while the session is away. Absent or
-/// unreadable values play the default, the aurora.
+/// unreadable values play the default, the misty forest.
 pub fn extract_screensaver(settings: &Value) -> Screensaver {
     match settings.get(SCREENSAVER_KEY).and_then(Value::as_str) {
         Some(key) => Screensaver::from_key(key).unwrap_or(Screensaver::DEFAULT),

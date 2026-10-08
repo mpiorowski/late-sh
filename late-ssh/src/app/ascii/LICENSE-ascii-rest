@@ -1,5 +1,5 @@
 The pieces in this directory (alpine_dawn.rs, aurora_fjord.rs, donut.rs,
-lava_lamp.rs, plasma.rs) are Rust ports of pieces from ascii.rest,
+lava_lamp.rs, misty_forest.rs, plasma.rs) are Rust ports of pieces from ascii.rest,
 https://github.com/bas3line/ascii (ported from commit 3742627981f8).
 
 MIT License

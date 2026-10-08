@@ -172,7 +172,8 @@ tile has the focus, as the sidebar's Live panel does on Home
 (`live::input::open_from_prefix`; lowercase only, `S` is the split; any
 other key after `s` is swallowed), and a click on a row opens it without
 focusing the tile. There is no `o` here: the tile is the panel, not the
-strip, and no reply key: `r` flips the split.
+strip, and no reply key: the layout keys are uppercase (`F` flips the
+split), so `r` does nothing on it.
 With an ascii tile focused, `[` `]` step it through the pieces
 (`input::cycle_tile`, saved with the layout) and Enter opens the piece
 picker (`../ascii/picker`, `App::piece_picker`, routed ahead of the page

@@ -3309,10 +3309,11 @@ async fn zen_too_small_to_draw_keeps_no_status_click_targets() {
 }
 
 /// `?` on Zen opens the guide on the Zen topic, which lists the layout keys;
-/// with every status line component off Zen's bottom row is gone and the
-/// tiles run down to the last row.
+/// with every status line component off Zen's bottom row stays, holding
+/// the layout keys alone with nothing to click, and the tiles end one row
+/// above it.
 #[tokio::test]
-async fn zen_guide_opens_on_zen_keys_and_the_row_goes_with_every_component_off() {
+async fn zen_guide_opens_on_zen_keys_and_the_row_keeps_its_keys_with_every_component_off() {
     use crate::app::common::primitives::Screen;
     use crate::app::help_modal::data::HelpTopic;
     use crate::app::profile::state::profile_params_from_profile;
@@ -3354,10 +3355,57 @@ async fn zen_guide_opens_on_zen_keys_and_the_row_goes_with_every_component_off()
     app.reset_render();
     terminal.process(&app.render().expect("render"));
     let screen = terminal.screen().contents();
-    let last_row = screen.lines().last().expect("last row");
+    let mut rows = screen.lines().rev();
+    let last_row = rows.next().expect("last row");
     assert!(
-        last_row.starts_with('╰'),
-        "a tile's bottom border is the page's last row: {last_row:?}"
+        last_row.trim_end().ends_with("? help  S split  F flip  X close  Z zoom"),
+        "the layout keys hold the last row's right end: {last_row:?}"
+    );
+    assert!(
+        !last_row.contains('╰'),
+        "no tile border on the keys' row: {last_row:?}"
+    );
+    let above = rows.next().expect("row above");
+    assert!(
+        above.starts_with('╰'),
+        "the tiles end one row above the keys: {above:?}"
+    );
+}
+
+/// The piece picker is the Zen page's. A chord off the page (Ctrl+F) or
+/// into a modal (Ctrl+O) closes it, so it never owns the next surface's
+/// keys or writes a pick to a tile that is no longer on screen.
+#[tokio::test]
+async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::zen::state::{Node, TileKind};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "piece-picker-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "piece-picker-flow-it");
+    app.resize(120, 40).expect("resize test terminal");
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.zen.rice.root = Node::leaf(TileKind::Ascii);
+    app.zen.focus = 0;
+
+    app.handle_input(b"\r");
+    assert!(app.piece_picker.is_open(), "Enter on the ascii tile opens it");
+    app.handle_input(b"\x06");
+    assert_ne!(app.screen, Screen::Zen, "Ctrl+F leaves the page");
+    assert!(!app.piece_picker.is_open(), "and the picker goes with it");
+
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"\r");
+    assert!(app.piece_picker.is_open());
+    app.handle_input(b"\x0f");
+    assert!(app.show_settings, "Ctrl+O opens Settings over the page");
+    assert!(!app.piece_picker.is_open(), "the picker does not sit over it");
+    app.handle_input(b"\x1b[B");
+    assert!(
+        !app.piece_picker.is_open(),
+        "the arrow went to Settings, not a picker"
     );
 }
 

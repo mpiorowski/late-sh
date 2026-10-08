@@ -15,11 +15,11 @@ fn opens_on_the_piece_playing_and_walks_the_list_without_wrapping() {
     picker.move_cursor(-10);
     assert_eq!(
         picker.selected(),
-        AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots)
+        AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots)
     );
     picker.move_cursor(10);
     assert_eq!(picker.selected(), AsciiPiece::Text(TextPiece::Donut));
-    picker.set_cursor(4);
+    picker.set_cursor(6);
     assert_eq!(picker.selected(), AsciiPiece::Text(TextPiece::Plasma));
     picker.close();
     assert!(!picker.is_open());

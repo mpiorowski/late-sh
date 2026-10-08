@@ -1,6 +1,9 @@
-use late_core::models::user::{AsciiPiece, TextPiece};
+use late_core::models::user::{AsciiPiece, Scene, SceneStyle, TextPiece};
 
-use super::{FRAME_MS, Picture, js_i32, js_round, picture, seconds};
+use super::{
+    Cadence, FRAME_MS, Picture, SLOW_FRAME_MS, cadence, frame_index, js_i32, js_round, picture,
+    seconds,
+};
 
 #[test]
 fn js_round_rounds_halves_up_like_javascript() {
@@ -17,11 +20,28 @@ fn js_i32_truncates_toward_zero_and_wraps() {
     assert_eq!(js_i32(4_294_967_297.0), 1);
 }
 
+/// A lively piece plays a frame on every half-tier edge at the wall
+/// clock's pace; the slow piece plays one a second at a crawl, so two
+/// hundred seconds of wall time are one second of its fog.
 #[test]
-fn a_frame_edge_is_the_half_tier() {
-    assert_eq!(FRAME_MS, 132);
-    assert_eq!(seconds(0), 0.0);
-    assert_eq!(seconds(1000), 132.0);
+fn a_frame_edge_is_the_half_tier_or_the_slow_second() {
+    let donut = AsciiPiece::Text(TextPiece::Donut);
+    let forest = AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots);
+    assert_eq!((FRAME_MS, SLOW_FRAME_MS), (132, 1000));
+    assert_eq!(cadence(donut), Cadence::Half);
+    assert_eq!(cadence(forest), Cadence::Slow);
+    assert_eq!(
+        cadence(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Pixels)),
+        Cadence::Slow,
+        "a scene's cadence is the scene's in either style"
+    );
+    assert_eq!(frame_index(donut, 131), 0);
+    assert_eq!(frame_index(donut, 132), 1);
+    assert_eq!(frame_index(forest, 999), 0);
+    assert_eq!(frame_index(forest, 1000), 1);
+    assert_eq!(seconds(donut, 0), 0.0);
+    assert_eq!(seconds(donut, 1000), 132.0);
+    assert_eq!(seconds(forest, 200), 1.0);
 }
 
 #[test]

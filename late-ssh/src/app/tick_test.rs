@@ -284,17 +284,37 @@ async fn zen_equalizer_tiles_hold_the_half_rate_tier() {
     );
 }
 
-/// The away screensaver plays on the half edge and holds that tier however
+/// The default screensaver is the slow piece: it rides the idle floor and
+/// its 1Hz edge, so an away session under it wakes no faster than an idle
+/// one, and a pointer move over it opens no hot window.
+#[tokio::test]
+async fn the_default_screensaver_rides_the_idle_floor() {
+    use crate::app::common::away::AWAY_AFTER;
+    let (_test_db, mut app) = chat_compose_app("tick-slow-saver").await;
+    app.set_screen(Screen::Dashboard);
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert!(app.screensaver().is_some(), "the default is on");
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.wake_hint(), IDLE_TICK);
+    app.last_one_hz_index = None;
+    assert!(app.tick(), "a 1Hz edge is a new frame of the piece");
+}
+
+/// A lively screensaver plays on the half edge and holds that tier however
 /// much else would wake faster: the hot window a pointer move over the
 /// screensaver opens.
 #[tokio::test]
 async fn the_screensaver_holds_the_half_tier() {
     use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
     let (_test_db, mut app) = chat_compose_app("tick-saver").await;
     app.set_screen(Screen::Dashboard);
+    app.profile_state.profile.screensaver =
+        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots));
     app.last_active_at = Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
-    assert!(app.screensaver().is_some(), "the Tweak defaults to on");
+    assert!(app.screensaver().is_some(), "the chosen piece is up");
     app.handle_input(b"\x1b[<35;20;5M");
     assert_eq!(app.wake_hint(), ANIM_HALF_TICK);
     set_marquee_transition(&mut app, 400, 402);

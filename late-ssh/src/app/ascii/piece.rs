@@ -12,11 +12,64 @@ use std::time::Instant;
 use late_core::MutexRecover;
 use late_core::models::user::{AsciiPiece, Scene, TextPiece};
 
-/// One frame edge: the half tier the render loop wakes on while a piece is
-/// up (`tick.rs`, `ANIM_HALF_TICK`). ~7.5fps keeps the slow pieces fluid,
-/// and a full-screen piece at this pace is what an away session costs in
-/// bytes.
+/// How a piece plays: how often it draws a new frame, and how fast its play
+/// time runs. What a session pays for a piece on screen is the cells that
+/// change per frame times the frames per second, so the cadence is the
+/// piece's cost as much as its look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cadence {
+    /// A new frame on every half-tier edge (`FRAME_MS`, ~7.5fps), play
+    /// time at the wall clock's pace: the lively pieces.
+    Half,
+    /// A new frame every `SLOW_FRAME_MS`, play time at `SLOW_RATE` of the
+    /// wall clock: a crawl that moves a few cells a frame, so an away
+    /// session under it costs about what an idle one did. The default
+    /// screensaver.
+    Slow,
+}
+
+impl Cadence {
+    pub(crate) fn frame_ms(self) -> u64 {
+        match self {
+            Self::Half => FRAME_MS,
+            Self::Slow => SLOW_FRAME_MS,
+        }
+    }
+
+    /// Play seconds per wall second.
+    fn rate(self) -> f64 {
+        match self {
+            Self::Half => 1.0,
+            Self::Slow => SLOW_RATE,
+        }
+    }
+}
+
+/// The pace a piece plays at. A scene's cadence is the scene's, whatever
+/// style draws it.
+pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
+    match piece {
+        AsciiPiece::Scene(Scene::MistyForest, _) => Cadence::Slow,
+        AsciiPiece::Scene(Scene::AuroraFjord | Scene::AlpineDawn, _) | AsciiPiece::Text(_) => {
+            Cadence::Half
+        }
+    }
+}
+
+/// One frame edge of the lively pieces: the half tier the render loop wakes
+/// on while one is up (`tick.rs`, `ANIM_HALF_TICK`). ~7.5fps keeps them
+/// fluid, and a full-screen piece at this pace is what an away session
+/// under one costs in bytes.
 pub(crate) const FRAME_MS: u64 = 132;
+/// One frame edge of the slow pieces: the 1Hz edge the render loop already
+/// takes while idle (`tick.rs`), so a slow piece never wakes it faster.
+pub(crate) const SLOW_FRAME_MS: u64 = 1000;
+/// How fast a slow piece's play time runs against the wall clock: a frame a
+/// second at this rate drifts the misty forest's fog a fraction of a cell,
+/// which the halftone turns into a few dozen dots moving, not a repaint
+/// (`ui_test.rs` holds the cell budget; the count grows linearly with this,
+/// about a hundred cells a second per hundredth).
+pub(crate) const SLOW_RATE: f64 = 0.005;
 
 /// A text piece's frame: `rows` lines of `cols` glyphs, drawn in one ink.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,28 +149,47 @@ pub(crate) enum Picture {
     Field(Arc<TextFrame>),
 }
 
-/// The frame edge `now` falls in, on the process-wide clock every session
-/// shares, so two people away at once watch the same frame.
-pub(crate) fn frame_index_now() -> u64 {
+/// Build what the scenes build once per process (alpine dawn's raymarched
+/// range, about half a second of one core; the aurora's and the misty
+/// forest's land). Called from `main` on a blocking thread at startup, so
+/// the first session to draw a scene never does it under the app lock on a
+/// runtime worker.
+pub fn warm() {
+    super::alpine_dawn::warm();
+    super::aurora_fjord::warm();
+    super::misty_forest::warm();
+}
+
+/// Milliseconds on the process-wide clock every session shares, so two
+/// people away at once watch the same frame.
+pub(crate) fn clock_now() -> u64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     let epoch = EPOCH.get_or_init(Instant::now);
-    epoch.elapsed().as_millis() as u64 / FRAME_MS
+    epoch.elapsed().as_millis() as u64
 }
 
-/// Play time in seconds at a frame edge.
-pub(crate) fn seconds(frame: u64) -> f64 {
-    frame as f64 * FRAME_MS as f64 / 1000.0
+/// The frame edge a piece is on at `clock_ms`, by its cadence.
+pub(crate) fn frame_index(piece: AsciiPiece, clock_ms: u64) -> u64 {
+    clock_ms / cadence(piece).frame_ms()
 }
 
-/// The piece's frame at `frame`, for an area of `cols` x `rows` cells. The
-/// fixed-size pieces come from the shared cache; the field is drawn to the
-/// area, so it is computed per call (it is the cheapest piece). A scene's
-/// frame is the same in either style, so both share one entry.
+/// A piece's play time in seconds at one of its frame edges.
+pub(crate) fn seconds(piece: AsciiPiece, frame: u64) -> f64 {
+    let cadence = cadence(piece);
+    frame as f64 * cadence.frame_ms() as f64 / 1000.0 * cadence.rate()
+}
+
+/// The piece's frame at `frame` (one of its own edges, `frame_index`), for
+/// an area of `cols` x `rows` cells. The fixed-size pieces come from the
+/// shared cache; the field is drawn to the area, so it is computed per call
+/// (it is the cheapest piece). A scene's frame is the same in either style,
+/// so both share one entry.
 pub(crate) fn picture(piece: AsciiPiece, frame: u64, cols: usize, rows: usize) -> Picture {
-    let t = seconds(frame);
+    let t = seconds(piece, frame);
     match piece {
         AsciiPiece::Scene(scene, _) => cached(Fixed::Scene(scene), frame, || {
             Picture::Shaded(Arc::new(match scene {
+                Scene::MistyForest => super::misty_forest::frame(t),
                 Scene::AuroraFjord => super::aurora_fjord::frame(t),
                 Scene::AlpineDawn => super::alpine_dawn::frame(t),
             }))

@@ -477,11 +477,19 @@ pub struct App {
     /// a short window after input so request -> response interactions
     /// (menu loads, chat send echo) land at typing latency.
     pub(crate) last_input_at: Instant,
-    /// Set on input from a person (`common::away::is_presence_input`): not
+    /// Set on input from a person (`common::away::presence_input`): not
     /// on a bare mouse move or a focus report. The away clock, the AFK line,
     /// attention, and the device's left-at mark all read this one, so a
     /// pointer resting on the terminal never keeps a session here.
     pub(crate) last_active_at: Instant,
+    /// The tail of the last input chunk that cut an escape sequence in two
+    /// (`common::away::PresenceInput::Partial`), read again in front of the
+    /// next chunk, so who sent it is decided from the whole report and the
+    /// second half of a mouse move never reads as a person's keys.
+    pub(crate) presence_held: Vec<u8>,
+    /// A bracketed paste woke the session from under the screensaver and
+    /// its close has not arrived: the chunks up to it are swallowed too.
+    pub(crate) waking_paste_open: bool,
     /// Second-boundary edge state for the shared 1Hz block in tick():
     /// None = never fired (fire immediately so first frames have presence,
     /// directory, and clock state).
@@ -1523,6 +1531,8 @@ impl App {
             started_at: Instant::now(),
             last_input_at: Instant::now(),
             last_active_at: Instant::now(),
+            presence_held: Vec::new(),
+            waking_paste_open: false,
             last_one_hz_index: None,
             attention_mark: Instant::now(),
             attention_spot: None,
@@ -2496,6 +2506,11 @@ impl App {
             return;
         }
 
+        // The piece picker belongs to the Zen page it was opened over; a
+        // chord off the page (Ctrl+F, a door) must not carry it along to
+        // own the next page's keys.
+        self.piece_picker.close();
+
         // Leaving Home is leaving the open cyberspace chat room: its stream
         // and presence heartbeat exist only while the user is on the surface,
         // and Esc is not the only way off it (digits, Tab, door chords).
@@ -2817,28 +2832,72 @@ impl App {
     }
 
     pub fn handle_input(&mut self, data: &[u8]) {
+        use crate::app::common::away::{PresenceInput, paste_end, presence_input};
         if !data.is_empty() {
             self.last_input_at = Instant::now();
         }
-        // Read before the input can bring the session back: the input that
-        // drops the screensaver is swallowed, not acted on.
+        // A paste that woke the session is swallowed to its close, however
+        // many chunks it runs on for; what follows the close is the page's.
+        let data: &[u8] = match self.waking_paste_open {
+            false => data,
+            true => match paste_end(data) {
+                Some(end) => {
+                    self.waking_paste_open = false;
+                    &data[end..]
+                }
+                None => return,
+            },
+        };
+        // Read before the input can bring the session back: the one thing
+        // that drops the screensaver is swallowed, not acted on.
         let screensaver_up = self.screensaver().is_some();
+        // Presence is read over the held tail of the last chunk and this
+        // one, so a report cut at a chunk boundary is classified whole.
+        let held = std::mem::take(&mut self.presence_held);
+        let read: std::borrow::Cow<'_, [u8]> = match held.is_empty() {
+            true => std::borrow::Cow::Borrowed(data),
+            false => std::borrow::Cow::Owned([held.as_slice(), data].concat()),
+        };
         // A person, not the pointer crossing the terminal: the away clock
         // restarts and `/brb` ("until your next key") ends here, for every
         // screen including the doors that never parse their input. Coming
         // back is synced now rather than on the next 1Hz edge, so the
         // screensaver drops on this very key.
-        if crate::app::common::away::is_presence_input(data) {
-            self.last_active_at = Instant::now();
-            self.newcomer_clock.note_input(chrono::Utc::now());
-            self.sent_away = false;
-            if self.away {
-                self.sync_away();
+        let person = match presence_input(&read) {
+            PresenceInput::Nobody => None,
+            PresenceInput::Partial { held_from } => {
+                self.presence_held = read[held_from..].to_vec();
+                None
             }
-        }
-        if screensaver_up {
-            return;
-        }
+            PresenceInput::Person {
+                event_end,
+                paste_open,
+            } => {
+                self.last_active_at = Instant::now();
+                self.newcomer_clock.note_input(chrono::Utc::now());
+                self.sent_away = false;
+                if self.away {
+                    self.sync_away();
+                }
+                // The held tail came from a chunk already swallowed, so the
+                // event ends this far into this one.
+                Some((event_end - held.len(), paste_open))
+            }
+        };
+        let data: &[u8] = match (screensaver_up, person) {
+            (false, _) => data,
+            // The pointer, a focus change, or half a report: nothing to
+            // wake for, nothing to act on.
+            (true, None) => return,
+            (true, Some((event_end, paste_open))) => {
+                self.waking_paste_open = paste_open;
+                let rest = &data[event_end..];
+                if rest.is_empty() {
+                    return;
+                }
+                rest
+            }
+        };
         // First contact's breakthrough (`app/deadchannel/haunt`): while it
         // plays, every key is swallowed here, before a running door game or
         // the parser sees it.

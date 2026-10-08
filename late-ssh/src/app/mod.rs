@@ -2,7 +2,7 @@ pub mod activity;
 pub mod ai;
 pub mod arcade;
 pub mod artboard;
-pub(crate) mod ascii;
+pub mod ascii;
 pub mod audio;
 pub mod bonsai;
 pub mod chat;

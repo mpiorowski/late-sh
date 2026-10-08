@@ -374,9 +374,9 @@ struct DrawContext<'a> {
     /// The away screensaver: the piece that covers the whole frame while the
     /// session is away (`App::screensaver`).
     screensaver: Option<late_core::models::user::AsciiPiece>,
-    /// The frame edge every ascii piece plays this frame
-    /// (`ascii::piece::frame_index_now`).
-    ascii_frame: u64,
+    /// The shared clock every ascii piece is drawn at this frame
+    /// (`ascii::piece::clock_now`).
+    ascii_clock: u64,
     splash_ticks: usize,
     splash_hint: &'a str,
     /// The day's wall piece, hung over the splash when it fits; the
@@ -477,7 +477,7 @@ impl App {
         let games_hub_roster = HubGame::roster(self.is_runner());
         // Away with the Tweak on: the piece covers everything this frame.
         let screensaver = self.screensaver();
-        let ascii_frame = crate::app::ascii::piece::frame_index_now();
+        let ascii_clock = crate::app::ascii::piece::clock_now();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
@@ -1690,7 +1690,7 @@ impl App {
                         ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
                         screensaver,
-                        ascii_frame,
+                        ascii_clock,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
                         splash_piece: self.splash_piece.as_ref(),
@@ -1959,7 +1959,7 @@ impl App {
         if let Some(piece) = ctx.screensaver {
             ctx.status_hits.borrow_mut().clear();
             frame.render_widget(Clear, area);
-            crate::app::ascii::ui::draw_piece(frame, area, piece, ctx.ascii_frame);
+            crate::app::ascii::ui::draw_piece(frame, area, piece, ctx.ascii_clock);
             return;
         }
 
@@ -2459,7 +2459,7 @@ impl App {
                         now: ctx.live_panel_now,
                     },
                     wall_tick: ctx.marquee_tick,
-                    ascii_frame: ctx.ascii_frame,
+                    ascii_clock: ctx.ascii_clock,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
             }

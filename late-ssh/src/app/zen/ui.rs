@@ -116,8 +116,9 @@ pub(crate) struct ZenView<'a> {
     /// them the same way and records the same click and key targets.
     pub live_panel: LivePanelProps<'a>,
     pub wall_tick: usize,
-    /// The frame edge the ascii tiles play (`ascii::piece::frame_index_now`).
-    pub ascii_frame: u64,
+    /// The shared clock the ascii tiles are drawn at
+    /// (`ascii::piece::clock_now`).
+    pub ascii_clock: u64,
 }
 
 pub(crate) fn draw_rice(
@@ -264,7 +265,7 @@ pub(crate) fn draw_rice(
             }
             TileKind::Ascii => {
                 if let Some(piece) = zen.rice.root.piece_at(ordinal) {
-                    crate::app::ascii::ui::draw_piece(frame, inner, piece, view.ascii_frame);
+                    crate::app::ascii::ui::draw_piece(frame, inner, piece, view.ascii_clock);
                 }
             }
             TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), neighbours),
