@@ -4,7 +4,7 @@
 use late_core::models::user::{AsciiPiece, SceneStyle, TextPiece};
 use ratatui::{Frame, layout::Rect, style::Color};
 
-use super::piece::{Picture, Shade, ShadedFrame, TextFrame, frame_index, picture, pixel};
+use super::piece::{Picture, ShadedFrame, TextFrame, frame_index, picture, pixel};
 use crate::app::common::theme;
 
 /// Draw `piece` over `area` as it stands at `clock_ms` on the shared clock
@@ -99,11 +99,47 @@ fn draw_pixels(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
 /// the grid stays regular and only the dots grow. The sizes take plain
 /// thresholds, no dither: a dither between sizes is what turned the grid
 /// into a texture. The tone does the rest: the ink over the ground on a
-/// steep curve, so the dim sky and the trees fall away to dark and the
-/// fog, the sun and its beams stand out. The tone is held to `TONES`
-/// steps and the ink to `INK_STEP` a channel, so a cell only changes when
-/// the scene moves it a visible step: a slow piece's frame then changes a
-/// few dozen cells, not every cell whose colour wobbled.
+/// steep curve, so the dim sky falls away to dark and the fog, the sun and
+/// its beams stand out. Both read the brightness after a local contrast
+/// boost (`sharpened`), which keeps the trees: they are only a little
+/// darker than the fog around them, and without it the few steps of a
+/// halftone flatten the two into one dim field. The tone is held to
+/// `TONES` steps and the ink to `INK_STEP` a channel, so a cell only
+/// changes when the scene moves it a visible step: a slow piece's frame
+/// then changes a few dozen cells, not every cell whose colour wobbled.
+
+/// Each scene cell's brightness with its local contrast raised (unsharp
+/// mask): the cell's difference from a box blur of `radius` cells around
+/// it, scaled by `amount`, is added back. A dark tree beside lit fog goes
+/// darker and the fog beside it brighter, so an edge the halftone's few
+/// steps would flatten survives them.
+fn sharpened(scene: &ShadedFrame, radius: usize, amount: f64) -> Vec<f64> {
+    let (w, h) = (scene.cols, scene.rows);
+    let level: Vec<f64> = scene.cells.iter().map(|c| c.level).collect();
+    let blur_line = |get: &dyn Fn(usize) -> f64, n: usize| -> Vec<f64> {
+        (0..n)
+            .map(|i| {
+                let (a, b) = (i.saturating_sub(radius), (i + radius).min(n - 1));
+                (a..=b).map(get).sum::<f64>() / (b - a + 1) as f64
+            })
+            .collect()
+    };
+    let mut across = vec![0.0; w * h];
+    for r in 0..h {
+        let line = blur_line(&|x| level[r * w + x], w);
+        across[r * w..(r + 1) * w].copy_from_slice(&line);
+    }
+    let mut out = level.clone();
+    for x in 0..w {
+        let line = blur_line(&|r| across[r * w + x], h);
+        for r in 0..h {
+            let k = r * w + x;
+            out[k] = (level[k] + amount * (level[k] - line[r])).clamp(0.0, 1.0);
+        }
+    }
+    out
+}
+
 fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let at = sampling(area, scene);
     let [gr, gg, gb] = scene.ground;
@@ -112,8 +148,12 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     // ink; the curve spreads what lies between.
     const FLOOR: f64 = 0.12;
     const CEILING: f64 = 0.92;
-    const CURVE: f64 = 1.5;
-    const TONES: f64 = 16.0;
+    const CURVE: f64 = 1.2;
+    const TONES: f64 = 12.0;
+    // The local contrast: how far around a cell its surround reaches, in
+    // scene cells, and how strongly its difference from it is pushed.
+    const SURROUND: usize = 4;
+    const SHARPEN: f64 = 1.0;
     const INK_STEP: f64 = 8.0;
     // The size thresholds: a diagonal pair, then a cluster.
     const PAIR: f64 = 0.55;
@@ -122,11 +162,12 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     // 2, 4, 5) and the lower (dot 3; dots 3, 8; dots 3, 6, 7, 8).
     const UPPER: [u32; 4] = [0, 0x01, 0x11, 0x1b];
     const LOWER: [u32; 4] = [0, 0x04, 0x84, 0xe4];
-    let tone = |shade: Shade| {
-        let t = ((shade.level - FLOOR) / (CEILING - FLOOR)).clamp(0.0, 1.0).powf(CURVE);
+    let levels = sharpened(scene, SURROUND, SHARPEN);
+    let tone = |level: f64| {
+        let t = ((level - FLOOR) / (CEILING - FLOOR)).clamp(0.0, 1.0).powf(CURVE);
         (t * TONES).round() / TONES
     };
-    let size = |shade: Shade, tone: f64| match (tone > 0.0, shade.level) {
+    let size = |level: f64, tone: f64| match (tone > 0.0, level) {
         (false, _) => 0,
         (true, level) if level >= CLUSTER => 3,
         (true, level) if level >= PAIR => 2,
@@ -138,11 +179,12 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
             let (col, upper, lower) = at(tx, ty);
             let top = scene.cells[upper * scene.cols + col];
             let bottom = scene.cells[lower * scene.cols + col];
+            let (l_top, l_bottom) = (levels[upper * scene.cols + col], levels[lower * scene.cols + col]);
             let Some(cell) = buffer.cell_mut((area.x + tx, area.y + ty)) else {
                 continue;
             };
-            let (t_top, t_bottom) = (tone(top), tone(bottom));
-            let bits = UPPER[size(top, t_top)] | LOWER[size(bottom, t_bottom)];
+            let (t_top, t_bottom) = (tone(l_top), tone(l_bottom));
+            let bits = UPPER[size(l_top, t_top)] | LOWER[size(l_bottom, t_bottom)];
             if bits == 0 {
                 cell.set_char(' ').set_fg(ground).set_bg(ground);
                 continue;

@@ -671,7 +671,7 @@ fn drift(bank: &[f32], row: usize, u: f64) -> f64 {
 }
 
 /// How much faster the beams play than the air in the crawl (`crawl`).
-const BEAM_PACE: f64 = 10.0;
+const BEAM_PACE: f64 = 7.0;
 
 /// The scene as the screensaver crawls it, at `t` seconds of play time
 /// (`piece::SLOW_RATE` of the wall clock): the air at `t`, the beams at

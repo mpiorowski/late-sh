@@ -87,7 +87,7 @@ late-ssh/src/app/ascii/
   already takes) with play time at `SLOW_RATE` (0.01) of the wall clock,
   a crawl. What a session pays for a piece is the cells that change per
   frame times the frames per second. At the crawl the forest's fog is all
-  but still, so the forest plays its beams ten times faster than its air
+  but still, so the forest plays its beams seven times faster than its air
   (`misty_forest::crawl`, `BEAM_PACE`): the sway and breathing of the
   sunbeams is the motion the screensaver shows, and it is cheap, a few
   dozen cells a frame on a 200x50 terminal (`ui_test.rs`,
@@ -121,10 +121,13 @@ late-ssh/src/app/ascii/
   at the same place in its quarter of the glyph, so the grid stays regular
   and only the dots grow. Sizes take plain thresholds, never a dither: a
   dither between sizes turns the grid into a texture. The tone is the ink
-  over the ground on a steep curve (dim sky and trees fall to dark, fog
-  and sun stand out), held to sixteen steps, and every ink is rounded to
-  eight steps a channel, so a cell changes only when the scene
-  moves it a visible step. Text art is centred, cropped evenly when larger
+  over the ground on a steep curve (dim sky falls to dark, fog and sun
+  stand out). Size and tone read the brightness after a local contrast
+  boost (an unsharp mask, `ui::sharpened`): the trees are only a little
+  darker than the fog around them, and without it the halftone's few
+  steps flatten both into one dim field. The tone is held to twelve steps
+  and every ink rounded to eight steps a channel, so a cell changes only
+  when the scene moves it a visible step. Text art is centred, cropped evenly when larger
   than the area, in one theme ink per piece
   (`ui::ink`).
 - **Cadence in the tick.** A drawn Zen ascii tile, or the screensaver,
