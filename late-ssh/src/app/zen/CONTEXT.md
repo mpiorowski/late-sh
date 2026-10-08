@@ -43,13 +43,9 @@ rows. It replaced the presence tile, and a stored `presence` reads as
 newest first; see §3 for its keys), headlines (News articles and the
 viewer's RSS entries merged newest first, two rows each (the title with
 its source and age, then the link), an entry shared to News listed once,
-as the article), live (the #lounge live strip, `../live/CONTEXT.md`: the
-picture rows from 8 rows and 56 columns inside, else its one row, with no
-hint row and no rule since the title names the key, on three fifths of
-the width (56 columns at least) beside the #lounge activity feed on the
-rest, or the whole tile when the feed would get under 30 columns; while
-nothing is up, a faint `nothing live` on 30% of the width beside the
-feed), blank. The look (border style, gap, titles) is
+as the article), live (the Live panel's rows, `../live/CONTEXT.md` §1:
+the same four rows the sidebar's panel draws, each with its `s1`-`s4`
+key, wider so less is cut; `nobody playing` while nothing is on), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):

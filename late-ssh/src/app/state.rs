@@ -2061,11 +2061,7 @@ impl App {
     }
 
     /// Watch `playname`'s live `game`, replacing any watch already open.
-    pub(crate) fn start_spectating(
-        &mut self,
-        game: crate::app::door::spectate::state::SpectateGame,
-        playname: String,
-    ) {
+    pub(crate) fn start_spectating(&mut self, key: crate::app::door::spectate::state::LiveGameKey) {
         use crate::app::door::spectate::proxy::WatchTarget;
         use crate::app::door::spectate::state::{SpectateGame, State};
 
@@ -2073,7 +2069,7 @@ impl App {
         // preview.
         self.step_away_from_watch();
         self.stop_spectating();
-        let target = match game {
+        let target = match key.game() {
             SpectateGame::Dcss => WatchTarget {
                 host: self.dcss_host.clone(),
                 port: self.dcss_port,
@@ -2090,12 +2086,7 @@ impl App {
                 key: crate::app::door::brogue::identity::derive_client_key(&self.brogue_secret),
             },
         };
-        self.spectate_state = Some(State::new(
-            game,
-            playname,
-            target,
-            self.repaint_signal.clone(),
-        ));
+        self.spectate_state = Some(State::new(key, target, self.repaint_signal.clone()));
     }
 
     pub(crate) fn stop_spectating(&mut self) {

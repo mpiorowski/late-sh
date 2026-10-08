@@ -230,8 +230,9 @@ struct DrawContext<'a> {
             [Option<crate::app::live::pick::LiveSource>; crate::app::live::panel::LIVE_PANEL_ROWS],
         )>,
     >,
-    /// Watchers on this player's own running game on the watchable door
-    /// whose screen is up, for its chrome.
+    /// People other than this player with a watch open on their own
+    /// running game on the watchable door whose screen is up, for its
+    /// chrome: peeking at your own game makes you nobody's audience.
     own_watchers: Option<usize>,
     /// People other than this one with the held watch open, for its header.
     watch_others: usize,
@@ -466,7 +467,7 @@ impl App {
         let own_watchers = own_screen_game.and_then(|game| {
             let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
             let key = crate::app::door::spectate::state::LiveGameKey::new(game, &handle)?;
-            Some(self.live_games.watchers_of(key))
+            Some(self.live_games.others_watching(key, self.user_id))
         });
         let watch_others = self.spectate_state.as_ref().map_or(0, |state| {
             self.live_games.others_watching(state.key(), self.user_id)

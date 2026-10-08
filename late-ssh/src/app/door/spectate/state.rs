@@ -132,11 +132,13 @@ impl LiveGameKey {
     }
 }
 
-/// One live game on the Games hub's rail: which door it is in, and the host's
-/// roster entry for it.
+/// One live game on the Games hub's rail: its key (the door and the
+/// player's handle) and the host's roster entry for it. Built only from a
+/// roster line whose playname is a handle (`LiveGamesService::live_rows`), so
+/// every row, and every watch started on one, has a key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveRow {
-    pub game: SpectateGame,
+    pub key: LiveGameKey,
     pub entry: LiveGame,
 }
 
@@ -215,8 +217,7 @@ pub enum WatchMode {
 }
 
 pub struct State {
-    game: SpectateGame,
-    playname: String,
+    key: LiveGameKey,
     process: SpectateProcess,
     /// Held while the watch is open: its place in the process-wide count of
     /// who is watching (`svc::OpenWatches`). `None` is a preview.
@@ -230,17 +231,16 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(
-        game: SpectateGame,
-        playname: String,
-        target: WatchTarget,
-        repaint: Option<Arc<RenderSignal>>,
-    ) -> Self {
-        let process = SpectateProcess::spawn(game.door_game(), target, playname.clone(), repaint);
+    pub fn new(key: LiveGameKey, target: WatchTarget, repaint: Option<Arc<RenderSignal>>) -> Self {
+        let process = SpectateProcess::spawn(
+            key.game().door_game(),
+            target,
+            key.playname().to_string(),
+            repaint,
+        );
         Self {
-            game,
-            chat: ChatLink::new(game, playname.clone()),
-            playname,
+            key,
+            chat: ChatLink::new(key.game(), key.playname().to_string()),
             process,
             open: None,
             seen_at: Instant::now(),
@@ -273,8 +273,7 @@ impl State {
     /// This watch's row among the hub rail's live rows; `None` once the
     /// roster no longer lists the game.
     pub fn row_in(&self, live: &[LiveRow]) -> Option<usize> {
-        live.iter()
-            .position(|row| row.game == self.game && row.entry.playname == self.playname)
+        live.iter().position(|row| row.key == self.key)
     }
 
     pub fn chat(&self) -> &ChatLink {
@@ -286,17 +285,16 @@ impl State {
     }
 
     pub fn game(&self) -> SpectateGame {
-        self.game
+        self.key.game()
     }
 
     pub fn playname(&self) -> &str {
-        &self.playname
+        self.key.playname()
     }
 
-    /// The watched game as a key. Every playname a door host lists is a
-    /// handle, and a watch is only started on a listed game.
+    /// The watched game as a key.
     pub fn key(&self) -> LiveGameKey {
-        LiveGameKey::new(self.game, &self.playname).expect("a watched playname is a handle")
+        self.key
     }
 
     /// Off screen: frames keep landing but no longer repaint the session,
@@ -328,7 +326,7 @@ impl State {
             true => Duration::ZERO,
             false => now.saturating_duration_since(self.seen_at),
         };
-        end_reason(self.mode(), on_hub, away, self.status(), &self.playname)
+        end_reason(self.mode(), on_hub, away, self.status(), self.key.playname())
     }
 }
 

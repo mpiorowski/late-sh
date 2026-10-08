@@ -39,9 +39,8 @@ pub struct DoorGameStripView {
 pub(crate) fn candidates(live: &[LiveRow]) -> Vec<LiveCandidate> {
     live.iter()
         .filter_map(|row| {
-            let key = LiveGameKey::new(row.game, &row.entry.playname)?;
             Some(LiveCandidate {
-                source: LiveSource::DoorGame(key),
+                source: LiveSource::DoorGame(row.key),
                 updated: started_at(&row.entry)?,
                 aimed_at: None,
             })
@@ -61,7 +60,7 @@ pub(crate) fn view(
     watching: usize,
 ) -> Option<DoorGameStripView> {
     live.iter()
-        .find(|row| row.game == key.game() && row.entry.playname == key.playname())
+        .find(|row| row.key == key)
         .map(|row| DoorGameStripView {
             key,
             entry: row.entry.clone(),

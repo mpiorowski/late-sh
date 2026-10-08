@@ -759,8 +759,6 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The fewest columns the #lounge feed gets beside a live strip: under
-/// this its rows are cut to a word, and the strip keeps the whole tile.
 /// The #lounge activity feed as a list: newest on top, one event a row with
 /// its age flush right, a friend's line in the friend color.
 fn draw_activity_tile(

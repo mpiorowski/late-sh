@@ -44,6 +44,16 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
     };
+    // The Live prefix, as on Home: `s` then a row's number opens that row
+    // of the Live tile, from whichever tile has the focus, while the page
+    // draws one (one zoomed away is not shown). Any other key after `s` is
+    // swallowed, as on Home, so it is spent here, ahead of the focused
+    // tile's own keys.
+    if app.live_prefix_armed {
+        app.live_prefix_armed = false;
+        crate::app::live::input::open_from_prefix(app, byte);
+        return true;
+    }
     if app.zen.focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
         return true;
     }
@@ -67,15 +77,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             return true;
         }
     }
-    // The Live prefix, as on Home: `s` then a row's number opens that row
-    // of the Live tile, from whichever tile has the focus, while the page
-    // draws one (one zoomed away is not shown). Lowercase only: `S` is
-    // the split. Any other key after `s` is swallowed, as on Home.
-    if app.live_prefix_armed {
-        app.live_prefix_armed = false;
-        crate::app::live::input::open_from_prefix(app, byte);
-        return true;
-    }
+    // Lowercase only: `S` is the split.
     if byte == b's' && app.zen.draws(TileKind::Live) {
         app.live_prefix_armed = true;
         return true;

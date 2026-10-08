@@ -28,8 +28,8 @@ pub enum TileKind {
     Pulse,
     Inbox,
     Headlines,
-    /// The #lounge live strip (`app/live`), with the feed beside a note
-    /// while nothing is up.
+    /// The Live panel's rows (`app/live/panel.rs`), as the sidebar draws
+    /// them.
     Live,
     Blank,
 }

@@ -159,17 +159,16 @@ pub(crate) fn rows(
         .collect();
     let mut games: Vec<(u64, LivePanelRow)> = live
         .iter()
-        .filter_map(|row| {
-            let key = LiveGameKey::new(row.game, &row.entry.playname)?;
-            Some((
+        .map(|row| {
+            (
                 row.entry.started_unix,
                 LivePanelRow::DoorGame {
-                    key,
+                    key: row.key,
                     status: row.entry.status.clone(),
                     started_unix: row.entry.started_unix,
-                    watching: open_watches.watchers_of(key),
+                    watching: open_watches.watchers_of(row.key),
                 },
-            ))
+            )
         })
         .collect();
     let mut news: Vec<(DateTime<Utc>, LivePanelRow)> = articles

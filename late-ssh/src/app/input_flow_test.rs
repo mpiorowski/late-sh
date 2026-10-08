@@ -3112,7 +3112,7 @@ async fn default_bottom_bar_shows_every_default_component_even_while_idle() {
     app.resize(160, 40).expect("resize test terminal");
     let today = chrono::Utc::now().format("%a %-d %b").to_string();
     let frame = render_plain(&mut app);
-    for reading in ["unread 0", "mic -", "live -", today.as_str()] {
+    for reading in ["unread 0", "mic -", "now -", today.as_str()] {
         assert!(
             frame.contains(reading),
             "{reading:?} shows by default: {frame:?}"
@@ -4547,7 +4547,6 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
         proxy::LiveGame,
         state::{SpectateGame, WatchMode},
     };
-    use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-watch-viewer").await;
@@ -6346,4 +6345,45 @@ async fn the_road_and_the_hand_fit_an_80_by_24_terminal() {
             "expected {needle:?} on an 80 by 24 scene; frame={frame:?}"
         );
     }
+}
+
+/// On Zen too, any key after `s` is swallowed, whichever tile has the
+/// focus: with the Inbox focused, `s` then `j` moves nothing and leaves
+/// nothing armed, so a digit typed later opens no Live row.
+#[tokio::test]
+async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
+    use crate::app::zen::state::{KindPick, TileKind};
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-prefix-inbox").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-prefix-inbox-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"\x06");
+    wait_for_render_contains(&mut app, "w tend").await;
+
+    // Turn the Lobby tile into the Inbox and focus it; the Live tile stays.
+    app.zen.focus = app
+        .zen
+        .first_tile_of(TileKind::Lobby)
+        .expect("the default has a lobby");
+    app.zen.open_kind_picker();
+    while app.zen.kind_picker_selection() != Some(TileKind::Inbox) {
+        app.zen.move_kind_picker(1);
+    }
+    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    assert_eq!(app.zen.focused_kind(), Some(TileKind::Inbox));
+    assert!(app.zen.draws(TileKind::Live), "the live tile is still drawn");
+
+    app.handle_input(b"s");
+    assert!(app.live_prefix_armed, "s arms the prefix");
+    app.handle_input(b"j");
+    assert!(!app.live_prefix_armed, "j is swallowed and spends the prefix");
 }

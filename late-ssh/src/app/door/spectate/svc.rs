@@ -264,15 +264,19 @@ impl LiveGamesService {
     }
 
     /// Every live game across the watchable doors, in the order the Games
-    /// hub's rail lists them: door by door, oldest game first.
+    /// hub's rail lists them: door by door, oldest game first. This is the
+    /// boundary for the hosts' playnames: a roster line whose name is not a
+    /// handle (`LiveGameKey::new`) is no row, so nothing downstream can hold
+    /// a game it cannot key.
     pub fn live_rows(&self) -> Vec<LiveRow> {
         SpectateGame::ALL
             .into_iter()
             .flat_map(|game| {
                 let roster = self.roster(game);
-                (0..roster.len()).map(move |index| LiveRow {
-                    game,
-                    entry: roster[index].clone(),
+                (0..roster.len()).filter_map(move |index| {
+                    let entry = roster[index].clone();
+                    let key = LiveGameKey::new(game, &entry.playname)?;
+                    Some(LiveRow { key, entry })
                 })
             })
             .collect()

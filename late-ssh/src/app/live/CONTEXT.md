@@ -12,7 +12,7 @@
 
 A queue with two lanes, and one overlay. Every clock is a database stamp or the wall clock, so every session on every replica sees the same thing in the same order (the aim is the one exception, §8).
 
-**Nothing is filtered by who is looking.** A source's candidates never depend on the viewer: your own match, your own stream, your own door game are offered exactly as anyone else's. The same holds for the Games hub rail's `live` rows (`LiveGamesService::live_rows`, the whole roster). A candidate drops out only because the thing itself is not live (a pending stream, a match result past its horizon).
+**Nothing is filtered by who is looking.** A source's candidates never depend on the viewer: your own match, your own stream, your own door game are offered exactly as anyone else's. The same holds for the Games hub rail's `live` rows (`LiveGamesService::live_rows`: every roster entry whose name is a handle, which is what a late.sh player's always is). A candidate drops out only because the thing itself is not live (a pending stream, a match result past its horizon).
 
 **The queue** (`pick_queued`, `replay`):
 1. Two lanes, first come first served: **News** (shared links) and **Rest** (match moves, match results, booth tracks, streams going live, door games starting). When the strip hands over, it takes the oldest link if one is waiting, else the oldest of the rest.
@@ -108,17 +108,17 @@ The picture sits in a `PICTURE_COLS` column, centred in `PICTURE_ROWS`, with the
 
 The Zen Live tile does not draw the strip: it draws the Live panel (§1).
 
-`draw_live_strip` and `draw_live_tile` record `LiveState::hit` when what they drew opens something; `App::render` clears it before every draw.
+`draw_live_strip` records `LiveState::hit` when what it drew opens something, and `panel::draw_live_inline` records `LiveState::panel_hit`; `App::render` clears both before every draw.
 
 ## 7. Wiring outside this directory
 
 - `app/state.rs`: `App::live`.
-- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, self.chat.news.all_articles(), &self.chat.live_streams, &self.live_games.live_rows(), reading, picture_settings)` on every tick whatever the page, after the chat tick has drained the News snapshot and `tick_stream` has copied the stream registry, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold; `App::live_strip_shown` (the card, or Zen drawing a Live tile: `ZenState::draws`, zoom-aware) gates the aim's half-tick repaint and the wake hint's half tier.
-- `app/render.rs`: builds the view when `home_selected`, never for the chat center, and for Zen while it holds a Live tile (`ZenView::live`). It also builds it on any page while the status line carries the Live segment, for `status_text`. It builds the Live panel's rows (`panel::rows`, from `chat.live_streams`, the hub's live rows, `chat.news.all_articles()` and `LiveGamesService::open_watches`, at one `Utc::now()` the draw ages the rows by) on every frame and hands them to the sidebar with the panel's hit slot (`common/sidebar.rs`, `SidebarProps::live`), clearing the slot with the strip's before the draw.
+- `app/tick.rs`: `self.live.tick(&self.daily, &self.audio, self.chat.news.all_articles(), &self.chat.live_streams, &self.live_games.live_rows(), reading, picture_settings)` on every tick whatever the page, after the chat tick has drained the News snapshot and `tick_stream` has copied the stream registry, the settings being the session's `inline_image_render_settings`; `App::lounge_card_shown` gates the reading hold; `App::live_strip_shown` (the #lounge card; Zen's Live tile is the panel, which does not animate) gates the aim's half-tick repaint and the wake hint's half tier.
+- `app/render.rs`: builds the view when `home_selected`, never for the chat center. It also builds it on any page while the status line carries the Live segment, for `status_text`. It builds the Live panel's rows (`panel::rows`, from `chat.live_streams`, the hub's live rows, `chat.news.all_articles()` and `LiveGamesService::open_watches`, at one `Utc::now()` the draw ages the rows by) on every frame and hands them to the sidebar with the panel's hit slot (`common/sidebar.rs`, `SidebarProps::live`), clearing the slot with the strip's before the draw.
 - `app/common/sidebar.rs`: `RightSidebarComponent::Live` draws `panel::draw_live_inline` under its rule, at `LIVE_PANEL_HEIGHT`.
 - `app/input.rs`: the click on a panel row, next to the strip's, under the same modal gate.
 - `app/statusline`: the Live segment (`StatusComponent::Live`, `now` on the bar) reads `status_text` and its click is `open_from_key`, so the strip's reading and its key reach every page (`../statusline/CONTEXT.md`).
-- `app/zen`: `TileKind::Live`; `zen/ui.rs::draw_live_tile` draws the strip or, with nothing up, the note beside the activity feed; `zen/input.rs::handle_common` sends `o` to `open_from_key` while a Live tile is drawn, and `handle_live` sends Enter on the focused one.
+- `app/zen`: `TileKind::Live` draws the Live panel's rows (`ZenView::live_panel`, `panel::draw_live_inline`, the rows the frame built for the sidebar); `zen/input.rs::handle_common` arms the `s` prefix while a Live tile is drawn and spends it on the next key (`open_from_prefix`), ahead of the focused tile's own keys, as `app/input.rs::handle_byte_event` does on Home ahead of the slash composer and the page keys.
 - `app/chat/ui.rs`: `DashboardChatView.live_strip` + `live_strip_hit`; `draw_dashboard_chat_card` carves the strip off the top of the messages, above the poll strip. While it is up the room header drops its topic row and closing rule (stream and voice rows stay).
 - `app/input.rs`: `o` and `r` in `handle_global_key`, gated on `App::lounge_card_shown` and no composer; `r` also on no message being selected, so `r` on a selected message still replies to the message. The click, on either surface, gated on `chat_scroll_clicks_blocked` and taken before a click focuses a Zen tile.
 

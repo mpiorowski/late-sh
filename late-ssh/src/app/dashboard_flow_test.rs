@@ -1105,3 +1105,86 @@ async fn opening_a_watch_from_the_strip_drops_a_lounge_draft() {
     );
     assert_eq!(app.chat.composer_room_id(), None);
 }
+
+/// `s` is the Live prefix on Home, but the RSS and Discover panes spend `s`
+/// themselves (share the selected entry, cycle the sort): with either pane
+/// selected the key is theirs, and nothing is armed.
+#[tokio::test]
+async fn s_on_the_rss_and_discover_panes_stays_theirs() {
+    let (_test_db, mut app) = make_app_harness().await;
+    app.resize(160, 40).expect("resize");
+
+    app.chat.select_discover();
+    let sort_before = app.chat.discover.sort();
+    app.handle_input(b"s");
+    assert_ne!(
+        app.chat.discover.sort(),
+        sort_before,
+        "s cycles the Discover sort"
+    );
+    assert!(!app.live_prefix_armed, "and arms nothing");
+
+    app.chat.select_feeds();
+    app.banner = None;
+    app.handle_input(b"s");
+    assert!(
+        app.banner.is_some(),
+        "s on the RSS pane shares the selection (here: complains there is none)"
+    );
+    assert!(!app.live_prefix_armed, "and arms nothing");
+}
+
+/// A roster name outside the handle shape is not a live row anywhere: the
+/// hub rail does not list it, so stepping onto the rail never previews it
+/// and the frame that would key it never panics.
+#[tokio::test]
+async fn a_roster_name_outside_the_handle_shape_is_not_listed() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{proxy::LiveGame, state::SpectateGame};
+
+    let (_test_db, mut app) = make_app_harness().await;
+    app.resize(160, 40).expect("resize");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "1not_a_handle".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+    assert!(app.live_games.live_rows().is_empty(), "no row for it");
+
+    // Up from the top card would wrap to the last live row, were there one.
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    assert_eq!(app.screen, Screen::Games);
+    assert!(app.spectate_state.is_none(), "nothing is previewed");
+    let _frame = render_plain(&mut app);
+}
+
+/// Any key after `s` is swallowed, including the ones Home otherwise takes
+/// early: `s/` opens no slash composer and leaves nothing armed.
+#[tokio::test]
+async fn a_slash_after_the_live_prefix_is_swallowed() {
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "slash-prefix-me").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge");
+    let mut app = make_app(test_db.db.clone(), me.id, "slash-prefix-flow-it");
+    app.resize(160, 40).expect("resize");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"/");
+    assert!(app.chat.is_composing(), "a bare slash opens the composer");
+    app.chat.reset_composer();
+
+    app.handle_input(b"s/");
+    assert!(!app.chat.is_composing(), "the slash never opens the composer");
+    assert!(!app.live_prefix_armed, "and the prefix is spent");
+}

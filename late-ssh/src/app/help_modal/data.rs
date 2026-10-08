@@ -1538,7 +1538,7 @@ fn zen_help_lines() -> Vec<String> {
         "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
         "  click             pet the pet; it reads the rest of your session itself",
         "  s1-4              with a live tile on the page, open that row of it (the sidebar's live panel, wider)",
-        "  Enter / click     on the live tile, the same",
+        "  click             on a row of the live tile, the same",
         "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
         "",
         "Leaving",

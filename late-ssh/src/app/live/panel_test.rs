@@ -64,7 +64,7 @@ fn stream(username: &str, title: &str, went_live_at: Option<DateTime<Utc>>) -> L
 
 fn door_game(game: SpectateGame, playname: &str, minutes_in: u64, status: &str) -> LiveRow {
     LiveRow {
-        game,
+        key: LiveGameKey::new(game, playname).expect("a handle"),
         entry: LiveGame {
             playname: playname.to_string(),
             started_unix: NOW_UNIX - minutes_in * 60,

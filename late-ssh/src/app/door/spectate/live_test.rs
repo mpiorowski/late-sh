@@ -5,8 +5,12 @@ use super::*;
 const STARTED: u64 = 1_790_000_000;
 
 fn row(playname: &str, status: &str) -> LiveRow {
+    row_of(SpectateGame::Dcss, playname, status)
+}
+
+fn row_of(game: SpectateGame, playname: &str, status: &str) -> LiveRow {
     LiveRow {
-        game: SpectateGame::Dcss,
+        key: LiveGameKey::new(game, playname).expect("a handle"),
         entry: LiveGame {
             playname: playname.to_string(),
             started_unix: STARTED,
@@ -99,10 +103,7 @@ fn every_door_draws_its_own_picture_in_the_picture_column() {
     let pictures: Vec<Vec<String>> = statuses
         .into_iter()
         .map(|(game, status)| {
-            let live = [LiveRow {
-                game,
-                ..row("mat", status)
-            }];
+            let live = [row_of(game, "mat", status)];
             let key = LiveGameKey::new(game, "mat").expect("a handle");
             let strip = view(&live, key, 0).expect("a listed game has a view");
             let body = body(60, &strip);

@@ -142,7 +142,7 @@ pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
     match (away, on_hub) {
         (true, _) => app.resume_watch(key),
         (false, true) => {}
-        (false, false) => app.start_spectating(key.game(), key.playname().to_string()),
+        (false, false) => app.start_spectating(key),
     }
     app.open_watch();
     app.set_screen(crate::app::common::primitives::Screen::Games);

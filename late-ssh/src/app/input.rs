@@ -1303,7 +1303,7 @@ fn select_rail_entry(
             // Re-selecting the row already being watched keeps its stream.
             if watched_live_row(app, live) != Some(index) {
                 let row = &live[index];
-                app.start_spectating(row.game, row.entry.playname.clone());
+                app.start_spectating(row.key);
             }
         }
     }
@@ -2052,6 +2052,16 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
     }
 
     if handle_modal_input(app, ctx, byte) {
+        return;
+    }
+
+    // `s` then a digit opens that row of the Live panel. Any other key
+    // after `s` is swallowed, like `z`'s: a mistyped suffix must not jump
+    // rooms, switch pages or open the slash composer, so the prefix is
+    // spent here, ahead of every dispatcher below.
+    if app.live_prefix_armed {
+        app.live_prefix_armed = false;
+        crate::app::live::input::open_from_prefix(app, byte);
         return;
     }
 
@@ -4095,15 +4105,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
-    // `s` then a digit opens that row of the Live panel. Any other key
-    // after `s` is swallowed, like `z`'s: a mistyped suffix must not jump
-    // rooms or switch pages.
-    if app.live_prefix_armed {
-        app.live_prefix_armed = false;
-        crate::app::live::input::open_from_prefix(app, byte);
-        return true;
-    }
-
     // The Artboard owns its letters. The paired-client hotkeys (`m` mute,
     // `+`/`-` volume, `v` the music prefix) and `w` (Bonsai Care) stay off
     // that page entirely, the way the voice chords do: the page spends
@@ -4202,14 +4203,18 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             true
         }
         // The Live panel's prefix: Home only, where the panel draws its
-        // row numbers and chat spends no `s`; on every other page `s` is
-        // the page's (the Directory's search, the Clubhouse's seat).
+        // row numbers, and not while a pane that spends `s` is selected
+        // (RSS shares its entry, Discover cycles its sort); on every other
+        // page `s` is the page's (the Directory's search, the Clubhouse's
+        // seat).
         b's' | b'S'
             if ctx.screen == Screen::Dashboard
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
-                && !app.chat.room_jump_active =>
+                && !app.chat.room_jump_active
+                && !app.chat.feeds_selected
+                && !app.chat.discover_selected =>
         {
             app.live_prefix_armed = true;
             true
