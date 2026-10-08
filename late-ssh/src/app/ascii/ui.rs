@@ -99,22 +99,33 @@ fn bayer(col: usize, row: usize) -> f64 {
 }
 
 /// A scene as a halftone of braille dots: each scene row of a terminal cell
-/// is a 2x2 of its dots, 0 to 4 of them lit by the row's brightness (ordered
-/// dither at scene coordinates), the cell in the one ink its lit rows
-/// share, on the ground.
-pub(crate) fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
+/// is a 2x2 of its dots showing the original's three dot sizes (ordered
+/// dither at scene coordinates) as one, two diagonal, or all four dots, the
+/// cell in the one ink its lit rows share, on the ground. A small dot is
+/// faint in the original, a point in a cell of black; a braille dot is not,
+/// so the ink is toned down toward the ground by the larger row's size,
+/// which keeps a dim sky dim and a lit fog bank bright. The ink is rounded
+/// to eight steps a channel: a cell's colour then only moves when the scene
+/// moves it a visible step, so a slow piece's frame changes a few dozen
+/// cells, not every cell whose colour wobbled by one.
+fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let at = sampling(area, scene);
     let [gr, gg, gb] = scene.ground;
     let ground = Color::Rgb(gr, gg, gb);
-    // How many of a row's four dots are lit, and which: top-left first, then
-    // bottom-right, top-right, bottom-left, so two lit dots sit diagonal.
+    // How many of a row's four dots are lit by its brightness: the
+    // original's dot size, none to large, as none, one, two or four dots.
+    const LIT: [usize; 4] = [0, 1, 2, 4];
     let lit = |shade: Shade, col: usize, row: usize| {
-        ((shade.level * 4.0 + bayer(col, row)).round().clamp(0.0, 4.0)) as usize
+        LIT[((shade.level * 3.0 + bayer(col, row)).round().clamp(0.0, 3.0)) as usize]
     };
-    // Braille dot bits for [top-left, bottom-right, top-right, bottom-left]
-    // of the upper 2x2 (dots 1, 5, 4, 2) and the lower 2x2 (dots 3, 8, 6, 7).
+    // Which dots: top-left first, then bottom-right, top-right, bottom-left,
+    // so two lit dots sit diagonal. Braille dot bits for that order in the
+    // upper 2x2 (dots 1, 5, 4, 2) and the lower 2x2 (dots 3, 8, 6, 7).
     const UPPER: [u32; 4] = [0x01, 0x10, 0x08, 0x02];
     const LOWER: [u32; 4] = [0x04, 0x80, 0x20, 0x40];
+    // How much of the ink a row of that many dots shows, over the ground.
+    const TONE: [f64; 5] = [0.0, 0.3, 0.6, 0.6, 1.0];
+    const INK_STEP: f64 = 8.0;
     let buffer = frame.buffer_mut();
     for ty in 0..area.height {
         for tx in 0..area.width {
@@ -132,10 +143,13 @@ pub(crate) fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
             let bits = UPPER[..n_top].iter().chain(&LOWER[..n_bottom]).fold(0, |b, bit| b | bit);
             let glyph = char::from_u32(0x2800 + bits).expect("a braille pattern");
             let weight = (n_top + n_bottom) as f64;
+            let tone = TONE[n_top.max(n_bottom)];
             let mut ink = [0u8; 3];
             for c in 0..3 {
                 let mixed = (top.ink[c] * n_top as f64 + bottom.ink[c] * n_bottom as f64) / weight;
-                ink[c] = (mixed * 255.0).round() as u8;
+                let base = f64::from(scene.ground[c]);
+                let toned = base + (mixed * 255.0 - base) * tone;
+                ink[c] = ((toned / INK_STEP).round() * INK_STEP).min(255.0) as u8;
             }
             cell.set_char(glyph)
                 .set_fg(Color::Rgb(ink[0], ink[1], ink[2]))

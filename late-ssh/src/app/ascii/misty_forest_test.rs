@@ -10,7 +10,7 @@ use super::{COLS, PALETTE, ROWS, dot, frame, nearest};
 
 #[test]
 fn frame_matches_ascii_rest_dot_for_dot_and_colour_for_colour() {
-    let scene = frame(1.0);
+    let scene = frame(1.0, 1.0);
     assert_eq!((scene.cols, scene.rows), (COLS, ROWS));
     let mut text = String::new();
     let mut colors = Vec::with_capacity(COLS * ROWS);

@@ -41,7 +41,7 @@ fn a_frame_edge_is_the_half_tier_or_the_slow_second() {
     assert_eq!(frame_index(forest, 1000), 1);
     assert_eq!(seconds(donut, 0), 0.0);
     assert_eq!(seconds(donut, 1000), 132.0);
-    assert_eq!(seconds(forest, 200), 1.0);
+    assert_eq!(seconds(forest, 100), 1.0);
 }
 
 #[test]

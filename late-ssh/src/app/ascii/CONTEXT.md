@@ -59,7 +59,7 @@ Two surfaces draw them, both through `ui::draw_piece`:
 late-ssh/src/app/ascii/
 |-- mod.rs              # module declarations only
 |-- piece.rs            # TextFrame / ShadedFrame / Picture, the frame clock, the shared frame cache, the startup warm-up, JS helpers
-|-- misty_forest.rs     # scene: forest, fog banks, cloud and beams built once (OnceLock), drifted per frame; the slow piece
+|-- misty_forest.rs     # scene: forest, fog banks, cloud and beams built once (OnceLock), drifted per frame; the slow piece, its beams on a faster clock in the crawl
 |-- aurora_fjord.rs     # scene: land built once (OnceLock), sky + water per frame
 |-- alpine_dawn.rs      # scene: the range raymarched once (OnceLock), tinted + mirrored per frame
 |-- plasma.rs           # the field, drawn at whatever size it is given
@@ -84,15 +84,19 @@ late-ssh/src/app/ascii/
   `Cadence::Half` (every lively piece): a frame every `FRAME_MS` (132ms,
   the half tier) at the wall clock's pace. `Cadence::Slow` (the misty
   forest): a frame every `SLOW_FRAME_MS` (1s, the 1Hz edge the idle floor
-  already takes) with play time at `SLOW_RATE` (0.005) of the wall clock,
+  already takes) with play time at `SLOW_RATE` (0.01) of the wall clock,
   a crawl. What a session pays for a piece is the cells that change per
-  frame times the frames per second, and the halftone flips about a
-  hundred cells per hundredth of a second of the forest's play, so the
-  slow piece moves a few dozen dots a second on a 200x50 terminal
-  (`ui_test.rs`, `the_slow_piece_moves_a_few_cells_a_frame`, holds the
-  budget): about a kilobyte a second per away session, against tens of
+  frame times the frames per second. At the crawl the forest's fog is all
+  but still, so the forest plays its beams ten times faster than its air
+  (`misty_forest::crawl`, `BEAM_PACE`): the sway and breathing of the
+  sunbeams is the motion the screensaver shows, and it is cheap, a few
+  dozen cells a frame on a 200x50 terminal (`ui_test.rs`,
+  `the_slow_piece_moves_a_few_cells_a_frame`, holds the budget at a
+  hundred): about a kilobyte a second per away session, against tens of
   kilobytes a frame for a lively scene. That is what lets the screensaver
-  default to on.
+  default to on. The dots style's rounded ink is part of that arithmetic:
+  before it, most of a frame's changed cells were colours that wobbled by
+  one.
 - **One frame per edge for the process.** `piece::picture` serves the
   fixed-size pieces (the scenes, lava lamp, donut) from a process-wide cache
   keyed by piece and edge; it computes outside the lock, and two sessions
@@ -111,9 +115,15 @@ late-ssh/src/app/ascii/
   ordered dither, nearest palette colour) is what the golden frame checks;
   on its canvas the cells are square and a dot reaches into the next row,
   which no terminal glyph can do. `ui::draw_dots` is the dots style: the
-  braille halftone, each scene row a 2x2 of dots lit by brightness (ordered
-  dither at scene coordinates), one ink per cell (its lit rows' inks,
-  weighted by their dots), on the ground. Text art is centred, cropped
+  braille halftone, each scene row a 2x2 of dots showing the original's
+  three dot sizes (ordered dither at scene coordinates) as one, two
+  diagonal, or all four dots, one ink per cell (its lit rows' inks,
+  weighted by their dots), on the ground. The original's small dot is a
+  faint point in a black cell and a braille dot is not, so the ink is toned
+  toward the ground by the larger row's size (a dim sky stays dim, a lit
+  fog bank stays bright), then rounded to eight steps a channel, so a
+  cell's colour moves only when the scene moves it a visible step. Text
+  art is centred, cropped
   evenly when larger than the area, in one theme ink per piece
   (`ui::ink`).
 - **Cadence in the tick.** A drawn Zen ascii tile, or the screensaver,

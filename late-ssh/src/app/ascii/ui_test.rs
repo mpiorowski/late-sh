@@ -185,38 +185,3 @@ fn the_slow_piece_moves_a_few_cells_a_frame() {
     }
     eprintln!("slow piece: at most {worst} cells change per frame");
 }
-
-#[test]
-fn experiment_pace_and_picture() {
-    use super::draw_dots;
-    use std::io::Write;
-    let draw_scene = |scene: &crate::app::ascii::piece::ShadedFrame| {
-        let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
-        terminal.draw(|frame| draw_dots(frame, Rect::new(0, 0, 200, 50), scene)).expect("draw");
-        terminal.backend().buffer().clone()
-    };
-    let diff = |a: &Buffer, b: &Buffer| a.content().iter().zip(b.content().iter()).filter(|(x, y)| x != y).count();
-    for (air, beams) in [(0.005, 0.005), (0.01, 0.01), (0.005, 0.05), (0.005, 0.1), (0.002, 0.1), (0.0, 0.1), (0.0, 0.2)] {
-        let mut worst = 0;
-        let mut total = 0;
-        for second in [0u64, 7, 30, 61, 240, 1200] {
-            let s = second as f64;
-            let before = draw_scene(&misty_forest::shade(s * air, s * beams));
-            let after = draw_scene(&misty_forest::shade((s + 1.0) * air, (s + 1.0) * beams));
-            let d = diff(&before, &after);
-            worst = worst.max(d);
-            total += d;
-        }
-        eprintln!("air {air} beams {beams}: worst {worst} mean {}", total / 6);
-    }
-    // picture dump: cell glyph codepoint and fg rgb per cell, ground first
-    let scene = misty_forest::shade(1.0, 1.0);
-    let buffer = draw_scene(&scene);
-    let mut out = std::fs::File::create(std::env::var("DUMP").unwrap_or("/dev/null".into())).unwrap();
-    writeln!(out, "{} {} {} {} {}", 200, 50, scene.ground[0], scene.ground[1], scene.ground[2]).unwrap();
-    for cell in buffer.content().iter() {
-        let cp = cell.symbol().chars().next().unwrap() as u32;
-        let (r, g, b) = match cell.fg { Color::Rgb(r, g, b) => (r, g, b), _ => (0, 0, 0) };
-        writeln!(out, "{cp} {r} {g} {b}").unwrap();
-    }
-}

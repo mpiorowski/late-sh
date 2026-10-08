@@ -66,10 +66,10 @@ pub(crate) const FRAME_MS: u64 = 132;
 pub(crate) const SLOW_FRAME_MS: u64 = 1000;
 /// How fast a slow piece's play time runs against the wall clock: a frame a
 /// second at this rate drifts the misty forest's fog a fraction of a cell,
-/// which the halftone turns into a few dozen dots moving, not a repaint
-/// (`ui_test.rs` holds the cell budget; the count grows linearly with this,
-/// about a hundred cells a second per hundredth).
-pub(crate) const SLOW_RATE: f64 = 0.005;
+/// which the halftone turns into a few dots moving, not a repaint; the
+/// forest plays its beams faster than this on its own (`misty_forest::crawl`).
+/// `ui_test.rs` holds the cell budget; the count grows linearly with this.
+pub(crate) const SLOW_RATE: f64 = 0.01;
 
 /// A text piece's frame: `rows` lines of `cols` glyphs, drawn in one ink.
 #[derive(Clone, Debug, PartialEq)]
@@ -189,7 +189,7 @@ pub(crate) fn picture(piece: AsciiPiece, frame: u64, cols: usize, rows: usize) -
     match piece {
         AsciiPiece::Scene(scene, _) => cached(Fixed::Scene(scene), frame, || {
             Picture::Shaded(Arc::new(match scene {
-                Scene::MistyForest => super::misty_forest::frame(t),
+                Scene::MistyForest => super::misty_forest::crawl(t),
                 Scene::AuroraFjord => super::aurora_fjord::frame(t),
                 Scene::AlpineDawn => super::alpine_dawn::frame(t),
             }))

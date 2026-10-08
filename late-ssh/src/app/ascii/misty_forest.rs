@@ -670,15 +670,24 @@ fn drift(bank: &[f32], row: usize, u: f64) -> f64 {
     f0 + (f1 - f0) * uf
 }
 
-/// The scene at `t` seconds of play time, shaded per square cell, as the
-/// original plays it: one clock for everything.
-pub(crate) fn frame(t: f64) -> ShadedFrame {
-    shade(t, t)
+/// How much faster the beams play than the air in the crawl (`crawl`).
+const BEAM_PACE: f64 = 10.0;
+
+/// The scene as the screensaver crawls it, at `t` seconds of play time
+/// (`piece::SLOW_RATE` of the wall clock): the air at `t`, the beams at
+/// `BEAM_PACE` times that. At the crawl the fog is all but still, and the
+/// beams are where the piece shows it is alive: they sway and breathe
+/// through the gaps in the trees, and under the dots' toned ink that costs
+/// a few dozen cells a frame (`ui_test.rs` holds the budget), where the
+/// fog at the same pace would cost hundreds.
+pub(crate) fn crawl(t: f64) -> ShadedFrame {
+    frame(t, t * BEAM_PACE)
 }
 
-/// The scene with the air (fog, cloud, motes) at `t` and the sun's beams at
-/// `beams` seconds of play time.
-pub(crate) fn shade(t: f64, beams: f64) -> ShadedFrame {
+/// The scene shaded per square cell, with the air (fog, cloud, motes) at
+/// `t` and the sun's beams at `beams` seconds of play time. The original
+/// plays both on one clock (`frame(t, t)`, what the golden frame checks).
+pub(crate) fn frame(t: f64, beams: f64) -> ShadedFrame {
     let land = land();
     let mut mote = vec![0f32; N];
     for [mx, my, sp, ph, sz] in &land.motes {
