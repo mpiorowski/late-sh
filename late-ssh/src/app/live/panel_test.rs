@@ -167,7 +167,14 @@ fn each_kind_is_newest_first_and_stale_or_pending_things_are_not_listed() {
         Uuid::now_v7(),
     );
 
-    let rows = rows(&streams, &games, &articles, ReadCursor::Loaded(None), &open_watches, now());
+    let rows = rows(
+        &streams,
+        &games,
+        &articles,
+        ReadCursor::Loaded(None),
+        &open_watches,
+        now(),
+    );
 
     assert_eq!(
         texts(&rows),
@@ -216,7 +223,14 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
         .map(|n| stream(&format!("s{n}"), "show", Some(ago(n))))
         .collect();
     let games: Vec<LiveRow> = (0..4)
-        .map(|n| door_game(SpectateGame::Dcss, &format!("game{n}"), n as u64, &format!("g{n}")))
+        .map(|n| {
+            door_game(
+                SpectateGame::Dcss,
+                &format!("game{n}"),
+                n as u64,
+                &format!("g{n}"),
+            )
+        })
         .collect();
     let articles: Vec<ArticleFeedItem> = (0..4)
         .map(|n| article("ann", &format!("n{n}"), ago(n)))
@@ -240,7 +254,14 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
 
     // Four of everything: one of each, then the count.
     assert_eq!(
-        heads(&rows(&streams, &games, &articles, ReadCursor::Loaded(None), &open_watches, now())),
+        heads(&rows(
+            &streams,
+            &games,
+            &articles,
+            ReadCursor::Loaded(None),
+            &open_watches,
+            now()
+        )),
         vec!["s0", "g0", "n0", "+9"]
     );
     // Two streams and two games against four shares: three live, one share.
@@ -257,18 +278,39 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
     );
     // One game and four shares: the game, then the shares fill the rest.
     assert_eq!(
-        heads(&rows(&[], &games[..1], &articles, ReadCursor::Loaded(None), &open_watches, now())),
+        heads(&rows(
+            &[],
+            &games[..1],
+            &articles,
+            ReadCursor::Loaded(None),
+            &open_watches,
+            now()
+        )),
         vec!["g0", "n0", "n1", "+2"]
     );
     // Nothing live: four shares.
     assert_eq!(
-        heads(&rows(&[], &[], &articles, ReadCursor::Loaded(None), &open_watches, now())),
+        heads(&rows(
+            &[],
+            &[],
+            &articles,
+            ReadCursor::Loaded(None),
+            &open_watches,
+            now()
+        )),
         vec!["n0", "n1", "n2", "n3"]
     );
     // Two streams and one game, nothing to read: the leftover is a stream,
     // shown with the other stream, above the game.
     assert_eq!(
-        heads(&rows(&streams[..2], &games[..1], &[], ReadCursor::Loaded(None), &open_watches, now())),
+        heads(&rows(
+            &streams[..2],
+            &games[..1],
+            &[],
+            ReadCursor::Loaded(None),
+            &open_watches,
+            now()
+        )),
         vec!["s0", "s1", "g0", ""]
     );
 }

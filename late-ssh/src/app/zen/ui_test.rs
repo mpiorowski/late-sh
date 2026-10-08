@@ -291,4 +291,3 @@ fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
         .collect();
     assert_eq!(tree_rows, &expected[..]);
 }
-

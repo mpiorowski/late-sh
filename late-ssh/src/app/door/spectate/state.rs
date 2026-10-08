@@ -326,7 +326,13 @@ impl State {
             true => Duration::ZERO,
             false => now.saturating_duration_since(self.seen_at),
         };
-        end_reason(self.mode(), on_hub, away, self.status(), self.key.playname())
+        end_reason(
+            self.mode(),
+            on_hub,
+            away,
+            self.status(),
+            self.key.playname(),
+        )
     }
 }
 

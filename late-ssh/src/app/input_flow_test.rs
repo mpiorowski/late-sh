@@ -4992,7 +4992,11 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
     wait_for_render_contains(&mut app, "news    The terminal renaissance").await;
 
     app.handle_input(b"sx");
-    assert_eq!(app.chat.news_modal_url(), None, "a stray suffix opens nothing");
+    assert_eq!(
+        app.chat.news_modal_url(),
+        None,
+        "a stray suffix opens nothing"
+    );
     assert!(!app.live_prefix_armed, "and disarms the prefix");
 
     app.handle_input(b"s1");
@@ -6380,10 +6384,16 @@ async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
     }
     assert_eq!(app.zen.pick_kind(), KindPick::Changed);
     assert_eq!(app.zen.focused_kind(), Some(TileKind::Inbox));
-    assert!(app.zen.draws(TileKind::Live), "the live tile is still drawn");
+    assert!(
+        app.zen.draws(TileKind::Live),
+        "the live tile is still drawn"
+    );
 
     app.handle_input(b"s");
     assert!(app.live_prefix_armed, "s arms the prefix");
     app.handle_input(b"j");
-    assert!(!app.live_prefix_armed, "j is swallowed and spends the prefix");
+    assert!(
+        !app.live_prefix_armed,
+        "j is swallowed and spends the prefix"
+    );
 }

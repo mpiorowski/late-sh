@@ -112,11 +112,7 @@ pub(crate) fn draw_live_strip(
         hit.set(Some((area, source)));
     }
     let lines = match size {
-        StripSize::Full => live_strip_lines(
-            area.width,
-            strip,
-            canvas_background(),
-        ),
+        StripSize::Full => live_strip_lines(area.width, strip, canvas_background()),
         StripSize::Compact => vec![live_strip_compact_line(area.width, strip)],
     };
     frame.render_widget(Paragraph::new(lines), area);

@@ -42,8 +42,8 @@ use uuid::Uuid;
 
 use super::pick::LiveSource;
 use super::ui::truncate_chars;
-use crate::app::common::theme;
 use crate::app::chat::news::state::{ReadCursor, is_unread_at};
+use crate::app::common::theme;
 use crate::app::door::spectate::{
     state::{LiveGameKey, LiveRow},
     svc::OpenWatches,

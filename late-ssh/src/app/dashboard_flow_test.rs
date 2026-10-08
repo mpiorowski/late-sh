@@ -1027,7 +1027,11 @@ async fn s_then_a_digit_opens_the_live_panel_row() {
     wait_for_render_contains(&mut app, "dcss    XL3 Lair:2 s1").await;
 
     app.handle_input(b"sl");
-    assert_eq!(app.screen, Screen::Dashboard, "a stray suffix opens nothing");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "a stray suffix opens nothing"
+    );
     assert!(!app.live_prefix_armed, "and disarms the prefix");
 
     app.handle_input(b"s4");
@@ -1185,6 +1189,9 @@ async fn a_slash_after_the_live_prefix_is_swallowed() {
     app.chat.reset_composer();
 
     app.handle_input(b"s/");
-    assert!(!app.chat.is_composing(), "the slash never opens the composer");
+    assert!(
+        !app.chat.is_composing(),
+        "the slash never opens the composer"
+    );
     assert!(!app.live_prefix_armed, "and the prefix is spent");
 }
