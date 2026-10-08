@@ -3,14 +3,11 @@
 //! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
 
-use std::{
-    cell::Cell,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
@@ -40,7 +37,7 @@ use crate::app::{
     },
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
-    live::{pick::LiveSource, state::LiveStripView},
+    live::panel::LivePanelProps,
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
     pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
     statusline::bar::ZenStatusRow,
@@ -115,11 +112,9 @@ pub(crate) struct ZenView<'a> {
     /// Built only while an Inbox or Headlines tile is on the page.
     pub inbox: Vec<InboxRow>,
     pub headlines: Vec<Headline>,
-    /// What the #lounge live strip shows, built only while a Live tile is
-    /// on the page; `None` when nothing is up.
-    pub live: Option<LiveStripView<'a>>,
-    /// Where the Live tile drew the strip, for the click that opens it.
-    pub live_hit: &'a Cell<Option<(Rect, LiveSource)>>,
+    /// The Live panel's rows, the sidebar's, for the Live tile: it draws
+    /// them the same way and records the same click and key targets.
+    pub live_panel: LivePanelProps<'a>,
     pub wall_tick: usize,
     /// The frame edge the ascii tiles play (`ascii::piece::frame_index_now`).
     pub ascii_frame: u64,
@@ -316,14 +311,9 @@ pub(crate) fn draw_rice(
                 zen.headlines_selected,
                 focused,
             ),
-            TileKind::Live => draw_live_tile(
-                frame,
-                inner,
-                view.live.as_ref(),
-                view.live_hit,
-                view.activity,
-                view.active_friends,
-            ),
+            TileKind::Live => {
+                crate::app::live::panel::draw_live_inline(frame, pad_sides(inner), &view.live_panel)
+            }
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
@@ -439,15 +429,7 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
         TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
         TileKind::Headlines => &[("jk", "pick"), ("enter", "copy")],
-        TileKind::Live
-            if view
-                .live
-                .as_ref()
-                .is_some_and(|strip| strip.opens().is_some()) =>
-        {
-            &[("o", "open")]
-        }
-        TileKind::Live => &[],
+        TileKind::Live => &[("s1-4", "open")],
         TileKind::Clock
         | TileKind::Visualizer
         | TileKind::Activity
@@ -794,51 +776,6 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     };
     let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// The fewest columns the #lounge feed gets beside a live strip: under
-/// this its rows are cut to a word, and the strip keeps the whole tile.
-const LIVE_FEED_MIN_WIDTH: u16 = 30;
-
-/// The live strip, or a faint "nothing live" while nothing is up, beside
-/// the #lounge feed, so the tile is never dead. The strip takes three
-/// fifths of the tile, never less than its full form's width
-/// (`live::ui::MIN_FULL_WIDTH`), and keeps the whole tile when the feed
-/// would get fewer than `LIVE_FEED_MIN_WIDTH` columns; the note takes 30%.
-fn draw_live_tile(
-    frame: &mut Frame,
-    area: Rect,
-    strip: Option<&LiveStripView<'_>>,
-    hit: &Cell<Option<(Rect, LiveSource)>>,
-    entries: &[ActivityTickerEntry],
-    friends: &[ActiveFriend],
-) {
-    let feed = match strip {
-        Some(strip) => {
-            let strip_width = (area.width * 3 / 5).max(crate::app::live::ui::MIN_FULL_WIDTH);
-            if area.width.saturating_sub(strip_width) < 1 + LIVE_FEED_MIN_WIDTH {
-                crate::app::live::ui::draw_live_tile(frame, area, strip, hit);
-                return;
-            }
-            let [strip_area, feed] =
-                Layout::horizontal([Constraint::Length(strip_width), Constraint::Fill(1)])
-                    .areas(area);
-            crate::app::live::ui::draw_live_tile(frame, strip_area, strip, hit);
-            feed
-        }
-        None => {
-            let [note, feed] =
-                Layout::horizontal([Constraint::Percentage(30), Constraint::Fill(1)]).areas(area);
-            draw_centered_note(frame, pad_sides(note), &["nothing live"]);
-            feed
-        }
-    };
-    let feed_block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(theme::BORDER_DIM()));
-    let feed_inner = feed_block.inner(feed);
-    frame.render_widget(feed_block, feed);
-    draw_activity_tile(frame, pad_sides(feed_inner), entries, friends);
 }
 
 /// The #lounge activity feed as a list: newest on top, one event a row with

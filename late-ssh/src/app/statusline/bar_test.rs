@@ -928,9 +928,9 @@ fn live_reads_the_strip_and_rests_or_hides_when_it_is_down() {
 
     assert_eq!(
         render(always, &data()).as_deref(),
-        Some("─ live stream mat · late n… ")
+        Some("─ now stream mat · late n… ")
     );
-    assert_eq!(render(always, &quiet).as_deref(), Some("─ live - "));
+    assert_eq!(render(always, &quiet).as_deref(), Some("─ now - "));
     assert_eq!(render(auto_hiding, &quiet), None);
     assert_eq!(click_action(StatusComponent::Live), Some(StatusClick::Live));
     assert_eq!(click_action(StatusComponent::Date), None);

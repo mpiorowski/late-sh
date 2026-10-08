@@ -5,8 +5,10 @@
 // so the hub hands it every event: `i` writes, j/k and the arrows select
 // messages, Ctrl+D/Ctrl+U, the page keys and the wheel scroll, the
 // message-action keys act on a selected message, and backtick hops away on
-// the workspace cycle with the watch kept open. Esc peels a chat selection,
-// then closes the watch back to its preview, then leaves the preview
+// the workspace cycle with the watch kept open (`App::away_watches`: the hub
+// shows its cards until the cycle or the live strip brings one back). Esc
+// peels a chat selection, then closes the watch back to its preview, then
+// leaves the preview
 // (`dispatch_escape`). While the composer is open no key reaches this
 // handler at all (the composer gate in `app/input.rs`).
 //
@@ -120,8 +122,9 @@ pub fn handle_escape(app: &mut App) {
 }
 
 /// `o` or a click on the live strip while it shows a live game: open the
-/// watch on it, on the Games screen. A watch already on that game keeps its
-/// stream. `false` when the game is no longer listed.
+/// watch on it, on the Games screen. A watch already on that game, on the
+/// hub or stepped away from, keeps its stream. `false` when the game is no
+/// longer listed.
 pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
     let listed = app
         .live_games
@@ -131,12 +134,15 @@ pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
     if !listed {
         return false;
     }
-    let watching = app
+    let away = app.away_watches.iter().any(|state| state.key() == key);
+    let on_hub = app
         .spectate_state
         .as_ref()
-        .is_some_and(|state| state.game() == key.game() && state.playname() == key.playname());
-    if !watching {
-        app.start_spectating(key.game(), key.playname().to_string());
+        .is_some_and(|state| state.key() == key);
+    match (away, on_hub) {
+        (true, _) => app.resume_watch(key),
+        (false, true) => {}
+        (false, false) => app.start_spectating(key),
     }
     app.open_watch();
     app.set_screen(crate::app::common::primitives::Screen::Games);

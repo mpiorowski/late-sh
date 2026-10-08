@@ -12,9 +12,8 @@ use crate::app::{
 
 use super::pick::LiveSource;
 
-/// `o` on the #lounge card or on Zen with a Live tile shown, or Enter on a
-/// focused Zen Live tile, opens what the strip is showing. With nothing to
-/// open (no strip up, or a result holding it) the key falls through
+/// `o` on the #lounge card opens what the strip is showing. With nothing
+/// to open (no strip up, or a result holding it) the key falls through
 /// untouched.
 pub fn open_from_key(app: &mut App) -> bool {
     match app.live.opens() {
@@ -44,6 +43,42 @@ pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
     match app.live.hit.get() {
         Some((rect, source)) if rect.contains(Position { x, y }) => open(app, source),
         Some(_) | None => false,
+    }
+}
+
+/// A left-click on a row of the sidebar's Live panel opens what the row
+/// lists, as the strip's click does. A blank slot or the `+N more` row
+/// opens nothing.
+pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
+    let Some((rect, sources)) = app.live.panel_hit.get() else {
+        return false;
+    };
+    if !rect.contains(Position { x, y }) {
+        return false;
+    }
+    match sources.get(usize::from(y - rect.y)) {
+        Some(Some(source)) => open(app, *source),
+        Some(None) | None => false,
+    }
+}
+
+/// `s` then `1`-`4` on Home, or on Zen with a Live tile on the page, opens
+/// that row of the Live panel (the sidebar's, or the tile's, which draws
+/// the same rows), by the number the row shows: the sources are the ones
+/// the last frame drew, so the key and the eye agree. Nothing opens for a
+/// blank slot, the `+N more` row, a panel that is not drawn, or any other
+/// suffix.
+pub fn open_from_prefix(app: &mut App, byte: u8) -> bool {
+    let slot = match byte {
+        b'1'..=b'4' => usize::from(byte - b'1'),
+        _ => return false,
+    };
+    let Some((_, sources)) = app.live.panel_hit.get() else {
+        return false;
+    };
+    match sources[slot] {
+        Some(source) => open(app, source),
+        None => false,
     }
 }
 

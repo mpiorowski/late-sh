@@ -3,9 +3,11 @@
 // rail sitting on one of its live rows, the watched screen alone where the
 // selected card's landing would be. Enter opens it: the watched screen
 // across the whole page with the watch chat docked beside it. A preview ends
-// when the session leaves the hub; an open watch is a stop on the backtick
-// cycle, so it outlives a hop away, and ends on Esc, when the game does, or
-// once it has been off screen for `AWAY_WINDOW` (`App::tick`).
+// when the session leaves the hub. An open watch is a stop on the backtick
+// cycle: leaving the hub steps away from it (`App::away_watches`, every one
+// still streaming, so the hub shows its cards on the next visit), and it
+// ends on Esc, when the game does, or once it has been off screen for
+// `AWAY_WINDOW` (`App::tick`).
 //
 // `ChatLink` is a session's tie to a player's watch-chat room. A watch holds
 // one (the pane beside the watched screen); a player holds one for their own
@@ -19,6 +21,7 @@ use late_core::models::leaderboard::DoorGame;
 use uuid::Uuid;
 
 use super::proxy::{LiveGame, SpectateProcess, WatchStatus, WatchTarget};
+use super::svc::OpenWatch;
 use crate::app::common::primitives::Screen;
 use crate::render_signal::RenderSignal;
 
@@ -53,6 +56,16 @@ impl SpectateGame {
         }
     }
 
+    /// The game's name in lowercase, the Live panel's first column: it
+    /// sits where a handle sits on the other rows, and reads like one.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Dcss => "dcss",
+            Self::Nethack => "nethack",
+            Self::Brogue => "brogue",
+        }
+    }
+
     /// The door's own screen, where its player runs the game.
     pub const fn screen(self) -> Screen {
         match self {
@@ -79,10 +92,9 @@ impl SpectateGame {
     }
 }
 
-/// How long an open watch stays up off screen: the same five minutes a
-/// detached Lateania world stays on the backtick cycle. A watch is passive,
-/// so time away from it, not time without a key, is what ends it.
-pub const AWAY_WINDOW: Duration = Duration::from_secs(5 * 60);
+/// How long an open watch stays up off screen. A watch is passive, so time
+/// away from it, not time without a key, is what ends it.
+pub const AWAY_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 /// One live game by its door and its player's handle, held inline so it is
 /// `Copy`: the live strip's key for it (`LiveSource::DoorGame`). Built only
@@ -120,11 +132,13 @@ impl LiveGameKey {
     }
 }
 
-/// One live game on the Games hub's rail: which door it is in, and the host's
-/// roster entry for it.
+/// One live game on the Games hub's rail: its key (the door and the
+/// player's handle) and the host's roster entry for it. Built only from a
+/// roster line whose playname is a handle (`LiveGamesService::live_rows`), so
+/// every row, and every watch started on one, has a key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveRow {
-    pub game: SpectateGame,
+    pub key: LiveGameKey,
     pub entry: LiveGame,
 }
 
@@ -203,11 +217,13 @@ pub enum WatchMode {
 }
 
 pub struct State {
-    game: SpectateGame,
-    playname: String,
+    key: LiveGameKey,
     process: SpectateProcess,
-    mode: WatchMode,
-    /// When an open watch was last on screen, for `AWAY_WINDOW`.
+    /// Held while the watch is open: its place in the process-wide count of
+    /// who is watching (`svc::OpenWatches`). `None` is a preview.
+    open: Option<OpenWatch>,
+    /// When the watch last stepped off screen, for `AWAY_WINDOW`. Only read
+    /// while it is off screen.
     seen_at: Instant,
     /// The watched player's chat room, beside their screen once the watch is
     /// open.
@@ -215,51 +231,49 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(
-        game: SpectateGame,
-        playname: String,
-        target: WatchTarget,
-        repaint: Option<Arc<RenderSignal>>,
-    ) -> Self {
-        let process = SpectateProcess::spawn(game.door_game(), target, playname.clone(), repaint);
+    pub fn new(key: LiveGameKey, target: WatchTarget, repaint: Option<Arc<RenderSignal>>) -> Self {
+        let process = SpectateProcess::spawn(
+            key.game().door_game(),
+            target,
+            key.playname().to_string(),
+            repaint,
+        );
         Self {
-            game,
-            chat: ChatLink::new(game, playname.clone()),
-            playname,
+            key,
+            chat: ChatLink::new(key.game(), key.playname().to_string()),
             process,
-            mode: WatchMode::Preview,
+            open: None,
             seen_at: Instant::now(),
         }
     }
 
-    /// The watch is on screen at `now`.
-    pub fn mark_seen(&mut self, now: Instant) {
-        self.seen_at = now;
-    }
-
     pub fn mode(&self) -> WatchMode {
-        self.mode
+        match self.open {
+            Some(_) => WatchMode::Open,
+            None => WatchMode::Preview,
+        }
     }
 
     pub fn is_open(&self) -> bool {
-        self.mode == WatchMode::Open
+        self.open.is_some()
     }
 
-    /// Enter on the previewed row.
-    pub fn open(&mut self) {
-        self.mode = WatchMode::Open;
+    /// Enter on the previewed row. `open` is this session's place in the
+    /// count of who is watching, held until the watch closes or ends.
+    pub fn open(&mut self, open: OpenWatch) {
+        self.open = Some(open);
     }
 
-    /// Esc out of an open watch: back to the preview beside the rail.
+    /// Esc out of an open watch: back to the preview beside the rail, and
+    /// out of the count.
     pub fn close(&mut self) {
-        self.mode = WatchMode::Preview;
+        self.open = None;
     }
 
     /// This watch's row among the hub rail's live rows; `None` once the
     /// roster no longer lists the game.
     pub fn row_in(&self, live: &[LiveRow]) -> Option<usize> {
-        live.iter()
-            .position(|row| row.game == self.game && row.entry.playname == self.playname)
+        live.iter().position(|row| row.key == self.key)
     }
 
     pub fn chat(&self) -> &ChatLink {
@@ -271,11 +285,28 @@ impl State {
     }
 
     pub fn game(&self) -> SpectateGame {
-        self.game
+        self.key.game()
     }
 
     pub fn playname(&self) -> &str {
-        &self.playname
+        self.key.playname()
+    }
+
+    /// The watched game as a key.
+    pub fn key(&self) -> LiveGameKey {
+        self.key
+    }
+
+    /// Off screen: frames keep landing but no longer repaint the session,
+    /// and `AWAY_WINDOW` counts from `now`.
+    pub fn step_away(&mut self, now: Instant) {
+        self.seen_at = now;
+        self.process.set_on_screen(false);
+    }
+
+    /// Back on screen.
+    pub fn resume(&mut self) {
+        self.process.set_on_screen(true);
     }
 
     pub fn status(&self) -> WatchStatus {
@@ -287,14 +318,21 @@ impl State {
     }
 
     /// Why this watch should end at `now`, if it should: a preview lives
-    /// only on the Games hub, an open watch until it has been off screen for
-    /// `AWAY_WINDOW`, and any watch only while its stream is open.
+    /// only on the Games hub, an open watch until it has been off screen
+    /// (`on_hub` false: stepped away from) for `AWAY_WINDOW`, and any watch
+    /// only while its stream is open.
     pub fn end_reason(&self, on_hub: bool, now: Instant) -> Option<WatchEnd> {
         let away = match on_hub {
             true => Duration::ZERO,
             false => now.saturating_duration_since(self.seen_at),
         };
-        end_reason(self.mode, on_hub, away, self.status(), &self.playname)
+        end_reason(
+            self.mode(),
+            on_hub,
+            away,
+            self.status(),
+            self.key.playname(),
+        )
     }
 }
 

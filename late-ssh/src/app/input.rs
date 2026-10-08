@@ -1291,7 +1291,7 @@ fn select_rail_entry(
             // Re-selecting the row already being watched keeps its stream.
             if watched_live_row(app, live) != Some(index) {
                 let row = &live[index];
-                app.start_spectating(row.game, row.entry.playname.clone());
+                app.start_spectating(row.key);
             }
         }
     }
@@ -2040,6 +2040,16 @@ fn handle_byte_event(app: &mut App, ctx: InputContext, byte: u8) {
     }
 
     if handle_modal_input(app, ctx, byte) {
+        return;
+    }
+
+    // `s` then a digit opens that row of the Live panel. Any other key
+    // after `s` is swallowed, like `z`'s: a mistyped suffix must not jump
+    // rooms, switch pages or open the slash composer, so the prefix is
+    // spent here, ahead of every dispatcher below.
+    if app.live_prefix_armed {
+        app.live_prefix_armed = false;
+        crate::app::live::input::open_from_prefix(app, byte);
         return;
     }
 
@@ -2872,6 +2882,11 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
         return true;
     }
+    // The sidebar's Live panel is drawn under the same modals as the pet.
+    if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_panel_click(app, x, y)
+    {
+        return true;
+    }
     // A click on a Zen tile focuses it, then falls through so the composer
     // and the messages of that tile still take the click. A modal over the
     // page takes the click itself, the same guard the pet click uses.
@@ -3480,6 +3495,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 fn clear_prefix_arms(app: &mut App) {
     app.music_prefix_armed = false;
     app.room_section_prefix_armed = false;
+    app.live_prefix_armed = false;
 }
 
 /// Everything a full-screen modal has to close before it opens, so it never
@@ -4173,6 +4189,23 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !app.chat.room_jump_active =>
         {
             app.room_section_prefix_armed = true;
+            true
+        }
+        // The Live panel's prefix: Home only, where the panel draws its
+        // row numbers, and not while a pane that spends `s` is selected
+        // (RSS shares its entry, Discover cycles its sort); on every other
+        // page `s` is the page's (the Directory's search, the Clubhouse's
+        // seat).
+        b's' | b'S'
+            if ctx.screen == Screen::Dashboard
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !app.chat.room_jump_active
+                && !app.chat.feeds_selected
+                && !app.chat.discover_selected =>
+        {
+            app.live_prefix_armed = true;
             true
         }
         b'\\'

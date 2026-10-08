@@ -200,7 +200,7 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, "strip-key-them v strip-key-me").await;
 
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
@@ -246,7 +246,7 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
         .await
         .expect("post the open one");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, "strip-close-them v strip-close-me").await;
     assert!(app.lobby.glow(), "the open challenge glows");
 
     app.handle_input(b"o");
@@ -304,7 +304,7 @@ async fn app_with_a_match_on_the_strip(
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, &format!("{name}-them · {name}-me")).await;
     (test_db, app, poster, them.id, posted.id)
 }
 
@@ -316,7 +316,7 @@ fn click_the_live_segment(app: &mut crate::app::state::App) {
     terminal.process(&app.render().expect("render"));
     let screen = terminal.screen().contents();
     let bottom_row = screen.lines().last().expect("bottom border row");
-    let byte = bottom_row.find("live ").expect("the live segment");
+    let byte = bottom_row.find("now ").expect("the now segment");
     let live_col = unicode_width::UnicodeWidthStr::width(&bottom_row[..byte]);
     // SGR mouse coords are 1-indexed.
     app.handle_input(format!("\x1b[<0;{};{STRIP_CLICK_ROWS}M", live_col + 1).as_bytes());
@@ -396,15 +396,13 @@ async fn clicking_the_live_segment_on_another_board_keeps_that_boards_way_out() 
 }
 
 /// Ctrl+F on a board goes to Zen and closes the board, so the chord back
-/// hands over the page the board was opened from, never an empty board. A
-/// board opened from Zen's Live tile hands back Zen's own page.
+/// hands over the page the board was opened from, never an empty board.
 #[tokio::test]
 async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
     use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
     use crate::app::common::primitives::Screen;
     use crate::app::games::chips::svc::ChipService;
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
-    use crate::app::zen::state::{KindPick, TileKind};
 
     let test_db = new_test_db().await;
     let me = create_test_user(&test_db.db, "strip-zen-me").await;
@@ -431,7 +429,7 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, "strip-zen-them · strip-zen-me").await;
 
     // Opened from Home: Ctrl+F twice comes back to Home.
     app.handle_input(b"o");
@@ -444,27 +442,6 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
         Screen::Dashboard,
         "the board was opened from Home"
     );
-
-    // Opened from Zen's Live tile: Ctrl+F twice comes back to Home, the
-    // page Zen was opened over.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.zen.focus = app
-        .zen
-        .first_tile_of(TileKind::Lobby)
-        .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
-        app.zen.move_kind_picker(1);
-    }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    wait_for_render_contains(&mut app, "o open").await;
-    app.handle_input(b"\r");
-    assert_eq!(app.screen, Screen::DailyMatch, "Enter opens the match");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen, "Ctrl+F on the board opens Zen");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Dashboard, "Zen was opened over Home");
 }
 
 /// A track somebody queued in the booth goes up on the live strip, and `o`
@@ -743,8 +720,10 @@ async fn r_on_a_news_story_replies_in_lounge_with_its_title_quoted() {
 /// Somebody starts a DCSS game: it goes up on the live strip, `o` opens the
 /// watch on it (the game across the Games page, its chat beside it), and the
 /// watch is a stop on the backtick cycle, so `` ` `` toggles between it and
-/// Home. No render runs between the keys: the test door host is unreachable,
-/// so a tick would see the stream end and drop the watch.
+/// Home. Reaching the Games page by its number shows the hub's cards, and
+/// the watch is still on the cycle. No render runs between the keys: the
+/// test door host is unreachable, so a tick would see the stream end and
+/// drop the watch.
 #[tokio::test]
 async fn o_on_a_live_door_game_opens_the_watch_and_backtick_toggles_it_with_home() {
     use crate::app::common::primitives::Screen;
@@ -797,15 +776,276 @@ async fn o_on_a_live_door_game_opens_the_watch_and_backtick_toggles_it_with_home
 
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Dashboard, "backtick hops home");
-    assert_eq!(
-        watch(&app).map(|(_, _, mode)| mode),
-        Some(WatchMode::Open),
-        "with the watch kept open"
-    );
 
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Games, "and backtick hops back in");
     assert_eq!(watch(&app).map(|(_, _, mode)| mode), Some(WatchMode::Open));
+
+    app.handle_input(b"1");
+    app.handle_input(b"3");
+    assert_eq!(app.screen, Screen::Games, "3 is the Games page");
+    assert_eq!(
+        watch(&app),
+        None,
+        "its cards, with no watch drawn over them"
+    );
+
+    app.handle_input(b"1");
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Games, "the watch is still on the cycle");
+    assert_eq!(
+        watch(&app),
+        Some((SpectateGame::Dcss, "crawler".to_string(), WatchMode::Open)),
+        "the same open watch"
+    );
+}
+
+/// Two watches kept at once: open one from the hub's rail, go Home, come back
+/// with `3` (the cards, no watch), open another, and the backtick cycles
+/// Home, the first, the second, Home. No render runs between the keys: the
+/// test door hosts are unreachable, so a tick would see the streams end.
+#[tokio::test]
+async fn every_watch_opened_stays_a_stop_on_the_backtick_cycle() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "two-watches-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "two-watches-flow-it");
+    app.resize(160, 40).expect("resize");
+    let live = |playname: &str| LiveGame {
+        playname: playname.to_string(),
+        started_unix: 1_790_000_000,
+        watchers: 0,
+        status: String::new(),
+    };
+    app.live_games
+        .publish_roster_for_tests(SpectateGame::Dcss, vec![live("crawler")]);
+    app.live_games
+        .publish_roster_for_tests(SpectateGame::Nethack, vec![live("digger")]);
+    let watch = |app: &crate::app::state::App| {
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.playname().to_string(), state.mode()))
+    };
+    let open = |playname: &str| Some((playname.to_string(), WatchMode::Open));
+
+    // Up from the top card wraps to the rail's last live row (digger), then
+    // the one above it (crawler).
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    app.handle_input(b"k");
+    app.handle_input(b"\r");
+    assert_eq!(watch(&app), open("crawler"), "the first watch is open");
+
+    app.handle_input(b"1");
+    app.handle_input(b"3");
+    assert_eq!(app.screen, Screen::Games);
+    assert_eq!(watch(&app), None, "3 shows the cards");
+    app.handle_input(b"k");
+    app.handle_input(b"\r");
+    assert_eq!(watch(&app), open("digger"), "the second watch is open");
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "the last watch hops home");
+    app.handle_input(b"`");
+    assert_eq!(
+        (app.screen, watch(&app)),
+        (Screen::Games, open("crawler")),
+        "then the first watch"
+    );
+    app.handle_input(b"`");
+    assert_eq!(
+        (app.screen, watch(&app)),
+        (Screen::Games, open("digger")),
+        "then the second"
+    );
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "and home again");
+}
+
+/// Who is watching is the people with the watch open, counted in the
+/// process: a preview counts nobody, opening counts you, stepping away keeps
+/// counting you, Esc back to the preview drops you. Another user holding the
+/// same watch open is one other, however it is looked at.
+#[tokio::test]
+async fn an_open_watch_counts_its_watcher_until_it_closes() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{LiveGameKey, SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "watch-count-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "watch-count-flow-it");
+    app.resize(160, 40).expect("resize");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+    let key = LiveGameKey::new(SpectateGame::Dcss, "crawler").expect("a handle");
+    let someone_else = uuid::Uuid::now_v7();
+    let _their_watch = app.live_games.open_watch(key, someone_else);
+    let mode = |app: &crate::app::state::App| app.spectate_state.as_ref().map(|state| state.mode());
+
+    // Up from the top card wraps to the rail's live row: the preview.
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    assert_eq!(mode(&app), Some(WatchMode::Preview));
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        1,
+        "a preview counts nobody"
+    );
+    assert_eq!(app.live_games.others_watching(key, me.id), 1);
+
+    app.handle_input(b"\r");
+    assert_eq!(mode(&app), Some(WatchMode::Open));
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        2,
+        "opening the watch counts you"
+    );
+    assert_eq!(
+        app.live_games.others_watching(key, me.id),
+        1,
+        "but not among the others"
+    );
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        2,
+        "an away watch still counts"
+    );
+
+    app.handle_input(b"`");
+    // Esc in the open watch (`spectate::input::handle_escape`). A bare Esc
+    // byte is only flushed by a tick, and a tick here would see the
+    // unreachable test host end the stream, so the key's effect is called.
+    app.close_watch();
+    assert_eq!(
+        mode(&app),
+        Some(WatchMode::Preview),
+        "Esc closes the watch to its preview"
+    );
+    assert_eq!(
+        app.live_games.watchers_of(key),
+        1,
+        "and takes you out of the count"
+    );
+
+    drop(_their_watch);
+    assert_eq!(app.live_games.watchers_of(key), 0);
+}
+
+/// The sidebar's Live panel lists the live door games under its rule, who
+/// and where, and a click on a row opens that game's watch, as the strip's
+/// click does. A click on a blank slot opens nothing.
+#[tokio::test]
+async fn a_click_on_a_live_panel_row_opens_the_watch() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "live-panel-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "live-panel-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a width that shows the rail");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: "XL3 Lair:2".to_string(),
+        }],
+    );
+    wait_for_render_contains(&mut app, "── live").await;
+    wait_for_render_contains(&mut app, "dcss    XL3 Lair:2 s1").await;
+    let (rect, _) = app
+        .live
+        .panel_hit
+        .get()
+        .expect("the panel recorded its rows");
+    let click = |app: &mut crate::app::state::App, row: u16| {
+        app.handle_input(format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + row + 1).as_bytes());
+    };
+
+    click(&mut app, 3);
+    assert_eq!(app.screen, Screen::Dashboard, "a blank slot opens nothing");
+
+    click(&mut app, 0);
+    assert_eq!(app.screen, Screen::Games, "the row opens the Games page");
+    assert_eq!(
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.playname().to_string(), state.mode())),
+        Some(("crawler".to_string(), WatchMode::Open)),
+        "on the open watch of that game"
+    );
+}
+
+/// `s` then the row's number opens that Live panel row from the keyboard;
+/// a digit with no row under it opens nothing, and any other suffix is
+/// swallowed rather than read as a chat key.
+#[tokio::test]
+async fn s_then_a_digit_opens_the_live_panel_row() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "live-prefix-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "live-prefix-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a width that shows the rail");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: "XL3 Lair:2".to_string(),
+        }],
+    );
+    wait_for_render_contains(&mut app, "dcss    XL3 Lair:2 s1").await;
+
+    app.handle_input(b"sl");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "a stray suffix opens nothing"
+    );
+    assert!(!app.live_prefix_armed, "and disarms the prefix");
+
+    app.handle_input(b"s4");
+    assert_eq!(app.screen, Screen::Dashboard, "a blank slot opens nothing");
+
+    app.handle_input(b"s1");
+    assert_eq!(app.screen, Screen::Games, "the row opens the Games page");
+    assert_eq!(
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.playname().to_string(), state.mode())),
+        Some(("crawler".to_string(), WatchMode::Open)),
+        "on the open watch of that game"
+    );
 }
 
 /// A #lounge draft belongs to #lounge. Clicking a live door game on the strip
@@ -868,4 +1108,90 @@ async fn opening_a_watch_from_the_strip_drops_a_lounge_draft() {
         "the lounge draft does not come along into the watch"
     );
     assert_eq!(app.chat.composer_room_id(), None);
+}
+
+/// `s` is the Live prefix on Home, but the RSS and Discover panes spend `s`
+/// themselves (share the selected entry, cycle the sort): with either pane
+/// selected the key is theirs, and nothing is armed.
+#[tokio::test]
+async fn s_on_the_rss_and_discover_panes_stays_theirs() {
+    let (_test_db, mut app) = make_app_harness().await;
+    app.resize(160, 40).expect("resize");
+
+    app.chat.select_discover();
+    let sort_before = app.chat.discover.sort();
+    app.handle_input(b"s");
+    assert_ne!(
+        app.chat.discover.sort(),
+        sort_before,
+        "s cycles the Discover sort"
+    );
+    assert!(!app.live_prefix_armed, "and arms nothing");
+
+    app.chat.select_feeds();
+    app.banner = None;
+    app.handle_input(b"s");
+    assert!(
+        app.banner.is_some(),
+        "s on the RSS pane shares the selection (here: complains there is none)"
+    );
+    assert!(!app.live_prefix_armed, "and arms nothing");
+}
+
+/// A roster name outside the handle shape is not a live row anywhere: the
+/// hub rail does not list it, so stepping onto the rail never previews it
+/// and the frame that would key it never panics.
+#[tokio::test]
+async fn a_roster_name_outside_the_handle_shape_is_not_listed() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{proxy::LiveGame, state::SpectateGame};
+
+    let (_test_db, mut app) = make_app_harness().await;
+    app.resize(160, 40).expect("resize");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "1not_a_handle".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+    assert!(app.live_games.live_rows().is_empty(), "no row for it");
+
+    // Up from the top card would wrap to the last live row, were there one.
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    assert_eq!(app.screen, Screen::Games);
+    assert!(app.spectate_state.is_none(), "nothing is previewed");
+    let _frame = render_plain(&mut app);
+}
+
+/// Any key after `s` is swallowed, including the ones Home otherwise takes
+/// early: `s/` opens no slash composer and leaves nothing armed.
+#[tokio::test]
+async fn a_slash_after_the_live_prefix_is_swallowed() {
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "slash-prefix-me").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge");
+    let mut app = make_app(test_db.db.clone(), me.id, "slash-prefix-flow-it");
+    app.resize(160, 40).expect("resize");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"/");
+    assert!(app.chat.is_composing(), "a bare slash opens the composer");
+    app.chat.reset_composer();
+
+    app.handle_input(b"s/");
+    assert!(
+        !app.chat.is_composing(),
+        "the slash never opens the composer"
+    );
+    assert!(!app.live_prefix_armed, "and the prefix is spent");
 }

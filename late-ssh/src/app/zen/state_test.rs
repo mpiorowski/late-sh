@@ -50,21 +50,18 @@ fn one_press_moves_a_row_split_by_exactly_one_column_at_every_width() {
 fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
     let area = Rect::new(0, 0, 160, 44);
     let mut root = RiceLayout::default().root;
-    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium. Music sits in
-    // a column inside a column inside the rail; only the split directly
-    // above it moves, so the clock above and the left column stay put.
+    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
+    // Live sits in a column inside a column inside the rail; only the
+    // split directly above it moves, so the tiles above it and the left
+    // column stay put, and music alone gives up the row.
     let before = heights(&root, area, 1);
-    assert!(root.resize_leaf(3, Dir::Column, 1, area, 1));
+    assert!(root.resize_leaf(6, Dir::Column, 1, area, 1));
     let after = heights(&root, area, 1);
-    assert_eq!(after[3], before[3] + 1, "music gains one row");
-    assert_eq!(after[0], before[0], "the bonsai column is untouched");
-    assert_eq!(after[1], before[1]);
-    assert_eq!(after[2], before[2], "the clock is untouched");
-    assert_eq!(
-        after[4] + after[5] + after[6] + 1,
-        before[4] + before[5] + before[6],
-        "lobby, pet, and the reef give up one row between them"
-    );
+    assert_eq!(after[6], before[6] + 1, "live gains one row");
+    for leaf in 0..6 {
+        assert_eq!(after[leaf], before[leaf], "leaf {leaf} is untouched");
+    }
+    assert_eq!(after[7] + 1, before[7], "music gives up the row");
 
     let mut row_only = Node::split(
         Dir::Row,
@@ -264,7 +261,7 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
 
 #[test]
 fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_the_focused_one() {
-    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium.
+    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
     let mut zen = ZenState::new(RiceLayout::default());
     assert!(zen.shows_equalizer(), "the default page has a music tile");
 
@@ -274,7 +271,7 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
         !zen.shows_equalizer(),
         "zoomed on the bonsai hides the music tile"
     );
-    zen.focus = 3;
+    zen.focus = 7;
     assert!(
         zen.shows_equalizer(),
         "zoomed on the music tile keeps its eq"
@@ -300,7 +297,7 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
 
 #[test]
 fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
-    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium.
+    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
     let mut zen = ZenState::new(RiceLayout::default());
     let lobby = zen.first_tile_of(TileKind::Lobby).expect("a lobby tile");
     assert!(zen.shows(TileKind::Lobby));

@@ -19,7 +19,7 @@ use crate::app::{
     chat::news::live::{self as news_live, ArticleStripView},
     door::spectate::{
         live::{self as door_live, DoorGameStripView},
-        state::{LiveGameKey, LiveRow},
+        state::LiveRow,
     },
     files::inline_image::InlineImageRenderSettings,
     lobby::daily::{live::MatchStripView, state::DailyState},
@@ -30,6 +30,7 @@ use crate::app::{
 };
 
 use super::pick::{Featured, LiveCandidate, LiveSource, aim_overlay, pick_queued};
+use crate::app::door::spectate::svc::LiveGamesService;
 
 /// What the strip paints, by source.
 pub enum LiveStripView<'a> {
@@ -83,6 +84,10 @@ pub struct LiveState {
     /// Where the strip drew this frame and what it showed, for the click
     /// that opens it. Render-recorded, cleared before every draw.
     pub hit: Cell<Option<(Rect, LiveSource)>>,
+    /// Where the sidebar's Live panel drew this frame and what is on each
+    /// of its rows, for the click that opens one. Render-recorded, cleared
+    /// before every draw.
+    pub panel_hit: super::panel::LivePanelHit,
 }
 
 impl LiveState {
@@ -93,8 +98,7 @@ impl LiveState {
     /// Read the sources and decide what the strip shows. `articles` is the
     /// session's News snapshot and `streams` its copy of the stream
     /// registry (`ChatState::live_streams`). `door_games` are the live games
-    /// on the watchable doors (`LiveGamesService::live_rows`), and
-    /// `own_door_games` the viewer's own running ones. `reading` is
+    /// on the watchable doors (`LiveGamesService::live_rows`). `reading` is
     /// whether the viewer has a message selected in the card: the strip then
     /// holds its height. `picture_settings` is how this session's terminal
     /// paints an image. True when what the strip draws changed.
@@ -106,7 +110,6 @@ impl LiveState {
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
-        own_door_games: &[LiveGameKey],
         reading: bool,
         picture_settings: InlineImageRenderSettings,
     ) -> bool {
@@ -114,7 +117,7 @@ impl LiveState {
         candidates.extend(audio.live_candidates());
         candidates.extend(news_live::candidates(articles));
         candidates.extend(stream_live::candidates(streams));
-        candidates.extend(door_live::candidates(door_games, own_door_games));
+        candidates.extend(door_live::candidates(door_games));
         let changed = self.refresh(&candidates, Instant::now(), Utc::now(), reading);
         let thumbnail = match self.showing() {
             Some(LiveSource::BoothTrack(item_id)) => audio
@@ -224,6 +227,7 @@ impl LiveState {
     /// `articles` is the session's News snapshot, `streams` its copy of the
     /// stream registry, and `door_games` the live games on the watchable
     /// doors.
+    #[allow(clippy::too_many_arguments)]
     pub fn view<'a>(
         &self,
         daily: &'a DailyState,
@@ -232,6 +236,7 @@ impl LiveState {
         articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
+        live_games: &LiveGamesService,
     ) -> Option<LiveStripView<'a>> {
         match self.showing()? {
             LiveSource::DailyMatch(match_id) => {
@@ -256,7 +261,8 @@ impl LiveState {
                 stream_live::view(streams, streamer_id).map(LiveStripView::Stream)
             }
             LiveSource::DoorGame(key) => {
-                door_live::view(door_games, key).map(LiveStripView::DoorGame)
+                door_live::view(door_games, key, live_games.watchers_of(key))
+                    .map(LiveStripView::DoorGame)
             }
         }
     }

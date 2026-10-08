@@ -32,9 +32,19 @@ use super::svc::ArticleService;
 /// stays empty rather than guessing: a missing cursor row (`Loaded(None)`)
 /// means everything is unread, which is not the same as not knowing yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReadCursor {
+pub(crate) enum ReadCursor {
     Loading,
     Loaded(Option<DateTime<Utc>>),
+}
+
+/// Whether an article is unread against the cursor, for a mark that must
+/// not guess: nothing is unread until the cursor has loaded, everything
+/// is when the reader has no cursor row.
+pub(crate) fn is_unread_at(item: &ArticleFeedItem, cursor: ReadCursor) -> bool {
+    match cursor {
+        ReadCursor::Loading => false,
+        ReadCursor::Loaded(last_read_at) => is_unread(item, last_read_at),
+    }
 }
 
 /// The news badge: articles in the shared snapshot newer than the reader's
@@ -252,6 +262,10 @@ impl State {
 
     pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
         self.marker_read_at
+    }
+
+    pub(crate) fn read_cursor(&self) -> ReadCursor {
+        self.read_cursor
     }
 
     pub fn composing(&self) -> bool {

@@ -31,8 +31,8 @@ pub enum TileKind {
     Pulse,
     Inbox,
     Headlines,
-    /// The #lounge live strip (`app/live`), with the feed beside a note
-    /// while nothing is up.
+    /// The Live panel's rows (`app/live/panel.rs`), as the sidebar draws
+    /// them.
     Live,
     Blank,
 }
@@ -503,39 +503,44 @@ pub struct RiceLayout {
 }
 
 impl Default for RiceLayout {
-    /// The out-of-the-box page, also what `R` resets to: the bonsai at full
-    /// canvas over the current room's chat on the left, and a rail of
-    /// clock, music, lobby, then the pet over the live reef on the right
-    /// (the pet sits against the tank and watches; unowned, the tile points
-    /// at the shop).
+    /// The out-of-the-box page, also what `R` resets to: on the left, the
+    /// bonsai beside the reef over the current room's chat; on the right a
+    /// rail of clock, pet, lobby, live, then music (the pet sits against
+    /// the tank, to its left, and watches it; unowned, the pet and the tank
+    /// tiles point at the shop).
     fn default() -> Self {
         Self {
             root: Node::split(
                 Dir::Row,
-                640,
+                720,
                 Node::split(
                     Dir::Column,
-                    600,
-                    Node::leaf(TileKind::Bonsai),
+                    490,
+                    Node::split(
+                        Dir::Row,
+                        500,
+                        Node::leaf(TileKind::Bonsai),
+                        Node::leaf(TileKind::Aquarium),
+                    ),
                     Node::leaf(TileKind::Chat),
                 ),
                 Node::split(
                     Dir::Column,
-                    180,
+                    170,
                     Node::leaf(TileKind::Clock),
                     Node::split(
                         Dir::Column,
-                        170,
-                        Node::leaf(TileKind::Music),
+                        360,
+                        Node::leaf(TileKind::Pet),
                         Node::split(
                             Dir::Column,
-                            240,
+                            250,
                             Node::leaf(TileKind::Lobby),
                             Node::split(
                                 Dir::Column,
-                                300,
-                                Node::leaf(TileKind::Pet),
-                                Node::leaf(TileKind::Aquarium),
+                                340,
+                                Node::leaf(TileKind::Live),
+                                Node::leaf(TileKind::Music),
                             ),
                         ),
                     ),
