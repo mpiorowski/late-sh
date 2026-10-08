@@ -387,12 +387,14 @@ impl DailyMatch {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
+    /// Every open challenge, newest first: the lobby lists what just went up
+    /// at the top.
     pub async fn list_open(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 "SELECT * FROM daily_matches
                  WHERE status = 'open'
-                 ORDER BY created ASC, id ASC",
+                 ORDER BY created DESC, id DESC",
                 &[],
             )
             .await?;

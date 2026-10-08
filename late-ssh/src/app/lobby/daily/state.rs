@@ -1096,7 +1096,7 @@ impl DailyState {
             .collect()
     }
 
-    /// Every open challenge, oldest first (snapshot order).
+    /// Every open challenge, newest first (snapshot order).
     pub fn lobby(&self) -> Vec<&DailyChallengeItem> {
         self.snapshot.open_challenges.iter().collect()
     }
@@ -2691,6 +2691,17 @@ pub fn format_deadline(deadline: DateTime<Utc>, now: DateTime<Utc>) -> String {
         format!("{hours}h {minutes}m")
     } else {
         format!("{minutes}m")
+    }
+}
+
+/// How long an open challenge has been up, in the deadline's compact units:
+/// `posted 2d 3h ago`, `posted 41m ago`, and `posted just now` inside the
+/// first minute (or for a stamp a skewed clock puts in the future).
+pub fn format_posted(created: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    match (now - created).num_seconds() < 60 {
+        true => "posted just now".to_string(),
+        // Elapsed time is a deadline seen from the other end.
+        false => format!("posted {} ago", format_deadline(now, created)),
     }
 }
 

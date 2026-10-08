@@ -21,6 +21,32 @@ fn format_deadline_scales_units() {
 }
 
 #[test]
+fn format_posted_says_how_long_a_challenge_has_been_up() {
+    let now = Utc.with_ymd_and_hms(2026, 7, 8, 12, 0, 0).unwrap();
+    assert_eq!(
+        format_posted(now - chrono::Duration::hours(50), now),
+        "posted 2d 2h ago"
+    );
+    assert_eq!(
+        format_posted(now - chrono::Duration::minutes(90), now),
+        "posted 1h 30m ago"
+    );
+    assert_eq!(
+        format_posted(now - chrono::Duration::minutes(1), now),
+        "posted 1m ago"
+    );
+    assert_eq!(
+        format_posted(now - chrono::Duration::seconds(59), now),
+        "posted just now"
+    );
+    assert_eq!(
+        format_posted(now + chrono::Duration::minutes(5), now),
+        "posted just now",
+        "a stamp from a skewed clock is not negative time"
+    );
+}
+
+#[test]
 fn fresh_turn_edges_notifies_each_became_my_turn_edge_once() {
     let a = Uuid::from_u128(1);
     let b = Uuid::from_u128(2);
