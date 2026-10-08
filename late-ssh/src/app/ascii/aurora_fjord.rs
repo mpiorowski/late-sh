@@ -72,6 +72,7 @@ pub(crate) const PALETTE: [[u8; 3]; 43] = [
     [0xee, 0xf3, 0xff],
 ];
 
+#[cfg(test)]
 const DOTS: [char; 4] = [' ', '·', '•', '●'];
 const COVER: [f64; 4] = [0.0, 0.3, 0.6, 1.0];
 const BAYER: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
@@ -879,9 +880,35 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
     }
 }
 
-/// One cell of the halftone: its dot and its palette colour, dithered by
-/// where the cell sits (`x`, `y`) on whatever grid it is drawn on.
+/// One cell of the halftone as the original draws it: its dot and its
+/// palette colour, dithered by where the cell sits (`x`, `y`). What the
+/// golden frame is compared against; the terminal draws `pixel`.
+#[cfg(test)]
 pub(crate) fn dot(shade: Shade, x: usize, y: usize) -> (char, u8) {
+    let (step, index) = halftone(shade, x, y);
+    (DOTS[step], index)
+}
+
+/// The same cell as one solid pixel: its dot's colour spread over the cell,
+/// so the dot's size becomes brightness over the ground. What the terminal
+/// draws (`ui::draw_shaded`), where a cell is two of these stacked and a
+/// glyph cannot reach into the next row the way the original's canvas lets
+/// its dots touch.
+pub(crate) fn pixel(shade: Shade, x: usize, y: usize) -> [u8; 3] {
+    let (step, index) = halftone(shade, x, y);
+    let cover = COVER[step];
+    let ink = PALETTE[index as usize];
+    let mut out = [0u8; 3];
+    for c in 0..3 {
+        let ground = f64::from(GROUND[c]);
+        out[c] = js_round(ground + (f64::from(ink[c]) - ground) * cover) as u8;
+    }
+    out
+}
+
+/// The halftone step (0 for no dot, 3 for the largest) and palette colour
+/// of a cell.
+fn halftone(shade: Shade, x: usize, y: usize) -> (usize, u8) {
     let bayer = f64::from(BAYER[(y & 3) * 4 + (x & 3)]) / 16.0 - 0.47;
     let step = js_round(shade.level * 3.0 + bayer).clamp(0.0, 3.0) as usize;
     let [cr, cg, cb] = shade.rgb;
@@ -892,7 +919,7 @@ pub(crate) fn dot(shade: Shade, x: usize, y: usize) -> (char, u8) {
     };
     let s = (0.3 + 0.7 * want) / peak;
     (
-        DOTS[step],
+        step,
         nearest(clamp(cr * s), clamp(cg * s), clamp(cb * s)),
     )
 }

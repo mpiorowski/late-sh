@@ -55,8 +55,8 @@ late-ssh/src/app/ascii/
   `frame(t, cols, rows)`) holds no state between frames, so a frame is the
   same for every session and every replica: nothing to sync, nothing to
   persist.
-- **One clock.** `piece::frame_index_now` counts `FRAME_MS` (264ms, the
-  quarter tier) edges since the process's first ask, shared by every
+- **One clock.** `piece::frame_index_now` counts `FRAME_MS` (132ms, the
+  half tier) edges since the process's first ask, shared by every
   session, so two people away at once watch the same frame. `seconds`
   turns an edge into play time.
 - **One frame per edge for the process.** `piece::picture` serves the
@@ -66,14 +66,19 @@ late-ssh/src/app/ascii/
   Plasma is drawn to the area's size, so it is computed per call.
 - **Drawing.** The aurora is shaded per square cell (`ShadedFrame`: a
   level and an unquantised colour per cell). `ui::draw_shaded` scales it to
-  cover the area (the overflow cropped evenly), averages the two scene rows
-  a terminal cell stands on, and runs the halftone (`aurora_fjord::dot`:
-  dot size from brightness, ordered dither, nearest palette colour) at the
-  terminal's own coordinates, so the dots stay crisp at any size, on the
-  scene's ground colour. Text art is centred, cropped evenly when larger
-  than the area, in one theme ink per piece (`ui::ink`).
+  cover the area (the overflow cropped evenly) and draws the two scene rows
+  a terminal cell stands on as the halves of a `▀` (upper in the ink, lower
+  in the background), each the halftone as a pixel (`aurora_fjord::pixel`:
+  the dot's nearest palette colour spread over the cell by the dot's size,
+  ordered dither at scene coordinates), so the picture fills the cell; at
+  200x50 it is the original's own 200x100 grid, cell for cell. The
+  original's dots (`aurora_fjord::dot`, test only) are what the golden
+  frame checks: on its canvas the cells are square and a dot reaches into
+  the next row, which no terminal glyph can do. Text art is centred,
+  cropped evenly when larger than the area, in one theme ink per piece
+  (`ui::ink`).
 - **Cadence.** A drawn Zen ascii tile, or the screensaver, repaints on the
-  quarter edge and asks `wake_hint` for `ANIM_QUARTER_TICK`; the
+  half edge and asks `wake_hint` for `ANIM_HALF_TICK`; the
   screensaver returns that tier ahead of every other check, since it covers
   everything and a pointer moving over it must not open the hot window.
 
@@ -103,6 +108,6 @@ late-ssh/src/app/ascii/
   from the original with that cache removed. The dots do not depend on it.
 - ascii.rest's `paper` (a light page flipping the ramp) is not ported:
   every piece draws its dark-ground ramp.
-- The screensaver's bandwidth (a full-screen halftone at ~3.8fps per away
+- The screensaver's bandwidth (a full-screen two-colour picture at ~7.5fps per away
   session) has not been measured; `late_ssh_render*` and the
   output-budget metrics are where it would show.

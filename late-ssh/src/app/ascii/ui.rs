@@ -39,10 +39,12 @@ fn ink(piece: AsciiPiece) -> Color {
 }
 
 /// A scene on square cells, scaled to cover the area (the overflow is
-/// cropped evenly from both sides) and dithered into dots on the terminal's
-/// own grid, so the halftone stays crisp at any size. A terminal cell is
-/// one scene cell wide and two tall, so it averages the two scene rows it
-/// stands on. Only the aurora is shaded, so its halftone draws it.
+/// cropped evenly from both sides) and drawn as pixels: a terminal cell is
+/// one scene cell wide and two tall, so it shows the two scene rows it
+/// stands on as the halves of a `▀`, the upper in its ink, the lower in its
+/// background. Each half is the scene's halftone (`aurora_fjord::pixel`)
+/// dithered at scene coordinates, so at 200x50 the picture is the original's
+/// own dot grid, cell for cell. Only the aurora is shaded, so this draws it.
 fn draw_shaded(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let (w, h) = (f64::from(area.width), f64::from(area.height));
     let (cols, rows) = (scene.cols as f64, scene.rows as f64);
@@ -53,7 +55,8 @@ fn draw_shaded(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let sample = |x: f64, y: f64| {
         let col = (x.floor().max(0.0) as usize).min(scene.cols - 1);
         let row = (y.floor().max(0.0) as usize).min(scene.rows - 1);
-        scene.cells[row * scene.cols + col]
+        let [r, g, b] = aurora_fjord::pixel(scene.cells[row * scene.cols + col], col, row);
+        Color::Rgb(r, g, b)
     };
     let [gr, gg, gb] = aurora_fjord::GROUND;
     let ground = Color::Rgb(gr, gg, gb);
@@ -63,21 +66,14 @@ fn draw_shaded(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
             let x = x0 + (f64::from(tx) + 0.5) * per;
             let top = sample(x, y0 + (2.0 * f64::from(ty) + 0.5) * per);
             let bottom = sample(x, y0 + (2.0 * f64::from(ty) + 1.5) * per);
-            let shade = super::piece::Shade {
-                level: (top.level + bottom.level) / 2.0,
-                rgb: [
-                    (top.rgb[0] + bottom.rgb[0]) / 2.0,
-                    (top.rgb[1] + bottom.rgb[1]) / 2.0,
-                    (top.rgb[2] + bottom.rgb[2]) / 2.0,
-                ],
+            let Some(cell) = buffer.cell_mut((area.x + tx, area.y + ty)) else {
+                continue;
             };
-            let (glyph, index) = aurora_fjord::dot(shade, tx as usize, ty as usize);
-            let [r, g, b] = aurora_fjord::PALETTE[index as usize];
-            if let Some(cell) = buffer.cell_mut((area.x + tx, area.y + ty)) {
-                cell.set_char(glyph)
-                    .set_fg(Color::Rgb(r, g, b))
-                    .set_bg(ground);
-            }
+            // Bare ground is a plain space: no glyph, no ink, fewer bytes.
+            match top == ground && bottom == ground {
+                true => cell.set_char(' ').set_fg(ground).set_bg(ground),
+                false => cell.set_char('▀').set_fg(top).set_bg(bottom),
+            };
         }
     }
 }

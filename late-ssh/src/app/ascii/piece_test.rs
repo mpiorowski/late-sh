@@ -18,10 +18,10 @@ fn js_i32_truncates_toward_zero_and_wraps() {
 }
 
 #[test]
-fn a_frame_edge_is_the_quarter_tier() {
-    assert_eq!(FRAME_MS, 264);
+fn a_frame_edge_is_the_half_tier() {
+    assert_eq!(FRAME_MS, 132);
     assert_eq!(seconds(0), 0.0);
-    assert_eq!(seconds(1000), 264.0);
+    assert_eq!(seconds(1000), 132.0);
 }
 
 #[test]

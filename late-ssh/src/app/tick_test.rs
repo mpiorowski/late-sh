@@ -284,11 +284,11 @@ async fn zen_equalizer_tiles_hold_the_half_rate_tier() {
     );
 }
 
-/// The away screensaver plays on the quarter edge and holds that tier however
-/// much else would wake faster: the Home sidebar's eq, or the hot window a
-/// pointer move over the screensaver opens.
+/// The away screensaver plays on the half edge and holds that tier however
+/// much else would wake faster: the hot window a pointer move over the
+/// screensaver opens.
 #[tokio::test]
-async fn the_screensaver_holds_the_quarter_tier() {
+async fn the_screensaver_holds_the_half_tier() {
     use crate::app::common::away::AWAY_AFTER;
     let (_test_db, mut app) = chat_compose_app("tick-saver").await;
     app.set_screen(Screen::Dashboard);
@@ -296,9 +296,9 @@ async fn the_screensaver_holds_the_quarter_tier() {
     assert!(app.sync_away());
     assert!(app.screensaver().is_some(), "the Tweak defaults to on");
     app.handle_input(b"\x1b[<35;20;5M");
-    assert_eq!(app.wake_hint(), ANIM_QUARTER_TICK);
-    set_marquee_transition(&mut app, 400, 404);
-    assert!(app.tick(), "a quarter edge is a new frame of the piece");
+    assert_eq!(app.wake_hint(), ANIM_HALF_TICK);
+    set_marquee_transition(&mut app, 400, 402);
+    assert!(app.tick(), "a half edge is a new frame of the piece");
 }
 
 /// Make the next `tick` observe an exact wall-clock frame transition. Both

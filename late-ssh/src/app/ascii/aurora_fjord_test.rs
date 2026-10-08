@@ -6,7 +6,8 @@
 //! removed, which is the exact lookup this port does. The dots are the same
 //! with or without the cache.
 
-use super::{COLS, PALETTE, ROWS, dot, frame, nearest};
+use super::{COLS, GROUND, PALETTE, ROWS, dot, frame, nearest, pixel};
+use crate::app::ascii::piece::Shade;
 
 #[test]
 fn frame_matches_ascii_rest_dot_for_dot_and_colour_for_colour() {
@@ -27,6 +28,25 @@ fn frame_matches_ascii_rest_dot_for_dot_and_colour_for_colour() {
         colors.as_slice(),
         include_bytes!("fixtures/aurora_fjord_t1.colors").as_slice()
     );
+}
+
+/// A pixel is the dot's colour spread over its cell: no dot is bare ground,
+/// the largest dot is the full palette colour, whatever the dither says.
+#[test]
+fn a_pixel_spreads_the_dot_over_its_cell() {
+    let dark = Shade {
+        level: 0.0,
+        rgb: [0.2, 0.5, 0.3],
+    };
+    let white = Shade {
+        level: 1.0,
+        rgb: [1.0, 1.0, 1.0],
+    };
+    for (x, y) in [(0, 0), (1, 2), (3, 3), (2, 1)] {
+        assert_eq!(pixel(dark, x, y), GROUND, "no dot at {x},{y}");
+        let (_, index) = dot(white, x, y);
+        assert_eq!(pixel(white, x, y), PALETTE[index as usize], "full dot at {x},{y}");
+    }
 }
 
 #[test]

@@ -12,11 +12,11 @@ use std::time::Instant;
 use late_core::MutexRecover;
 use late_core::models::user::AsciiPiece;
 
-/// One frame edge: the quarter tier the render loop wakes on while a piece
-/// is up (`tick.rs`, `ANIM_QUARTER_TICK`). Every piece is slow enough that
-/// ~3.8fps reads as motion, and a full-screen piece at this pace is what an
-/// away session costs in bytes.
-pub(crate) const FRAME_MS: u64 = 264;
+/// One frame edge: the half tier the render loop wakes on while a piece is
+/// up (`tick.rs`, `ANIM_HALF_TICK`). ~7.5fps keeps the slow pieces fluid,
+/// and a full-screen piece at this pace is what an away session costs in
+/// bytes.
+pub(crate) const FRAME_MS: u64 = 132;
 
 /// A text piece's frame: `rows` lines of `cols` glyphs, drawn in one ink.
 #[derive(Clone, Debug, PartialEq)]

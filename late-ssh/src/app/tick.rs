@@ -16,7 +16,8 @@ use crate::session::SessionMessage;
 /// The hot world-tick cadence (the classic 15fps): animations that earn
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
-/// Half-rate cadence (~7.5fps): Clubhouse ambience, riding the shared
+/// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
+/// (a drawn Zen ascii tile, the away screensaver), riding the shared
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
 /// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
@@ -1112,8 +1113,8 @@ impl App {
             changed = true;
         }
         // The ascii pieces (`app/ascii`) are pure functions of the shared
-        // clock: a new frame on every quarter edge while one is drawn.
-        changed |= anim_quarter && self.ascii_visible();
+        // clock: a new frame on every half edge while one is drawn.
+        changed |= anim_half && self.ascii_visible();
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -1376,7 +1377,7 @@ impl App {
         // The screensaver covers everything else, so nothing under it earns
         // a faster tier, and the pointer moving over it never wakes it hot.
         if self.screensaver().is_some() {
-            return ANIM_QUARTER_TICK;
+            return ANIM_HALF_TICK;
         }
         let hot = self.show_splash
             || self.haunt.breakthrough_playing()
@@ -1397,13 +1398,15 @@ impl App {
         // bonsai care modal and the profile's bonsai sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway. A
         // Zen music or visualizer tile paints its eq on that edge too; left
-        // to the aquarium's quarter tier it drops to ~3.8fps.
+        // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
+        // tile plays its frames on this edge too.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || crate::app::door::hub::state::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
+            || self.ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
@@ -1411,7 +1414,6 @@ impl App {
             return ANIM_HALF_TICK;
         }
         if self.aquarium_visible()
-            || self.ascii_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
         {
             return ANIM_QUARTER_TICK;
@@ -1420,7 +1422,7 @@ impl App {
     }
 
     /// Whether an ascii piece is on screen: the away screensaver, or a Zen
-    /// ascii tile that is drawn (not zoomed away). Gates the quarter-edge
+    /// ascii tile that is drawn (not zoomed away). Gates the half-edge
     /// repaint and the wake tier.
     fn ascii_visible(&self) -> bool {
         self.screensaver().is_some()

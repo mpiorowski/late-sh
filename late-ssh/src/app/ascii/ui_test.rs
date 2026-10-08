@@ -46,44 +46,53 @@ fn text_art_larger_than_the_area_keeps_its_middle() {
 #[test]
 fn the_aurora_covers_every_cell_on_its_own_ground() {
     let [r, g, b] = aurora_fjord::GROUND;
+    let ground = Color::Rgb(r, g, b);
     for (cols, rows) in [(200, 50), (80, 24), (31, 9)] {
         let buffer = draw(AsciiPiece::AuroraFjord, cols, rows);
+        let mut lit = 0;
         for row in 0..rows {
             for col in 0..cols {
                 let cell = &buffer[(col, row)];
-                assert_eq!(cell.bg, Color::Rgb(r, g, b), "{cols}x{rows} at {col},{row}");
-                assert!(
-                    [" ", "·", "•", "●"].contains(&cell.symbol()),
-                    "{cols}x{rows} at {col},{row} drew {:?}",
-                    cell.symbol()
-                );
+                match cell.symbol() {
+                    " " => assert_eq!(cell.bg, ground, "{cols}x{rows} at {col},{row}"),
+                    "▀" => lit += 1,
+                    other => panic!("{cols}x{rows} at {col},{row} drew {other:?}"),
+                }
             }
         }
+        assert!(lit > 0, "{cols}x{rows} drew nothing but ground");
     }
 }
 
 #[test]
-fn the_aurora_at_its_native_aspect_is_the_halftone_of_its_own_rows() {
+fn the_aurora_at_its_native_aspect_is_its_own_pixels_two_to_a_cell() {
     // 200x50 terminal cells are the scene's 200x100 square cells exactly:
-    // each terminal cell is two scene rows averaged, dithered where it sits.
+    // the upper scene row is the cell's ink, the lower its background, each
+    // the halftone pixel dithered where it sits in the scene.
     let buffer = draw(AsciiPiece::AuroraFjord, 200, 50);
     let scene = aurora_fjord::frame(0.0);
+    let rgb = |[r, g, b]: [u8; 3]| Color::Rgb(r, g, b);
+    let ground = rgb(aurora_fjord::GROUND);
     for (col, row) in [(10usize, 3usize), (150, 25), (147, 28), (100, 45)] {
-        let top = scene.cells[(2 * row) * 200 + col];
-        let bottom = scene.cells[(2 * row + 1) * 200 + col];
-        let shade = crate::app::ascii::piece::Shade {
-            level: (top.level + bottom.level) / 2.0,
-            rgb: [
-                (top.rgb[0] + bottom.rgb[0]) / 2.0,
-                (top.rgb[1] + bottom.rgb[1]) / 2.0,
-                (top.rgb[2] + bottom.rgb[2]) / 2.0,
-            ],
-        };
-        let (glyph, index) = aurora_fjord::dot(shade, col, row);
-        let [r, g, b] = aurora_fjord::PALETTE[index as usize];
+        let top = rgb(aurora_fjord::pixel(
+            scene.cells[(2 * row) * 200 + col],
+            col,
+            2 * row,
+        ));
+        let bottom = rgb(aurora_fjord::pixel(
+            scene.cells[(2 * row + 1) * 200 + col],
+            col,
+            2 * row + 1,
+        ));
         let cell = &buffer[(col as u16, row as u16)];
-        assert_eq!(cell.symbol(), glyph.to_string(), "at {col},{row}");
-        assert_eq!(cell.fg, Color::Rgb(r, g, b), "at {col},{row}");
+        match top == ground && bottom == ground {
+            true => assert_eq!(cell.symbol(), " ", "at {col},{row}"),
+            false => {
+                assert_eq!(cell.symbol(), "▀", "at {col},{row}");
+                assert_eq!(cell.fg, top, "at {col},{row}");
+            }
+        }
+        assert_eq!(cell.bg, bottom, "at {col},{row}");
     }
 }
 
