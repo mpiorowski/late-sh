@@ -442,8 +442,6 @@ struct DrawContext<'a> {
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
-    zen_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
-    live_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
     /// The pane beside this player's own running game, published for the
     /// click that opens its composer; cleared every frame like the hits.
     own_chat_hit: &'a std::cell::Cell<Option<Rect>>,
@@ -734,29 +732,13 @@ impl App {
             &self.chat.live_streams,
             &live_rows,
             self.chat.news.all_articles(),
+            self.chat.news.read_cursor(),
             self.live_games.open_watches(),
             live_panel_now,
         );
         // The strip is the #lounge card's alone; another room's card, or
         // the chat center, never carries it.
         let dashboard_live_strip = if home_selected {
-            self.live.view(
-                &self.daily,
-                &self.audio,
-                self.paired_source,
-                self.chat.news.all_articles(),
-                &self.chat.live_streams,
-                &live_rows,
-                &self.live_games,
-            )
-        } else {
-            None
-        };
-        // Zen's Live tile shows the same strip, built only while the page
-        // draws one (not while zoomed on another tile).
-        let zen_live_strip = if self.screen == Screen::Zen
-            && self.zen.draws(crate::app::zen::state::TileKind::Live)
-        {
             self.live.view(
                 &self.daily,
                 &self.audio,
@@ -1777,8 +1759,6 @@ impl App {
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
-                        zen_live_strip,
-                        live_hit: &self.live.hit,
                         own_chat_hit: &self.own_chat_hit,
                     },
                     &mut terminal_image_frame,
@@ -2453,8 +2433,11 @@ impl App {
                     } else {
                         Vec::new()
                     },
-                    live: ctx.zen_live_strip.take(),
-                    live_hit: ctx.live_hit,
+                    live_panel: crate::app::live::panel::LivePanelProps {
+                        rows: &ctx.live_panel_rows,
+                        hit: ctx.live_panel_hit,
+                        now: ctx.live_panel_now,
+                    },
                     wall_tick: ctx.marquee_tick,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);

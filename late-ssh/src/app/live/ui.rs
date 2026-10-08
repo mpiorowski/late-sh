@@ -57,16 +57,6 @@ pub(crate) const GAP: u16 = 2;
 /// The words row the key hint sits on, under what the source says.
 const HINT_ROW: usize = 6;
 
-/// Where the strip is drawn. The #lounge card names its keys in the hint
-/// row and parts the strip from the chat with the rule; a Zen tile has a
-/// border and a title for both, and its title names the tile's keys, as
-/// every Zen tile's does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StripHost {
-    LoungeCard,
-    ZenTile,
-}
-
 /// Which form the card fitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StripSize {
@@ -126,53 +116,10 @@ pub(crate) fn draw_live_strip(
             area.width,
             strip,
             canvas_background(),
-            StripHost::LoungeCard,
         ),
         StripSize::Compact => vec![live_strip_compact_line(area.width, strip)],
     };
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// The form a Zen tile's inner area fits: the picture rows when it has
-/// `PICTURE_ROWS` and the card's width, else the one row. A tile always
-/// spares a row (`zen::layout::MIN_TILE_CELLS`).
-pub(crate) fn fit_live_tile(area: Rect) -> StripSize {
-    if area.width >= MIN_FULL_WIDTH && area.height >= PICTURE_ROWS {
-        StripSize::Full
-    } else {
-        StripSize::Compact
-    }
-}
-
-/// The strip in a Zen tile's inner area, centred top to bottom: the
-/// picture rows with no hint and no rule, or the one row without its rule
-/// label, since the tile's title already says what it is.
-pub(crate) fn draw_live_tile(
-    frame: &mut Frame,
-    area: Rect,
-    strip: &LiveStripView<'_>,
-    hit: &Cell<Option<(Rect, LiveSource)>>,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let lines = match fit_live_tile(area) {
-        StripSize::Full => {
-            live_strip_lines(area.width, strip, canvas_background(), StripHost::ZenTile)
-        }
-        StripSize::Compact => vec![Line::from(compact_body_spans(area.width, strip))],
-    };
-    let height = (lines.len() as u16).min(area.height);
-    let drawn = Rect::new(
-        area.x,
-        area.y + (area.height - height) / 2,
-        area.width,
-        height,
-    );
-    if let Some(source) = strip.opens() {
-        hit.set(Some((drawn, source)));
-    }
-    frame.render_widget(Paragraph::new(lines), drawn);
 }
 
 /// The picture in its column with the words beside it. On the #lounge card
@@ -184,7 +131,6 @@ pub(crate) fn live_strip_lines(
     width: u16,
     strip: &LiveStripView<'_>,
     background: Rgb,
-    host: StripHost,
 ) -> Vec<Line<'static>> {
     let budget = usize::from(width.saturating_sub(PICTURE_COLS + GAP));
     let body = match strip {
@@ -194,13 +140,12 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
         LiveStripView::DoorGame(game) => door_live::body(budget, game),
     };
-    frame_lines(width, body, host)
+    frame_lines(width, body)
 }
 
 /// A source's body in the frame: the picture centred in its column, the
-/// words beside it, and on the #lounge card the hint among them and the
-/// rule under both.
-fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static>> {
+/// words beside it, the hint among them and the rule under both.
+fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
     let StripBody {
         mut picture,
         mut words,
@@ -208,10 +153,7 @@ fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static
         glow,
     } = body;
     let mut lines = Vec::with_capacity(LIVE_STRIP_HEIGHT as usize);
-    match host {
-        StripHost::LoungeCard => words[HINT_ROW] = hint,
-        StripHost::ZenTile => {}
-    }
+    words[HINT_ROW] = hint;
 
     picture.truncate(PICTURE_ROWS as usize);
     // Centre whatever the source drew in the fixed band.
@@ -230,10 +172,7 @@ fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static
         spans.extend(words);
         lines.push(Line::from(spans));
     }
-    match host {
-        StripHost::LoungeCard => lines.push(rule_line(width, glow)),
-        StripHost::ZenTile => {}
-    }
+    lines.push(rule_line(width, glow));
     lines
 }
 

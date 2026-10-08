@@ -32,28 +32,7 @@ fn the_card_picks_the_form_and_keeps_rows_for_the_messages() {
 }
 
 #[test]
-fn a_zen_tile_takes_the_picture_rows_from_eight_rows_up() {
-    let tile = |width, height| Rect {
-        x: 0,
-        y: 0,
-        width,
-        height,
-    };
-    assert_eq!(fit_live_tile(tile(60, PICTURE_ROWS)), StripSize::Full);
-    assert_eq!(
-        fit_live_tile(tile(60, PICTURE_ROWS - 1)),
-        StripSize::Compact,
-        "a short tile gets the one row, as a short card does"
-    );
-    assert_eq!(
-        fit_live_tile(tile(MIN_FULL_WIDTH - 1, 20)),
-        StripSize::Compact,
-        "a narrow one too"
-    );
-}
-
-#[test]
-fn only_the_lounge_card_draws_the_hint_and_the_rule() {
+fn the_card_draws_the_hint_among_the_words_and_the_rule_under_them() {
     let body = || StripBody {
         picture: Vec::new(),
         words: (0..PICTURE_ROWS).map(|_| Vec::new()).collect(),
@@ -77,12 +56,7 @@ fn only_the_lounge_card_draws_the_hint_and_the_rule() {
     let mut card = vec![String::new(); PICTURE_ROWS as usize];
     card[HINT_ROW] = format!("{words}o read");
     card.push(format!("── live {}", "─".repeat(32)));
-    assert_eq!(text(frame_lines(40, body(), StripHost::LoungeCard)), card);
-    assert_eq!(
-        text(frame_lines(40, body(), StripHost::ZenTile)),
-        vec![String::new(); PICTURE_ROWS as usize],
-        "the tile's title names its keys and its border parts it"
-    );
+    assert_eq!(text(frame_lines(40, body())), card);
 }
 
 #[test]
@@ -95,10 +69,11 @@ fn a_picture_wider_than_its_column_never_touches_the_words() {
         words: (0..PICTURE_ROWS)
             .map(|_| vec![Span::raw("words")])
             .collect(),
-        hint: Vec::new(),
+        // The hint takes its row among the words.
+        hint: vec![Span::raw("words")],
         glow: false,
     };
-    let lines = frame_lines(80, body, StripHost::ZenTile);
+    let lines = frame_lines(80, body);
     let words_at = usize::from(PICTURE_COLS + GAP);
     for line in &lines[..PICTURE_ROWS as usize] {
         let text: String = line

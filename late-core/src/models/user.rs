@@ -349,15 +349,16 @@ pub enum RightSidebarComponent {
 
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
-    /// to backfill any panels missing from a stored list. Every panel has a
+    /// to place any panel missing from a stored list (right after the panel
+    /// before it here, see `normalize_right_sidebar_components`). Every panel has a
     /// fixed height; when the rail runs short, panels drop from the bottom
     /// of this order up. Stale stored keys (e.g. the retired "pet",
     /// "activity", "visualizer" and "pot" panels) are dropped on read by
     /// `from_key`; the pet panel came back under a new key so an old stored
     /// "pet" entry cannot switch it on.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
-        Self::Live,
         Self::Daily,
+        Self::Live,
         Self::Music,
         Self::Spacer,
         Self::Bonsai,
@@ -434,10 +435,13 @@ pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
         .collect()
 }
 
-/// Drop duplicates and backfill any missing panels at the end so the list
-/// always covers every component exactly once, preserving stored order.
-/// A backfilled panel takes its `default_enabled()`, the same as a new
-/// user gets it.
+/// Drop duplicates and backfill any missing panels so the list always
+/// covers every component exactly once, preserving stored order. A missing
+/// panel lands where a new user has it: right under the panel that precedes
+/// it in `ALL`, wherever the stored order put that one (the first panel of
+/// `ALL` goes on top), so a new panel shipped under the lobby sits under
+/// the lobby on every rail and is not lost off the bottom of a full one.
+/// It takes its `default_enabled()`, the same as a new user gets it.
 pub fn normalize_right_sidebar_components(
     components: &[RightSidebarComponentSetting],
 ) -> Vec<RightSidebarComponentSetting> {
@@ -448,13 +452,30 @@ pub fn normalize_right_sidebar_components(
         }
         result.push(*setting);
     }
-    for component in RightSidebarComponent::ALL {
-        if !result.iter().any(|s| s.component == component) {
-            result.push(RightSidebarComponentSetting {
+    for (index, component) in RightSidebarComponent::ALL.into_iter().enumerate() {
+        if result.iter().any(|s| s.component == component) {
+            continue;
+        }
+        // Missing panels are placed in ALL order, so the predecessor is
+        // in the list by now, stored or just placed.
+        let at = match index {
+            0 => 0,
+            _ => {
+                let before = RightSidebarComponent::ALL[index - 1];
+                result
+                    .iter()
+                    .position(|s| s.component == before)
+                    .expect("the panel before it in ALL is placed first")
+                    + 1
+            }
+        };
+        result.insert(
+            at,
+            RightSidebarComponentSetting {
                 component,
                 enabled: component.default_enabled(),
-            });
-        }
+            },
+        );
     }
     result
 }

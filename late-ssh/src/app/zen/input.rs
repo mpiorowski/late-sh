@@ -32,7 +32,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_rice(app, event)
 }
 
-/// The chat keys, the Live strip's `o`, and the tank feed `a`. The chat keys belong to the
+/// The chat keys, the Live tile's `s` prefix, and the tank feed `a`. The chat keys belong to the
 /// focused chat tile: `[` `]` rebind it to the previous or next joined
 /// room, `i` and Enter write in its room, `j` `k` select in it, and the
 /// message actions act on its selection; with any other tile focused all
@@ -48,9 +48,6 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         return true;
     }
     if app.zen.focused_kind() == Some(TileKind::Headlines) && handle_headlines(app, byte) {
-        return true;
-    }
-    if app.zen.focused_kind() == Some(TileKind::Live) && handle_live(app, byte) {
         return true;
     }
     let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
@@ -70,13 +67,20 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             return true;
         }
     }
+    // The Live prefix, as on Home: `s` then a row's number opens that row
+    // of the Live tile, from whichever tile has the focus, while the page
+    // draws one (one zoomed away is not shown). Lowercase only: `S` is
+    // the split. Any other key after `s` is swallowed, as on Home.
+    if app.live_prefix_armed {
+        app.live_prefix_armed = false;
+        crate::app::live::input::open_from_prefix(app, byte);
+        return true;
+    }
+    if byte == b's' && app.zen.draws(TileKind::Live) {
+        app.live_prefix_armed = true;
+        return true;
+    }
     match byte {
-        // `o` opens what a Live tile on the page shows, whichever tile has
-        // the focus, as on the #lounge card. One zoomed away is not shown.
-        b'o' if app.zen.draws(TileKind::Live) => {
-            crate::app::live::input::open_from_key(app);
-            true
-        }
         b'[' => {
             if chat_focused {
                 cycle_room(app, -1);
@@ -104,19 +108,6 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         // The backtick chain, as on Home: it hops through the games waiting
         // on you and comes home here.
         b'`' => crate::app::workspace::cycle::cycle_game_workspace(app),
-        _ => false,
-    }
-}
-
-/// The focused Live tile: Enter opens what the strip shows, the way `o`
-/// does on the #lounge card. With nothing to open it still takes the key,
-/// as every tile but a chat does.
-fn handle_live(app: &mut App, byte: u8) -> bool {
-    match byte {
-        b'\r' | b'\n' => {
-            crate::app::live::input::open_from_key(app);
-            true
-        }
         _ => false,
     }
 }

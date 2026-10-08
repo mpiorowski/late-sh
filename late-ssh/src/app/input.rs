@@ -3497,6 +3497,7 @@ fn is_room_search_shortcut(event: &ParsedInput) -> bool {
 fn clear_prefix_arms(app: &mut App) {
     app.music_prefix_armed = false;
     app.room_section_prefix_armed = false;
+    app.live_prefix_armed = false;
 }
 
 /// Everything a full-screen modal has to close before it opens, so it never
@@ -4094,6 +4095,15 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         return true;
     }
 
+    // `s` then a digit opens that row of the Live panel. Any other key
+    // after `s` is swallowed, like `z`'s: a mistyped suffix must not jump
+    // rooms or switch pages.
+    if app.live_prefix_armed {
+        app.live_prefix_armed = false;
+        crate::app::live::input::open_from_prefix(app, byte);
+        return true;
+    }
+
     // The Artboard owns its letters. The paired-client hotkeys (`m` mute,
     // `+`/`-` volume, `v` the music prefix) and `w` (Bonsai Care) stay off
     // that page entirely, the way the voice chords do: the page spends
@@ -4189,6 +4199,19 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !app.chat.room_jump_active =>
         {
             app.room_section_prefix_armed = true;
+            true
+        }
+        // The Live panel's prefix: Home only, where the panel draws its
+        // row numbers and chat spends no `s`; on every other page `s` is
+        // the page's (the Directory's search, the Clubhouse's seat).
+        b's' | b'S'
+            if ctx.screen == Screen::Dashboard
+                && !ctx.chat_composing
+                && !ctx.feeds_processing
+                && !ctx.news_composing
+                && !app.chat.room_jump_active =>
+        {
+            app.live_prefix_armed = true;
             true
         }
         b'\\'

@@ -4537,9 +4537,9 @@ async fn backtick_from_zen_hops_through_the_games_and_comes_home_to_zen() {
     assert_eq!(app.screen, Screen::Dashboard);
 }
 
-/// A watch opened from Zen (`o` on its Live tile showing a live door game)
-/// is a trip into the games like any other stop: backtick comes home to
-/// Zen, and Zen still knows the page its `Ctrl+F` hands back.
+/// A watch opened from Zen (`s1` on the row its Live tile lists the game
+/// on) is a trip into the games like any other stop: backtick comes home
+/// to Zen, and Zen still knows the page its `Ctrl+F` hands back.
 #[tokio::test]
 async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
     use crate::app::common::primitives::Screen;
@@ -4588,13 +4588,14 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
         app.zen.move_kind_picker(1);
     }
     assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    // The tile draws the strip's one-row form.
-    wait_for_render_contains(&mut app, "dcss crawler").await;
+    // The tile lists the game on its first row, with its key.
+    wait_for_render_contains(&mut app, "dcss").await;
+    wait_for_render_contains(&mut app, "s1").await;
 
     // No render runs from here: the test door host is unreachable, so a
     // tick would see the stream end and drop the watch.
-    app.handle_input(b"o");
-    assert_eq!(app.screen, Screen::Games, "o opens the watch");
+    app.handle_input(b"s1");
+    assert_eq!(app.screen, Screen::Games, "s1 opens the watch");
     assert_eq!(
         app.spectate_state.as_ref().map(|state| state.mode()),
         Some(WatchMode::Open)
@@ -4955,10 +4956,11 @@ async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
     );
 }
 
-/// A Live tile shows the #lounge live strip on Zen. Enter on it opens what
-/// it shows, and so does `o` from any tile, as on the card.
+/// A Live tile draws the Live panel's rows on Zen. `s` then the row's
+/// number opens the row from whichever tile has the focus, as the sidebar's
+/// panel does on Home; a stray suffix is swallowed.
 #[tokio::test]
-async fn zen_enter_on_the_live_tile_or_o_anywhere_opens_what_the_strip_shows() {
+async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
     use crate::app::zen::state::{KindPick, TileKind};
     use late_core::models::article::{Article, ArticleParams};
 
@@ -5002,29 +5004,33 @@ async fn zen_enter_on_the_live_tile_or_o_anywhere_opens_what_the_strip_shows() {
         app.zen.move_kind_picker(1);
     }
     assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    wait_for_render_contains(&mut app, "The terminal renaissance").await;
+    wait_for_render_contains(&mut app, "news    The terminal renaissance").await;
 
-    app.handle_input(b"\r");
+    app.handle_input(b"sx");
+    assert_eq!(app.chat.news_modal_url(), None, "a stray suffix opens nothing");
+    assert!(!app.live_prefix_armed, "and disarms the prefix");
+
+    app.handle_input(b"s1");
     assert_eq!(
         app.chat.news_modal_url(),
         Some("https://example.com/terminal-renaissance"),
-        "Enter opens the article"
+        "s1 opens the article"
     );
-    assert!(!app.chat.is_composing(), "Enter never reaches a composer");
+    assert!(!app.chat.is_composing(), "the key never reaches a composer");
 
-    // `o` with a chat tile focused opens the same article.
+    // `s1` with a chat tile focused opens the same article.
     app.chat.close_news_modal();
     app.zen.focus = app
         .zen
         .first_tile_of(TileKind::Chat)
         .expect("the default has a chat");
-    app.handle_input(b"o");
+    app.handle_input(b"s1");
     assert_eq!(
         app.chat.news_modal_url(),
         Some("https://example.com/terminal-renaissance"),
-        "o opens the article from a chat tile"
+        "s1 opens the article from a chat tile"
     );
-    assert!(!app.chat.is_composing(), "o never reaches a composer");
+    assert!(!app.chat.is_composing(), "the key never reaches a composer");
 }
 
 #[tokio::test]
@@ -5074,15 +5080,20 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
     wait_for_render_contains(&mut app, "Under the picker").await;
     let live = app.zen.focus;
 
-    // The picker is up over the page. The strip under it still records
-    // its click rect, but a click there belongs to the picker: nothing
-    // opens and the focus stays put, so the picker converts the tile it
-    // opened on.
+    // The picker is up over the page. The Live tile under it still records
+    // its rows' click rect, but a click there belongs to the picker:
+    // nothing opens and the focus stays put, so the picker converts the
+    // tile it opened on.
     app.handle_input(b" ");
     assert!(app.zen.kind_picker.is_some(), "space opens the picker");
     render_plain(&mut app);
-    let (strip, _) = app.live.hit.get().expect("the live tile drew its strip");
-    let click = format!("\x1b[<0;{};{}M", strip.x + strip.width / 2 + 1, strip.y + 1);
+    let (rows, _) = app
+        .live
+        .panel_hit
+        .get()
+        .expect("the live tile drew its rows");
+    // The first row, where the article is.
+    let click = format!("\x1b[<0;{};{}M", rows.x + 2, rows.y + 1);
     app.handle_input(click.as_bytes());
     assert_eq!(
         app.chat.news_modal_url(),

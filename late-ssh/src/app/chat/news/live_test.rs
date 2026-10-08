@@ -5,7 +5,7 @@ use super::*;
 use crate::app::{
     live::{
         state::LiveStripView,
-        ui::{StripHost, live_strip_compact_line, live_strip_lines},
+        ui::{live_strip_compact_line, live_strip_lines},
     },
     lobby::daily::live_board::canvas_background,
 };
@@ -62,7 +62,7 @@ fn the_strip_shows_the_art_centred_beside_what_it_is_and_who_shared_it() {
     let articles = vec![article(1, "The terminal renaissance", 0)];
     let strip = LiveStripView::Article(view(&articles, Uuid::from_u128(1)).unwrap());
     let lines: Vec<String> =
-        live_strip_lines(WIDTH, &strip, canvas_background(), StripHost::LoungeCard)
+        live_strip_lines(WIDTH, &strip, canvas_background())
             .iter()
             .map(line_text)
             .collect();

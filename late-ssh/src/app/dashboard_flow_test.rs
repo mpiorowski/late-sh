@@ -200,7 +200,7 @@ async fn o_opens_the_live_strip_match_from_the_lounge_card() {
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, "strip-key-them v strip-key-me").await;
 
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch, "o opens the featured match");
@@ -246,7 +246,7 @@ async fn closing_a_board_opened_from_the_live_strip_returns_to_the_lounge_card()
         .await
         .expect("post the open one");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, "strip-close-them v strip-close-me").await;
     assert!(app.lobby.glow(), "the open challenge glows");
 
     app.handle_input(b"o");
@@ -304,7 +304,7 @@ async fn app_with_a_match_on_the_strip(
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, &format!("{name}-them · {name}-me")).await;
     (test_db, app, poster, them.id, posted.id)
 }
 
@@ -396,15 +396,13 @@ async fn clicking_the_live_segment_on_another_board_keeps_that_boards_way_out() 
 }
 
 /// Ctrl+F on a board goes to Zen and closes the board, so the chord back
-/// hands over the page the board was opened from, never an empty board. A
-/// board opened from Zen's Live tile hands back Zen's own page.
+/// hands over the page the board was opened from, never an empty board.
 #[tokio::test]
 async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
     use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
     use crate::app::common::primitives::Screen;
     use crate::app::games::chips::svc::ChipService;
     use crate::app::lobby::daily::{games::DailyGame, svc::DailyService};
-    use crate::app::zen::state::{KindPick, TileKind};
 
     let test_db = new_test_db().await;
     let me = create_test_user(&test_db.db, "strip-zen-me").await;
@@ -431,7 +429,7 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
         .await
         .expect("post");
     app.daily.claim_challenge(posted.id);
-    wait_for_render_contains(&mut app, "\u{2500}\u{2500} live").await;
+    wait_for_render_contains(&mut app, "strip-zen-them · strip-zen-me").await;
 
     // Opened from Home: Ctrl+F twice comes back to Home.
     app.handle_input(b"o");
@@ -444,27 +442,6 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
         Screen::Dashboard,
         "the board was opened from Home"
     );
-
-    // Opened from Zen's Live tile: Ctrl+F twice comes back to Home, the
-    // page Zen was opened over.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.zen.focus = app
-        .zen
-        .first_tile_of(TileKind::Lobby)
-        .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
-        app.zen.move_kind_picker(1);
-    }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    wait_for_render_contains(&mut app, "o open").await;
-    app.handle_input(b"\r");
-    assert_eq!(app.screen, Screen::DailyMatch, "Enter opens the match");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen, "Ctrl+F on the board opens Zen");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Dashboard, "Zen was opened over Home");
 }
 
 /// A track somebody queued in the booth goes up on the live strip, and `o`
@@ -998,7 +975,7 @@ async fn a_click_on_a_live_panel_row_opens_the_watch() {
         }],
     );
     wait_for_render_contains(&mut app, "── live").await;
-    wait_for_render_contains(&mut app, "crawler XL3 Lair:2").await;
+    wait_for_render_contains(&mut app, "dcss    XL3 Lair:2 s1").await;
     let (rect, _) = app
         .live
         .panel_hit
@@ -1012,6 +989,51 @@ async fn a_click_on_a_live_panel_row_opens_the_watch() {
     assert_eq!(app.screen, Screen::Dashboard, "a blank slot opens nothing");
 
     click(&mut app, 0);
+    assert_eq!(app.screen, Screen::Games, "the row opens the Games page");
+    assert_eq!(
+        app.spectate_state
+            .as_ref()
+            .map(|state| (state.playname().to_string(), state.mode())),
+        Some(("crawler".to_string(), WatchMode::Open)),
+        "on the open watch of that game"
+    );
+}
+
+/// `s` then the row's number opens that Live panel row from the keyboard;
+/// a digit with no row under it opens nothing, and any other suffix is
+/// swallowed rather than read as a chat key.
+#[tokio::test]
+async fn s_then_a_digit_opens_the_live_panel_row() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "live-prefix-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "live-prefix-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a width that shows the rail");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: "XL3 Lair:2".to_string(),
+        }],
+    );
+    wait_for_render_contains(&mut app, "dcss    XL3 Lair:2 s1").await;
+
+    app.handle_input(b"sl");
+    assert_eq!(app.screen, Screen::Dashboard, "a stray suffix opens nothing");
+    assert!(!app.live_prefix_armed, "and disarms the prefix");
+
+    app.handle_input(b"s4");
+    assert_eq!(app.screen, Screen::Dashboard, "a blank slot opens nothing");
+
+    app.handle_input(b"s1");
     assert_eq!(app.screen, Screen::Games, "the row opens the Games page");
     assert_eq!(
         app.spectate_state

@@ -163,10 +163,12 @@ With Headlines focused, `j` `k` walk its items the same way and Enter
 copies the selected link to the clipboard (`pending_clipboard`, the way a
 copied search hit goes).
 With a Live tile on the page (`ZenState::draws`, so not one zoomed away
-from), `o` opens what the strip shows from whichever tile has the focus,
-as on the #lounge card (`live::input::open_from_key`); with Live focused,
-Enter does too, and a click on the strip opens it without focusing the
-tile. There is no reply key here: `r` flips the split.
+from), `s` then a row's number opens that row of the tile from whichever
+tile has the focus, as the sidebar's Live panel does on Home
+(`live::input::open_from_prefix`; lowercase only, `S` is the split; any
+other key after `s` is swallowed), and a click on a row opens it without
+focusing the tile. There is no `o` here: the tile is the panel, not the
+strip, and no reply key: `r` flips the split.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
@@ -267,8 +269,8 @@ leaving the page, so a held resize key costs one row update.
   (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), Inbox Enter, Live Enter and `o`, the click the picker
-  swallows, `?` opening the Zen topic, and the status row's all-off
-  removal (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
-  the Live tile, empty and sharing a wide tile with the feed (`ui_test.rs`); the rest of the tile drawing is
-  untested.
+  (`rows_test.rs`), Inbox Enter, the Live tile's `s` prefix, the click the
+  picker swallows, `?` opening the Zen topic, and the status row's all-off
+  removal (`input_flow_test.rs`), and the drawn-kinds gate (`state_test.rs`);
+  the Live tile's rows are the panel's (`live/panel_test.rs`); the rest of
+  the tile drawing is untested.

@@ -726,6 +726,9 @@ pub struct App {
 
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
+    /// `s` was pressed on Home: the next digit opens that row of the
+    /// sidebar's Live panel (`live/input.rs::open_from_prefix`).
+    pub(crate) live_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -1693,6 +1696,7 @@ impl App {
             interaction_mode: config.initial_interaction_mode.unwrap_or_default(),
             music_prefix_armed: false,
             room_section_prefix_armed: false,
+            live_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,

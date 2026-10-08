@@ -201,8 +201,8 @@ fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
     assert_eq!(
         shipped,
         vec![
-            (RightSidebarComponent::Live, true),
             (RightSidebarComponent::Daily, true),
+            (RightSidebarComponent::Live, true),
             (RightSidebarComponent::Music, true),
             (RightSidebarComponent::Spacer, true),
             (RightSidebarComponent::Bonsai, true),
@@ -228,19 +228,17 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
     let components = extract_right_sidebar_components(&settings);
     // Stored order kept for known entries, unknown dropped (including the
     // retired "pet", "activity", "visualizer", and "pot" keys), missing
-    // panels backfilled at the end in ALL order at their default: live,
-    // the lobby and free space on, the pet and the tank off. The retired
-    // "pet" key must not switch on the pet panel, which lives under
+    // panels placed under their ALL predecessor at their default: the
+    // lobby on top (nothing precedes it), live under the lobby, free space
+    // under the music, the pet under the bonsai and the tank under the pet,
+    // the lobby, live and free space on, the pet and the tank off. The
+    // retired "pet" key must not switch on the pet panel, which lives under
     // "pet_box".
     assert_eq!(
         components,
         vec![
             RightSidebarComponentSetting {
-                component: RightSidebarComponent::Bonsai,
-                enabled: false,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Music,
+                component: RightSidebarComponent::Daily,
                 enabled: true,
             },
             RightSidebarComponentSetting {
@@ -248,12 +246,8 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
                 enabled: true,
             },
             RightSidebarComponentSetting {
-                component: RightSidebarComponent::Daily,
-                enabled: true,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Spacer,
-                enabled: true,
+                component: RightSidebarComponent::Bonsai,
+                enabled: false,
             },
             RightSidebarComponentSetting {
                 component: RightSidebarComponent::Pet,
@@ -262,6 +256,14 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
             RightSidebarComponentSetting {
                 component: RightSidebarComponent::Tank,
                 enabled: false,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Music,
+                enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Spacer,
+                enabled: true,
             },
         ]
     );

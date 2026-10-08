@@ -1442,12 +1442,10 @@ impl App {
             )
     }
 
-    /// Whether the live strip is on screen: the #lounge card, or a Live
-    /// tile drawn on Zen (a Live tile zoomed away from doesn't count).
+    /// Whether the live strip is on screen: the #lounge card (Zen's Live
+    /// tile is the panel, which does not animate).
     fn live_strip_shown(&self) -> bool {
         self.lounge_card_shown()
-            || (self.screen == Screen::Zen
-                && self.zen.draws(crate::app::zen::state::TileKind::Live))
     }
 
     /// Whether the right sidebar draws this frame (the settings draft

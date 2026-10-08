@@ -11,7 +11,7 @@ use crate::app::games::{
 };
 use crate::app::live::{
     state::LiveStripView,
-    ui::{GAP, LIVE_STRIP_HEIGHT, StripHost, live_strip_compact_line, live_strip_lines},
+    ui::{GAP, LIVE_STRIP_HEIGHT, live_strip_compact_line, live_strip_lines},
 };
 use crate::app::lobby::daily::{
     briscola::{self, DailyBriscolaState},
@@ -93,7 +93,7 @@ fn strip_height_is_fixed_whatever_it_shows() {
         strip(&item, None, Some("weslin won · eight ball · +400 chips")),
     ] {
         assert_eq!(
-            live_strip_lines(WIDTH, &strip, BACKGROUND, StripHost::LoungeCard).len(),
+            live_strip_lines(WIDTH, &strip, BACKGROUND).len(),
             LIVE_STRIP_HEIGHT as usize
         );
     }
@@ -106,7 +106,6 @@ fn the_words_sit_beside_the_board() {
         WIDTH,
         &strip(&item, None, None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
     let text: Vec<String> = lines.iter().map(line_text).collect();
 
@@ -135,7 +134,6 @@ fn the_words_sit_beside_the_board() {
         WIDTH,
         &strip(&item, Some(&shot), None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
     assert!(
         line_text(&aiming[3]).ends_with("eggy is lining up a shot"),
@@ -147,7 +145,6 @@ fn the_words_sit_beside_the_board() {
         WIDTH,
         &strip(&item, None, Some("weslin won · eight ball · +400 chips")),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
     assert!(line_text(&done[3]).ends_with("weslin won · eight ball · +400 chips"));
     assert!(line_text(&done[6]).ends_with("press ctrl+g to play"));
@@ -189,7 +186,6 @@ fn backgammon_words_mark_each_players_colour_and_never_touch_the_board() {
         WIDTH,
         &strip(&item, None, None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
     let text: Vec<String> = lines.iter().map(line_text).collect();
 
@@ -283,7 +279,6 @@ fn gin_says_how_the_last_hand_ended_once_the_next_is_dealt() {
         WIDTH,
         &strip(&item, None, None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
     let text: Vec<String> = lines.iter().map(line_text).collect();
 
@@ -362,7 +357,6 @@ fn briscola_shows_the_trick_the_follower_took_with_the_challenger_on_top() {
         WIDTH,
         &strip(&item, None, None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
 
     assert_eq!(
@@ -410,7 +404,6 @@ fn gin_shows_the_pile_and_each_hand_with_the_challenger_on_top() {
         WIDTH,
         &strip(&item, None, None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
 
     // eggy holds ten on top, weslin eleven below with the card just drawn.
@@ -475,7 +468,6 @@ fn cribbage_pegs_each_lane_with_the_challenger_on_top() {
         WIDTH,
         &strip(&item, None, None),
         BACKGROUND,
-        StripHost::LoungeCard,
     );
 
     let empty = "·".repeat(20);

@@ -56,6 +56,16 @@ impl SpectateGame {
         }
     }
 
+    /// The game's name in lowercase, the Live panel's first column: it
+    /// sits where a handle sits on the other rows, and reads like one.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Dcss => "dcss",
+            Self::Nethack => "nethack",
+            Self::Brogue => "brogue",
+        }
+    }
+
     /// The door's own screen, where its player runs the game.
     pub const fn screen(self) -> Screen {
         match self {
