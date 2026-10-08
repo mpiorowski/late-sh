@@ -228,7 +228,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, r flips, z zooms, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
-    - The top of the #lounge chat on Home is the live strip, up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened, links shared to News ahead of the rest: a link stays five minutes (o opens it, r replies to it in #lounge; shares are not posted into the chat itself), a track queued in the YouTube booth at least two, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over anything but a link while the cue moves. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
+    - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened, links shared to News ahead of the rest: a link stays five minutes (o opens it, r replies to it in #lounge; shares are not posted into the chat itself), a track queued in the YouTube booth at least two, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over anything but a link while the cue moves. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
     - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"unread N\" counter in the bottom-left border, right of the key hints.\n\
@@ -870,7 +870,7 @@ fn social_help_lines() -> Vec<String> {
         "  s                 share selected entry through News processing",
         "  d                 dismiss selected entry",
         "  r                 refresh RSS now",
-        "  After sharing, the URL becomes a public News article and goes up on the #lounge live strip.",
+        "  After sharing, the URL becomes a public News article and goes up on the #lounge now strip.",
         "",
         "Cyberspace",
         "  cyberspace.online is a small, human social network like ours; late.sh",
@@ -1078,7 +1078,7 @@ fn lobby_help_lines() -> Vec<String> {
         "  Enter             claim / open a match, or sit at a house table",
         "  Esc               close the Lobby",
         "",
-        "The live strip heads #lounge on Home with one thing happening in the house:",
+        "The now strip heads #lounge on Home with one thing happening in the house:",
         "  a link shared to News, a daily match move or result (yours included), or a track queued in the YouTube booth",
         "  things take turns in the order they happened, links ahead of the rest",
         "  a link stays five minutes, a track at least two, a move or a result (with the final board) at least one",
@@ -1467,7 +1467,7 @@ fn news_help_lines() -> Vec<String> {
             "  r                 reply in #lounge quoting the selected story",
             "  d                 delete your own story",
             "  /                 toggle filter to only your stories",
-            "  o on live strip   open the news item modal",
+            "  o on now strip    open the news item modal",
             "  Enter in modal    copy link and close",
             "  N in modal        jump to News with story selected",
             "",
@@ -1476,7 +1476,7 @@ fn news_help_lines() -> Vec<String> {
             "  2. AI extracts a compact summary",
             "  3. ASCII art / preview is generated when possible",
             "  4. the story lands in the shared feed for everyone",
-            "  5. it heads the #lounge chat on Home as the live strip for five minutes (o reads it, r replies)",
+            "  5. it heads the #lounge chat on Home as the now strip for five minutes (o reads it, r replies)",
             "  6. the chips land in your balance",
             "",
             "Good inputs",
@@ -1487,7 +1487,7 @@ fn news_help_lines() -> Vec<String> {
             "  RSS is a private inbox in the Home room rail.",
             "  RSS/Atom subscriptions are managed in Settings > RSS.",
             "  Sharing an RSS entry sends its URL through this News pipeline.",
-            "  Only shared entries become public News articles and go up on the #lounge live strip.",
+            "  Only shared entries become public News articles and go up on the #lounge now strip.",
             "",
             "Notes",
             "  summaries are intentionally compact for terminal reading",
@@ -1537,7 +1537,7 @@ fn zen_help_lines() -> Vec<String> {
         "  a                 feed the tank (free, once a day, +100 chips)",
         "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
         "  click             pet the pet; it reads the rest of your session itself",
-        "  o                 with a live tile on the page, open what the #lounge live strip shows",
+        "  s1-4              with a live tile on the page, open that row of it (the sidebar's live panel, wider)",
         "  Enter / click     on the live tile, the same",
         "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
         "",
@@ -1690,7 +1690,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Care counts the bonsai, tank, and pet still waiting on today's care; click it for Zen."
             .to_string(),
-        "  Live reads what the #lounge live strip shows (a stream, a match, a booth track, a shared link); click it to open that."
+        "  Now reads what the #lounge now strip shows (a stream, a match, a booth track, a shared link); click it to open that."
             .to_string(),
         "  Status segments with a destination are clickable and jump to what they count."
             .to_string(),

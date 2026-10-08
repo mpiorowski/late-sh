@@ -80,7 +80,7 @@ fn the_strip_shows_the_art_centred_beside_what_it_is_and_who_shared_it() {
             String::new(),
             format!("{words}o read · r reply"),
             String::new(),
-            format!("── live {}", "─".repeat(72)),
+            format!("── now {}", "─".repeat(73)),
         ]
     );
 }
@@ -91,7 +91,7 @@ fn the_one_row_form_says_who_shared_what() {
     let strip = LiveStripView::Article(view(&articles, Uuid::from_u128(1)).unwrap());
     assert_eq!(
         line_text(&live_strip_compact_line(WIDTH, &strip)),
-        "── live news mat · The terminal renaissance"
+        "── now news mat · The terminal renaissance"
     );
 }
 

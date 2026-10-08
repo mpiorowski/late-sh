@@ -53,11 +53,11 @@ feed), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):
-bonsai over the current room's chat on the left (64%), and a rail of
-clock, music, lobby, then the pet over the reef on the right, so the pet
-has the tank below it and the bonsai's edge to its left, and alternates
-between them (pinned by `layout_test.rs`). Without a Pet Companion the tile says
-so and points at `/shop`. Pulse is not in it.
+on the left (72%), the bonsai beside the reef over the current room's
+chat; on the right a rail of clock, pet, lobby, live, then music, so the
+pet has the tank against its left edge and watches it (the bonsai is out
+of its reach; pinned by `layout_test.rs`). Without a Pet Companion or the
+Aquarium the tile says so and points at `/shop`. Pulse is not in it.
 
 The active chat is `App::zen_chat_room_id`: the focused chat tile's
 room, else the first chat tile's, else (no chat tile) the current room,

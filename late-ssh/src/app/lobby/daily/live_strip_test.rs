@@ -124,7 +124,7 @@ fn the_words_sit_beside_the_board() {
         .expect("the key is its own span");
     assert_eq!(key.style.fg, Some(theme::AMBER_DIM()), "the key stands out");
     assert!(
-        text[8].starts_with("── live ─"),
+        text[8].starts_with("── now ─"),
         "the rule parts the strip from the chat: {}",
         text[8]
     );
@@ -154,7 +154,7 @@ fn the_words_sit_beside_the_board() {
 fn the_compact_line_names_the_game_and_the_players() {
     let item = pool_item();
     let live = line_text(&live_strip_compact_line(WIDTH, &strip(&item, None, None)));
-    assert!(live.starts_with("── live "), "{live}");
+    assert!(live.starts_with("── now "), "{live}");
     assert!(live.ends_with("8ball eggy v weslin"), "{live}");
 
     let done = line_text(&live_strip_compact_line(

@@ -202,7 +202,9 @@ fn clip_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// `── live ────`, the label lit while the source says so.
+/// `── now ────`, the label lit while the source says so. The strip is
+/// named `now` on screen: what just happened, beside the Live panel,
+/// which is what is on.
 fn rule_line(width: u16, glow: bool) -> Line<'static> {
     let label_style = if glow {
         Style::default()
@@ -213,7 +215,7 @@ fn rule_line(width: u16, glow: bool) -> Line<'static> {
             .fg(theme::AMBER_DIM())
             .add_modifier(Modifier::ITALIC)
     };
-    let label = "live";
+    let label = "now";
     let used = 3 + label.chars().count() + 1;
     let trail = usize::from(width).saturating_sub(used).max(1);
     Line::from(vec![

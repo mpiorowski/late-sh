@@ -55,7 +55,7 @@ fn the_card_draws_the_hint_among_the_words_and_the_rule_under_them() {
     let words = " ".repeat(usize::from(PICTURE_COLS + GAP));
     let mut card = vec![String::new(); PICTURE_ROWS as usize];
     card[HINT_ROW] = format!("{words}o read");
-    card.push(format!("── live {}", "─".repeat(32)));
+    card.push(format!("── now {}", "─".repeat(33)));
     assert_eq!(text(frame_lines(40, body())), card);
 }
 

@@ -4547,7 +4547,7 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
         proxy::LiveGame,
         state::{SpectateGame, WatchMode},
     };
-    use crate::app::zen::state::{KindPick, TileKind};
+    use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-watch-viewer").await;
@@ -4575,20 +4575,11 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
         }],
     );
 
-    // Zen opened over the Leaderboards, with a Live tile showing the game.
+    // Zen opened over the Leaderboards; the default's Live tile lists the
+    // game on its first row, with its key.
     app.set_screen(Screen::Leaderboard);
     app.handle_input(b"\x06");
     wait_for_render_contains(&mut app, "w tend").await;
-    app.zen.focus = app
-        .zen
-        .first_tile_of(TileKind::Lobby)
-        .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
-        app.zen.move_kind_picker(1);
-    }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    // The tile lists the game on its first row, with its key.
     wait_for_render_contains(&mut app, "dcss").await;
     wait_for_render_contains(&mut app, "s1").await;
 
@@ -4961,7 +4952,7 @@ async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
 /// panel does on Home; a stray suffix is swallowed.
 #[tokio::test]
 async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
-    use crate::app::zen::state::{KindPick, TileKind};
+    use crate::app::zen::state::TileKind;
     use late_core::models::article::{Article, ArticleParams};
 
     let test_db = new_test_db().await;
@@ -4994,16 +4985,11 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
     app.handle_input(b"\x06");
     wait_for_render_contains(&mut app, "w tend").await;
 
-    // The lobby tile becomes a Live tile, which shows the shared link.
+    // The default's Live tile shows the shared link.
     app.zen.focus = app
         .zen
-        .first_tile_of(TileKind::Lobby)
-        .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
-        app.zen.move_kind_picker(1);
-    }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+        .first_tile_of(TileKind::Live)
+        .expect("the default has a live tile");
     wait_for_render_contains(&mut app, "news    The terminal renaissance").await;
 
     app.handle_input(b"sx");
@@ -5035,7 +5021,7 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
 
 #[tokio::test]
 async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
-    use crate::app::zen::state::{KindPick, TileKind};
+    use crate::app::zen::state::TileKind;
     use late_core::models::article::{Article, ArticleParams};
 
     let test_db = new_test_db().await;
@@ -5070,13 +5056,8 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
 
     app.zen.focus = app
         .zen
-        .first_tile_of(TileKind::Lobby)
-        .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Live) {
-        app.zen.move_kind_picker(1);
-    }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+        .first_tile_of(TileKind::Live)
+        .expect("the default has a live tile");
     wait_for_render_contains(&mut app, "Under the picker").await;
     let live = app.zen.focus;
 
