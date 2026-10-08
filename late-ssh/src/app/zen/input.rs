@@ -34,7 +34,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 /// The chat keys, the Live tile's `s` prefix, the ascii tile's pieces, and
 /// the tank feed `a`. `[` `]` on a focused ascii tile step it through the
-/// pieces. The chat keys belong to the
+/// pieces and Enter opens the picker over them. The chat keys belong to the
 /// focused chat tile: `[` `]` rebind it to the previous or next joined
 /// room, `i` and Enter write in its room, `j` `k` select in it, and the
 /// message actions act on its selection; with any other tile focused all
@@ -97,6 +97,10 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         b'i' | b'\r' | b'\n' => {
             if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
                 app.chat.start_composing_in_room(room_id);
+            }
+            // Enter on an ascii tile picks its piece from the list.
+            if byte != b'i' && app.zen.focused_kind() == Some(TileKind::Ascii) {
+                crate::app::ascii::picker::input::open(app);
             }
             true
         }

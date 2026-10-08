@@ -129,7 +129,6 @@ async fn settings_cycle_values_share_arrows_color_and_weight() {
                 TweakRow::TerminalImages,
                 TweakRow::LandingPage,
                 TweakRow::ArtSplash,
-                TweakRow::Screensaver,
             ] {
                 app.settings_modal_state
                     .select_mouse_target(Target::Tweak(row));
@@ -150,7 +149,6 @@ async fn settings_cycle_values_share_arrows_color_and_weight() {
                         TweakRow::TerminalImages => "◂ Auto  ▸",
                         TweakRow::LandingPage => "◂ Clubhouse ▸",
                         TweakRow::ArtSplash => "◂ SFW    ▸",
-                        TweakRow::Screensaver => "◂ Aurora fjord ▸",
                         _ => unreachable!(),
                     };
                     let x = (rect.x..rect.right())
@@ -201,12 +199,6 @@ async fn settings_cycle_values_share_arrows_color_and_weight() {
                             .settings_modal_state
                             .draft()
                             .art_splash_mode
-                            .as_str()
-                            .to_string(),
-                        TweakRow::Screensaver => app
-                            .settings_modal_state
-                            .draft()
-                            .screensaver
                             .as_str()
                             .to_string(),
                         _ => unreachable!(),

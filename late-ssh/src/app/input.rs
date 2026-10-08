@@ -842,6 +842,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Over the Zen page, from its ascii tile.
+    if app.piece_picker.is_open() {
+        crate::app::ascii::picker::input::handle_input(app, event);
+        return;
+    }
+
     if app.jobs.post.is_open() {
         crate::app::jobs::input::handle_post_input(app, &event);
         return;
@@ -2167,6 +2173,10 @@ fn dispatch_escape(app: &mut App) {
     // ahead of both, the same order `handle_parsed_input` gives its keys.
     if app.tag_picker.is_open() {
         crate::app::tag_picker::input::close(app);
+        return;
+    }
+    if app.piece_picker.is_open() {
+        crate::app::ascii::picker::input::close(app);
         return;
     }
     if app.show_settings {

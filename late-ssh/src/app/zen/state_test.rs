@@ -320,24 +320,34 @@ fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
 /// forgotten when the tile becomes something else, as a chat tile's room is.
 #[test]
 fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
-    use late_core::models::user::AsciiPiece;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, TextPiece};
+    let aurora = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
+    let donut = AsciiPiece::Text(TextPiece::Donut);
     let mut zen = ZenState::new(RiceLayout {
         root: Node::leaf(TileKind::Ascii),
         look: Look::default(),
     });
-    assert_eq!(zen.focused_piece(), Some(AsciiPiece::AuroraFjord));
+    assert_eq!(zen.focused_piece(), Some(aurora));
     assert!(zen.cycle_focused_piece(true));
-    assert_eq!(zen.focused_piece(), Some(AsciiPiece::Plasma));
+    assert_eq!(
+        zen.focused_piece(),
+        Some(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels))
+    );
     assert!(zen.cycle_focused_piece(false));
     assert!(zen.cycle_focused_piece(false));
-    assert_eq!(zen.focused_piece(), Some(AsciiPiece::Donut), "it wraps");
+    assert_eq!(zen.focused_piece(), Some(donut), "it wraps");
 
     let stored = serde_json::to_string(&zen.rice).expect("serialize");
+    assert!(stored.contains("\"piece\":\"donut\""), "stored by key: {stored}");
     let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
-    assert_eq!(restored.root.piece_at(0), Some(AsciiPiece::Donut));
+    assert_eq!(restored.root.piece_at(0), Some(donut));
+
+    assert!(zen.set_focused_piece(AsciiPiece::Text(TextPiece::Plasma)));
+    assert_eq!(zen.focused_piece(), Some(AsciiPiece::Text(TextPiece::Plasma)));
+    assert!(zen.set_focused_piece(donut));
 
     assert!(zen.split_focused(true));
-    assert_eq!(zen.rice.root.piece_at(0), Some(AsciiPiece::Donut));
+    assert_eq!(zen.rice.root.piece_at(0), Some(donut));
     assert_eq!(zen.rice.root.piece_at(1), None, "the new tile is blank");
     assert!(
         !zen.cycle_focused_piece(true),
@@ -348,7 +358,7 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
     assert!(zen.rice.root.set_kind(0, TileKind::Ascii));
     assert_eq!(
         zen.rice.root.piece_at(0),
-        Some(AsciiPiece::AuroraFjord),
+        Some(aurora),
         "coming back plays the default"
     );
 }

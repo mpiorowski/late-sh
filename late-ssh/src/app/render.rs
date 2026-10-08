@@ -396,6 +396,7 @@ struct DrawContext<'a> {
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     directory_editor: &'a crate::app::directory::editor::state::EditorState,
     tag_picker: &'a crate::app::tag_picker::state::TagPickerState,
+    piece_picker: &'a crate::app::ascii::picker::state::PiecePickerState,
     /// The showcase feed, for the editor's projects page.
     showcase_items: &'a [chat::showcase::svc::ShowcaseFeedItem],
     booth_modal_open: bool,
@@ -1709,6 +1710,7 @@ impl App {
                         room_info_modal_state: &self.room_info_modal_state,
                         directory_editor: &self.directory_editor,
                         tag_picker: &self.tag_picker,
+                        piece_picker: &self.piece_picker,
                         showcase_items: self.chat.showcase.all_items(),
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
@@ -2771,6 +2773,11 @@ impl App {
         // whichever opened it.
         if ctx.tag_picker.is_open() {
             crate::app::tag_picker::ui::draw(frame, inner, ctx.tag_picker);
+        }
+
+        // Over the Zen page, from its ascii tile.
+        if ctx.piece_picker.is_open() {
+            crate::app::ascii::picker::ui::draw(frame, inner, ctx.piece_picker);
         }
 
         if ctx.booth_modal_open {

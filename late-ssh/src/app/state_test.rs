@@ -197,7 +197,7 @@ async fn a_pointer_over_the_terminal_does_not_hold_off_away() {
 #[tokio::test]
 async fn the_key_that_drops_the_screensaver_is_swallowed() {
     use crate::app::common::away::AWAY_AFTER;
-    use late_core::models::user::AsciiPiece;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "saver-key").await;
     let mut app = make_app_in_world(
@@ -211,10 +211,11 @@ async fn the_key_that_drops_the_screensaver_is_swallowed() {
 
     app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
-    assert_eq!(app.screensaver(), Some(AsciiPiece::AuroraFjord));
+    let aurora = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
+    assert_eq!(app.screensaver(), Some(aurora));
 
     app.handle_input(b"\x1b[<35;20;5M");
-    assert_eq!(app.screensaver(), Some(AsciiPiece::AuroraFjord));
+    assert_eq!(app.screensaver(), Some(aurora));
 
     app.handle_input(b"?");
     assert_eq!(app.screensaver(), None);

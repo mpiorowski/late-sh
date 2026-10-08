@@ -191,43 +191,21 @@ impl LandingPage {
     }
 }
 
-/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Zen ascii tile
-/// shows and what the away screensaver plays. Ported from ascii.rest by
-/// @bas3line (MIT). Stored by key in `users.settings` and in the Zen layout.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AsciiPiece {
+/// A colour scene from ascii.rest: shaded per cell, drawn in a
+/// `SceneStyle`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Scene {
     AuroraFjord,
-    Plasma,
-    LavaLamp,
-    Donut,
+    AlpineDawn,
 }
 
-impl AsciiPiece {
-    /// Cycle order: the tile's `[` `]` and the Tweaks row walk it.
-    pub const ALL: [AsciiPiece; 4] = [
-        AsciiPiece::AuroraFjord,
-        AsciiPiece::Plasma,
-        AsciiPiece::LavaLamp,
-        AsciiPiece::Donut,
-    ];
+impl Scene {
+    pub const ALL: [Scene; 2] = [Scene::AuroraFjord, Scene::AlpineDawn];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AuroraFjord => "aurora_fjord",
-            Self::Plasma => "plasma",
-            Self::LavaLamp => "lava_lamp",
-            Self::Donut => "donut",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key.trim() {
-            "aurora_fjord" => Some(Self::AuroraFjord),
-            "plasma" => Some(Self::Plasma),
-            "lava_lamp" => Some(Self::LavaLamp),
-            "donut" => Some(Self::Donut),
-            _ => None,
+            Self::AlpineDawn => "alpine_dawn",
         }
     }
 
@@ -235,9 +213,104 @@ impl AsciiPiece {
     pub fn label(self) -> &'static str {
         match self {
             Self::AuroraFjord => "aurora fjord",
+            Self::AlpineDawn => "alpine dawn",
+        }
+    }
+}
+
+/// How a scene is drawn on the terminal's cells.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SceneStyle {
+    /// The original's halftone, as braille: dots lit by brightness.
+    Dots,
+    /// Solid half-block pixels, two to a cell, in true colour.
+    Pixels,
+}
+
+impl SceneStyle {
+    pub const ALL: [SceneStyle; 2] = [SceneStyle::Dots, SceneStyle::Pixels];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dots => "dots",
+            Self::Pixels => "pixels",
+        }
+    }
+}
+
+/// A text piece from ascii.rest: glyphs in one ink.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextPiece {
+    Plasma,
+    LavaLamp,
+    Donut,
+}
+
+impl TextPiece {
+    pub const ALL: [TextPiece; 3] = [TextPiece::Plasma, TextPiece::LavaLamp, TextPiece::Donut];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plasma => "plasma",
+            Self::LavaLamp => "lava_lamp",
+            Self::Donut => "donut",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
             Self::Plasma => "plasma",
             Self::LavaLamp => "lava lamp",
             Self::Donut => "donut",
+        }
+    }
+}
+
+/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Zen ascii tile
+/// shows and what the away screensaver plays. Ported from ascii.rest by
+/// @bas3line (MIT). Stored by key (`as_str`) in `users.settings` and in the
+/// Zen layout: a scene's key is its name for dots, `<name>_pixels` for
+/// pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AsciiPiece {
+    Scene(Scene, SceneStyle),
+    Text(TextPiece),
+}
+
+impl AsciiPiece {
+    /// Picker and cycle order: each scene in both styles, then the text
+    /// pieces.
+    pub const ALL: [AsciiPiece; 7] = [
+        AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots),
+        AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels),
+        AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Dots),
+        AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Pixels),
+        AsciiPiece::Text(TextPiece::Plasma),
+        AsciiPiece::Text(TextPiece::LavaLamp),
+        AsciiPiece::Text(TextPiece::Donut),
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Scene(Scene::AuroraFjord, SceneStyle::Dots) => "aurora_fjord",
+            Self::Scene(Scene::AuroraFjord, SceneStyle::Pixels) => "aurora_fjord_pixels",
+            Self::Scene(Scene::AlpineDawn, SceneStyle::Dots) => "alpine_dawn",
+            Self::Scene(Scene::AlpineDawn, SceneStyle::Pixels) => "alpine_dawn_pixels",
+            Self::Text(piece) => piece.as_str(),
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        let key = key.trim();
+        Self::ALL.into_iter().find(|piece| piece.as_str() == key)
+    }
+
+    /// Lowercase display name, the way ascii.rest names its pieces; a scene
+    /// names its style too: `aurora fjord · dots`.
+    pub fn label(self) -> String {
+        match self {
+            Self::Scene(scene, style) => format!("{} · {}", scene.label(), style.label()),
+            Self::Text(piece) => piece.label().to_string(),
         }
     }
 
@@ -254,6 +327,22 @@ impl AsciiPiece {
     }
 }
 
+impl Serialize for AsciiPiece {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AsciiPiece {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let key = String::deserialize(deserializer)?;
+        match Self::from_key(&key) {
+            Some(piece) => Ok(piece),
+            None => Err(serde::de::Error::custom(format!("unknown ascii piece {key:?}"))),
+        }
+    }
+}
+
 /// Tweak: what covers the screen while the session is away (`/brb`, or 30
 /// quiet minutes). On by default, playing the aurora.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,7 +352,8 @@ pub enum Screensaver {
 }
 
 impl Screensaver {
-    pub const DEFAULT: Screensaver = Screensaver::Piece(AsciiPiece::AuroraFjord);
+    pub const DEFAULT: Screensaver =
+        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots));
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -279,9 +369,9 @@ impl Screensaver {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Off => "off",
+            Self::Off => "off".to_string(),
             Self::Piece(piece) => piece.label(),
         }
     }

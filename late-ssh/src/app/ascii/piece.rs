@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use late_core::MutexRecover;
-use late_core::models::user::AsciiPiece;
+use late_core::models::user::{AsciiPiece, Scene, TextPiece};
 
 /// One frame edge: the half tier the render loop wakes on while a piece is
 /// up (`tick.rs`, `ANIM_HALF_TICK`). ~7.5fps keeps the slow pieces fluid,
@@ -51,21 +51,38 @@ impl TextFrame {
     }
 }
 
-/// One cell of a shaded scene: its colour before it is quantised, and the
-/// brightness the halftone turns into dot size.
+/// One cell of a shaded scene: the brightness the original's halftone turns
+/// into dot size, the colour it shades the cell with before any of that,
+/// and the ink its largest dot would be drawn in (the piece's own rule,
+/// clamped to 0..=1), which is what the terminal draws.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Shade {
     pub level: f64,
     pub rgb: [f64; 3],
+    pub ink: [f64; 3],
 }
 
-/// A shaded scene's frame on square cells: what the renderer samples down to
-/// the terminal's grid and dithers into dots there (`ui.rs`).
+/// A shaded scene's frame on square cells, on its own ground colour: what
+/// the renderer samples down to the terminal's grid (`ui.rs`).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ShadedFrame {
     pub cols: usize,
     pub rows: usize,
+    pub ground: [u8; 3],
     pub cells: Vec<Shade>,
+}
+
+/// A cell as one solid pixel: its ink over the ground by its brightness. The
+/// original's dot of that ink covers that much of the cell, so from a step
+/// back this is the same tone; drawn solid it fills the terminal cell,
+/// which a glyph cannot.
+pub(crate) fn pixel(shade: Shade, ground: [u8; 3]) -> [u8; 3] {
+    let mut out = [0u8; 3];
+    for c in 0..3 {
+        let base = f64::from(ground[c]);
+        out[c] = (base + (shade.ink[c] * 255.0 - base) * shade.level).round() as u8;
+    }
+    out
 }
 
 /// A frame, ready to draw.
@@ -94,25 +111,41 @@ pub(crate) fn seconds(frame: u64) -> f64 {
 
 /// The piece's frame at `frame`, for an area of `cols` x `rows` cells. The
 /// fixed-size pieces come from the shared cache; the field is drawn to the
-/// area, so it is computed per call (it is the cheapest piece).
+/// area, so it is computed per call (it is the cheapest piece). A scene's
+/// frame is the same in either style, so both share one entry.
 pub(crate) fn picture(piece: AsciiPiece, frame: u64, cols: usize, rows: usize) -> Picture {
     let t = seconds(frame);
     match piece {
-        AsciiPiece::AuroraFjord => cached(piece, frame, || {
-            Picture::Shaded(Arc::new(super::aurora_fjord::frame(t)))
+        AsciiPiece::Scene(scene, _) => cached(Fixed::Scene(scene), frame, || {
+            Picture::Shaded(Arc::new(match scene {
+                Scene::AuroraFjord => super::aurora_fjord::frame(t),
+                Scene::AlpineDawn => super::alpine_dawn::frame(t),
+            }))
         }),
-        AsciiPiece::LavaLamp => cached(piece, frame, || {
-            Picture::Text(Arc::new(super::lava_lamp::frame(t)))
-        }),
-        AsciiPiece::Donut => cached(piece, frame, || {
+        AsciiPiece::Text(TextPiece::LavaLamp) => {
+            cached(Fixed::Text(TextPiece::LavaLamp), frame, || {
+                Picture::Text(Arc::new(super::lava_lamp::frame(t)))
+            })
+        }
+        AsciiPiece::Text(TextPiece::Donut) => cached(Fixed::Text(TextPiece::Donut), frame, || {
             Picture::Text(Arc::new(super::donut::frame(t)))
         }),
-        AsciiPiece::Plasma => Picture::Field(Arc::new(super::plasma::frame(t, cols, rows))),
+        AsciiPiece::Text(TextPiece::Plasma) => {
+            Picture::Field(Arc::new(super::plasma::frame(t, cols, rows)))
+        }
     }
 }
 
+/// What the cache holds a frame of: a scene (whatever style draws it) or a
+/// fixed-size text piece.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fixed {
+    Scene(Scene),
+    Text(TextPiece),
+}
+
 struct Cached {
-    piece: AsciiPiece,
+    piece: Fixed,
     frame: u64,
     picture: Picture,
 }
@@ -121,7 +154,7 @@ struct Cached {
 /// a session drawing the aurora never holds up another drawing the donut;
 /// two sessions racing on one edge both compute it and the second write
 /// wins, which costs a frame of CPU and nothing else.
-fn cached(piece: AsciiPiece, frame: u64, make: impl FnOnce() -> Picture) -> Picture {
+fn cached(piece: Fixed, frame: u64, make: impl FnOnce() -> Picture) -> Picture {
     static CACHE: Mutex<Vec<Cached>> = Mutex::new(Vec::new());
     if let Some(hit) = CACHE
         .lock_recover()

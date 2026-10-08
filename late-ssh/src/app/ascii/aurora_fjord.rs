@@ -5,9 +5,9 @@
 //!
 //! Shaded in colour per cell on a square grid. ascii.rest then draws it as a
 //! halftone, dot size for brightness, ordered-dithered, in the palette colour
-//! nearest its hue; [`dot`] is that step, which the renderer runs at the
-//! terminal's own resolution (`ui.rs`). The land is built once for the whole
-//! process; each frame shades the sky, then mirrors it into the water.
+//! nearest its hue; [`dot`] is that step, kept for the golden frame, while
+//! the renderer draws `Shade::ink` (`ui.rs`). The land is built once for the
+//! whole process; each frame shades the sky, then mirrors it into the water.
 
 use std::f64::consts::PI;
 use std::sync::OnceLock;
@@ -26,6 +26,7 @@ const WLF: f64 = WL as f64;
 
 /// The colour behind the dots.
 pub(crate) const GROUND: [u8; 3] = [0x05, 0x08, 0x0f];
+#[cfg(test)]
 pub(crate) const PALETTE: [[u8; 3]; 43] = [
     [0x0b, 0x13, 0x22],
     [0x10, 0x1b, 0x30],
@@ -74,7 +75,9 @@ pub(crate) const PALETTE: [[u8; 3]; 43] = [
 
 #[cfg(test)]
 const DOTS: [char; 4] = [' ', '·', '•', '●'];
+#[cfg(test)]
 const COVER: [f64; 4] = [0.0, 0.3, 0.6, 1.0];
+#[cfg(test)]
 const BAYER: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -867,48 +870,27 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
             }
             let peak = cr.max(cg).max(cb).max(1e-4);
             let level = clamp(floor + (1.0 - floor) * peak.powf(0.85) * 0.95) * fade;
+            // the largest dot's ink: the colour at full brightness
             cells.push(Shade {
                 level,
                 rgb: [cr, cg, cb],
+                ink: [clamp(cr / peak), clamp(cg / peak), clamp(cb / peak)],
             });
         }
     }
     ShadedFrame {
         cols: W,
         rows: H,
+        ground: GROUND,
         cells,
     }
 }
 
 /// One cell of the halftone as the original draws it: its dot and its
 /// palette colour, dithered by where the cell sits (`x`, `y`). What the
-/// golden frame is compared against; the terminal draws `pixel`.
+/// golden frame is compared against; the terminal draws `Shade::ink`.
 #[cfg(test)]
 pub(crate) fn dot(shade: Shade, x: usize, y: usize) -> (char, u8) {
-    let (step, index) = halftone(shade, x, y);
-    (DOTS[step], index)
-}
-
-/// The same cell as one solid pixel: its dot's colour spread over the cell,
-/// so the dot's size becomes brightness over the ground. What the terminal
-/// draws (`ui::draw_shaded`), where a cell is two of these stacked and a
-/// glyph cannot reach into the next row the way the original's canvas lets
-/// its dots touch.
-pub(crate) fn pixel(shade: Shade, x: usize, y: usize) -> [u8; 3] {
-    let (step, index) = halftone(shade, x, y);
-    let cover = COVER[step];
-    let ink = PALETTE[index as usize];
-    let mut out = [0u8; 3];
-    for c in 0..3 {
-        let ground = f64::from(GROUND[c]);
-        out[c] = js_round(ground + (f64::from(ink[c]) - ground) * cover) as u8;
-    }
-    out
-}
-
-/// The halftone step (0 for no dot, 3 for the largest) and palette colour
-/// of a cell.
-fn halftone(shade: Shade, x: usize, y: usize) -> (usize, u8) {
     let bayer = f64::from(BAYER[(y & 3) * 4 + (x & 3)]) / 16.0 - 0.47;
     let step = js_round(shade.level * 3.0 + bayer).clamp(0.0, 3.0) as usize;
     let [cr, cg, cb] = shade.rgb;
@@ -919,14 +901,15 @@ fn halftone(shade: Shade, x: usize, y: usize) -> (usize, u8) {
     };
     let s = (0.3 + 0.7 * want) / peak;
     (
-        step,
+        DOTS[step],
         nearest(clamp(cr * s), clamp(cg * s), clamp(cb * s)),
     )
 }
 
 /// The palette colour nearest a colour, weighted toward green the way the
 /// eye is.
-fn nearest(r: f64, g: f64, b: f64) -> u8 {
+#[cfg(test)]
+pub(crate) fn nearest(r: f64, g: f64, b: f64) -> u8 {
     let mut best = 0usize;
     let mut best_d = f64::MAX;
     for (i, [pr, pg, pb]) in PALETTE.iter().enumerate() {

@@ -10,8 +10,8 @@ use late_core::models::statusline::{
     LabelMode, StatusComponent, StatusComponentSetting, StatusVariant,
 };
 use late_core::models::user::{
-    InteractionMode, RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
-    normalize_text_brightness_adjustment, sanitize_username_input,
+    AsciiPiece, InteractionMode, RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
+    Screensaver, normalize_text_brightness_adjustment, sanitize_username_input,
 };
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -48,6 +48,25 @@ pub(crate) enum PickerKind {
     Timezone,
     Language,
     InteractionMode,
+    Screensaver,
+}
+
+/// Off, then every piece: the Screensaver row's choices, in picker order.
+pub(crate) fn screensaver_choices() -> Vec<Screensaver> {
+    std::iter::once(Screensaver::Off)
+        .chain(AsciiPiece::ALL.into_iter().map(Screensaver::Piece))
+        .collect()
+}
+
+/// The Screensaver row's label for a choice: the piece's name, capitalised
+/// (`Aurora fjord · dots`).
+pub(crate) fn screensaver_label(saver: Screensaver) -> String {
+    let label = saver.label();
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 pub(crate) const INTERACTION_MODES: [InteractionMode; 3] = [
@@ -1156,7 +1175,9 @@ impl SettingsModalState {
                 self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(true);
             }
             TweakRow::Screensaver => {
-                self.draft.screensaver = self.draft.screensaver.cycle(true);
+                // A list, not a value: Enter opens the picker instead.
+                self.open_picker(PickerKind::Screensaver);
+                return;
             }
             TweakRow::PaperAtLogin => {
                 self.draft.paper_at_login ^= true;
@@ -2202,7 +2223,11 @@ impl SettingsModalState {
                 .iter()
                 .position(|mode| *mode == self.interaction_mode)
                 .unwrap_or(0),
-            _ => 0,
+            PickerKind::Screensaver => screensaver_choices()
+                .iter()
+                .position(|saver| *saver == self.draft.screensaver)
+                .unwrap_or(0),
+            PickerKind::Country | PickerKind::Timezone => 0,
         };
         self.picker.scroll_offset = 0;
     }
@@ -2236,8 +2261,17 @@ impl SettingsModalState {
             Some(PickerKind::Timezone) => self.filtered_timezones().len(),
             Some(PickerKind::Language) => self.filtered_languages().len(),
             Some(PickerKind::InteractionMode) => self.filtered_interaction_modes().len(),
+            Some(PickerKind::Screensaver) => self.filtered_screensavers().len(),
             None => 0,
         }
+    }
+
+    pub(crate) fn filtered_screensavers(&self) -> Vec<Screensaver> {
+        let query = self.picker.query.trim().to_lowercase();
+        screensaver_choices()
+            .into_iter()
+            .filter(|saver| saver.label().contains(&query))
+            .collect()
     }
 
     pub(crate) fn filtered_languages(&self) -> Vec<TranslateLang> {
@@ -2329,6 +2363,16 @@ impl SettingsModalState {
                     .copied()
                 {
                     self.draft.translate_to = lang;
+                    mutated = true;
+                }
+            }
+            Some(PickerKind::Screensaver) => {
+                if let Some(saver) = self
+                    .filtered_screensavers()
+                    .get(self.picker.selected_index)
+                    .copied()
+                {
+                    self.draft.screensaver = saver;
                     mutated = true;
                 }
             }

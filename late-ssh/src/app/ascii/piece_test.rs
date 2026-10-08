@@ -1,4 +1,4 @@
-use late_core::models::user::AsciiPiece;
+use late_core::models::user::{AsciiPiece, TextPiece};
 
 use super::{FRAME_MS, Picture, js_i32, js_round, picture, seconds};
 
@@ -26,10 +26,10 @@ fn a_frame_edge_is_the_half_tier() {
 
 #[test]
 fn sessions_asking_for_one_frame_share_it() {
-    let Picture::Text(first) = picture(AsciiPiece::Donut, 7, 80, 24) else {
+    let Picture::Text(first) = picture(AsciiPiece::Text(TextPiece::Donut), 7, 80, 24) else {
         panic!("the donut is fixed-size text art");
     };
-    let Picture::Text(again) = picture(AsciiPiece::Donut, 7, 120, 40) else {
+    let Picture::Text(again) = picture(AsciiPiece::Text(TextPiece::Donut), 7, 120, 40) else {
         panic!("the donut is fixed-size text art");
     };
     assert!(std::sync::Arc::ptr_eq(&first, &again));
@@ -39,16 +39,16 @@ fn sessions_asking_for_one_frame_share_it() {
 fn every_piece_draws_a_picture_of_its_kind() {
     for piece in AsciiPiece::ALL {
         match (piece, picture(piece, 3, 30, 10)) {
-            (AsciiPiece::AuroraFjord, Picture::Shaded(scene)) => {
+            (AsciiPiece::Scene(..), Picture::Shaded(scene)) => {
                 assert_eq!((scene.cols, scene.rows), (200, 100));
             }
-            (AsciiPiece::LavaLamp, Picture::Text(art)) => {
+            (AsciiPiece::Text(TextPiece::LavaLamp), Picture::Text(art)) => {
                 assert_eq!((art.cols, art.rows), (30, 27));
             }
-            (AsciiPiece::Donut, Picture::Text(art)) => {
+            (AsciiPiece::Text(TextPiece::Donut), Picture::Text(art)) => {
                 assert_eq!((art.cols, art.rows), (40, 22));
             }
-            (AsciiPiece::Plasma, Picture::Field(art)) => {
+            (AsciiPiece::Text(TextPiece::Plasma), Picture::Field(art)) => {
                 assert_eq!((art.cols, art.rows), (30, 10));
             }
             (piece, _) => panic!("{} drew the wrong kind of picture", piece.label()),

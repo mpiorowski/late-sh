@@ -26,8 +26,9 @@ simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
 the feeding streak or red for the days unfed, see the hub CONTEXT), ascii (an
 animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: the aurora
-until `[` `]` step it through the others, the piece named in the title,
-`ascii · plasma`; the piece is stored on the leaf beside `room`, absent
+in dots until `[` `]` step it through the others or Enter picks one from
+the list (`ascii/picker`, over the page), the piece named in the title,
+`ascii · aurora fjord · pixels`; the piece is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
 changes kind, as a chat tile's room is; `Z` zooms it over the whole page,
 the screensaver you keep), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
@@ -173,8 +174,10 @@ other key after `s` is swallowed), and a click on a row opens it without
 focusing the tile. There is no `o` here: the tile is the panel, not the
 strip, and no reply key: `r` flips the split.
 With an ascii tile focused, `[` `]` step it through the pieces
-(`input::cycle_tile`, saved with the layout); on any tile that is neither
-a chat nor an ascii tile they do nothing.
+(`input::cycle_tile`, saved with the layout) and Enter opens the piece
+picker (`../ascii/picker`, `App::piece_picker`, routed ahead of the page
+in `app/input.rs` and drawn over it in `render.rs`); on any tile that is
+neither a chat nor an ascii tile they do nothing.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row

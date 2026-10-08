@@ -708,6 +708,8 @@ pub struct App {
     pub(crate) directory_editor: crate::app::directory::editor::state::EditorState,
     /// The tag picker the settings modal and the profile editor open.
     pub(crate) tag_picker: super::tag_picker::state::TagPickerState,
+    /// The piece picker a Zen ascii tile opens (`app/ascii/picker`).
+    pub(crate) piece_picker: super::ascii::picker::state::PiecePickerState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
@@ -1707,6 +1709,7 @@ impl App {
             ),
             directory_editor: crate::app::directory::editor::state::EditorState::default(),
             tag_picker: super::tag_picker::state::TagPickerState::default(),
+            piece_picker: super::ascii::picker::state::PiecePickerState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_source: config.initial_audio_source,
             selected_radio_station: config.initial_radio_station,

@@ -1,10 +1,6 @@
-//! Golden frame from ascii.rest's own `aurora-fjord.ts` (node, `frame(1)`),
-//! halftoned at its native 200x100 the way the original draws it. One edit
-//! to the original before recording: its nearest-colour lookup caches by
-//! 5-bit colour bucket and keeps whichever colour asked first, so its
-//! colours depend on draw order; the fixture was recorded with that cache
-//! removed, which is the exact lookup this port does. The dots are the same
-//! with or without the cache.
+//! Golden frame from ascii.rest's own `alpine-dawn.ts` (node, `frame(1)`),
+//! halftoned at its native 200x100 the way the original draws it, recorded
+//! with its nearest-colour cache removed (`aurora_fjord_test.rs` says why).
 
 use super::{COLS, PALETTE, ROWS, dot, frame, nearest};
 
@@ -22,10 +18,10 @@ fn frame_matches_ascii_rest_dot_for_dot_and_colour_for_colour() {
         }
         text.push('\n');
     }
-    assert_eq!(text, include_str!("fixtures/aurora_fjord_t1.txt"));
+    assert_eq!(text, include_str!("fixtures/alpine_dawn_t1.txt"));
     assert_eq!(
         colors.as_slice(),
-        include_bytes!("fixtures/aurora_fjord_t1.colors").as_slice()
+        include_bytes!("fixtures/alpine_dawn_t1.colors").as_slice()
     );
 }
 

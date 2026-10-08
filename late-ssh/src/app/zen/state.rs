@@ -2,7 +2,7 @@
 //! and the focus that edits it. Everything here is pure data; persistence is
 //! the orchestration layer's job (`App::flush_zen_layout`).
 
-use late_core::models::user::AsciiPiece;
+use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -126,7 +126,7 @@ pub enum Node {
 }
 
 /// What a new ascii tile plays.
-pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece::AuroraFjord;
+pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
 
 /// Per-mille bounds for a split's first child, so neither side is ever
 /// handed the whole split.
@@ -666,6 +666,12 @@ impl ZenState {
     /// The piece the focused tile plays, when it is an ascii tile.
     pub fn focused_piece(&self) -> Option<AsciiPiece> {
         self.rice.root.piece_at(self.focus)
+    }
+
+    /// Give the focused ascii tile a piece; `false` when the focused tile is
+    /// not an ascii tile.
+    pub fn set_focused_piece(&mut self, piece: AsciiPiece) -> bool {
+        self.rice.root.set_piece(self.focus, piece)
     }
 
     /// Step the focused ascii tile to the next (or previous) piece; `false`

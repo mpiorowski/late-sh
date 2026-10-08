@@ -1783,6 +1783,7 @@ fn draw_picker(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) 
         Some(PickerKind::Timezone) => " Pick Timezone ",
         Some(PickerKind::Language) => " Target language ",
         Some(PickerKind::InteractionMode) => " Interaction mode ",
+        Some(PickerKind::Screensaver) => " Screensaver ",
         None => " Picker ",
     };
     let block = Block::default()
@@ -1859,6 +1860,11 @@ fn draw_picker(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) 
             .filtered_interaction_modes()
             .into_iter()
             .map(|mode| super::state::interaction_mode_label(mode).to_string())
+            .collect(),
+        Some(PickerKind::Screensaver) => state
+            .filtered_screensavers()
+            .into_iter()
+            .map(super::state::screensaver_label)
             .collect(),
         None => Vec::new(),
     };
@@ -3634,21 +3640,15 @@ fn terminal_images_span(mode: late_core::models::user::TerminalImagesMode) -> Va
 }
 
 /// The "Screensaver" row: the piece that covers the screen while the session
-/// is away (`/brb`, or 30 quiet minutes), or Off. Cycled with the arrows.
+/// is away (`/brb`, or 30 quiet minutes), or Off. Enter opens the picker;
+/// Left/Right still cycle.
 fn screensaver_span(saver: late_core::models::user::Screensaver) -> ValueSpan {
-    use late_core::models::user::{AsciiPiece, Screensaver};
-    let label = |saver: Screensaver| match saver {
-        Screensaver::Off => "Off",
-        Screensaver::Piece(AsciiPiece::AuroraFjord) => "Aurora fjord",
-        Screensaver::Piece(AsciiPiece::Plasma) => "Plasma",
-        Screensaver::Piece(AsciiPiece::LavaLamp) => "Lava lamp",
-        Screensaver::Piece(AsciiPiece::Donut) => "Donut",
-    };
-    let choices: Vec<&str> = std::iter::once(Screensaver::Off)
-        .chain(AsciiPiece::ALL.into_iter().map(Screensaver::Piece))
-        .map(label)
+    let choices: Vec<String> = super::state::screensaver_choices()
+        .into_iter()
+        .map(super::state::screensaver_label)
         .collect();
-    cycle_value_span(label(saver), &choices)
+    let choices: Vec<&str> = choices.iter().map(String::as_str).collect();
+    picker_value_span(&super::state::screensaver_label(saver), &choices)
 }
 
 /// The "Land on" row: the page a session opens on, cycled with the arrows.
