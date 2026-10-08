@@ -760,6 +760,59 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
     );
 }
 
+#[test]
+fn screensaver_reads_the_choice_and_falls_back_to_the_aurora() {
+    use crate::models::user::{AsciiPiece, Screensaver, extract_screensaver};
+    assert_eq!(
+        extract_screensaver(&json!({})),
+        Screensaver::Piece(AsciiPiece::AuroraFjord)
+    );
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "off" })),
+        Screensaver::Off
+    );
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "lava_lamp" })),
+        Screensaver::Piece(AsciiPiece::LavaLamp)
+    );
+    // A piece this binary does not know (a rolled-back deploy) plays the
+    // default rather than switching the screensaver off.
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "night_coast" })),
+        Screensaver::DEFAULT
+    );
+    // Every stored key reads back as itself.
+    for saver in
+        std::iter::once(Screensaver::Off).chain(AsciiPiece::ALL.into_iter().map(Screensaver::Piece))
+    {
+        assert_eq!(Screensaver::from_key(saver.as_str()), Some(saver));
+    }
+}
+
+#[test]
+fn screensaver_cycle_walks_off_then_every_piece() {
+    use crate::models::user::{AsciiPiece, Screensaver};
+    let mut seen = vec![Screensaver::Off];
+    let mut at = Screensaver::Off.cycle(true);
+    while at != Screensaver::Off {
+        seen.push(at);
+        at = at.cycle(true);
+    }
+    assert_eq!(
+        seen,
+        vec![
+            Screensaver::Off,
+            Screensaver::Piece(AsciiPiece::AuroraFjord),
+            Screensaver::Piece(AsciiPiece::Plasma),
+            Screensaver::Piece(AsciiPiece::LavaLamp),
+            Screensaver::Piece(AsciiPiece::Donut),
+        ]
+    );
+    for saver in seen {
+        assert_eq!(saver.cycle(true).cycle(false), saver);
+    }
+}
+
 #[tokio::test]
 async fn paper_shown_claim_wins_once_per_edition_and_only_moves_forward() {
     let (client, _test_db) = setup_db().await;

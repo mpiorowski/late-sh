@@ -144,10 +144,12 @@ pub(crate) enum TweakRow {
     LandingPage,
     PaperAtLogin,
     ArtSplash,
+    // Away group.
+    Screensaver,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 12] = [
+    pub(crate) const ALL: [TweakRow; 13] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -160,6 +162,7 @@ impl TweakRow {
         TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
         TweakRow::ArtSplash,
+        TweakRow::Screensaver,
     ];
 }
 
@@ -1152,6 +1155,9 @@ impl SettingsModalState {
             TweakRow::ArtSplash => {
                 self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(true);
             }
+            TweakRow::Screensaver => {
+                self.draft.screensaver = self.draft.screensaver.cycle(true);
+            }
             TweakRow::PaperAtLogin => {
                 self.draft.paper_at_login ^= true;
             }
@@ -1175,6 +1181,10 @@ impl SettingsModalState {
             }
             TweakRow::ArtSplash => {
                 self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(forward);
+                self.save();
+            }
+            TweakRow::Screensaver => {
+                self.draft.screensaver = self.draft.screensaver.cycle(forward);
                 self.save();
             }
             TweakRow::TerminalImages => {
@@ -2699,6 +2709,7 @@ impl SettingsModalState {
             start_with_music_muted: draft.start_with_music_muted,
             landing_page: draft.landing_page,
             paper_at_login: draft.paper_at_login,
+            screensaver: draft.screensaver,
             show_watch_chat: draft.show_watch_chat,
             art_splash_mode: draft.art_splash_mode,
             terminal_images: draft.terminal_images,

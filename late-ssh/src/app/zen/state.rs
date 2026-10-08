@@ -2,6 +2,7 @@
 //! and the focus that edits it. Everything here is pure data; persistence is
 //! the orchestration layer's job (`App::flush_zen_layout`).
 
+use late_core::models::user::AsciiPiece;
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -14,6 +15,8 @@ use super::layout;
 pub enum TileKind {
     Bonsai,
     Aquarium,
+    /// An animated ascii piece (`app/ascii`); `Z` zooms it to a screensaver.
+    Ascii,
     Pet,
     Chat,
     Music,
@@ -36,9 +39,10 @@ pub enum TileKind {
 
 impl TileKind {
     /// Every kind, alphabetical by label: the tile picker's rows.
-    pub const ALL: [TileKind; 15] = [
+    pub const ALL: [TileKind; 16] = [
         TileKind::Activity,
         TileKind::Aquarium,
+        TileKind::Ascii,
         TileKind::Blank,
         TileKind::Bonsai,
         TileKind::Chat,
@@ -58,6 +62,7 @@ impl TileKind {
         match self {
             TileKind::Bonsai => "bonsai",
             TileKind::Aquarium => "aquarium",
+            TileKind::Ascii => "ascii",
             TileKind::Pet => "pet",
             TileKind::Chat => "chat",
             TileKind::Music => "music",
@@ -107,6 +112,10 @@ pub enum Node {
         /// current room, Home's selection or #lounge. Other kinds ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         room: Option<Uuid>,
+        /// The piece an ascii tile plays; `None` (the stored default) is
+        /// [`DEFAULT_PIECE`]. Other kinds ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        piece: Option<AsciiPiece>,
     },
     Split {
         dir: Dir,
@@ -115,6 +124,9 @@ pub enum Node {
         second: Box<Node>,
     },
 }
+
+/// What a new ascii tile plays.
+pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece::AuroraFjord;
 
 /// Per-mille bounds for a split's first child, so neither side is ever
 /// handed the whole split.
@@ -138,7 +150,11 @@ pub const MAX_CHAT_TILES: usize = 10;
 
 impl Node {
     pub fn leaf(kind: TileKind) -> Self {
-        Node::Leaf { kind, room: None }
+        Node::Leaf {
+            kind,
+            room: None,
+            piece: None,
+        }
     }
 
     pub fn split(dir: Dir, share: u16, first: Node, second: Node) -> Self {
@@ -195,6 +211,55 @@ impl Node {
         self.leaf_kinds().get(ordinal).copied()
     }
 
+    /// The piece the leaf at `ordinal` plays, when it is an ascii tile.
+    pub fn piece_at(&self, ordinal: usize) -> Option<AsciiPiece> {
+        let mut remaining = ordinal;
+        match self.leaf_ref(&mut remaining) {
+            Some(Node::Leaf {
+                kind: TileKind::Ascii,
+                piece,
+                ..
+            }) => Some(piece.unwrap_or(DEFAULT_PIECE)),
+            _ => None,
+        }
+    }
+
+    /// Set the piece the leaf at `ordinal` plays; `false` when it is not an
+    /// ascii tile.
+    pub fn set_piece(&mut self, ordinal: usize, new_piece: AsciiPiece) -> bool {
+        let mut remaining = ordinal;
+        match self.leaf_mut(&mut remaining) {
+            Some(Node::Leaf {
+                kind: TileKind::Ascii,
+                piece,
+                ..
+            }) => {
+                *piece = Some(new_piece);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn leaf_ref(&self, ordinal: &mut usize) -> Option<&Node> {
+        match self {
+            Node::Leaf { .. } => {
+                if *ordinal == 0 {
+                    Some(self)
+                } else {
+                    *ordinal -= 1;
+                    None
+                }
+            }
+            Node::Split { first, second, .. } => {
+                if let Some(leaf) = first.leaf_ref(ordinal) {
+                    return Some(leaf);
+                }
+                second.leaf_ref(ordinal)
+            }
+        }
+    }
+
     /// Bind the leaf at `ordinal` to a room (or back to the current room).
     pub fn set_room(&mut self, ordinal: usize, new_room: Option<Uuid>) -> bool {
         let mut remaining = ordinal;
@@ -232,22 +297,31 @@ impl Node {
         let Some(leaf) = self.leaf_mut(&mut remaining) else {
             return false;
         };
-        let Node::Leaf { kind, room } = *leaf else {
+        let Node::Leaf { kind, room, piece } = *leaf else {
             return false;
         };
-        *leaf = Node::split(dir, 500, Node::Leaf { kind, room }, Node::leaf(new_kind));
+        *leaf = Node::split(
+            dir,
+            500,
+            Node::Leaf { kind, room, piece },
+            Node::leaf(new_kind),
+        );
         true
     }
 
     /// Change what the leaf at `ordinal` shows. A tile that stops being a
-    /// chat forgets its room, so cycling back lands on the current room.
+    /// chat forgets its room, so cycling back lands on the current room;
+    /// one that stops being an ascii tile forgets its piece the same way.
     pub fn set_kind(&mut self, ordinal: usize, new_kind: TileKind) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
-            Some(Node::Leaf { kind, room }) => {
+            Some(Node::Leaf { kind, room, piece }) => {
                 *kind = new_kind;
                 if new_kind != TileKind::Chat {
                     *room = None;
+                }
+                if new_kind != TileKind::Ascii {
+                    *piece = None;
                 }
                 true
             }
@@ -549,6 +623,7 @@ impl ZenState {
             TileKind::Music | TileKind::Visualizer => true,
             TileKind::Bonsai
             | TileKind::Aquarium
+            | TileKind::Ascii
             | TileKind::Pet
             | TileKind::Chat
             | TileKind::Clock
@@ -581,6 +656,20 @@ impl ZenState {
             true => self.focused_kind().into_iter().collect(),
             false => self.rice.root.leaf_kinds(),
         }
+    }
+
+    /// The piece the focused tile plays, when it is an ascii tile.
+    pub fn focused_piece(&self) -> Option<AsciiPiece> {
+        self.rice.root.piece_at(self.focus)
+    }
+
+    /// Step the focused ascii tile to the next (or previous) piece; `false`
+    /// when the focus is not on an ascii tile.
+    pub fn cycle_focused_piece(&mut self, forward: bool) -> bool {
+        let Some(piece) = self.focused_piece() else {
+            return false;
+        };
+        self.rice.root.set_piece(self.focus, piece.cycle(forward))
     }
 
     /// The page opening: the first time this session, the focus moves to

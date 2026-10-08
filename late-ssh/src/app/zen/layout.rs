@@ -17,9 +17,9 @@ pub fn rice_fits(area: Rect) -> bool {
     area.width >= RICE_MIN_COLS && area.height >= RICE_MIN_ROWS
 }
 
-/// The Rice page: the tiles, then the status row at the bottom when the
-/// page has one (`statusline::bar::zen_row_shown`); without it the tiles
-/// take the whole page.
+/// The Rice page: the tiles, then the status row at the bottom (the user's
+/// status line and the page's keys) whenever the page is drawn at all
+/// (`rice_fits`); a page too small to draw has no row.
 pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
     match status_row {
         true => {

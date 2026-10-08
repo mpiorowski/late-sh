@@ -132,13 +132,14 @@ async fn a_user_is_away_only_once_every_session_is() {
     assert!(!laptop.sync_away(), "the laptop was just used");
     assert!(!is_away(), "the laptop keeps the user here");
 
-    laptop.last_input_at = std::time::Instant::now() - AWAY_AFTER;
+    laptop.last_active_at = std::time::Instant::now() - AWAY_AFTER;
     assert!(laptop.sync_away());
     assert!(is_away(), "both sessions are away now");
     assert!(!laptop.sync_away(), "an unchanged flag is not rewritten");
 
     desktop.handle_input(b"j");
-    assert!(desktop.sync_away(), "any key brings the desktop back");
+    assert!(!desktop.away, "any key brings the desktop back, at once");
+    assert!(!desktop.sync_away(), "the key already synced the flag");
     assert!(!is_away());
 }
 
@@ -160,6 +161,66 @@ async fn brb_holds_through_mouse_motion_until_a_key() {
     assert!(app.away);
 
     app.handle_input(b"j");
-    assert!(app.sync_away(), "a key brings the session back");
+    assert!(!app.away, "a key brings the session back, at once");
+    assert!(!app.sync_away(), "the key already synced the flag");
+}
+
+/// The 30-minute clock counts from the last thing a person did. A pointer
+/// resting on (or drifting over) the terminal reports motion all the time
+/// under any-event tracking; it must not keep the session here, or a
+/// terminal left open under the mouse never goes away.
+#[tokio::test]
+async fn a_pointer_over_the_terminal_does_not_hold_off_away() {
+    use crate::app::common::away::AWAY_AFTER;
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "away-pointer").await;
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "pointer",
+        SessionWorld::default(),
+    );
+
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    app.handle_input(b"\x1b[<35;20;5M");
+    app.handle_input(b"\x1b[I");
+    assert!(
+        app.sync_away(),
+        "thirty quiet minutes are away, pointer or not"
+    );
+    assert!(app.away);
+}
+
+/// Away with the Tweak at its default, the aurora covers the screen. The
+/// pointer crossing it changes nothing, and the key that drops it is
+/// swallowed: `?` over the screensaver opens no guide, the next one does.
+#[tokio::test]
+async fn the_key_that_drops_the_screensaver_is_swallowed() {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::AsciiPiece;
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "saver-key").await;
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "saver",
+        SessionWorld::default(),
+    );
+    app.set_screen(crate::app::common::primitives::Screen::Dashboard);
+    assert_eq!(app.screensaver(), None, "a session that is here has none");
+
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert_eq!(app.screensaver(), Some(AsciiPiece::AuroraFjord));
+
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.screensaver(), Some(AsciiPiece::AuroraFjord));
+
+    app.handle_input(b"?");
+    assert_eq!(app.screensaver(), None);
     assert!(!app.away);
+    assert!(!app.show_help, "the waking key is not the page's");
+
+    app.handle_input(b"?");
+    assert!(app.show_help, "the next key is");
 }

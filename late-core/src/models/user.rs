@@ -191,6 +191,115 @@ impl LandingPage {
     }
 }
 
+/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Zen ascii tile
+/// shows and what the away screensaver plays. Ported from ascii.rest by
+/// @bas3line (MIT). Stored by key in `users.settings` and in the Zen layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AsciiPiece {
+    AuroraFjord,
+    Plasma,
+    LavaLamp,
+    Donut,
+}
+
+impl AsciiPiece {
+    /// Cycle order: the tile's `[` `]` and the Tweaks row walk it.
+    pub const ALL: [AsciiPiece; 4] = [
+        AsciiPiece::AuroraFjord,
+        AsciiPiece::Plasma,
+        AsciiPiece::LavaLamp,
+        AsciiPiece::Donut,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AuroraFjord => "aurora_fjord",
+            Self::Plasma => "plasma",
+            Self::LavaLamp => "lava_lamp",
+            Self::Donut => "donut",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "aurora_fjord" => Some(Self::AuroraFjord),
+            "plasma" => Some(Self::Plasma),
+            "lava_lamp" => Some(Self::LavaLamp),
+            "donut" => Some(Self::Donut),
+            _ => None,
+        }
+    }
+
+    /// Lowercase display name, the way ascii.rest names its pieces.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AuroraFjord => "aurora fjord",
+            Self::Plasma => "plasma",
+            Self::LavaLamp => "lava lamp",
+            Self::Donut => "donut",
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        let at = Self::ALL
+            .iter()
+            .position(|piece| *piece == self)
+            .expect("every piece is in ALL");
+        let len = Self::ALL.len();
+        match forward {
+            true => Self::ALL[(at + 1) % len],
+            false => Self::ALL[(at + len - 1) % len],
+        }
+    }
+}
+
+/// Tweak: what covers the screen while the session is away (`/brb`, or 30
+/// quiet minutes). On by default, playing the aurora.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Screensaver {
+    Off,
+    Piece(AsciiPiece),
+}
+
+impl Screensaver {
+    pub const DEFAULT: Screensaver = Screensaver::Piece(AsciiPiece::AuroraFjord);
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Piece(piece) => piece.as_str(),
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "off" => Some(Self::Off),
+            other => AsciiPiece::from_key(other).map(Self::Piece),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Piece(piece) => piece.label(),
+        }
+    }
+
+    /// Off, then every piece in order, then Off again.
+    pub fn cycle(self, forward: bool) -> Self {
+        let first = AsciiPiece::ALL[0];
+        let last = AsciiPiece::ALL[AsciiPiece::ALL.len() - 1];
+        match (self, forward) {
+            (Self::Off, true) => Self::Piece(first),
+            (Self::Off, false) => Self::Piece(last),
+            (Self::Piece(piece), true) if piece == last => Self::Off,
+            (Self::Piece(piece), false) if piece == first => Self::Off,
+            (Self::Piece(piece), forward) => Self::Piece(piece.cycle(forward)),
+        }
+    }
+}
+
 /// Which hung pieces may appear over the login splash. Unmarked art is SFW.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ArtSplashMode {
@@ -476,6 +585,7 @@ const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
+const SCREENSAVER_KEY: &str = "screensaver";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
 const SHOW_WATCH_CHAT_KEY: &str = "show_watch_chat";
 const TERMINAL_IMAGES_KEY: &str = "terminal_images";
@@ -1975,6 +2085,15 @@ pub fn extract_landing_page(settings: &Value) -> LandingPage {
     match settings.get(LANDING_PAGE_KEY).and_then(Value::as_str) {
         Some(key) => LandingPage::from_key(key).unwrap_or(LandingPage::Clubhouse),
         None => LandingPage::Clubhouse,
+    }
+}
+
+/// Tweak: what plays over the screen while the session is away. Absent or
+/// unreadable values play the default, the aurora.
+pub fn extract_screensaver(settings: &Value) -> Screensaver {
+    match settings.get(SCREENSAVER_KEY).and_then(Value::as_str) {
+        Some(key) => Screensaver::from_key(key).unwrap_or(Screensaver::DEFAULT),
+        None => Screensaver::DEFAULT,
     }
 }
 

@@ -5149,10 +5149,9 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
     assert!(app.chat.composing);
     assert_eq!(app.chat.composer_room_id(), Some(quiet.id));
     let (cols, rows) = app.size;
-    let (tiles_area, _) = crate::app::zen::layout::rice_areas(
-        ratatui::layout::Rect::new(0, 0, cols, rows),
-        app.zen_status_row(),
-    );
+    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
+    let (tiles_area, _) =
+        crate::app::zen::layout::rice_areas(page, crate::app::zen::layout::rice_fits(page));
     let rects = crate::app::zen::layout::tile_rects(
         &app.zen.rice.root,
         tiles_area,
@@ -5186,7 +5185,7 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
     // Zoom the second tile: the one pane on show is its room.
     app.handle_input(b"\x1b[C");
     assert_eq!(app.zen.focus, second);
-    app.handle_input(b"z");
+    app.handle_input(b"Z");
     assert!(app.zen.zoomed);
     let rendered = strip_ansi(&render_plain(&mut app));
     assert!(

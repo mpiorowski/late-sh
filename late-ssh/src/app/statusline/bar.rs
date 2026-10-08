@@ -120,35 +120,66 @@ pub(crate) fn build_top_status_bar(
     build_status_bar(&components, data, Placement::TopRight, area, title_width)
 }
 
-/// Zen's bottom row for one frame.
+/// Zen's bottom row for one frame: the user's bar on the left, the page's
+/// own keys on the right.
 pub(crate) struct ZenStatusRow {
-    /// `None` while every enabled component is auto-hidden: the row stays,
-    /// blank.
+    /// `None` while every enabled component is auto-hidden, or all are off:
+    /// the bar's part of the row stays blank.
     pub bar: Option<Line<'static>>,
+    /// `None` on a row too narrow to hold them beside a cell of gap.
+    pub keys: Option<Line<'static>>,
     pub hits: Vec<(StatusClick, Rect)>,
 }
 
-/// Whether Zen gives its bottom row to the status line. A setting, not a
-/// reading: the row stays while every enabled component reads inactive, so
-/// the tiles never jump as a count comes and goes. With every component
-/// switched off the row goes and the tiles take it.
-pub(crate) fn zen_row_shown(components: &[StatusComponentSetting]) -> bool {
-    components.iter().any(|setting| setting.enabled)
+/// The layout keys worth knowing by heart, on the right end of Zen's row:
+/// the guide, split, flip, close, and zoom. The rest are in the guide.
+pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 5] = [
+    ("?", "help"),
+    ("S", "split"),
+    ("F", "flip"),
+    ("X", "close"),
+    ("Z", "zoom"),
+];
+
+/// The keys as one compact line: each key amber, its word dim, two spaces
+/// between pairs and nothing around them.
+pub(crate) fn zen_keys_line() -> Line<'static> {
+    let key = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let word = Style::default().fg(theme::TEXT_DIM());
+    let mut spans = Vec::with_capacity(ZEN_ROW_KEYS.len() * 2);
+    for (index, (k, w)) in ZEN_ROW_KEYS.iter().enumerate() {
+        let gap = if index == 0 { "" } else { "  " };
+        spans.push(Span::styled(format!("{gap}{k}"), key));
+        spans.push(Span::styled(format!(" {w}"), word));
+    }
+    Line::from(spans)
 }
 
-/// Build Zen's bottom row; `row` is the row itself, all of it the bar's.
+/// Build Zen's bottom row. The keys claim the right end first, a cell of gap
+/// before them, and the bar fits into what is left; a row narrower than the
+/// keys gives the bar all of it.
 pub(crate) fn build_zen_status_row(
     components: &[StatusComponentSetting],
     data: &StatusData<'_>,
     row: Rect,
 ) -> ZenStatusRow {
-    match build_status_bar(components, data, Placement::ZenRow, row, 0) {
+    let keys = zen_keys_line();
+    let reserved = keys.width() as u16 + 1;
+    let (keys, reserved) = match reserved <= row.width {
+        true => (Some(keys), reserved),
+        false => (None, 0),
+    };
+    match build_status_bar(components, data, Placement::ZenRow, row, reserved) {
         Some(bar) => ZenStatusRow {
             bar: Some(bar.line),
+            keys,
             hits: bar.hits,
         },
         None => ZenStatusRow {
             bar: None,
+            keys,
             hits: Vec::new(),
         },
     }

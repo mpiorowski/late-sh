@@ -796,18 +796,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         app.apply_primary_device_attributes(attrs);
         return;
     }
-    // `/brb` holds "until your next key". A bare mouse move is not one: with
-    // any-event tracking on, the pointer merely crossing the terminal reports
-    // here, and must not bring the session back. Keys, clicks, drags and
-    // scrolls do; the 1Hz edge publishes it.
-    match &event {
-        ParsedInput::Mouse(MouseEvent {
-            kind: MouseEventKind::Moved,
-            ..
-        }) => {}
-        _ => app.sent_away = false,
-    }
-
     // The Late Edition sits above everything else: it is the first thing
     // a session sees after the splash and the tour.
     if app.paper.modal_visible() {
@@ -3875,7 +3863,8 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
     use crate::app::zen::layout as zen_layout;
     let (cols, rows) = app.size;
-    let (tiles_area, _) = zen_layout::rice_areas(Rect::new(0, 0, cols, rows), app.zen_status_row());
+    let page = Rect::new(0, 0, cols, rows);
+    let (tiles_area, _) = zen_layout::rice_areas(page, zen_layout::rice_fits(page));
     let zoomed = app.zen.zoomed.then_some(app.zen.focus);
     let rects = zen_layout::tile_rects(
         &app.zen.rice.root,

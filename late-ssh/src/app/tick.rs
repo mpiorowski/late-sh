@@ -140,11 +140,13 @@ impl App {
             changed = true;
         }
         // Going away is not urgent to the millisecond, so this session's away
-        // flag rides the 1Hz edge. It only writes the roster on a change and
-        // paints nothing of its own: peers pick it up on their presence edge
-        // below, so an idle session still settles.
-        if one_hz {
-            self.sync_away();
+        // flag rides the 1Hz edge. It only writes the roster on a change, and
+        // paints nothing of its own unless the screensaver comes up with it:
+        // peers pick it up on their presence edge below, so an idle session
+        // with the Tweak off still settles. Coming back is input's, which
+        // syncs at once and repaints anyway.
+        if one_hz && self.sync_away() && self.screensaver().is_some() {
+            changed = true;
         }
         // UTC midnight rolls the Arcade dailies over. This rides the 1Hz edge
         // rather than an input path so a session parked in chat overnight is
@@ -315,7 +317,7 @@ impl App {
         // The AFK line: how long this terminal's keyboard has been quiet is
         // an `App` fact, mirrored into chat the same way the timezone is,
         // because chat is what knows which room is on screen to hang it on.
-        changed |= self.chat.sync_afk_line(self.last_input_at.elapsed());
+        changed |= self.chat.sync_afk_line(self.last_active_at.elapsed());
         let translate_to = self.profile_state.profile().translate_to;
         let auto_translate = self.profile_state.profile().auto_translate;
         changed |= self
@@ -1096,14 +1098,13 @@ impl App {
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
-        if self.screen == Screen::Zen && self.zen_status_row() != self.zen_row_bound {
-            self.sync_aquarium_bounds();
-            changed = true;
-        }
         if anim_quarter && self.aquarium_visible() {
             self.aquarium_state.tick();
             changed = true;
         }
+        // The ascii pieces (`app/ascii`) are pure functions of the shared
+        // clock: a new frame on every quarter edge while one is drawn.
+        changed |= anim_quarter && self.ascii_visible();
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -1363,6 +1364,11 @@ impl App {
     /// clean tick, never a frame. Input, resize, and push wakes
     /// (RenderSignal) interrupt the sleep regardless.
     pub fn wake_hint(&self) -> Duration {
+        // The screensaver covers everything else, so nothing under it earns
+        // a faster tier, and the pointer moving over it never wakes it hot.
+        if self.screensaver().is_some() {
+            return ANIM_QUARTER_TICK;
+        }
         let hot = self.show_splash
             || self.haunt.breakthrough_playing()
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
@@ -1396,11 +1402,21 @@ impl App {
             return ANIM_HALF_TICK;
         }
         if self.aquarium_visible()
+            || self.ascii_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
         {
             return ANIM_QUARTER_TICK;
         }
         IDLE_TICK
+    }
+
+    /// Whether an ascii piece is on screen: the away screensaver, or a Zen
+    /// ascii tile that is drawn (not zoomed away). Gates the quarter-edge
+    /// repaint and the wake tier.
+    fn ascii_visible(&self) -> bool {
+        self.screensaver().is_some()
+            || (self.screen == Screen::Zen
+                && self.zen.draws(crate::app::zen::state::TileKind::Ascii))
     }
 
     /// Whether the reef is actually on screen: the Zen page draws it for
@@ -1495,7 +1511,7 @@ impl App {
             self.attention_spot = spot;
             crate::metrics::record_place_visit(self.screen, place);
         }
-        let presence = match self.last_input_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
+        let presence = match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
             true => crate::metrics::Presence::Active,
             false => crate::metrics::Presence::Idle,
         };

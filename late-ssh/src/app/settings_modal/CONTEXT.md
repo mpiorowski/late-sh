@@ -33,7 +33,7 @@ a row position.
 
 Settings/Tweaks clicks reuse keyboard actions, including per-device rail and
 interaction-mode updates. Cooldown, notification format, both sidebar modes,
-Terminal images, Land on, Gallery Art on Splash, and Text Brightness share bold
+Terminal images, Land on, Gallery Art on Splash, Screensaver, and Text Brightness share bold
 amber arrows. Only the arrows choose direction; other row/value clicks cycle
 forward. Every cycle reserves its longest option width. Ratatui measures both
 rendered spans and clipped hitboxes, and labels shorten at grapheme boundaries

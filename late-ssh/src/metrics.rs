@@ -25,6 +25,15 @@ use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, Ref
 use crate::pg_listener::Refresh;
 use late_core::models::referral::ReferralSource;
 
+/// What put the away screensaver up (`App::sync_away`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreensaverTrigger {
+    /// Thirty quiet minutes (`common::away::AWAY_AFTER`).
+    Idle,
+    /// `/brb`.
+    Brb,
+}
+
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
 /// count as `WorldTick` until the loop becomes event-driven.
@@ -475,6 +484,8 @@ pub enum VizWireBands {
 mod inner {
     use std::sync::{Arc, OnceLock};
 
+    use late_core::models::user::AsciiPiece;
+
     use opentelemetry::{
         KeyValue, global,
         metrics::{Counter, Gauge, Histogram, ObservableGauge, UpDownCounter},
@@ -484,6 +495,7 @@ mod inner {
     use crate::app::activity::event::GameFamily;
 
     use super::HomeRoom;
+    use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
@@ -1890,6 +1902,30 @@ mod inner {
         );
     }
 
+    fn screensavers_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_screensavers_total")
+                .with_description("Away screensavers put up, by what put them up and the piece")
+                .build()
+        })
+    }
+
+    pub fn record_screensaver(trigger: ScreensaverTrigger, piece: AsciiPiece) {
+        let trigger = match trigger {
+            ScreensaverTrigger::Idle => "idle",
+            ScreensaverTrigger::Brb => "brb",
+        };
+        screensavers_total().add(
+            1,
+            &[
+                KeyValue::new("trigger", trigger),
+                KeyValue::new("piece", piece.as_str()),
+            ],
+        );
+    }
+
     fn share_cards_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2737,6 +2773,9 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
+    use late_core::models::user::AsciiPiece;
+
+    use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
@@ -2798,6 +2837,7 @@ mod inner {
     }
     pub fn record_attention(_screen: Screen, _place: Place, _presence: Presence, _seconds: f64) {}
     pub fn record_place_visit(_screen: Screen, _place: Place) {}
+    pub fn record_screensaver(_trigger: ScreensaverTrigger, _piece: AsciiPiece) {}
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}

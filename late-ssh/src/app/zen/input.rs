@@ -32,7 +32,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_rice(app, event)
 }
 
-/// The chat keys, the Live strip's `o`, and the tank feed `a`. The chat keys belong to the
+/// The chat keys, the Live strip's `o`, the ascii tile's pieces, and the tank
+/// feed `a`. `[` `]` on a focused ascii tile step it through the pieces. The
+/// chat keys belong to the
 /// focused chat tile: `[` `]` rebind it to the previous or next joined
 /// room, `i` and Enter write in its room, `j` `k` select in it, and the
 /// message actions act on its selection; with any other tile focused all
@@ -57,7 +59,8 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     // The focused chat tile's message keys, the way the house table routes
     // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
     // leader always; `d` `r` `e` `p` `c` `t` `G` and Enter only while a
-    // message in that room is selected, so `r` flips the tile otherwise.
+    // message in that room is selected. The layout keys are uppercase
+    // (`S` `X` `F` `Z` `R`), so none of these collide with them.
     if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
         if crate::app::chat::input::chat_priority_key(app, byte)
             && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
@@ -78,15 +81,11 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         b'[' => {
-            if chat_focused {
-                cycle_room(app, -1);
-            }
+            cycle_tile(app, chat_focused, false);
             true
         }
         b']' => {
-            if chat_focused {
-                cycle_room(app, 1);
-            }
+            cycle_tile(app, chat_focused, true);
             true
         }
         b'i' | b'\r' | b'\n' => {
@@ -105,6 +104,19 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         // on you and comes home here.
         b'`' => crate::app::workspace::cycle::cycle_game_workspace(app),
         _ => false,
+    }
+}
+
+/// `[` `]` on the focused tile: a chat walks its joined rooms, an ascii tile
+/// its pieces. Any other tile takes the key and does nothing.
+fn cycle_tile(app: &mut App, chat_focused: bool, forward: bool) {
+    match chat_focused {
+        true => cycle_room(app, if forward { 1 } else { -1 }),
+        false => {
+            if app.zen.cycle_focused_piece(forward) {
+                app.mark_zen_layout_dirty();
+            }
+        }
     }
 }
 
@@ -275,8 +287,8 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         b'>' | b'.' => resize_or_explain(app, Dir::Row, 1),
         b'{' => resize_or_explain(app, Dir::Column, -1),
         b'}' => resize_or_explain(app, Dir::Column, 1),
-        b'r' => app.zen.flip_focused(),
-        b'z' => {
+        b'F' => app.zen.flip_focused(),
+        b'Z' => {
             app.zen.toggle_zoom();
             // The zoom is a view, not a layout edit; still resizes the tank.
             app.sync_aquarium_bounds();
@@ -350,10 +362,8 @@ pub(crate) fn focus_moved(app: &mut App) {
 /// nothing to trade.
 fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
     let (cols, rows) = app.size;
-    let (tiles_area, _) = super::layout::rice_areas(
-        ratatui::layout::Rect::new(0, 0, cols, rows),
-        app.zen_status_row(),
-    );
+    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
+    let (tiles_area, _) = super::layout::rice_areas(page, super::layout::rice_fits(page));
     if app.zen.resize_focused(dir, delta_cells, tiles_area) {
         return true;
     }
@@ -362,7 +372,7 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
         Dir::Column => "height",
     };
     app.banner = Some(Banner::info(&format!(
-        "No split to trade {axis} with; S splits, r flips"
+        "No split to trade {axis} with; S splits, F flips"
     )));
     false
 }
@@ -371,10 +381,8 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
 /// twice as tall as wide, so width is halved before comparing).
 fn focused_tile_is_wide(app: &App) -> bool {
     let (cols, rows) = app.size;
-    let (tiles_area, _) = super::layout::rice_areas(
-        ratatui::layout::Rect::new(0, 0, cols, rows),
-        app.zen_status_row(),
-    );
+    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
+    let (tiles_area, _) = super::layout::rice_areas(page, super::layout::rice_fits(page));
     let rects = super::layout::tile_rects(
         &app.zen.rice.root,
         tiles_area,

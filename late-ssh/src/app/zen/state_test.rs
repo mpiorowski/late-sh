@@ -317,3 +317,51 @@ fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
     assert!(zen.draws(TileKind::Lobby), "zoomed on it, it draws");
     assert!(!zen.draws(TileKind::Bonsai), "and the bonsai does not");
 }
+
+/// An ascii tile plays the aurora until `[` `]` pick another piece; the piece
+/// is stored with the layout, rides along when the tile is split, and is
+/// forgotten when the tile becomes something else, as a chat tile's room is.
+#[test]
+fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
+    use late_core::models::user::AsciiPiece;
+    let mut zen = ZenState::new(RiceLayout {
+        root: Node::leaf(TileKind::Ascii),
+        look: Look::default(),
+    });
+    assert_eq!(zen.focused_piece(), Some(AsciiPiece::AuroraFjord));
+    assert!(zen.cycle_focused_piece(true));
+    assert_eq!(zen.focused_piece(), Some(AsciiPiece::Plasma));
+    assert!(zen.cycle_focused_piece(false));
+    assert!(zen.cycle_focused_piece(false));
+    assert_eq!(zen.focused_piece(), Some(AsciiPiece::Donut), "it wraps");
+
+    let stored = serde_json::to_string(&zen.rice).expect("serialize");
+    let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
+    assert_eq!(restored.root.piece_at(0), Some(AsciiPiece::Donut));
+
+    assert!(zen.split_focused(true));
+    assert_eq!(zen.rice.root.piece_at(0), Some(AsciiPiece::Donut));
+    assert_eq!(zen.rice.root.piece_at(1), None, "the new tile is blank");
+    assert!(
+        !zen.cycle_focused_piece(true),
+        "`[ ]` on a blank tile is nothing"
+    );
+
+    assert!(zen.rice.root.set_kind(0, TileKind::Clock));
+    assert!(zen.rice.root.set_kind(0, TileKind::Ascii));
+    assert_eq!(
+        zen.rice.root.piece_at(0),
+        Some(AsciiPiece::AuroraFjord),
+        "coming back plays the default"
+    );
+}
+
+/// Layouts stored before the ascii tile existed carry no `piece` key, and
+/// read back unchanged.
+#[test]
+fn a_layout_without_pieces_reads_back_unchanged() {
+    let stored = serde_json::to_string(&RiceLayout::default()).expect("serialize");
+    assert!(!stored.contains("piece"));
+    let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
+    assert_eq!(restored, RiceLayout::default());
+}

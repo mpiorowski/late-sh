@@ -284,6 +284,23 @@ async fn zen_equalizer_tiles_hold_the_half_rate_tier() {
     );
 }
 
+/// The away screensaver plays on the quarter edge and holds that tier however
+/// much else would wake faster: the Home sidebar's eq, or the hot window a
+/// pointer move over the screensaver opens.
+#[tokio::test]
+async fn the_screensaver_holds_the_quarter_tier() {
+    use crate::app::common::away::AWAY_AFTER;
+    let (_test_db, mut app) = chat_compose_app("tick-saver").await;
+    app.set_screen(Screen::Dashboard);
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert!(app.screensaver().is_some(), "the Tweak defaults to on");
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.wake_hint(), ANIM_QUARTER_TICK);
+    set_marquee_transition(&mut app, 400, 404);
+    assert!(app.tick(), "a quarter edge is a new frame of the piece");
+}
+
 /// Make the next `tick` observe an exact wall-clock frame transition. Both
 /// values remain forward of the app's natural startup phase; the small offset
 /// leaves enough room that the call cannot cross into the following frame.
@@ -335,7 +352,7 @@ async fn going_away_and_coming_back_ride_the_one_hz_edge() {
     assert!(app.away_user_ids.is_empty(), "a fresh session is here");
     let epoch = app.chat_ctx_epoch;
 
-    app.last_input_at = Instant::now() - AWAY_AFTER;
+    app.last_active_at = Instant::now() - AWAY_AFTER;
     app.last_one_hz_index = None;
     assert!(app.tick(), "going away repaints the badge");
     assert!(roster_says_away(), "the edge writes the flag to the roster");
@@ -353,7 +370,7 @@ async fn going_away_and_coming_back_ride_the_one_hz_edge() {
         "an unchanged away set must not invalidate chat rows every second"
     );
 
-    app.last_input_at = Instant::now();
+    app.last_active_at = Instant::now();
     app.last_one_hz_index = None;
     app.tick();
     assert!(!roster_says_away(), "input brings the session back");

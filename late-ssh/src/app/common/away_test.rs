@@ -122,3 +122,29 @@ fn away_glyph_is_not_a_purchasable_badge() {
     }
     assert!(checked > 0, "no badge seed migrations were scanned");
 }
+
+#[test]
+fn only_a_person_counts_as_presence() {
+    // Keys, pastes, clicks, drags, and scrolls are a person.
+    assert!(is_presence_input(b"j"));
+    assert!(is_presence_input(b"\x1b[A"));
+    assert!(is_presence_input(b"\x1b[200~hello\x1b[201~"));
+    assert!(is_presence_input(b"\x1b[<0;20;5M"), "left press");
+    assert!(is_presence_input(b"\x1b[<0;20;5m"), "left release");
+    assert!(is_presence_input(b"\x1b[<32;21;5M"), "left drag");
+    assert!(is_presence_input(b"\x1b[<64;20;5M"), "wheel up");
+    // The pointer crossing the terminal (motion bit, no button; with or
+    // without a modifier held), and focus reports, are not.
+    assert!(!is_presence_input(b""));
+    assert!(!is_presence_input(b"\x1b[<35;20;5M"));
+    assert!(!is_presence_input(b"\x1b[<39;20;5M"), "shift held");
+    assert!(!is_presence_input(b"\x1b[I"));
+    assert!(!is_presence_input(b"\x1b[O"));
+    // A burst of moves in one chunk is still nobody; one key in it is a
+    // person.
+    assert!(!is_presence_input(
+        b"\x1b[<35;20;5M\x1b[<35;21;5M\x1b[<35;22;6M"
+    ));
+    assert!(is_presence_input(b"\x1b[<35;20;5M\x1b[<35;21;5Mx"));
+    assert!(is_presence_input(b"\x1b[<35;20;5M\x1b[<0;21;5M"));
+}

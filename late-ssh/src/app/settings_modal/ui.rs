@@ -369,6 +369,7 @@ fn tweak_lines() -> Vec<BodyLine<TweakRow>> {
         TweakRow::ComposerKeepFocused | TweakRow::InteractionMode => "Input",
         TweakRow::FlagFallback | TweakRow::TerminalImages | TweakRow::ChatBadges => "Display",
         TweakRow::LandingPage | TweakRow::PaperAtLogin | TweakRow::ArtSplash => "Startup",
+        TweakRow::Screensaver => "Away",
     })
 }
 
@@ -1010,6 +1011,7 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
             cycle_value_span(draft.art_splash_mode.label(), &["SFW", "Always", "Never"]),
             true,
         ),
+        TweakRow::Screensaver => ("Screensaver", screensaver_span(draft.screensaver), true),
     };
     let line = tweak_row_line(state, row, rect.width as usize, label, value);
     if cycling {
@@ -3629,6 +3631,24 @@ fn terminal_images_span(mode: late_core::models::user::TerminalImagesMode) -> Va
         TerminalImagesMode::Sixel => "Sixel",
     };
     cycle_value_span(label, &["Auto", "Off", "Sixel"])
+}
+
+/// The "Screensaver" row: the piece that covers the screen while the session
+/// is away (`/brb`, or 30 quiet minutes), or Off. Cycled with the arrows.
+fn screensaver_span(saver: late_core::models::user::Screensaver) -> ValueSpan {
+    use late_core::models::user::{AsciiPiece, Screensaver};
+    let label = |saver: Screensaver| match saver {
+        Screensaver::Off => "Off",
+        Screensaver::Piece(AsciiPiece::AuroraFjord) => "Aurora fjord",
+        Screensaver::Piece(AsciiPiece::Plasma) => "Plasma",
+        Screensaver::Piece(AsciiPiece::LavaLamp) => "Lava lamp",
+        Screensaver::Piece(AsciiPiece::Donut) => "Donut",
+    };
+    let choices: Vec<&str> = std::iter::once(Screensaver::Off)
+        .chain(AsciiPiece::ALL.into_iter().map(Screensaver::Piece))
+        .map(label)
+        .collect();
+    cycle_value_span(label(saver), &choices)
 }
 
 /// The "Land on" row: the page a session opens on, cycled with the arrows.

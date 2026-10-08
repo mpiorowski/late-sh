@@ -363,6 +363,12 @@ struct DrawContext<'a> {
     show_ultimate_modal: bool,
     ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
+    /// The away screensaver: the piece that covers the whole frame while the
+    /// session is away (`App::screensaver`).
+    screensaver: Option<late_core::models::user::AsciiPiece>,
+    /// The frame edge every ascii piece plays this frame
+    /// (`ascii::piece::frame_index_now`).
+    ascii_frame: u64,
     splash_ticks: usize,
     splash_hint: &'a str,
     /// The day's wall piece, hung over the splash when it fits; the
@@ -458,6 +464,9 @@ impl App {
             self.live_games.watchers_of(game, &handle)
         });
         let games_hub_roster = HubGame::roster(self.is_runner());
+        // Away with the Tweak on: the piece covers everything this frame.
+        let screensaver = self.screensaver();
+        let ascii_frame = crate::app::ascii::piece::frame_index_now();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
@@ -1453,6 +1462,7 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
+            || screensaver.is_some()
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -1474,6 +1484,7 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
+            || screensaver.is_some()
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
@@ -1667,6 +1678,8 @@ impl App {
                         show_ultimate_modal: self.show_ultimate_modal,
                         ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
+                        screensaver,
+                        ascii_frame,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
                         splash_piece: self.splash_piece.as_ref(),
@@ -1927,6 +1940,16 @@ impl App {
                     ctx.splash_ticks,
                 );
             }
+            return;
+        }
+
+        // Away: the screensaver covers the page, its frame, and every modal.
+        // Nothing under it is clickable, and the input that dismisses it is
+        // swallowed (`App::handle_input`).
+        if let Some(piece) = ctx.screensaver {
+            ctx.status_hits.borrow_mut().clear();
+            frame.render_widget(Clear, area);
+            crate::app::ascii::ui::draw_piece(frame, area, piece, ctx.ascii_frame);
             return;
         }
 
@@ -2360,8 +2383,7 @@ impl App {
                 // click target either.
                 let (_, row) = crate::app::zen::layout::rice_areas(
                     content_area,
-                    crate::app::zen::layout::rice_fits(content_area)
-                        && crate::app::statusline::bar::zen_row_shown(&ctx.statusline_components),
+                    crate::app::zen::layout::rice_fits(content_area),
                 );
                 let status_row = row.map(|row| {
                     crate::app::statusline::bar::build_zen_status_row(
@@ -2422,6 +2444,7 @@ impl App {
                     live: ctx.zen_live_strip.take(),
                     live_hit: ctx.live_hit,
                     wall_tick: ctx.marquee_tick,
+                    ascii_frame: ctx.ascii_frame,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
             }
