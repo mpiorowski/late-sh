@@ -224,12 +224,7 @@ struct DrawContext<'a> {
     /// watching each, and the panel's click slot.
     live_panel_rows: Vec<crate::app::live::panel::LivePanelRow>,
     live_panel_now: chrono::DateTime<chrono::Utc>,
-    live_panel_hit: &'a std::cell::Cell<
-        Option<(
-            Rect,
-            [Option<crate::app::live::pick::LiveSource>; crate::app::live::panel::LIVE_PANEL_ROWS],
-        )>,
-    >,
+    live_panel_hit: &'a crate::app::live::panel::LivePanelHit,
     /// People other than this player with a watch open on their own
     /// running game on the watchable door whose screen is up, for its
     /// chrome: peeking at your own game makes you nobody's audience.

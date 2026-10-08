@@ -87,7 +87,7 @@ pub struct LiveState {
     /// Where the sidebar's Live panel drew this frame and what is on each
     /// of its rows, for the click that opens one. Render-recorded, cleared
     /// before every draw.
-    pub panel_hit: Cell<Option<(Rect, [Option<LiveSource>; super::panel::LIVE_PANEL_ROWS])>>,
+    pub panel_hit: super::panel::LivePanelHit,
 }
 
 impl LiveState {
@@ -227,6 +227,7 @@ impl LiveState {
     /// `articles` is the session's News snapshot, `streams` its copy of the
     /// stream registry, and `door_games` the live games on the watchable
     /// doors.
+    #[allow(clippy::too_many_arguments)]
     pub fn view<'a>(
         &self,
         daily: &'a DailyState,

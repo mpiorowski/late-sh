@@ -54,6 +54,10 @@ use crate::app::stream::registry::LiveStreamView;
 /// Rows under the rule. The rule is the title, so this is all rows.
 pub(crate) const LIVE_PANEL_HEIGHT: u16 = 4;
 pub(crate) const LIVE_PANEL_ROWS: usize = LIVE_PANEL_HEIGHT as usize;
+
+/// Where the panel drew this frame and the source on each of its rows,
+/// render-recorded for the click that opens one.
+pub(crate) type LivePanelHit = Cell<Option<(Rect, [Option<LiveSource>; LIVE_PANEL_ROWS])>>;
 /// How long a News share stays on the panel: reading it is still possible
 /// long after, but after an hour it is the News room's, not the room's.
 pub(crate) const NEWS_LIFETIME: Duration = Duration::hours(1);
@@ -123,7 +127,7 @@ pub(crate) struct LivePanelProps<'a> {
     pub rows: &'a [LivePanelRow],
     /// Written by the draw: the body rect and the source on each of its
     /// rows (`None` for a blank slot or the `+N more` row).
-    pub hit: &'a Cell<Option<(Rect, [Option<LiveSource>; LIVE_PANEL_ROWS])>>,
+    pub hit: &'a LivePanelHit,
     pub now: DateTime<Utc>,
 }
 
