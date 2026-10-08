@@ -95,7 +95,7 @@ late-ssh/src/app/ascii/
   hundred): about a kilobyte a second per away session, against tens of
   kilobytes a frame for a lively scene. That is what lets the screensaver
   default to on. The dots style's rounded ink is part of that arithmetic:
-  before it, most of a frame's changed cells were colours that wobbled by
+  without it, most of a frame's changed cells are colours that wobbled by
   one.
 - **One frame per edge for the process.** `piece::picture` serves the
   fixed-size pieces (the scenes, lava lamp, donut) from a process-wide cache
@@ -114,17 +114,18 @@ late-ssh/src/app/ascii/
   cell for cell. The original's halftone (each scene's `dot`, test only:
   ordered dither, nearest palette colour) is what the golden frame checks;
   on its canvas the cells are square and a dot reaches into the next row,
-  which no terminal glyph can do. `ui::draw_dots` is the dots style: the
-  braille halftone, each scene row a 2x2 of dots showing the original's
-  three dot sizes (ordered dither at scene coordinates) as one, two
-  diagonal, or all four dots, one ink per cell (its lit rows' inks,
-  weighted by their dots), on the ground. The original's small dot is a
-  faint point in a black cell and a braille dot is not, so the ink is toned
-  toward the ground by the larger row's size (a dim sky stays dim, a lit
-  fog bank stays bright), then rounded to eight steps a channel, so a
-  cell's colour moves only when the scene moves it a visible step. Text
-  art is centred, cropped
-  evenly when larger than the area, in one theme ink per piece
+  which no terminal glyph can do. `ui::draw_dots` is the dots style, the
+  original's look: a square grid of dots, one per scene cell (two scene
+  rows to a terminal cell), sized and lit by brightness. Braille draws the
+  three sizes as one dot, a diagonal pair, or a 2x2 cluster, each anchored
+  at the same place in its quarter of the glyph, so the grid stays regular
+  and only the dots grow. Sizes take plain thresholds, never a dither: a
+  dither between sizes turns the grid into a texture. The tone is the ink
+  over the ground on a steep curve (dim sky and trees fall to dark, fog
+  and sun stand out), held to sixteen steps, and every ink is rounded to
+  eight steps a channel, so a cell changes only when the scene
+  moves it a visible step. Text art is centred, cropped evenly when larger
+  than the area, in one theme ink per piece
   (`ui::ink`).
 - **Cadence in the tick.** A drawn Zen ascii tile, or the screensaver,
   repaints on its cadence's edge (`App::ascii_edge`: the half edge for a

@@ -91,64 +91,72 @@ fn draw_pixels(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     }
 }
 
-/// The 4x4 ordered-dither matrix the pieces halftone with, as a threshold
-/// offset in steps (about -0.47..=0.47) by scene cell.
-fn bayer(col: usize, row: usize) -> f64 {
-    const BAYER: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
-    f64::from(BAYER[(row & 3) * 4 + (col & 3)]) / 16.0 - 0.47
-}
-
-/// A scene as a halftone of braille dots: each scene row of a terminal cell
-/// is a 2x2 of its dots showing the original's three dot sizes (ordered
-/// dither at scene coordinates) as one, two diagonal, or all four dots, the
-/// cell in the one ink its lit rows share, on the ground. A small dot is
-/// faint in the original, a point in a cell of black; a braille dot is not,
-/// so the ink is toned down toward the ground by the larger row's size,
-/// which keeps a dim sky dim and a lit fog bank bright. The ink is rounded
-/// to eight steps a channel: a cell's colour then only moves when the scene
-/// moves it a visible step, so a slow piece's frame changes a few dozen
-/// cells, not every cell whose colour wobbled by one.
+/// A scene as a halftone on a square grid of dots, the original's look:
+/// each scene cell a dot (two scene rows to a terminal cell, so the grid
+/// is the scene's own 200x100 at 200x50), sized and lit by the cell's
+/// brightness. Braille draws the three sizes: one dot, a diagonal pair,
+/// a 2x2 cluster, each at the same place in its quarter of the glyph, so
+/// the grid stays regular and only the dots grow. The sizes take plain
+/// thresholds, no dither: a dither between sizes is what turned the grid
+/// into a texture. The tone does the rest: the ink over the ground on a
+/// steep curve, so the dim sky and the trees fall away to dark and the
+/// fog, the sun and its beams stand out. The tone is held to `TONES`
+/// steps and the ink to `INK_STEP` a channel, so a cell only changes when
+/// the scene moves it a visible step: a slow piece's frame then changes a
+/// few dozen cells, not every cell whose colour wobbled.
 fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let at = sampling(area, scene);
     let [gr, gg, gb] = scene.ground;
     let ground = Color::Rgb(gr, gg, gb);
-    // How many of a row's four dots are lit by its brightness: the
-    // original's dot size, none to large, as none, one, two or four dots.
-    const LIT: [usize; 4] = [0, 1, 2, 4];
-    let lit = |shade: Shade, col: usize, row: usize| {
-        LIT[((shade.level * 3.0 + bayer(col, row)).round().clamp(0.0, 3.0)) as usize]
-    };
-    // Which dots: top-left first, then bottom-right, top-right, bottom-left,
-    // so two lit dots sit diagonal. Braille dot bits for that order in the
-    // upper 2x2 (dots 1, 5, 4, 2) and the lower 2x2 (dots 3, 8, 6, 7).
-    const UPPER: [u32; 4] = [0x01, 0x10, 0x08, 0x02];
-    const LOWER: [u32; 4] = [0x04, 0x80, 0x20, 0x40];
-    // How much of the ink a row of that many dots shows, over the ground.
-    const TONE: [f64; 5] = [0.0, 0.3, 0.6, 0.6, 1.0];
+    // Below `FLOOR` brightness a cell is dark, from `CEILING` it is at full
+    // ink; the curve spreads what lies between.
+    const FLOOR: f64 = 0.12;
+    const CEILING: f64 = 0.92;
+    const CURVE: f64 = 1.5;
+    const TONES: f64 = 16.0;
     const INK_STEP: f64 = 8.0;
+    // The size thresholds: a diagonal pair, then a cluster.
+    const PAIR: f64 = 0.55;
+    const CLUSTER: f64 = 0.72;
+    // Braille bits by size in the upper quarter (dot 1; dots 1, 5; dots 1,
+    // 2, 4, 5) and the lower (dot 3; dots 3, 8; dots 3, 6, 7, 8).
+    const UPPER: [u32; 4] = [0, 0x01, 0x11, 0x1b];
+    const LOWER: [u32; 4] = [0, 0x04, 0x84, 0xe4];
+    let tone = |shade: Shade| {
+        let t = ((shade.level - FLOOR) / (CEILING - FLOOR)).clamp(0.0, 1.0).powf(CURVE);
+        (t * TONES).round() / TONES
+    };
+    let size = |shade: Shade, tone: f64| match (tone > 0.0, shade.level) {
+        (false, _) => 0,
+        (true, level) if level >= CLUSTER => 3,
+        (true, level) if level >= PAIR => 2,
+        (true, _) => 1,
+    };
     let buffer = frame.buffer_mut();
     for ty in 0..area.height {
         for tx in 0..area.width {
             let (col, upper, lower) = at(tx, ty);
             let top = scene.cells[upper * scene.cols + col];
             let bottom = scene.cells[lower * scene.cols + col];
-            let (n_top, n_bottom) = (lit(top, col, upper), lit(bottom, col, lower));
             let Some(cell) = buffer.cell_mut((area.x + tx, area.y + ty)) else {
                 continue;
             };
-            if n_top + n_bottom == 0 {
+            let (t_top, t_bottom) = (tone(top), tone(bottom));
+            let bits = UPPER[size(top, t_top)] | LOWER[size(bottom, t_bottom)];
+            if bits == 0 {
                 cell.set_char(' ').set_fg(ground).set_bg(ground);
                 continue;
             }
-            let bits = UPPER[..n_top].iter().chain(&LOWER[..n_bottom]).fold(0, |b, bit| b | bit);
             let glyph = char::from_u32(0x2800 + bits).expect("a braille pattern");
-            let weight = (n_top + n_bottom) as f64;
-            let tone = TONE[n_top.max(n_bottom)];
+            // One ink for the cell: the rows' inks, the brighter lending
+            // more, at the brighter row's tone.
+            let weight = t_top + t_bottom;
+            let lit = t_top.max(t_bottom);
             let mut ink = [0u8; 3];
             for c in 0..3 {
-                let mixed = (top.ink[c] * n_top as f64 + bottom.ink[c] * n_bottom as f64) / weight;
+                let mixed = (top.ink[c] * t_top + bottom.ink[c] * t_bottom) / weight;
                 let base = f64::from(scene.ground[c]);
-                let toned = base + (mixed * 255.0 - base) * tone;
+                let toned = base + (mixed * 255.0 - base) * lit;
                 ink[c] = ((toned / INK_STEP).round() * INK_STEP).min(255.0) as u8;
             }
             cell.set_char(glyph)

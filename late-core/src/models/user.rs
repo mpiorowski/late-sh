@@ -225,7 +225,8 @@ impl Scene {
 /// How a scene is drawn on the terminal's cells.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SceneStyle {
-    /// The original's halftone, as braille: dots lit by brightness.
+    /// The original's halftone: a grid of dots sized and lit by
+    /// brightness.
     Dots,
     /// Solid half-block pixels, two to a cell, in true colour.
     Pixels,
