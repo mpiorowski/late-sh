@@ -12,7 +12,7 @@
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
-use super::piece::{Shade, ShadedFrame, js_i32, js_round};
+use super::piece::{ROUGH_TAU, Shade, ShadedFrame, js_i32, js_round};
 
 pub(crate) const COLS: usize = 200;
 pub(crate) const ROWS: usize = 100;
@@ -427,7 +427,7 @@ impl Land {
                 let k = r * W + x;
                 let y = r as f64 + 0.5;
                 let xf = x as f64;
-                if x >= CAB[0] && x <= CAB[1] && y >= EAVE && y < CAB_BASE + 0.5 {
+                if (CAB[0]..=CAB[1]).contains(&x) && (EAVE..CAB_BASE + 0.5).contains(&y) {
                     land.mat[k] = Mat::Wall;
                     let boards = if r & 1 == 1 { 0.82 } else { 1.0 };
                     let s = (0.5 + 0.5 * ((CAB[1] - x) as f64 / (CAB[1] - CAB[0]) as f64)) * boards;
@@ -436,7 +436,7 @@ impl Land {
                     land.sb[k] = (0.11 * s) as f32;
                     land.rim[k] = 0.0;
                     for [a, b] in PANES {
-                        if x >= a && x <= b && y >= EAVE + 1.5 && y < CAB_BASE - 2.0 {
+                        if (a..=b).contains(&x) && (EAVE + 1.5..CAB_BASE - 2.0).contains(&y) {
                             land.mat[k] = Mat::Pane;
                         }
                     }
@@ -598,7 +598,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
     }
     // the aurora's light falling on the land below
     let mut light_x = vec![0f32; W];
-    for x in 0..W {
+    for (x, light) in light_x.iter_mut().enumerate() {
         let mut s = 0.0;
         let mut d = -24i64;
         while d <= 24 {
@@ -606,7 +606,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
             s += f64::from(env_a[xx]) + 0.4 * f64::from(env_b[xx]);
             d += 6;
         }
-        light_x[x] = (s / 9.0) as f32;
+        *light = (s / 9.0) as f32;
     }
     let flick = 0.92 + 0.05 * (t * 2.3).sin() + 0.03 * (t * 7.1).sin();
 
@@ -713,7 +713,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
                     if st > 0.0 {
                         let (xf, rf) = (x as f64, r as f64);
                         let tw = 0.7
-                            + 0.3 * (t * (1.3 + 3.0 * hash(xf, rf)) + 6.28 * hash(rf, xf)).sin();
+                            + 0.3 * (t * (1.3 + 3.0 * hash(xf, rf)) + ROUGH_TAU * hash(rf, xf)).sin();
                         let s = st * tw * clamp(1.0 - a * 1.6) * smooth(WLF - 2.0, 30.0, y);
                         cr = cr.max(s * 0.9);
                         cg = cg.max(s * 0.94);

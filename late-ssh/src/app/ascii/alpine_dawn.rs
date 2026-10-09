@@ -13,7 +13,7 @@
 
 use std::sync::OnceLock;
 
-use super::piece::{Shade, ShadedFrame, js_i32, js_round};
+use super::piece::{ROUGH_TAU, Shade, ShadedFrame, js_i32, js_round};
 
 pub(crate) const COLS: usize = 200;
 pub(crate) const ROWS: usize = 100;
@@ -557,7 +557,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
     for r in 0..SR {
         let rf = r as f64;
         let y = rf + 0.5;
-        for x in 0..W {
+        for (x, &wisp_x) in wisp.iter().enumerate() {
             let xf = x as f64;
             let k = r * W + x;
             let gl = f(land.glow_a[k]) * pulse;
@@ -615,7 +615,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
                 // a few stars still out in the west
                 if y < 34.0 && hash(xf, rf * 3.0 + 11.0) > 0.985 {
                     let tw =
-                        0.6 + 0.4 * (t * (1.5 + hash(xf, rf) * 3.0) + hash(rf, xf) * 6.28).sin();
+                        0.6 + 0.4 * (t * (1.5 + hash(xf, rf) * 3.0) + hash(rf, xf) * ROUGH_TAU).sin();
                     let s = tw * smooth(150.0, 40.0, xf) * smooth(34.0, 6.0, y) * 0.75;
                     cr = cr.max(s * 0.9);
                     cg = cg.max(s * 0.92);
@@ -664,7 +664,7 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
                 let m = f(land.mist[(r - M0) * MW + ((xf + drift).floor() as usize % MW)]);
                 // a ragged top edge: the sheet heaves in long swells and small
                 // tufts
-                let edge = 5.0 * (m - 0.5) + 4.0 * (f(wisp[x]) - 0.5);
+                let edge = 5.0 * (m - 0.5) + 4.0 * (f(wisp_x) - 0.5);
                 let band = smooth(M0 as f64 + 14.0, SHORE_F - 3.0, y + edge);
                 let a = (0.3 + 0.7 * smooth(0.32, 0.64, m)) * band * 0.6;
                 cr = mix(cr, mr, a);

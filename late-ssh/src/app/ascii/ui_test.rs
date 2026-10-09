@@ -26,8 +26,8 @@ fn a_scene_covers_every_cell_on_its_own_ground_in_either_style() {
         let ground = Color::Rgb(r, g, b);
         for style in SceneStyle::ALL {
             let piece = AsciiPiece {
-                scene: scene,
-                style: style,
+                scene,
+                style,
             };
             for (cols, rows) in [(200, 50), (80, 24), (31, 9)] {
                 let buffer = draw(piece, cols, rows);

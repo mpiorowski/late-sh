@@ -67,23 +67,6 @@ fn draw_pixels(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     }
 }
 
-/// A scene as a halftone on a square grid of dots, the original's look:
-/// each scene cell a dot (two scene rows to a terminal cell, so the grid
-/// is the scene's own 200x100 at 200x50), sized and lit by the cell's
-/// brightness. Braille draws the three sizes: one dot, a diagonal pair,
-/// a 2x2 cluster, each at the same place in its quarter of the glyph, so
-/// the grid stays regular and only the dots grow. The sizes take plain
-/// thresholds, no dither: a dither between sizes is what turned the grid
-/// into a texture. The tone does the rest: the ink over the ground on a
-/// steep curve, so the dim sky falls away to dark and the fog, the sun and
-/// its beams stand out. Both read the brightness after a local contrast
-/// boost (`sharpened`), which keeps the trees: they are only a little
-/// darker than the fog around them, and without it the few steps of a
-/// halftone flatten the two into one dim field. The tone is held to
-/// `TONES` steps and the ink to `INK_STEP` a channel, so a cell only
-/// changes when the scene moves it a visible step: a slow piece's frame
-/// then changes a few dozen cells, not every cell whose colour wobbled.
-
 /// Each scene cell's brightness with its local contrast raised (unsharp
 /// mask): the cell's difference from a box blur of `radius` cells around
 /// it, scaled by `amount`, is added back. A dark tree beside lit fog goes
@@ -108,14 +91,30 @@ fn sharpened(scene: &ShadedFrame, radius: usize, amount: f64) -> Vec<f64> {
     let mut out = level.clone();
     for x in 0..w {
         let line = blur_line(&|r| across[r * w + x], h);
-        for r in 0..h {
+        for (r, blurred) in line.iter().enumerate() {
             let k = r * w + x;
-            out[k] = (level[k] + amount * (level[k] - line[r])).clamp(0.0, 1.0);
+            out[k] = (level[k] + amount * (level[k] - blurred)).clamp(0.0, 1.0);
         }
     }
     out
 }
 
+/// A scene as a halftone on a square grid of dots, the original's look:
+/// each scene cell a dot (two scene rows to a terminal cell, so the grid
+/// is the scene's own 200x100 at 200x50), sized and lit by the cell's
+/// brightness. Braille draws the three sizes: one dot, a diagonal pair,
+/// a 2x2 cluster, each at the same place in its quarter of the glyph, so
+/// the grid stays regular and only the dots grow. The sizes take plain
+/// thresholds, no dither: a dither between sizes is what turned the grid
+/// into a texture. The tone does the rest: the ink over the ground on a
+/// steep curve, so the dim sky falls away to dark and the fog, the sun and
+/// its beams stand out. Both read the brightness after a local contrast
+/// boost (`sharpened`), which keeps the trees: they are only a little
+/// darker than the fog around them, and without it the few steps of a
+/// halftone flatten the two into one dim field. The tone is held to
+/// `TONES` steps and the ink to `INK_STEP` a channel, so a cell only
+/// changes when the scene moves it a visible step: a slow piece's frame
+/// then changes a few dozen cells, not every cell whose colour wobbled.
 fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     let at = sampling(area, scene);
     let [gr, gg, gb] = scene.ground;
@@ -176,11 +175,11 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
             let weight = t_top + t_bottom;
             let lit = t_top.max(t_bottom);
             let mut ink = [0u8; 3];
-            for c in 0..3 {
+            for (c, channel) in ink.iter_mut().enumerate() {
                 let mixed = (top.ink[c] * t_top + bottom.ink[c] * t_bottom) / weight;
                 let base = f64::from(scene.ground[c]);
                 let toned = base + (mixed * 255.0 - base) * lit;
-                ink[c] = ((toned / INK_STEP).round() * INK_STEP).min(255.0) as u8;
+                *channel = ((toned / INK_STEP).round() * INK_STEP).min(255.0) as u8;
             }
             cell.set_char(glyph)
                 .set_fg(Color::Rgb(ink[0], ink[1], ink[2]))

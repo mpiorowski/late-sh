@@ -203,6 +203,12 @@ fn cached(scene: Scene, frame: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> 
     picture
 }
 
+/// The originals' `6.28`, a full turn rounded to two places. Their star and
+/// wisp phases are written with it, and the golden fixtures were recorded
+/// from them, so a port keeps it rather than `TAU`.
+#[allow(clippy::approx_constant)]
+pub(crate) const ROUGH_TAU: f64 = 6.28;
+
 /// JavaScript's `x | 0`: truncate toward zero, wrap into an i32.
 pub(crate) fn js_i32(value: f64) -> i32 {
     value as i64 as i32

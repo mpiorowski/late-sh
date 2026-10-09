@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 
 #[cfg(test)]
 use super::piece::js_round;
-use super::piece::{Shade, ShadedFrame, js_i32};
+use super::piece::{ROUGH_TAU, Shade, ShadedFrame, js_i32};
 
 pub(crate) const COLS: usize = 200;
 pub(crate) const ROWS: usize = 100;
@@ -498,7 +498,7 @@ fn build_land() -> Land {
                     * smooth(SUN_R + 2.0, SUN_R + 8.0, d)) as f32;
                 ray = 0.35 * smooth(26.0, 46.0, y);
                 lift[k] = 0.04;
-            } else if l <= NEAR as i8 - 1 {
+            } else if l < NEAR as i8 {
                 let lf = f64::from(l);
                 let [.., haze, speed, m, drift, beam] = LAYERS[l as usize];
                 // pine: dark teal, paling with distance; mist pooled just
@@ -650,7 +650,7 @@ fn build_land() -> Land {
                 hash(fi, 1.0) * WF,
                 50.0 + hash(fi, 2.0) * 44.0,
                 0.3 + hash(fi, 3.0) * 0.8,
-                hash(fi, 4.0) * 6.28,
+                hash(fi, 4.0) * ROUGH_TAU,
                 hash(fi, 5.0),
             ]
         })

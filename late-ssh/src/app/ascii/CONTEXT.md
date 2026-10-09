@@ -206,7 +206,8 @@ What the numbers decide:
    its colour step; keep the original's `dot` and palette under
    `#[cfg(test)]` for the golden frame. Keep
    JavaScript's semantics where they decide a glyph: `Math.round` is
-   `piece::js_round` (halves up), `x | 0` is `piece::js_i32`, `Math.imul`
+   `piece::js_round` (halves up), `x | 0` is `piece::js_i32`, a literal
+   `6.28` is `piece::ROUGH_TAU` (not `TAU`), `Math.imul`
    and `>>>` are `u32` wrapping arithmetic, and a `Float32Array` is a
    `Vec<f32>` (store rounded, read back as `f64`).
 2. Add the variant to `Scene` (late-core: key, label, `ALL`), its two

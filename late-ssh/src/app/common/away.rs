@@ -168,7 +168,7 @@ fn event_len(data: &[u8]) -> Event {
 /// How many bytes the UTF-8 character starting with `lead` takes.
 fn utf8_len(lead: u8) -> usize {
     match lead {
-        0x00..=0x7F | 0x80..=0xBF => 1,
+        0x00..=0xBF => 1,
         0xC0..=0xDF => 2,
         0xE0..=0xEF => 3,
         0xF0..=0xFF => 4,

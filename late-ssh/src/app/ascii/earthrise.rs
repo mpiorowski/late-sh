@@ -22,7 +22,7 @@
 use std::f64::consts::PI;
 use std::sync::OnceLock;
 
-use super::piece::{Shade, ShadedFrame, js_i32, js_round};
+use super::piece::{ROUGH_TAU, Shade, ShadedFrame, js_i32, js_round};
 
 pub(crate) const COLS: usize = 200;
 pub(crate) const ROWS: usize = 100;
@@ -345,7 +345,7 @@ fn build_land() -> Land {
     let mut gz = vec![0f32; N];
     let mut gy = vec![0f32; N];
     let cam_y = height(0.0, 7.0) + CAM_H;
-    for c in 0..W {
+    for (c, top_c) in top.iter_mut().enumerate() {
         let dir = (c as f64 + 0.5 - WF / 2.0) / F;
         let mut top_r = H as i64;
         let mut z = 26.0;
@@ -383,7 +383,7 @@ fn build_land() -> Land {
             prev_z = z;
             z += 0.03 + z * 0.012;
         }
-        top[c] = top_r;
+        *top_c = top_r;
     }
 
     // Static light: the ground and the sky, everything but the Earth's disc.
@@ -392,7 +392,7 @@ fn build_land() -> Land {
     let mut sb = vec![0f32; N];
     let mut scap = vec![1f32; N];
     for r in 0..H {
-        for x in 0..W {
+        for (x, &top_x) in top.iter().enumerate() {
             let k = r * W + x;
             if !ground[k] {
                 continue;
@@ -441,7 +441,7 @@ fn build_land() -> Land {
                     * smooth(30.0, 100.0, (x as f64 - 100.0).abs());
             let mut b = (1.0 - (-ls * 1.5).exp()) * albedo * vig;
             // the far crest catches the sun along its whole length
-            let crest = r as i64 - top[x];
+            let crest = r as i64 - top_x;
             if crest < 2 && lit > 0.2 {
                 let catch = match crest {
                     0 => 0.85,
@@ -638,7 +638,7 @@ fn build_land() -> Land {
                     k,
                     s: s * w,
                     p,
-                    ph: hash(x, r) * 6.28,
+                    ph: hash(x, r) * ROUGH_TAU,
                     core: w == 1.0,
                 });
             }
@@ -753,7 +753,7 @@ pub(crate) fn light(t: f64) -> Vec<Lit> {
         let (dx, dy) = (x as f64 + 0.5 - EC[0], r as f64 + 0.5 - ey);
         let d = (dx * dx + dy * dy).sqrt();
         // the Earth's air, a thin blue rim on its sunlit side
-        if d >= ER - 1.0 && d < ER + 12.0 {
+        if (ER - 1.0..ER + 12.0).contains(&d) {
             let side = smooth(-0.3, 0.75, (dx * l[0] - dy * l[1]) / d);
             let mut g = (-(d - ER).max(0.0) / 1.2).exp() * 0.55 * side;
             if g < 0.05 {
