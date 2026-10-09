@@ -222,11 +222,13 @@ pub enum ArticleEvent {
     Deleted {
         user_id: Uuid,
     },
-    /// This user's news read cursor, loaded at session start or moved by
-    /// marking the feed read. The session counts its own unread badge from
-    /// it against the shared snapshot.
+    /// This user's news reads, loaded at session start, moved by marking the
+    /// feed read, or grown by opening one article: the cursor plus the
+    /// articles opened ahead of it (`article_reads`). The session counts its
+    /// own unread badge from them against the shared snapshot.
     ReadCursorLoaded {
         user_id: Uuid,
         last_read_at: Option<DateTime<Utc>>,
+        read_article_ids: Vec<Uuid>,
     },
 }

@@ -85,15 +85,6 @@ impl OpenWatches {
         let held = self.held.lock().expect("open watches mutex");
         held.get(&key).map_or(0, HashMap::len)
     }
-
-    /// People other than `user_id` with `key`'s watch open.
-    pub fn others_watching(&self, key: LiveGameKey, user_id: Uuid) -> usize {
-        let held = self.held.lock().expect("open watches mutex");
-        match held.get(&key) {
-            Some(users) => users.keys().filter(|id| **id != user_id).count(),
-            None => 0,
-        }
-    }
 }
 
 /// One session's open watch on one game, as [`OpenWatches`] counts it.
@@ -189,11 +180,6 @@ impl LiveGamesService {
     /// once (the sidebar's Live panel) and its tests, which need no roster.
     pub fn open_watches(&self) -> &OpenWatches {
         &self.open_watches
-    }
-
-    /// People other than `user_id` with `key`'s watch open, process wide.
-    pub fn others_watching(&self, key: LiveGameKey, user_id: Uuid) -> usize {
-        self.open_watches.others_watching(key, user_id)
     }
 
     fn feed(&self, game: SpectateGame) -> &RosterFeed {

@@ -8,6 +8,7 @@ use late_core::{
     models::{
         article::{Article, ArticleParams},
         article_feed_read::ArticleFeedRead,
+        article_read::ArticleRead,
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -107,6 +108,23 @@ impl ArticleService {
         });
     }
 
+    /// Mark the one article a modal opened on as read for this reader, then
+    /// republish their reads so every session of theirs drops its mark.
+    pub fn mark_article_read_task(&self, user_id: Uuid, article_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.mark_article_read_and_publish(user_id, article_id).await {
+                late_core::error_span!(
+                    "article_mark_article_read_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    article_id = %article_id,
+                    "failed to mark article read"
+                );
+            }
+        });
+    }
+
     pub fn list_articles_task(&self) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -172,21 +190,45 @@ impl ArticleService {
 
     async fn publish_read_cursor(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::ReadCursorLoaded {
-            user_id,
-            last_read_at,
-        });
-        Ok(())
+        self.publish_reads(&db_client, user_id).await
     }
 
+    /// A visit to the News room: the cursor moves to now, and the single
+    /// article reads it now covers go with it.
     async fn mark_read_and_publish(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        ArticleFeedRead::mark_read_now(&db_client, user_id).await?;
-        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
+        ArticleFeedRead::mark_read_now(&db_client, user_id)
+            .await
+            .context("moving article read cursor")?;
+        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id)
+            .await
+            .context("loading moved article read cursor")?
+            .context("article read cursor row missing after marking read")?;
+        ArticleRead::delete_covered(&db_client, user_id, last_read_at)
+            .await
+            .context("deleting covered article reads")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn mark_article_read_and_publish(&self, user_id: Uuid, article_id: Uuid) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleRead::mark_read(&db_client, user_id, article_id)
+            .await
+            .context("marking article read")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn publish_reads(&self, db_client: &tokio_postgres::Client, user_id: Uuid) -> Result<()> {
+        let last_read_at = ArticleFeedRead::last_read_at(db_client, user_id)
+            .await
+            .context("loading article read cursor")?;
+        let read_article_ids = ArticleRead::article_ids_for_user(db_client, user_id)
+            .await
+            .context("loading article reads")?;
         self.publish_event(ArticleEvent::ReadCursorLoaded {
             user_id,
             last_read_at,
+            read_article_ids,
         });
         Ok(())
     }

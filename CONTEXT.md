@@ -741,6 +741,7 @@ overwrite its own layout on every reconnect.
 | PaperRoomEdition | `paper_room_editions` | PK `(room_id, edition)`; `status` IN (printing, ready, quiet), `text` set iff ready, `generated_at` null iff printing. The row is the print claim (migration 173). |
 | PaperSection | `paper_sections` | PK `(edition, section)`, `section` IN (reading, outside), same status contract. |
 | ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
+| ArticleRead | `article_reads` | PK `(user_id, article_id)`, both FK cascade: one article read ahead of the checkpoint (the article modal); a News room visit deletes the rows the moved checkpoint covers |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
 | SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
 | NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, binary completion |

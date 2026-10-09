@@ -1,8 +1,8 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
+use crate::app::chat::news::state::Reads;
 use crate::app::chat::ui_text::{NewsPayload, format_news_ascii_art_for_display};
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
-use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Flex, Layout, Margin, Rect},
@@ -17,7 +17,7 @@ use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
     pub selected_index: usize,
-    pub marker_read_at: Option<DateTime<Utc>>,
+    pub marker: &'a Reads,
     pub mine_only: bool,
 }
 
@@ -68,10 +68,7 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
             let article_idx = start_index + row;
             let item = &view.articles[article_idx];
             let article = &item.article;
-            let is_unread = view
-                .marker_read_at
-                .map(|last_read_at| article.created > last_read_at)
-                .unwrap_or(true);
+            let is_unread = view.marker.is_unread(item);
 
             let item_block = Block::default()
                 .borders(Borders::BOTTOM)

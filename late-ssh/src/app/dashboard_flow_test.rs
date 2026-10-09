@@ -869,8 +869,8 @@ async fn every_watch_opened_stays_a_stop_on_the_backtick_cycle() {
 
 /// Who is watching is the people with the watch open, counted in the
 /// process: a preview counts nobody, opening counts you, stepping away keeps
-/// counting you, Esc back to the preview drops you. Another user holding the
-/// same watch open is one other, however it is looked at.
+/// counting you, Esc back to the preview drops you. The watch chat's header
+/// says so: you and the other user holding the same watch open are two.
 #[tokio::test]
 async fn an_open_watch_counts_its_watcher_until_it_closes() {
     use crate::app::common::primitives::Screen;
@@ -906,7 +906,6 @@ async fn an_open_watch_counts_its_watcher_until_it_closes() {
         1,
         "a preview counts nobody"
     );
-    assert_eq!(app.live_games.others_watching(key, me.id), 1);
 
     app.handle_input(b"\r");
     assert_eq!(mode(&app), Some(WatchMode::Open));
@@ -915,10 +914,9 @@ async fn an_open_watch_counts_its_watcher_until_it_closes() {
         2,
         "opening the watch counts you"
     );
-    assert_eq!(
-        app.live_games.others_watching(key, me.id),
-        1,
-        "but not among the others"
+    assert!(
+        render_plain(&mut app).contains("watcher chat \u{b7} 2 watching"),
+        "the open watch's chat header counts everyone with it open, you included"
     );
 
     app.handle_input(b"`");
@@ -1045,6 +1043,94 @@ async fn s_then_a_digit_opens_the_live_panel_row() {
             .map(|state| (state.playname().to_string(), state.mode())),
         Some(("crawler".to_string(), WatchMode::Open)),
         "on the open watch of that game"
+    );
+}
+
+/// Opening a share's article modal reads that article and no other: `s1`
+/// on the newer of two unread shares drops its dot on the Live panel while
+/// the older keeps its own, and a later session of the same reader still
+/// finds it read.
+#[tokio::test]
+async fn opening_a_shares_modal_marks_that_article_read() {
+    use late_core::models::article::{Article, ArticleParams};
+    use late_core::models::article_read::ArticleRead;
+
+    // The panel row carrying `key`, from its kind to the key: `news`, the
+    // title, the dot while unread. Rows sit between the rail's borders.
+    fn news_row(frame: &str, key: &str) -> String {
+        frame
+            .split('\u{2502}')
+            .find_map(|cell| {
+                let row = cell.strip_suffix(&format!(" {key}"))?;
+                row.starts_with("news    ").then(|| row.to_string())
+            })
+            .unwrap_or_else(|| panic!("no news row for {key} in:\n{frame}"))
+    }
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "news-read-me").await;
+    let them = create_test_user(&test_db.db, "news-read-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let share = |url: &str, title: &str| ArticleParams {
+        user_id: them.id,
+        url: url.to_string(),
+        title: title.to_string(),
+        summary: "• summary".to_string(),
+        ascii_art: "#".to_string(),
+    };
+    Article::create_by_user_id(&client, them.id, share("https://example.com/alpha", "alpha"))
+        .await
+        .expect("share the older article");
+    let newer =
+        Article::create_by_user_id(&client, them.id, share("https://example.com/beta", "beta"))
+            .await
+            .expect("share the newer article");
+
+    let mut app = make_app(test_db.db.clone(), me.id, "news-read-flow-it");
+    app.resize(160, 40)
+        .expect("resize to a width that shows the rail");
+    wait_for_render_contains(&mut app, "\u{25cf} s2").await;
+    let frame = render_plain(&mut app);
+    let (beta, alpha) = (news_row(&frame, "s1"), news_row(&frame, "s2"));
+    assert!(beta.starts_with("news    beta") && beta.ends_with('\u{25cf}'));
+    assert!(alpha.starts_with("news    alpha") && alpha.ends_with('\u{25cf}'));
+
+    app.handle_input(b"s1");
+    assert_eq!(
+        app.chat.news_modal_url(),
+        Some("https://example.com/beta"),
+        "s1 opens the newer share"
+    );
+    app.chat.close_news_modal();
+    let frame = render_plain(&mut app);
+    assert!(
+        !news_row(&frame, "s1").contains('\u{25cf}'),
+        "the opened share is read: {frame}"
+    );
+    assert!(
+        news_row(&frame, "s2").ends_with('\u{25cf}'),
+        "the other share is still unread: {frame}"
+    );
+
+    crate::test_helpers::wait_until(
+        || async {
+            ArticleRead::article_ids_for_user(&client, me.id)
+                .await
+                .expect("reads")
+                .contains(&newer.id)
+        },
+        "the read is stored",
+    )
+    .await;
+    let mut later = make_app(test_db.db.clone(), me.id, "news-read-later-flow-it");
+    later
+        .resize(160, 40)
+        .expect("resize to a width that shows the rail");
+    wait_for_render_contains(&mut later, "\u{25cf} s2").await;
+    let frame = render_plain(&mut later);
+    assert!(
+        !news_row(&frame, "s1").contains('\u{25cf}'),
+        "a later session finds it read: {frame}"
     );
 }
 

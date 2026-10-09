@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
@@ -28,36 +30,49 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 
 use super::svc::ArticleService;
 
-/// This session's news read cursor. Until the first load answers, the badge
-/// stays empty rather than guessing: a missing cursor row (`Loaded(None)`)
-/// means everything is unread, which is not the same as not knowing yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReadCursor {
-    Loading,
-    Loaded(Option<DateTime<Utc>>),
+/// What a reader has read: every article up to the cursor (`None` when
+/// they have no cursor row, which reads nothing by time), plus the ones
+/// they opened ahead of it in the article modal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reads {
+    pub last_read_at: Option<DateTime<Utc>>,
+    pub article_ids: HashSet<Uuid>,
 }
 
-/// Whether an article is unread against the cursor, for a mark that must
-/// not guess: nothing is unread until the cursor has loaded, everything
-/// is when the reader has no cursor row.
-pub(crate) fn is_unread_at(item: &ArticleFeedItem, cursor: ReadCursor) -> bool {
-    match cursor {
-        ReadCursor::Loading => false,
-        ReadCursor::Loaded(last_read_at) => is_unread(item, last_read_at),
+impl Reads {
+    pub(crate) fn is_unread(&self, item: &ArticleFeedItem) -> bool {
+        let read_by_cursor = match self.last_read_at {
+            Some(last_read_at) => item.article.created <= last_read_at,
+            None => false,
+        };
+        !read_by_cursor && !self.article_ids.contains(&item.article.id)
     }
 }
 
-/// The news badge: articles in the shared snapshot newer than the reader's
-/// cursor, no cursor row meaning all of them. The snapshot holds the newest
-/// [`NEWS_FEED_LIMIT`] articles, so the count saturates there.
-pub(crate) fn unread_in_snapshot(
-    articles: &[ArticleFeedItem],
-    last_read_at: Option<DateTime<Utc>>,
-) -> i64 {
-    let unread = articles
-        .iter()
-        .filter(|item| is_unread(item, last_read_at))
-        .count();
+/// This session's news reads. Until the first load answers, the badge
+/// stays empty rather than guessing: a missing cursor row
+/// (`last_read_at: None`) means everything not opened is unread, which is
+/// not the same as not knowing yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReadCursor {
+    Loading,
+    Loaded(Reads),
+}
+
+/// Whether an article is unread against the reads, for a mark that must
+/// not guess: nothing is unread until the reads have loaded.
+pub(crate) fn is_unread_at(item: &ArticleFeedItem, cursor: &ReadCursor) -> bool {
+    match cursor {
+        ReadCursor::Loading => false,
+        ReadCursor::Loaded(reads) => reads.is_unread(item),
+    }
+}
+
+/// The news badge: articles in the shared snapshot the reader has not read.
+/// The snapshot holds the newest [`NEWS_FEED_LIMIT`] articles, so the
+/// count saturates there.
+pub(crate) fn unread_in_snapshot(articles: &[ArticleFeedItem], reads: &Reads) -> i64 {
+    let unread = articles.iter().filter(|item| reads.is_unread(item)).count();
     unread as i64
 }
 
@@ -80,7 +95,7 @@ pub(crate) fn news_unread_label(unread: i64) -> String {
 pub(crate) fn has_fresh_unread_from_others(
     previous: &[ArticleFeedItem],
     next: &[ArticleFeedItem],
-    last_read_at: Option<DateTime<Utc>>,
+    reads: &Reads,
     reader: Uuid,
 ) -> bool {
     let Some(newest_seen) = previous.iter().map(|item| item.article.created).max() else {
@@ -89,15 +104,8 @@ pub(crate) fn has_fresh_unread_from_others(
     next.iter().any(|item| {
         item.article.created > newest_seen
             && item.article.user_id != reader
-            && is_unread(item, last_read_at)
+            && reads.is_unread(item)
     })
-}
-
-fn is_unread(item: &ArticleFeedItem, last_read_at: Option<DateTime<Utc>>) -> bool {
-    match last_read_at {
-        Some(last_read_at) => item.article.created > last_read_at,
-        None => true,
-    }
 }
 
 /// Outcome of one tab tick: the banner to surface plus whether a drained
@@ -118,8 +126,8 @@ pub struct State {
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
     read_cursor: ReadCursor,
-    marker_read_at: Option<DateTime<Utc>>,
-    preserve_marker_read_at: bool,
+    marker: Reads,
+    preserve_marker: bool,
     composing: bool,
     composer: TextArea<'static>,
     processing: bool,
@@ -143,8 +151,11 @@ impl State {
             snapshot_rx,
             event_rx,
             read_cursor: ReadCursor::Loading,
-            marker_read_at: None,
-            preserve_marker_read_at: false,
+            marker: Reads {
+                last_read_at: None,
+                article_ids: HashSet::new(),
+            },
+            preserve_marker: false,
             composing: false,
             composer: new_news_textarea(),
             processing: false,
@@ -252,20 +263,20 @@ impl State {
     }
 
     pub fn unread_count(&self) -> i64 {
-        match self.read_cursor {
+        match &self.read_cursor {
             ReadCursor::Loading => 0,
-            ReadCursor::Loaded(last_read_at) => {
-                unread_in_snapshot(&self.source_articles, last_read_at)
-            }
+            ReadCursor::Loaded(reads) => unread_in_snapshot(&self.source_articles, reads),
         }
     }
 
-    pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
-        self.marker_read_at
+    /// The reads the News list marks its dots against: held at what they
+    /// were when the room was entered, so the visit keeps showing what was new.
+    pub(crate) fn marker(&self) -> &Reads {
+        &self.marker
     }
 
-    pub(crate) fn read_cursor(&self) -> ReadCursor {
-        self.read_cursor
+    pub(crate) fn read_cursor(&self) -> &ReadCursor {
+        &self.read_cursor
     }
 
     pub fn composing(&self) -> bool {
@@ -300,15 +311,40 @@ impl State {
     }
 
     pub fn mark_read(&mut self) {
-        self.marker_read_at = match self.read_cursor {
-            ReadCursor::Loading => None,
-            ReadCursor::Loaded(last_read_at) => last_read_at,
+        self.marker = match &self.read_cursor {
+            ReadCursor::Loading => Reads {
+                last_read_at: None,
+                article_ids: HashSet::new(),
+            },
+            ReadCursor::Loaded(reads) => reads.clone(),
         };
-        self.preserve_marker_read_at = true;
-        // Clear the badge now; the stored cursor comes back as
-        // `ReadCursorLoaded` once the write lands.
-        self.read_cursor = ReadCursor::Loaded(Some(Utc::now()));
+        self.preserve_marker = true;
+        // Clear the badge now; the stored reads come back as
+        // `ReadCursorLoaded` once the write lands. The cursor covers every
+        // article opened before it, so those reads go.
+        self.read_cursor = ReadCursor::Loaded(Reads {
+            last_read_at: Some(Utc::now()),
+            article_ids: HashSet::new(),
+        });
         self.article_service.mark_read_task(self.user_id);
+    }
+
+    /// Mark the one article the modal opened on as read, and no other.
+    /// Clears its mark now and skips the write when the reads already
+    /// cover it; before the reads load it writes anyway, the stored reads
+    /// arriving after it.
+    pub fn mark_article_read(&mut self, item: &ArticleFeedItem) {
+        match &mut self.read_cursor {
+            ReadCursor::Loading => {}
+            ReadCursor::Loaded(reads) => {
+                if !reads.is_unread(item) {
+                    return;
+                }
+                reads.article_ids.insert(item.article.id);
+            }
+        }
+        self.article_service
+            .mark_article_read_task(self.user_id, item.article.id);
     }
 
     pub fn composer_push(&mut self, ch: char) {
@@ -438,12 +474,12 @@ impl State {
             return None;
         };
         let snapshot = self.snapshot_rx.borrow_and_update().clone();
-        let announce = match self.read_cursor {
+        let announce = match &self.read_cursor {
             ReadCursor::Loading => false,
-            ReadCursor::Loaded(last_read_at) => has_fresh_unread_from_others(
+            ReadCursor::Loaded(reads) => has_fresh_unread_from_others(
                 &self.source_articles,
                 &snapshot.articles,
-                last_read_at,
+                reads,
                 self.user_id,
             ),
         };
@@ -489,10 +525,15 @@ impl State {
                     ArticleEvent::ReadCursorLoaded {
                         user_id,
                         last_read_at,
+                        read_article_ids,
                     } if self.user_id == user_id => {
-                        self.read_cursor = ReadCursor::Loaded(last_read_at);
-                        if self.unread_count() == 0 && !self.preserve_marker_read_at {
-                            self.marker_read_at = last_read_at;
+                        let reads = Reads {
+                            last_read_at,
+                            article_ids: read_article_ids.into_iter().collect(),
+                        };
+                        self.read_cursor = ReadCursor::Loaded(reads.clone());
+                        if self.unread_count() == 0 && !self.preserve_marker {
+                            self.marker = reads;
                         }
                     }
                     _ => (),

@@ -298,3 +298,49 @@ async fn a_listening_replica_picks_up_shares_and_deletes_from_the_notify() {
     .await
     .expect("the listening replica drops the deleted article");
 }
+
+async fn recv_reads(
+    events: &mut tokio::sync::broadcast::Receiver<ArticleEvent>,
+) -> (Option<chrono::DateTime<chrono::Utc>>, Vec<Uuid>) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if let ArticleEvent::ReadCursorLoaded {
+                last_read_at,
+                read_article_ids,
+                ..
+            } = events.recv().await.expect("article event")
+            {
+                return (last_read_at, read_article_ids);
+            }
+        }
+    })
+    .await
+    .expect("reads timeout")
+}
+
+/// Opening one article publishes it among the reader's reads; a visit to
+/// the News room moves the cursor past it and the single read goes.
+#[tokio::test]
+async fn a_room_visit_moves_the_cursor_over_the_articles_opened_before_it() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "reads-sharer").await;
+    let reader = create_test_user(&test_db.db, "reads-reader").await;
+    let article = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        article_params(sharer.id, "https://example.com/reads", "Reads"),
+    )
+    .await
+    .expect("create article");
+    let service = make_article_service(test_db.db.clone());
+    let mut events = service.subscribe_events();
+
+    service.mark_article_read_task(reader.id, article.id);
+    assert_eq!(recv_reads(&mut events).await, (None, vec![article.id]));
+
+    service.mark_read_task(reader.id);
+    let (last_read_at, read_article_ids) = recv_reads(&mut events).await;
+    assert!(last_read_at.is_some_and(|at| at >= article.created));
+    assert_eq!(read_article_ids, Vec::<Uuid>::new());
+}

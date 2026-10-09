@@ -225,12 +225,12 @@ struct DrawContext<'a> {
     live_panel_rows: Vec<crate::app::live::panel::LivePanelRow>,
     live_panel_now: chrono::DateTime<chrono::Utc>,
     live_panel_hit: &'a crate::app::live::panel::LivePanelHit,
-    /// People other than this player with a watch open on their own
-    /// running game on the watchable door whose screen is up, for its
-    /// chrome: peeking at your own game makes you nobody's audience.
-    own_watchers: Option<usize>,
-    /// People other than this one with the held watch open, for its header.
-    watch_others: usize,
+    /// People with a watch open on this player's own running game on the
+    /// watchable door whose screen is up, for its watcher chat.
+    own_watchers: usize,
+    /// People with the held watch open, this session included, for its
+    /// watch chat's header.
+    held_watchers: usize,
     /// The watch chat on show: the watched player's room on the Games hub,
     /// this player's own room beside their running game on a watchable
     /// door's screen. `None` until this session is in the room.
@@ -466,14 +466,19 @@ impl App {
         // game shows its watchers and their chat.
         let own_screen_game =
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
-        let own_watchers = own_screen_game.and_then(|game| {
+        let own_game_key = own_screen_game.and_then(|game| {
             let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
-            let key = crate::app::door::spectate::state::LiveGameKey::new(game, &handle)?;
-            Some(self.live_games.others_watching(key, self.user_id))
+            crate::app::door::spectate::state::LiveGameKey::new(game, &handle)
         });
-        let watch_others = self.spectate_state.as_ref().map_or(0, |state| {
-            self.live_games.others_watching(state.key(), self.user_id)
-        });
+        // No game of theirs on the roster: nobody can be watching it.
+        let own_watchers = match own_game_key {
+            Some(key) => self.live_games.watchers_of(key),
+            None => 0,
+        };
+        let held_watchers = match self.spectate_state.as_ref() {
+            Some(state) => self.live_games.watchers_of(state.key()),
+            None => 0,
+        };
         let games_hub_roster = HubGame::roster(self.is_runner());
         // Away with the Tweak on: the piece covers everything this frame.
         let screensaver = self.screensaver();
@@ -895,7 +900,7 @@ impl App {
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
             selected_index: self.chat.news.selected_index(),
-            marker_read_at: self.chat.news.marker_read_at(),
+            marker: self.chat.news.marker(),
             mine_only: self.chat.news.mine_only(),
         };
         let feeds_view = chat::feeds::ui::FeedListView {
@@ -1575,7 +1580,7 @@ impl App {
                         live_panel_now,
                         live_panel_hit: &self.live.panel_hit,
                         own_watchers,
-                        watch_others,
+                        held_watchers,
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         own_watch_line,
@@ -2084,7 +2089,7 @@ impl App {
                             entry: state
                                 .row_in(&ctx.live_rows)
                                 .map(|index| &ctx.live_rows[index].entry),
-                            others_watching: ctx.watch_others,
+                            watchers: ctx.held_watchers,
                         },
                         crate::app::door::spectate::ui::WatchPane::Open(
                             ctx.watch_chat_view.take().map(Box::new),
@@ -2150,7 +2155,7 @@ impl App {
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
                             entry: live_selected.map(|index| &ctx.live_rows[index].entry),
-                            others_watching: ctx.watch_others,
+                            watchers: ctx.held_watchers,
                         },
                         crate::app::door::spectate::ui::WatchPane::Preview,
                         terminal_images,
@@ -2875,16 +2880,6 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.icon_picker_open
 }
 
-/// `· 2 watching` in a running watchable game's chrome. Being watched is
-/// never hidden from the player, whatever their watch-chat setting.
-fn own_watchers_span(watchers: Option<usize>) -> Option<Span<'static>> {
-    let watchers = watchers.filter(|n| *n > 0)?;
-    Some(Span::styled(
-        format!("\u{b7} {watchers} watching "),
-        Style::default().fg(theme::AMBER_GLOW()),
-    ))
-}
-
 /// A watchable door's content area split between its game and the player's
 /// own watch chat, when `chat_wanted` (the setting is on and the game runs).
 fn own_chat_split(
@@ -3030,7 +3025,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· ? help · S save · ` step out · Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
-            spans.extend(own_watchers_span(ctx.own_watchers));
         }
     }
 
@@ -3051,7 +3045,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
-            spans.extend(own_watchers_span(ctx.own_watchers));
         }
     }
 
@@ -3072,7 +3065,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
-            spans.extend(own_watchers_span(ctx.own_watchers));
         }
     }
 

@@ -22,10 +22,9 @@ fn a_user_counts_once_however_many_sessions_hold_the_watch() {
     assert_eq!(watches.watchers_of(key("mat")), 0);
 }
 
-/// Watches are per game, and a watcher does not count themselves among the
-/// others on the game they are watching.
+/// Watches are counted per game.
 #[test]
-fn watchers_are_counted_per_game_and_the_others_leave_you_out() {
+fn watchers_are_counted_per_game() {
     let watches = OpenWatches::new();
     let alice = Uuid::now_v7();
     let bob = Uuid::now_v7();
@@ -37,8 +36,4 @@ fn watchers_are_counted_per_game_and_the_others_leave_you_out() {
     assert_eq!(watches.watchers_of(key("mat")), 2);
     assert_eq!(watches.watchers_of(key("eggy")), 1);
     assert_eq!(watches.watchers_of(key("nobody")), 0);
-    assert_eq!(watches.others_watching(key("mat"), alice), 1);
-    assert_eq!(watches.others_watching(key("mat"), bob), 1);
-    assert_eq!(watches.others_watching(key("eggy"), alice), 1);
-    assert_eq!(watches.others_watching(key("eggy"), bob), 0);
 }

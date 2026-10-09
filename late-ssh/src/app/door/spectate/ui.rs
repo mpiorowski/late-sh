@@ -2,7 +2,7 @@
 // landing's place) while the rail sits on a live row: one header row, then
 // the player's screen alone. Opened (Enter on the row) it takes the whole
 // page: the header over the screen, and the watch chat docked beside it
-// (`chat_dock`). The screen is the player's size, not ours: a smaller one is
+// (`chat_dock`) under its `watcher chat · N watching` row. The screen is the player's size, not ours: a smaller one is
 // centered, a larger one is cropped to a window around the game's cursor
 // (crawl and NetHack park it on the `@`), or pinned top-left while the game
 // hides its cursor (`crop_anchor`; Brogue). Brogue's black canvas is keyed
@@ -133,9 +133,9 @@ pub struct SpectateView<'a> {
     /// The watched game's roster entry, for where the player is and how
     /// long they have run; `None` once the roster no longer lists it.
     pub entry: Option<&'a LiveGame>,
-    /// People other than this session's user with this watch open
-    /// (`LiveGamesService::others_watching`).
-    pub others_watching: usize,
+    /// People with this watch open, this session's user included
+    /// (`LiveGamesService::watchers_of`), for the docked chat's header row.
+    pub watchers: usize,
 }
 
 /// One axis of the fit: where to start reading the player's screen, how far
@@ -204,8 +204,10 @@ pub fn draw(
     let body = layout.screen;
     if let (WatchPane::Open(chat), Some((rule, chat_area))) = (pane, layout.chat) {
         draw_rule(frame, rule);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(chat_area);
+        draw_chat_header(frame, rows[0], view.watchers);
         if let Some(chat) = chat {
-            let composer = draw_embedded_room_chat(frame, chat_area, *chat, terminal_images);
+            let composer = draw_embedded_room_chat(frame, rows[1], *chat, terminal_images);
             join_rule_to_composer(frame, rule, composer);
         }
     }
@@ -283,12 +285,6 @@ fn draw_header(
                 " \u{b7} {} in",
                 duration_label(minutes_since(game.started_unix))
             ),
-            dim,
-        ));
-    }
-    if view.others_watching > 0 {
-        spans.push(Span::styled(
-            format!(" \u{b7} {} also watching", view.others_watching),
             dim,
         ));
     }
@@ -403,7 +399,7 @@ pub fn draw_own_chat(
     own_chat: OwnChat,
     chat: Option<EmbeddedRoomChatView<'_>>,
     line: Option<&WatchLine>,
-    watchers: Option<usize>,
+    watchers: usize,
     terminal_images: &mut TerminalImageFrame,
 ) {
     match own_chat {
@@ -416,7 +412,7 @@ pub fn draw_own_chat(
 }
 
 /// The pane beside a player's own running game: their watchers' chat. One
-/// faint header row says what it is, then the room's ordinary embedded chat,
+/// faint header row says what it is and how many are watching, then the room's ordinary embedded chat,
 /// composer strip included. The strip is the player's way in and is always
 /// there, so the rows never jump: inert, its title and placeholder name F2
 /// and the click (`chat::ui::ComposerInert::OwnWatchChat`); open, it names
@@ -426,22 +422,12 @@ fn draw_own_chat_pane(
     rule: Rect,
     pane: Rect,
     chat: Option<EmbeddedRoomChatView<'_>>,
-    watchers: Option<usize>,
+    watchers: usize,
     terminal_images: &mut TerminalImageFrame,
 ) {
     draw_rule(frame, rule);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(pane);
-    let header = match watchers {
-        Some(watchers) if watchers > 0 => format!(" watcher chat \u{b7} {watchers} watching"),
-        Some(_) | None => " watcher chat".to_string(),
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            header,
-            Style::default().fg(theme::TEXT_FAINT()),
-        ))),
-        rows[0],
-    );
+    draw_chat_header(frame, rows[0], watchers);
     // No room yet (it is still resolving, or the join has not landed): the
     // pane stays reserved and empty rather than resizing the game later, and
     // without the strip, since F2 has nowhere to write until then.
@@ -450,21 +436,27 @@ fn draw_own_chat_pane(
     }
 }
 
+/// The watch chat's header row, the one place a watch view or a player's
+/// own game says how many are watching: everyone with the watch open, even
+/// when that is nobody.
+fn draw_chat_header(frame: &mut Frame, area: Rect, watchers: usize) {
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" watcher chat \u{b7} {watchers} watching"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ))),
+        area,
+    );
+}
+
 /// The one row under a player's own running game, where the terminal is too
-/// narrow for the pane: the newest thing a watcher
-/// said, or a faint word that people are watching and quiet. Blank when
-/// nobody is there, so the row costs a player without an audience nothing
-/// but the row.
-fn draw_watch_line(
-    frame: &mut Frame,
-    area: Rect,
-    line: Option<&WatchLine>,
-    watchers: Option<usize>,
-) {
+/// narrow for the pane: the newest thing a watcher said, or a faint word
+/// that nobody has, with how many are watching either way.
+fn draw_watch_line(frame: &mut Frame, area: Rect, line: Option<&WatchLine>, watchers: usize) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    match (line, watchers) {
-        (Some(line), _) => {
+    match line {
+        Some(line) => {
             let name = Style::default().fg(theme::AMBER_DIM());
             let mut spans = vec![Span::styled(" ", dim)];
             if line.is_action {
@@ -476,22 +468,25 @@ fn draw_watch_line(
                 spans.push(Span::styled(format!(": {}", line.body), dim));
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
-            // The age sits at the right edge, over the tail of a message too
-            // long for the row, so it is never the part that gets cut.
+            // The age and the count sit at the right edge, over the tail of
+            // a message too long for the row, so they are never the part
+            // that gets cut.
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(format!("  {} ", line.age), faint)))
-                    .alignment(Alignment::Right),
+                Paragraph::new(Line::from(Span::styled(
+                    format!("  {} \u{b7} {watchers} watching ", line.age),
+                    faint,
+                )))
+                .alignment(Alignment::Right),
                 area,
             );
         }
-        (None, Some(watchers)) if watchers > 0 => frame.render_widget(
+        None => frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 format!(" {watchers} watching \u{b7} nobody has said anything"),
                 faint,
             ))),
             area,
         ),
-        (None, _) => {}
     }
 }
 

@@ -141,7 +141,7 @@ pub(crate) fn rows(
     streams: &[LiveStreamView],
     live: &[LiveRow],
     articles: &[ArticleFeedItem],
-    read_cursor: ReadCursor,
+    read_cursor: &ReadCursor,
     open_watches: &OpenWatches,
     now: DateTime<Utc>,
 ) -> Vec<LivePanelRow> {

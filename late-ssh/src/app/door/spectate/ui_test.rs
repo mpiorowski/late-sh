@@ -199,3 +199,38 @@ fn the_rule_tees_into_the_composer_borders() {
         .collect();
     assert_eq!(column, "\u{2502}\u{2502}\u{251c}\u{2502}\u{251c}\u{2502}");
 }
+
+/// The one-row fallback under a player's own game always says how many are
+/// watching: beside the newest message, or with nobody having spoken, even
+/// when nobody is there.
+#[test]
+fn the_players_chat_row_always_counts_the_watchers() {
+    let row = |line: Option<&WatchLine>, watchers: usize| {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 1))
+            .expect("test terminal");
+        terminal
+            .draw(|frame| draw_watch_line(frame, Rect::new(0, 0, 60, 1), line, watchers))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        (0..60)
+            .map(|x| buffer[(x, 0)].symbol().to_string())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    };
+
+    assert_eq!(
+        row(None, 0),
+        " 0 watching \u{b7} nobody has said anything"
+    );
+    let line = WatchLine {
+        author: "mira".to_string(),
+        body: "nice dodge".to_string(),
+        is_action: false,
+        age: "now".to_string(),
+    };
+    assert_eq!(
+        row(Some(&line), 3),
+        format!(" mira: nice dodge{}now \u{b7} 3 watching", " ".repeat(26))
+    );
+}
