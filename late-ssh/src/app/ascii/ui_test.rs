@@ -3,8 +3,8 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, styl
 
 use super::draw_piece;
 use crate::app::ascii::{
-    alpine_dawn, aurora_fjord, misty_forest,
-    piece::{SLOW_FRAME_MS, Shade, pixel},
+    alpine_dawn, aurora_fjord, earthrise, misty_forest,
+    piece::{Shade, cadence, pixel},
 };
 
 fn draw(piece: AsciiPiece, cols: u16, rows: u16) -> Buffer {
@@ -18,6 +18,7 @@ fn draw(piece: AsciiPiece, cols: u16, rows: u16) -> Buffer {
 #[test]
 fn a_scene_covers_every_cell_on_its_own_ground_in_either_style() {
     for (scene, [r, g, b]) in [
+        (Scene::Earthrise, earthrise::GROUND),
         (Scene::MistyForest, misty_forest::GROUND),
         (Scene::AuroraFjord, aurora_fjord::GROUND),
         (Scene::AlpineDawn, alpine_dawn::GROUND),
@@ -122,44 +123,50 @@ fn an_empty_area_draws_nothing() {
     );
 }
 
-/// The slow piece earns its place as the default screensaver by moving a
-/// few cells a frame: on a full 200x50 terminal, in dots, one second of
-/// wall time changes a bounded handful of cells, so an away session under
-/// it ships about a kilobyte a second rather than a repaint. The budget is
-/// the contract; `SLOW_RATE` and `SLOW_FRAME_MS` are tuned to it (the
-/// count grows linearly with the play step: about a hundred cells per
-/// hundredth of a second of play).
+/// A slow piece earns its place as a screensaver that can default to on by
+/// moving a few cells a second: on a full 200x50 terminal, in dots, a
+/// frame changes a bounded handful of cells for every second of wall time
+/// it stands for, so an away session under it ships about a kilobyte a
+/// second rather than a repaint. The budget is the contract; each slow
+/// piece's cadence (`piece::cadence`: the forest's `SLOW_RATE` at a frame
+/// a second, the Earth's `EARTH_RATE` at a frame every `EARTH_FRAME_MS`)
+/// and its own pace within it (`misty_forest::BEAM_PACE`) are tuned to it.
 #[test]
-fn the_slow_piece_moves_a_few_cells_a_frame() {
-    const BUDGET: usize = 100;
-    let piece = AsciiPiece {
-        scene: Scene::MistyForest,
-        style: SceneStyle::Dots,
-    };
-    let draw_at = |clock_ms: u64| {
-        let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
-        terminal
-            .draw(|frame| draw_piece(frame, Rect::new(0, 0, 200, 50), piece, clock_ms))
-            .expect("draw");
-        terminal.backend().buffer().clone()
-    };
-    let mut worst = 0;
-    for second in [0u64, 7, 30, 61, 240, 1200] {
-        let before = draw_at(second * SLOW_FRAME_MS);
-        let after = draw_at((second + 1) * SLOW_FRAME_MS);
-        let changed = before
-            .content()
-            .iter()
-            .zip(after.content().iter())
-            .filter(|(a, b)| a != b)
-            .count();
-        worst = worst.max(changed);
-        assert!(
-            changed <= BUDGET,
-            "second {second} to {}: {changed} cells changed, over the {BUDGET} budget",
-            second + 1
-        );
-        assert!(changed > 0, "second {second}: the forest froze");
+fn a_slow_piece_moves_a_few_cells_a_second() {
+    const BUDGET_PER_SECOND: usize = 100;
+    for scene in [Scene::Earthrise, Scene::MistyForest] {
+        let piece = AsciiPiece {
+            scene,
+            style: SceneStyle::Dots,
+        };
+        let frame_ms = cadence(piece).frame_ms();
+        let draw_at = |clock_ms: u64| {
+            let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
+            terminal
+                .draw(|frame| draw_piece(frame, Rect::new(0, 0, 200, 50), piece, clock_ms))
+                .expect("draw");
+            terminal.backend().buffer().clone()
+        };
+        let mut worst = 0;
+        for edge in [0u64, 7, 30, 61, 240, 1200] {
+            let before = draw_at(edge * frame_ms);
+            let after = draw_at((edge + 1) * frame_ms);
+            let changed = before
+                .content()
+                .iter()
+                .zip(after.content().iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            let per_second = changed * 1000 / frame_ms as usize;
+            worst = worst.max(per_second);
+            assert!(
+                per_second <= BUDGET_PER_SECOND,
+                "{}: frame {edge} to {}: {changed} cells changed, {per_second} a second, over the {BUDGET_PER_SECOND} budget",
+                piece.label(),
+                edge + 1
+            );
+            assert!(changed > 0, "{}: frame {edge}: it froze", piece.label());
+        }
+        eprintln!("{}: at most {worst} cells change per second", piece.label());
     }
-    eprintln!("slow piece: at most {worst} cells change per frame");
 }

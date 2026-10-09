@@ -1,7 +1,8 @@
 use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 
 use super::{
-    Cadence, FRAME_MS, SLOW_FRAME_MS, cadence, frame_index, js_i32, js_round, picture, seconds,
+    Cadence, EARTH_FRAME_MS, EARTH_RATE, FRAME_MS, SLOW_FRAME_MS, SLOW_RATE, cadence, frame_index,
+    js_i32, js_round, picture, seconds,
 };
 
 #[test]
@@ -20,8 +21,9 @@ fn js_i32_truncates_toward_zero_and_wraps() {
 }
 
 /// A lively piece plays a frame on every half-tier edge at the wall
-/// clock's pace; the slow piece plays one a second at a crawl, so two
-/// hundred seconds of wall time are one second of its fog.
+/// clock's pace; a slow piece plays one every so many 1Hz edges at a
+/// crawl: a hundred seconds of wall time are one second of the forest's
+/// fog, and the Earth takes a notch every fourth second.
 #[test]
 fn a_frame_edge_is_the_half_tier_or_the_slow_second() {
     let aurora = AsciiPiece {
@@ -32,24 +34,44 @@ fn a_frame_edge_is_the_half_tier_or_the_slow_second() {
         scene: Scene::MistyForest,
         style: SceneStyle::Dots,
     };
-    assert_eq!((FRAME_MS, SLOW_FRAME_MS), (132, 1000));
+    let earth = AsciiPiece {
+        scene: Scene::Earthrise,
+        style: SceneStyle::Dots,
+    };
+    assert_eq!((FRAME_MS, SLOW_FRAME_MS, EARTH_FRAME_MS), (132, 1000, 4000));
     assert_eq!(cadence(aurora), Cadence::Half);
-    assert_eq!(cadence(forest), Cadence::Slow);
+    assert_eq!(
+        cadence(forest),
+        Cadence::Slow {
+            frame_ms: SLOW_FRAME_MS,
+            rate: SLOW_RATE
+        }
+    );
+    assert_eq!(
+        cadence(earth),
+        Cadence::Slow {
+            frame_ms: EARTH_FRAME_MS,
+            rate: EARTH_RATE
+        }
+    );
     assert_eq!(
         cadence(AsciiPiece {
             scene: Scene::MistyForest,
             style: SceneStyle::Pixels
         }),
-        Cadence::Slow,
+        cadence(forest),
         "a scene's cadence is the scene's in either style"
     );
     assert_eq!(frame_index(aurora, 131), 0);
     assert_eq!(frame_index(aurora, 132), 1);
     assert_eq!(frame_index(forest, 999), 0);
     assert_eq!(frame_index(forest, 1000), 1);
+    assert_eq!(frame_index(earth, 3999), 0);
+    assert_eq!(frame_index(earth, 4000), 1);
     assert_eq!(seconds(aurora, 0), 0.0);
     assert_eq!(seconds(aurora, 1000), 132.0);
     assert_eq!(seconds(forest, 100), 1.0);
+    assert_eq!(seconds(earth, 1), 4.0 * EARTH_RATE);
 }
 
 #[test]

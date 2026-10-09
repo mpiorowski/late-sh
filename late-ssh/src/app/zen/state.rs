@@ -15,7 +15,7 @@ use super::layout;
 pub enum TileKind {
     Bonsai,
     Aquarium,
-    /// An animated ascii piece (`app/ascii`); `Z` zooms it to a screensaver.
+    /// An animated ascii piece (`app/ascii`); `z` zooms it to a screensaver.
     Ascii,
     Pet,
     Chat,

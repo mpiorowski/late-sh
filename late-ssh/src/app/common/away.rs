@@ -150,7 +150,10 @@ fn event_len(data: &[u8]) -> Event {
         // OSC and DCS (a terminal's reply to a query): to BEL or ST.
         Some(b']' | b'P') => {
             let bel = body.iter().position(|b| *b == 0x07).map(|at| at + 1);
-            let st = body.windows(2).position(|w| w == b"\x1b\\").map(|at| at + 2);
+            let st = body
+                .windows(2)
+                .position(|w| w == b"\x1b\\")
+                .map(|at| at + 2);
             match (bel, st) {
                 (Some(a), Some(b)) => Event::Complete(1 + a.min(b)),
                 (Some(a), None) | (None, Some(a)) => Event::Complete(1 + a),

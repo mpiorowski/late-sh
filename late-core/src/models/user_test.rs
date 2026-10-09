@@ -761,13 +761,13 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
 }
 
 #[test]
-fn screensaver_reads_the_choice_and_falls_back_to_the_misty_forest() {
+fn screensaver_reads_the_choice_and_falls_back_to_earthrise() {
     use crate::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver, extract_screensaver};
-    let misty_forest = Screensaver::Piece(AsciiPiece {
-        scene: Scene::MistyForest,
+    let earthrise = Screensaver::Piece(AsciiPiece {
+        scene: Scene::Earthrise,
         style: SceneStyle::Dots,
     });
-    assert_eq!(extract_screensaver(&json!({})), misty_forest);
+    assert_eq!(extract_screensaver(&json!({})), earthrise);
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "off" })),
         Screensaver::Off
@@ -792,7 +792,7 @@ fn screensaver_reads_the_choice_and_falls_back_to_the_misty_forest() {
     for gone in ["night_coast", "plasma", "lava_lamp", "donut"] {
         assert_eq!(
             extract_screensaver(&json!({ "screensaver": gone })),
-            misty_forest,
+            earthrise,
             "{gone}"
         );
     }
@@ -817,6 +817,14 @@ fn screensaver_cycle_walks_off_then_every_piece() {
         seen,
         vec![
             Screensaver::Off,
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::Earthrise,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::Earthrise,
+                style: SceneStyle::Pixels
+            }),
             Screensaver::Piece(AsciiPiece {
                 scene: Scene::MistyForest,
                 style: SceneStyle::Dots

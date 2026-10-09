@@ -214,10 +214,10 @@ async fn app_under_the_aurora(name: &str) -> (TestDb, App) {
     (test_db, app)
 }
 
-/// The Tweak defaults to the misty forest in dots, the slow piece: an away
-/// session with the default setting is under it.
+/// The Tweak defaults to earthrise in dots, a slow piece: an away session
+/// with the default setting is under it.
 #[tokio::test]
-async fn the_screensaver_defaults_to_the_misty_forest() {
+async fn the_screensaver_defaults_to_earthrise() {
     use crate::app::common::away::AWAY_AFTER;
     use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
     let test_db = new_test_db().await;
@@ -234,7 +234,7 @@ async fn the_screensaver_defaults_to_the_misty_forest() {
     assert_eq!(
         app.screensaver(),
         Some(AsciiPiece {
-            scene: Scene::MistyForest,
+            scene: Scene::Earthrise,
             style: SceneStyle::Dots
         })
     );

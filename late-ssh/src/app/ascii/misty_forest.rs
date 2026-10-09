@@ -13,9 +13,9 @@
 //! and the beams are built once for the whole process; each frame drifts
 //! the fog and the cloud across them, sways the beams and floats the motes.
 //!
-//! It is the slow piece (`piece::Cadence::Slow`): played at a crawl, a frame
-//! moves a few cells of fog and beam, which is what makes it the
-//! screensaver's default.
+//! It is a slow piece (`piece::Cadence::Slow`): played at a crawl, a frame
+//! moves a few cells of fog and beam, so it costs an away session about
+//! what idling did.
 
 use std::f64::consts::PI;
 use std::sync::OnceLock;
@@ -250,7 +250,9 @@ fn build_land() -> Land {
                 true => (2.0 + fi * 2.0) * (-((x - SUN[0] - 4.0) / 38.0).powi(2)).exp(),
                 false => 0.0,
             };
-            y_row + amp * (fbm(x * (0.018 + fi * 0.003), fi * 13.0 + 2.0, 3, 0.0) - 0.5) * sway + dip
+            y_row
+                + amp * (fbm(x * (0.018 + fi * 0.003), fi * 13.0 + 2.0, 3, 0.0) - 0.5) * sway
+                + dip
         };
         let base: Vec<f32> = (0..W).map(|x| ridge(x as f64) as f32).collect();
         let mut fill = vec![0u8; N];
@@ -377,7 +379,11 @@ fn build_land() -> Land {
                 let dx = (xf + 0.5 - gx).abs();
                 // the side toward the frame stays full, so no sliver of sky
                 // shows there
-                let outer = if (xf + 0.5 - gx) * (gx - WF / 2.0) > 0.0 { 1.6 } else { 1.0 };
+                let outer = if (xf + 0.5 - gx) * (gx - WF / 2.0) > 0.0 {
+                    1.6
+                } else {
+                    1.0
+                };
                 let ragged = half * outer * (0.82 + 0.3 * noise(xf * 0.5, r * 0.4, 0.0));
                 if dx <= ragged || dx < 0.9 {
                     let k = r as usize * W + x as usize;
@@ -462,8 +468,9 @@ fn build_land() -> Land {
                 cg = mix(0.14, 0.58, p) * veil;
                 cb = mix(0.17, 0.62, p) * veil;
                 // the fog band the far ridge stands in
-                let band =
-                    0.75 * smooth(28.0, 50.0, y) * (0.55 + 0.75 * fbm(xf * 0.025, y * 0.16, 3, 0.0));
+                let band = 0.75
+                    * smooth(28.0, 50.0, y)
+                    * (0.55 + 0.75 * fbm(xf * 0.025, y * 0.16, 3, 0.0));
                 cr = mix(cr, fog_r(0.0), band);
                 cg = mix(cg, fog_g(0.0), band);
                 cb = mix(cb, fog_b(0.0), band);
@@ -548,7 +555,11 @@ fn build_land() -> Land {
                 // the forest floor: moss in clumps, sparse, fading out
                 // toward the frame
                 let clump = smooth(0.42, 0.72, fbm(xf * 0.09, y * 0.4, 3, 0.0));
-                let speck = if hash(xf * 7.0, r as f64 * 11.0) > 0.55 { 1.0 } else { 0.35 };
+                let speck = if hash(xf * 7.0, r as f64 * 11.0) > 0.55 {
+                    1.0
+                } else {
+                    0.35
+                };
                 let m = (0.06 + 0.3 * clump) * speck * smooth(HF + 2.0, HF - 8.0, y);
                 cr = 0.02 + m * 0.6;
                 cg = 0.03 + m * 0.62;
@@ -594,8 +605,11 @@ fn build_land() -> Land {
     let mut fog = vec![0f32; FW * H];
     for r in 0..H {
         for u in 0..FW {
-            fog[r * FW + u] =
-                smooth(0.42, 0.75, fbm(u as f64 * 0.022, r as f64 * 0.09, 4, fwf * 0.022)) as f32;
+            fog[r * FW + u] = smooth(
+                0.42,
+                0.75,
+                fbm(u as f64 * 0.022, r as f64 * 0.09, 4, fwf * 0.022),
+            ) as f32;
         }
     }
 
@@ -605,8 +619,11 @@ fn build_land() -> Land {
         for u in 0..FW {
             let (uf, rf) = (u as f64, r as f64);
             let q = fbm(uf * 0.01, rf * 0.05, 2, fwf * 0.01);
-            cloud[r * FW + u] =
-                smooth(0.44, 0.68, fbm(uf * 0.016 + q * 1.5, rf * 0.17, 4, fwf * 0.016)) as f32;
+            cloud[r * FW + u] = smooth(
+                0.44,
+                0.68,
+                fbm(uf * 0.016 + q * 1.5, rf * 0.17, 4, fwf * 0.016),
+            ) as f32;
         }
     }
 
@@ -703,7 +720,8 @@ pub(crate) fn frame(t: f64, beams: f64) -> ShadedFrame {
     let shift_a = 2.0 * (beams * 0.35).sin();
     let shift_b = -beams * 1.6;
     let pulse = 0.88 + 0.12 * (beams * 0.7).sin();
-    let ray = |arr: &[f32], bin: f64| f64::from(arr[(bin.floor() as i64).rem_euclid(RA as i64) as usize]);
+    let ray =
+        |arr: &[f32], bin: f64| f64::from(arr[(bin.floor() as i64).rem_euclid(RA as i64) as usize]);
 
     let mut cells = Vec::with_capacity(N);
     for r in 0..H {
@@ -776,7 +794,8 @@ pub(crate) fn frame(t: f64, beams: f64) -> ShadedFrame {
             let mut floor = f64::from(land.lift[k]);
             if mote[k] != 0.0 && dist > 6.0 {
                 // a mote shows up where a beam catches it
-                let lit = ray(&land.ray_a, f64::from(land.abin[k]) + shift_a) * (-dist / 90.0).exp();
+                let lit =
+                    ray(&land.ray_a, f64::from(land.abin[k]) + shift_a) * (-dist / 90.0).exp();
                 let v = f64::from(mote[k]) * (0.1 + 1.6 * lit) * (ra * 2.0).min(1.0);
                 if v > 0.18 {
                     cr = cr.max(v * 1.05);
@@ -842,3 +861,7 @@ pub(crate) fn nearest(r: f64, g: f64, b: f64) -> u8 {
     }
     best as u8
 }
+
+#[cfg(test)]
+#[path = "misty_forest_test.rs"]
+mod misty_forest_test;

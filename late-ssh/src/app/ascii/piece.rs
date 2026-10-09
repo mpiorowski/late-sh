@@ -16,23 +16,25 @@ use late_core::models::user::{AsciiPiece, Scene};
 /// time runs. What a session pays for a piece on screen is the cells that
 /// change per frame times the frames per second, so the cadence is the
 /// piece's cost as much as its look.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Cadence {
     /// A new frame on every half-tier edge (`FRAME_MS`, ~7.5fps), play
     /// time at the wall clock's pace: the lively pieces.
     Half,
-    /// A new frame every `SLOW_FRAME_MS`, play time at `SLOW_RATE` of the
-    /// wall clock: a crawl that moves a few cells a frame, so an away
-    /// session under it costs about what an idle one did. The default
-    /// screensaver.
-    Slow,
+    /// A new frame every `frame_ms` (a whole number of the 1Hz edges the
+    /// idle floor already takes, so the piece never wakes the render loop),
+    /// play time at `rate` of the wall clock: a crawl that moves a few
+    /// cells a second, so an away session under it costs about what an
+    /// idle one did. The default screensaver, earthrise, and the misty
+    /// forest; each pays its budget its own way (`cadence`).
+    Slow { frame_ms: u64, rate: f64 },
 }
 
 impl Cadence {
     pub(crate) fn frame_ms(self) -> u64 {
         match self {
             Self::Half => FRAME_MS,
-            Self::Slow => SLOW_FRAME_MS,
+            Self::Slow { frame_ms, .. } => frame_ms,
         }
     }
 
@@ -40,16 +42,25 @@ impl Cadence {
     fn rate(self) -> f64 {
         match self {
             Self::Half => 1.0,
-            Self::Slow => SLOW_RATE,
+            Self::Slow { rate, .. } => rate,
         }
     }
 }
 
 /// The pace a piece plays at. A scene's cadence is the scene's, whatever
-/// style draws it.
+/// style draws it. What a slow piece costs is what its cadence says here:
+/// the forest drifts a hair every second, the Earth turns a visible notch
+/// every few seconds; `ui_test.rs` holds both to one cell budget.
 pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
     match piece.scene {
-        Scene::MistyForest => Cadence::Slow,
+        Scene::Earthrise => Cadence::Slow {
+            frame_ms: EARTH_FRAME_MS,
+            rate: EARTH_RATE,
+        },
+        Scene::MistyForest => Cadence::Slow {
+            frame_ms: SLOW_FRAME_MS,
+            rate: SLOW_RATE,
+        },
         Scene::AuroraFjord | Scene::AlpineDawn => Cadence::Half,
     }
 }
@@ -62,12 +73,20 @@ pub(crate) const FRAME_MS: u64 = 132;
 /// One frame edge of the slow pieces: the 1Hz edge the render loop already
 /// takes while idle (`tick.rs`), so a slow piece never wakes it faster.
 pub(crate) const SLOW_FRAME_MS: u64 = 1000;
-/// How fast a slow piece's play time runs against the wall clock: a frame a
-/// second at this rate drifts the misty forest's fog a fraction of a cell,
-/// which the halftone turns into a few dots moving, not a repaint; the
-/// forest plays its beams faster than this on its own (`misty_forest::crawl`).
+/// How fast the misty forest's play time runs against the wall clock: a
+/// frame a second at this rate drifts its fog a fraction of a cell, which
+/// the halftone turns into a few dots moving, not a repaint; the forest
+/// plays its beams faster than this on its own (`misty_forest::crawl`).
 /// `ui_test.rs` holds the cell budget; the count grows linearly with this.
 pub(crate) const SLOW_RATE: f64 = 0.01;
+/// Earthrise's frame edge, every fourth 1Hz edge, and its play rate: the
+/// only cells a frame moves are the Earth's disc, and any motion at all
+/// flips the cells sitting on a tone step, so it plays fewer, bigger
+/// steps, a visible notch of the globe every few seconds, for about a
+/// turn in half an hour (`earthrise::frame`, the spin), at the same bytes
+/// a second as the forest.
+pub(crate) const EARTH_FRAME_MS: u64 = 4 * SLOW_FRAME_MS;
+pub(crate) const EARTH_RATE: f64 = 0.08;
 
 /// One cell of a shaded scene: the brightness the original's halftone turns
 /// into dot size, the colour it shades the cell with before any of that,
@@ -104,12 +123,13 @@ pub(crate) fn pixel(shade: Shade, ground: [u8; 3]) -> [u8; 3] {
 }
 
 /// Build what the scenes build once per process (alpine dawn's raymarched
-/// range, about half a second of one core; the aurora's and the misty
-/// forest's land). Called from `main` on a blocking thread at startup, so
-/// the first session to draw a scene never does it under the app lock on a
-/// runtime worker.
+/// range, about half a second of one core; earthrise's cratered ground and
+/// its shadows; the aurora's and the misty forest's land). Called from
+/// `main` on a blocking thread at startup, so the first session to draw a
+/// scene never does it under the app lock on a runtime worker.
 pub fn warm() {
     super::alpine_dawn::warm();
+    super::earthrise::warm();
     super::aurora_fjord::warm();
     super::misty_forest::warm();
 }
@@ -140,6 +160,7 @@ pub(crate) fn picture(piece: AsciiPiece, frame: u64) -> Arc<ShadedFrame> {
     let t = seconds(piece, frame);
     cached(piece.scene, frame, || {
         Arc::new(match piece.scene {
+            Scene::Earthrise => super::earthrise::frame(t),
             Scene::MistyForest => super::misty_forest::crawl(t),
             Scene::AuroraFjord => super::aurora_fjord::frame(t),
             Scene::AlpineDawn => super::alpine_dawn::frame(t),

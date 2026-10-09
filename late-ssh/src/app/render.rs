@@ -2392,10 +2392,11 @@ impl App {
             ),
             Screen::Zen => {
                 // A page too small to draw has no row, so it keeps no
-                // click target either.
+                // click target either; nor does a zoomed one, the tile
+                // takes the whole page.
                 let (_, row) = crate::app::zen::layout::rice_areas(
                     content_area,
-                    crate::app::zen::layout::rice_fits(content_area),
+                    crate::app::zen::layout::rice_row(content_area, ctx.zen.zoomed),
                 );
                 let status_row = row.map(|row| {
                     crate::app::statusline::bar::build_zen_status_row(

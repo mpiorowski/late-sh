@@ -285,7 +285,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         b'{' => resize_or_explain(app, Dir::Column, -1),
         b'}' => resize_or_explain(app, Dir::Column, 1),
         b'F' => app.zen.flip_focused(),
-        b'Z' => {
+        b'z' => {
             app.zen.toggle_zoom();
             // The zoom is a view, not a layout edit; still resizes the tank.
             app.sync_aquarium_bounds();

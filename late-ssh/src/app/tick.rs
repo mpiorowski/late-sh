@@ -1377,11 +1377,12 @@ impl App {
     pub fn wake_hint(&self) -> Duration {
         // The screensaver covers everything else, so nothing under it earns
         // a faster tier, and the pointer moving over it never wakes it hot.
-        // The slow piece rides the idle floor's 1Hz edge.
+        // A slow piece rides the idle floor's 1Hz edge (a frame every one
+        // or every few of them; a repaint between frames diffs to nothing).
         if let Some(piece) = self.screensaver() {
             return match crate::app::ascii::piece::cadence(piece) {
                 crate::app::ascii::piece::Cadence::Half => ANIM_HALF_TICK,
-                crate::app::ascii::piece::Cadence::Slow => IDLE_TICK,
+                crate::app::ascii::piece::Cadence::Slow { .. } => IDLE_TICK,
             };
         }
         let hot = self.show_splash
@@ -1444,12 +1445,12 @@ impl App {
             .into_iter()
             .any(|piece| match cadence(piece) {
                 Cadence::Half => anim_half,
-                Cadence::Slow => one_hz,
+                Cadence::Slow { .. } => one_hz,
             })
     }
 
     /// Whether a piece on screen plays at the half tier, which earns it.
-    /// The slow piece asks for nothing: the idle floor already carries the
+    /// A slow piece asks for nothing: the idle floor already carries the
     /// 1Hz edge it plays on.
     fn lively_ascii_visible(&self) -> bool {
         use crate::app::ascii::piece::{Cadence, cadence};

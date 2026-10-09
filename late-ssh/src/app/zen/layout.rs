@@ -17,9 +17,18 @@ pub fn rice_fits(area: Rect) -> bool {
     area.width >= RICE_MIN_COLS && area.height >= RICE_MIN_ROWS
 }
 
+/// Whether the page gives its bottom row to the status line: whenever it
+/// is drawn at all (`rice_fits`), unless a tile is zoomed, when that tile
+/// is the whole page, the way the screensaver is. Every caller of
+/// `rice_areas` that draws, clicks, or sizes what is on show reads it
+/// from here.
+pub fn rice_row(area: Rect, zoomed: bool) -> bool {
+    rice_fits(area) && !zoomed
+}
+
 /// The Rice page: the tiles, then the status row at the bottom (the user's
-/// status line and the page's keys) whenever the page is drawn at all
-/// (`rice_fits`); a page too small to draw has no row.
+/// status line and the page's keys) when `status_row` (`rice_row`); a page
+/// too small to draw has no row, nor does a zoomed one.
 pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
     match status_row {
         true => {

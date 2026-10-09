@@ -244,15 +244,20 @@ pub(crate) fn draw_rice(
             | TileKind::Blank => None,
         };
         let keys = tile_keys(*kind, &view);
-        let inner = draw_tile_chrome(
-            frame,
-            *rect,
-            &title,
-            title_tail,
-            keys,
-            focused,
-            &zen.rice.look,
-        );
+        // Zoomed, the tile is the page: no border, no title, no keys, the
+        // way the screensaver draws a piece.
+        let inner = match zoomed {
+            Some(_) => *rect,
+            None => draw_tile_chrome(
+                frame,
+                *rect,
+                &title,
+                title_tail,
+                keys,
+                focused,
+                &zen.rice.look,
+            ),
+        };
         if inner.width == 0 || inner.height == 0 {
             continue;
         }

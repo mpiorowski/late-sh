@@ -195,17 +195,26 @@ impl LandingPage {
 /// `SceneStyle`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Scene {
-    /// The slow one: fog and sunbeams through pines, played at a crawl.
+    /// A slow one, the default: the Earth turning over the lunar horizon,
+    /// played at a crawl.
+    Earthrise,
+    /// A slow one: fog and sunbeams through pines, played at a crawl.
     MistyForest,
     AuroraFjord,
     AlpineDawn,
 }
 
 impl Scene {
-    pub const ALL: [Scene; 3] = [Scene::MistyForest, Scene::AuroraFjord, Scene::AlpineDawn];
+    pub const ALL: [Scene; 4] = [
+        Scene::Earthrise,
+        Scene::MistyForest,
+        Scene::AuroraFjord,
+        Scene::AlpineDawn,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Earthrise => "earthrise",
             Self::MistyForest => "misty_forest",
             Self::AuroraFjord => "aurora_fjord",
             Self::AlpineDawn => "alpine_dawn",
@@ -215,6 +224,7 @@ impl Scene {
     /// Lowercase display name, the way ascii.rest names its pieces.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Earthrise => "earthrise",
             Self::MistyForest => "misty forest",
             Self::AuroraFjord => "aurora fjord",
             Self::AlpineDawn => "alpine dawn",
@@ -256,17 +266,25 @@ pub struct AsciiPiece {
 
 impl AsciiPiece {
     /// What plays when nothing was picked, on a Zen ascii tile and as the
-    /// screensaver alike: the misty forest in dots, the slow piece, a frame
-    /// a second that moves a few cells, so a tile left up or an away
-    /// session costs about what idling does.
+    /// screensaver alike: earthrise in dots, a slow piece, a frame a second
+    /// that moves a few cells, so a tile left up or an away session costs
+    /// about what idling does.
     pub const DEFAULT: AsciiPiece = AsciiPiece {
-        scene: Scene::MistyForest,
+        scene: Scene::Earthrise,
         style: SceneStyle::Dots,
     };
 
     /// Picker and cycle order: each scene in both styles, the screensaver's
     /// default first.
-    pub const ALL: [AsciiPiece; 6] = [
+    pub const ALL: [AsciiPiece; 8] = [
+        AsciiPiece {
+            scene: Scene::Earthrise,
+            style: SceneStyle::Dots,
+        },
+        AsciiPiece {
+            scene: Scene::Earthrise,
+            style: SceneStyle::Pixels,
+        },
         AsciiPiece {
             scene: Scene::MistyForest,
             style: SceneStyle::Dots,
@@ -295,6 +313,8 @@ impl AsciiPiece {
 
     pub fn as_str(self) -> &'static str {
         match (self.scene, self.style) {
+            (Scene::Earthrise, SceneStyle::Dots) => "earthrise",
+            (Scene::Earthrise, SceneStyle::Pixels) => "earthrise_pixels",
             (Scene::MistyForest, SceneStyle::Dots) => "misty_forest",
             (Scene::MistyForest, SceneStyle::Pixels) => "misty_forest_pixels",
             (Scene::AuroraFjord, SceneStyle::Dots) => "aurora_fjord",
@@ -352,9 +372,9 @@ impl<'de> Deserialize<'de> for AsciiPiece {
 }
 
 /// Tweak: what covers the screen while the session is away (`/brb`, or 30
-/// quiet minutes). On by default, playing the misty forest in dots: the
-/// slow piece, a frame a second that moves a few cells, so an away session
-/// costs about what an idle one did. The lively scenes are a choice.
+/// quiet minutes). On by default, playing earthrise in dots: a slow piece,
+/// a frame a second that moves a few cells, so an away session costs about
+/// what an idle one did. The lively scenes are a choice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Screensaver {
     Off,
@@ -2217,7 +2237,7 @@ pub fn extract_landing_page(settings: &Value) -> LandingPage {
 }
 
 /// Tweak: what plays over the screen while the session is away. Absent or
-/// unreadable values play the default, the misty forest.
+/// unreadable values play the default, earthrise.
 pub fn extract_screensaver(settings: &Value) -> Screensaver {
     match settings.get(SCREENSAVER_KEY).and_then(Value::as_str) {
         Some(key) => Screensaver::from_key(key).unwrap_or(Screensaver::DEFAULT),

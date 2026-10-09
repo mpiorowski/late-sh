@@ -818,7 +818,7 @@ fn zen_row_fits_the_bar_beside_the_keys() {
         on(StatusComponent::Users, LabelMode::Text),
     ];
     let keys = zen_keys_line();
-    assert_eq!(keys.to_string(), "? help  S split  F flip  X close  Z zoom");
+    assert_eq!(keys.to_string(), "? help  S split  F flip  X close  z zoom");
     // 30 cells for the bar, one of gap, then the keys.
     let row = Rect::new(0, 39, 30 + 1 + keys.width() as u16, 1);
     let zen_row = build_zen_status_row(&components, &data(), row);

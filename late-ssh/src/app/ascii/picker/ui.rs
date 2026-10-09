@@ -85,7 +85,11 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &PiecePickerState) {
     }
     frame.render_widget(Paragraph::new(lines), list_area);
     frame.render_widget(
-        Paragraph::new(hint_line(&[("Enter", "pick"), ("j k", "move"), ("Esc", "close")])),
+        Paragraph::new(hint_line(&[
+            ("Enter", "pick"),
+            ("j k", "move"),
+            ("Esc", "close"),
+        ])),
         foot_area,
     );
     state.mouse.finish();

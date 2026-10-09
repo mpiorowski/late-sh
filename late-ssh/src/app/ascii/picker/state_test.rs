@@ -22,7 +22,7 @@ fn opens_on_the_piece_playing_and_walks_the_list_without_wrapping() {
     assert_eq!(
         picker.selected(),
         AsciiPiece {
-            scene: Scene::MistyForest,
+            scene: Scene::Earthrise,
             style: SceneStyle::Dots
         }
     );
@@ -38,7 +38,7 @@ fn opens_on_the_piece_playing_and_walks_the_list_without_wrapping() {
     assert_eq!(
         picker.selected(),
         AsciiPiece {
-            scene: Scene::AuroraFjord,
+            scene: Scene::MistyForest,
             style: SceneStyle::Pixels
         }
     );

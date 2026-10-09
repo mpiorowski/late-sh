@@ -138,7 +138,11 @@ fn only_a_person_counts_as_presence() {
     assert_eq!(person(b"\x1bj"), Some(2), "Alt and a key");
     assert_eq!(person(b"\x1b[A"), Some(3));
     assert_eq!(person(b"\x1bOP"), Some(3), "F1");
-    assert_eq!(person(b"\x1b[200~hello\x1b[201~x"), Some(17), "a whole paste");
+    assert_eq!(
+        person(b"\x1b[200~hello\x1b[201~x"),
+        Some(17),
+        "a whole paste"
+    );
     assert_eq!(person(b"\x1b[<0;20;5M"), Some(10), "left press");
     assert_eq!(person(b"\x1b[<0;20;5m"), Some(10), "left release");
     assert_eq!(person(b"\x1b[<32;21;5M"), Some(11), "left drag");
@@ -177,8 +181,14 @@ fn a_report_cut_in_two_is_read_whole() {
         presence_input(b"\x1b[<35;20;5M\x1b[<35;2"),
         PresenceInput::Partial { held_from: 11 }
     );
-    assert_eq!(presence_input(b"\x1b["), PresenceInput::Partial { held_from: 0 });
-    assert_eq!(presence_input(b"\x1bO"), PresenceInput::Partial { held_from: 0 });
+    assert_eq!(
+        presence_input(b"\x1b["),
+        PresenceInput::Partial { held_from: 0 }
+    );
+    assert_eq!(
+        presence_input(b"\x1bO"),
+        PresenceInput::Partial { held_from: 0 }
+    );
     assert_eq!(
         presence_input(b"\x1bP>|kitty"),
         PresenceInput::Partial { held_from: 0 },

@@ -3894,7 +3894,7 @@ fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
     use crate::app::zen::layout as zen_layout;
     let (cols, rows) = app.size;
     let page = Rect::new(0, 0, cols, rows);
-    let (tiles_area, _) = zen_layout::rice_areas(page, zen_layout::rice_fits(page));
+    let (tiles_area, _) = zen_layout::rice_areas(page, zen_layout::rice_row(page, app.zen.zoomed));
     let zoomed = app.zen.zoomed.then_some(app.zen.focus);
     let rects = zen_layout::tile_rects(
         &app.zen.rice.root,

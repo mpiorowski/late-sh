@@ -166,7 +166,14 @@ const PEAK_SPOTS: [[f64; 5]; 7] = [
 fn peaks() -> [Peak; 7] {
     PEAK_SPOTS.map(|[sx, row, z, f, a]| {
         let h = CAM + ((HZ - row) / 100.0) * K * z - 1.5;
-        [((sx - 100.0) / 100.0) * K * z, z, h, h * f, a.cos(), a.sin()]
+        [
+            ((sx - 100.0) / 100.0) * K * z,
+            z,
+            h,
+            h * f,
+            a.cos(),
+            a.sin(),
+        ]
     })
 }
 
@@ -391,8 +398,9 @@ fn build_land() -> Land {
             let k = r * W + x;
             let y = rf + 0.5;
             let bank_l = 88.0 + 14.0 * smooth(0.0, 52.0, xf) + 2.0 * fbm(xf * 0.2, 1.0, 2, 0.0);
-            let bank_r =
-                90.0 + 12.0 * smooth(W as f64, W as f64 - 40.0, xf) + 2.0 * fbm(xf * 0.2, 4.0, 2, 0.0);
+            let bank_r = 90.0
+                + 12.0 * smooth(W as f64, W as f64 - 40.0, xf)
+                + 2.0 * fbm(xf * 0.2, 4.0, 2, 0.0);
             if y > bank_l || y > bank_r {
                 fg[k] = 1;
                 fg_shade[k] = (0.15 * hash(xf, rf)) as f32;
@@ -486,8 +494,9 @@ fn build_land() -> Land {
             sky_g[r * W + x] = (0.04 + veil + low * (0.48 + 0.02 * east)) as f32;
             sky_b[r * W + x] = (0.13 + veil * 1.6 + low * (0.62 - 0.12 * east)) as f32;
             // the sun's glow, kept apart so it can breathe
-            glow_a[r * W + x] =
-                ((-ds / 6.0).exp() * 0.65 + (-ds / 15.0).exp() * 0.2 + (-ds / 50.0).exp() * 0.1) as f32;
+            glow_a[r * W + x] = ((-ds / 6.0).exp() * 0.65
+                + (-ds / 15.0).exp() * 0.2
+                + (-ds / 50.0).exp() * 0.1) as f32;
         }
     }
 
@@ -605,7 +614,8 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
             } else {
                 // a few stars still out in the west
                 if y < 34.0 && hash(xf, rf * 3.0 + 11.0) > 0.985 {
-                    let tw = 0.6 + 0.4 * (t * (1.5 + hash(xf, rf) * 3.0) + hash(rf, xf) * 6.28).sin();
+                    let tw =
+                        0.6 + 0.4 * (t * (1.5 + hash(xf, rf) * 3.0) + hash(rf, xf) * 6.28).sin();
                     let s = tw * smooth(150.0, 40.0, xf) * smooth(34.0, 6.0, y) * 0.75;
                     cr = cr.max(s * 0.9);
                     cg = cg.max(s * 0.92);

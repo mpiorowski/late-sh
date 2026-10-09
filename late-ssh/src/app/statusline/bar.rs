@@ -138,7 +138,7 @@ pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 5] = [
     ("S", "split"),
     ("F", "flip"),
     ("X", "close"),
-    ("Z", "zoom"),
+    ("z", "zoom"),
 ];
 
 /// The keys as one compact line: each key amber, its word dim, two spaces

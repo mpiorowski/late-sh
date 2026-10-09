@@ -3302,18 +3302,17 @@ impl App {
         }
     }
 
-    /// Whether Zen gives its bottom row to the status line; every caller of
-    /// `zen::layout::rice_areas` reads it from here, so the tiles, the
-    /// clicks, and the reef agree on where the row is.
     /// The rect the aquarium simulation should fill on the current screen:
-    /// the tank tile's inner rect on Zen, the launch band elsewhere.
+    /// the tank tile's inner rect on Zen (the whole page, zoomed), the
+    /// launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         use crate::app::zen::{layout as zen_layout, state::TileKind};
         let (cols, rows) = self.size;
         let full = Rect::new(0, 0, cols, rows);
         match self.screen {
             Screen::Zen => {
-                let (tiles, _) = zen_layout::rice_areas(full, zen_layout::rice_fits(full));
+                let (tiles, _) =
+                    zen_layout::rice_areas(full, zen_layout::rice_row(full, self.zen.zoomed));
                 let zoomed = self.zen.zoomed.then_some(self.zen.focus);
                 zen_layout::tile_rects(
                     &self.zen.rice.root,
@@ -3323,7 +3322,10 @@ impl App {
                 )
                 .into_iter()
                 .find(|(kind, _)| *kind == TileKind::Aquarium)
-                .map(|(_, rect)| zen_layout::tile_inner(rect, &self.zen.rice.look))
+                .map(|(_, rect)| match zoomed {
+                    Some(_) => rect,
+                    None => zen_layout::tile_inner(rect, &self.zen.rice.look),
+                })
                 .unwrap_or_else(|| aquarium_area_for_terminal(cols, rows))
             }
             _ => aquarium_area_for_terminal(cols, rows),
