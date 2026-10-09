@@ -396,8 +396,7 @@ async fn main() -> anyhow::Result<()> {
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone())
-        .with_ai_service(ai_service.clone())
-        .with_drunk_map(drunk_map.clone());
+        .with_ai_service(ai_service.clone());
     let _shop_notify_task = shop_service
         .start_notify_worker(pg_listener.subscribe(late_ssh::app::ShopService::CHANNELS));
     // Every notify-driven domain is subscribed by now.

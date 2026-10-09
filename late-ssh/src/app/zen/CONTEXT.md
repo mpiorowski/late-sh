@@ -119,7 +119,7 @@ assembly, the status row build, and `zen_chat_view` in `render.rs`; the digit `7
 hit test, the picker staying put in `room_search_modal/input.rs`, and the
 dedicated-input hook in `input.rs`; `App::zen`, `App::zen_chat_rows_cache`,
 `sync_aquarium_bounds`, and `mark_zen_layout_dirty` / `flush_zen_layout` in `state.rs`; the
-aquarium stepping, the ascii tile's half edge (`ascii_visible`), and anim edge in `tick.rs`; `extract_zen_layout` /
+aquarium stepping, the ascii tile's cadence edge (`ascii_edge`), and anim edge in `tick.rs`; `extract_zen_layout` /
 `User::set_zen_layout` in `late-core/src/models/user.rs`.
 
 ## 3. Keys

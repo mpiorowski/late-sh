@@ -21,7 +21,8 @@ pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
 /// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
-/// tile + profile-modal reef), stepping on the `anim_quarter` /4 edge in tick().
+/// tile + profile-modal reef) and the lively ascii pieces in pixels,
+/// stepping on the `anim_quarter` /4 edge in tick().
 pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
 /// Idle floor: nothing visible animates, ticks only drain service channels.
 /// Worst-case latency for an unprompted event (a chat message arriving
@@ -1114,8 +1115,9 @@ impl App {
         }
         // The ascii pieces (`app/ascii`) are pure functions of the shared
         // clock: a new frame on every edge of a drawn piece's cadence, the
-        // half edge for the lively ones and the 1Hz edge for the slow.
-        changed |= self.ascii_edge(anim_half, one_hz);
+        // half edge for the lively ones in dots, the quarter edge for the
+        // lively ones in pixels, and the 1Hz edge for the slow.
+        changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -1382,6 +1384,7 @@ impl App {
         if let Some(piece) = self.screensaver() {
             return match crate::app::ascii::piece::cadence(piece) {
                 crate::app::ascii::piece::Cadence::Half => ANIM_HALF_TICK,
+                crate::app::ascii::piece::Cadence::Quarter => ANIM_QUARTER_TICK,
                 crate::app::ascii::piece::Cadence::Slow { .. } => IDLE_TICK,
             };
         }
@@ -1405,7 +1408,8 @@ impl App {
         // the sidebar, which always carries the eq strip and that sway. A
         // Zen music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
-        // tile plays its frames on this edge too.
+        // tile in dots plays its frames on this edge too; one in pixels
+        // rides the quarter tier below.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || crate::app::door::hub::state::animates(self)
@@ -1421,6 +1425,7 @@ impl App {
         }
         if self.aquarium_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
+            || self.quarter_ascii_visible()
         {
             return ANIM_QUARTER_TICK;
         }
@@ -1438,13 +1443,15 @@ impl App {
     }
 
     /// Whether a piece on screen plays a new frame on this tick: the lively
-    /// ones on the half edge, the slow one on the 1Hz edge.
-    fn ascii_edge(&self, anim_half: bool, one_hz: bool) -> bool {
+    /// ones on the half edge in dots and the quarter edge in pixels, the
+    /// slow ones on the 1Hz edge.
+    fn ascii_edge(&self, anim_half: bool, anim_quarter: bool, one_hz: bool) -> bool {
         use crate::app::ascii::piece::{Cadence, cadence};
         self.visible_pieces()
             .into_iter()
             .any(|piece| match cadence(piece) {
                 Cadence::Half => anim_half,
+                Cadence::Quarter => anim_quarter,
                 Cadence::Slow { .. } => one_hz,
             })
     }
@@ -1457,6 +1464,15 @@ impl App {
         self.visible_pieces()
             .into_iter()
             .any(|piece| cadence(piece) == Cadence::Half)
+    }
+
+    /// Whether a piece on screen plays at the quarter tier: a lively piece
+    /// in pixels.
+    fn quarter_ascii_visible(&self) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| cadence(piece) == Cadence::Quarter)
     }
 
     /// Whether the reef is actually on screen: the Zen page draws it for

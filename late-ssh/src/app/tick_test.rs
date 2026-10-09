@@ -311,7 +311,7 @@ async fn the_screensaver_holds_the_half_tier() {
     let (_test_db, mut app) = chat_compose_app("tick-saver").await;
     app.set_screen(Screen::Dashboard);
     app.profile_state.profile.screensaver = Screensaver::Piece(AsciiPiece {
-        scene: Scene::AuroraFjord,
+        scene: Scene::AlpineDawn,
         style: SceneStyle::Dots,
     });
     app.last_active_at = Instant::now() - AWAY_AFTER;
@@ -321,6 +321,26 @@ async fn the_screensaver_holds_the_half_tier() {
     assert_eq!(app.wake_hint(), ANIM_HALF_TICK);
     set_marquee_transition(&mut app, 400, 402);
     assert!(app.tick(), "a half edge is a new frame of the piece");
+}
+
+/// The same lively scene in pixels is several times the bytes a frame, so
+/// it plays on the quarter edge and holds that tier instead.
+#[tokio::test]
+async fn a_pixel_screensaver_holds_the_quarter_tier() {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    let (_test_db, mut app) = chat_compose_app("tick-pixel-saver").await;
+    app.set_screen(Screen::Dashboard);
+    app.profile_state.profile.screensaver = Screensaver::Piece(AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    });
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.wake_hint(), ANIM_QUARTER_TICK);
+    set_marquee_transition(&mut app, 403, 404);
+    assert!(app.tick(), "a quarter edge is a new frame of the piece");
 }
 
 /// Make the next `tick` observe an exact wall-clock frame transition. Both

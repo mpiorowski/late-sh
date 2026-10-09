@@ -61,16 +61,21 @@ fn is_braille(glyph: &str) -> bool {
 }
 
 #[test]
-fn a_pixel_is_the_ink_over_the_ground_by_its_brightness() {
+fn a_pixel_is_the_ink_over_the_ground_by_its_brightness_in_steps() {
     let ground = [10, 20, 30];
     let shade = |level| Shade {
         level,
         rgb: [0.0; 3],
         ink: [1.0, 0.5, 0.0],
     };
+    // Bare ground is exact: the pixel renderer draws it as a plain space.
     assert_eq!(pixel(shade(0.0), ground), ground);
-    assert_eq!(pixel(shade(1.0), ground), [255, 128, 0]);
-    assert_eq!(pixel(shade(0.5), ground), [133, 74, 15]);
+    // Everything else sits on an 8-step grid counted from the ground: the
+    // exact blends are [255, 128, 0] and [133, 74, 15].
+    assert_eq!(pixel(shade(1.0), ground), [255, 124, 0]);
+    assert_eq!(pixel(shade(0.5), ground), [130, 76, 14]);
+    // A wobble that stays inside a step is the same pixel.
+    assert_eq!(pixel(shade(0.49), ground), pixel(shade(0.5), ground));
 }
 
 #[test]
@@ -168,62 +173,111 @@ fn a_slow_piece_moves_a_few_cells_a_second() {
     }
 }
 
-/// The cost report: what every piece costs on a 200x50 terminal, in both
-/// styles, at its own cadence. Ignored, since it is a report, not a
-/// contract (`a_slow_piece_moves_a_few_cells_a_second` is the contract);
-/// run it when porting a piece or retuning a cadence and put the numbers
-/// in `CONTEXT.md`, Cost:
+/// What a piece costs on the wire at its own cadence on a 200x50 terminal:
+/// the cells that change between consecutive frames (mean and worst) and
+/// the bytes the same diff is through the real terminal backend, the
+/// mean of `EDGES` frame edges past the warm-up.
+struct WireCost {
+    cells: usize,
+    worst_cells: usize,
+    bytes: usize,
+}
+
+const EDGES: u64 = 8;
+
+fn wire_cost(piece: AsciiPiece) -> WireCost {
+    use crate::app::state::SharedBuffer;
+    use crate::app::terminal_backend::GlyphIsolatingBackend;
+    use ratatui::backend::Backend;
+    let frame_ms = cadence(piece).frame_ms();
+    let draw_at = |clock_ms: u64| {
+        let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
+        terminal
+            .draw(|frame| draw_piece(frame, Rect::new(0, 0, 200, 50), piece, clock_ms))
+            .expect("draw");
+        terminal.backend().buffer().clone()
+    };
+    // Past the first edge so the warm-up is not in the frame time.
+    let first = 1000;
+    let mut before = draw_at(first * frame_ms);
+    let (mut total, mut worst, mut bytes) = (0usize, 0usize, 0usize);
+    for edge in first + 1..=first + EDGES {
+        let after = draw_at(edge * frame_ms);
+        let changed = before
+            .content()
+            .iter()
+            .zip(after.content().iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        let shared = SharedBuffer::default();
+        let mut backend = GlyphIsolatingBackend::new(shared.clone());
+        backend.draw(before.diff(&after).into_iter()).expect("draw diff");
+        bytes += shared.take().len();
+        total += changed;
+        worst = worst.max(changed);
+        before = after;
+    }
+    WireCost {
+        cells: total / EDGES as usize,
+        worst_cells: worst,
+        bytes: bytes / EDGES as usize,
+    }
+}
+
+/// The most any piece may put on the wire at its cadence, in KB a second
+/// on a 200x50 terminal: a client's terminal has to parse and paint every
+/// byte of it, and past this a slow one falls behind and every key feels
+/// late. A piece that costs more plays slower (`piece::cadence`), never
+/// faster; the numbers are in `CONTEXT.md`, Cost.
+const WIRE_BUDGET_KB_PER_S: usize = 200;
+
+#[test]
+fn every_piece_stays_under_the_wire_budget() {
+    for piece in AsciiPiece::ALL {
+        let cost = wire_cost(piece);
+        let kb_per_s = cost.bytes * 1000 / cadence(piece).frame_ms() as usize / 1024;
+        assert!(
+            kb_per_s <= WIRE_BUDGET_KB_PER_S,
+            "{} puts {kb_per_s} KB/s on the wire at its cadence, over the {WIRE_BUDGET_KB_PER_S} KB/s budget",
+            piece.label()
+        );
+    }
+}
+
+/// The cost report: every piece measured at its own cadence on a 200x50
+/// terminal, the cells that change between consecutive frames, the bytes
+/// the same diff is through the real terminal backend, and one frame's
+/// compute in the unoptimised test profile (read it against the other
+/// rows, not the clock). Ignored, since it is a report, not a contract
+/// (`every_piece_stays_under_the_wire_budget` and
+/// `a_slow_piece_moves_a_few_cells_a_second` are the contracts); run it
+/// when porting a piece or retuning a cadence and put the numbers in
+/// `CONTEXT.md`, Cost:
 /// `make test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(the_cost_report)'"`.
-/// Cells changed per frame are what the wire carries (a changed cell is
-/// on the order of ten to twenty bytes with its colour); the frame time
-/// is the unoptimised test profile's, so read it against the other rows,
-/// not the clock.
 #[test]
 #[ignore]
 fn the_cost_report() {
     use crate::app::ascii::piece::picture;
     use std::time::Instant;
-    const EDGES: u64 = 8;
     eprintln!(
-        "{:<24} {:>8} {:>10} {:>10} {:>10} {:>10}",
-        "piece", "frame ms", "cells/frame", "worst", "cells/s", "frame us"
+        "{:<24} {:>8} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "piece", "frame ms", "cells/frame", "worst", "cells/s", "bytes/frame", "KB/s", "frame us"
     );
     for piece in AsciiPiece::ALL {
         let frame_ms = cadence(piece).frame_ms();
-        let draw_at = |clock_ms: u64| {
-            let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
-            terminal
-                .draw(|frame| draw_piece(frame, Rect::new(0, 0, 200, 50), piece, clock_ms))
-                .expect("draw");
-            terminal.backend().buffer().clone()
-        };
-        // Past the first edge so the warm-up is not in the frame time.
-        let first = 1000;
-        let mut before = draw_at(first * frame_ms);
-        let (mut total, mut worst) = (0usize, 0usize);
-        for edge in first + 1..=first + EDGES {
-            let after = draw_at(edge * frame_ms);
-            let changed = before
-                .content()
-                .iter()
-                .zip(after.content().iter())
-                .filter(|(a, b)| a != b)
-                .count();
-            total += changed;
-            worst = worst.max(changed);
-            before = after;
-        }
-        let mean = total / EDGES as usize;
+        let cost = wire_cost(piece);
         let started = Instant::now();
-        let _ = picture(piece, first + EDGES + 1);
+        let _ = picture(piece, 1000 + EDGES + 1);
         let frame_us = started.elapsed().as_micros();
         eprintln!(
-            "{:<24} {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "{:<24} {:>8} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
             piece.label(),
             frame_ms,
-            mean,
-            worst,
-            mean * 1000 / frame_ms as usize,
+            cost.cells,
+            cost.worst_cells,
+            cost.cells * 1000 / frame_ms as usize,
+            cost.bytes,
+            cost.bytes * 1000 / frame_ms as usize / 1024,
             frame_us
         );
     }

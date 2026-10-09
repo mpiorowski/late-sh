@@ -17,9 +17,9 @@ use late_core::{
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
             AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
-            BAR_CONSUMABLE_ITEM_KIND, BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU,
+            BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU,
             CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT,
-            COMPANION_CONSUMABLE_ITEM_KIND, HANGOVER_PILL_SKU, MarketplaceItem, PET_COMPANION_SKU,
+            COMPANION_CONSUMABLE_ITEM_KIND, MarketplaceItem, PET_COMPANION_SKU,
             PurchaseResult, PurchaseStatus, PurchaseWithEffectResult, TankActiveStatus,
             TankStockKind, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
             adjust_aquarium_active_by_sku, is_sprout_row, is_welcome_fish,
@@ -44,7 +44,6 @@ use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use super::entitlements::ShopEntitlements;
 use crate::app::ai::screen::{TitleScreen, screen_custom_title};
 use crate::app::ai::svc::AiService;
-use crate::app::clubhouse::drunk::DrunkMap;
 use crate::app::common::username_effect::{FlairEffect, FlairTitle, NameFlair, NameFlairDirectory};
 
 #[derive(Clone, Debug, Default)]
@@ -220,11 +219,6 @@ impl ShopCatalogItem {
         self.is_username_effect() || self.is_badge_rental() || self.is_title_rental()
     }
 
-    /// Taken the moment it is bought, so it never sits in an inventory.
-    pub fn is_hangover_pill(&self) -> bool {
-        self.sku == HANGOVER_PILL_SKU
-    }
-
     pub fn is_consumable(&self) -> bool {
         matches!(
             self.item_kind.as_str(),
@@ -232,7 +226,6 @@ impl ShopCatalogItem {
                 | COMPANION_CONSUMABLE_ITEM_KIND
                 | BONSAI_CONSUMABLE_ITEM_KIND
                 | AQUARIUM_CONSUMABLE_ITEM_KIND
-                | BAR_CONSUMABLE_ITEM_KIND
         )
     }
 
@@ -299,8 +292,7 @@ fn purchase_story(
         | PurchaseStatus::InsufficientFunds
         | PurchaseStatus::RequiresAquarium
         | PurchaseStatus::DailyLimitReached
-        | PurchaseStatus::OwnedCapReached
-        | PurchaseStatus::AlreadySober => return None,
+        | PurchaseStatus::OwnedCapReached => return None,
     }
     let duration = rental_duration_secs(&result.item);
     match result.item.item_kind.as_str() {
@@ -368,8 +360,7 @@ fn custom_title_outcome(settled: SettledPurchase) -> CustomTitleOutcome {
             | PurchaseStatus::InsufficientFunds
             | PurchaseStatus::RequiresAquarium
             | PurchaseStatus::DailyLimitReached
-            | PurchaseStatus::OwnedCapReached
-            | PurchaseStatus::AlreadySober,
+            | PurchaseStatus::OwnedCapReached,
         )
         | None => CustomTitleOutcome::Refused(settled.message),
     }
@@ -436,9 +427,6 @@ pub struct ShopService {
     /// cooldown: a session lives on one replica, and this meters API spend,
     /// not game state.
     screen_cooldowns: Arc<Mutex<HashMap<Uuid, Instant>>>,
-    /// The process's drunk map, so a hangover pill clears the buyer's
-    /// drunk tint at once on this replica.
-    drunk_map: Option<DrunkMap>,
 }
 
 impl ShopService {
@@ -452,13 +440,7 @@ impl ShopService {
             activity: None,
             ai_service: None,
             screen_cooldowns: Arc::new(Mutex::new(HashMap::new())),
-            drunk_map: None,
         }
-    }
-
-    pub fn with_drunk_map(mut self, drunk_map: DrunkMap) -> Self {
-        self.drunk_map = Some(drunk_map);
-        self
     }
 
     pub fn with_ai_service(mut self, ai_service: AiService) -> Self {
@@ -913,11 +895,6 @@ impl ShopService {
                 {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
                 }
-                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
-                    if result.item.sku == HANGOVER_PILL_SKU =>
-                {
-                    "Sobered up: your typing is straight again".to_string()
-                }
                 PurchaseStatus::Purchased if result.item.item_kind == CHAT_CONSUMABLE_ITEM_KIND => {
                     format!("Activated {}", result.item.name)
                 }
@@ -961,26 +938,11 @@ impl ShopService {
                 PurchaseStatus::DailyLimitReached => {
                     format!("{} is limited to once per day", result.item.name)
                 }
-                PurchaseStatus::AlreadySober => {
-                    "You're already sober, nothing was charged".to_string()
-                }
             },
         };
 
         if flair_changed {
             self.refresh_user_flair(user_id).await?;
-        }
-        // The pill zeroed the buzz in the DB; this replica's drunk map drops the
-        // tint now rather than on the next drunk seed pass (a minute at most,
-        // which is how every other replica catches up).
-        if let (Some(drunk_map), Some(result)) = (&self.drunk_map, &purchase.purchase)
-            && result.item.sku == HANGOVER_PILL_SKU
-            && matches!(
-                result.status,
-                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
-            )
-        {
-            drunk_map.record_drink(user_id, 0, Utc::now());
         }
         if purchase.refresh_all_active_users {
             self.refresh_catalog_for_active_users().await?;
@@ -1366,7 +1328,6 @@ fn is_consumable_kind(item_kind: &str) -> bool {
             | COMPANION_CONSUMABLE_ITEM_KIND
             | BONSAI_CONSUMABLE_ITEM_KIND
             | AQUARIUM_CONSUMABLE_ITEM_KIND
-            | BAR_CONSUMABLE_ITEM_KIND
     )
 }
 

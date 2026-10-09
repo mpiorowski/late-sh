@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use late_core::MutexRecover;
-use late_core::models::user::{AsciiPiece, Scene};
+use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 
 /// How a piece plays: how often it draws a new frame, and how fast its play
 /// time runs. What a session pays for a piece on screen is the cells that
@@ -19,14 +19,24 @@ use late_core::models::user::{AsciiPiece, Scene};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Cadence {
     /// A new frame on every half-tier edge (`FRAME_MS`, ~7.5fps), play
-    /// time at the wall clock's pace: the lively pieces.
+    /// time at the wall clock's pace: alpine dawn in dots, the one piece
+    /// whose frame is cheap enough for it under the wire budget
+    /// (`ui_test.rs`, `every_piece_stays_under_the_wire_budget`).
     Half,
+    /// A new frame on every quarter-tier edge (`QUARTER_FRAME_MS`,
+    /// ~3.8fps), play time at the wall clock's pace: alpine dawn in
+    /// pixels, whose frame is a true-colour cell for every scene cell that
+    /// moved and so several times the bytes of the dots' (Cost in
+    /// `CONTEXT.md`); half the frames keeps it under the budget.
+    Quarter,
     /// A new frame every `frame_ms` (a whole number of the 1Hz edges the
     /// idle floor already takes, so the piece never wakes the render loop),
     /// play time at `rate` of the wall clock: a crawl that moves a few
     /// cells a second, so an away session under it costs about what an
     /// idle one did. The default screensaver, earthrise, and the misty
-    /// forest; each pays its budget its own way (`cadence`).
+    /// forest; each pays its budget its own way (`cadence`). The aurora
+    /// plays this way too, at a fifth of the wall clock: its whole sky
+    /// moves every frame, so no faster rate fits the wire budget.
     Slow { frame_ms: u64, rate: f64 },
 }
 
@@ -34,6 +44,7 @@ impl Cadence {
     pub(crate) fn frame_ms(self) -> u64 {
         match self {
             Self::Half => FRAME_MS,
+            Self::Quarter => QUARTER_FRAME_MS,
             Self::Slow { frame_ms, .. } => frame_ms,
         }
     }
@@ -41,27 +52,36 @@ impl Cadence {
     /// Play seconds per wall second.
     fn rate(self) -> f64 {
         match self {
-            Self::Half => 1.0,
+            Self::Half | Self::Quarter => 1.0,
             Self::Slow { rate, .. } => rate,
         }
     }
 }
 
-/// The pace a piece plays at. A scene's cadence is the scene's, whatever
-/// style draws it. What a slow piece costs is what its cadence says here:
-/// the forest drifts a hair every second, the Earth turns a visible notch
-/// every few seconds; `ui_test.rs` holds both to one cell budget.
+/// The pace a piece plays at: the fastest its bytes a second allow under
+/// the wire budget (`ui_test.rs`, `every_piece_stays_under_the_wire_budget`,
+/// `WIRE_BUDGET_KB_PER_S`). A 1Hz scene's cadence is the scene's, whatever
+/// style draws it (the forest drifts a hair every second, the Earth turns
+/// a visible notch every few seconds, `ui_test.rs` holds both to one cell
+/// budget; the aurora drifts a fifth of a second of play every second).
+/// Alpine dawn's is its style's: dots at the half tier, pixels at the
+/// quarter, since a pixel frame is several times the bytes of a dots frame.
 pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
-    match piece.scene {
-        Scene::Earthrise => Cadence::Slow {
+    match (piece.scene, piece.style) {
+        (Scene::Earthrise, _) => Cadence::Slow {
             frame_ms: EARTH_FRAME_MS,
             rate: EARTH_RATE,
         },
-        Scene::MistyForest => Cadence::Slow {
+        (Scene::MistyForest, _) => Cadence::Slow {
             frame_ms: SLOW_FRAME_MS,
             rate: SLOW_RATE,
         },
-        Scene::AuroraFjord | Scene::AlpineDawn => Cadence::Half,
+        (Scene::AuroraFjord, _) => Cadence::Slow {
+            frame_ms: SLOW_FRAME_MS,
+            rate: AURORA_RATE,
+        },
+        (Scene::AlpineDawn, SceneStyle::Dots) => Cadence::Half,
+        (Scene::AlpineDawn, SceneStyle::Pixels) => Cadence::Quarter,
     }
 }
 
@@ -70,6 +90,9 @@ pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
 /// fluid, and a full-screen piece at this pace is what an away session
 /// under one costs in bytes.
 pub(crate) const FRAME_MS: u64 = 132;
+/// One frame edge of the lively pieces in pixels: the quarter tier
+/// (`tick.rs`, `ANIM_QUARTER_TICK`), every other half edge.
+pub(crate) const QUARTER_FRAME_MS: u64 = 2 * FRAME_MS;
 /// One frame edge of the slow pieces: the 1Hz edge the render loop already
 /// takes while idle (`tick.rs`), so a slow piece never wakes it faster.
 pub(crate) const SLOW_FRAME_MS: u64 = 1000;
@@ -87,6 +110,11 @@ pub(crate) const SLOW_RATE: f64 = 0.01;
 /// a second as the forest.
 pub(crate) const EARTH_FRAME_MS: u64 = 4 * SLOW_FRAME_MS;
 pub(crate) const EARTH_RATE: f64 = 0.08;
+/// How fast the aurora's play time runs against the wall clock, a frame a
+/// second: its sky and water move as a whole, so a frame flips most of
+/// the screen at any rate, and only one frame a second at this fraction
+/// of the clock fits the wire budget in pixels (Cost in `CONTEXT.md`).
+pub(crate) const AURORA_RATE: f64 = 0.2;
 
 /// One cell of a shaded scene: the brightness the original's halftone turns
 /// into dot size, the colour it shades the cell with before any of that,
@@ -109,15 +137,24 @@ pub(crate) struct ShadedFrame {
     pub cells: Vec<Shade>,
 }
 
-/// A cell as one solid pixel: its ink over the ground by its brightness. The
-/// original's dot of that ink covers that much of the cell, so from a step
-/// back this is the same tone; drawn solid it fills the terminal cell,
-/// which a glyph cannot.
+/// How far apart a pixel's colour steps are, per channel, counted from the
+/// ground: a cell only changes when the scene moves it this much, so the
+/// water's shimmer and the sky's drift stop flipping every cell they touch
+/// by one level (the dots style rounds its ink the same way). The ground
+/// itself is always exact, so bare ground still draws as a plain space.
+pub(crate) const PIXEL_STEP: f64 = 8.0;
+
+/// A cell as one solid pixel: its ink over the ground by its brightness,
+/// held to `PIXEL_STEP` steps from the ground. The original's dot of that
+/// ink covers that much of the cell, so from a step back this is the same
+/// tone; drawn solid it fills the terminal cell, which a glyph cannot.
 pub(crate) fn pixel(shade: Shade, ground: [u8; 3]) -> [u8; 3] {
     let mut out = [0u8; 3];
     for c in 0..3 {
         let base = f64::from(ground[c]);
-        out[c] = (base + (shade.ink[c] * 255.0 - base) * shade.level).round() as u8;
+        let lift = (shade.ink[c] * 255.0 - base) * shade.level;
+        let stepped = (lift / PIXEL_STEP).round() * PIXEL_STEP;
+        out[c] = (base + stepped).clamp(0.0, 255.0) as u8;
     }
     out
 }
