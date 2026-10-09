@@ -713,7 +713,8 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
                     if st > 0.0 {
                         let (xf, rf) = (x as f64, r as f64);
                         let tw = 0.7
-                            + 0.3 * (t * (1.3 + 3.0 * hash(xf, rf)) + ROUGH_TAU * hash(rf, xf)).sin();
+                            + 0.3
+                                * (t * (1.3 + 3.0 * hash(xf, rf)) + ROUGH_TAU * hash(rf, xf)).sin();
                         let s = st * tw * clamp(1.0 - a * 1.6) * smooth(WLF - 2.0, 30.0, y);
                         cr = cr.max(s * 0.9);
                         cg = cg.max(s * 0.94);

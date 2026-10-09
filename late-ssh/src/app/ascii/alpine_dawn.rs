@@ -614,8 +614,8 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
             } else {
                 // a few stars still out in the west
                 if y < 34.0 && hash(xf, rf * 3.0 + 11.0) > 0.985 {
-                    let tw =
-                        0.6 + 0.4 * (t * (1.5 + hash(xf, rf) * 3.0) + hash(rf, xf) * ROUGH_TAU).sin();
+                    let tw = 0.6
+                        + 0.4 * (t * (1.5 + hash(xf, rf) * 3.0) + hash(rf, xf) * ROUGH_TAU).sin();
                     let s = tw * smooth(150.0, 40.0, xf) * smooth(34.0, 6.0, y) * 0.75;
                     cr = cr.max(s * 0.9);
                     cg = cg.max(s * 0.92);
