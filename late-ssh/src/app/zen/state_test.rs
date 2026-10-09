@@ -315,14 +315,15 @@ fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
     assert!(!zen.draws(TileKind::Bonsai), "and the bonsai does not");
 }
 
-/// An ascii tile plays the aurora until `[` `]` pick another piece; the piece
-/// is stored with the layout, rides along when the tile is split, and is
-/// forgotten when the tile becomes something else, as a chat tile's room is.
+/// An ascii tile plays the screensaver's piece, the slow misty forest,
+/// until `[` `]` pick another; the piece is stored with the layout, rides
+/// along when the tile is split, and is forgotten when the tile becomes
+/// something else, as a chat tile's room is.
 #[test]
 fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
-    let aurora = AsciiPiece {
-        scene: Scene::AuroraFjord,
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    let forest = AsciiPiece {
+        scene: Scene::MistyForest,
         style: SceneStyle::Dots,
     };
     let dawn = AsciiPiece {
@@ -333,18 +334,23 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
         root: Node::leaf(TileKind::Ascii),
         look: Look::default(),
     });
-    assert_eq!(zen.focused_piece(), Some(aurora));
+    assert_eq!(zen.focused_piece(), Some(forest));
+    assert_eq!(
+        Screensaver::DEFAULT,
+        Screensaver::Piece(forest),
+        "the tile and the screensaver default to one piece"
+    );
     assert!(zen.cycle_focused_piece(true));
     assert_eq!(
         zen.focused_piece(),
         Some(AsciiPiece {
-            scene: Scene::AuroraFjord,
+            scene: Scene::MistyForest,
             style: SceneStyle::Pixels
         })
     );
-    // Back past the aurora and the misty forest's two styles, off the
-    // front of the list onto its end.
-    for _ in 0..4 {
+    // Back past the misty forest's two styles, off the front of the list
+    // onto its end.
+    for _ in 0..2 {
         assert!(zen.cycle_focused_piece(false));
     }
     assert_eq!(zen.focused_piece(), Some(dawn), "it wraps");
@@ -357,12 +363,12 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
     let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
     assert_eq!(restored.root.piece_at(0), Some(dawn));
 
-    let forest = AsciiPiece {
-        scene: Scene::MistyForest,
+    let aurora = AsciiPiece {
+        scene: Scene::AuroraFjord,
         style: SceneStyle::Dots,
     };
-    assert!(zen.set_focused_piece(forest));
-    assert_eq!(zen.focused_piece(), Some(forest));
+    assert!(zen.set_focused_piece(aurora));
+    assert_eq!(zen.focused_piece(), Some(aurora));
     assert!(zen.set_focused_piece(dawn));
 
     assert!(zen.split_focused(true));
@@ -377,7 +383,7 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
     assert!(zen.rice.root.set_kind(0, TileKind::Ascii));
     assert_eq!(
         zen.rice.root.piece_at(0),
-        Some(aurora),
+        Some(forest),
         "coming back plays the default"
     );
 }
@@ -418,7 +424,7 @@ fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
     });
     let restored = RiceLayout::from_json(Some(&stored));
     assert_ne!(restored, RiceLayout::default(), "the layout survives");
-    assert_eq!(restored.root.piece_at(0), Some(DEFAULT_PIECE));
+    assert_eq!(restored.root.piece_at(0), Some(AsciiPiece::DEFAULT));
     assert_eq!(restored.root.kind_at(1), Some(TileKind::Chat));
     assert_eq!(restored.root.leaf_rooms()[1], Some(room));
     assert_eq!(

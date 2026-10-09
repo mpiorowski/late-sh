@@ -2,7 +2,7 @@
 //! and the focus that edits it. Everything here is pure data; persistence is
 //! the orchestration layer's job (`App::flush_zen_layout`).
 
-use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
+use late_core::models::user::AsciiPiece;
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -113,7 +113,7 @@ pub enum Node {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         room: Option<Uuid>,
         /// The piece an ascii tile plays; `None` (the stored default) is
-        /// [`DEFAULT_PIECE`]. Other kinds ignore it. A key this build does
+        /// [`AsciiPiece::DEFAULT`]. Other kinds ignore it. A key this build does
         /// not know (a piece dropped, a rolled-back deploy) reads as `None`
         /// rather than failing the whole layout, which `from_json` would
         /// replace with the default, room bindings and all.
@@ -132,14 +132,8 @@ pub enum Node {
     },
 }
 
-/// What a new ascii tile plays.
-pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece {
-    scene: Scene::AuroraFjord,
-    style: SceneStyle::Dots,
-};
-
 /// A stored `piece` key: a piece this build knows, or `None` for one it
-/// does not, so the tile falls back to [`DEFAULT_PIECE`] and the rest of
+/// does not, so the tile falls back to [`AsciiPiece::DEFAULT`] and the rest of
 /// the layout reads as stored.
 fn known_piece<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -238,7 +232,7 @@ impl Node {
                 kind: TileKind::Ascii,
                 piece,
                 ..
-            } => vec![piece.unwrap_or(DEFAULT_PIECE)],
+            } => vec![piece.unwrap_or(AsciiPiece::DEFAULT)],
             Node::Leaf { .. } => Vec::new(),
             Node::Split { first, second, .. } => {
                 let mut pieces = first.ascii_pieces();
@@ -256,7 +250,7 @@ impl Node {
                 kind: TileKind::Ascii,
                 piece,
                 ..
-            }) => Some(piece.unwrap_or(DEFAULT_PIECE)),
+            }) => Some(piece.unwrap_or(AsciiPiece::DEFAULT)),
             _ => None,
         }
     }

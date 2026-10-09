@@ -22,12 +22,14 @@ picker's order, the screensaver's default first. It is stored by key
 (`as_str`: `misty_forest`, `aurora_fjord_pixels`, ...) in the Zen layout
 and in `users.settings.screensaver`. A key this build does not know (the
 text pieces ascii.rest also has, plasma, lava lamp and donut, were ported
-once and dropped) plays the default: the screensaver's misty forest, a
-Zen tile's aurora, the rest of the layout kept.
+once and dropped) plays the default, `AsciiPiece::DEFAULT`, the misty
+forest in dots, on a Zen tile (the rest of the layout kept) and as the
+screensaver alike.
 
 Two surfaces draw them, both through `ui::draw_piece`:
 
-- **The Zen ascii tile** (`../zen/CONTEXT.md`): the aurora in dots until
+- **The Zen ascii tile** (`../zen/CONTEXT.md`): the screensaver's default,
+  the misty forest in dots (one `AsciiPiece::DEFAULT` for both), until
   `[` `]` step it through the pieces or Enter picks one from the list
   (`picker/`, a popup over the page: `j` `k` or a click, Enter picks, Esc
   closes; the pick is saved with the layout); `Z` zooms it over the page.

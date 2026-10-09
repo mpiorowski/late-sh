@@ -255,6 +255,15 @@ pub struct AsciiPiece {
 }
 
 impl AsciiPiece {
+    /// What plays when nothing was picked, on a Zen ascii tile and as the
+    /// screensaver alike: the misty forest in dots, the slow piece, a frame
+    /// a second that moves a few cells, so a tile left up or an away
+    /// session costs about what idling does.
+    pub const DEFAULT: AsciiPiece = AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Dots,
+    };
+
     /// Picker and cycle order: each scene in both styles, the screensaver's
     /// default first.
     pub const ALL: [AsciiPiece; 6] = [
@@ -353,10 +362,7 @@ pub enum Screensaver {
 }
 
 impl Screensaver {
-    pub const DEFAULT: Screensaver = Screensaver::Piece(AsciiPiece {
-        scene: Scene::MistyForest,
-        style: SceneStyle::Dots,
-    });
+    pub const DEFAULT: Screensaver = Screensaver::Piece(AsciiPiece::DEFAULT);
 
     pub fn as_str(self) -> &'static str {
         match self {

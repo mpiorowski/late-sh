@@ -25,8 +25,8 @@ stress live in the `w` care modal), aquarium (the real reef
 simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
 the feeding streak or red for the days unfed, see the hub CONTEXT), ascii (an
-animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: the aurora
-in dots until `[` `]` step it through the others or Enter picks one from
+animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: the misty
+forest in dots, the screensaver's default and the slow piece, until `[` `]` step it through the others or Enter picks one from
 the list (`ascii/picker`, over the page), the piece named in the title,
 `ascii · aurora fjord · pixels`; the piece is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
