@@ -211,7 +211,9 @@ fn wire_cost(piece: AsciiPiece) -> WireCost {
             .count();
         let shared = SharedBuffer::default();
         let mut backend = GlyphIsolatingBackend::new(shared.clone());
-        backend.draw(before.diff(&after).into_iter()).expect("draw diff");
+        backend
+            .draw(before.diff(&after).into_iter())
+            .expect("draw diff");
         bytes += shared.take().len();
         total += changed;
         worst = worst.max(changed);

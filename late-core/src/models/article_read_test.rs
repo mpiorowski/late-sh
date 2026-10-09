@@ -1,11 +1,12 @@
+use crate::models::article::NEWS_FEED_LIMIT;
 use crate::{
     models::{
         article::{Article, ArticleParams},
-        article_feed_read::ArticleFeedRead,
         article_read::ArticleRead,
     },
     test_utils::{create_test_user, test_db},
 };
+use std::collections::HashSet;
 use uuid::Uuid;
 
 async fn share(client: &tokio_postgres::Client, user_id: Uuid, url: &str) -> Article {
@@ -24,10 +25,10 @@ async fn share(client: &tokio_postgres::Client, user_id: Uuid, url: &str) -> Art
     .expect("create article")
 }
 
-/// A read is the reader's alone, opening it twice is one read, and a cursor
-/// that moved past it deletes it while a read after the cursor stays.
+/// A read is the reader's alone, opening it twice is one read, and reading
+/// the feed adds every snapshot article without touching another reader.
 #[tokio::test]
-async fn article_reads_are_per_reader_and_the_cursor_deletes_what_it_covers() {
+async fn article_reads_are_per_reader_and_the_feed_read_covers_the_snapshot() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let sharer = create_test_user(&test_db.db, "article-read-sharer").await;
@@ -55,24 +56,59 @@ async fn article_reads_are_per_reader_and_the_cursor_deletes_what_it_covers() {
         Vec::<Uuid>::new()
     );
 
-    ArticleFeedRead::mark_read_now(&client, reader.id)
+    ArticleRead::mark_feed_read(&client, reader.id)
         .await
-        .expect("move cursor");
-    let cursor = ArticleFeedRead::last_read_at(&client, reader.id)
+        .expect("read the feed");
+    let reads: HashSet<Uuid> = ArticleRead::article_ids_for_user(&client, reader.id)
         .await
-        .expect("cursor")
-        .expect("cursor row");
-    ArticleRead::mark_read(&client, reader.id, second.id)
-        .await
-        .expect("mark second");
-    ArticleRead::delete_covered(&client, reader.id, cursor)
-        .await
-        .expect("delete covered");
+        .expect("reader reads after the feed")
+        .into_iter()
+        .collect();
+    assert!(reads.contains(&first.id) && reads.contains(&second.id));
+    assert_eq!(
+        ArticleRead::article_ids_for_user(&client, other.id)
+            .await
+            .expect("other reads after the feed"),
+        Vec::<Uuid>::new()
+    );
+}
 
+/// Only the snapshot's articles ride a load: a read of an article past the
+/// newest [`NEWS_FEED_LIMIT`] is kept but never loaded, and the feed read
+/// covers exactly the snapshot.
+#[tokio::test]
+async fn a_load_carries_only_the_snapshots_articles() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "article-window-sharer").await;
+    let reader = create_test_user(&test_db.db, "article-window-reader").await;
+    let oldest = share(&client, sharer.id, "https://example.com/window-0").await;
+    for n in 1..=NEWS_FEED_LIMIT {
+        share(
+            &client,
+            sharer.id,
+            &format!("https://example.com/window-{n}"),
+        )
+        .await;
+    }
+
+    ArticleRead::mark_read(&client, reader.id, oldest.id)
+        .await
+        .expect("mark the oldest");
     assert_eq!(
         ArticleRead::article_ids_for_user(&client, reader.id)
             .await
-            .expect("reader reads after the cursor"),
-        vec![second.id]
+            .expect("reads"),
+        Vec::<Uuid>::new(),
+        "an article past the snapshot is not loaded"
     );
+
+    ArticleRead::mark_feed_read(&client, reader.id)
+        .await
+        .expect("read the feed");
+    let reads = ArticleRead::article_ids_for_user(&client, reader.id)
+        .await
+        .expect("reads after the feed");
+    assert_eq!(reads.len(), NEWS_FEED_LIMIT as usize);
+    assert!(!reads.contains(&oldest.id));
 }

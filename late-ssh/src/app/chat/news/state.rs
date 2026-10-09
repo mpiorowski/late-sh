@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -30,49 +29,39 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 
 use super::svc::ArticleService;
 
-/// What a reader has read: every article up to the cursor (`None` when
-/// they have no cursor row, which reads nothing by time), plus the ones
-/// they opened ahead of it in the article modal.
+/// This session's news reads: the ids of the snapshot's articles the
+/// reader has read (`article_reads`), a visit to the News room reading
+/// every one of them and the article modal reading one. Reads only grow,
+/// so a load merges into what is held. Until the first load answers, the
+/// badge stays empty rather than guessing: no reads means everything is
+/// unread, which is not the same as not knowing yet.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Reads {
-    pub last_read_at: Option<DateTime<Utc>>,
-    pub article_ids: HashSet<Uuid>,
-}
-
-impl Reads {
-    pub(crate) fn is_unread(&self, item: &ArticleFeedItem) -> bool {
-        let read_by_cursor = match self.last_read_at {
-            Some(last_read_at) => item.article.created <= last_read_at,
-            None => false,
-        };
-        !read_by_cursor && !self.article_ids.contains(&item.article.id)
-    }
-}
-
-/// This session's news reads. Until the first load answers, the badge
-/// stays empty rather than guessing: a missing cursor row
-/// (`last_read_at: None`) means everything not opened is unread, which is
-/// not the same as not knowing yet.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReadCursor {
+pub(crate) enum Reads {
     Loading,
-    Loaded(Reads),
+    Loaded(HashSet<Uuid>),
+}
+
+pub(crate) fn is_unread(item: &ArticleFeedItem, read_ids: &HashSet<Uuid>) -> bool {
+    !read_ids.contains(&item.article.id)
 }
 
 /// Whether an article is unread against the reads, for a mark that must
 /// not guess: nothing is unread until the reads have loaded.
-pub(crate) fn is_unread_at(item: &ArticleFeedItem, cursor: &ReadCursor) -> bool {
-    match cursor {
-        ReadCursor::Loading => false,
-        ReadCursor::Loaded(reads) => reads.is_unread(item),
+pub(crate) fn is_unread_at(item: &ArticleFeedItem, reads: &Reads) -> bool {
+    match reads {
+        Reads::Loading => false,
+        Reads::Loaded(read_ids) => is_unread(item, read_ids),
     }
 }
 
 /// The news badge: articles in the shared snapshot the reader has not read.
 /// The snapshot holds the newest [`NEWS_FEED_LIMIT`] articles, so the
 /// count saturates there.
-pub(crate) fn unread_in_snapshot(articles: &[ArticleFeedItem], reads: &Reads) -> i64 {
-    let unread = articles.iter().filter(|item| reads.is_unread(item)).count();
+pub(crate) fn unread_in_snapshot(articles: &[ArticleFeedItem], read_ids: &HashSet<Uuid>) -> i64 {
+    let unread = articles
+        .iter()
+        .filter(|item| is_unread(item, read_ids))
+        .count();
     unread as i64
 }
 
@@ -95,7 +84,7 @@ pub(crate) fn news_unread_label(unread: i64) -> String {
 pub(crate) fn has_fresh_unread_from_others(
     previous: &[ArticleFeedItem],
     next: &[ArticleFeedItem],
-    reads: &Reads,
+    read_ids: &HashSet<Uuid>,
     reader: Uuid,
 ) -> bool {
     let Some(newest_seen) = previous.iter().map(|item| item.article.created).max() else {
@@ -104,7 +93,7 @@ pub(crate) fn has_fresh_unread_from_others(
     next.iter().any(|item| {
         item.article.created > newest_seen
             && item.article.user_id != reader
-            && reads.is_unread(item)
+            && is_unread(item, read_ids)
     })
 }
 
@@ -125,8 +114,8 @@ pub struct State {
     selected: usize,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
-    read_cursor: ReadCursor,
-    marker: Reads,
+    reads: Reads,
+    marker: HashSet<Uuid>,
     preserve_marker: bool,
     composing: bool,
     composer: TextArea<'static>,
@@ -139,7 +128,7 @@ impl State {
         let snapshot_rx = article_service.subscribe_snapshot();
         let event_rx = article_service.subscribe_events();
         article_service.list_articles_task();
-        article_service.load_read_cursor_task(user_id);
+        article_service.load_reads_task(user_id);
         Self {
             article_service,
             user_id,
@@ -150,11 +139,8 @@ impl State {
             selected: 0,
             snapshot_rx,
             event_rx,
-            read_cursor: ReadCursor::Loading,
-            marker: Reads {
-                last_read_at: None,
-                article_ids: HashSet::new(),
-            },
+            reads: Reads::Loading,
+            marker: HashSet::new(),
             preserve_marker: false,
             composing: false,
             composer: new_news_textarea(),
@@ -263,20 +249,20 @@ impl State {
     }
 
     pub fn unread_count(&self) -> i64 {
-        match &self.read_cursor {
-            ReadCursor::Loading => 0,
-            ReadCursor::Loaded(reads) => unread_in_snapshot(&self.source_articles, reads),
+        match &self.reads {
+            Reads::Loading => 0,
+            Reads::Loaded(read_ids) => unread_in_snapshot(&self.source_articles, read_ids),
         }
     }
 
     /// The reads the News list marks its dots against: held at what they
     /// were when the room was entered, so the visit keeps showing what was new.
-    pub(crate) fn marker(&self) -> &Reads {
+    pub(crate) fn marker(&self) -> &HashSet<Uuid> {
         &self.marker
     }
 
-    pub(crate) fn read_cursor(&self) -> &ReadCursor {
-        &self.read_cursor
+    pub(crate) fn reads(&self) -> &Reads {
+        &self.reads
     }
 
     pub fn composing(&self) -> bool {
@@ -310,38 +296,29 @@ impl State {
         self.processing = false;
     }
 
+    /// A visit to the News room: every article in the snapshot is read.
+    /// The badge clears now; the stored reads come back as `ReadsLoaded`
+    /// once the write lands and merge into these.
     pub fn mark_read(&mut self) {
-        self.marker = match &self.read_cursor {
-            ReadCursor::Loading => Reads {
-                last_read_at: None,
-                article_ids: HashSet::new(),
-            },
-            ReadCursor::Loaded(reads) => reads.clone(),
+        self.marker = match &self.reads {
+            Reads::Loading => HashSet::new(),
+            Reads::Loaded(read_ids) => read_ids.clone(),
         };
         self.preserve_marker = true;
-        // Clear the badge now; the stored reads come back as
-        // `ReadCursorLoaded` once the write lands. The cursor covers every
-        // article opened before it, so those reads go.
-        self.read_cursor = ReadCursor::Loaded(Reads {
-            last_read_at: Some(Utc::now()),
-            article_ids: HashSet::new(),
-        });
+        let snapshot_ids = self.source_articles.iter().map(|item| item.article.id);
+        match &mut self.reads {
+            Reads::Loading => self.reads = Reads::Loaded(snapshot_ids.collect()),
+            Reads::Loaded(read_ids) => read_ids.extend(snapshot_ids),
+        }
         self.article_service.mark_read_task(self.user_id);
     }
 
-    /// Mark the one article the modal opened on as read, and no other.
-    /// Clears its mark now and skips the write when the reads already
-    /// cover it; before the reads load it writes anyway, the stored reads
-    /// arriving after it.
+    /// Mark the one article the modal opened on as read, and no other. Its
+    /// mark clears now, and the write always goes: it is a no-op on a row
+    /// that exists, and a reopen is the retry of a write that failed.
     pub fn mark_article_read(&mut self, item: &ArticleFeedItem) {
-        match &mut self.read_cursor {
-            ReadCursor::Loading => {}
-            ReadCursor::Loaded(reads) => {
-                if !reads.is_unread(item) {
-                    return;
-                }
-                reads.article_ids.insert(item.article.id);
-            }
+        if let Reads::Loaded(read_ids) = &mut self.reads {
+            read_ids.insert(item.article.id);
         }
         self.article_service
             .mark_article_read_task(self.user_id, item.article.id);
@@ -474,12 +451,12 @@ impl State {
             return None;
         };
         let snapshot = self.snapshot_rx.borrow_and_update().clone();
-        let announce = match &self.read_cursor {
-            ReadCursor::Loading => false,
-            ReadCursor::Loaded(reads) => has_fresh_unread_from_others(
+        let announce = match &self.reads {
+            Reads::Loading => false,
+            Reads::Loaded(read_ids) => has_fresh_unread_from_others(
                 &self.source_articles,
                 &snapshot.articles,
-                reads,
+                read_ids,
                 self.user_id,
             ),
         };
@@ -522,18 +499,25 @@ impl State {
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
                         banner = Some(Banner::success("Article deleted."));
                     }
-                    ArticleEvent::ReadCursorLoaded {
+                    ArticleEvent::ReadsLoaded {
                         user_id,
-                        last_read_at,
                         read_article_ids,
                     } if self.user_id == user_id => {
-                        let reads = Reads {
-                            last_read_at,
-                            article_ids: read_article_ids.into_iter().collect(),
-                        };
-                        self.read_cursor = ReadCursor::Loaded(reads.clone());
-                        if self.unread_count() == 0 && !self.preserve_marker {
-                            self.marker = reads;
+                        // Reads only grow, so a load merges: two writes'
+                        // loads landing in either order never take a read
+                        // back, and neither does a load older than a mark
+                        // this session made itself.
+                        match &mut self.reads {
+                            Reads::Loading => {
+                                self.reads = Reads::Loaded(read_article_ids.into_iter().collect());
+                            }
+                            Reads::Loaded(read_ids) => read_ids.extend(read_article_ids),
+                        }
+                        if self.unread_count() == 0
+                            && !self.preserve_marker
+                            && let Reads::Loaded(read_ids) = &self.reads
+                        {
+                            self.marker = read_ids.clone();
                         }
                     }
                     _ => (),

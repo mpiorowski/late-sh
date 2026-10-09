@@ -219,10 +219,7 @@ fn the_players_chat_row_always_counts_the_watchers() {
             .to_string()
     };
 
-    assert_eq!(
-        row(None, 0),
-        " 0 watching \u{b7} nobody has said anything"
-    );
+    assert_eq!(row(None, 0), " 0 watching \u{b7} nobody has said anything");
     let line = WatchLine {
         author: "mira".to_string(),
         body: "nice dodge".to_string(),

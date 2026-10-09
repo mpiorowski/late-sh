@@ -120,8 +120,10 @@ late-ssh/src/app/ascii/
   arithmetic: without it, most of a frame's changed cells are colours that
   wobbled by one.
 - **One frame per edge for the process.** `piece::picture` serves a
-  scene's frame from a process-wide cache keyed by scene and edge (both
-  styles share it); it computes outside the lock, and two sessions racing
+  scene's frame from a process-wide cache keyed by scene and play time
+  (both styles share an entry when they want the same picture; alpine
+  dawn's pixels frame `n` is its dots frame `2n`); it computes outside
+  the lock, and two sessions racing
   on one edge both compute it (a frame of CPU, nothing else).
 - **Drawing.** A scene is shaded per square cell (`ShadedFrame`, on its
   own ground colour; a `Shade` is the brightness the original turns into

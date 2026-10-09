@@ -1078,9 +1078,13 @@ async fn opening_a_shares_modal_marks_that_article_read() {
         summary: "• summary".to_string(),
         ascii_art: "#".to_string(),
     };
-    Article::create_by_user_id(&client, them.id, share("https://example.com/alpha", "alpha"))
-        .await
-        .expect("share the older article");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        share("https://example.com/alpha", "alpha"),
+    )
+    .await
+    .expect("share the older article");
     let newer =
         Article::create_by_user_id(&client, them.id, share("https://example.com/beta", "beta"))
             .await

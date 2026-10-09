@@ -127,3 +127,29 @@ fn every_piece_is_a_scene_on_the_originals_grid() {
         assert_eq!(scene.cells.len(), 200 * 100, "{}", piece.label());
     }
 }
+
+/// Alpine dawn's two styles run different cadences, so one frame number is
+/// a different play time in each: the cache hands each style its own play
+/// time's picture, and the same play time in both styles is one picture.
+#[test]
+fn a_frame_number_is_its_own_styles_play_time_in_the_cache() {
+    let dots = AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Dots,
+    };
+    let pixels = AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    };
+    let dots_frame = picture(dots, 1001);
+    let pixels_frame = picture(pixels, 1001);
+    assert_ne!(
+        dots_frame.cells, pixels_frame.cells,
+        "frame 1001 is 132s of play in dots and 264s in pixels"
+    );
+    assert_eq!(
+        picture(dots, 2002).cells,
+        pixels_frame.cells,
+        "the dots' frame 2002 is the pixels' frame 1001"
+    );
+}

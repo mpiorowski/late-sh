@@ -1,15 +1,12 @@
 use super::*;
+use crate::app::chat::news::state::Reads;
 use crate::app::door::spectate::{proxy::LiveGame, state::SpectateGame};
 use chrono::TimeZone;
-use crate::app::chat::news::state::Reads;
 use late_core::models::article::Article;
 use std::collections::HashSet;
 
 fn no_reads() -> Reads {
-    Reads {
-        last_read_at: None,
-        article_ids: HashSet::new(),
-    }
+    Reads::Loaded(HashSet::new())
 }
 
 const NOW_UNIX: u64 = 1_790_000_000;
@@ -180,7 +177,7 @@ fn each_kind_is_newest_first_and_stale_or_pending_things_are_not_listed() {
         &streams,
         &games,
         &articles,
-        &ReadCursor::Loaded(no_reads()),
+        &no_reads(),
         &open_watches,
         now(),
     );
@@ -201,37 +198,23 @@ fn each_kind_is_newest_first_and_stale_or_pending_things_are_not_listed() {
     );
 }
 
-/// The dot follows the News badge's rule: a share older than the reader's
-/// cursor, or opened ahead of it, carries none, and nothing is marked until
-/// the reads have loaded, so the panel never guesses at what was read.
+/// The dot follows the News badge's rule: a share the reader has read
+/// carries none, and nothing is marked until the reads have loaded, so the
+/// panel never guesses at what was read.
 #[test]
-fn a_share_is_dotted_while_unread_by_the_news_cursor() {
+fn a_share_is_dotted_while_unread() {
     let articles = [article("ann", "the freshest", ago(2))];
     let open_watches = OpenWatches::new();
-    let text_at = |cursor: ReadCursor| {
-        texts(&rows(&[], &[], &articles, &cursor, &open_watches, now()))[0].clone()
-    };
-    let cursor_at = |last_read_at| {
-        ReadCursor::Loaded(Reads {
-            last_read_at: Some(last_read_at),
-            article_ids: HashSet::new(),
-        })
-    };
+    let text_at =
+        |reads: Reads| texts(&rows(&[], &[], &articles, &reads, &open_watches, now()))[0].clone();
 
+    assert_eq!(text_at(no_reads()), "news    the fre… \u{25cf} s1");
     assert_eq!(
-        text_at(cursor_at(ago(5))),
-        "news    the fre… \u{25cf} s1"
-    );
-    assert_eq!(text_at(cursor_at(ago(1))), "news    the fresh… s1");
-    assert_eq!(
-        text_at(ReadCursor::Loaded(Reads {
-            last_read_at: Some(ago(5)),
-            article_ids: HashSet::from([articles[0].article.id]),
-        })),
+        text_at(Reads::Loaded(HashSet::from([articles[0].article.id]))),
         "news    the fresh… s1",
-        "an article opened ahead of the cursor is read"
+        "a read article carries no dot"
     );
-    assert_eq!(text_at(ReadCursor::Loading), "news    the fresh… s1");
+    assert_eq!(text_at(Reads::Loading), "news    the fresh… s1");
 }
 
 /// The floor rule: every kind with something gets a row, the leftover goes
@@ -278,7 +261,7 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
             &streams,
             &games,
             &articles,
-            &ReadCursor::Loaded(no_reads()),
+            &no_reads(),
             &open_watches,
             now()
         )),
@@ -290,7 +273,7 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
             &streams[..2],
             &games[..2],
             &articles,
-            &ReadCursor::Loaded(no_reads()),
+            &no_reads(),
             &open_watches,
             now()
         )),
@@ -302,7 +285,7 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
             &[],
             &games[..1],
             &articles,
-            &ReadCursor::Loaded(no_reads()),
+            &no_reads(),
             &open_watches,
             now()
         )),
@@ -314,7 +297,7 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
             &[],
             &[],
             &articles,
-            &ReadCursor::Loaded(no_reads()),
+            &no_reads(),
             &open_watches,
             now()
         )),
@@ -327,7 +310,7 @@ fn every_kind_keeps_a_row_and_the_leftover_goes_by_priority() {
             &streams[..2],
             &games[..1],
             &[],
-            &ReadCursor::Loaded(no_reads()),
+            &no_reads(),
             &open_watches,
             now()
         )),

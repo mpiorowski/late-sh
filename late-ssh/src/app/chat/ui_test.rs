@@ -1058,7 +1058,7 @@ fn chat_view<'a>(
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
     static AFK_LINES: OnceLock<HashMap<Uuid, DateTime<Utc>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
-    static NEWS_MARKER: OnceLock<crate::app::chat::news::state::Reads> = OnceLock::new();
+    static NEWS_MARKER: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
     static AWAY_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1094,10 +1094,7 @@ fn chat_view<'a>(
         news_view: crate::app::chat::news::ui::ArticleListView {
             articles: &[],
             selected_index: 0,
-            marker: NEWS_MARKER.get_or_init(|| crate::app::chat::news::state::Reads {
-                last_read_at: None,
-                article_ids: HashSet::new(),
-            }),
+            marker: NEWS_MARKER.get_or_init(HashSet::new),
             mine_only: false,
         },
         discover_selected: false,

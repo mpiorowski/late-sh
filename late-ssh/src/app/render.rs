@@ -743,7 +743,7 @@ impl App {
             &self.chat.live_streams,
             &live_rows,
             self.chat.news.all_articles(),
-            self.chat.news.read_cursor(),
+            self.chat.news.reads(),
             self.live_games.open_watches(),
             live_panel_now,
         );

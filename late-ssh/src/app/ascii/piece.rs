@@ -191,11 +191,14 @@ pub(crate) fn seconds(piece: AsciiPiece, frame: u64) -> f64 {
 }
 
 /// The piece's frame at `frame` (one of its own edges, `frame_index`), from
-/// the shared cache. A scene's frame is the same in either style, so both
-/// share one entry.
+/// the shared cache, keyed by the scene and its play time: a scene's
+/// picture is the same in either style at the same play time, so the two
+/// styles share an entry exactly when they want the same picture, and a
+/// style on a slower cadence (alpine dawn in pixels, whose frame `n` is the
+/// dots' frame `2n`) never gets the other's picture for its frame number.
 pub(crate) fn picture(piece: AsciiPiece, frame: u64) -> Arc<ShadedFrame> {
     let t = seconds(piece, frame);
-    cached(piece.scene, frame, || {
+    cached(piece.scene, play_ms(t), || {
         Arc::new(match piece.scene {
             Scene::Earthrise => super::earthrise::frame(t),
             Scene::MistyForest => super::misty_forest::crawl(t),
@@ -205,9 +208,15 @@ pub(crate) fn picture(piece: AsciiPiece, frame: u64) -> Arc<ShadedFrame> {
     })
 }
 
+/// A play time as the cache's key: whole milliseconds, which every cadence's
+/// edges land on exactly.
+fn play_ms(seconds: f64) -> u64 {
+    (seconds * 1000.0).round() as u64
+}
+
 struct Cached {
     scene: Scene,
-    frame: u64,
+    play_ms: u64,
     picture: Arc<ShadedFrame>,
 }
 
@@ -215,12 +224,12 @@ struct Cached {
 /// drawing the aurora never holds up another drawing the forest; two
 /// sessions racing on one edge both compute it and the second write wins,
 /// which costs a frame of CPU and nothing else.
-fn cached(scene: Scene, frame: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> Arc<ShadedFrame> {
+fn cached(scene: Scene, play_ms: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> Arc<ShadedFrame> {
     static CACHE: Mutex<Vec<Cached>> = Mutex::new(Vec::new());
     if let Some(hit) = CACHE
         .lock_recover()
         .iter()
-        .find(|entry| entry.scene == scene && entry.frame == frame)
+        .find(|entry| entry.scene == scene && entry.play_ms == play_ms)
     {
         return hit.picture.clone();
     }
@@ -228,12 +237,12 @@ fn cached(scene: Scene, frame: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> 
     let mut cache = CACHE.lock_recover();
     match cache.iter_mut().find(|entry| entry.scene == scene) {
         Some(entry) => {
-            entry.frame = frame;
+            entry.play_ms = play_ms;
             entry.picture = picture.clone();
         }
         None => cache.push(Cached {
             scene,
-            frame,
+            play_ms,
             picture: picture.clone(),
         }),
     }

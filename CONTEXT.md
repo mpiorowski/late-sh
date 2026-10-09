@@ -740,8 +740,7 @@ overwrite its own layout on every reconnect.
 | JobPosting | `job_postings` | The job feed's rows (migrations 193, 194): `(source, external_id)` UNIQUE, `source` IN (hn, wwr, jobicy, late), `status` IN (pending, queued, active, expired, dead, dropped), `remote_kind` set on every shelf row, `released_on` set on every active or expired row, `raw` cleared on settle, `posted_by` set exactly on `late` rows (written on the shelf by a person, taken down by them or a moderator). `JobPressRun` (`job_press_runs`, `run_on` PK) is the nightly press's claim. See `late-ssh/src/app/jobs/CONTEXT.md`. |
 | PaperRoomEdition | `paper_room_editions` | PK `(room_id, edition)`; `status` IN (printing, ready, quiet), `text` set iff ready, `generated_at` null iff printing. The row is the print claim (migration 173). |
 | PaperSection | `paper_sections` | PK `(edition, section)`, `section` IN (reading, outside), same status contract. |
-| ArticleFeedRead | `article_feed_reads` | `user_id` PK/FK, per-user news read checkpoint |
-| ArticleRead | `article_reads` | PK `(user_id, article_id)`, both FK cascade: one article read ahead of the checkpoint (the article modal); a News room visit deletes the rows the moved checkpoint covers |
+| ArticleRead | `article_reads` | PK `(user_id, article_id)`, both FK cascade, indexed by `article_id` for the cascade: one News article one reader has read, the only record of a read (a News room visit inserts the snapshot's, the article modal one; migration 231 folded the old per-user checkpoint into these) |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
 | SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
 | NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, binary completion |

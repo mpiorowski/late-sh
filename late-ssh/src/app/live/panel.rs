@@ -42,7 +42,7 @@ use uuid::Uuid;
 
 use super::pick::LiveSource;
 use super::ui::truncate_chars;
-use crate::app::chat::news::state::{ReadCursor, is_unread_at};
+use crate::app::chat::news::state::{Reads, is_unread_at};
 use crate::app::common::theme;
 use crate::app::door::spectate::{
     state::{LiveGameKey, LiveRow},
@@ -135,13 +135,13 @@ pub(crate) struct LivePanelProps<'a> {
 /// have gone live (a pending one has no stamp and is not listed, so the
 /// panel never points at a black screen), the watchable doors' live games
 /// with the open-watch count on each, and the News shares younger than
-/// [`NEWS_LIFETIME`] (unread against `read_cursor`), each kind newest
+/// [`NEWS_LIFETIME`] (unread against `reads`), each kind newest
 /// first, the kinds in `rank` order.
 pub(crate) fn rows(
     streams: &[LiveStreamView],
     live: &[LiveRow],
     articles: &[ArticleFeedItem],
-    read_cursor: &ReadCursor,
+    reads: &Reads,
     open_watches: &OpenWatches,
     now: DateTime<Utc>,
 ) -> Vec<LivePanelRow> {
@@ -184,7 +184,7 @@ pub(crate) fn rows(
                 LivePanelRow::News {
                     article_id: item.article.id,
                     title: item.article.title.clone(),
-                    unread: is_unread_at(item, read_cursor),
+                    unread: is_unread_at(item, reads),
                 },
             )
         })
