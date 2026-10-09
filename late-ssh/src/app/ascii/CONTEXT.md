@@ -70,7 +70,7 @@ late-ssh/src/app/ascii/
 |-- alpine_dawn.rs      # scene: the range raymarched once (OnceLock), tinted + mirrored per frame
 |-- ui.rs               # draw_piece: a scene as pixels or braille dots by its style
 |-- picker/             # the piece picker a Zen ascii tile opens: state.rs, input.rs, ui.rs
-|-- fixtures/           # golden frames recorded from the TS originals
+|-- fixtures/           # golden frames recorded from the TS originals: <slug>_t1.txt (glyphs) and <slug>_t1.colors (palette bytes), see Porting a piece
 |-- LICENSE-ascii-rest  # the MIT notice the port carries
 ```
 
@@ -94,7 +94,7 @@ late-ssh/src/app/ascii/
   `a_slow_piece_moves_a_few_cells_a_second`, holds every slow piece to a
   hundred cells a second on a 200x50 terminal in dots: about a kilobyte a
   second per away session, against tens of kilobytes a frame for a lively
-  scene. That is what lets the screensaver default to on. The two pay it
+  scene (every piece's numbers are in Cost). That is what lets the screensaver default to on. The two pay it
   differently. The forest plays a frame every `SLOW_FRAME_MS` (1s) at
   `SLOW_RATE` (0.01): its fog is all but still at that crawl, so it plays
   its beams seven times faster than its air (`misty_forest::crawl`,
@@ -147,7 +147,58 @@ late-ssh/src/app/ascii/
   returns its tier ahead of every other check, since it covers everything
   and a pointer moving over it must not open the hot window.
 
-## 4. Porting a piece
+## 4. Cost
+
+Every piece is measured, never guessed, and a new one is measured
+against this table before its cadence is picked. The report is
+`ui_test.rs`, `the_cost_report` (ignored: it prints, the budget test
+asserts):
+
+```
+make test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(the_cost_report)'"
+```
+
+It draws each piece in both styles on a 200x50 terminal at its own
+cadence and counts the cells that change between consecutive frames
+(what the wire carries: a changed cell is on the order of ten to twenty
+bytes with its colour), plus one frame's compute in the unoptimised test
+profile (read it against the other rows, not the clock).
+
+| piece                  | frame ms | cells/frame | worst | cells/s | frame us (debug) |
+|------------------------|---------:|------------:|------:|--------:|-----------------:|
+| earthrise · dots       |     4000 |         355 |   372 |      88 |             8879 |
+| earthrise · pixels     |     4000 |         575 |   580 |     143 |             8176 |
+| misty forest · dots    |     1000 |          55 |    62 |      55 |             8003 |
+| misty forest · pixels  |     1000 |         588 |   661 |     588 |             7470 |
+| aurora fjord · dots    |      132 |        2522 |  2558 |   19106 |            16160 |
+| aurora fjord · pixels  |      132 |        6920 |  7118 |   52424 |            11681 |
+| alpine dawn · dots     |      132 |         501 |   622 |    3795 |            13110 |
+| alpine dawn · pixels   |      132 |        3014 |  3357 |   22833 |            11250 |
+
+What the numbers decide:
+
+- **The screensaver's default holds the budget**: a hundred cells a
+  second in dots (`a_slow_piece_moves_a_few_cells_a_second`), so a
+  session that is away costs about what one that idles did. Any piece
+  offered as a slow one must pass that test at its cadence.
+- **A lively piece's cost is its cells per second**, and the table is the
+  scale: alpine dawn in dots is a tenth of the aurora in pixels at the
+  same fps. Raising a piece's fps is welcome when the report says it is
+  cheap: the cost of a piece at a new rate is its cells/frame times the
+  rate, so a piece under a thousand cells a frame can run at `HOT_TICK`
+  (66ms, `tick.rs`, the fastest tier the loop has) for what the aurora
+  costs at the half tier. Doing it is a cadence: a `frame_ms` on the
+  piece (`piece::cadence`), the tick tier it rides (`App::ascii_edge`,
+  `App::wake_hint`, `App::lively_ascii_visible`), and a re-run of the
+  report with the new row in this table.
+- **Compute is not the limit** at these sizes (a frame is a few
+  milliseconds in debug, shared by every session through the cache); the
+  wire is. A piece that needs the frame cache to miss (a per-session
+  parameter) would change that, and does not exist yet.
+- Measured on the wire (`late_ssh_render*`, the output-budget metrics):
+  not yet, for any piece; the cells are the proxy until then.
+
+## 5. Porting a piece
 
 1. Port the TS scene line by line into `<slug>.rs` with a `frame` that
    returns a `ShadedFrame`: its `ground`, and per cell the level, the raw
@@ -164,14 +215,42 @@ late-ssh/src/app/ascii/
    to the cell budget) and `piece::picture`; the compiler finds the rest
    (the cycle test's list). The pickers and the Tweaks row read `ALL` and
    `label`.
-3. Record the golden frame: run the original under node (23+ strips the
-   types) for `frame(1, { color })` with the nearest-colour cache removed
-   (see Gotchas), write `fixtures/<slug>_t1.txt` and `<slug>_t1.colors`,
-   and check the port through its `dot` (`alpine_dawn_test.rs` is the
-   shape).
-4. Name the file in `LICENSE-ascii-rest`.
+3. Record the golden frame from the original, with its nearest-colour
+   cache removed (see Gotchas). In a scratch directory, clone
+   https://github.com/bas3line/ascii at the commit `LICENSE-ascii-rest`
+   names, copy `src/pieces/<slug>.ts` and `src/types.ts` beside each
+   other, point the piece's `import type` at `./types.ts`, and in its
+   `nearest` delete the line `if (lut[k] !== 255) return lut[k];` and
+   make `return (lut[k] = best);` a plain `return best;`. Then run, with
+   node 23+ (it strips the types):
 
-## 5. Gotchas
+   ```js
+   import { writeFileSync } from "node:fs";
+   import piece from "./<slug>.ts";
+   const color = new Uint8Array(200 * 100);
+   const text = piece()(1, { color });
+   writeFileSync("<slug>_t1.txt", text + "\n");
+   writeFileSync("<slug>_t1.colors", color);
+   ```
+
+   `fixtures/<slug>_t1.txt` is the 100 lines of 200 glyphs the original
+   returns, each line newline-terminated; `<slug>_t1.colors` is the 20000
+   palette indices, one byte per cell in row order. The test
+   (`alpine_dawn_test.rs` is the shape, `earthrise_test.rs` where the
+   original's `dot` takes a floor and a cap) runs the port at `t = 1`
+   through its `dot` and compares both files byte for byte, and checks
+   every palette colour is its own nearest. A mismatch is a port bug, not
+   a tolerance: never loosen it, find the JavaScript semantic that
+   differs (step 1).
+4. Name the file in `LICENSE-ascii-rest`, and declare the test module at
+   the bottom of `<slug>.rs` (`#[cfg(test)] #[path = "<slug>_test.rs"]
+   mod <slug>_test;`): a golden test that is never declared never runs.
+5. Run the cost report (Cost) and add the piece's two rows to the table;
+   pick its cadence from them, not from how it looks: a slow candidate
+   goes into the budget test's list, a lively one gets the tier its cells
+   a second earn.
+
+## 6. Gotchas
 
 - ascii.rest's scenes cache their nearest-colour lookup by 5-bit colour
   bucket, filled by whichever colour asks first, so their colours depend on
@@ -185,8 +264,8 @@ late-ssh/src/app/ascii/
   under the app lock; a test binary pays it on the first scene test.
 - ascii.rest's `paper` (a light page flipping the ramp) is not ported:
   every piece draws its dark-ground ramp.
-- A lively scene as the screensaver (a full-screen two-colour picture at
-  ~7.5fps per away session) has not had its bandwidth measured on the
-  wire; `late_ssh_render*` and the output-budget metrics are where it
-  would show. The default is a slow piece for that reason: its cost is
-  pinned by the cell budget test, not estimated.
+- A lively scene as the screensaver (a full-screen picture at ~7.5fps per
+  away session, up to seven thousand cells a frame, Cost) has not had its
+  bandwidth measured on the wire; `late_ssh_render*` and the output-budget
+  metrics are where it would show. The default is a slow piece for that
+  reason: its cost is pinned by the cell budget test, not estimated.
