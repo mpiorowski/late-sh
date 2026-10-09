@@ -15,8 +15,9 @@ file names the commit): **earthrise** (the Earth turning over a cratered
 lunar horizon in long low sunlight; a slow piece, see Cadence, and the
 default), **misty forest** (pine ridges fading into morning fog, sunbeams
 slanting through; the other slow piece), **aurora fjord** (aurora over a
-fjord, a lit cabin) and **alpine dawn** (first light on snow peaks over a
-misty lake), each drawn in one of two styles (`SceneStyle`: **dots**, the
+fjord, a lit cabin; a frame a second at a fifth of the clock, see
+Cadence) and **alpine dawn** (first light on snow peaks over a misty
+lake; the lively one), each drawn in one of two styles (`SceneStyle`: **dots**, the
 original's halftone as braille, or **pixels**, solid half-blocks in true
 colour). `late_core::models::user::AsciiPiece` (a `scene` and a `style`)
 is a choice of the eight; `AsciiPiece::ALL` is the picker's order, the
@@ -83,16 +84,22 @@ late-ssh/src/app/ascii/
   the process's first ask, shared by every session, so two people away at
   once watch the same frame; `piece::frame_index` turns it into a piece's
   own edge by its `Cadence`, and `seconds` an edge into play time.
-  `Cadence::Half` (the aurora and alpine dawn, the lively scenes, in
-  dots): a frame every `FRAME_MS` (132ms, the half tier) at the wall
-  clock's pace. `Cadence::Quarter` (the same scenes in pixels): a frame
-  every `QUARTER_FRAME_MS` (264ms, the quarter tier), since a pixel frame
-  is several times the bytes of a dots frame (Cost), and half the frames
-  puts the two styles at about the same bytes a second.
-  `Cadence::Slow { frame_ms, rate }` (earthrise and the misty forest): a
-  frame every `frame_ms`, a whole number of the 1Hz edges the idle floor
-  already takes, with play time at `rate` of the wall clock, a crawl;
-  `piece::cadence` is the one place each slow piece's pair lives. What a
+  A piece's cadence is the fastest its bytes a second allow under the
+  wire budget (Cost): `Cadence::Half` (alpine dawn in dots): a frame
+  every `FRAME_MS` (132ms, the half tier) at the wall clock's pace.
+  `Cadence::Quarter` (alpine dawn in pixels): a frame every
+  `QUARTER_FRAME_MS` (264ms, the quarter tier), since a pixel frame is
+  several times the bytes of a dots frame, and half the frames puts the
+  two styles at about the same bytes a second.
+  `Cadence::Slow { frame_ms, rate }` (earthrise, the misty forest and the
+  aurora): a frame every `frame_ms`, a whole number of the 1Hz edges the
+  idle floor already takes, with play time at `rate` of the wall clock;
+  `piece::cadence` is the one place each piece's pair lives. The aurora
+  is there because its whole sky and water move every frame, so a frame
+  flips most of the screen at any rate, and only one frame a second at
+  `AURORA_RATE` (0.2) of the clock fits the budget in pixels: it reads as
+  a slow aurora, a visible step every second. The two slow pieces proper
+  are a crawl, held to a far smaller budget of their own: What a
   session pays for a piece is the cells that change per frame times the
   frames per second, and `ui_test.rs`,
   `a_slow_piece_moves_a_few_cells_a_second`, holds every slow piece to a
@@ -178,14 +185,14 @@ other rows, not the clock).
 
 | piece                  | frame ms | cells/frame | worst | cells/s | bytes/frame | KB/s | frame us (debug) |
 |------------------------|---------:|------------:|------:|--------:|------------:|-----:|-----------------:|
-| earthrise · dots       |     4000 |         355 |   372 |      88 |       13359 |    3 |             3020 |
-| earthrise · pixels     |     4000 |         448 |   464 |     112 |       18854 |    4 |             2822 |
-| misty forest · dots    |     1000 |          55 |    62 |      55 |        2248 |    2 |             3200 |
-| misty forest · pixels  |     1000 |         141 |   161 |     141 |        5921 |    5 |             3187 |
-| aurora fjord · dots    |      132 |        2522 |  2558 |   19106 |       88091 |  651 |             4859 |
-| aurora fjord · pixels  |      264 |        5228 |  5444 |   19803 |      200199 |  740 |             4674 |
-| alpine dawn · dots     |      132 |         501 |   622 |    3795 |       17622 |  130 |             5538 |
-| alpine dawn · pixels   |      264 |        1450 |  1657 |    5492 |       52596 |  194 |             5877 |
+| earthrise · dots       |     4000 |         355 |   372 |      88 |       13359 |    3 |             3089 |
+| earthrise · pixels     |     4000 |         448 |   464 |     112 |       18854 |    4 |             3022 |
+| misty forest · dots    |     1000 |          55 |    62 |      55 |        2248 |    2 |             3367 |
+| misty forest · pixels  |     1000 |         141 |   161 |     141 |        5921 |    5 |             3319 |
+| aurora fjord · dots    |     1000 |        3226 |  3281 |    3226 |      109939 |  107 |             4586 |
+| aurora fjord · pixels  |     1000 |        4943 |  5026 |    4943 |      192652 |  188 |             4561 |
+| alpine dawn · dots     |      132 |         501 |   622 |    3795 |       17622 |  130 |             5727 |
+| alpine dawn · pixels   |      264 |        1450 |  1657 |    5492 |       52596 |  194 |             5595 |
 
 What the numbers decide:
 
@@ -193,19 +200,26 @@ What the numbers decide:
   second in dots (`a_slow_piece_moves_a_few_cells_a_second`), so a
   session that is away costs about what one that idles did. Any piece
   offered as a slow one must pass that test at its cadence.
-- **A lively piece's cost is its bytes per second**, and the table is the
-  scale: alpine dawn in dots is a fifth of the aurora in dots at the same
-  fps. Pixels pay for the two styles' arithmetic with their rate: a pixel
-  cell is a true-colour pair and a scene's shimmer touches several times
-  the cells the halftone's few steps show, so the pixel style plays at the
-  quarter tier (`Cadence::Quarter`) and rounds its colours
-  (`PIXEL_STEP`), which together put it at about the dots' bytes a second
-  (before either, alpine dawn in pixels was 870 KB/s and the aurora 2
-  MB/s at the half tier). Changing a piece's rate is a cadence: a
-  `frame_ms` on the piece (`piece::cadence`), the tick tier it rides
-  (`App::ascii_edge`, `App::wake_hint`, `App::lively_ascii_visible`,
+- **The rule: no piece puts more than 200 KB/s on the wire** at its
+  cadence on a 200x50 terminal (`WIRE_BUDGET_KB_PER_S`,
+  `every_piece_stays_under_the_wire_budget`, a contract that runs with
+  the suite). A piece's cost is its bytes a frame times its frames a
+  second, and the only lever that never touches its look is the rate: a
+  piece that costs more plays slower, never the other way. That is how
+  the table came to be what it is. Alpine dawn's frame is cheap in dots
+  and earns the half tier. In pixels a cell is a true-colour pair and a
+  scene's shimmer touches several times the cells the halftone's few
+  steps show, so the pixel style rounds its colours (`PIXEL_STEP`) and
+  plays at the quarter tier, which lands it beside the dots (before
+  either, 870 KB/s). The aurora moves its whole sky every frame, so at
+  the half tier it was 651 KB/s in dots and 2 MB/s in pixels, and no rate
+  above a frame a second at a fifth of the clock fits; it plays at that.
+  Changing a piece's rate is a cadence: a `frame_ms` on the piece
+  (`piece::cadence`), the tick tier it rides (`App::ascii_edge`,
+  `App::wake_hint`, `App::lively_ascii_visible`,
   `App::quarter_ascii_visible`), and a re-run of the report with the new
-  row in this table.
+  row in this table. Alpine dawn in pixels sits at 194: a change to its
+  drawing re-runs the budget test before anything else.
 - **Compute is not the limit** at these sizes (a frame is a few
   milliseconds in debug, shared by every session through the cache); the
   wire is. A piece that needs the frame cache to miss (a per-session
@@ -215,8 +229,7 @@ What the numbers decide:
   terminal: the server spends a few milliseconds a frame on it, the
   client's terminal has to parse and paint it at its rate, and a terminal
   that cannot (tmux in the path, a non-GPU emulator) falls behind and
-  every key feels late. The bytes column is the number to hold a lively
-  piece to; the aurora is the ceiling, in either style.
+  every key feels late. The bytes column is the number the rule holds.
 - Measured in prod (`late_ssh_render*`, the output-budget metrics): not
   yet, for any piece; the bytes column is the proxy until then.
 
@@ -269,9 +282,10 @@ What the numbers decide:
    the bottom of `<slug>.rs` (`#[cfg(test)] #[path = "<slug>_test.rs"]
    mod <slug>_test;`): a golden test that is never declared never runs.
 5. Run the cost report (Cost) and add the piece's two rows to the table;
-   pick its cadence from them, not from how it looks: a slow candidate
-   goes into the budget test's list, a lively one gets the tier its cells
-   a second earn.
+   pick its cadence from them, not from how it looks: the fastest tier
+   that keeps both styles under the wire budget
+   (`every_piece_stays_under_the_wire_budget` fails the build otherwise),
+   and a slow candidate goes into the cell budget test's list too.
 
 ## 6. Gotchas
 
@@ -287,9 +301,9 @@ What the numbers decide:
   under the app lock; a test binary pays it on the first scene test.
 - ascii.rest's `paper` (a light page flipping the ramp) is not ported:
   every piece draws its dark-ground ramp.
-- A lively scene as the screensaver (a full-screen picture at ~7.5fps in
-  dots or ~3.8fps in pixels per away session, up to 200 KB a frame, Cost)
-  has not had its bandwidth measured in prod; `late_ssh_render*` and the
+- A lively scene as the screensaver (a full-screen picture per away
+  session at up to the wire budget, Cost) has not had its bandwidth
+  measured in prod; `late_ssh_render*` and the
   output-budget metrics are where it would show. The default is a slow
   piece for that reason: its cost is pinned by the cell budget test, not
   estimated.
