@@ -420,7 +420,7 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
 fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'static str)] {
     match kind {
         TileKind::Bonsai => &[("w", "tend")],
-        TileKind::Ascii => &[("[ ]", "piece"), ("Enter", "pick"), ("Z", "full")],
+        TileKind::Ascii => &[("[ ]", "piece"), ("Enter", "pick"), ("z", "full")],
         TileKind::Aquarium if view.aquarium_owned => &[("a", "feed")],
         TileKind::Aquarium => &[],
         TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],

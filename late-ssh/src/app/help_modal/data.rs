@@ -1537,7 +1537,7 @@ fn zen_help_lines() -> Vec<String> {
         "  a                 feed the tank (free, once a day, +100 chips)",
         "  m  - =  v x  v1-5 mute, volume, audio source, and station, as everywhere",
         "  click             pet the pet; it reads the rest of your session itself",
-        "  [ ]  Enter        on an ascii tile, step through the pieces, or pick one from the list; Z plays it full screen",
+        "  [ ]  Enter        on an ascii tile, step through the pieces, or pick one from the list; z plays it full screen",
         "  s1-4              with a live tile on the page, open that row of it (the sidebar's live panel, wider)",
         "  click             on a row of the live tile, the same",
         "  sprout            no page key: its Shop row (/shop, Companions) cuts it with - within the week",
