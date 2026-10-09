@@ -762,10 +762,11 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
 
 #[test]
 fn screensaver_reads_the_choice_and_falls_back_to_the_misty_forest() {
-    use crate::models::user::{
-        AsciiPiece, Scene, SceneStyle, Screensaver, TextPiece, extract_screensaver,
-    };
-    let misty_forest = Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots));
+    use crate::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver, extract_screensaver};
+    let misty_forest = Screensaver::Piece(AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Dots,
+    });
     assert_eq!(extract_screensaver(&json!({})), misty_forest);
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "off" })),
@@ -773,22 +774,28 @@ fn screensaver_reads_the_choice_and_falls_back_to_the_misty_forest() {
     );
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "aurora_fjord" })),
-        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots))
-    );
-    assert_eq!(
-        extract_screensaver(&json!({ "screensaver": "lava_lamp" })),
-        Screensaver::Piece(AsciiPiece::Text(TextPiece::LavaLamp))
+        Screensaver::Piece(AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Dots
+        })
     );
     assert_eq!(
         extract_screensaver(&json!({ "screensaver": "alpine_dawn_pixels" })),
-        Screensaver::Piece(AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Pixels))
+        Screensaver::Piece(AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels
+        })
     );
-    // A piece this binary does not know (a rolled-back deploy) plays the
-    // default rather than switching the screensaver off.
-    assert_eq!(
-        extract_screensaver(&json!({ "screensaver": "night_coast" })),
-        misty_forest
-    );
+    // A piece this binary does not know (a rolled-back deploy, or one of the
+    // text pieces that were dropped) plays the default rather than
+    // switching the screensaver off.
+    for gone in ["night_coast", "plasma", "lava_lamp", "donut"] {
+        assert_eq!(
+            extract_screensaver(&json!({ "screensaver": gone })),
+            misty_forest,
+            "{gone}"
+        );
+    }
     // Every stored key reads back as itself.
     for saver in
         std::iter::once(Screensaver::Off).chain(AsciiPiece::ALL.into_iter().map(Screensaver::Piece))
@@ -799,7 +806,7 @@ fn screensaver_reads_the_choice_and_falls_back_to_the_misty_forest() {
 
 #[test]
 fn screensaver_cycle_walks_off_then_every_piece() {
-    use crate::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver, TextPiece};
+    use crate::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
     let mut seen = vec![Screensaver::Off];
     let mut at = Screensaver::Off.cycle(true);
     while at != Screensaver::Off {
@@ -810,15 +817,30 @@ fn screensaver_cycle_walks_off_then_every_piece() {
         seen,
         vec![
             Screensaver::Off,
-            Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots)),
-            Screensaver::Piece(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Pixels)),
-            Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots)),
-            Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels)),
-            Screensaver::Piece(AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Dots)),
-            Screensaver::Piece(AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Pixels)),
-            Screensaver::Piece(AsciiPiece::Text(TextPiece::Plasma)),
-            Screensaver::Piece(AsciiPiece::Text(TextPiece::LavaLamp)),
-            Screensaver::Piece(AsciiPiece::Text(TextPiece::Donut)),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::MistyForest,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::MistyForest,
+                style: SceneStyle::Pixels
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AuroraFjord,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AuroraFjord,
+                style: SceneStyle::Pixels
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AlpineDawn,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AlpineDawn,
+                style: SceneStyle::Pixels
+            }),
         ]
     );
     for saver in seen {
@@ -1079,8 +1101,14 @@ fn radio_settings_read_the_station_and_pinned_slots() {
 #[test]
 fn an_ascii_piece_serialises_as_its_key() {
     use crate::models::user::{AsciiPiece, Scene, SceneStyle};
-    let piece = AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Pixels);
-    assert_eq!(serde_json::to_string(&piece).unwrap(), "\"alpine_dawn_pixels\"");
+    let piece = AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    };
+    assert_eq!(
+        serde_json::to_string(&piece).unwrap(),
+        "\"alpine_dawn_pixels\""
+    );
     assert_eq!(
         serde_json::from_str::<AsciiPiece>("\"alpine_dawn_pixels\"").unwrap(),
         piece

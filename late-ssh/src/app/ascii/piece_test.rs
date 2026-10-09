@@ -1,8 +1,7 @@
-use late_core::models::user::{AsciiPiece, Scene, SceneStyle, TextPiece};
+use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 
 use super::{
-    Cadence, FRAME_MS, Picture, SLOW_FRAME_MS, cadence, frame_index, js_i32, js_round, picture,
-    seconds,
+    Cadence, FRAME_MS, SLOW_FRAME_MS, cadence, frame_index, js_i32, js_round, picture, seconds,
 };
 
 #[test]
@@ -25,53 +24,54 @@ fn js_i32_truncates_toward_zero_and_wraps() {
 /// hundred seconds of wall time are one second of its fog.
 #[test]
 fn a_frame_edge_is_the_half_tier_or_the_slow_second() {
-    let donut = AsciiPiece::Text(TextPiece::Donut);
-    let forest = AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots);
+    let aurora = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
+    };
+    let forest = AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Dots,
+    };
     assert_eq!((FRAME_MS, SLOW_FRAME_MS), (132, 1000));
-    assert_eq!(cadence(donut), Cadence::Half);
+    assert_eq!(cadence(aurora), Cadence::Half);
     assert_eq!(cadence(forest), Cadence::Slow);
     assert_eq!(
-        cadence(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Pixels)),
+        cadence(AsciiPiece {
+            scene: Scene::MistyForest,
+            style: SceneStyle::Pixels
+        }),
         Cadence::Slow,
         "a scene's cadence is the scene's in either style"
     );
-    assert_eq!(frame_index(donut, 131), 0);
-    assert_eq!(frame_index(donut, 132), 1);
+    assert_eq!(frame_index(aurora, 131), 0);
+    assert_eq!(frame_index(aurora, 132), 1);
     assert_eq!(frame_index(forest, 999), 0);
     assert_eq!(frame_index(forest, 1000), 1);
-    assert_eq!(seconds(donut, 0), 0.0);
-    assert_eq!(seconds(donut, 1000), 132.0);
+    assert_eq!(seconds(aurora, 0), 0.0);
+    assert_eq!(seconds(aurora, 1000), 132.0);
     assert_eq!(seconds(forest, 100), 1.0);
 }
 
 #[test]
-fn sessions_asking_for_one_frame_share_it() {
-    let Picture::Text(first) = picture(AsciiPiece::Text(TextPiece::Donut), 7, 80, 24) else {
-        panic!("the donut is fixed-size text art");
+fn sessions_asking_for_one_frame_share_it_in_either_style() {
+    let dots = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
     };
-    let Picture::Text(again) = picture(AsciiPiece::Text(TextPiece::Donut), 7, 120, 40) else {
-        panic!("the donut is fixed-size text art");
+    let pixels = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Pixels,
     };
-    assert!(std::sync::Arc::ptr_eq(&first, &again));
+    let first = picture(dots, 7);
+    assert!(std::sync::Arc::ptr_eq(&first, &picture(dots, 7)));
+    assert!(std::sync::Arc::ptr_eq(&first, &picture(pixels, 7)));
 }
 
 #[test]
-fn every_piece_draws_a_picture_of_its_kind() {
+fn every_piece_is_a_scene_on_the_originals_grid() {
     for piece in AsciiPiece::ALL {
-        match (piece, picture(piece, 3, 30, 10)) {
-            (AsciiPiece::Scene(..), Picture::Shaded(scene)) => {
-                assert_eq!((scene.cols, scene.rows), (200, 100));
-            }
-            (AsciiPiece::Text(TextPiece::LavaLamp), Picture::Text(art)) => {
-                assert_eq!((art.cols, art.rows), (30, 27));
-            }
-            (AsciiPiece::Text(TextPiece::Donut), Picture::Text(art)) => {
-                assert_eq!((art.cols, art.rows), (40, 22));
-            }
-            (AsciiPiece::Text(TextPiece::Plasma), Picture::Field(art)) => {
-                assert_eq!((art.cols, art.rows), (30, 10));
-            }
-            (piece, _) => panic!("{} drew the wrong kind of picture", piece.label()),
-        }
+        let scene = picture(piece, 3);
+        assert_eq!((scene.cols, scene.rows), (200, 100), "{}", piece.label());
+        assert_eq!(scene.cells.len(), 200 * 100, "{}", piece.label());
     }
 }

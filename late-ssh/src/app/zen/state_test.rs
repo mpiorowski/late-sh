@@ -320,9 +320,15 @@ fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
 /// forgotten when the tile becomes something else, as a chat tile's room is.
 #[test]
 fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, TextPiece};
-    let aurora = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
-    let donut = AsciiPiece::Text(TextPiece::Donut);
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
+    let aurora = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
+    };
+    let dawn = AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    };
     let mut zen = ZenState::new(RiceLayout {
         root: Node::leaf(TileKind::Ascii),
         look: Look::default(),
@@ -331,26 +337,36 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
     assert!(zen.cycle_focused_piece(true));
     assert_eq!(
         zen.focused_piece(),
-        Some(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels))
+        Some(AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Pixels
+        })
     );
     // Back past the aurora and the misty forest's two styles, off the
     // front of the list onto its end.
     for _ in 0..4 {
         assert!(zen.cycle_focused_piece(false));
     }
-    assert_eq!(zen.focused_piece(), Some(donut), "it wraps");
+    assert_eq!(zen.focused_piece(), Some(dawn), "it wraps");
 
     let stored = serde_json::to_string(&zen.rice).expect("serialize");
-    assert!(stored.contains("\"piece\":\"donut\""), "stored by key: {stored}");
+    assert!(
+        stored.contains("\"piece\":\"alpine_dawn_pixels\""),
+        "stored by key: {stored}"
+    );
     let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
-    assert_eq!(restored.root.piece_at(0), Some(donut));
+    assert_eq!(restored.root.piece_at(0), Some(dawn));
 
-    assert!(zen.set_focused_piece(AsciiPiece::Text(TextPiece::Plasma)));
-    assert_eq!(zen.focused_piece(), Some(AsciiPiece::Text(TextPiece::Plasma)));
-    assert!(zen.set_focused_piece(donut));
+    let forest = AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Dots,
+    };
+    assert!(zen.set_focused_piece(forest));
+    assert_eq!(zen.focused_piece(), Some(forest));
+    assert!(zen.set_focused_piece(dawn));
 
     assert!(zen.split_focused(true));
-    assert_eq!(zen.rice.root.piece_at(0), Some(donut));
+    assert_eq!(zen.rice.root.piece_at(0), Some(dawn));
     assert_eq!(zen.rice.root.piece_at(1), None, "the new tile is blank");
     assert!(
         !zen.cycle_focused_piece(true),
@@ -376,26 +392,26 @@ fn a_layout_without_pieces_reads_back_unchanged() {
     assert_eq!(restored, RiceLayout::default());
 }
 
-/// A piece key this build does not know (one dropped later, or a deploy
-/// rolled back past it) costs that tile its pick, not the user the whole
-/// layout: the tile plays the default and every other leaf reads as
+/// A piece key this build does not know (one dropped, like the donut, or a
+/// deploy rolled back past it) costs that tile its pick, not the user the
+/// whole layout: the tile plays the default and every other leaf reads as
 /// stored.
 #[test]
 fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
-    use late_core::models::user::{AsciiPiece, TextPiece};
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
     let room = Uuid::from_u128(7);
     let stored = serde_json::json!({
         "root": {
             "node": "split",
             "dir": "row",
             "share": 500,
-            "first": { "node": "leaf", "kind": "ascii", "piece": "night_coast" },
+            "first": { "node": "leaf", "kind": "ascii", "piece": "donut" },
             "second": {
                 "node": "split",
                 "dir": "column",
                 "share": 400,
                 "first": { "node": "leaf", "kind": "chat", "room": room },
-                "second": { "node": "leaf", "kind": "ascii", "piece": "donut" }
+                "second": { "node": "leaf", "kind": "ascii", "piece": "alpine_dawn_pixels" }
             }
         },
         "look": Look::default()
@@ -407,6 +423,9 @@ fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
     assert_eq!(restored.root.leaf_rooms()[1], Some(room));
     assert_eq!(
         restored.root.piece_at(2),
-        Some(AsciiPiece::Text(TextPiece::Donut))
+        Some(AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels
+        })
     );
 }

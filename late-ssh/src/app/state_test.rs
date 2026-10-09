@@ -2,8 +2,8 @@ use crate::app::state::App;
 use crate::test_helpers::{
     SessionWorld, make_app, make_app_in_world, new_test_db, render_plain, wait_for_render_contains,
 };
-use late_core::test_utils::TestDb;
 use late_core::models::leaderboard::{LeaderboardData, LeaderboardEntry};
+use late_core::test_utils::TestDb;
 use late_core::test_utils::create_test_user;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -200,14 +200,12 @@ async fn app_under_the_aurora(name: &str) -> (TestDb, App) {
     use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, name).await;
-    let mut app = make_app_in_world(
-        test_db.db.clone(),
-        user.id,
-        name,
-        SessionWorld::default(),
-    );
+    let mut app = make_app_in_world(test_db.db.clone(), user.id, name, SessionWorld::default());
     app.set_screen(crate::app::common::primitives::Screen::Dashboard);
-    let aurora = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
+    let aurora = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
+    };
     app.profile_state.profile.screensaver = Screensaver::Piece(aurora);
     assert_eq!(app.screensaver(), None, "a session that is here has none");
     app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
@@ -235,7 +233,10 @@ async fn the_screensaver_defaults_to_the_misty_forest() {
     assert!(app.away);
     assert_eq!(
         app.screensaver(),
-        Some(AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots))
+        Some(AsciiPiece {
+            scene: Scene::MistyForest,
+            style: SceneStyle::Dots
+        })
     );
 }
 

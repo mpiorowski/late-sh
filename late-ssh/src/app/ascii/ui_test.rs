@@ -1,9 +1,9 @@
-use late_core::models::user::{AsciiPiece, Scene, SceneStyle, TextPiece};
+use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, style::Color};
 
 use super::draw_piece;
 use crate::app::ascii::{
-    alpine_dawn, aurora_fjord, donut, misty_forest,
+    alpine_dawn, aurora_fjord, misty_forest,
     piece::{SLOW_FRAME_MS, Shade, pixel},
 };
 
@@ -15,37 +15,6 @@ fn draw(piece: AsciiPiece, cols: u16, rows: u16) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
-fn row_text(buffer: &Buffer, row: u16) -> String {
-    (0..buffer.area.width)
-        .map(|col| buffer[(col, row)].symbol().to_string())
-        .collect()
-}
-
-#[test]
-fn text_art_sits_centred_in_a_larger_area() {
-    let buffer = draw(AsciiPiece::Text(TextPiece::Donut), 60, 30);
-    let art = donut::frame(0.0);
-    // 60 - 40 leaves 10 columns either side; 30 - 22 leaves 4 rows above.
-    for row in 0..art.rows {
-        let line: String = (0..art.cols).map(|col| art.at(col, row)).collect();
-        let drawn = row_text(&buffer, 4 + row as u16);
-        assert_eq!(&drawn[10..50], line, "donut row {row}");
-        assert_eq!(drawn[..10].trim(), "");
-    }
-}
-
-#[test]
-fn text_art_larger_than_the_area_keeps_its_middle() {
-    let buffer = draw(AsciiPiece::Text(TextPiece::Donut), 20, 10);
-    let art = donut::frame(0.0);
-    // 40 columns into 20 crops 10 from each side; 22 rows into 10 crops 6
-    // from the top.
-    for row in 0..10u16 {
-        let line: String = (10..30).map(|col| art.at(col, 6 + row as usize)).collect();
-        assert_eq!(row_text(&buffer, row), line, "cropped row {row}");
-    }
-}
-
 #[test]
 fn a_scene_covers_every_cell_on_its_own_ground_in_either_style() {
     for (scene, [r, g, b]) in [
@@ -55,7 +24,10 @@ fn a_scene_covers_every_cell_on_its_own_ground_in_either_style() {
     ] {
         let ground = Color::Rgb(r, g, b);
         for style in SceneStyle::ALL {
-            let piece = AsciiPiece::Scene(scene, style);
+            let piece = AsciiPiece {
+                scene: scene,
+                style: style,
+            };
             for (cols, rows) in [(200, 50), (80, 24), (31, 9)] {
                 let buffer = draw(piece, cols, rows);
                 let mut lit = 0;
@@ -108,7 +80,10 @@ fn the_aurora_at_its_native_aspect_is_its_own_pixels_two_to_a_cell() {
     // 200x50 terminal cells are the scene's 200x100 square cells exactly:
     // the upper scene row is the cell's ink, the lower its background.
     let buffer = draw(
-        AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Pixels),
+        AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Pixels,
+        },
         200,
         50,
     );
@@ -157,7 +132,10 @@ fn an_empty_area_draws_nothing() {
 #[test]
 fn the_slow_piece_moves_a_few_cells_a_frame() {
     const BUDGET: usize = 100;
-    let piece = AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots);
+    let piece = AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Dots,
+    };
     let draw_at = |clock_ms: u64| {
         let mut terminal = Terminal::new(TestBackend::new(200, 50)).expect("test terminal");
         terminal

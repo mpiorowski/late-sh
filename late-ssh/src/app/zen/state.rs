@@ -133,7 +133,10 @@ pub enum Node {
 }
 
 /// What a new ascii tile plays.
-pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots);
+pub const DEFAULT_PIECE: AsciiPiece = AsciiPiece {
+    scene: Scene::AuroraFjord,
+    style: SceneStyle::Dots,
+};
 
 /// A stored `piece` key: a piece this build knows, or `None` for one it
 /// does not, so the tile falls back to [`DEFAULT_PIECE`] and the rest of

@@ -310,8 +310,10 @@ async fn the_screensaver_holds_the_half_tier() {
     use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
     let (_test_db, mut app) = chat_compose_app("tick-saver").await;
     app.set_screen(Screen::Dashboard);
-    app.profile_state.profile.screensaver =
-        Screensaver::Piece(AsciiPiece::Scene(Scene::AuroraFjord, SceneStyle::Dots));
+    app.profile_state.profile.screensaver = Screensaver::Piece(AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
+    });
     app.last_active_at = Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
     assert!(app.screensaver().is_some(), "the chosen piece is up");

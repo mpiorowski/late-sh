@@ -1,4 +1,4 @@
-use late_core::models::user::{AsciiPiece, Scene, SceneStyle, TextPiece};
+use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 
 use super::PiecePickerState;
 
@@ -6,21 +6,42 @@ use super::PiecePickerState;
 fn opens_on_the_piece_playing_and_walks_the_list_without_wrapping() {
     let mut picker = PiecePickerState::default();
     assert!(!picker.is_open());
-    picker.open(AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Pixels));
+    picker.open(AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    });
     assert!(picker.is_open());
     assert_eq!(
         picker.selected(),
-        AsciiPiece::Scene(Scene::AlpineDawn, SceneStyle::Pixels)
+        AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels
+        }
     );
     picker.move_cursor(-10);
     assert_eq!(
         picker.selected(),
-        AsciiPiece::Scene(Scene::MistyForest, SceneStyle::Dots)
+        AsciiPiece {
+            scene: Scene::MistyForest,
+            style: SceneStyle::Dots
+        }
     );
     picker.move_cursor(10);
-    assert_eq!(picker.selected(), AsciiPiece::Text(TextPiece::Donut));
-    picker.set_cursor(6);
-    assert_eq!(picker.selected(), AsciiPiece::Text(TextPiece::Plasma));
+    assert_eq!(
+        picker.selected(),
+        AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels
+        }
+    );
+    picker.set_cursor(3);
+    assert_eq!(
+        picker.selected(),
+        AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Pixels
+        }
+    );
     picker.close();
     assert!(!picker.is_open());
 }

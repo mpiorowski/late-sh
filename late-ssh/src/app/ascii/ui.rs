@@ -1,11 +1,10 @@
 //! Drawing a piece into any rect: the Zen ascii tile, zoomed or not, and the
 //! away screensaver over the whole terminal.
 
-use late_core::models::user::{AsciiPiece, SceneStyle, TextPiece};
+use late_core::models::user::{AsciiPiece, SceneStyle};
 use ratatui::{Frame, layout::Rect, style::Color};
 
-use super::piece::{Picture, ShadedFrame, TextFrame, frame_index, picture, pixel};
-use crate::app::common::theme;
+use super::piece::{ShadedFrame, frame_index, picture, pixel};
 
 /// Draw `piece` over `area` as it stands at `clock_ms` on the shared clock
 /// (`piece::clock_now`): the frame edge is the piece's own, by its cadence.
@@ -13,35 +12,10 @@ pub(crate) fn draw_piece(frame: &mut Frame, area: Rect, piece: AsciiPiece, clock
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let picture = picture(
-        piece,
-        frame_index(piece, clock_ms),
-        area.width as usize,
-        area.height as usize,
-    );
-    match (piece, picture) {
-        (AsciiPiece::Scene(_, SceneStyle::Pixels), Picture::Shaded(scene)) => {
-            draw_pixels(frame, area, &scene)
-        }
-        (AsciiPiece::Scene(_, SceneStyle::Dots), Picture::Shaded(scene)) => {
-            draw_dots(frame, area, &scene)
-        }
-        (AsciiPiece::Text(text), Picture::Text(art) | Picture::Field(art)) => {
-            draw_text(frame, area, &art, ink(text))
-        }
-        (AsciiPiece::Scene(..), Picture::Text(_) | Picture::Field(_))
-        | (AsciiPiece::Text(_), Picture::Shaded(_)) => {
-            unreachable!("piece::picture draws a scene shaded and a text piece as text")
-        }
-    }
-}
-
-/// The one colour a text piece is drawn in.
-fn ink(piece: TextPiece) -> Color {
-    match piece {
-        TextPiece::Plasma => theme::TEXT_DIM(),
-        TextPiece::LavaLamp => theme::AMBER_GLOW(),
-        TextPiece::Donut => theme::AMBER(),
+    let scene = picture(piece, frame_index(piece, clock_ms));
+    match piece.style {
+        SceneStyle::Pixels => draw_pixels(frame, area, &scene),
+        SceneStyle::Dots => draw_dots(frame, area, &scene),
     }
 }
 
@@ -57,9 +31,11 @@ fn sampling(area: Rect, scene: &ShadedFrame) -> impl Fn(u16, u16) -> (usize, usi
     let x0 = (cols - w * per) / 2.0;
     let y0 = (rows - 2.0 * h * per) / 2.0;
     move |tx, ty| {
-        let col = ((x0 + (f64::from(tx) + 0.5) * per).floor().max(0.0) as usize).min(scene.cols - 1);
+        let col =
+            ((x0 + (f64::from(tx) + 0.5) * per).floor().max(0.0) as usize).min(scene.cols - 1);
         let row = |half: f64| {
-            ((y0 + (2.0 * f64::from(ty) + half) * per).floor().max(0.0) as usize).min(scene.rows - 1)
+            ((y0 + (2.0 * f64::from(ty) + half) * per).floor().max(0.0) as usize)
+                .min(scene.rows - 1)
         };
         (col, row(0.5), row(1.5))
     }
@@ -164,7 +140,9 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
     const LOWER: [u32; 4] = [0, 0x04, 0x84, 0xe4];
     let levels = sharpened(scene, SURROUND, SHARPEN);
     let tone = |level: f64| {
-        let t = ((level - FLOOR) / (CEILING - FLOOR)).clamp(0.0, 1.0).powf(CURVE);
+        let t = ((level - FLOOR) / (CEILING - FLOOR))
+            .clamp(0.0, 1.0)
+            .powf(CURVE);
         (t * TONES).round() / TONES
     };
     let size = |level: f64, tone: f64| match (tone > 0.0, level) {
@@ -179,7 +157,10 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
             let (col, upper, lower) = at(tx, ty);
             let top = scene.cells[upper * scene.cols + col];
             let bottom = scene.cells[lower * scene.cols + col];
-            let (l_top, l_bottom) = (levels[upper * scene.cols + col], levels[lower * scene.cols + col]);
+            let (l_top, l_bottom) = (
+                levels[upper * scene.cols + col],
+                levels[lower * scene.cols + col],
+            );
             let Some(cell) = buffer.cell_mut((area.x + tx, area.y + ty)) else {
                 continue;
             };
@@ -204,31 +185,6 @@ fn draw_dots(frame: &mut Frame, area: Rect, scene: &ShadedFrame) {
             cell.set_char(glyph)
                 .set_fg(Color::Rgb(ink[0], ink[1], ink[2]))
                 .set_bg(ground);
-        }
-    }
-}
-
-/// Text art centred in the area; art larger than the area is cropped evenly
-/// from both sides, so the middle of the piece stays in view.
-fn draw_text(frame: &mut Frame, area: Rect, art: &TextFrame, ink: Color) {
-    let (w, h) = (area.width as usize, area.height as usize);
-    let (pad_x, crop_x) = match art.cols <= w {
-        true => ((w - art.cols) / 2, 0),
-        false => (0, (art.cols - w) / 2),
-    };
-    let (pad_y, crop_y) = match art.rows <= h {
-        true => ((h - art.rows) / 2, 0),
-        false => (0, (art.rows - h) / 2),
-    };
-    let buffer = frame.buffer_mut();
-    for row in 0..art.rows.min(h) {
-        for col in 0..art.cols.min(w) {
-            let glyph = art.at(col + crop_x, row + crop_y);
-            let x = area.x + (pad_x + col) as u16;
-            let y = area.y + (pad_y + row) as u16;
-            if let Some(cell) = buffer.cell_mut((x, y)) {
-                cell.set_char(glyph).set_fg(ink);
-            }
         }
     }
 }

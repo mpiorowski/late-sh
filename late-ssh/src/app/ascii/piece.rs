@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use late_core::MutexRecover;
-use late_core::models::user::{AsciiPiece, Scene, TextPiece};
+use late_core::models::user::{AsciiPiece, Scene};
 
 /// How a piece plays: how often it draws a new frame, and how fast its play
 /// time runs. What a session pays for a piece on screen is the cells that
@@ -48,11 +48,9 @@ impl Cadence {
 /// The pace a piece plays at. A scene's cadence is the scene's, whatever
 /// style draws it.
 pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
-    match piece {
-        AsciiPiece::Scene(Scene::MistyForest, _) => Cadence::Slow,
-        AsciiPiece::Scene(Scene::AuroraFjord | Scene::AlpineDawn, _) | AsciiPiece::Text(_) => {
-            Cadence::Half
-        }
+    match piece.scene {
+        Scene::MistyForest => Cadence::Slow,
+        Scene::AuroraFjord | Scene::AlpineDawn => Cadence::Half,
     }
 }
 
@@ -70,39 +68,6 @@ pub(crate) const SLOW_FRAME_MS: u64 = 1000;
 /// forest plays its beams faster than this on its own (`misty_forest::crawl`).
 /// `ui_test.rs` holds the cell budget; the count grows linearly with this.
 pub(crate) const SLOW_RATE: f64 = 0.01;
-
-/// A text piece's frame: `rows` lines of `cols` glyphs, drawn in one ink.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TextFrame {
-    pub cols: usize,
-    pub rows: usize,
-    pub cells: Vec<char>,
-}
-
-impl TextFrame {
-    pub(crate) fn blank(cols: usize, rows: usize) -> Self {
-        Self {
-            cols,
-            rows,
-            cells: vec![' '; cols * rows],
-        }
-    }
-
-    pub(crate) fn at(&self, col: usize, row: usize) -> char {
-        self.cells[row * self.cols + col]
-    }
-
-    /// The frame as ascii.rest prints it: lines joined by `\n`. What the
-    /// golden frames are compared against.
-    #[cfg(test)]
-    pub(crate) fn to_text(&self) -> String {
-        self.cells
-            .chunks(self.cols)
-            .map(|line| line.iter().collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
 
 /// One cell of a shaded scene: the brightness the original's halftone turns
 /// into dot size, the colour it shades the cell with before any of that,
@@ -138,17 +103,6 @@ pub(crate) fn pixel(shade: Shade, ground: [u8; 3]) -> [u8; 3] {
     out
 }
 
-/// A frame, ready to draw.
-#[derive(Clone, Debug)]
-pub(crate) enum Picture {
-    /// A scene shaded per cell, scaled to cover the area it is drawn in.
-    Shaded(Arc<ShadedFrame>),
-    /// Fixed-size text art, centred in the area.
-    Text(Arc<TextFrame>),
-    /// A field drawn at the area's own size (plasma).
-    Field(Arc<TextFrame>),
-}
-
 /// Build what the scenes build once per process (alpine dawn's raymarched
 /// range, about half a second of one core; the aurora's and the misty
 /// forest's land). Called from `main` on a blocking thread at startup, so
@@ -179,71 +133,48 @@ pub(crate) fn seconds(piece: AsciiPiece, frame: u64) -> f64 {
     frame as f64 * cadence.frame_ms() as f64 / 1000.0 * cadence.rate()
 }
 
-/// The piece's frame at `frame` (one of its own edges, `frame_index`), for
-/// an area of `cols` x `rows` cells. The fixed-size pieces come from the
-/// shared cache; the field is drawn to the area, so it is computed per call
-/// (it is the cheapest piece). A scene's frame is the same in either style,
-/// so both share one entry.
-pub(crate) fn picture(piece: AsciiPiece, frame: u64, cols: usize, rows: usize) -> Picture {
+/// The piece's frame at `frame` (one of its own edges, `frame_index`), from
+/// the shared cache. A scene's frame is the same in either style, so both
+/// share one entry.
+pub(crate) fn picture(piece: AsciiPiece, frame: u64) -> Arc<ShadedFrame> {
     let t = seconds(piece, frame);
-    match piece {
-        AsciiPiece::Scene(scene, _) => cached(Fixed::Scene(scene), frame, || {
-            Picture::Shaded(Arc::new(match scene {
-                Scene::MistyForest => super::misty_forest::crawl(t),
-                Scene::AuroraFjord => super::aurora_fjord::frame(t),
-                Scene::AlpineDawn => super::alpine_dawn::frame(t),
-            }))
-        }),
-        AsciiPiece::Text(TextPiece::LavaLamp) => {
-            cached(Fixed::Text(TextPiece::LavaLamp), frame, || {
-                Picture::Text(Arc::new(super::lava_lamp::frame(t)))
-            })
-        }
-        AsciiPiece::Text(TextPiece::Donut) => cached(Fixed::Text(TextPiece::Donut), frame, || {
-            Picture::Text(Arc::new(super::donut::frame(t)))
-        }),
-        AsciiPiece::Text(TextPiece::Plasma) => {
-            Picture::Field(Arc::new(super::plasma::frame(t, cols, rows)))
-        }
-    }
-}
-
-/// What the cache holds a frame of: a scene (whatever style draws it) or a
-/// fixed-size text piece.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Fixed {
-    Scene(Scene),
-    Text(TextPiece),
+    cached(piece.scene, frame, || {
+        Arc::new(match piece.scene {
+            Scene::MistyForest => super::misty_forest::crawl(t),
+            Scene::AuroraFjord => super::aurora_fjord::frame(t),
+            Scene::AlpineDawn => super::alpine_dawn::frame(t),
+        })
+    })
 }
 
 struct Cached {
-    piece: Fixed,
+    scene: Scene,
     frame: u64,
-    picture: Picture,
+    picture: Arc<ShadedFrame>,
 }
 
-/// The latest frame of each fixed-size piece. Computed outside the lock, so
-/// a session drawing the aurora never holds up another drawing the donut;
-/// two sessions racing on one edge both compute it and the second write
-/// wins, which costs a frame of CPU and nothing else.
-fn cached(piece: Fixed, frame: u64, make: impl FnOnce() -> Picture) -> Picture {
+/// The latest frame of each scene. Computed outside the lock, so a session
+/// drawing the aurora never holds up another drawing the forest; two
+/// sessions racing on one edge both compute it and the second write wins,
+/// which costs a frame of CPU and nothing else.
+fn cached(scene: Scene, frame: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> Arc<ShadedFrame> {
     static CACHE: Mutex<Vec<Cached>> = Mutex::new(Vec::new());
     if let Some(hit) = CACHE
         .lock_recover()
         .iter()
-        .find(|entry| entry.piece == piece && entry.frame == frame)
+        .find(|entry| entry.scene == scene && entry.frame == frame)
     {
         return hit.picture.clone();
     }
     let picture = make();
     let mut cache = CACHE.lock_recover();
-    match cache.iter_mut().find(|entry| entry.piece == piece) {
+    match cache.iter_mut().find(|entry| entry.scene == scene) {
         Some(entry) => {
             entry.frame = frame;
             entry.picture = picture.clone();
         }
         None => cache.push(Cached {
-            piece,
+            scene,
             frame,
             picture: picture.clone(),
         }),
