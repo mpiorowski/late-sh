@@ -25,7 +25,7 @@ locals {
   # a :bootstrap placeholder (a fresh disaster-recovery apply then needs one
   # release per component to roll real images out).
   image_tags = {
-    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "dcss", "usurper", "brogue", "bashquest"] :
+    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "zork", "dcss", "usurper", "brogue", "bashquest"] :
     component => lookup(var.IMAGE_TAGS, component, "ghcr.io/mpiorowski/late-sh/late-${component}:bootstrap")
   }
 

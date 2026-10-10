@@ -352,6 +352,10 @@ pub struct SessionConfig {
     pub codekeep_host: String,
     pub codekeep_port: u16,
     pub codekeep_secret: String,
+    pub zork_enabled: bool,
+    pub zork_host: String,
+    pub zork_port: u16,
+    pub zork_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -913,6 +917,12 @@ pub struct App {
     pub(crate) codekeep_host: String,
     pub(crate) codekeep_port: u16,
     pub(crate) codekeep_secret: String,
+    pub(crate) zork_state: Option<crate::app::door::zork::state::State>,
+    pub(crate) zork_term: String,
+    pub(crate) zork_enabled: bool,
+    pub(crate) zork_host: String,
+    pub(crate) zork_port: u16,
+    pub(crate) zork_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1839,6 +1849,12 @@ impl App {
             codekeep_host: config.codekeep_host,
             codekeep_port: config.codekeep_port,
             codekeep_secret: config.codekeep_secret,
+            zork_state: None,
+            zork_term: config.term.clone(),
+            zork_enabled: config.zork_enabled,
+            zork_host: config.zork_host,
+            zork_port: config.zork_port,
+            zork_secret: config.zork_secret,
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
@@ -2321,6 +2337,21 @@ impl App {
         self.bashquest_state = None;
     }
 
+    pub(crate) fn enter_zork(&mut self) {
+        if self.zork_state.is_none() {
+            self.zork_state = Some(crate::app::door::zork::state::State::new(
+                crate::app::door::zork::state::StateConfig {
+                    user_id: self.user_id,
+                    host: self.zork_host.clone(),
+                    port: self.zork_port,
+                    secret: self.zork_secret.clone(),
+                    term: self.zork_term.clone(),
+                    enabled: self.zork_enabled,
+                    repaint: self.repaint_signal.clone(),
+                },
+            ));
+        }
+    }
     pub(crate) fn enter_codekeep(&mut self) {
         if self.codekeep_state.is_some() {
             return;
@@ -2498,6 +2529,9 @@ impl App {
             }
             if screen == Screen::Bashquest {
                 self.enter_bashquest();
+            }
+            if screen == Screen::Zork {
+                self.enter_zork();
             }
             if screen == Screen::Codekeep {
                 self.enter_codekeep();
@@ -2685,6 +2719,9 @@ impl App {
         }
         if self.screen == Screen::Bashquest {
             self.enter_bashquest();
+        }
+        if self.screen == Screen::Zork {
+            self.enter_zork();
         }
         if self.screen == Screen::Codekeep {
             self.enter_codekeep();
@@ -3055,6 +3092,21 @@ impl App {
             && state.in_exit_grace()
         {
             return;
+        }
+        if self.screen == Screen::Zork
+            && let Some(state) = self.zork_state.as_mut()
+        {
+            if state.in_exit_grace() {
+                return;
+            }
+            if state.game_visible() {
+                if data == DOOR_DETACH_KEY {
+                    self.detach_door_game();
+                } else {
+                    state.forward_input(data);
+                }
+                return;
+            }
         }
         // CodeKeep is another network PTY door. Ink owns every key while the
         // game is live; Ctrl-C triggers upstream's graceful save-and-exit.

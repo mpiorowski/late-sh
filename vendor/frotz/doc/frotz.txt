@@ -1,0 +1,413 @@
+FROTZ V2.55
+An interpreter for all Infocom and other Z-Machine games.
+Complies with the Z-Machine Standard version 1.1.
+
+Originally written by Stefan Jokisch in 1995-1997.
+Ported to Unix by Galen Hazelwood.
+Reference code Unix and DOS ports are maintained by David Griffith.
+
+Frotz is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This archive contains only the DOS executable for Frotz.  For the
+source code and to report bugs, please see Frotz's Gitlab page at
+https://gitlab.com/DavidGriffith/frotz.  The source can also be
+found at the Interactive Fiction Archive at http://ifarchive.org/
+
+Frotz is distributed under the GNU General Public License version 2 or (at
+your option) and later version.
+https://www.gnu.org/licenses/gpl-2.0.en.html
+
+This software is offered as-is with no warranty or liability.  If you
+find a bug or would like Frotz to do something it doesn't currently do,
+please visit the above Gitlab website and report your concerns.
+
+
+Syntax: frotz [options] story-file
+
+    -d #     select display mode
+
+    Available display modes are
+
+    0 = monochrome
+    1 = text
+    2 = CGA
+    3 = MCGA
+    4 = EGA
+    5 = AMIGA
+
+    When no display mode is given, Frotz tries to select a mode that
+    is suitable for the given story file. In theory every story file
+    can be run under every display mode; in practice, however, there
+    are story files that don't work well under certain display modes.
+
+    -f #     set the foreground colour
+    -b #     set the background colour
+    -F #     set the foreground colour for reversed text
+    -B #     set the background colour for reversed text
+    -e #     set the emphasis colour
+
+    The emphasis colour is used in text mode instead of underlining;
+    its default value is yellow. The reverse mode colours can be set
+    to change the look of the status line; if you prefer the look of
+    Infocom's V3 interpreter, try -F4 to turn the text on the status
+    line red. All colours range from 0 to 15.
+
+    Colour codes are as follows:
+    0	black
+    1	blue
+    2	green
+    3	cyan
+    4	red
+    5	magenta
+    6	brown
+    7	light grey
+    8	grey 
+    9	light blue
+    10	light green
+    11	light cyan
+    12	light red
+    13	light magenta
+    14	yellow
+    15	white
+
+    For V6 games under Amiga mode switches -F and -B don't work; and
+    even -f and -b accept only certain colours.
+
+    -g #     choose a font for Amiga mode
+
+    Available fonts are
+
+    1 = Sans Serif (default)
+    2 = Comic Style
+    3 = Times
+    4 = Serif
+
+    This switch sets the proportional-width font used in Amiga mode;
+    if you don't like these fonts at all, try -g0 to get back to the
+    fixed-width system font.
+
+    -i	     ignore runtime errors
+
+    Set this switch and Frotz no longer worries about anything the
+    game tries to do. This can help you to get around fatal errors.
+
+    -T       bold typing
+
+    In modes 2, 4 and 5 this switch enables boldface characters for
+    location names and other highlighted text bits. Sadly, boldface
+    text tends to be less readable, especially when capital letters
+    are used, which is why this is only an option.
+
+    -w #     set the screen width
+    -h #     set the screen height
+    -l #     set the left margin
+    -r #     set the right margin
+
+    Setting the screen format can be useful if you are running Frotz
+    under Microsoft Windows, or if you want to test a game on a more
+    narrow screen. Setting the margins is a matter of taste; Infocom
+    interpreters usually set a right margin of one character (-r1).
+
+    -S #     set the width of the transscript file
+
+    By default your transscript files are formatted to a width of 80
+    columns per line -- regardless of the current screen width. This
+    switch allows you to change this setting. In particular, use -S0
+    to deactivate automatic line splitting in transscript files.
+
+    -c #     set the number of context lines
+
+    When the game prints several pages of text in a row, Frotz stops
+    for a more prompt after each page. The first prompt appears when
+    your input reaches the top of the window. Further prompts appear
+    when the previous page has been scrolled off the window. You can
+    use this switch to make the latter more prompts appear earlier.
+
+    -u #     set the number of undo slots for multiple undo
+
+    Frotz tries to allocate as much conventional memory as possible
+    for multiple UNDO. If this strategy causes some kind of problem,
+    use this switch to set a tighter limit. In particular, you might
+    want to turn off the UNDO feature altogether by typing -u0.
+
+    -s #     set the random number seed
+
+    The given seed value is used as the initial seed value on every
+    restart. This is helpful for testing games like 'Curses' which
+    make random decisions before the first input (such that the hot
+    key Alt-S does not really help). The meaning of seed values is
+    explained in the next section.
+
+    -x       expand abbreviations (g, x, z ==> again, examine, wait)
+
+    This switch was made for old Infocom games that lack the common
+    abbreviations introduced in later games. Use it with caution: A
+    few games might use "g", "x" or "z" for different purposes.
+
+    -o       watch object movement
+    -O       watch object locating
+    -a       watch attribute assignment
+    -A       watch attribute testing
+
+    Although these switches may be of assistance while debugging new
+    games, they are are actually meant to be cheat functions. The -o
+    switch, for example, helps to locate the thief in 'Zork 1' and
+    the cat in 'Curses'. The other switches produce a lot of obscure
+    messages during the game; but some of these messages might give
+    you important clues if you watch carefully.
+
+    -t       set the Tandy bit
+
+    Some old Infocom games were sold by the Tandy Corporation. These
+    games behave slightly different when you use this option. For
+    example, 'The Witness' gets censored: bastards turn into idiots,
+    private dicks into private eyes and so on.
+
+    -p       alter behaviour of piracy opcode
+
+    The piracy opcode was never used by Infocom, and this switch is
+    only useful for those who like to toy around with Z-code.
+
+    -Z #     set error checking mode
+
+    Possible error checking modes include 0 (none), 1 (report first 
+    error (default)), 2 (report all errors), and 3 (exit after any error).
+
+
+Special keys:
+
+    Alt-D - toggle debugging options (-a, -A, -o, -O)
+    Alt-H - help on hot keys
+    Alt-N - new game (restart)
+    Alt-P - turn on input line playback
+    Alt-R - toggle input line recording on/off
+    Alt-S - set the random number seed
+    Alt-U - multiple undo, works even for old V1 to V4 games
+    Alt-X - exit game
+
+    When testing a text adventure it can be difficult to reproduce a
+    specific bug. To avoid this problem you should use the Alt-R key
+    to record all your inputs in a command file. Later you can press
+    Alt-P to feed the command file back into Frotz. In many cases,
+    however, you will find that the result is different because most
+    games contain random events. Luckily, Frotz provides a hot key
+    to control these events. Type Alt-S and you are asked for a seed
+    value, i.e. a value in the range from 1 to 32767. Normally, you
+    would choose a number >= 1000. Smaller values generate a special
+    sequence of random numbers as proposed by Nelson. (For instance,
+    the seed value 4 generates 1, 2, 3, 4, 1, 2, 3, 4, 1...). In any
+    case, random events become predictable until the next restart.
+
+    See also the command line option -s above.
+
+    cursor left		- move one character to the left
+    cursor right	- move one character to the right
+    ctrl-cursor left	- move to previous word
+    ctrl-cursor right	- move to next word
+    home		- move to beginning of line
+    end			- move to end of line
+    backspace		- delete character to the left
+    delete		- delete character below cursor
+    insert		- toggle overwrite mode on/off
+    escape		- delete whole input line
+    cursor up		- get previous command
+    cursor down		- get next command
+    page up		- scroll status window up ('Beyond Zork')
+    page down		- scroll status window down ('Beyond Zork')
+    tab			- word completion (like "tcsh" under Unix)
+
+    When you need to type an unpleasantly long word, try to type the
+    first three or four letters then press the tabulator key. If you
+    are lucky, Frotz fills in some or all of the missing letters. A
+    high beep noise indicates that the word is ambiguous; a low beep
+    indicates that it does not exist. Apart from that, you can also
+    use the history feature to get to previous input lines. Type the
+    beginning of the input line you are looking for, then use cursor
+    up/down to scroll through all input lines matching that prefix.
+
+Questions and answers:
+
+    Q: What is Frotz?
+    A: Frotz runs text adventures which come in so-called story files:
+       ZORK1.DAT, TRINITY.DAT, CURSES.Z5, JIGSAW.Z8, ARTHUR.ZIP etc.
+
+    Q: Where can I find story files to use with Frotz?
+    A: First, you can use the files from your original Infocom games. It
+       is possible to play Atari ST, Amiga or Macintosh games on your PC
+       once you manage to transfer the story files. Some people even
+       extracted story files from old Atari 800, Apple II and C-64 disks
+       (ask your local 8bit guru). Second, there is an increasing number
+       of new games available on the Internet. Check the if-archive at
+       ftp.gmd.de.
+
+    Q: Why does Frotz stop with an error message?
+    A: It might have detected a bug in the story file other interpreters
+       overlooked. Use the -i switch to run your story file anyway. It's
+       also possible that the story file is corrupt; be sure to download
+       story files in binary mode, especially when you use a WWW browser.
+
+    Q: Is there a way to exit Frotz in emergency situations?
+    A: If you run Frotz under DOS, try ctrl-break. If you run Frotz under
+       Windows, better use the exit button.
+
+    Q: What do I need to play graphic games?
+    A: In addition to the story file, you also need appropriate graphics
+       files in your current directory. CG1 files work for CGA mode, MG1
+       files for both MCGA and AMIGA modes and finally EG1/EG2 files for
+       EGA mode. If you extract a story file from Amiga/Macintosh disks,
+       you should get the MG1 file from the if-archive at ftp.gmd.de and
+       run the game in AMIGA mode (-d5).  These files should be put in a 
+       subdirectory named "GRAPHICS".
+
+    Q: What do I need for sound?
+    A: You need the original 'Sherlock' or 'Lurking Horror'. Next get the
+       SHSOUND.ZIP or LHSOUND.ZIP package from ftp.gmd.de (directory is
+       /if-archive/infocom/missing-files). Each package contains a readme
+       file, sound files and a tool to update your old story file. Follow
+       the instructions in the readme file.  These files should be put 
+       in a subdirectory named "SOUND".
+
+    Q: When exactly should I hear sound?
+    A: Here are two examples: In 'Lurking Horror', you can hear chanting
+       during your dream in the terminal pool. In 'Sherlock', you should
+       play the violin.
+
+    Q: Why doesn't the sound work?
+    A: Be sure to use the correct story files: 'Sherlock' release 26 (not
+       release 21) or 'Lurking Horror' release 221 (not release 203). The
+       release number is shown at the start of the game. Furthermore, look
+       at your AUTOEXEC.BAT file: It must set the BLASTER variable to the
+       proper values, e.g. "A220 I7 D1 T6" with capital A, I, D and T.
+       Finally, all sound files should be placed in a subdirectory called
+       SOUND.
+
+    Q: How can I send transscription to the printer?
+    A: Type PRN as file name.
+
+    Q: Why does Frotz crash in monochrome mode?
+    A: Some systems are configured to use the monochrome video area for
+       upper memory blocks. Check your CONFIG.SYS: If EMM386.SYS is set
+       with the option -I=B000-B7FF then Frotz will crash in monochrome
+       mode. Remove this option or try -I=B100-B7FF instead.
+
+    Q: Why is it impossible to save or restore?
+    A: When your story file is stored on a floppy disk, don't remove the
+       disk during save and restore. Furthermore, an excessive amount of
+       DOS environment variables (say, over 2KB) might occupy the memory
+       required for opening files. If this problem occurs, please e-mail
+       the author.
+
+    Q: Why do I get weird characters instead of accented letters?
+    A: Activate IBM font 850 (consult your DOS manual). Alternatively,
+       the hardware default font 437 displays most important characters
+       such as French, German or Spanish letters properly.
+
+    Q: Why don't the number pad keys work in 'Beyond Zork'?
+    A: NumLock must be set.
+
+    Q: How can I scroll the status window in 'Beyond Zork'?
+    A: Use page up/down instead of cursor up/down.
+
+
+Caveats, Bugs, and Deficiencies:
+
+    - V8 games push the limit of what Frotz is capable of running under
+      DOS.  Anchorhead, for instance, usually will not load because
+      there's not enough memory below 640K to fit Frotz and the game
+      file.  Hopefully paging the game file in from disk instead of
+      sucking the whole thing into main memory will help with this.
+      Infocom's own interpreters did this to deal with low-memory
+      computers.
+
+    - Blorb file can be read, but only as far as loading a zcode game file.
+      Support for using audio and graphics resources within a Blorb file
+      is still under development.  Therefore Blorb support is disabled
+      by default.  If you want to try it, you'll need to recompile Frotz.
+
+
+List of fatal errors:
+
+    - "Bad stack frame"
+    - "Byte swapped story file"
+    - "Call to illegal address"
+    - "Call to non-routine" [1]
+    - "Cannot open story file"
+    - "Division by zero"
+    - "Error reading save file"
+    - "Illegal attribute"
+    - "Illegal object" [2]
+    - "Illegal window"
+    - "Illegal window property"
+    - "Jump to illegal address"
+    - "Nesting stream #3 too deep"
+    - "No such property"
+    - "Out of memory"
+    - "Print at illegal address"
+    - "Stack overflow" [3]
+    - "Stack underflow" [4]
+    - "Store out of dynamic memory"
+    - "Story file read error"
+    - "Text buffer overflow"
+    - "Unknown opcode"
+    - "Unknown Z-code version"
+
+    [1] The first byte of a routine must be less than 16.
+    [2] In V4 and above, object numbers > 2000 are considered illegal.
+    [3] Checked on every call instruction.
+    [4] Checked on every return from a subroutine.
+
+Table of display modes:
+
+  +---------+---------+------------------+----------------+--------+--------+
+  | # name  | format  | available fonts  | text styles    | colour | Latin1 |
+  +=========+=========+==================+================+========+========+
+  | 0 MONO  |  80x25  | fix              | bold underline |        | *      |
+  +---------+---------+------------------+----------------+--------+--------+
+  | 1 TEXT  |  80x25  | fix              | bold [1]       | *      | *      |
+  +---------+---------+------------------+----------------+--------+--------+
+  | 2 CGA   | 640x200 | fix graphic      | underline [2]  |        | [3]    |
+  +---------+---------+------------------+----------------+--------+--------+
+  | 3 MCGA  | 320x200 | fix prop         | underline      | *      | [3]    |
+  +---------+---------+------------------+----------------+--------+--------+
+  | 4 EGA   | 640x200 | fix graphic      | underline [2]  | *      | *      |
+  +---------+---------+------------------+----------------+--------+--------+
+  | 5 AMIGA | 640x400 | fix graphic prop | bold underline | *      | *      |
+  +---------+---------+------------------+----------------+--------+--------+
+
+    [1] Underlined text is shown in emphasis colour (-e switch).
+    [2] Boldface text is available using the -T switch.
+    [3] ISO Latin 1 characters are replaced with suitable substitutes.
+
+Acknowledgements by Stefan Jokisch:
+
+    Many thanks to Paul D. Doherty for his continuing support of this
+    project. Thanks to everyone who sent bug reports, contributions or
+    helpful hints (in alphabetical order):
+
+    Thomas Biskup, Ian Carpenter, Graeme Cree, Jason Dyer,
+    Carl Edman, Julian Eggebrecht, Bernhard Fuchs, Joe Hachem,
+    John Kennedy, Kirk Klobe, Marnix Klooster, John Mackin,
+    Paul O'Brian, Magnus Olsson, Barry Prescott, L. Ross Raszewski,
+    Ambat Sasi Nair, Alan Sherrod, Linards Ticmanis and Paolo Vece.
+
+    Last but not least, thanks to the porters:
+
+    David Kinder (Amiga), Rich Lawrence (Windows 95/NT),
+    Andrew Holdsworth (RiscOS), Christos Dimitrakakis (HP-UX),
+    Christopher J. Madsen (OS/2), Galen Hazelwood (Unix curses library),
+    Ian Dean (Windows CE).
+
+
+Acknowledgements by David Griffith:
+
+    To the above list I would like to thank the following people:
+
+    Torbjorn Anderson, Timo Korvola, Martin Frost, Mihail Milushev,
+    David Picton, Archturiat Baumann, Leonard Richardson, Stephen
+    Kitt, Paul E Coad, Paul Janzen, Brad Town, Jason C Penney, Denis
+    Hirschfeldt, Jacob Nevins, Matteo De Luigi, Steven Frank, Thomas
+    Troeger, David Kinder, Bill Lash, Chris Bracken, and others whom
+    I've forgotten

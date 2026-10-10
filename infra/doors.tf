@@ -109,6 +109,19 @@ locals {
       extra_ports = []
     }
 
+    # Zork: two private slots per edition, one child across the trilogy.
+    zork = {
+      port                = 2331
+      var_path            = "/var/lib/late-zork"
+      pvc_size            = "1Gi"
+      seed_container_name = "zork-save-seed"
+      seed_command        = "mkdir -p /var/lib/late-zork && chown -R late:late /var/lib/late-zork"
+      extra_env = {
+        LATE_ZORK_DATA_DIR = "/var/lib/late-zork"
+      }
+      extra_ports = []
+    }
+
     # BashQuest: bashquest.sh keeps everything under $HOME/.bashquest, one
     # shared directory (not per-player) so its in-game leaderboard sees every
     # player's save. It creates users.db and the save files itself and saves

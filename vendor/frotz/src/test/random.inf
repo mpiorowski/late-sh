@@ -1,0 +1,340 @@
+!% -~S
+!% $OMIT_UNUSED_ROUTINES=1
+! Z-machine Randomization Test Suite
+! by David Griffith August 2002 - 2024
+! Release 2 / Serial number 240229
+!
+! This version was originally distributed with Frotz.
+!
+! Simulates dropping balls through a grid of pegs to test the
+! interpreter's random number generator.  A bellcurve should be the
+! result.
+!
+! Also contains Andrew Hunter's randomization test which is found in the
+! Zoom tarball.  I'm not quite sure how it displays randomness, but I
+! put it in here anyway.
+!
+! This program is placed in the public domain.
+
+Release 2;
+Serial "240229";
+
+Constant MAX_LANES  = 256;
+
+Global Granularity = 1;
+Global Height = 0;
+Global Width = 0;
+Global Lanes = 0;
+Global Bar_Base = '=';
+Global Bar_Mid = '|';
+Global Bar = 'o';
+Array Count --> MAX_LANES + 1;
+
+! For the bellcurve test
+Constant BELL_RESERVED_ROWS = 3;
+Constant PEG_HEIGHT = 40;
+Global Dropcount_curr = 0;
+Global Dropcount_last = 0;
+
+! For the spread random test
+Constant SPREAD_RESERVED_ROWS = 3;
+Constant usualIter = 20000;
+Constant time = 50;
+Global iterations = 0;
+
+
+! Drop a ball into a given lane.  Return the number of the bin the ball
+! eventually falls into.  A ball should never have the opportunity to
+! bounce to the left if it's already at the very left of the pegfield.
+! Likewise for the very right.  Therefore, balls should always be
+! dropped into the very middle.
+!
+[ drop initial_lane current_lane x y;
+
+	Dropcount_curr++;
+	initial_lane = Lanes / 2;
+	current_lane = initial_lane;
+	for (x = PEG_HEIGHT: x > 0: x--) {
+		y = random(2);
+		if (y == 1) {	! Ball bounces left.
+			if (current_lane == 0) {
+				@set_cursor 3 20;
+				print "ERROR! Ball fell off left side!";
+				quit;
+			} else {
+				current_lane--;
+			}
+		}
+		if (y == 2) {	! Ball bounces right.
+			if (current_lane == Lanes) {
+				@set_cursor 3 20;
+				print "ERROR! Ball fell of right side!";
+				quit;
+			} else {
+				current_lane++;
+			}
+		}
+	}
+	return current_lane;
+];
+
+
+! Return false when a column reaches the top.
+! Otherwise return true.
+[ display_bellcurve x y q top;
+	@split_window Height;
+	@set_window 1;
+	@erase_window 1;
+
+	@set_cursor 1 1;
+	print "prev: ", Dropcount_last;
+	for (x = 0: x <= Lanes: x++) {
+		@set_cursor 2 1;
+		print "drops: ", Dropcount_curr;
+		@set_cursor 3 1;
+		print "granularity: ", Granularity;
+		@set_cursor 1 20;
+		print "<space>: pause.";
+		@set_cursor 2 20;
+		print "Press 'q' to quit.";
+		top = Count-->x / Granularity;
+		if (top < 0) {
+			top = 0;
+		}
+		if (top >= Height - BELL_RESERVED_ROWS) {
+			rfalse;
+		}
+		for (y = 0: y <= top: y++) {
+			q = Height - y;
+			@set_cursor q x;
+			if (x == Lanes/2) {
+				print (char) Bar_Mid;
+			} else {
+				if (y == 0) {
+					print (char) Bar_Base;
+				} else {
+					print (char) Bar;
+				}
+			}
+		}
+	}
+	rtrue;
+];
+
+
+[ Main_bellcurve x reps ix num crap;
+
+	@set_window 0;
+	@erase_window -1;
+
+
+	! The highest even number that fits
+	Lanes = (Width / 2) * 2;
+	if (Lanes > MAX_LANES)
+		Lanes = (MAX_LANES / 2) * 2;
+
+	print "^^This program drops ~balls~ from the very top-middle of
+a vertical two-dimensional field filled with pegs.  The balls bounce off
+the pegs either left or right until they drop into one of several slots
+at the bottom where they stack up.  There are one less than half as many
+levels of pegs as there are slots.  This means that if a ball always
+bounces left, it will fall the leftmost slot.  Likewise, a ball always
+bouncing right will fall into the rightmost slot.
+According to the laws of probability, if the bounces are totally random,
+a smooth bellcurve should appear when the balls are counted and put into
+a bar graph.  This program displays such a bar graph.^";
+
+	print "^A ball which settles in the center of the field is
+represented by '|'.^";
+
+	print "A ball which settles to the left or right of the center
+is represented by 'o'.^";
+
+	print "^How many drops (1 through 9) per ball drawn? ";
+
+	@read_char 1 ix;
+	if (ix >= '1' && ix <= '9') {
+		Granularity = ix - '0';
+	} else {
+		Granularity = 1;
+	}
+
+	print "^^Press any key to begin.  ";
+	@read_char 1 crap;
+
+	for (num = 0: num < Lanes: num++) {
+		Count-->num = 0;
+	}
+	while (1) {
+		for (reps = 1: reps <= GRANULARITY: reps++) {
+			x = drop();
+		}
+		Count-->x = Count-->x + 1;
+		if (display_bellcurve() == false) {
+			for (num = 0: num < Lanes: num++) {
+				Count-->num = 0;
+			}
+			@erase_window 0;
+			@erase_window 1;
+			dropcount_last = dropcount_curr;
+			dropcount_curr = 0;
+			display_bellcurve();
+		}
+		@read_char 1 1 pause -> crap;
+		if (crap == ' ') {
+			@set_cursor 1 20;
+			print "===  Paused  ===";
+			@set_cursor Height Lanes;
+			@read_char 1 pause crap;
+			@erase_window 1;
+		} else {
+			if (crap == 'q' || crap == 'Q') {
+				@erase_window -1;
+				rtrue;
+			}
+		}
+	}
+];
+
+[ randomize_spread x y z num;
+	for (x = 0: x < usualIter: ) {
+		for (z = 0: z < time: z++) {
+			x++;
+			y = random(Lanes - 1);
+			Count-->y = Count-->y + 1;
+		}
+		iterations = iterations + time;
+		if (display_spread() == false) {
+			for (num = 0: num < Lanes: num++) {
+				Count-->num = 0;
+			}
+			@erase_window 0;
+			@erase_window 1;
+!			dropcount_last = dropcount_curr;
+!			dropcount_curr = 0;
+!			display_spread();
+		} else {
+			@read_char 1 1 pause -> z;
+
+			if (z == ' ') {
+				@set_cursor 1 20;
+				print "===  Paused  ===";
+				@set_cursor Height Lanes;
+				@read_char 1 z;
+			}
+			if (z == 'q' || z == 'Q') {
+				@erase_window -1;
+				rfalse;
+			}
+		}
+	}
+];
+
+
+! Return false when a column reaches the top.
+! Return true otherwise.
+[ display_spread x y z q top;
+	@split_window Height;
+	@set_window 1;
+	@erase_window 1;
+
+	@set_cursor 1 1;
+	print "iterations: ", iterations;
+	@set_cursor 2 1;
+        print "granularity: ", granularity;
+	@set_cursor 1 20;
+	print "<space>: Pause.";
+	@set_cursor 2 20;
+	print "'q': Quit.";
+
+	top = 1;
+
+	for (x = 0: x < Lanes: x++) {
+		if (Count-->x > top) {
+			top = Count-->x;
+			if (top >= Height - SPREAD_RESERVED_ROWS) {
+				rfalse;
+			}
+		}
+	}
+	for (x = 0: x < Lanes: x++) {
+		z = (Count-->x * (Height-SPREAD_RESERVED_ROWS)) / top;
+		q = 3 + (x % 6);
+		for (y = 0: y <= z: y++) {
+			q = Height - y;
+			@set_cursor q x;
+			if (y == 0)
+				print (char) Bar_Base;
+			else
+				print (char) Bar;
+		}
+	}
+	@set_cursor Height Lanes;
+	rtrue;
+];
+
+[ Main_spread x crap;
+
+	@set_window 0;
+	@erase_window -1;
+
+	print "^^This program draws random numbers in the range n-1,
+		where n is the number of columns or rows available on
+		screen, up to 80. In the long run, all the bars should
+		be just about the same length.^^";
+        print "Press any key to begin.  ";
+	@read_char 1 -> crap;
+
+	Lanes = Width;
+
+	for (x = 0: x < Lanes: x++) {
+		Count-->x = 0;
+	}
+
+	while (1) {
+		if (~randomize_spread()) return;
+		display_spread();
+		@read_char -> x;
+	}
+];
+
+[ Main mychar i height_trimmed width_trimmed;
+	Width = $21->0;
+	Height = $20->0;
+
+	width_trimmed = (Width/2) * 2;
+	height_trimmed = (Height/2) * 2;
+
+	while (1) {
+		print "^Z-machine Randomization Test Suite^";
+		print "by David Griffith 2002 - 2024^";
+		print "This program is in the public domain.^";
+		print "Originally distributed with Frotz.^";
+                print "Release ", (0-->1)&$03ff, " / Serial number ";
+		for (i=0 : i<6 : i++) print (char) $12->i;
+		print "^^";
+		print "Screen Height: ", Height, "^";
+		print "Screen Width:  ", Width;
+		if (width_trimmed >= MAX_LANES) {
+			print " (This exceeds maximum of ", MAX_LANES, ".  Things may not work properly.)^";
+		} else {
+			print "^";
+		}
+
+		print "^1) Bellcurve graph.^";
+		print "2) Spread graph.^";
+		print "q) Quit.^";
+		print "^Please select a test: ";
+		@read_char 1 mychar;
+		switch (mychar) {
+			'1':	Main_bellcurve();
+			'2':	Main_spread();
+			'q':	rtrue;
+			default: print "^";
+		}
+	}
+];
+
+[ pause;
+	rtrue;
+];

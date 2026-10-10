@@ -159,6 +159,11 @@ pub struct Config {
     pub codekeep_host: String,
     pub codekeep_port: u16,
     pub codekeep_secret: String,
+    /// Trilogy door: one interpreter and six private slots per account.
+    pub zork_enabled: bool,
+    pub zork_host: String,
+    pub zork_port: u16,
+    pub zork_secret: String,
 }
 
 /// Read a required env value; empty or whitespace-only counts as unset.
@@ -383,6 +388,10 @@ impl Config {
             codekeep_host: "service-codekeep".to_string(),
             codekeep_port: 2328,
             codekeep_secret: required("LATE_CODEKEEP_SECRET")?,
+            zork_enabled: true,
+            zork_host: "service-zork".to_string(),
+            zork_port: 2331,
+            zork_secret: required("LATE_ZORK_SECRET")?,
         })
     }
 
@@ -489,6 +498,10 @@ impl Config {
             codekeep_host: "late-codekeep-sv".to_string(),
             codekeep_port: 2328,
             codekeep_secret: required("LATE_CODEKEEP_SECRET")?,
+            zork_enabled: false,
+            zork_host: "late-zork-sv".to_string(),
+            zork_port: 2331,
+            zork_secret: optional("LATE_ZORK_SECRET").unwrap_or_default(),
         })
     }
 
@@ -521,6 +534,7 @@ impl Config {
             ("dopewars", self.dopewars_enabled, &self.dopewars_secret),
             ("bashquest", self.bashquest_enabled, &self.bashquest_secret),
             ("codekeep", self.codekeep_enabled, &self.codekeep_secret),
+            ("zork", self.zork_enabled, &self.zork_secret),
         ];
         for (name, enabled, secret) in door_secrets {
             if enabled && secret.is_empty() {
@@ -663,6 +677,13 @@ impl Config {
             port = self.codekeep_port,
             has_secret = !self.codekeep_secret.is_empty(),
             "codekeep: CodeKeep door-game host (late-codekeep) target and status"
+        );
+        tracing::info!(
+            enabled = self.zork_enabled,
+            host = %self.zork_host,
+            port = self.zork_port,
+            has_secret = !self.zork_secret.is_empty(),
+            "zork: trilogy door-game host (late-zork) target and status"
         );
     }
 }

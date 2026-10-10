@@ -99,7 +99,8 @@ fn is_game_side(app: &App, screen: Screen) -> bool {
         | Screen::Brogue
         | Screen::Lateania
         | Screen::Darkroom
-        | Screen::GreenDragon => true,
+        | Screen::GreenDragon
+        | Screen::Zork => true,
         Screen::Games => watch_on_hub(app),
         Screen::Dashboard
         | Screen::Rebels
@@ -168,7 +169,9 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         // A running roguelike reaches here through the detach path in
         // `App::handle_input` (backtick is otherwise forwarded raw to the
         // game); `set_screen` keeps the running state alive on the hop out.
-        Screen::Nethack | Screen::Dcss | Screen::Brogue => GameWorkspace::Door(app.screen),
+        Screen::Nethack | Screen::Dcss | Screen::Brogue | Screen::Zork => {
+            GameWorkspace::Door(app.screen)
+        }
         // An active Lateania world reaches here through the detach action in
         // `lateania::screen::handle_active_lateania_key`, which arms the
         // recency window first; the hop-out screen switch tears the session
@@ -257,6 +260,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
                 | Screen::Lateania
                 | Screen::Darkroom
                 | Screen::GreenDragon
+                | Screen::Zork
                 | Screen::Games => {
                     app.set_screen(base);
                 }
@@ -303,6 +307,11 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             // the whole resume: the vt100 parser holds the live frame and the
             // next draw re-sizes the remote PTY if the viewport changed.
             app.set_screen(screen);
+            if screen == Screen::Zork
+                && let Some(state) = app.zork_state.as_mut()
+            {
+                state.resume_live();
+            }
             // Lateania has no detached session: the hop-out saved and removed
             // the character, so hopping in re-joins the remembered slot
             // directly, skipping the character-select landing.

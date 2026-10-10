@@ -34,3 +34,18 @@ infra/
 
 # Tests artifacts
 *.profraw
+
+# Zork distribution material and a clean vendored build context.
+!vendor/frotz/**
+!assets/zork/**
+!docker/doors/zork.Dockerfile
+vendor/frotz/**/*.o
+vendor/frotz/**/*.a
+vendor/frotz/frotz
+vendor/frotz/dfrotz
+vendor/frotz/sfrotz
+vendor/frotz/xfrotz
+vendor/frotz/src/common/defs.h
+vendor/frotz/src/common/hash.h
+vendor/frotz/src/curses/ux_defines.h
+vendor/frotz/**/__pycache__

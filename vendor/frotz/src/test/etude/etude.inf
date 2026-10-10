@@ -1,0 +1,155 @@
+Switches xv5;
+
+Release 2;
+
+Global errflag;
+Constant SectionOk = "This aspect of your interpreter appears to
+  behave according to spec.^";
+Constant SectionBad = "This aspect of your interpreter appears to
+  behave WRONG.^";
+
+Include "header.inc";
+Include "color.inc";
+Include "styles.inc";
+Include "division.inc";
+Include "accents.inc";
+Include "accentin.inc";
+Include "timedch.inc";
+Include "timedstr.inc";
+Include "givenin.inc";
+Include "undo.inc";
+Include "exittext.inc";
+
+Array optionlist table [;
+  "Version" Version;
+  "Recent changes to TerpEtude" History;
+  "Header flags analysis" TestHeader;
+  "Styled text" TestStyles;
+  "Colored text" TestColor;
+  "Multiplication, division, remainder" TestDiv;
+  "Accented character output" TestAccents;
+  "Single-key input" TestAccentsCharIn;
+  "Full-line input" TestAccentsIn;
+  "Timed single-key input" TestTimedChar;
+  "Timed full-line input" TestTimedString;
+  "Pre-loading of input line" TestGivenInput;
+  "Undo capability" TestUndo;
+  "Printing before quitting" TestExitText;
+];
+
+[ main;
+
+  new_line;
+  Version();
+  new_line;
+
+  mainloop();
+
+  print "Goodbye.^";
+
+  quit;
+];
+
+Constant INBUFSIZE 80;
+Array inbuf -> INBUFSIZE;
+
+[ mainloop
+    printmenu inbufvar numopts ix cx len val;
+
+  numopts = optionlist-->0 / 2;
+  printmenu = 1;
+
+  while (1) {
+    if (printmenu) {
+      print "Options: (hit Enter by itself to display this menu)^";
+      print "  . (period): Exit TerpEtude^";
+      for (ix=0: ix<numopts: ix++) {
+	print "  ", ix+1, ": ", (string) optionlist-->(ix*2+1), "^";
+      }
+      printmenu = 0;
+    }
+
+    print "^> ";
+    inbuf->0 = (INBUFSIZE-3);
+    inbuf->1 = 0;
+    inbufvar = inbuf;
+    ix = 0;
+    @aread inbufvar ix;
+    new_line;
+    len = inbuf->1;
+    cx = 0;
+    while (cx < len && inbuf->(2+cx) == ' ')
+      cx++;
+    if (cx < len && inbuf->(2+cx) == '.')
+      break;
+
+    if (cx == len || inbuf->(2+cx) < '0' || inbuf->(2+cx) > '9') {
+      printmenu = 1;
+      continue;
+    }
+    val = 0;
+    while (cx < len && inbuf->(2+cx) >= '0' && inbuf->(2+cx) <= '9') {
+      val = val * 10 + (inbuf->(2+cx) - '0');
+      cx++;
+    }
+
+    if (val < 1 || val > numopts) {
+      print "Please enter a value from 1 to ", numopts, ", or ~.~ to
+	exit, or hit Enter by itself to display the menu of options.^";
+      continue;
+    }
+
+    ix = optionlist-->(val*2);
+    if (ix==0) {
+      print "That option is not yet implemented.^";
+      continue;
+    }
+
+    indirect(ix);
+  }
+
+];
+
+[ GetKey ix;
+  @read_char 1 ix;
+  return ix;
+];
+
+[ Version;
+  print "TerpEtude: A Z-machine Interpreter Exerciser^";
+  print "By Andrew Plotkin (erkyrath@@64netcom.com)^";
+  print "Release ", (0-->1) & $03ff;
+  print " / built with Inform v"; inversion; new_line;
+  print "Tests compliance with Z-Machine Standards Document 0.99.^";
+  new_line;
+
+  print "NOTE: This program does not test everything in the Z-Spec.
+    Passing all the tests in this program does NOT guarantee that
+    your interpreter is Z-Spec-compliant.^^";
+
+  print "For that matter, this program may have mistakes in it. I
+    don't think it does, but you should not assume it is the Fount of
+    All Z-Machineness. If you find something strange, check the
+    Z-Spec, check existing interpreters, check Infocom's interpreters,
+    and then send me mail if you're still confused.^";
+];
+
+[ History;
+
+  print "In the beginning, TerpEtude was written. That was release
+    DRAFT-1.^^";
+  print "   Release 2:^Accented-out test: Added ability to
+    display characters in bold, underline, and fixed-width styles.^";
+  print "Accented-out test: Noted that >> and << are, in fact, tested
+    correctly.^";
+  print "Given-text test: It's the game file's job to print the given
+    text before it calls @@64read. Fixed test to do this.^";
+  print "Timed-string test: Changed test to do both ~invisible~ and
+    ~visible~ interrupts (only one interrupt in three actually prints
+    text.)^";
+  print "^   Upcoming Test Features:^";
+  print "List of terminating characters^Fonts^Stream 3 nesting^";
+  print "^   Credits:^";
+  print "Title: Jon Ferro^";
+  print "Spec Aid: Graham, SJ, PDD, and the rest of the crowd^";
+];

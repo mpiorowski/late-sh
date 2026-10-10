@@ -1815,6 +1815,7 @@ mod inner {
             Screen::Dopewars => "dopewars",
             Screen::Bashquest => "bashquest",
             Screen::Codekeep => "codekeep",
+            Screen::Zork => "zork",
             Screen::Usurper => "usurper",
             Screen::GreenDragon => "greendragon",
             Screen::Darkroom => "darkroom",

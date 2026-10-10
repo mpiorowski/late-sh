@@ -46,7 +46,9 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
         drink_round::{Bar, BarOrder, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, bar_order},
-        drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, SOFT_DRINK_PRICE, UserDrinks, drunk_level_word},
+        drinks::{
+            DRINK_PRICE_MAX, DRINK_PRICE_MIN, SOFT_DRINK_PRICE, UserDrinks, drunk_level_word,
+        },
         user::{User, UserParams},
     },
 };

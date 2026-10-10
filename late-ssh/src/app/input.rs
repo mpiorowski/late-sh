@@ -1419,7 +1419,8 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Usurper
                     | HubGame::Dopewars
                     | HubGame::Bashquest
-                    | HubGame::Codekeep => {}
+                    | HubGame::Codekeep
+                    | HubGame::Zork => {}
                 }
                 true
             }
@@ -1643,6 +1644,12 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             app.set_screen(Screen::Darkroom);
             app.enter_darkroom();
         }
+        HubGame::Zork => {
+            app.set_screen(Screen::Zork);
+            if let Some(state) = app.zork_state.as_mut() {
+                state.open_menu();
+            }
+        }
         HubGame::Codekeep => {
             if !app.codekeep_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1846,6 +1853,42 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::Zork {
+        if let Some(state) = app.zork_state.as_mut() {
+            if state.in_exit_grace() {
+                return true;
+            }
+            match event {
+                ParsedInput::Arrow(b'A') => {
+                    state.step(false);
+                    return true;
+                }
+                ParsedInput::Arrow(b'B') => {
+                    state.step(true);
+                    return true;
+                }
+                ParsedInput::Byte(0x1b | b'q') | ParsedInput::Char('q') => {
+                    if state.back() {
+                        app.set_screen(Screen::Games);
+                    }
+                    return true;
+                }
+                _ => {}
+            }
+            if let Some(byte) = launcher_key_byte(event)
+                && state.menu_key(byte)
+            {
+                return true;
+            }
+            if matches!(
+                state.mode(),
+                crate::app::door::zork::state::Mode::Confirm(_)
+            ) {
+                return true;
+            }
+        }
+        return false;
+    }
     if ctx.screen == Screen::Codekeep {
         // Running bytes are intercepted before parsed input, and a non-running
         // CodeKeep screen returns to the Games hub on the same tick (no exit
@@ -3367,6 +3410,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Dopewars => false,
         Screen::Bashquest => false,
         Screen::Codekeep => false,
+        Screen::Zork => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3839,6 +3883,7 @@ fn game_owns_ctrl_s(app: &App) -> bool {
         | Screen::Dopewars
         | Screen::Bashquest
         | Screen::Codekeep
+        | Screen::Zork
         | Screen::Usurper
         | Screen::Artboard
         | Screen::Profiles
@@ -4025,6 +4070,7 @@ fn zen_return_screen(app: &App) -> Option<Screen> {
         | Screen::Dopewars
         | Screen::Bashquest
         | Screen::Codekeep
+        | Screen::Zork
         | Screen::Usurper
         | Screen::Artboard
         | Screen::Profiles
@@ -4456,6 +4502,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // are forwarded raw in App::handle_input before reaching this
             // path.
         }
+        Screen::Zork => {}
         Screen::Codekeep => {
             // Running-mode bytes are forwarded raw in App::handle_input; a
             // non-running screen bounces back to Games on the same tick.

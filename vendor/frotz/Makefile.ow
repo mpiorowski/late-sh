@@ -1,0 +1,98 @@
+# This file is used to build Frotz for DOS using Open Watcom C 2.0 beta.
+# Written with Open Watcom MAKE Version 2.0 beta in mind.
+# The resulting executable runs as a 16-bit program.
+#
+
+# It would be more convenient to use the POSIX-ish owcc wrapper to do
+# compilation, but the DOS/4GW version of owcc (27 Aug 2020) likes to crash
+# when trying to invoke wcc.  (The Linux version has no problem.)
+CC = wcc
+
+INCLUDE_PATH = -I$(%WATCOM)/h
+
+# If we're running under DOS, use a backslash in INCLUDE_PATH
+!ifdef %COMSPEC
+!ifndef %SHELL
+INCLUDE_PATH = -I$(%WATCOM)\h
+!endif
+!endif
+
+CFLAGS = -bt=dos -ml -onatxl+ -0 -zq $(INCLUDE_PATH)
+AS = wasm
+ASFLAGS = -bt=dos -ml -zq
+LD = wlink
+LDFLAGS = system dos option quiet,map=$(BINNAME:.exe=.map)
+WLIB = wlib
+# Use a wmake internal command to delete individual files.  This works on
+# both MS-DOS and Linux build systems.
+RM = %erase
+
+BINNAME = frotz.exe
+
+OW_DOS_DIR = src/dos/
+DOS_OBJECTS =   $(OW_DOS_DIR)dosinit.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dosinput.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dosmouse.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dospic.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dossampl.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dosscrn.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dostext.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)dosblorb.o
+DOS_OBJECTS +=	$(OW_DOS_DIR)owfix.o
+
+CORE_DIR = src/common/
+CORE_OBJECTS =  $(CORE_DIR)buffer.o
+CORE_OBJECTS +=	$(CORE_DIR)fastmem.o
+CORE_OBJECTS +=	$(CORE_DIR)files.o
+CORE_OBJECTS +=	$(CORE_DIR)getopt.o
+CORE_OBJECTS +=	$(CORE_DIR)hotkey.o
+CORE_OBJECTS +=	$(CORE_DIR)input.o
+CORE_OBJECTS +=	$(CORE_DIR)main.o
+CORE_OBJECTS +=	$(CORE_DIR)math.o
+CORE_OBJECTS +=	$(CORE_DIR)object.o
+CORE_OBJECTS +=	$(CORE_DIR)process.o
+CORE_OBJECTS +=	$(CORE_DIR)random.o
+CORE_OBJECTS +=	$(CORE_DIR)redirect.o
+CORE_OBJECTS +=	$(CORE_DIR)screen.o
+CORE_OBJECTS +=	$(CORE_DIR)sound.o
+CORE_OBJECTS +=	$(CORE_DIR)stream.o
+CORE_OBJECTS +=	$(CORE_DIR)table.o
+CORE_OBJECTS +=	$(CORE_DIR)text.o
+CORE_OBJECTS +=	$(CORE_DIR)variable.o
+CORE_OBJECTS +=	$(CORE_DIR)quetzal.o
+CORE_OBJECTS +=	$(CORE_DIR)err.o
+
+BLORB_DIR = src/blorb/
+BLORB_OBJECTS += $(BLORB_DIR)blorblib.o
+
+all:	frotz
+
+.ERASE
+
+.c:	$(OW_DOS_DIR);$(CORE_DIR);$(BLORB_DIR)
+.asm:	$(OW_DOS_DIR)
+
+.c.o:
+	echo $(CFLAGS) -fo=$@ $< >$*.rsp
+	$(CC) $(VER) -i="$(OW_DOS_DIR)" -i="$(CORE_DIR)" -i="$(BLORB_DIR)" @$*.rsp
+	$(RM) $*.rsp
+
+.asm.o:
+	echo $(ASFLAGS) -fo=$@ $< >$*.rsp
+	$(AS) $(VER) -i="$(OW_DOS_DIR)" -i="$(CORE_DIR)" -i="$(BLORB_DIR)" @$*.rsp
+	$(RM) $*.rsp
+
+# Note: the `for' command is specially intercepted by wmake, and works like
+# its namesake in MS-DOS command.com --- even when cross-building in Unix (!).
+clean:	.SYMBOLIC
+	for %i in ($(CORE_DIR)/*.o $(BLORB_DIR)/*.o $(OW_DOS_DIR)/*.o) do -$(RM) %i
+	for %i in ($(CORE_DIR)/*.rsp $(BLORB_DIR)/*.rsp $(OW_DOS_DIR)/*.rsp) do -$(RM) %i
+	for %i in (*.obj *.lib *.rsp *.exe *.bak *.map *.lnk) do -$(RM) %i
+
+frotz:	$(BINNAME) .SYMBOLIC
+
+$(BINNAME): $(DOS_OBJECTS) $(CORE_OBJECTS) $(BLORB_OBJECTS)
+	echo $(LDFLAGS) name $(BINNAME) >$*.rsp
+	for %i in ($(DOS_OBJECTS) $(CORE_OBJECTS) $(BLORB_OBJECTS)) do echo file %i >>$*.rsp
+	$(LD) @$*.rsp
+	$(RM) $*.rsp

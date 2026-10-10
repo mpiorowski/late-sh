@@ -24,12 +24,13 @@ Read the details in [LICENSE](LICENSE), the plain-English policy in [LICENSING.m
 - Real-time global chat and shared activity feed
 - Audio streaming via Icecast/Liquidsoap, played by the paired CLI or the public `/listen` page
 - Terminal games including 2048, Sudoku, Nonograms, Minesweeper, and Solitaire
+- Zork Trilogy door with an autosave and a manual save per edition
 - Web frontend for landing, profiles, and the token-less `/listen` page
 - Companion CLI for local audio playback and synced visualizer data
 
 ## Workspace
 
-This is a Rust workspace with five crates:
+The Rust workspace contains the main apps and standalone door hosts:
 
 | Crate | Role |
 |-------|------|
@@ -38,6 +39,10 @@ This is a Rust workspace with five crates:
 | `late-ssh` | SSH server and terminal UI application |
 | `late-web` | Web server, landing page, profiles/gallery, stream proxy, and the public `/listen` page |
 | `late-webview` | Helper process hosting the official YouTube IFrame Player for the CLI |
+| `late-zork` | Private SSH/PTY host for the separately executed Frotz interpreter and Zork trilogy |
+
+The other standalone door hosts are `late-bashquest`, `late-brogue`,
+`late-codekeep`, `late-dcss`, `late-dopewars`, `late-nethack`, and `late-usurper`.
 
 The stack is backed by PostgreSQL, Icecast, and Liquidsoap.
 
@@ -120,6 +125,24 @@ cargo run -p late-web
 Local host development can use Cargo's normal defaults, including the standard
 repo-local `target/` directory. The `/app/target` path is only for Docker/dev
 containers.
+
+The Zork door is enabled in the development profile. Build its vendored asset
+image once before building the Compose services (the current door base images
+target amd64):
+
+```bash
+docker build --platform linux/amd64 -f docker/doors/zork.Dockerfile \
+  -t ghcr.io/mpiorowski/late-sh/door-zork:2.56pre-r1 .
+make start
+```
+
+Open Games (`3`) → **Zork Trilogy** → choose an edition. Each has automatic
+progress and one deliberate `SAVE`; the six slots belong to your account.
+`SAVE` accepts an optional description, `RESTORE` asks before returning to the
+edition menu, and backtick steps out while the current game stays open.
+After 20 minutes without game input, Continue resumes its last prompt.
+See the [Zork component context](late-ssh/src/app/door/zork/CONTEXT.md) for the
+save contract, standalone host configuration, container tests, and rollout order.
 
 ```bash
 export CARGO_HOME=$HOME/.cargo

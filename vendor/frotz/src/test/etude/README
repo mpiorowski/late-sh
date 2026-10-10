@@ -1,0 +1,27 @@
+This archive contains the TerpEtude game file (etude.z5).
+
+It also contains all the Inform 6 source code for TerpEtude:
+
+etude.inf
+accents.inc
+accentin.inc
+color.inc
+division.inc
+exittext.inc
+givenin.inc
+graham.inf
+header.inc
+styles.inc
+timedch.inc
+timedstr.inc
+undo.inc
+
+I strongly recommend that TerpEtude only be distributed in this
+format -- that is, with game file and source code together. A
+programmer who wants to test his interpreter can't really know
+what he's doing unless he sees exactly what the tests are.
+
+I've also thrown in gntests.z5 and gntests.inf; this program
+comprises the six test programs that Graham appended to the
+Z-Spec TeX document. (Taken from the 0.99 spec.tex file.)
+

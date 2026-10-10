@@ -114,23 +114,23 @@ fn clicks_select_games_and_ignore_chrome() {
 /// the hit test follows the same window.
 #[test]
 fn hit_test_follows_the_scroll_window() {
-    // Height 10: 8 sidebar rows visible of 23, selection on the last game
+    // Height 10: 8 sidebar rows visible of 24, selection on the last game
     // slides the window to the bottom of the list.
     let body = Rect::new(0, 0, 80, 10);
-    // Window starts at row 15 (the blank above "doors"), so y=1 is dead
-    // and y=3 lands on Green Dragon...
+    // Window starts at row 16 (the "doors" header), so y=1 is dead
+    // and y=3 lands on Usurper...
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 1),
+        sidebar_hit_test(body, HubGame::roster(false), 12, 0, None, 5, 1),
         None
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 3),
-        Some(RailEntry::Card(6))
+        sidebar_hit_test(body, HubGame::roster(false), 12, 0, None, 5, 3),
+        Some(RailEntry::Card(7))
     );
-    // ...and the selected CodeKeep row is visible at the window's bottom.
+    // ...and the selected Zork row is visible at the window's bottom.
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 8),
-        Some(RailEntry::Card(11))
+        sidebar_hit_test(body, HubGame::roster(false), 12, 0, None, 5, 8),
+        Some(RailEntry::Card(12))
     );
 }
 
@@ -173,23 +173,23 @@ fn clicks_select_live_games_under_the_cards() {
         sidebar_hit_test(body, public, 0, 2, None, 5, 23),
         Some(RailEntry::Card(11))
     );
-    for dead in [24, 25, 26] {
+    for dead in [25, 26, 27] {
         assert_eq!(sidebar_hit_test(body, public, 0, 2, None, 5, dead), None);
     }
-    assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, None, 5, 27),
-        Some(RailEntry::Live(0))
-    );
     assert_eq!(
         sidebar_hit_test(body, public, 0, 2, None, 5, 28),
         Some(RailEntry::Live(0))
     );
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, Some(1), 5, 30),
+        sidebar_hit_test(body, public, 0, 2, None, 5, 29),
+        Some(RailEntry::Live(0))
+    );
+    assert_eq!(
+        sidebar_hit_test(body, public, 0, 2, Some(1), 5, 31),
         Some(RailEntry::Live(1))
     );
     // With nobody playing the section is its header and one dead line.
-    for dead in [24, 25, 26, 27] {
+    for dead in [25, 26, 27, 28] {
         assert_eq!(sidebar_hit_test(body, public, 0, 0, None, 5, dead), None);
     }
 }

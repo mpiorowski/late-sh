@@ -1,0 +1,9 @@
+*.o
+*.a
+/frotz
+/dfrotz
+/sfrotz
+/xfrotz
+/src/common/defs.h
+/src/common/hash.h
+/src/curses/ux_defines.h

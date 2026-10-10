@@ -31,6 +31,7 @@ FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
 FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r3 AS brogue-build
 FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
 FROM ghcr.io/mpiorowski/late-sh/door-bashquest:v1 AS bashquest-build
+FROM ghcr.io/mpiorowski/late-sh/door-zork:2.56pre-r1 AS zork-build
 
 # ==============================================================================
 # Stage 0: Base - Common system dependencies
@@ -121,6 +122,7 @@ COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-codekeep/Cargo.toml late-codekeep/Cargo.toml
+COPY late-zork/Cargo.toml late-zork/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
 COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
 COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
@@ -134,12 +136,13 @@ COPY vendor vendor
 # built in these images (CLI-only YouTube helper), but it is a workspace member
 # and a late-cli path dependency, so its manifest and target stubs must exist
 # for `cargo metadata` to resolve the workspace.
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src late-webview/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/src late-zork/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src late-webview/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "fn main() {}" > late-codekeep/src/main.rs && \
+    echo "fn main() {}" > late-zork/src/main.rs && \
     echo "fn main() {}" > late-nethack/src/main.rs && \
     echo "fn main() {}" > late-dcss/src/main.rs && \
     echo "fn main() {}" > late-brogue/src/main.rs && \
@@ -176,17 +179,19 @@ COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-webview/Cargo.toml late-webview/Cargo.toml
 COPY late-codekeep/Cargo.toml late-codekeep/Cargo.toml
+COPY late-zork/Cargo.toml late-zork/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
 COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
 COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
 COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
 COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
 COPY late-bashquest/Cargo.toml late-bashquest/Cargo.toml
-RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src && \
+RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-zork/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "" > late-webview/src/lib.rs && \
     echo "fn main() {}" > late-webview/src/main.rs && \
     echo "fn main() {}" > late-codekeep/src/main.rs && \
+    echo "fn main() {}" > late-zork/src/main.rs && \
     echo "fn main() {}" > late-nethack/src/main.rs && \
     echo "fn main() {}" > late-dcss/src/main.rs && \
     echo "fn main() {}" > late-brogue/src/main.rs && \
@@ -228,6 +233,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release -p late-codekeep && \
     cp /app/target/release/late-codekeep /app/late-codekeep-bin
+
+FROM door-builder-base AS builder-zork
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-zork
+COPY --from=planner /app /app
+COPY late-zork late-zork
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-zork && \
+    cp /app/target/release/late-zork /app/late-zork-bin
 
 FROM door-builder-base AS builder-nethack
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
@@ -351,6 +369,17 @@ COPY --from=codekeep-build /usr/local/bin/codekeep /usr/local/bin/codekeep
 COPY --from=codekeep-build /opt/codekeep /opt/codekeep
 RUN mkdir -p /var/lib/late-codekeep && chmod 0777 /var/lib/late-codekeep
 CMD ["cargo", "watch", "-w", "late-codekeep", "-x", "run -p late-codekeep"]
+
+# Zork's executable and corresponding GPL source are confined to its host.
+FROM dev-base AS dev-zork
+COPY --from=zork-build /usr/games/frotz /usr/games/frotz
+COPY --from=zork-build /usr/share/late-zork /usr/share/late-zork
+COPY --from=zork-build /usr/share/doc/frotz /usr/share/doc/frotz
+# Shared dev Cargo caches are root-owned, but Frotz correctly refuses root.
+# Keep the watcher/compiler as root and execute the host as the runtime user.
+RUN useradd --create-home --user-group late \
+    && mkdir -p /var/lib/late-zork && chown late:late /var/lib/late-zork
+CMD ["sh", "-ec", "chown -R late:late /var/lib/late-zork; exec cargo watch -w late-zork -s 'cargo build -p late-zork && exec runuser -u late -- /app/target/debug/late-zork'"]
 
 # DCSS host: serves the game over SSH (see late-dcss). dev-base derives from
 # `base`, which already has the from-source crawl binary + data tree, so the
@@ -502,6 +531,20 @@ USER late
 EXPOSE 2328
 
 CMD ["/app/late-codekeep"]
+
+# Zork host: Frotz remains an independent GPL executable with its source.
+FROM runtime-base AS runtime-zork
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libncursesw6 ncurses-term \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=zork-build /usr/games/frotz /usr/games/frotz
+COPY --from=zork-build /usr/share/late-zork /usr/share/late-zork
+COPY --from=zork-build /usr/share/doc/frotz /usr/share/doc/frotz
+RUN mkdir -p /var/lib/late-zork && chown late:late /var/lib/late-zork
+COPY --from=builder-zork /app/late-zork-bin /app/late-zork
+USER late
+EXPOSE 2331
+CMD ["/app/late-zork"]
 
 # ==============================================================================
 # Stage 4g: Runtime DCSS - the late-dcss host (game served over SSH)

@@ -62,7 +62,8 @@ fn all_games_are_listed_in_order() {
             "dopewars",
             "BashQuest",
             "Rebels",
-            "CodeKeep"
+            "CodeKeep",
+            "Zork Trilogy"
         ],
     );
 }

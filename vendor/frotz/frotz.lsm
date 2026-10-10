@@ -1,0 +1,12 @@
+Begin3
+Title:		Frotz
+Version:	2.55
+Entered-date:	2020-05-10
+Description:	An interpreter for all Infocom games and other Z-machine games.
+Keywords:	infocom, frotz, text-adventure, zork, z-machine
+Author:		dave@661.org (David Griffith)
+Primary-site:	https://gitlab.com/DavidGriffith/frotz
+Alternate-site:	http://ifarchive.org/indexes/if-archive/infocom/interpreters/frotz/
+Platforms:	Unix (GCC, Clang), DOS (Turbo C 3.00), TOPS20 (KCC)
+Copying-policy:	GNU General Public License, Version 2
+End

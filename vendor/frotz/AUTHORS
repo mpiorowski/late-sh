@@ -1,0 +1,42 @@
+Original Frotz reference code:
+	Stefan Jokisch <stefan.jokisch@gmx.de>
+
+Original Unix port:
+	Galen Hazelwood <galenh@micron.net>
+
+Current Custodian:
+	David Griffith <dave@661.org>
+
+Other Authors:
+	Alembic Petrofsky <alembic@petrofsky.berkeley.ca.us>
+	Jim Dunleavy <jim.dunleavy@erha.ie>
+
+
+Thanks also to those who posted to rec.arts.int-fiction and 
+intfiction.org feedback on what I was doing with Unix Frotz, people who 
+checked the betas for bugs, and sent in patches.  These include, but are 
+not limited to:
+
+Torbjorn Anderson, Timo Korvola, Martin Frost, Mihail Milushev, David 
+Picton, Archturiat Baumann, Leonard Richardson, Stephen Kitt, Paul E 
+Coad, Paul Janzen, Brad Town, Jason C Penney, Denis Hirschfeldt, Jacob 
+Nevins, Matteo De Luigi, Steven Frank, Thomas Troeger, David Kinder,
+Bill Lash, Chris Bracken, Brian Johnson, Kirk Klobe, James Le Cuirot,
+borg323, and others whom I've forgotten.
+
+Michael Edmonson (author of Rezrov) and Evin Robertson (author of Nitfol)
+deserve recognition for the ideas that I've borrowed from their programs.
+
+Thanks goes to Erik de Castro Lopo, author of libsndfile and 
+libsamplerate for putting up with my numerous questions about audio 
+programming and gently nudging me towards how to do things the right 
+way.
+
+Thanks goes to Mark McCurry, author of lots of audio-related Linux
+things including the ZynAddSubFX open source synthesizer.  His efforts,
+paid through Kickstarter, got the libao-based audio subsystem to work
+correctly.
+
+Thanks goes to Paul Gilbert of the ScummVM project who figured out how
+to correctly process adaptive palette images from Zork Zero and Arthur
+when I kept doing the Wrong Thing.

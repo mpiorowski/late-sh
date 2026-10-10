@@ -12,6 +12,7 @@ members = [
     "late-usurper",
     "late-web",
     "late-webview",
+    "late-zork",
 ]
 resolver = "2"
 

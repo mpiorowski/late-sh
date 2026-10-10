@@ -210,7 +210,13 @@ fn parse_bartender_order_pours_non_intoxicating_drinks_on_either_tab() {
 fn parse_bartender_order_pins_non_intoxicating_drinks_to_the_soft_price() {
     // Any other price on a coffee is a model slip: served uncharged, never
     // debited at a number the prompt did not promise.
-    for price in [0, SOFT_DRINK_PRICE - 1, SOFT_DRINK_PRICE + 1, DRINK_PRICE_MIN, DRINK_PRICE_MAX] {
+    for price in [
+        0,
+        SOFT_DRINK_PRICE - 1,
+        SOFT_DRINK_PRICE + 1,
+        DRINK_PRICE_MIN,
+        DRINK_PRICE_MAX,
+    ] {
         let raw = format!(
             r#"{{"action":"pour","price":{price},"intoxicating":false,"line":"a coffee"}}"#
         );

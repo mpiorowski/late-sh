@@ -37,6 +37,7 @@ impl PickerScope {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom

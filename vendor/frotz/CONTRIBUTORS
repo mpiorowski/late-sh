@@ -1,0 +1,41 @@
+In 2019, a Kickstarter campaign was run to raise funds to pay Mark
+McCurry to overhaul the audio subsystem in the curses port of Frotz.
+I've tried off and on since 2013 to do this, but there was always a
+problem with mixing two audio streams and excessive CPU usage.  Mark is
+much better at this kind of programming and is well-known for working on
+some very good audio-related projects.  However, he would not do the
+work for free.  Therefore I started a Kickstarter campaign to pay him.
+
+The audio subsystem now reads and processes audio data through
+libsndfile, libmodplug, libsamplerate, libvorbis, and a few other
+libraries brought in as dependencies.  Output is throgh the libao
+library, which automatically takes care of the messiness of figuring out
+exactly how to talk to the audio hardware.
+
+A total of $1,078.00 was raised in 30 days.  After taxes, fees,
+backed-out pledges were subtracted, the total sum was $878.60.
+
+The following people contributed $100:
+Dan Sanderson
+Daniel Sharpe
+Justin de Vesine
+Simon Martin
+
+The following people contributed $25:
+Alan De Smet
+Anders Svensson
+anomalogue
+Brett Witty
+Carl Muckenhoupt
+Carolyn VanEseltine
+Edward Marczak
+Jason C. Penney
+Jason Scott
+Mark Davis
+Max Silbiger
+Michael Piotrowski
+Rick Reynolds
+SciaticNerd
+Scott Hardwick
+Thomas Insel
+Zellyn Hunter

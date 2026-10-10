@@ -215,6 +215,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
     }
 }
 
@@ -655,6 +659,10 @@ fn make_app_with_chat_service_and_permissions(
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -914,6 +922,10 @@ pub fn make_app_with_paired_client(
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),

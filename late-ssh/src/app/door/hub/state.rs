@@ -37,6 +37,7 @@ pub enum HubGame {
     Dopewars,
     Bashquest,
     Codekeep,
+    Zork,
     Darkroom,
 }
 
@@ -73,7 +74,7 @@ impl HubGame {
     /// client (Minecraft), then the doors: Green Dragon (our native LORD
     /// remake, filed with the BBS doors it descends from) and the foreign
     /// upstream terminal games hosted on a PTY.
-    pub const ALL: [HubGame; 13] = [
+    pub const ALL: [HubGame; 14] = [
         HubGame::NightCity,
         HubGame::Lateania,
         HubGame::Dcss,
@@ -87,6 +88,7 @@ impl HubGame {
         HubGame::Bashquest,
         HubGame::Rebels,
         HubGame::Codekeep,
+        HubGame::Zork,
     ];
 
     /// The sidebar a session sees. Runners (`App::is_runner`) get every
@@ -113,6 +115,7 @@ impl HubGame {
             HubGame::Dopewars => "dopewars",
             HubGame::Bashquest => "BashQuest",
             HubGame::Codekeep => "CodeKeep",
+            HubGame::Zork => "Zork Trilogy",
             HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
         }
     }
@@ -128,6 +131,7 @@ impl HubGame {
             | HubGame::Dopewars
             | HubGame::Bashquest
             | HubGame::Rebels
+            | HubGame::Zork
             | HubGame::Codekeep => HubGroup::Doors,
         }
     }
@@ -149,6 +153,7 @@ impl HubGame {
             | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
+            | HubGame::Zork
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }
@@ -170,6 +175,7 @@ impl HubGame {
             | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
+            | HubGame::Zork
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }
@@ -221,6 +227,11 @@ impl HubGame {
             | HubGame::Bashquest
             | HubGame::Rebels
             | HubGame::Codekeep => None,
+            HubGame::Zork => app
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Zork),
         }
     }
 }
