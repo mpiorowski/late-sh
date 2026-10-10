@@ -3,8 +3,9 @@
 //! it with the cursor on one, each rack a window of five around the
 //! piece worn (the whole rack, once, while it is shorter than that), the
 //! row's tint on the piece and named beside the label;
-//! the keys; the tailor's last word. Pure: a function of the session's
-//! draft and word. The city's `draw_panel` frames it.
+//! the keys. Pure: a function of the session's draft. The city's
+//! `draw_panel` frames it and puts the tailor's last word (`word`) at
+//! its foot.
 
 use ratatui::{
     style::Modifier,
@@ -157,9 +158,6 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
         next_unlock_line(draft.level),
         dim_text,
     )));
-    if let Some(word) = view.word {
-        lines.push(Line::from(Span::styled(word.to_string(), lit(Neon::Cyan))));
-    }
     lines
 }
 

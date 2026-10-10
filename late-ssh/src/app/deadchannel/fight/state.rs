@@ -8,8 +8,8 @@
 //! day's ten rations are ten steps down it (`road.rs`, one road a day,
 //! the same for every runner), and a step is something you ask for, never
 //! something that happens to you (the city is the wallet; nothing there
-//! can be missed). Half the steps are fights; the rest are a rest or a
-//! cache, taken with one key.
+//! can be missed). Half the steps are fights; the rest are a rest (the
+//! static out of the deck) or a cache (bits), taken with one key.
 //!
 //! A fight is a round of cards (`cards.rs`; GAME.md, "The round"): five
 //! drawn, three energy, the glyph's next move shown before you play.
@@ -77,9 +77,8 @@ use super::data::{
     self, BRIGHT_LINE, CACHE_LINES, CLEAR_LINE, CRYSTAL_LINE, DRAFT_LINE, DRINK_CRYSTALS,
     DRINK_SIGNAL_PER_LEVEL, DROP_LINES, FOES, FoeKind, FoeTier, GARNISH_PERCENT, HEARD_LINE,
     Intent, KILL_LINES, LOAN_FEE_PERCENT, LOAN_PER_LEVEL, LOCKER_FEE_PERCENT, MARK_BONUS_CAP,
-    MAX_LEVEL, MEND_LINE, NEAR_MISS_SIGNAL, NOISE_CARDS, OLD_SIGNAL, RATIONS_PER_DAY, RULES,
-    RUN_LINES, Rules, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE,
-    percent_up,
+    MAX_LEVEL, NEAR_MISS_SIGNAL, NOISE_CARDS, OLD_SIGNAL, RATIONS_PER_DAY, RULES, RUN_LINES, Rules,
+    SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE, percent_up,
 };
 use super::policy;
 use super::road::{self, Mark, Node, Road, RoadRun, Trace};
@@ -375,8 +374,6 @@ pub enum Pick {
 pub enum Call {
     /// A glyph's node (`Fair` or `Lower`) or a bright one (`Bright`).
     Fight(Pick),
-    /// A rest: mend the signal.
-    Mend,
     /// A rest: shake the static out of the deck.
     Clear,
     /// A cache: take it.
@@ -443,8 +440,6 @@ pub enum Refusal {
     NoEnergy,
     /// A hand slot with no card in it.
     NoCard,
-    /// A rest spent on clearing a deck with no static in it.
-    NoStatic,
     /// A step down the road with a draft owed: the card is picked first.
     CardWaiting,
     /// A draft with none owed.
@@ -508,11 +503,7 @@ pub enum Applied {
         card: Card,
         replaces: Card,
     },
-    /// A rest spent on the signal: `restored` points.
-    Mended {
-        restored: i32,
-    },
-    /// A rest spent on the deck: `cards` of static out of it.
+    /// A rest: `cards` of static out of the deck, none when it was clean.
     Cleared {
         cards: usize,
     },
@@ -832,13 +823,6 @@ impl Sheet {
         self.fight.is_none() && (self.is_down() || self.rations_left <= 0)
     }
 
-    /// Whether the plain thing to do at a rest is to clear the deck: the
-    /// signal is whole, so a mend would buy nothing, and there is static
-    /// to shake out. Otherwise it is the mend.
-    pub fn rest_clears(&self) -> bool {
-        self.signal >= self.max_signal() && self.road.static_cards > 0
-    }
-
     /// The numbers on the cards against `fight`'s glyph.
     pub fn powers(&self, fight: &Fight) -> Powers {
         self.powers_under(&RULES, fight)
@@ -1031,10 +1015,7 @@ impl Sheet {
                     });
                 }
             }
-            Applied::Escaped
-            | Applied::Mended { .. }
-            | Applied::Cleared { .. }
-            | Applied::Cached { .. } => {}
+            Applied::Escaped | Applied::Cleared { .. } | Applied::Cached { .. } => {}
             Applied::Reset => {
                 news.push(News::SteppedOff);
                 return news;
@@ -1498,27 +1479,24 @@ impl Sheet {
                     self.take_step(lane, Mark::Fighting);
                     self.engage(rules, pick, rng)
                 }
-                Call::Fight(Pick::Bright) | Call::Mend | Call::Clear | Call::Take => {
-                    refused(Refusal::WrongCall)
-                }
+                Call::Fight(Pick::Bright) | Call::Clear | Call::Take => refused(Refusal::WrongCall),
             },
             Node::Bright => match call {
                 Call::Fight(Pick::Bright) => {
                     self.take_step(lane, Mark::Fighting);
                     self.engage(rules, Pick::Bright, rng)
                 }
-                Call::Fight(Pick::Fair | Pick::Lower) | Call::Mend | Call::Clear | Call::Take => {
+                Call::Fight(Pick::Fair | Pick::Lower) | Call::Clear | Call::Take => {
                     refused(Refusal::WrongCall)
                 }
             },
             Node::Rest => match call {
-                Call::Mend => self.mend(rules, lane),
                 Call::Clear => self.clear(lane),
                 Call::Fight(_) | Call::Take => refused(Refusal::WrongCall),
             },
             Node::Cache => match call {
                 Call::Take => self.cache(rules, lane, rng),
-                Call::Fight(_) | Call::Mend | Call::Clear => refused(Refusal::WrongCall),
+                Call::Fight(_) | Call::Clear => refused(Refusal::WrongCall),
             },
         }
     }
@@ -1572,34 +1550,15 @@ impl Sheet {
         }
     }
 
-    /// A rest spent on the signal. Allowed with nothing to mend: a rest is
-    /// also just a step, and somebody whole still has to get past it.
-    fn mend(&mut self, rules: &Rules, lane: u8) -> Outcome {
-        self.take_step(lane, Mark::Mended);
-        let restored = rules
-            .mend(self.max_signal())
-            .min(self.max_signal() - self.signal);
-        self.signal += restored;
-        let line = match restored {
-            0 => "your signal was already whole.".to_string(),
-            n => format!("+{n} signal. {}/{}.", self.signal, self.max_signal()),
-        };
-        Outcome {
-            applied: Applied::Mended { restored },
-            lines: vec![MEND_LINE.to_string(), line],
-        }
-    }
-
-    /// A rest spent on the deck: every static card out of it. Refused,
-    /// and the ration kept, with no static to clear.
+    /// A rest: every static card out of the deck. Taken with a clean
+    /// deck too: a rest is also just a step, and somebody clean still has
+    /// to get past it.
     fn clear(&mut self, lane: u8) -> Outcome {
         let cards = usize::from(self.road.static_cards);
-        if cards == 0 {
-            return refused(Refusal::NoStatic);
-        }
         self.take_step(lane, Mark::Cleared);
         self.road.static_cards = 0;
         let line = match cards {
+            0 => "your deck was already clean.".to_string(),
             1 => "1 static card gone. the deck is clean.".to_string(),
             n => format!("{n} static cards gone. the deck is clean."),
         };
@@ -2077,7 +2036,6 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::WrongCall => "that is not what waits there.",
         Refusal::NoEnergy => "not enough energy left this turn.",
         Refusal::NoCard => "there is no card there.",
-        Refusal::NoStatic => "there is no static in your deck to shake out.",
         Refusal::CardWaiting => "a new card is waiting for you. pick it before the next step.",
         Refusal::NoDraft => "no new card is waiting for you.",
         Refusal::NotOffered => "that card is not on offer.",

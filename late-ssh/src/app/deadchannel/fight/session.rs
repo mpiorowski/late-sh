@@ -184,14 +184,13 @@ impl FightSession {
         self.sheet.as_ref()?.node_ahead(picker.lane)
     }
 
-    /// A step key on the road (`f`, `g`, `b`, `h`, `c`, `t`). With the
-    /// road over for the day (spent, or the signal down: the panel is
-    /// showing the day's card instead of a step) the key closes it. A call
-    /// the node under the cursor does not answer is ignored, so a key
-    /// never spends a ration on a refusal. A fight opens the scene; a rest
-    /// or a cache is taken where the runner stands, and the road stays
-    /// open on the next step.
-    pub(crate) fn call(&mut self, call: Call) {
+    /// A step on the road (Enter, or `g`). With the road over for the day
+    /// (spent, or the signal down: the panel is showing the day's card
+    /// instead of a step) the key closes it. A call the node under the
+    /// cursor does not answer is ignored, so a key never spends a ration
+    /// on a refusal. A fight opens the scene; a rest or a cache is taken
+    /// where the runner stands, and the road stays open on the next step.
+    fn call(&mut self, call: Call) {
         let over = self.sheet.as_ref().is_some_and(Sheet::road_over);
         if over {
             self.close();
@@ -208,7 +207,7 @@ impl FightSession {
         let answers = match (self.node_ahead(), call) {
             (Some(Node::Glyph), Call::Fight(Pick::Fair | Pick::Lower)) => true,
             (Some(Node::Bright), Call::Fight(Pick::Bright)) => true,
-            (Some(Node::Rest), Call::Mend | Call::Clear) => true,
+            (Some(Node::Rest), Call::Clear) => true,
             (Some(Node::Cache), Call::Take) => true,
             (Some(Node::Glyph | Node::Bright | Node::Rest | Node::Cache), _) => false,
             // No mirror yet: the row decides.
@@ -222,7 +221,7 @@ impl FightSession {
                 self.open_scene();
                 self.request(Command::Step { lane, call });
             }
-            Call::Mend | Call::Clear | Call::Take => {
+            Call::Clear | Call::Take => {
                 self.request(Command::Step { lane, call });
             }
         }
@@ -247,20 +246,22 @@ impl FightSession {
         true
     }
 
-    /// Enter on the road: the plain thing to do with the node under the
-    /// cursor. A glyph is fought, a rest mends (or clears the deck when
-    /// the signal is whole and there is static in it, `Sheet::rest_clears`),
-    /// a cache is taken.
+    /// Enter on the road: the one thing the node under the cursor is
+    /// for. A glyph or a bright one is fought, a rest clears the deck, a
+    /// cache is taken.
     pub(crate) fn enter(&mut self) {
-        let rest_clears = self.sheet.as_ref().is_some_and(Sheet::rest_clears);
-        let call = match (self.node_ahead(), rest_clears) {
-            (Some(Node::Glyph) | None, _) => Call::Fight(Pick::Fair),
-            (Some(Node::Bright), _) => Call::Fight(Pick::Bright),
-            (Some(Node::Rest), true) => Call::Clear,
-            (Some(Node::Rest), false) => Call::Mend,
-            (Some(Node::Cache), _) => Call::Take,
+        let call = match self.node_ahead() {
+            Some(Node::Glyph) | None => Call::Fight(Pick::Fair),
+            Some(Node::Bright) => Call::Fight(Pick::Bright),
+            Some(Node::Rest) => Call::Clear,
+            Some(Node::Cache) => Call::Take,
         };
         self.call(call);
+    }
+
+    /// `g` on the road: the glyph a level down, on a glyph's node only.
+    pub(crate) fn step_down(&mut self) {
+        self.call(Call::Fight(Pick::Lower));
     }
 
     /// The lanes the next step can reach, top to bottom, from the mirror;
@@ -486,7 +487,6 @@ impl FightSession {
             | Applied::Reset
             | Applied::Drank { .. }
             | Applied::Carted { .. }
-            | Applied::Mended { .. }
             | Applied::Cleared { .. }
             | Applied::Cached { .. } => scene.lines.extend(lines),
         }

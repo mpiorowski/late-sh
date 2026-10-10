@@ -242,19 +242,11 @@ pub const SECTIONS: &[Section] = &[
                 },
                 Key {
                     key: "enter",
-                    does: "step: fight the glyph, mend at a rest, take a cache",
+                    does: "step: fight the glyph, clear the deck at a rest, take a cache",
                 },
                 Key {
                     key: "g",
                     does: "on a glyph: fight the one a level down, half pay",
-                },
-                Key {
-                    key: "h",
-                    does: "at a rest: mend your signal",
-                },
-                Key {
-                    key: "c",
-                    does: "at a rest: clear the static out of your deck",
                 },
                 Key {
                     key: "s",
@@ -271,7 +263,7 @@ pub const SECTIONS: &[Section] = &[
                 "*five steps* of every road are glyphs in every lane, the first and the last always. every road is five fights, whichever way you walk it.",
             ),
             Block::Rule(
-                "a *rest* is one or the other: mend *35%* of your signal, or shake every static card out of your deck.",
+                "a *rest* shakes every static card out of your deck. it never mends your signal: that is patch's.",
             ),
             Block::Rule(
                 "a *cache* is bits for the taking: *half* of what the glyph of your level pays, and no fight.",

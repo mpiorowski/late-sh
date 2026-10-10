@@ -150,5 +150,23 @@ fn a_run_reaches_the_lane_it_stands_in_and_the_ones_beside_it() {
     assert_eq!(road_for(day(24)).node(1, 1), Some(Node::Glyph));
 }
 
+/// A road stored the day rests still mended reads back with that step a
+/// rest taken, so the row of anybody mid-road at the deploy still loads.
+#[test]
+fn a_stored_mended_step_reads_as_a_rest_taken() {
+    let stored = serde_json::json!({
+        "path": [{"lane": 1, "mark": "mended"}],
+        "static_cards": 0,
+    });
+    let run: RoadRun = serde_json::from_value(stored).expect("an old road reads");
+    assert_eq!(
+        run.path,
+        vec![Trace {
+            lane: 1,
+            mark: Mark::Cleared
+        }]
+    );
+}
+
 /// The road of 2026-09-24, top lane first.
 const PINNED_ROAD: [&str; 3] = ["g$B++B+$gg", "g+g$+g$+gg", "g$g+$g$$gg"];

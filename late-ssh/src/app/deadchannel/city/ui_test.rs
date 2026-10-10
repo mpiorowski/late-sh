@@ -197,6 +197,49 @@ fn render_with_sheet(state: &State, sheet: &Sheet, till: Option<&str>) -> String
     screen
 }
 
+/// Where `needle` first sits on `screen`: its row and its column.
+fn spot(screen: &str, needle: &str) -> (usize, usize) {
+    screen
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.find(needle)
+                .map(|at| (row, line[..at].chars().count()))
+        })
+        .unwrap_or_else(|| panic!("{needle} on the screen\n{screen}"))
+}
+
+/// A shop's panel holds its frame whatever happens at the counter: the
+/// counter's word arriving, or a purchase changing what the keys say.
+#[test]
+fn a_shop_panel_keeps_its_frame_whatever_the_counter_says() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Armorer);
+    state.pick_down();
+    state.pick_down();
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.level = 3;
+    sheet.bits = 1300;
+    sheet.weapon_tier = 2;
+    let corners = |screen: &str| (spot(screen, " the armorer "), spot(screen, " Esc closes "));
+
+    let quiet = render_with_sheet(&state, &sheet, None);
+    let word =
+        "the armorer hands over the tire iron. the box cutter goes back on the wall. 937 bits.";
+    let answered = render_with_sheet(&state, &sheet, Some(word));
+    assert!(answered.contains(word), "{answered}");
+    assert_eq!(corners(&answered), corners(&quiet), "{answered}");
+
+    sheet.weapon_tier = 3;
+    sheet.bits = 363;
+    let bought = render_with_sheet(&state, &sheet, Some(word));
+    assert!(bought.contains("you carry that, or better"), "{bought}");
+    assert_eq!(corners(&bought), corners(&quiet), "{bought}");
+}
+
 /// Dead Air lists what each glass does at this level, and spells the
 /// refusal the row would give ahead of the keys.
 #[test]

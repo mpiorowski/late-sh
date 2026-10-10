@@ -1442,9 +1442,6 @@ fn run_words(events: &[Event]) -> String {
                     }
                 ));
             }
-            Event::Mended { restored, signal } => {
-                out.push_str(&format!(". mended +{restored}, signal {signal}\n"));
-            }
             Event::Cleared { cards } => {
                 out.push_str(&format!(". {cards} static shaken out of the deck\n"));
             }

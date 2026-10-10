@@ -419,8 +419,9 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         text.contains("── ▚ glyph  ▓ bright  + rest  $ cache  ─"),
         "{text}"
     );
-    // Under it, the glyph on that lane.
-    assert!(text.contains("▸ [f]"), "{text}");
+    // Under it, the glyph on that lane, with no key of its own: Enter
+    // fights it.
+    assert!(!text.contains("[f]"), "{text}");
     assert!(
         text.contains("hiss  lv 2   the glyph of your level"),
         "{text}"
@@ -442,7 +443,13 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
     // The same panel fits a terminal with no rows to spare: the lanes
     // close up, nothing is dropped.
     let short = render_road(&sheet, &picker, 21, None);
-    for needle in [" the road ", "[▚]", "▸ [f]", "[Enter] fight", "esc back"] {
+    for needle in [
+        " the road ",
+        "[▚]",
+        "hiss  lv 2",
+        "[Enter] fight",
+        "esc back",
+    ] {
         assert!(short.contains(needle), "{needle}\n{short}");
     }
 
@@ -497,23 +504,25 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
 
     let (at, picker) = before(&sheet, Node::Bright);
     let bright = render_road(&at, &picker, 30, None);
-    assert!(bright.contains("▸ [b]"), "{bright}");
+    assert!(bright.contains("[Enter] fight"), "{bright}");
+    assert!(!bright.contains("[b]"), "{bright}");
     assert!(bright.contains("bright stray signal  lv 4"), "{bright}");
     assert!(bright.contains("risky"), "{bright}");
     assert!(bright.contains("· a crystal"), "{bright}");
     assert!(bright.contains("[▓]"), "{bright}");
 
     let (at, picker) = before(&sheet, Node::Rest);
-    let rest = render_road(&at, &picker, 30, Some("+3 signal. 12/40."));
+    let rest = render_road(&at, &picker, 30, Some("1 static card gone."));
     assert!(rest.contains("a doorway out of the rain"), "{rest}");
-    assert!(rest.contains("[h] mend    +14 signal, to 26/40"), "{rest}");
     assert!(
-        rest.contains("[c] clear   3 static cards out of your deck"),
+        rest.contains("clear   3 static cards out of your deck"),
         "{rest}"
     );
+    assert!(rest.contains("[Enter] clear the deck"), "{rest}");
+    assert!(!rest.contains("mend"), "a rest no longer mends\n{rest}");
     assert!(rest.contains("[+]"), "{rest}");
     assert!(
-        rest.contains("+3 signal. 12/40."),
+        rest.contains("1 static card gone."),
         "the last step's word\n{rest}"
     );
 
@@ -521,9 +530,11 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
     let cache = render_road(&at, &picker, 30, None);
     assert!(cache.contains("a cache"), "{cache}");
     assert!(
-        cache.contains(&format!("[t] take    {} bits", RULES.cache(4))),
+        cache.contains(&format!("take    {} bits", RULES.cache(4))),
         "{cache}"
     );
+    assert!(cache.contains("[Enter] take it"), "{cache}");
+    assert!(!cache.contains("[t]"), "{cache}");
     assert!(cache.contains("[$]"), "{cache}");
 }
 
@@ -565,7 +576,7 @@ fn a_road_that_is_over_is_the_days_card() {
     );
     assert!(down.contains("[s] copy the day's card"), "{down}");
     assert!(down.contains("[Enter] back to the street"), "{down}");
-    assert!(!down.contains("[f]"), "{down}");
+    assert!(!down.contains("[Enter] fight"), "{down}");
     assert!(
         !down.contains("[▚]"),
         "no cursor on a road that is over\n{down}"

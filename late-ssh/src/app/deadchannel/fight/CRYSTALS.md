@@ -27,8 +27,8 @@ or a rule on the same sheet under the same row lock (`fight/state.rs`,
 
 ## The bright glyph
 
-`Pick::Bright`, the call a `Node::Bright` answers, key `b` (or Enter)
-with the road's cursor on it.
+`Pick::Bright`, the call a `Node::Bright` answers, Enter with the road's
+cursor on it.
 
 - Two nodes of every day's road are bright (`road::BRIGHT_NODES`), each
   on a fight step of its own and never the first, one lane each.

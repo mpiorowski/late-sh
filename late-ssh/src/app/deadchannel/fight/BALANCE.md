@@ -83,7 +83,6 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `foe_signal_percent` | 100 | a glyph's signal over the table's: how many turns a fight lasts |
 | `hit_percent` | 185 | a glyph's hit: its attack less a quarter of your defense, times this |
 | `block_percent` | 60 | a block card, as a share of your defense |
-| `rest_mend_percent` | 35 | what a rest mends of the signal's max |
 | `cache_percent` | 50 | a cache, as a share of the fair glyph's bits |
 | `old_signal` | 290 / 39 / 22 | the Old Signal's signal, attack, defense |
 | `crystal_drop_one_in` | 12 | crystals from plain kills |
@@ -130,7 +129,7 @@ runs, drop, earnings, and spending), the kit each level was fought in
 Between two steps the runner shops in the order a person would
 (`Run::shop`): the card owed, patch, the loan, the armorer, the blade
 shop, the bar. `route` is how it picks a lane: a few steps read ahead, a
-rest worth what the signal and the deck are missing, a cache worth a
+rest worth the static in the deck, a cache worth a
 cache, a bright glyph a detour for the player who takes them and a berth
 for the one who does not. A runner under its run line stays in the fight
 when the way out would be the end of the day. A `Bench` is the rules
@@ -317,8 +316,9 @@ What the tables say:
   strike or the block: the kit sits within a tier of the level all the
   way up and the top kit waits for level 14.
 - **Patch is the key's bill.** 11% of what the ambient runner earns and
-  3% for the careful one. The rests on the road are the free
-  alternative.
+  3% for the careful one, measured while rests still mended for free.
+  Rests only clear the deck now, so patch is the one heal between
+  rolls and this bill is due a fresh `make deadchannel-arena`.
 - **The bright glyph is safe to read and a risk on the key.** Read sharp
   it goes down 93% of the time or better from level 4; on the key it is
   64% at its worst (level 9) and leaves about a third of the signal. The

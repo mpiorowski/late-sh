@@ -66,7 +66,7 @@ live in.
   exp (`EXP_KEEP_ON_DEATH`); the armorer's wall costs 225% of LoGD's
   ladder (`PRICE_PERCENT`, "The crystal pass"), because at LoGD's
   prices a runner held the top kit half way up; and patch is a bit a
-  point (`PATCH_PERCENT`), the price of not walking to a rest. The
+  point (`PATCH_PERCENT`), the signal's price between rolls. The
   fight itself is no longer LoGD's: the round ("The road pass")
   replaced the exchange loop and the door's resolver. This is the real salvage from the dragon work, plus
   the pure-resolver + per-user save schema *shapes* as a parts bin.
@@ -1506,8 +1506,8 @@ talk about.
   run ever runs past that, we built a sudoku.
 - **Node kinds:** fight (the round); elite (both intents live, a card
   drop on the kill: where jokers enter later, one at a time, as rewards
-  rather than a shop); rest (clear static from the deck, or heal
-  signal: the one decision every Spire player argues about); cache
+  rather than a shop); rest (clear static from the deck; the signal
+  is patch's); cache
   (bits, which walk back up to the armorer: the road is the faucet, the
   street is the sink); event (a line and a choice, pure copy in the
   voice, an afternoon each: the content slot that never runs dry).

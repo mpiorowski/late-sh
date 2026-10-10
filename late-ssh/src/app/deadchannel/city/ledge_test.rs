@@ -85,3 +85,33 @@ fn leaning_out_says_what_the_step_off_takes_and_what_it_keeps() {
     ));
     assert!(answered.contains("your signal is down."), "{answered}");
 }
+
+/// The ledge box holds its frame leaning out or not, answered or not.
+#[test]
+fn the_ledge_box_keeps_its_frame() {
+    let corner = |screen: &str| {
+        screen
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                line.find(" the ledge ")
+                    .map(|at| (row, line[..at].chars().count()))
+            })
+            .unwrap_or_else(|| panic!("the ledge box\n{screen}"))
+    };
+    let idle = text_of(&render_with(120, 40, 3, false, None));
+    let armed = text_of(&render_with(120, 40, 3, true, None));
+    let fell = text_of(&render_with(
+        120,
+        40,
+        3,
+        true,
+        Some(
+            "you step off the ledge. the fall is longer than the city. you wake at the top of Static Row. level 1, bare hands, empty pockets. the bits machine still knows your name. 400 bits owed.",
+        ),
+    ));
+    assert_eq!(corner(&armed), corner(&idle), "{armed}");
+    assert_eq!(corner(&fell), corner(&idle), "{fell}");
+    // Its last sentence, wrapped onto the last of the word's rows.
+    assert!(fell.contains("owed."), "the whole answer\n{fell}");
+}

@@ -8,7 +8,7 @@
 //! ([`FIGHT_STEPS`] steps are fights in all three lanes), so the pace of
 //! the climb belongs to the rations and never to the route. What a route
 //! chooses is which fights are the bright ones, and what the steps between
-//! them give: a rest or a cache.
+//! them give: a rest (the static out of the deck) or a cache (bits).
 //!
 //! And the run on it: where one runner stands on today's road and how
 //! each step went (`RoadRun`, the `road` column of the runner row), wiped
@@ -37,7 +37,7 @@ pub enum Node {
     Glyph,
     /// The bright glyph of your level: harder, double bits, a crystal.
     Bright,
-    /// A doorway out of the rain: mend the signal, or clear the deck.
+    /// A doorway out of the rain: the static shaken out of the deck.
     Rest,
     /// Bits somebody left.
     Cache,
@@ -174,7 +174,9 @@ pub enum Mark {
     Ran,
     /// The signal dropped here.
     Fell,
-    Mended,
+    /// A rest taken. Rests used to mend too; a road stored before that
+    /// still says `mended`, and reads as the rest it was.
+    #[serde(alias = "mended")]
     Cleared,
     Cached,
 }

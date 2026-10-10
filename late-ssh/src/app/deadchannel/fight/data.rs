@@ -415,8 +415,8 @@ pub const PAY_EXP_PERCENT: i64 = 540;
 pub const PRICE_PERCENT: i64 = 225;
 
 /// What patch charges per missing point of signal, per level, as a
-/// percentage of a bit. A bit a point: the road's rests mend for nothing,
-/// so patch is the price of not walking to one (`fight/BALANCE.md`).
+/// percentage of a bit. A bit a point: the road mends nothing, so patch
+/// (or the roll) is how the signal comes back (`fight/BALANCE.md`).
 pub const PATCH_PERCENT: i64 = 100;
 
 /// [`PATCH_PERCENT`] as the panel says it, so the copy moves with the knob.
@@ -454,8 +454,6 @@ pub struct Rules {
     pub hit_percent: u32,
     /// What a block card holds, as a percentage of your defense.
     pub block_percent: u32,
-    /// What a rest on the road mends, as a percentage of the signal's max.
-    pub rest_mend_percent: i32,
     /// What a cache on the road holds, as a percentage of what the glyph
     /// of your level pays.
     pub cache_percent: i64,
@@ -487,7 +485,6 @@ pub const RULES: Rules = Rules {
     foe_signal_percent: FOE_SIGNAL_PERCENT,
     hit_percent: HIT_PERCENT,
     block_percent: BLOCK_PERCENT,
-    rest_mend_percent: REST_MEND_PERCENT,
     cache_percent: CACHE_PERCENT,
     old_signal: OLD_SIGNAL_TIER,
     jab_percent: JAB_PERCENT,
@@ -551,11 +548,6 @@ impl Rules {
     /// The bits in a cache on the road for a runner of `level`.
     pub fn cache(&self, level: i32) -> i64 {
         self.foe(level).2.bits * self.cache_percent / 100
-    }
-
-    /// What a rest mends of a signal whose max is `max_signal`, rounded up.
-    pub fn mend(&self, max_signal: i32) -> i32 {
-        (max_signal * self.rest_mend_percent + 99) / 100
     }
 
     /// The glyph a level below a runner of `level`, its pay cut to
@@ -683,9 +675,6 @@ pub const SEVER_PERCENT: i32 = 250;
 /// Static cards a `Noise` turn puts into the deck.
 pub const NOISE_CARDS: usize = 2;
 
-/// What a rest on the road mends, as a percentage of the signal's max.
-pub const REST_MEND_PERCENT: i32 = 35;
-
 /// What a cache on the road holds, as a percentage of what the glyph of
 /// your level pays.
 pub const CACHE_PERCENT: i64 = 50;
@@ -768,8 +757,7 @@ pub const BRIGHT_LINE: &str = "this one is bright. it burns harder, and it is ca
 /// The lower glyph's arrival, under its own line: the step down is said.
 pub const STEPPED_DOWN_LINE: &str = "you went looking for something smaller. it pays like it.";
 
-/// A rest on the road, by what was done with it.
-pub const MEND_LINE: &str = "a dry doorway out of the rain. you sit until the picture steadies.";
+/// A rest on the road: the static shaken out of the deck.
 pub const CLEAR_LINE: &str =
     "a dry doorway out of the rain. you shake the static out of your deck.";
 

@@ -12,14 +12,19 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 
 use super::map::Neon;
-use super::ui::{INK, INK_DIM, NIGHT, Rgb, ink, lit, mix, neon_rgb, rgb_color, scale};
+use super::ui::{INK, INK_DIM, NIGHT, Rgb, draw_framed, ink, lit, mix, neon_rgb, rgb_color, scale};
 
+/// The ledge box is this wide, border included, in either state.
+const LEDGE_WIDTH: u16 = 80;
+/// Rows at the foot of the ledge box kept for the row's answer: the
+/// fall says three sentences.
+const LEDGE_WORD_ROWS: u16 = 3;
 /// Where the horizon sits, as a fraction of the height from the top.
 const HORIZON: f32 = 0.28;
 /// The haze the far city dissolves into, and the sky above it: the sky
@@ -305,57 +310,63 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64, view: LedgeView<'_>) {
         title_rect,
     );
 
+    // Three rows in either state, the keys on the last, and the row's
+    // answer in rows of its own under them: leaning out or a refusal
+    // never resizes the box.
     let key = lit(Neon::Amber);
-    let mut lines = Vec::new();
-    if let Some(till) = view.till {
-        lines.push(Line::from(Span::styled(till.to_string(), lit(Neon::Cyan))));
-    }
-    let border = match view.armed {
-        true => {
-            lines.push(Line::from(Span::styled(
-                "you lean out over the drop. level 1, bare hands, empty pockets and locker.",
-                lit(Neon::Red),
-            )));
-            lines.push(Line::from(Span::styled(
-                "the marks, the peak, and the debt come down with you.",
-                ink(INK_DIM),
-            )));
-            lines.push(Line::from(vec![
-                Span::styled("[r] ", key),
-                Span::styled("step off", ink(INK)),
-                Span::styled("   any other key leans back", ink(INK_DIM)),
-            ]));
-            lit(Neon::Red)
-        }
-        false => {
-            lines.push(Line::from(vec![
-                Span::styled("[r] ", key),
-                Span::styled("lean out", ink(INK)),
-                Span::styled("   [Enter] ", key),
-                Span::styled("step back", ink(INK)),
-            ]));
-            ink(INK_DIM)
-        }
+    let (lines, border) = match view.armed {
+        true => (
+            vec![
+                Line::from(Span::styled(
+                    "you lean out over the drop. level 1, bare hands, empty pockets and locker.",
+                    lit(Neon::Red),
+                )),
+                Line::from(Span::styled(
+                    "the marks, the peak, and the debt come down with you.",
+                    ink(INK_DIM),
+                )),
+                Line::from(vec![
+                    Span::styled("[r] ", key),
+                    Span::styled("step off", ink(INK)),
+                    Span::styled("   any other key leans back", ink(INK_DIM)),
+                ]),
+            ],
+            lit(Neon::Red),
+        ),
+        false => (
+            vec![
+                Line::from(Span::styled(
+                    "a long way down, and a way to start over.",
+                    ink(INK_DIM),
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[r] ", key),
+                    Span::styled("lean out", ink(INK)),
+                    Span::styled("   [Enter] ", key),
+                    Span::styled("step back", ink(INK)),
+                ]),
+            ],
+            ink(INK_DIM),
+        ),
     };
-    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4)
-        .min(area.width.saturating_sub(2));
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
+    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let width = LEDGE_WIDTH.min(area.width.saturating_sub(2));
+    let body_rows = body.line_count(width.saturating_sub(2)) as u16;
+    let height = (body_rows + 1 + LEDGE_WORD_ROWS + 2).min(area.height.saturating_sub(1));
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width + 1),
         y: area.y + area.height.saturating_sub(height),
         width,
         height,
     };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(ink(INK))
+        .border_style(border)
+        .title(Span::styled(" the ledge ", lit(Neon::White)));
     frame.render_widget(Clear, rect);
-    frame.render_widget(
-        Paragraph::new(lines).style(ink(INK)).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border)
-                .title(Span::styled(" the ledge ", lit(Neon::White))),
-        ),
-        rect,
-    );
+    draw_framed(frame, rect, block, body, view.till, LEDGE_WORD_ROWS);
 }
 
 #[cfg(test)]

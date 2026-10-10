@@ -354,7 +354,7 @@ fn the_wire_hears_only_the_results_worth_a_story() {
     assert_eq!(sheet.news(&Applied::Escaped), vec![]);
     assert_eq!(sheet.news(&Applied::Round), vec![]);
     assert_eq!(sheet.news(&Applied::Played { card: Card::Strike }), vec![]);
-    assert_eq!(sheet.news(&Applied::Mended { restored: 3 }), vec![]);
+    assert_eq!(sheet.news(&Applied::Cleared { cards: 3 }), vec![]);
 
     // The first glyph ever.
     sheet.kills = 1;
@@ -1843,7 +1843,7 @@ fn a_step_reaches_the_lane_beside_and_a_node_answers_only_its_own_call() {
     let call = match node {
         Node::Glyph => Call::Fight(Pick::Fair),
         Node::Bright => Call::Fight(Pick::Bright),
-        Node::Rest => Call::Mend,
+        Node::Rest => Call::Clear,
         Node::Cache => Call::Take,
     };
     let refused = sheet.apply(Command::Step { lane: 2, call }, &mut rng);
@@ -1853,7 +1853,7 @@ fn a_step_reaches_the_lane_beside_and_a_node_answers_only_its_own_call() {
     assert_eq!(sheet, before);
 
     // A glyph's node is not a rest and not a cache.
-    for call in [Call::Mend, Call::Clear, Call::Take] {
+    for call in [Call::Clear, Call::Take] {
         let mut fresh_day = fresh();
         let refused = fresh_day.apply(Command::Step { lane: 1, call }, &mut rng);
         assert_eq!(refused.applied, Applied::Refused(Refusal::WrongCall));
@@ -1881,9 +1881,11 @@ fn before_a(node: Node) -> (Sheet, u8) {
     (sheet, lane as u8)
 }
 
-/// A rest is one or the other: the signal, or the deck.
+/// A rest shakes the static out of the deck and never touches the
+/// signal; with a clean deck it is still a step, the ration spent, so a
+/// road of rests never stands in the runner's way.
 #[test]
-fn a_rest_mends_the_signal_or_clears_the_deck() {
+fn a_rest_clears_the_deck_and_lets_a_clean_one_through() {
     let mut rng = StdRng::seed_from_u64(1);
     let (mut sheet, lane) = before_a(Node::Rest);
     sheet.level = 4;
@@ -1891,28 +1893,6 @@ fn a_rest_mends_the_signal_or_clears_the_deck() {
     sheet.signal = 10;
     sheet.road.static_cards = 3;
     let rations = sheet.rations_left;
-
-    let mut mended = sheet.clone();
-    let outcome = mended.apply(
-        Command::Step {
-            lane,
-            call: Call::Mend,
-        },
-        &mut rng,
-    );
-    // 35% of forty.
-    assert_eq!(outcome.applied, Applied::Mended { restored: 14 });
-    assert_eq!(
-        (mended.signal, mended.road.static_cards, mended.rations_left),
-        (24, 3, rations - 1)
-    );
-    assert_eq!(
-        mended.road.path,
-        vec![Trace {
-            lane,
-            mark: Mark::Mended
-        }]
-    );
 
     let mut cleared = sheet.clone();
     let outcome = cleared.apply(
@@ -1931,45 +1911,32 @@ fn a_rest_mends_the_signal_or_clears_the_deck() {
         ),
         (10, 0, rations - 1)
     );
-
-    // A mend never goes past the max, and is still a step for a runner
-    // who is whole; a clear with nothing to clear keeps the ration.
-    let mut whole = sheet.clone();
-    whole.signal = 38;
-    whole.road.static_cards = 0;
-    let topped = whole.apply(
-        Command::Step {
+    assert_eq!(
+        cleared.road.path,
+        vec![Trace {
             lane,
-            call: Call::Mend,
-        },
-        &mut rng,
+            mark: Mark::Cleared
+        }]
     );
-    assert_eq!(topped.applied, Applied::Mended { restored: 2 });
+
     let mut clean = sheet.clone();
     clean.road.static_cards = 0;
-    let before = clean.clone();
-    let refused = clean.apply(
+    let outcome = clean.apply(
         Command::Step {
             lane,
             call: Call::Clear,
         },
         &mut rng,
     );
-    assert_eq!(refused.applied, Applied::Refused(Refusal::NoStatic));
-    assert_eq!(clean, before);
-}
-
-/// The plain call at a rest (Enter) is the mend, unless the mend would
-/// buy nothing and the deck has static to shake out.
-#[test]
-fn the_plain_call_at_a_rest_clears_only_when_whole_with_static() {
-    let mut sheet = fresh();
-    sheet.signal = sheet.max_signal();
-    assert!(!sheet.rest_clears(), "whole and clean: the mend");
-    sheet.road.static_cards = 2;
-    assert!(sheet.rest_clears(), "whole with static: the clear");
-    sheet.signal -= 1;
-    assert!(!sheet.rest_clears(), "hurt: the mend comes first");
+    assert_eq!(outcome.applied, Applied::Cleared { cards: 0 });
+    assert_eq!(
+        outcome.lines.last().map(String::as_str),
+        Some("your deck was already clean.")
+    );
+    assert_eq!(
+        (clean.signal, clean.road.static_cards, clean.rations_left),
+        (10, 0, rations - 1)
+    );
 }
 
 /// A cache pays a share of what the glyph of your level pays, and the

@@ -386,10 +386,6 @@ pub enum Event {
         lane: u8,
         node: Node,
     },
-    Mended {
-        restored: i32,
-        signal: i32,
-    },
     Cleared {
         cards: usize,
     },
@@ -795,15 +791,7 @@ impl Run<'_> {
                 })
             }
             Node::Bright => Call::Fight(Pick::Bright),
-            Node::Rest => {
-                let missing = self.sheet.max_signal() - self.sheet.signal;
-                // The deck when the signal is nearly whole and there is
-                // static to shake out; the signal otherwise.
-                match self.sheet.road.static_cards > 0 && missing * 6 < self.sheet.max_signal() {
-                    true => Call::Clear,
-                    false => Call::Mend,
-                }
-            }
+            Node::Rest => Call::Clear,
             Node::Cache => Call::Take,
         };
         let step = self.sheet.step();
@@ -812,11 +800,6 @@ impl Run<'_> {
         let kit = (self.sheet.weapon_tier, self.sheet.armor_tier);
         let pick = match self.act(Command::Step { lane, call }) {
             Applied::Started { pick } => pick,
-            Applied::Mended { restored } => {
-                let signal = self.sheet.signal;
-                self.journal.note(|| Event::Mended { restored, signal });
-                return false;
-            }
             Applied::Cleared { cards } => {
                 self.journal.note(|| Event::Cleared { cards });
                 return false;
@@ -1017,21 +1000,20 @@ const ROUTE_FADE: f64 = 0.6;
 /// The lane a simulated runner steps to, and what waits there: the one
 /// whose next few steps are worth the most to the runner as it stands. A
 /// bright glyph is worth a detour to the player who takes them and is
-/// walked around by the one who does not; a rest is worth what the signal
-/// and the deck are missing; a cache is a cache.
+/// walked around by the one who does not; a rest is worth the static in
+/// the deck; a cache is a cache.
 fn route(player: &Player, sheet: &Sheet, road: &Road, bench: &mut Bench) -> (u8, Node) {
     let wants_bright = match player.takes_bright {
         Some(line) => bench.threat(Pick::Bright, sheet) <= line,
         None => false,
     };
-    let missing = 1.0 - f64::from(sheet.signal) / f64::from(sheet.max_signal().max(1));
     let worth = |node: Node| match node {
         Node::Glyph => 0.0,
         Node::Bright => match wants_bright {
             true => 3.0,
             false => -3.0,
         },
-        Node::Rest => missing * 4.0 + f64::from(sheet.road.static_cards) * 0.6,
+        Node::Rest => f64::from(sheet.road.static_cards) * 0.6,
         Node::Cache => 1.0,
     };
     fn best(road: &Road, worth: &dyn Fn(Node) -> f64, step: i32, from: u8, depth: i32) -> f64 {

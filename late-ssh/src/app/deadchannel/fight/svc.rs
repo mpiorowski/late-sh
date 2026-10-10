@@ -441,7 +441,6 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Played { .. } => FightBeat::Played,
         Applied::Round => FightBeat::Round,
         Applied::Drafted { .. } => FightBeat::Drafted,
-        Applied::Mended { .. } => FightBeat::Mended,
         Applied::Cleared { .. } => FightBeat::Cleared,
         Applied::Cached { .. } => FightBeat::Cached,
         Applied::Won { .. } => FightBeat::Won,

@@ -236,8 +236,7 @@ pub enum FightBeat {
     Round,
     /// A card drafted into the deck.
     Drafted,
-    /// A rest on the road spent on the signal, or on the deck.
-    Mended,
+    /// A rest on the road: the static out of the deck.
     Cleared,
     /// A cache on the road taken.
     Cached,
@@ -1464,7 +1463,6 @@ mod inner {
             FightBeat::Played => "played",
             FightBeat::Round => "round",
             FightBeat::Drafted => "drafted",
-            FightBeat::Mended => "mended",
             FightBeat::Cleared => "cleared",
             FightBeat::Cached => "cached",
             FightBeat::Won => "won",
