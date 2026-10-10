@@ -212,6 +212,7 @@ pub struct SessionConfig {
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub calendar_service: crate::app::calendar::svc::CalendarService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
     pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
@@ -462,6 +463,7 @@ pub struct App {
     /// UI state
     pub(super) size: (u16, u16),
     pub(crate) screen: Screen,
+    pub(crate) calendar: crate::app::calendar::state::CalendarState,
     pub(super) banner: Option<Banner>,
     pub(crate) show_settings: bool,
     pub(crate) show_splash: bool,
@@ -1526,6 +1528,10 @@ impl App {
             running: true,
             size: (cols, rows),
             screen: landing_screen,
+            calendar: crate::app::calendar::state::CalendarState::new(
+                config.calendar_service,
+                config.user_id,
+            ),
             banner: aquarium_loss_banner,
             show_settings: false,
             show_splash: true,
@@ -2477,6 +2483,13 @@ impl App {
     }
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {
+        self.calendar.cancel_open();
+        self.calendar.invalidate_geometry();
+        self.calendar.clear_click();
+        self.calendar.context_menu = None;
+        if screen == Screen::Calendars {
+            self.calendar.refresh();
+        }
         if self.screen == screen {
             if screen == Screen::Rebels {
                 self.enter_rebels();
@@ -2809,6 +2822,12 @@ impl App {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
+        self.calendar.invalidate_geometry();
+        self.calendar.clear_click();
+        self.calendar.context_menu = None;
+        self.profile_modal_state
+            .calendar_link
+            .set(ratatui::layout::Rect::default());
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
         self.leaderboard_page.clear_hit_regions();

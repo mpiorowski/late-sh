@@ -208,6 +208,10 @@ async fn main() -> anyhow::Result<()> {
         .with_session_registry(session_registry.clone())
         .with_irc_registry(irc_registry.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone());
+    let calendar_service = late_ssh::app::calendar::svc::CalendarService::new(db.clone());
+    let _calendar_worker = calendar_service.start_notify_worker(
+        pg_listener.subscribe(&[late_ssh::pg_listener::Channel::CalendarChanged]),
+    );
     let _article_notify_task =
         article_service.start_notify_worker(pg_listener.subscribe(ArticleService::CHANNELS));
     let feed_service = FeedService::new(db.clone());
@@ -450,6 +454,7 @@ async fn main() -> anyhow::Result<()> {
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
+        calendar_service,
         feed_service,
         cyberspace_service,
         showcase_service,

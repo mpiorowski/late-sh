@@ -42,6 +42,7 @@ impl PickerScope {
             | Screen::Darkroom
             | Screen::Artboard
             | Screen::Profiles
+            | Screen::Calendars
             | Screen::Leaderboard
             | Screen::Clubhouse
             | Screen::Nightcap

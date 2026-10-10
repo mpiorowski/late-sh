@@ -947,6 +947,7 @@ impl russh::server::Handler for ClientHandler {
             jobs_service: self.state.jobs_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,
+            calendar_service: self.state.calendar_service.clone(),
             feed_service: self.state.feed_service.clone(),
             cyberspace_service: self.state.cyberspace_service.clone(),
             showcase_service: self.state.showcase_service.clone(),

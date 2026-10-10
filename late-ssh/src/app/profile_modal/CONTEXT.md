@@ -33,6 +33,11 @@ The measured heights go back to the state as a `ScrollExtent` (interior-mutable,
 
 `j`/`k`, arrows, wheel: scroll. `PageUp`/`PageDown`: page. `g`/`G`: top/bottom. `Esc`/`q`, or a click outside: close.
 
+`c Open calendar` appears as a clickable footer for the viewer's own calendar or
+a currently published personal calendar. It opens that source on screen 7, where
+the calendar service rechecks sharing. Calendar invalidation clears public source
+metadata before reloading, and resize clears the link's rendered hit region.
+
 ## 5. Tests
 
 - `ui_test.rs`: a real profile rendered into a `TestBackend` at a wide and a short size; section order, the grid keys, the ledger rows (gift named, stipend last), the summary agreeing with the board rule, the `/chips` jump landing on the heading, and scroll clamping; the runner column beside the grid for a runner viewed by a runner (a section under it on a narrow terminal), absent for a civilian viewer or a civilian profile; the pet beside the reef for an owner of both (two sections on a narrow terminal).

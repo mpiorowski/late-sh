@@ -1722,6 +1722,7 @@ mod inner {
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active_quest_boards",
             Refresh::ShopFlairDirectory => "shop_flair_directory",
+            Refresh::CalendarNotices => "calendar_notices",
         }
     }
 
@@ -1821,6 +1822,7 @@ mod inner {
             Screen::Artboard => "artboard",
             Screen::Profiles => "profiles",
             Screen::Leaderboard => "leaderboard",
+            Screen::Calendars => "calendars",
             Screen::Clubhouse => "clubhouse",
             Screen::Nightcap => "nightcap",
             Screen::City => "city",

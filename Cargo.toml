@@ -31,6 +31,8 @@ unused_async = "warn"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
+humantime = "2.4"
+icalendar = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1.10", features = ["serde", "v7", "v4"] }

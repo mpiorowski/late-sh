@@ -868,3 +868,17 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .split(vertical[0]);
     horizontal[0]
 }
+
+pub(crate) fn draw_calendar_link(frame: &mut Frame, state: &ProfileModalState, available: bool) {
+    state.calendar_link.set(Rect::default());
+    let popup = state.popup_area();
+    if available && popup.width >= 24 && popup.height >= 4 {
+        let area = Rect::new(popup.right() - 17, popup.bottom() - 2, 15, 1);
+        frame.render_widget(
+            Paragraph::new("c Open calendar")
+                .style(Style::default().fg(theme::AMBER()).bg(theme::BG_CANVAS())),
+            area,
+        );
+        state.calendar_link.set(area);
+    }
+}

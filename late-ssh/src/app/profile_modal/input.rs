@@ -4,6 +4,18 @@ use crate::app::{
 };
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
+    let calendar_requested = matches!(event, ParsedInput::Byte(b'c') | ParsedInput::Char('c'))
+        || matches!(&event, ParsedInput::Mouse(m) if m.kind==MouseEventKind::Down && m.button==Some(MouseButton::Left) && m.x>0 && m.y>0 && app.profile_modal_state.calendar_link.get().contains((m.x-1,m.y-1).into()));
+    if calendar_requested
+        && let Some(owner) = app.profile_modal_state.viewed_user_id()
+        && (owner == app.user_id || app.calendar.public.iter().any(|p| p.owner_id == owner))
+    {
+        app.calendar.source = late_core::models::calendar::CalendarSource::Personal(owner);
+        app.calendar.events.clear();
+        app.show_profile_modal = false;
+        app.set_screen(crate::app::common::primitives::Screen::Calendars);
+        return;
+    }
     if is_close_event(&event) {
         close(app);
         return;

@@ -20,6 +20,8 @@ irc-proto = { path = "../vendor/irc-proto" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
+humantime = { workspace = true }
+icalendar = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

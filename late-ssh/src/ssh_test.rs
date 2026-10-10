@@ -693,7 +693,7 @@ async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
     // page hint; Home, and its rail, is page 1.
     let (client, mut shell) = open_shell(addr, &user.username, key.clone()).await;
     shell.data(&b"\x1b"[..]).await.expect("dismiss splash");
-    expect_shell_data_contains(&mut shell, b"Tab/0-5 pages").await;
+    expect_shell_data_contains(&mut shell, b"Tab/0-7 pages").await;
     shell.data(&b"1"[..]).await.expect("open home");
     expect_shell_data_contains(&mut shell, b"favprobe").await;
 
@@ -732,7 +732,7 @@ async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
     // it on a fresh connection is the round trip closing.
     let (client, mut shell) = open_shell(addr, &user.username, key).await;
     shell.data(&b"\x1b"[..]).await.expect("dismiss splash");
-    expect_shell_data_contains(&mut shell, b"Tab/0-5 pages").await;
+    expect_shell_data_contains(&mut shell, b"Tab/0-7 pages").await;
     shell.data(&b"1"[..]).await.expect("open home");
     expect_shell_data_contains(&mut shell, b"favorites").await;
     client

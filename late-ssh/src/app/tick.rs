@@ -202,6 +202,14 @@ impl App {
         }
 
         // Services
+        changed |= self.calendar.tick(
+            matches!(self.screen, Screen::Dashboard | Screen::Calendars)
+                || self.calendar.modal.is_some()
+                || self.show_profile_modal,
+            late_core::models::calendar::effective_timezone(
+                self.profile_state.profile().timezone.as_deref(),
+            ),
+        );
         let chat_tick = self.chat.tick();
         changed |= chat_tick.changed;
         if chat_tick.changed {
@@ -1624,6 +1632,7 @@ impl App {
             | Screen::GreenDragon
             | Screen::Darkroom
             | Screen::Leaderboard
+            | Screen::Calendars
             | Screen::Clubhouse
             | Screen::Nightcap
             | Screen::City
