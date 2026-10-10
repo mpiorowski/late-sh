@@ -38,7 +38,7 @@ late-ssh/src/app/audio/
 ├── svc.rs                  # AudioService: queue/history state machine, WS broadcast, resume, fallback debounce, periodic LoadVideo heartbeat, votes/skip-vote
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
-├── input.rs                # v+* music suffix handling: booth, source cycling, stream/station selection
+├── input.rs                # v+* music suffix handling: booth, source cycling, station selection, now-playing copy
 ├── stations.rs             # server-side stream/station registry and URL resolution
 ├── viz.rs                  # render_eq + Spectrum: live client spectrum, wall-tick ambient fallback
 ├── youtube.rs              # URL parsing + optional YouTube Data API validation client, thumbnail fetch
@@ -548,6 +548,8 @@ Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, rig
 The expanded source = `paired_source` (`AudioSource::{Radio, Youtube}`). Pure preference-based. Does **not** gate on whether a client is paired. The saved preference (loaded from `users.settings.audio_source` during SSH bootstrap, mirrored on `App`) is the source of truth from the first frame; pairing completing does not change the visual state. Don't add a pairing guard back: waiting for the client read as a startup glitch.
 
 The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
+
+`v+i` copies the selected source's full now-playing track text through the existing OSC 52 clipboard path: `Artist - Title` (or bare title) for radio, `Channel - Title` with the sidebar's submitter/video-id fallbacks for a queued YouTube track. It reads the same snapshots as the sidebar without requiring a paired client. Missing radio metadata or the YouTube fallback shows a banner and leaves the clipboard untouched. The normal music-prefix guards apply (no composition, active game, or Artboard interception).
 
 ### Title-bar source tags
 

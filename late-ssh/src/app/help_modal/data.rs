@@ -1350,6 +1350,7 @@ fn overview_lines() -> Vec<String> {
         "  v then v          open the Music Booth (submit + queue + votes)",
         "  v then x          switch audio source: Radio ⇄ YouTube",
         "  v then s          skip-vote the current YouTube track",
+        "  v then i          copy the selected source's now-playing track info to clipboard",
         "  v then 1..5       tune to a pinned station (radio active)",
         "  v then r          open Stations: every radio, live now-playing, pin to v1..v5",
         "  w, m, + / - and the v music prefix are off on the Artboard: that page",
@@ -2067,6 +2068,9 @@ Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs
   m                 mute paired client
   + / -             volume up / down
+  v then i          copy the selected source's full now-playing track text to clipboard
+                    radio: Artist - Title; YouTube: Channel - Title
+                    reports when track info is unavailable (including the YouTube fallback)
 
 Tune a station
   v then 1..5       tune to the station pinned in that slot (radio active)

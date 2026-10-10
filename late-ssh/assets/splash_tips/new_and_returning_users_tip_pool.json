@@ -4,6 +4,7 @@
   "Water your bonsai once a day with the w key",
   "You can open a public room with /public #room",
   "Switch what you hear: v then x cycles audio sources, v then 1-4 picks a stream or station",
+  "Copy the current song's full now-playing info to your clipboard: v then i",
   "Configure your notification preferences: ctrl+o",
   "Press ? outside of chat to see help",
   "Press tab to cycle through chat, games, and art",

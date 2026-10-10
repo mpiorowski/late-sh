@@ -34,6 +34,21 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
             app.banner = Some(Banner::success(banner));
             true
         }
+        b'i' | b'I' => {
+            let track = match app.paired_source {
+                AudioSource::Radio => app.station_now_playing(app.selected_radio_station),
+                AudioSource::Youtube => {
+                    crate::app::common::sidebar::youtube_track(&app.audio.queue_snapshot())
+                }
+            };
+            if let Some(track) = track.filter(|text| !text.trim().is_empty()) {
+                app.pending_clipboard = Some(track);
+                app.banner = Some(Banner::success("Now playing copied to clipboard!"));
+            } else {
+                app.banner = Some(Banner::error("No now-playing track info available"));
+            }
+            true
+        }
         _ => false,
     }
 }
