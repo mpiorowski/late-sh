@@ -9,8 +9,9 @@ name: terraform_plan
 #     prevent_destroy already guards the PVCs at apply time; this catches the
 #     rest (deployments, services, secrets) at review time.
 #
-# Also runs automatically on PRs that touch infra/. Plans never write state,
-# so racing a deploy is harmless (worst case: a stale read).
+# PRs that touch infra/ always get credential-free validation. Live plans run
+# for same-repository PRs and manual dispatches; fork PRs cannot access secrets.
+# Plans never write state, so racing a deploy is harmless (a stale read at worst).
 
 on:
   pull_request:
@@ -41,8 +42,33 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    name: terraform_validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: terraform_fmt
+        working-directory: ./infra
+        run: terraform fmt -check -recursive
+
+      - name: terraform_init
+        working-directory: ./infra
+        run: terraform init -backend=false -input=false
+
+      - name: terraform_validate
+        working-directory: ./infra
+        run: terraform validate
+
   plan:
     name: terraform_plan
+    needs: [validate]
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: ${{ inputs.environment || 'production' }}

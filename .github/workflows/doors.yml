@@ -155,7 +155,8 @@ jobs:
             games="$all_games"
           fi
 
-          json=$(printf '%s\n' $games | jq -R . | jq -cs .)
+          read -r -a game_array <<< "$games"
+          json=$(printf '%s\n' "${game_array[@]}" | jq -R . | jq -cs .)
           echo "games: $json"
           echo "games=$json" >> "$GITHUB_OUTPUT"
 

@@ -6457,7 +6457,7 @@ async fn esc_closes_a_scene_the_static_stopped_answering() {
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "[Enter] fight").await;
-    app.handle_input(b"f");
+    app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "[a] auto turn").await;
 
     // The service fails to answer the next command: an outage, as the
@@ -6524,7 +6524,7 @@ async fn esc_in_a_fight_is_a_run() {
     wait_for_render_contains(&mut app, " Undercity ").await;
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "[Enter] fight").await;
-    app.handle_input(b"f");
+    app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "[a] auto turn").await;
 
     // No dice: the flicker's hit lands on the way out, and the runner is
@@ -6773,9 +6773,9 @@ async fn the_road_and_the_hand_fit_an_80_by_24_terminal() {
     let frame = render_plain(&mut app);
     for needle in [
         " the road ",
-        "▸ [f]",
+        "[Enter] fight",
         "hiss  lv 2",
-        "[▚]",
+        "▸ [▚]",
         "[g] flicker, half pay",
         "esc back",
     ] {
