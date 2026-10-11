@@ -369,6 +369,7 @@ fn tweak_lines() -> Vec<BodyLine<TweakRow>> {
         TweakRow::ComposerKeepFocused | TweakRow::InteractionMode => "Input",
         TweakRow::FlagFallback | TweakRow::TerminalImages | TweakRow::ChatBadges => "Display",
         TweakRow::LandingPage | TweakRow::PaperAtLogin | TweakRow::ArtSplash => "Startup",
+        TweakRow::ArtboardDisclaimer => "Artboard",
         TweakRow::Screensaver => "Away",
     })
 }
@@ -1010,6 +1011,11 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
             "Show Gallery Art on Splash",
             cycle_value_span(draft.art_splash_mode.label(), &["SFW", "Always", "Never"]),
             true,
+        ),
+        TweakRow::ArtboardDisclaimer => (
+            "Artboard content disclaimer",
+            toggle_span(draft.artboard_disclaimer),
+            false,
         ),
         TweakRow::Screensaver => ("Screensaver", screensaver_span(draft.screensaver), true),
     };

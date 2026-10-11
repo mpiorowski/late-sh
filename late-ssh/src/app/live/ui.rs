@@ -24,6 +24,7 @@ use ratatui::{
 
 use crate::app::{
     audio::booth::live as booth_live,
+    calendar::live as event_live,
     chat::news::live as news_live,
     common::theme,
     door::spectate::live as door_live,
@@ -135,6 +136,7 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Article(article) => news_live::body(budget, article),
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
         LiveStripView::DoorGame(game) => door_live::body(budget, game),
+        LiveStripView::Event(event) => event_live::body(budget, event),
     };
     frame_lines(width, body)
 }
@@ -231,6 +233,7 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
         LiveStripView::Article(_) => false,
         LiveStripView::Stream(_) => stream_live::glow(),
         LiveStripView::DoorGame(_) => door_live::glow(),
+        LiveStripView::Event(event) => event_live::glow(event),
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -249,6 +252,7 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
         LiveStripView::Article(article) => news_live::compact_spans(rest, article),
         LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
         LiveStripView::DoorGame(game) => door_live::compact_spans(rest, game),
+        LiveStripView::Event(event) => event_live::compact_spans(rest, event),
     }
 }
 

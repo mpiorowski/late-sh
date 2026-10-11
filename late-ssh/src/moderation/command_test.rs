@@ -50,9 +50,8 @@ fn command_help_explains_ban_arguments() {
     let lines = mod_help_lines(Some("ban"));
 
     assert!(
-        lines
-            .iter()
-            .any(|line| line == "ban <server|#room|art|audio|stream> @name [duration] [reason...]")
+        lines.iter().any(|line| line
+            == "ban <server|#room|art|audio|calendar|stream> @name [duration] [reason...]")
     );
     assert!(
         lines.iter().any(|line| line.contains("s/m/h/d")),
@@ -91,10 +90,8 @@ fn command_help_uses_limited_grouped_surface() {
         "top-level help should show rename-user command: {lines:?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line
-                == "ban    <server|#room|art|audio|stream> @name [duration] [reason...]"),
+        lines.iter().any(|line| line
+            == "ban    <server|#room|art|audio|calendar|stream> @name [duration] [reason...]"),
         "top-level help should show verb-primary ban form: {lines:?}"
     );
 }
@@ -657,6 +654,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ServerUser { username, .. }
         | ModCommand::Artboard { username, .. }
         | ModCommand::Audio { username, .. }
+        | ModCommand::Calendar { username, .. }
         | ModCommand::Voice { username, .. }
         | ModCommand::Stream { username, .. }
         | ModCommand::Role { username, .. } => username,

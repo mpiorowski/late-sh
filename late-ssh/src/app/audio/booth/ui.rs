@@ -10,7 +10,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use late_core::models::media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS};
 
 use crate::app::{
-    audio::svc::{AudioMode, HistoryItemView, QueueItemView, QueueSnapshot, SkipProgress},
+    audio::{
+        svc::{AudioMode, HistoryItemView, QueueItemView, QueueSnapshot, SkipProgress},
+        youtube::watch_url,
+    },
     common::theme,
 };
 
@@ -60,6 +63,7 @@ pub(crate) fn draw(
         Constraint::Length(1), // Now Playing heading
         Constraint::Length(1), // breathing
         Constraint::Length(1), // now playing line
+        Constraint::Length(1), // now playing link + copy hint
         Constraint::Length(1), // breathing
         Constraint::Length(1), // Queue heading
         Constraint::Length(1), // breathing
@@ -86,20 +90,23 @@ pub(crate) fn draw(
         snapshot.audio_mode,
         snapshot.skip_progress(),
     );
+    if let Some(item) = snapshot.current.as_ref() {
+        frame.render_widget(Paragraph::new(current_link_line(item)), layout[8]);
+    }
 
-    frame.render_widget(Paragraph::new(list_heading(state.focus())), layout[9]);
+    frame.render_widget(Paragraph::new(list_heading(state.focus())), layout[10]);
     match state.focus() {
         BoothFocus::History => draw_history(
             frame,
-            layout[11],
+            layout[12],
             state,
             &snapshot.history,
             snapshot.current.as_ref().map(|item| item.video_id.as_str()),
         ),
-        _ => draw_queue(frame, layout[11], state, &snapshot.queue),
+        _ => draw_queue(frame, layout[12], state, &snapshot.queue),
     }
 
-    draw_footer(frame, layout[12], state.focus(), submit_enabled, is_staff);
+    draw_footer(frame, layout[13], state.focus(), submit_enabled, is_staff);
 }
 
 fn draw_submit(
@@ -238,6 +245,20 @@ fn draw_current(
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The row under the current track: its watch link in plain text, for
+/// terminals where the `^y` OSC 52 copy never reaches the clipboard and the
+/// user selects it by hand. The fallback stream has no row: the snapshot
+/// carries no video for it.
+fn current_link_line(item: &QueueItemView) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("     "),
+        Span::styled(
+            watch_url(&item.video_id),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
 }
 
 fn draw_queue(frame: &mut Frame, area: Rect, state: &BoothModalState, queue: &[QueueItemView]) {
@@ -672,10 +693,12 @@ fn draw_footer(
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
+    spans.push(Span::styled("^y", Style::default().fg(theme::AMBER_DIM())));
     spans.push(Span::styled(
-        "Esc/q",
-        Style::default().fg(theme::AMBER_DIM()),
+        " copy  ",
+        Style::default().fg(theme::TEXT_DIM()),
     ));
+    spans.push(Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())));
     spans.push(Span::styled(
         " close",
         Style::default().fg(theme::TEXT_DIM()),

@@ -163,6 +163,7 @@ impl<'a> PersonEntry<'a> {
 
 pub(crate) struct DirectoryState {
     pub(crate) mine_only: bool,
+    pub(crate) mouse: super::mouse::MouseState,
     shelf: Shelf,
     /// Under the stacked layout the detail pane opens over the list.
     detail_open: bool,
@@ -181,6 +182,7 @@ impl DirectoryState {
     pub(crate) fn new() -> Self {
         Self {
             mine_only: false,
+            mouse: Default::default(),
             shelf: Shelf::People,
             detail_open: false,
             narrow: Cell::new(false),
@@ -200,6 +202,7 @@ impl DirectoryState {
     }
 
     pub(crate) fn set_shelf(&mut self, shelf: Shelf) {
+        self.mouse.invalidate();
         self.shelf = shelf;
         self.detail_open = false;
         self.exit_search();
@@ -220,14 +223,18 @@ impl DirectoryState {
     }
 
     pub(crate) fn open_detail(&mut self) {
+        self.mouse.invalidate();
         self.detail_open = true;
     }
 
     pub(crate) fn close_detail(&mut self) {
+        self.mouse.invalidate();
         self.detail_open = false;
     }
 
     pub(crate) fn toggle_mine_only(&mut self) {
+        self.mouse.reset_pane(super::mouse::Pane::PeopleList);
+        self.mouse.reset_pane(super::mouse::Pane::PeopleDetail);
         self.mine_only = !self.mine_only;
         self.selected = 0;
         self.focus = 0;
@@ -239,9 +246,11 @@ impl DirectoryState {
 
     pub(crate) fn select(&mut self, index: usize) {
         if self.selected != index {
+            self.mouse.reset_pane(super::mouse::Pane::PeopleDetail);
             self.focus = 0;
         }
         self.selected = index;
+        self.mouse.invalidate();
     }
 
     /// The selection as a cursor set by a click or search: no focus reset
@@ -249,6 +258,13 @@ impl DirectoryState {
     pub(crate) fn select_and_open(&mut self, index: usize) {
         self.select(index);
         self.detail_open = true;
+        self.mouse.reveal_selection();
+    }
+
+    /// The feeds behind the rows moved: what the last frame recorded may
+    /// name rows that are no longer where they were.
+    pub(crate) fn feed_changed(&self) {
+        self.mouse.invalidate();
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize, len: usize) {
@@ -262,7 +278,8 @@ impl DirectoryState {
         if next != self.selected {
             self.focus = 0;
         }
-        self.selected = next;
+        self.select(next);
+        self.mouse.reveal_selection();
     }
 
     pub(crate) fn clamp_selection(&mut self, len: usize) {
@@ -288,9 +305,12 @@ impl DirectoryState {
         }
         let clamped = self.focus.min(len - 1) as isize;
         self.focus = (clamped + delta).rem_euclid(len as isize) as usize;
+        self.mouse.reveal_selection();
     }
 
     pub(crate) fn enter_search(&mut self) {
+        self.mouse.reset_pane(super::mouse::Pane::PeopleList);
+        self.mouse.reset_pane(super::mouse::Pane::PeopleDetail);
         self.search_mode = true;
         self.search_query.clear();
         self.selected = 0;
@@ -313,15 +333,24 @@ impl DirectoryState {
     pub(crate) fn search_push(&mut self, ch: char) {
         if !ch.is_control() {
             self.search_query.push(ch);
-            self.selected = 0;
-            self.focus = 0;
+            self.search_changed();
         }
     }
 
     pub(crate) fn search_backspace(&mut self) {
         self.search_query.pop();
+        self.search_changed();
+    }
+
+    fn search_changed(&mut self) {
         self.selected = 0;
         self.focus = 0;
+        self.mouse.reset_pane(super::mouse::Pane::PeopleList);
+        self.mouse.reset_pane(super::mouse::Pane::PeopleDetail);
+    }
+    pub(crate) fn focus_item(&mut self, index: usize) {
+        self.focus = index;
+        self.mouse.reveal_selection();
     }
 
     /// The query the people list should be filtered by right now: the live

@@ -130,6 +130,8 @@ fn render_with_jobs(
                     work_marker: Some(Utc::now()),
                     showcase_marker: Some(Utc::now()),
                     current_user_id: fixture.viewer,
+                    can_moderate: false,
+                    can_retract_jobs: false,
                     profile_base_url: "https://late.sh",
                 },
             )
@@ -170,29 +172,29 @@ fn a_wide_frame_draws_the_list_beside_the_sectioned_detail() {
 
     // Row one: the person with a card, three lines with fixed roles.
     assert!(
-        lines[1].starts_with("▎@meythewitch  ● open")
-            && cells(&lines[1], 0, 50).trim_end().ends_with("1d"),
+        lines[2].starts_with("▎@meythewitch  ● open")
+            && cells(&lines[2], 0, 50).trim_end().ends_with("1d"),
         "line 1 is name, status, age:\n{text}"
     );
     assert!(
-        lines[2].starts_with(" Full Stack Developer"),
+        lines[3].starts_with(" Full Stack Developer"),
         "line 2 is the headline:\n{text}"
     );
     assert!(
-        lines[3].starts_with(" rust · kotlin · typescript")
-            && cells(&lines[3], 0, 50).trim_end().ends_with("1 project"),
+        lines[4].starts_with(" rust · kotlin · typescript")
+            && cells(&lines[4], 0, 50).trim_end().ends_with("1 project"),
         "line 3 is the tags, giving way to the project count:\n{text}"
     );
-    assert!(!lines[3].contains("sql"), "a sixth tag is dropped:\n{text}");
+    assert!(!lines[4].contains("sql"), "a sixth tag is dropped:\n{text}");
 
     // Row two: projects only, so the count sits on line 1 and the newest
     // title on line 2.
-    assert!(lines[5].starts_with(" @Renu  2 projects"), "{text}");
-    assert!(lines[6].starts_with(" ↳ SalaTUI"), "{text}");
-    assert!(lines[7].starts_with(" rust · tui"), "{text}");
+    assert!(lines[6].starts_with(" @Renu  2 projects"), "{text}");
+    assert!(lines[7].starts_with(" ↳ SalaTUI"), "{text}");
+    assert!(lines[8].starts_with(" rust · tui"), "{text}");
 
     // The detail pane, right of the rule: header, then the sections in order.
-    let header = cells(&lines[1], 50, 120);
+    let header = cells(&lines[3], 50, 120);
     assert!(
         header.contains("@meythewitch · ● open · contract · Antalya, Turkey"),
         "header names status, type, and place:\n{text}"
@@ -239,13 +241,13 @@ fn a_narrow_frame_stacks_and_l_opens_the_detail_over_the_list() {
     let lines = render(&fixture, &state, 80, 20);
     let text = lines.join("\n");
     assert!(state.narrow(), "the draw records the stacked layout");
-    assert!(lines[1].starts_with("▎@meythewitch  ● open"), "{text}");
+    assert!(lines[2].starts_with("▎@meythewitch  ● open"), "{text}");
     assert!(
         row_of(&lines, "▸ CARD").is_none(),
         "no detail beside the list:\n{text}"
     );
     assert!(
-        lines[2].starts_with(" Full Stack Developer") && !lines[3].starts_with(" rust"),
+        lines[3].starts_with(" Full Stack Developer") && !lines[4].starts_with(" rust"),
         "under 24 rows the tag line goes:\n{text}"
     );
     assert!(lines[lines.len() - 1].contains("l open"), "{text}");
@@ -331,4 +333,163 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
         "{text}"
     );
     assert!(lines[lines.len() - 1].contains("for me"), "{text}");
+}
+
+#[test]
+fn people_wheel_scrolls_viewport_and_repaints_hits_without_moving_selection() {
+    use crate::app::directory::mouse::{Pane, Target};
+    let mut fixture = fixture();
+    fixture.people = (0..20)
+        .map(|index| card(Uuid::now_v7(), &format!("person{index}"), index))
+        .collect();
+    fixture.projects.clear();
+    let mut state = DirectoryState::new();
+    render(&fixture, &state, 120, 20);
+    let first = state
+        .mouse
+        .hits()
+        .into_iter()
+        .find(|(_, target)| matches!(target, Target::Person(_)))
+        .unwrap()
+        .0;
+    state.mouse.scroll(first.x, first.y, 9, (120, 20));
+    assert_eq!(state.selected(), 0);
+    assert_eq!(state.mouse.offset(Pane::PeopleList), 9);
+    assert_eq!(state.mouse.offset(Pane::PeopleDetail), 0);
+    assert!(
+        state.mouse.target(first.x, first.y, (120, 20)).is_none(),
+        "old hits dropped until paint"
+    );
+    let lines = render(&fixture, &state, 120, 20);
+    for (rect, target) in state.mouse.hits() {
+        if let Target::Person(id) = target {
+            let person = fixture
+                .people
+                .iter()
+                .find(|person| person.profile.user_id == id)
+                .unwrap();
+            assert!(
+                lines
+                    .iter()
+                    .skip(usize::from(rect.y))
+                    .take(usize::from(rect.height))
+                    .any(|line| line.contains(&format!("@{}", person.author_username))),
+                "hit belongs to the painted row"
+            );
+        }
+    }
+    state.move_selection(1, 20);
+    render(&fixture, &state, 120, 20);
+    assert!(
+        state.mouse.offset(Pane::PeopleList) < 9,
+        "keyboard reveals the selected row"
+    );
+    assert!(state.mouse.target(first.x, first.y, (80, 20)).is_none());
+}
+
+#[test]
+fn narrow_detail_copy_targets_keep_full_urls_after_wrapping_and_scroll() {
+    use crate::app::directory::mouse::{Pane, Target};
+    let mut fixture = fixture();
+    let url = "https://example.com/a/very/long/project/link/with/a/query?name=full-value";
+    fixture.people[0].profile.links = vec![url.to_string()];
+    let mut state = DirectoryState::new();
+    state.open_detail();
+    render(&fixture, &state, 45, 24);
+    let mut found = false;
+    for _ in 0..15 {
+        for (rect, target) in state.mouse.hits() {
+            if target == Target::Copy(url.to_string()) {
+                assert!(rect.right() <= 45 && rect.bottom() <= 24);
+                found = true;
+            }
+        }
+        let pane = state
+            .mouse
+            .hits()
+            .into_iter()
+            .find(|(_, target)| matches!(target, Target::Copy(_)))
+            .map(|(rect, _)| rect);
+        if let Some(rect) = pane {
+            state.mouse.scroll(rect.x, rect.y, 3, (45, 24));
+        } else {
+            state.mouse.scroll(10, 10, 3, (45, 24));
+        }
+        render(&fixture, &state, 45, 24);
+    }
+    assert!(found);
+    assert!(state.mouse.offset(Pane::PeopleDetail) > 0);
+    assert!(
+        state
+            .mouse
+            .hits()
+            .iter()
+            .any(|(_, target)| *target == Target::Back)
+    );
+}
+
+#[test]
+fn jobs_wheel_keeps_selection_and_targets_the_visible_posting() {
+    use crate::app::directory::{
+        mouse::{Pane, Target},
+        state::Shelf,
+    };
+    let fixture = fixture();
+    let mut state = DirectoryState::new();
+    state.set_shelf(Shelf::Jobs);
+    let mut jobs = jobs_state_for_tests();
+    jobs.loaded = true;
+    jobs.items = (0..20)
+        .map(|index| crate::app::jobs::state_test::posting(&format!("Company{index}"), &["rust"]))
+        .collect();
+    render_with_jobs(&fixture, &state, &jobs, 120, 20);
+    let first = jobs
+        .mouse
+        .hits()
+        .into_iter()
+        .find(|(_, target)| matches!(target, Target::Job(_)))
+        .unwrap()
+        .0;
+    jobs.mouse.scroll(first.x, first.y, 6, (120, 20));
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 20);
+    assert_eq!(jobs.selected(), 0);
+    assert_eq!(jobs.mouse.offset(Pane::JobsList), 6);
+    for (rect, target) in jobs.mouse.hits() {
+        if let Target::Job(id) = target {
+            let job = jobs.items.iter().find(|job| job.id == id).unwrap();
+            assert!(
+                lines
+                    .iter()
+                    .skip(usize::from(rect.y))
+                    .take(usize::from(rect.height))
+                    .any(|line| line.contains(&job.company))
+            );
+        }
+    }
+}
+
+#[test]
+fn opening_a_person_past_the_first_page_reveals_their_row() {
+    use crate::app::directory::mouse::Pane;
+    let mut fixture = fixture();
+    fixture.people = (0..20)
+        .map(|index| card(Uuid::now_v7(), &format!("person{index}"), index))
+        .collect();
+    fixture.projects.clear();
+    let mut state = DirectoryState::new();
+    render(&fixture, &state, 120, 20);
+    state.enter_search();
+    render(&fixture, &state, 120, 20);
+    state.exit_search();
+    state.select_and_open(15);
+    let lines = render(&fixture, &state, 120, 20);
+    assert!(
+        state.mouse.offset(Pane::PeopleList) > 0,
+        "the list scrolls to the person"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with("▎@person")),
+        "the selected row is on screen:\n{}",
+        lines.join("\n")
+    );
 }

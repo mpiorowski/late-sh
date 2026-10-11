@@ -212,6 +212,7 @@ pub struct SessionConfig {
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub calendar_service: crate::app::calendar::svc::CalendarService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
     pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
@@ -462,6 +463,7 @@ pub struct App {
     /// UI state
     pub(super) size: (u16, u16),
     pub(crate) screen: Screen,
+    pub(crate) calendar: crate::app::calendar::state::CalendarState,
     pub(super) banner: Option<Banner>,
     pub(crate) show_settings: bool,
     pub(crate) show_splash: bool,
@@ -956,6 +958,9 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
+    /// Consent lasts until this Artboard visit ends.
+    pub(crate) artboard_content_accepted: bool,
+    pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1523,6 +1528,10 @@ impl App {
             running: true,
             size: (cols, rows),
             screen: landing_screen,
+            calendar: crate::app::calendar::state::CalendarState::new(
+                config.calendar_service,
+                config.user_id,
+            ),
             banner: aquarium_loss_banner,
             show_settings: false,
             show_splash: true,
@@ -1861,6 +1870,8 @@ impl App {
             scratchpad: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             artboard_interacting: false,
+            artboard_content_accepted: false,
+            artboard_disclaimer_choices: std::cell::Cell::default(),
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -1887,9 +1898,7 @@ impl App {
             pending_chat_profile_open: None,
             last_terminal_bg: None,
         };
-        if app.screen == Screen::Artboard {
-            app.enter_dartboard();
-        }
+        app.sync_dartboard_connection();
         // The landing screen skips `set_screen`, so run its entry hook by
         // hand. Clubhouse: immediate crowd refresh plus the first-visit
         // tutorial. Home: refresh the room list (sync_selection runs just
@@ -2474,6 +2483,13 @@ impl App {
     }
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {
+        self.calendar.cancel_open();
+        self.calendar.invalidate_geometry();
+        self.calendar.clear_click();
+        self.calendar.context_menu = None;
+        if screen == Screen::Calendars {
+            self.calendar.refresh();
+        }
         if self.screen == screen {
             if screen == Screen::Rebels {
                 self.enter_rebels();
@@ -2499,9 +2515,7 @@ impl App {
             if screen == Screen::Codekeep {
                 self.enter_codekeep();
             }
-            if screen == Screen::Artboard {
-                self.enter_dartboard();
-            }
+            self.sync_dartboard_connection();
             self.sync_visible_chat_room();
             return;
         }
@@ -2519,6 +2533,7 @@ impl App {
         }
 
         if self.screen == Screen::Artboard {
+            self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
         }
@@ -2654,9 +2669,7 @@ impl App {
             self.chat.sync_selection();
         }
 
-        if self.screen == Screen::Artboard {
-            self.enter_dartboard();
-        }
+        self.sync_dartboard_connection();
         // The Games hub draws this account's character list on the Lateania
         // card and the landing draws it in full: read it from the database the
         // first time either is opened (and retry there if that read failed).
@@ -2809,6 +2822,9 @@ impl App {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
+        self.calendar.invalidate_geometry();
+        self.calendar.clear_click();
+        self.calendar.context_menu = None;
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
         self.leaderboard_page.clear_hit_regions();

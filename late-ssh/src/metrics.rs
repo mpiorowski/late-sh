@@ -11,6 +11,7 @@ use crate::app::audio::radio_meta::svc::PollOutcome;
 use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
+use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
@@ -19,10 +20,12 @@ use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
+use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::pg_listener::Refresh;
+use late_core::models::calendar::CalendarRefusalKind;
 use late_core::models::referral::ReferralSource;
 
 /// What put the away screensaver up (`App::sync_away`).
@@ -512,6 +515,7 @@ mod inner {
         ThumbnailFetch, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
     use crate::app::bonsai::state::BranchAction;
@@ -1108,6 +1112,99 @@ mod inner {
                 .u64_counter("late_ssh_pot_reminders_total")
                 .with_description(
                     "The pot's last call in #lounge, by outcome; a quiet week with no posted line is a reminder that never fired",
+                )
+                .build()
+        })
+    }
+
+    fn calendar_write_label(write: CalendarWrite) -> &'static str {
+        match write {
+            CalendarWrite::BoardPosted => "board_posted",
+            CalendarWrite::PersonalPosted => "personal_posted",
+            CalendarWrite::Edited => "edited",
+            CalendarWrite::Deleted => "deleted",
+            CalendarWrite::StaffDeleted => "staff_deleted",
+            CalendarWrite::RsvpIn => "rsvp_in",
+            CalendarWrite::RsvpOut => "rsvp_out",
+        }
+    }
+
+    fn calendar_op_label(op: CalendarOp) -> &'static str {
+        match op {
+            CalendarOp::Load => "load",
+            CalendarOp::Open => "open",
+            CalendarOp::Save => "save",
+            CalendarOp::Delete => "delete",
+            CalendarOp::Rsvp => "rsvp",
+            CalendarOp::Announce => "announce",
+        }
+    }
+
+    fn calendar_announcement_label(announcement: CalendarAnnouncement) -> &'static str {
+        match announcement {
+            CalendarAnnouncement::Posted => "posted",
+            CalendarAnnouncement::Starting => "starting",
+        }
+    }
+
+    fn live_origin_label(origin: LiveOrigin) -> &'static str {
+        match origin {
+            LiveOrigin::Strip => "strip",
+            LiveOrigin::Panel => "panel",
+        }
+    }
+
+    fn calendar_writes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_writes_total")
+                .with_description(
+                    "Settled writes to the events board and personal calendars, by what the write was",
+                )
+                .build()
+        })
+    }
+
+    fn calendar_refusals_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_refusals_total")
+                .with_description("Calendar writes refused, by the rule that refused them")
+                .build()
+        })
+    }
+
+    fn calendar_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_failures_total")
+                .with_description("Calendar operations that failed in the database, by operation")
+                .build()
+        })
+    }
+
+    fn calendar_announcements_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_announcements_total")
+                .with_description(
+                    "Board lines handed to #lounge: a post, or a start claimed by this replica",
+                )
+                .build()
+        })
+    }
+
+    fn calendar_opens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_opens_total")
+                .with_description(
+                    "Board events opened from the live strip or the Live panel, by which surface brought the viewer",
                 )
                 .build()
         })
@@ -1720,6 +1817,7 @@ mod inner {
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active_quest_boards",
             Refresh::ShopFlairDirectory => "shop_flair_directory",
+            Refresh::CalendarNotices => "calendar_notices",
         }
     }
 
@@ -1819,6 +1917,7 @@ mod inner {
             Screen::Artboard => "artboard",
             Screen::Profiles => "profiles",
             Screen::Leaderboard => "leaderboard",
+            Screen::Calendars => "calendars",
             Screen::Clubhouse => "clubhouse",
             Screen::Nightcap => "nightcap",
             Screen::City => "city",
@@ -2237,6 +2336,38 @@ mod inner {
     /// count; a sweep with no pot in its window is silence, not an outcome.
     pub fn record_pot_reminder(outcome: PotReminderOutcome) {
         pot_reminders_total().add(1, &[KeyValue::new("outcome", pot_reminder_label(outcome))]);
+    }
+
+    pub fn record_calendar_write(write: CalendarWrite) {
+        calendar_writes_total().add(1, &[KeyValue::new("write", calendar_write_label(write))]);
+    }
+
+    pub fn record_calendar_refusal(kind: CalendarRefusalKind) {
+        calendar_refusals_total().add(
+            1,
+            &[KeyValue::new(
+                "reason",
+                crate::app::calendar::svc::refusal_label(kind),
+            )],
+        );
+    }
+
+    pub fn record_calendar_failure(op: CalendarOp) {
+        calendar_failures_total().add(1, &[KeyValue::new("op", calendar_op_label(op))]);
+    }
+
+    pub fn record_calendar_announcement(announcement: CalendarAnnouncement) {
+        calendar_announcements_total().add(
+            1,
+            &[KeyValue::new(
+                "line",
+                calendar_announcement_label(announcement),
+            )],
+        );
+    }
+
+    pub fn record_calendar_open(origin: LiveOrigin) {
+        calendar_opens_total().add(1, &[KeyValue::new("from", live_origin_label(origin))]);
     }
 
     pub fn record_referral_attach(source: ReferralSource, outcome: ReferralAttachOutcome) {
@@ -2791,6 +2922,7 @@ mod inner {
         ThumbnailFetch, TranslationResult, VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
 
@@ -2862,6 +2994,11 @@ mod inner {
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_pot_reminder(_outcome: PotReminderOutcome) {}
+    pub fn record_calendar_write(_write: CalendarWrite) {}
+    pub fn record_calendar_refusal(_kind: CalendarRefusalKind) {}
+    pub fn record_calendar_failure(_op: CalendarOp) {}
+    pub fn record_calendar_announcement(_announcement: CalendarAnnouncement) {}
+    pub fn record_calendar_open(_origin: LiveOrigin) {}
     pub fn record_referral_attach(_source: ReferralSource, _outcome: ReferralAttachOutcome) {}
     pub fn record_referral_settlement(_settlement: ReferralSettlement) {}
     pub fn record_newcomer_minute(_result: NewcomerMinuteResult) {}

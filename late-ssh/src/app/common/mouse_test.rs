@@ -82,3 +82,18 @@ fn keyboard_reveals_selection_after_independent_wheel_scroll() {
     assert_eq!(state.pane(area, Pane::List, 27, 1), 1);
     assert_eq!(state.pane(area, Pane::List, 27, 24), 20);
 }
+
+#[test]
+fn scrollbar_click_seeks_and_keyboard_reveals_the_whole_row() {
+    let mouse = State::default();
+    let area = Rect::new(2, 3, 20, 5);
+    mouse.begin((80, 24));
+    mouse.pane_range(area, Pane::List, 30, 0..3);
+    mouse.finish();
+    assert!(!mouse.click_track(20, 7, (80, 24)));
+    assert!(mouse.click_track(21, 7, (80, 24)));
+    assert_eq!(mouse.offset(Pane::List), 25);
+    mouse.reveal_selection();
+    mouse.begin((80, 24));
+    assert_eq!(mouse.pane_range(area, Pane::List, 30, 12..15), 12);
+}

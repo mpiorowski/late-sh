@@ -283,6 +283,8 @@ fn footer_line() -> Line<'static> {
         Span::styled(" pin  ", label),
         Span::styled("0", key),
         Span::styled(" unpin  ", label),
+        Span::styled("^y", key),
+        Span::styled(" copy  ", label),
         Span::styled("Esc", key),
         Span::styled(" close", label),
     ])

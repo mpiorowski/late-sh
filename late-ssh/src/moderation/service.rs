@@ -12,6 +12,7 @@ use late_core::{
             RatingSource, RemoveMarkOutcome, StaffAuthority, StaffMarkOutcome,
         },
         audio_ban::{AudioBan, AudioBanListItem},
+        calendar_ban::{CalendarBan, CalendarBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chat_slow_mode::{ChatSlowMode, ChatSlowModeListItem},
@@ -38,9 +39,9 @@ use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, ArtboardCurateSource, ArtboardSafetyViewTarget, AudioAction, BanListScope,
-    LIST_PAGE_SIZE, ModCommand, RoleAction, RoomModAction, ServerUserAction, SlowListScope,
-    SlowScope, StreamAction, VoiceAction, mod_help_lines, normalize_mod_slug, parse_mod_command,
-    strip_user_prefix,
+    CalendarAction, LIST_PAGE_SIZE, ModCommand, RoleAction, RoomModAction, ServerUserAction,
+    SlowListScope, SlowScope, StreamAction, VoiceAction, mod_help_lines, normalize_mod_slug,
+    parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -337,6 +338,22 @@ impl ModerationService {
                     }
                 }
             }
+            ModCommand::Calendar {
+                action,
+                username,
+                duration,
+                reason,
+            } => {
+                self.calendar(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &username,
+                    duration,
+                    reason,
+                )
+                .await
+            }
             ModCommand::Audio {
                 action,
                 username,
@@ -456,12 +473,16 @@ impl ModerationService {
                     AudioBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
                 let stream =
                     StreamBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                let calendar =
+                    CalendarBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
                 let room =
                     RoomBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
                 if server.is_empty()
                     && artboard.is_empty()
                     && audio.is_empty()
                     && stream.is_empty()
+                    && calendar.is_empty()
                     && room.is_empty()
                 {
                     return Ok(vec!["no active bans".to_string()]);
@@ -496,6 +517,14 @@ impl ModerationService {
                     stream
                         .iter()
                         .map(format_stream_ban_item)
+                        .collect::<Vec<_>>(),
+                );
+                append_section(
+                    &mut lines,
+                    "calendar bans",
+                    calendar
+                        .iter()
+                        .map(format_calendar_ban_item)
                         .collect::<Vec<_>>(),
                 );
                 append_section(
@@ -540,6 +569,16 @@ impl ModerationService {
                     &format!("active stream bans (page {page})"),
                     "no active stream bans",
                     items.iter().map(format_stream_ban_item).collect(),
+                ))
+            }
+            BanListScope::Calendar => {
+                let items =
+                    CalendarBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
+                Ok(single_section(
+                    &format!("active calendar bans (page {page})"),
+                    "no active calendar bans",
+                    items.iter().map(format_calendar_ban_item).collect(),
                 ))
             }
             BanListScope::Room { slug } => {
@@ -1385,6 +1424,66 @@ impl ModerationService {
         tx.commit().await?;
         let banned = matches!(action, AudioAction::Ban);
         let _ = self.event_tx.send(ModerationEvent::AudioAction {
+            actor_user_id,
+            target_user_id: target.id,
+            action,
+            banned,
+            expires_at,
+            reason,
+        });
+        Ok(vec![format!(
+            "{} @{}",
+            action.past_tense(),
+            target.username
+        )])
+    }
+
+    /// Take posting to the events board away, or give it back. The ban is
+    /// read inside the post transaction (`CalendarStore::save`), so there
+    /// is no session to notify: the next post simply refuses.
+    async fn calendar(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: CalendarAction,
+        username: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            CalendarAction::Ban => Caps::BAN_FROM_CALENDAR,
+            CalendarAction::Unban => Caps::UNBAN_FROM_CALENDAR,
+        };
+        ensure_can(permissions, cap, target_tier)?;
+        let expires_at = matches!(action, CalendarAction::Ban)
+            .then(|| duration.map(|d| Utc::now() + d))
+            .flatten();
+        let tx = client.transaction().await?;
+        match action {
+            CalendarAction::Ban => {
+                CalendarBan::activate(&tx, target.id, actor_user_id, &reason, expires_at).await?;
+            }
+            CalendarAction::Unban => {
+                CalendarBan::delete_for_user(&tx, target.id).await?;
+            }
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
+        )
+        .await?;
+        tx.commit().await?;
+        let banned = matches!(action, CalendarAction::Ban);
+        let _ = self.event_tx.send(ModerationEvent::CalendarAction {
             actor_user_id,
             target_user_id: target.id,
             action,
@@ -2394,6 +2493,24 @@ fn format_server_ban_item(item: &ServerBanListItem) -> String {
         "- {target} by {actor} expires: {}{} reason: {}",
         format_expires_at(item.ban.expires_at),
         ip,
+        format_reason(&item.ban.reason)
+    )
+}
+
+fn format_calendar_ban_item(item: &CalendarBanListItem) -> String {
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    format!(
+        "- {target} by {actor} expires: {} reason: {}",
+        format_expires_at(item.ban.expires_at),
         format_reason(&item.ban.reason)
     )
 }

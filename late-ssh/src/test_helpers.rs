@@ -326,6 +326,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paper_service,
         jobs_service,
         article_service,
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -517,6 +518,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -776,6 +778,7 @@ pub fn make_app_with_paired_client(
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),

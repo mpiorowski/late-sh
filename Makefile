@@ -165,3 +165,7 @@ remove: down
 .PHONY: stop-all
 stop-all:
 	docker ps -q | xargs -r docker stop
+
+.PHONY: seed-calendar
+seed-calendar: .env
+	./scripts/seed_calendar_test_data.sh

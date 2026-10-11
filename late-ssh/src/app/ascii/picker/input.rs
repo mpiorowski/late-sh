@@ -37,8 +37,12 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
             return;
         };
         match mouse.kind {
-            MouseEventKind::ScrollUp => app.piece_picker.mouse.scroll(x, y, -3, app.size),
-            MouseEventKind::ScrollDown => app.piece_picker.mouse.scroll(x, y, 3, app.size),
+            MouseEventKind::ScrollUp => {
+                app.piece_picker.mouse.scroll(x, y, -3, app.size);
+            }
+            MouseEventKind::ScrollDown => {
+                app.piece_picker.mouse.scroll(x, y, 3, app.size);
+            }
             MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
                 match app.piece_picker.mouse.target(x, y, app.size) {
                     Some(Target::Close) => close(app),

@@ -1105,6 +1105,23 @@ fn radio_settings_read_the_station_and_pinned_slots() {
         crate::models::user::RadioSlots::default()
     );
 }
+#[test]
+fn artboard_disclaimer_defaults_on_and_reads_explicit_choices() {
+    use super::user::extract_artboard_disclaimer;
+    for settings in [
+        json!({}),
+        json!({"artboard_disclaimer": null}),
+        json!({"artboard_disclaimer": "off"}),
+    ] {
+        assert!(extract_artboard_disclaimer(&settings));
+    }
+    assert!(!extract_artboard_disclaimer(
+        &json!({"artboard_disclaimer": false})
+    ));
+    assert!(extract_artboard_disclaimer(
+        &json!({"artboard_disclaimer": true})
+    ));
+}
 
 #[test]
 fn an_ascii_piece_serialises_as_its_key() {

@@ -253,6 +253,7 @@ impl ComposerCommands {
             | Screen::Darkroom
             | Screen::Artboard
             | Screen::Profiles
+            | Screen::Calendars
             | Screen::Leaderboard
             | Screen::City
             | Screen::Zen

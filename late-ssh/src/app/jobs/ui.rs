@@ -2,6 +2,8 @@
 //! detail pane, the same frame the People shelf uses, the "for you"
 //! lines a person's own card prints, and the post form over the page.
 
+use crate::app::common::mouse_ui::{self, Surface};
+use crate::app::directory::mouse::{Pane, Target};
 use late_core::models::job_posting::{JobPosting, JobSource};
 use ratatui::{
     Frame,
@@ -10,7 +12,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::post::{POST_FIELDS, PostField, PostForm, PostKind, scope_choice_label};
 use super::state::{JobsState, match_line, scope_label};
@@ -48,6 +49,8 @@ pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] = &[
 const ROW_TAGS: usize = 4;
 
 pub(crate) struct JobsShelfView<'a> {
+    pub(crate) can_moderate: bool,
+    pub(crate) current_user_id: uuid::Uuid,
     pub(crate) jobs: &'a JobsState,
     /// The viewer's match tags (card skills and langs), for `/`.
     pub(crate) viewer_tags: &'a [String],
@@ -66,7 +69,7 @@ pub(crate) fn hints(view: &JobsShelfView<'_>) -> &'static [(&'static str, &'stat
     }
 }
 
-pub(crate) fn draw_jobs_shelf(frame: &mut Frame, area: Rect, view: &JobsShelfView<'_>) {
+pub(crate) fn draw_jobs_shelf(frame: &mut Surface<'_>, area: Rect, view: &JobsShelfView<'_>) {
     let visible = view.jobs.visible(view.viewer_tags);
     let selected = view.jobs.selected().min(visible.len().saturating_sub(1));
     if visible.is_empty() {
@@ -76,16 +79,16 @@ pub(crate) fn draw_jobs_shelf(frame: &mut Frame, area: Rect, view: &JobsShelfVie
     if !view.narrow {
         let cols =
             Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)]).split(area);
-        draw_list(frame, cols[0], &visible, selected, view.short);
-        draw_detail(frame, cols[1], visible[selected]);
+        draw_list(frame, cols[0], &visible, selected, view);
+        draw_detail(frame, cols[1], visible[selected], view);
     } else if view.jobs.detail_open() {
-        draw_detail(frame, area, visible[selected]);
+        draw_detail(frame, area, visible[selected], view);
     } else {
-        draw_list(frame, area, &visible, selected, view.short);
+        draw_list(frame, area, &visible, selected, view);
     }
 }
 
-fn draw_empty(frame: &mut Frame, area: Rect, view: &JobsShelfView<'_>) {
+fn draw_empty(frame: &mut Surface<'_>, area: Rect, view: &JobsShelfView<'_>) {
     if !view.jobs.loaded {
         draw_notice(frame, area, "Reading the shelf…", &[]);
     } else if view.jobs.for_me && view.viewer_tags.is_empty() {
@@ -118,7 +121,7 @@ fn draw_empty(frame: &mut Frame, area: Rect, view: &JobsShelfView<'_>) {
     }
 }
 
-fn draw_notice(frame: &mut Frame, area: Rect, head: &str, rest: &[&str]) {
+fn draw_notice(frame: &mut Surface<'_>, area: Rect, head: &str, rest: &[&str]) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let mut lines = vec![
         Line::from(""),
@@ -138,31 +141,56 @@ fn draw_notice(frame: &mut Frame, area: Rect, head: &str, rest: &[&str]) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, visible: &[&JobPosting], selected: usize, short: bool) {
-    // Three content lines plus the rule under each row; two when short.
-    let item_height: u16 = if short { 3 } else { 4 };
-    let visible_items = ((area.height / item_height).max(1)) as usize;
-    let start_index = selected.saturating_sub(visible_items.saturating_sub(1));
-    let end_index = (start_index + visible_items).min(visible.len());
-    let visible_len = end_index.saturating_sub(start_index);
-
-    let constraints =
-        std::iter::repeat_n(Constraint::Length(item_height), visible_len).collect::<Vec<_>>();
-    let rows = Layout::vertical(constraints).split(area);
-
-    for (row, row_area) in rows.iter().copied().enumerate() {
-        let index = start_index + row;
-        let posting = visible[index];
-        let is_selected = index == selected;
-        let block = Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(theme::BORDER_DIM()))
-            .style(theme::row_style(is_selected));
-        let content = block.inner(row_area);
-        frame.render_widget(block, row_area);
-        let lines = row_lines(posting, is_selected, short, content.width as usize);
-        frame.render_widget(Paragraph::new(lines), content);
-    }
+fn draw_list(
+    frame: &mut Surface<'_>,
+    area: Rect,
+    visible: &[&JobPosting],
+    selected: usize,
+    view: &JobsShelfView<'_>,
+) {
+    let item_height = if view.short { 3 } else { 4 };
+    let focus = selected * item_height;
+    mouse_ui::scroll(
+        frame,
+        area,
+        &view.jobs.mouse,
+        Pane::JobsList,
+        visible.len() * item_height,
+        focus..focus + item_height,
+        |frame, content, window| {
+            for (index, posting) in visible.iter().enumerate() {
+                let y = (index * item_height) as u16;
+                if y >= window.bottom() {
+                    break;
+                }
+                let rect = Rect::new(
+                    0,
+                    y,
+                    content.width,
+                    (item_height as u16).min(content.height - y),
+                );
+                if rect.bottom() <= window.y {
+                    continue;
+                }
+                let block = Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::default().fg(theme::BORDER_DIM()))
+                    .style(theme::row_style(index == selected));
+                let content = block.inner(rect);
+                frame.render_widget(block, rect);
+                frame.render_widget(
+                    Paragraph::new(row_lines(
+                        posting,
+                        index == selected,
+                        view.short,
+                        content.width as usize,
+                    )),
+                    content,
+                );
+                view.jobs.mouse.hit(content, Target::Job(posting.id));
+            }
+        },
+    );
 }
 
 /// Line 1: company, role, age at the right. Line 2: scope, pay. Line 3:
@@ -185,10 +213,10 @@ fn row_lines(
         ),
         faint,
     )];
-    let age_width: usize = age.iter().map(|span| span.content.width()).sum();
+    let age_width: usize = age.iter().map(|span| span.width()).sum();
     let head_budget = width.saturating_sub(1 + age_width + 2);
     let company = truncate_to_width(&posting.company, head_budget);
-    let role_budget = head_budget.saturating_sub(company.width() + 3);
+    let role_budget = head_budget.saturating_sub(Span::raw(&company).width() + 3);
     let first = vec![
         Span::styled(gutter, gutter_style),
         Span::styled(
@@ -224,7 +252,7 @@ fn row_lines(
             format!("via {} ", posting.source.site()),
             faint,
         )];
-        let right_width: usize = right.iter().map(|span| span.content.width()).sum();
+        let right_width: usize = right.iter().map(|span| span.width()).sum();
         let tags_budget = width.saturating_sub(1 + right_width + 2);
         let tags = posting
             .tags
@@ -250,7 +278,12 @@ fn row_lines(
 
 /// The whole card: company and role, the scope, tags, pay, the excerpt,
 /// the link, and where it came from.
-fn draw_detail(frame: &mut Frame, area: Rect, posting: &JobPosting) {
+fn draw_detail(
+    frame: &mut Surface<'_>,
+    area: Rect,
+    posting: &JobPosting,
+    view: &JobsShelfView<'_>,
+) {
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
@@ -261,7 +294,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, posting: &JobPosting) {
         width: inner.width.saturating_sub(2),
         ..inner
     };
-    let width = inner.width as usize;
+    let width = inner.width.saturating_sub(1) as usize;
     let faint = Style::default().fg(theme::TEXT_FAINT());
     let dim = Style::default().fg(theme::TEXT_DIM());
     let body = Style::default().fg(theme::TEXT());
@@ -305,6 +338,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, posting: &JobPosting) {
             Span::styled(posting.pay.trim().to_string(), body),
         ]));
     }
+    let link_line = lines.len();
     lines.push(Line::from(vec![
         Span::styled("link     ", faint),
         Span::styled(
@@ -335,7 +369,44 @@ fn draw_detail(frame: &mut Frame, area: Rect, posting: &JobPosting) {
         },
         faint,
     )));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let mut actions = vec![("[Copy link]", Target::Copy(posting.url.clone()))];
+    if view.narrow {
+        actions.insert(0, ("[Back]", Target::Back));
+    }
+    if posting.source == JobSource::Late
+        && (posting.posted_by == Some(view.current_user_id) || view.can_moderate)
+    {
+        actions.push(("[Take down]", Target::Key(b'd')));
+    }
+    let [controls, viewport] = Layout::vertical([
+        Constraint::Length(mouse_ui::buttons_height(inner.width, &actions)),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+    mouse_ui::buttons(frame, controls, &view.jobs.mouse, &actions);
+    let lines: Vec<_> = lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            (
+                line,
+                (index == link_line).then(|| Target::Copy(posting.url.clone())),
+            )
+        })
+        .collect();
+    let rows = lines
+        .iter()
+        .map(|(line, _)| mouse_ui::line_height(line, viewport.width.saturating_sub(1)))
+        .sum();
+    mouse_ui::scroll(
+        frame,
+        viewport,
+        &view.jobs.mouse,
+        Pane::JobsDetail,
+        rows,
+        0..1,
+        |frame, content, window| mouse_ui::lines(frame, content, window, &view.jobs.mouse, &lines),
+    );
 }
 
 /// The FOR YOU lines under a person's own card: one line per match,
@@ -383,7 +454,7 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
-    if UnicodeWidthStr::width(text) <= width {
+    if Span::raw(text).width() <= width {
         return text.to_string();
     }
     if width == 1 {
@@ -393,7 +464,7 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut used = 0usize;
     for ch in text.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        let cw = Span::raw(ch.to_string()).width();
         if used + cw > budget {
             break;
         }

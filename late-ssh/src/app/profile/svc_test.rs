@@ -534,9 +534,10 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             start_with_music_muted: false,
             landing_page: LandingPage::Zen,
             paper_at_login: true,
-            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            screensaver: late_core::models::user::Screensaver::Off,
             show_watch_chat: true,
             art_splash_mode: ArtSplashMode::Never,
+            artboard_disclaimer: false,
             terminal_images: TerminalImagesMode::Off,
             hidden_award_categories: hidden_awards.clone(),
             show_flag_fallback: false,
@@ -573,6 +574,19 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
     assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
     assert_eq!(updated.hidden_award_categories, hidden_awards);
     assert_eq!(updated.art_splash_mode, ArtSplashMode::Never);
+    assert!(!updated.artboard_disclaimer);
+    assert_eq!(
+        updated.screensaver,
+        late_core::models::user::Screensaver::Off
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let saved = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(
+        saved.settings["artboard_disclaimer"],
+        serde_json::json!(false)
+    );
+    assert_eq!(saved.settings["screensaver"], serde_json::json!("off"));
 }
 
 #[tokio::test]
@@ -624,6 +638,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -701,6 +716,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -989,6 +1005,7 @@ async fn edit_profile_snapshots_stay_per_user() {
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,

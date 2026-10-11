@@ -42,6 +42,7 @@ use uuid::Uuid;
 
 use super::pick::LiveSource;
 use super::ui::truncate_chars;
+use crate::app::calendar::live::PanelEvent;
 use crate::app::chat::news::state::{Reads, is_unread_at};
 use crate::app::common::theme;
 use crate::app::door::spectate::{
@@ -68,6 +69,8 @@ const KEY_COLS: usize = 3;
 const KIND_COLS: usize = 7;
 const STREAM_KIND: &str = "stream";
 const NEWS_KIND: &str = "news";
+/// A timed board post's kind.
+const EVENT_KIND: &str = "event";
 
 /// One thing the house can watch or read, as the panel lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +93,16 @@ pub enum LivePanelRow {
         /// People with the game's watch open.
         watching: usize,
     },
+    /// A timed board post from an hour before its start until it ends,
+    /// soonest first. All-day posts take the #lounge topic row instead.
+    Event {
+        event_id: Uuid,
+        title: String,
+        /// The start as a clock time in the viewer's zone.
+        time: String,
+        /// How many said they are in.
+        going: i64,
+    },
     /// A News article shared within [`NEWS_LIFETIME`].
     News {
         article_id: Uuid,
@@ -101,13 +114,14 @@ pub enum LivePanelRow {
 }
 
 impl LivePanelRow {
-    /// The kind's place on the panel: streams on top, games, news last.
-    /// Also the floor rule's priority for the leftover rows.
+    /// The kind's place on the panel: streams on top, games, events, news
+    /// last. Also the floor rule's priority for the leftover rows.
     fn rank(&self) -> usize {
         match self {
             LivePanelRow::Stream { .. } => 0,
             LivePanelRow::DoorGame { .. } => 1,
-            LivePanelRow::News { .. } => 2,
+            LivePanelRow::Event { .. } => 2,
+            LivePanelRow::News { .. } => 3,
         }
     }
 
@@ -116,6 +130,7 @@ impl LivePanelRow {
         match self {
             LivePanelRow::Stream { user_id, .. } => LiveSource::Stream(*user_id),
             LivePanelRow::DoorGame { key, .. } => LiveSource::DoorGame(*key),
+            LivePanelRow::Event { event_id, .. } => LiveSource::BoardEvent(*event_id),
             LivePanelRow::News { article_id, .. } => LiveSource::NewsArticle(*article_id),
         }
     }
@@ -134,12 +149,14 @@ pub(crate) struct LivePanelProps<'a> {
 /// The panel's rows in panel order: the floor rule over the streams that
 /// have gone live (a pending one has no stamp and is not listed, so the
 /// panel never points at a black screen), the watchable doors' live games
-/// with the open-watch count on each, and the News shares younger than
-/// [`NEWS_LIFETIME`] (unread against `reads`), each kind newest
-/// first, the kinds in `rank` order.
+/// with the open-watch count on each, the board's live timed posts
+/// (`events`, soonest first; never a viewer's own events), and the News shares
+/// younger than [`NEWS_LIFETIME`] (unread against `reads`), each other
+/// kind newest first, the kinds in `rank` order.
 pub(crate) fn rows(
     streams: &[LiveStreamView],
     live: &[LiveRow],
+    events: &[PanelEvent],
     articles: &[ArticleFeedItem],
     reads: &Reads,
     open_watches: &OpenWatches,
@@ -189,12 +206,24 @@ pub(crate) fn rows(
             )
         })
         .collect();
+    // Soonest first: what is about to start is what the room can still
+    // make. `events` arrive in that order from the calendar mirror.
+    let events: Vec<LivePanelRow> = events
+        .iter()
+        .map(|event| LivePanelRow::Event {
+            event_id: event.id,
+            title: event.title.clone(),
+            time: event.time.clone(),
+            going: event.going,
+        })
+        .collect();
     streams.sort_by_key(|(stamp, _)| std::cmp::Reverse(*stamp));
     games.sort_by_key(|(stamp, _)| std::cmp::Reverse(*stamp));
     news.sort_by_key(|(stamp, _)| std::cmp::Reverse(*stamp));
     arrange([
         streams.into_iter().map(|(_, row)| row).collect(),
         games.into_iter().map(|(_, row)| row).collect(),
+        events,
         news.into_iter().map(|(_, row)| row).collect(),
     ])
 }
@@ -334,6 +363,14 @@ fn row_line(width: usize, number: usize, row: &LivePanelRow, now: DateTime<Utc>)
                 Edge::Watching(*watching),
             )
         }
+        LivePanelRow::Event {
+            title, time, going, ..
+        } => (
+            EVENT_KIND,
+            Style::default().fg(theme::AMBER_DIM()),
+            format!("{time} {title}"),
+            Edge::Watching(usize::try_from(*going).unwrap_or(0)),
+        ),
         LivePanelRow::News { title, unread, .. } => (
             NEWS_KIND,
             Style::default().fg(theme::TEXT_FAINT()),

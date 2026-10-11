@@ -172,6 +172,10 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+    /// The board's all-day posts for today (`calendar::live::day_text`),
+    /// which take the #lounge topic row for the day. `None` elsewhere and
+    /// on any other day.
+    pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -1237,14 +1241,24 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             voice,
-            // The live strip stands in for the topic while it is up: the
-            // board is the room's news, and the topic is a key away in
-            // `/rules`. Voice and stream rows carry live state, so they stay.
-            topic: view
-                .room
-                .and_then(room_topic)
-                .filter(|_| view.live_strip.is_none()),
-            has_rules: view.room.is_some_and(room_has_rules) && view.live_strip.is_none(),
+            // The live strip stands in for the topic row while it is up:
+            // the board is the room's news, and the topic is a key away in
+            // `/rules`. On a day the board has an all-day post, that post
+            // takes the row. Voice and stream rows carry live state, so
+            // they stay.
+            row: match (
+                &view.live_strip,
+                view.board_day.as_deref(),
+                view.room.and_then(room_topic),
+            ) {
+                (Some(_), _, _) => None,
+                (None, Some(day), _) => Some(TopicRow::BoardDay(day)),
+                (None, None, Some(text)) => Some(TopicRow::Topic {
+                    text,
+                    has_rules: view.room.is_some_and(room_has_rules),
+                }),
+                (None, None, None) => None,
+            },
             closing_rule: view.live_strip.is_none(),
         },
     );
@@ -5124,6 +5138,13 @@ fn dm_display_label(
     }
 }
 
+/// What the header's last row says: the room's topic, or on #lounge on a
+/// day the board has an all-day post, the board's day in the topic's place.
+enum TopicRow<'a> {
+    Topic { text: &'a str, has_rules: bool },
+    BoardDay(&'a str),
+}
+
 /// The header block above a room's messages: the voice row (when the room has a
 /// voice channel), a divider, then the topic row. Each row pairs live state on
 /// the left with the keys or commands that act on it flushed to the right edge,
@@ -5134,8 +5155,7 @@ struct RoomHeader<'a> {
     /// the room is otherwise missing the show).
     stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
-    topic: Option<&'a str>,
-    has_rules: bool,
+    row: Option<TopicRow<'a>>,
     /// Whether the block ends in a rule. False when the daily live strip
     /// follows: the strip brings its own rule under the board.
     closing_rule: bool,
@@ -5148,7 +5168,7 @@ impl RoomHeader<'_> {
     fn height(&self) -> u16 {
         let rows = u16::from(self.stream.is_some())
             + u16::from(self.voice.is_some())
-            + u16::from(self.topic.is_some());
+            + u16::from(self.row.is_some());
         if rows == 0 {
             return 0;
         }
@@ -5259,7 +5279,7 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if let Some(stream) = header.stream {
         lines.push(padded(stream_header_line(stream, width)));
     }
-    if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
+    if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
     }
     if let Some(voice) = &header.voice {
@@ -5267,29 +5287,53 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
             voice, width,
         )));
     }
-    if header.voice.is_some() && header.topic.is_some() {
+    if header.voice.is_some() && header.row.is_some() {
         lines.push(rule());
     }
-    if let Some(topic) = header.topic {
-        let hint = if header.has_rules {
-            vec![Span::styled(
-                "/rules",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )]
-        } else {
-            Vec::new()
-        };
-        // The topic is clipped to whatever the hint leaves, so a long topic
-        // never pushes `/rules` off the row.
-        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
-        lines.push(padded(row_with_hint(
-            vec![Span::styled(
-                truncate_cells(topic, room_for_topic),
-                Style::default().fg(theme::TEXT_DIM()),
-            )],
-            hint,
-            width,
-        )));
+    match header.row {
+        Some(TopicRow::Topic { text, has_rules }) => {
+            let hint = if has_rules {
+                vec![Span::styled(
+                    "/rules",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                )]
+            } else {
+                Vec::new()
+            };
+            // The topic is clipped to whatever the hint leaves, so a long
+            // topic never pushes `/rules` off the row.
+            let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
+            lines.push(padded(row_with_hint(
+                vec![Span::styled(
+                    truncate_cells(text, room_for_topic),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )],
+                hint,
+                width,
+            )));
+        }
+        // The board's day reads in amber, the board's colour, with the
+        // board's key where `/rules` would be, in the strip's key style.
+        Some(TopicRow::BoardDay(text)) => {
+            let hint = crate::app::live::ui::key_hint_spans(
+                width,
+                &[
+                    crate::app::live::ui::HintPart::Key("7"),
+                    crate::app::live::ui::HintPart::Text(" for the board"),
+                ],
+            );
+            lines.push(padded(row_with_hint(
+                vec![Span::styled(
+                    truncate_cells(text, width.saturating_sub(17)),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )],
+                hint,
+                width,
+            )));
+        }
+        None => {}
     }
     // Closes the block off from the conversation below it.
     if header.closing_rule {
@@ -5420,8 +5464,10 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     voice,
-                    topic: room_topic(room),
-                    has_rules: room_has_rules(room),
+                    row: room_topic(room).map(|text| TopicRow::Topic {
+                        text,
+                        has_rules: room_has_rules(room),
+                    }),
                     closing_rule: true,
                 },
             )

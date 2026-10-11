@@ -170,6 +170,7 @@ fn push_quit_confirm_sayonara_placement(
 }
 
 struct DrawContext<'a> {
+    calendar: &'a crate::app::calendar::state::CalendarState,
     dashboard_view: chat::ui::DashboardChatView<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
@@ -319,6 +320,8 @@ struct DrawContext<'a> {
     /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
     artboard_interacting: bool,
+    artboard_disclaimer_visible: bool,
+    artboard_disclaimer_choices: &'a std::cell::Cell<[Rect; 3]>,
     leaderboard: &'a Arc<LeaderboardData>,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
@@ -452,6 +455,7 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        self.calendar.invalidate_geometry();
         // Computed up front: the method borrows all of `self`, which would
         // collide with the mutable field borrows the view structs hold below
         // (some door states are even taken out of `self` for the draw).
@@ -501,6 +505,7 @@ impl App {
         self.leaderboard_page.clear_hit_regions();
 
         // Init theme and layout sync — preview settings-modal draft live while open.
+        let artboard_disclaimer_visible = self.artboard_disclaimer_visible();
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
                 .draft()
@@ -742,6 +747,10 @@ impl App {
         let live_panel_rows = crate::app::live::panel::rows(
             &self.chat.live_streams,
             &live_rows,
+            &crate::app::calendar::live::panel_events(
+                &self.calendar.live_at(live_panel_now),
+                self.calendar.tz,
+            ),
             self.chat.news.all_articles(),
             self.chat.news.reads(),
             self.live_games.open_watches(),
@@ -758,6 +767,7 @@ impl App {
                 &self.chat.live_streams,
                 &live_rows,
                 &self.live_games,
+                &self.calendar,
             )
         } else {
             None
@@ -813,6 +823,7 @@ impl App {
                     &self.chat.live_streams,
                     &live_rows,
                     &self.live_games,
+                    &self.calendar,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
         } else {
@@ -890,6 +901,15 @@ impl App {
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
+            // The board's day, on the #lounge card alone like the strip.
+            board_day: if home_selected {
+                crate::app::calendar::live::day_text(
+                    &self.calendar.live_at(live_panel_now),
+                    live_panel_now,
+                )
+            } else {
+                None
+            },
             inline_images: &self.chat.inline_image_cache,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -1540,6 +1560,7 @@ impl App {
                     area,
                     screen,
                     DrawContext {
+                        calendar: &self.calendar,
                         dashboard_view,
                         chat_view,
                         game_selection: self.game_selection,
@@ -1644,6 +1665,8 @@ impl App {
                         city_runner_looks: &self.runner_looks,
                         clubhouse_overlay: self.chat.overlay(),
                         artboard_interacting: self.artboard_interacting,
+                        artboard_disclaimer_visible,
+                        artboard_disclaimer_choices: &self.artboard_disclaimer_choices,
                         leaderboard: &self.leaderboard,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
@@ -2061,7 +2084,19 @@ impl App {
                 }
             }
             Screen::Artboard => {
-                if let Some(state) = ctx.dartboard_state {
+                if ctx.artboard_disclaimer_visible {
+                    // The tour's own stop box offers show or skip; the
+                    // page under it stays bare so no art shows.
+                    if ctx.clubhouse_state.tutorial_forced_step().is_some() {
+                        frame.render_widget(ratatui::widgets::Clear, content_area);
+                    } else {
+                        artboard::disclaimer::draw(
+                            frame,
+                            content_area,
+                            ctx.artboard_disclaimer_choices,
+                        );
+                    }
+                } else if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(
                         frame,
                         content_area,
@@ -2071,6 +2106,7 @@ impl App {
                     );
                 }
             }
+            Screen::Calendars => crate::app::calendar::ui::draw(frame, inner, ctx.calendar),
             // The tour's dungeon stop plays its fight where the hub would be.
             Screen::Games if tour_header.is_some() => crate::app::clubhouse::fight::draw(
                 frame,
@@ -2314,6 +2350,8 @@ impl App {
                         work_marker: ctx.chat_view.work_view.marker_read_at,
                         showcase_marker: ctx.chat_view.showcase_view.marker_read_at,
                         current_user_id: ctx.chat_view.work_view.current_user_id,
+                        can_moderate: ctx.chat_view.work_view.is_admin,
+                        can_retract_jobs: ctx.is_admin || ctx.is_moderator,
                         profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
                 );
@@ -2547,6 +2585,7 @@ impl App {
                 inner,
                 ctx.clubhouse_state.tutorial,
                 screen,
+                ctx.artboard_disclaimer_visible,
             );
         }
 
@@ -2582,6 +2621,8 @@ impl App {
             frame.render_widget(notif_block, toast_area);
             draw_banner(frame, notif_inner, &banner);
         }
+
+        crate::app::calendar::ui::draw_modal(frame, inner, ctx.calendar);
 
         if ctx.show_settings {
             settings_modal::ui::draw(
@@ -2860,7 +2901,9 @@ impl App {
 }
 
 fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
-    ctx.show_settings
+    ctx.calendar.modal.is_some()
+        || ctx.calendar.context_menu.is_some()
+        || ctx.show_settings
         || ctx.show_quit_confirm
         || ctx.show_mod_modal
         || ctx.show_hub_modal
@@ -2910,6 +2953,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Artboard, "4"),
         (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
+        (Screen::Calendars, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -2966,6 +3010,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Artboard => "Artboard",
         Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
+        Screen::Calendars => "Calendars",
         Screen::Clubhouse => "Clubhouse",
         Screen::Nightcap => "Nightcap",
         Screen::City => "Undercity",
@@ -3154,7 +3199,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
+                "· {} inside · Tab/0-7 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),
@@ -3173,7 +3218,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         let gallery_focus = ctx
             .dartboard_state
             .map(|state| (state.gallery().focus(), state.gallery().is_framing()));
-        let hints: &[(&str, &str)] = if ctx.artboard_interacting {
+        let hints: &[(&str, &str)] = if ctx.artboard_disclaimer_visible {
+            if ctx.clubhouse_state.tutorial_forced_step().is_some() {
+                &[("S", "show"), ("Enter", "skip")]
+            } else {
+                &[("V", "view"), ("A", "always view"), ("B", "back to chat")]
+            }
+        } else if ctx.artboard_interacting {
             &[
                 ("active", "draw"),
                 ("Space", "drop"),
@@ -3218,20 +3269,29 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ],
             }
         };
-        // The page's own help is Ctrl+P in every state, and the top border
-        // always says so (`?` is the global guide, here as everywhere).
-        let help_hint: &[(&str, &str)] = if ctx.artboard_interacting {
-            &[]
-        } else {
-            &[("Ctrl+P", "help")]
-        };
+        // The page's own help is Ctrl+P once content has been accepted
+        // (`?` is the global guide, here as everywhere).
+        let help_hint: &[(&str, &str)] =
+            if ctx.artboard_interacting || ctx.artboard_disclaimer_visible {
+                &[]
+            } else {
+                &[("Ctrl+P", "help")]
+            };
         for (key, desc) in hints.iter().chain(help_hint) {
+            let key_color = if ctx.artboard_disclaimer_visible {
+                match *key {
+                    "V" => ratatui::style::Color::Yellow,
+                    "A" => ratatui::style::Color::Red,
+                    "B" => ratatui::style::Color::Green,
+                    _ => theme::AMBER_DIM(),
+                }
+            } else {
+                theme::AMBER_DIM()
+            };
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(
                 *key,
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(key_color).add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::styled(
                 format!(" {desc} "),

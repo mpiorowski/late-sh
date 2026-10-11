@@ -11,9 +11,10 @@ Naming note: `Artboard` is the user-facing name. Code and upstream crates still 
 ## High-Level Model
 
 - Top-level screen: `Screen::Artboard`, key `4`, also reachable through `Tab` / `Shift+Tab`.
+- Settings → Tweaks → Artboard content disclaimer (`artboard_disclaimer` in account settings, default true) hides the entire page behind a double-bordered NSFW warning. Its choices are View (`V`, current visit), Always View (`A`, view and persist the tweak off outside the tour), and Back to Chat (`B`/Esc, Home screen 1). Leaving resets one-visit consent. One all-yellow warning symbol sits on each side with five spaces to the wording, NSFW is red, and the choices start with yellow/red/green initials; explanations use theme text with dim parentheses. Superscript aside/footer use the theme faint text color and sit under the warning and above the bottom border. Choices are clickable except in keyboard-only mode. `disclaimer.rs` owns this gate, before gallery/editor input and without drawing art underneath; app modals keep priority. The dialog does not draw during the tour: the tour gate owns input at the Artboard stop, the page stays cleared, and the stop's tour box offers `S` (show, one-visit consent through the same `artboard_content_accepted`) or Enter (skip to Profiles); neither touches the tweak.
 - Shared canvas: `dartboard_core::Canvas`, canonical size `384 x 192`.
 - Server: one in-process `dartboard_local::ServerHandle` per `late-ssh` process.
-- Session connection: created lazily when the user enters Artboard; dropped when leaving Artboard.
+- Session connection: created by `App::sync_dartboard_connection` (`disclaimer.rs`) once the page may show: on entry with the disclaimer off, on `V`/`A`/tour `S`, or on the tick that lands a saved tweak; a visitor on the prompt holds no seat. Dropped when leaving Artboard. `q` on the prompt is the global quit.
 - Initial mode: `view`; `i`, `I`, `Enter`, or canvas left-click enters active edit mode.
 - Persistence: JSONB rows in `artboard_snapshots` through `late_core::models::artboard::Snapshot`.
 - Public gallery: `late-web/src/pages/gallery/`, read-only over saved DB snapshots, not live server memory. It does not list pieces yet.

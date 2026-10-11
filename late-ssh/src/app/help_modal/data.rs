@@ -189,7 +189,7 @@ pub(crate) fn bot_app_context() -> String {
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed, whether the patron is online or not: it decays 334 points an hour, so reaching wasted wears off in about six hours and even a maxed-out binge is fully sober again half a day later.\n\
         - A buzz also comes out in your typing, in public rooms only (never DMs or private rooms). Letters inside a word get shuffled, more of them the drunker you are, but the first and last letter of every word stay put so it always stays readable. Tipsy is the odd stumbled word; wasted is most of the sentence, plus a *hic* dropped mid-sentence in about a third of messages (and once in a while at sloshed). Handles, room slugs, links, and code in backticks are never touched. The slurring is saved with the message, so it does not clear up when you sober up later.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Profiles (5), and Leaderboards (6).\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Profiles (5), Leaderboards (6), and Calendars (7).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"unread N\" counter in the bottom-left border of the frame, right of the key hints; or press Ctrl+/ and type mentions. The unread count lives in the bottom border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, and Rebels; each is launched from there, not from its own top-level page. The hub also has an info card for our Minecraft server; see the Minecraft topic. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It is also the only door with an ending, and it has two of them: flying the starship out pays 15,000 chips and the [ADE] badge, and doing it while carrying the fleet beacon taken off the immortal wanderer on the ravaged battleship pays 20,000 and the [ADB] badge. They are claimed separately, so one account can earn both. The chips land for every run that gets out, because the save is wiped on the way out and a repeat is the whole arc again; the badge lands once per account. The battleship itself only appears on the map once the account has finished the game at least once, so a first run never meets it.\n\
@@ -199,6 +199,7 @@ pub(crate) fn bot_app_context() -> String {
         - A Dark Room and Green Dragon ride the backtick cycle too, as its last stops after Lateania and the roguelikes: pressing ` inside either hops onward with the door still loaded (the village keeps growing, the character stays listed as online), and ` from Home hops back in. While loaded they wear the same green in-progress dot on the Games hub sidebar. A loaded door left alone for 30 minutes (no key in it and its screen not open) ends its visit with the same save an explicit leave does and drops off the cycle; in Green Dragon that also drops the online flag, so an absent character becomes an ordinary sleeping PvP target. Two keys the hop never takes: a ` typed into a Green Dragon talk line stays a character, and there is no hopping out of a Green Dragon fight or mid-ascent in A Dark Room.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
         - Profiles page 5 lists people: one row per user who shared a project or posted a work card. Artboard has detailed page-local editing keybinds.\n\
+        - Calendars page 7 is the events board. Anyone can post an event to the board (five a day), everyone sees it, and i says I'm in or I'm out; the count of who is in shows on the event. Your own events live on the same grid, drawn green against the board's amber, and nobody else ever sees them; b hides the board to see only yours. n creates a private event (type a title like movie night tomorrow at 9pm and the time fills in; flip the where-it-goes control to put it on the board), e edits your own, d deletes your own; moderators can delete any post. v switches Month and List, [ and ] move a month, t is today; landing on a day marks its first event, j/k move along the day's events, click or Enter opens the marked event (an empty day starts a new one), right-click offers the actions you are allowed. A post shows up as a line in #lounge; an hour before a timed event starts it heads the now strip on Home and gets a Live panel row until it ends (o or click opens it on the board), and when it starts #lounge gets a headline; an all-day event takes the #lounge topic row for its day instead. Your own events show on page 7 only. Times use the account timezone or UTC.\n\
         - Leaderboards page 6 holds every board. The Boards section leads: Top Chips, Arcade Wins, Late Time (monthly + all-time), and Top Drinkers (buzz points from every drink you take, whoever paid, monthly + yearly). Then the Games section: Lateania Adventurers (living characters by level, class shown on the row) and Lateania PvP (rivals slain in the Wildbound Waste), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. Then per-game daily win counts and per-game high scores, each with monthly and all-time standings. A trailing Badge Guide entry explains what every award code means, how it is earned, and whether it pays chips. Daily quests render at the top of The Arcade (page 2). The Shop opens with Ctrl+S or the /shop composer command; active games, profile/job editors, and Artboard input keep their local Ctrl+S bindings.\n",
     );
     for topic in HelpTopic::ALL {
@@ -224,8 +225,8 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Minecraft), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
-    - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Minecraft), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time), 7 Calendars (the events board: anyone posts, i says I'm in; your own private events beside it).\n\
+    - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, F flips, z zooms it over the whole screen, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
     - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened, links shared to News ahead of the rest: a link stays five minutes (o opens it, r replies to it in #lounge; shares are not posted into the chat itself), a track queued in the YouTube booth at least two, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over anything but a link while the cue moves. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
@@ -941,6 +942,9 @@ fn directory_help_lines() -> Vec<String> {
         "Profiles",
         "",
         "Profiles page 5 is the work page: two shelves, People and Jobs. People is one row per person who posted a work card or shared a project, newest activity first; the detail pane beside the list (stacked under 100 columns) shows the whole person in sections: card, about, projects, late.fetch.",
+        "  Mouse             click a person or posting to show its details; wheel scrolls the pane under the pointer without changing selection",
+        "  Links             click a URL or Copy button to copy the full link; Profile opens the separate profile popup",
+        "  Controls          click shelf names, Search, Mine, For me, Your profile, or Post job; Back returns to the list on narrow terminals",
         "  5                 open Profiles",
         "  Space             switch between the People and Jobs shelves",
         "  j / k or ↑ / ↓   move between people",
@@ -958,6 +962,8 @@ fn directory_help_lines() -> Vec<String> {
         "",
         "Profile editor",
         "  One modal for everything on your row, three pages: card, about, projects.",
+        "  Mouse             click a tab or field to edit, click choice arrows to cycle, click skills/langs to pick tags; wheel scrolls fields or the hovered multiline text",
+        "  Save / Close      explicit buttons; clicking outside keeps your draft; Close asks before discarding unsaved profile changes",
         "  Tab / Shift+Tab   switch page",
         "  j / k             move between rows",
         "  Enter             type into the row; Enter or Tab commits and steps to the next row",
@@ -978,6 +984,7 @@ fn directory_help_lines() -> Vec<String> {
         "  j / k or ↑ / ↓   move between postings (stacked: l opens the card, h returns)",
         "  Enter / c         copy the posting's link",
         "  /                 keep only postings that carry your tags (card skills and late.fetch langs)",
+        "  Mouse form        click fields or stack tags; Post submits, Close cancels; while saving, the form waits for the answer",
         "  n                 post a job of your own: company, role, link, where, regions, stack, pay, excerpt; live at once, three a person",
         "  d                 take down a posting made here: your own, or any when you moderate",
         "  for you           your own open or casual card shows its best matches on the People shelf; The Late Edition prints NEW WORK from yesterday's releases the same way",
@@ -1291,6 +1298,22 @@ fn overview_lines() -> Vec<String> {
         "  4 Artboard        shared persistent ASCII canvas, and the gallery: frame your work, hang it, applaud others",
         "  5 Profiles        the people, one row each: their projects and work cards",
         "  6 Leaderboards    every board, monthly and all-time",
+        "  7 Calendars       the events board: anyone posts, i says I'm in; your own events beside it",
+        "",
+        "Calendars: the board is everyone's, your own events are yours alone.",
+        "n new event (a title like movie night tomorrow at 9pm fills the time in),",
+        "e edit your own, d delete your own (moderators any post), i I'm in or I'm out.",
+        "v Month or List, b show or hide the board, [ ] month, t today.",
+        "Arrows move days (a day marks its first event), j/k move along the day's events,",
+        "Enter opens the marked event, or starts a new one on an empty day.",
+        "Click selects; double-click opens; right-click offers what you may do.",
+        "Editor: Tab fields, Post to picks the board or just me, Ctrl+S saves,",
+        "Esc asks before discarding a changed draft. Dates take Oct 2, +2w, tomorrow.",
+        "If a save loses to a newer edit, Ctrl+L reloads it and keeps your draft.",
+        "A post is a line in #lounge; an hour before a timed event it heads the now",
+        "strip on Home and the Live panel (o or click opens it); the start is a headline.",
+        "An all-day event takes the #lounge topic row for its day. Yours stay on page 7.",
+        "Times use your account timezone (UTC fallback); all-day dates do not shift.",
         "",
         "Leaderboards: j/k or arrows select a board; click its row to switch.",
         "Ctrl+J/K scroll the content. The wheel over the rail selects boards;",
@@ -1314,11 +1337,16 @@ fn overview_lines() -> Vec<String> {
         "opens the config paste box (.nethackrc / init.txt).",
         "",
         "Profiles has its own guide tab; Artboard keeps page-local editing help.",
+        "Artboard may contain NSFW content: V views this visit, A always views,",
+        "and B returns to chat (1). Settings > Tweaks > Artboard",
+        "content disclaimer turns this default-on prompt off or back on.",
+        "During the tour, S shows the art for that visit and Enter skips to Profiles;",
+        "the tour never changes disclaimer preferences.",
         "There is also a dedicated Architecture slide if you need system-level context.",
         "",
         "Global keys",
         "  Tab / Shift+Tab   next / previous screen",
-        "  0-6               jump straight to a screen",
+        "  0-7               jump straight to a screen",
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
@@ -2059,7 +2087,7 @@ Global keys (work anywhere)
 
 Tune a station
   v then 1..5       tune to the station pinned in that slot (radio active)
-  v then r          open Stations: ↑↓ move, Enter listen, 1-5 pin to a slot, 0 unpin, Esc close
+  v then r          open Stations: ↑↓ move, Enter listen, 1-5 pin to a slot, 0 unpin, Ctrl+Y copy the track, Esc close
                     every row shows what that station is playing right now, so you can check before you switch
 
 Swap which source you hear
@@ -2071,6 +2099,7 @@ Music Booth (v then v)
 
   Tab               switch focus between submit, queue, and history
   [ or ]            switch Queue / History
+  Ctrl+Y            copy a YouTube link: the playing track from submit, the selected row in Queue/History
   Esc               close
 
   Submit focus:
@@ -2097,6 +2126,8 @@ Music Booth (v then v)
     /               filter the list
     Enter           queue selected track fresh
     d               delete selected track (staff)
+
+  Under Now Playing sits the track's YouTube link, so you can select it by hand if your terminal doesn't pass the copy through.
 
   Bringing a track pays you 100 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.

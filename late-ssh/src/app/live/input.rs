@@ -9,15 +9,24 @@ use crate::app::{
     lobby::{daily::state::BoardEntry, modal_input::return_screen_for_opening},
     state::App,
 };
+use crate::metrics;
 
 use super::pick::LiveSource;
+
+/// Which surface an open came from, for the one source that counts it
+/// (a board event: whether the strip or the panel is what brings people).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    Strip,
+    Panel,
+}
 
 /// `o` on the #lounge card opens what the strip is showing. With nothing
 /// to open (no strip up, or a result holding it) the key falls through
 /// untouched.
 pub fn open_from_key(app: &mut App) -> bool {
     match app.live.opens() {
-        Some(source) => open(app, source),
+        Some(source) => open(app, source, Origin::Strip),
         None => false,
     }
 }
@@ -33,6 +42,7 @@ pub fn reply_from_key(app: &mut App) -> bool {
         | Some(LiveSource::BoothTrack(_))
         | Some(LiveSource::Stream(_))
         | Some(LiveSource::DoorGame(_))
+        | Some(LiveSource::BoardEvent(_))
         | None => false,
     }
 }
@@ -41,7 +51,9 @@ pub fn reply_from_key(app: &mut App) -> bool {
 /// recorded on frames where the strip drew something that opens.
 pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
     match app.live.hit.get() {
-        Some((rect, source)) if rect.contains(Position { x, y }) => open(app, source),
+        Some((rect, source)) if rect.contains(Position { x, y }) => {
+            open(app, source, Origin::Strip)
+        }
         Some(_) | None => false,
     }
 }
@@ -57,7 +69,7 @@ pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
         return false;
     }
     match sources.get(usize::from(y - rect.y)) {
-        Some(Some(source)) => open(app, *source),
+        Some(Some(source)) => open(app, *source, Origin::Panel),
         Some(None) | None => false,
     }
 }
@@ -77,12 +89,12 @@ pub fn open_from_prefix(app: &mut App, byte: u8) -> bool {
         return false;
     };
     match sources[slot] {
-        Some(source) => open(app, source),
+        Some(source) => open(app, source, Origin::Panel),
         None => false,
     }
 }
 
-fn open(app: &mut App, source: LiveSource) -> bool {
+fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
     match source {
         // Never offered (`LiveState::opens`): the board left the lobby.
         LiveSource::DailyResult(_) => false,
@@ -162,5 +174,25 @@ fn open(app: &mut App, source: LiveSource) -> bool {
         // stop on the backtick cycle, so the same key hops back out. Gone
         // between the frame and the key (the game ended): nothing to open.
         LiveSource::DoorGame(key) => crate::app::door::spectate::input::open_live_game(app, key),
+        // The board, on the event's day, with the event's details open over
+        // it: the shared snapshot's copy, so it is up before the page's own
+        // load lands. Gone between the frame and the key (over, or taken
+        // down): nothing to open.
+        LiveSource::BoardEvent(event_id) => {
+            let event = app
+                .calendar
+                .live()
+                .into_iter()
+                .find(|event| event.id == event_id);
+            match event {
+                Some(event) => {
+                    metrics::record_calendar_open(origin);
+                    app.calendar.show_event(event);
+                    app.set_screen(Screen::Calendars);
+                    true
+                }
+                None => false,
+            }
+        }
     }
 }

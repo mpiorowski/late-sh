@@ -109,6 +109,12 @@ pub(crate) enum ModCommand {
         duration: Option<chrono::Duration>,
         reason: String,
     },
+    Calendar {
+        action: CalendarAction,
+        username: String,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    },
     Voice {
         action: VoiceAction,
         username: String,
@@ -144,6 +150,7 @@ pub(crate) enum BanListScope {
     Artboard,
     Audio,
     Stream,
+    Calendar,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,6 +240,28 @@ impl ArtboardAction {
         match self {
             Self::Ban => "artboard_ban",
             Self::Unban => "artboard_unban",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalendarAction {
+    Ban,
+    Unban,
+}
+
+impl CalendarAction {
+    pub(crate) const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Ban => "board-banned",
+            Self::Unban => "removed board ban for",
+        }
+    }
+
+    pub(crate) const fn audit_name(self) -> &'static str {
+        match self {
+            Self::Ban => "calendar_ban",
+            Self::Unban => "calendar_unban",
         }
     }
 }
@@ -460,7 +489,9 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
 
     if let Some(page) = parse_page(first)? {
         if parts.len() > 1 {
-            anyhow::bail!("usage: view bans [server|art|audio|stream|#roomname] [pagenumber]");
+            anyhow::bail!(
+                "usage: view bans [server|art|audio|calendar|stream|#roomname] [pagenumber]"
+            );
         }
         return Ok(ModCommand::Bans {
             scope: BanListScope::All,
@@ -493,6 +524,15 @@ fn parse_bans_mod_command(parts: &[&str]) -> Result<ModCommand> {
             }
             Ok(ModCommand::Bans {
                 scope: BanListScope::Audio,
+                page: optional_page(parts.get(1).copied())?,
+            })
+        }
+        "calendar" | "board" => {
+            if parts.len() > 2 {
+                anyhow::bail!("usage: view bans calendar [pagenumber]");
+            }
+            Ok(ModCommand::Bans {
+                scope: BanListScope::Calendar,
                 page: optional_page(parts.get(1).copied())?,
             })
         }
@@ -681,6 +721,12 @@ fn parse_ban_mod_command(parts: &[&str]) -> Result<ModCommand> {
             duration,
             reason,
         }),
+        "calendar" | "board" => Ok(ModCommand::Calendar {
+            action: CalendarAction::Ban,
+            username,
+            duration,
+            reason,
+        }),
         "stream" => Ok(ModCommand::Stream {
             action: StreamAction::Ban,
             username,
@@ -725,6 +771,12 @@ fn parse_unban_mod_command(parts: &[&str]) -> Result<ModCommand> {
         }),
         "audio" => Ok(ModCommand::Audio {
             action: AudioAction::Unban,
+            username,
+            duration: None,
+            reason,
+        }),
+        "calendar" | "board" => Ok(ModCommand::Calendar {
+            action: CalendarAction::Unban,
             username,
             duration: None,
             reason,
@@ -1141,8 +1193,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard safety help          - view help for art nsfw/sfw commands",
             "======== Bans, kicks, etc. =========================================",
             "kick   <server|voice|stream|#room> @name [reason...]",
-            "ban    <server|#room|art|audio|stream> @name [duration] [reason...]",
-            "unban  <server|#room|art|audio|voice|stream> @name [reason...]",
+            "ban    <server|#room|art|audio|calendar|stream> @name [duration] [reason...]",
+            "unban  <server|#room|art|audio|calendar|voice|stream> @name [reason...]",
             "slow   <server|#room> @name <interval> <duration|perma> [reason...]",
             "unslow <server|#room> @name [reason...]",
             "======== Help & Admin ==============================================",
@@ -1197,8 +1249,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Shows room id, type, visibility, flags, and member count.",
         ],
         "view bans" => &[
-            "view bans [server|art|audio|stream|#roomname] [pagenumber]",
-            "Lists current active bans. Without a scope, shows server, artboard, audio, stream, and room bans.",
+            "view bans [server|art|audio|calendar|stream|#roomname] [pagenumber]",
+            "Lists current active bans. Without a scope, shows server, artboard, audio, stream, calendar, and room bans.",
             "pagenumber: optional positive page number; 15 rows per page.",
         ],
         "view bans server" => &[
@@ -1263,13 +1315,25 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "Removes one user from one room.",
         ],
         "ban" => &[
-            "ban <server|#room|art|audio|stream> @name [duration] [reason...]",
-            "Creates a server, artboard, audio, stream, or room ban. Room bans also remove membership.",
+            "ban <server|#room|art|audio|calendar|stream> @name [duration] [reason...]",
+            "Creates a server, artboard, audio, calendar, stream, or room ban. Room bans also remove membership.",
             "#roomname is required for room operations, e.g. #lounge.",
             "@name: username; bare name is also accepted.",
             "duration: optional positive number plus s/m/h/d, e.g. 30m or 7d; omit for permanent.",
             "reason: optional audit text after duration.",
-            "Subtopics: help ban server, help ban room, help ban art, help ban audio, help ban stream.",
+            "Subtopics: help ban server, help ban room, help ban art, help ban audio, help ban calendar, help ban stream.",
+        ],
+        "ban calendar" | "ban board" => &[
+            "ban calendar @name [duration] [reason...]",
+            "Stops a user posting to the events board (page 7). Their own private events are untouched.",
+        ],
+        "unban calendar" | "unban board" => &[
+            "unban calendar @name [reason...]",
+            "Lets a user post to the events board again.",
+        ],
+        "view bans calendar" | "view bans board" => &[
+            "view bans calendar [pagenumber]",
+            "Lists active events-board bans with actor, expiry, and reason.",
         ],
         "ban server" => &[
             "ban server @name [duration] [reason...]",
@@ -1294,11 +1358,11 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "server restart and leaves CLI voice alone.",
         ],
         "unban" => &[
-            "unban <server|#room|art|audio|voice|stream> @name [reason...]",
-            "Removes active server, artboard, audio, stream, or room bans, or lifts a voice block.",
+            "unban <server|#room|art|audio|calendar|voice|stream> @name [reason...]",
+            "Removes active server, artboard, audio, calendar, stream, or room bans, or lifts a voice block.",
             "#roomname is required for room operations, e.g. #lounge.",
             "@name: username; bare name is also accepted. reason: optional audit text.",
-            "Subtopics: help unban server, help unban room, help unban art, help unban audio, help unban voice, help unban stream.",
+            "Subtopics: help unban server, help unban room, help unban art, help unban audio, help unban calendar, help unban voice, help unban stream.",
         ],
         "unban stream" => &[
             "unban stream @name [reason...]",

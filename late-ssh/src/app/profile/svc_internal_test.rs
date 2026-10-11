@@ -115,6 +115,7 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
         screensaver: late_core::models::user::Screensaver::DEFAULT,
         show_watch_chat: true,
         art_splash_mode: ArtSplashMode::Sfw,
+        artboard_disclaimer: true,
         terminal_images: TerminalImagesMode::Auto,
         hidden_award_categories: Vec::new(),
         show_flag_fallback: false,

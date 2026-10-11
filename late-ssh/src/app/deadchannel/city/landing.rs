@@ -539,13 +539,15 @@ fn text(value: impl Into<String>) -> Span<'static> {
     Span::styled(value.into(), ink(INK_DIM))
 }
 
-/// A bar of `filled` out of `total` cells in `neon`, the rest dark.
+/// A bar of `filled` out of `total` cells in `neon`, the rest dark. Two
+/// spaces after it, since many fonts draw `▰▱` wider than a cell and eat a
+/// single one.
 fn bar(filled: usize, total: usize, neon: Neon) -> Vec<Span<'static>> {
     let filled = filled.min(total);
     vec![
         Span::styled("▰".repeat(filled), ink(neon_rgb(neon))),
         Span::styled("▱".repeat(total - filled), ink(INK_MUTED)),
-        Span::raw(" "),
+        Span::raw("  "),
     ]
 }
 

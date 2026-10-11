@@ -201,9 +201,9 @@ fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
     assert_eq!(
         shipped,
         vec![
+            (RightSidebarComponent::Music, true),
             (RightSidebarComponent::Daily, true),
             (RightSidebarComponent::Live, true),
-            (RightSidebarComponent::Music, true),
             (RightSidebarComponent::Spacer, true),
             (RightSidebarComponent::Bonsai, true),
             (RightSidebarComponent::Pet, false),
@@ -229,22 +229,14 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
     // Stored order kept for known entries, unknown dropped (including the
     // retired "pet", "activity", "visualizer", and "pot" keys), missing
     // panels placed under their ALL predecessor at their default: the
-    // lobby on top (nothing precedes it), live under the lobby, free space
-    // under the music, the pet under the bonsai and the tank under the pet,
-    // the lobby, live and free space on, the pet and the tank off. The
+    // lobby under the music, live under the lobby, free space under live,
+    // the pet under the bonsai and the tank under the pet, the lobby, live
+    // and free space on, the pet and the tank off. The
     // retired "pet" key must not switch on the pet panel, which lives under
     // "pet_box".
     assert_eq!(
         components,
         vec![
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Daily,
-                enabled: true,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Live,
-                enabled: true,
-            },
             RightSidebarComponentSetting {
                 component: RightSidebarComponent::Bonsai,
                 enabled: false,
@@ -259,6 +251,14 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
             },
             RightSidebarComponentSetting {
                 component: RightSidebarComponent::Music,
+                enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Daily,
+                enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Live,
                 enabled: true,
             },
             RightSidebarComponentSetting {

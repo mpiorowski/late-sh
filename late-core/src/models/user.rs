@@ -585,9 +585,9 @@ impl RightSidebarComponent {
     /// `from_key`; the pet panel came back under a new key so an old stored
     /// "pet" entry cannot switch it on.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
+        Self::Music,
         Self::Daily,
         Self::Live,
-        Self::Music,
         Self::Spacer,
         Self::Bonsai,
         Self::Pet,
@@ -2276,6 +2276,14 @@ pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
 pub fn extract_paper_at_login(settings: &Value) -> bool {
     settings
         .get(PAPER_AT_LOGIN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Ask before displaying Artboard content on each visit. Enabled by default.
+pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
+    settings
+        .get("artboard_disclaimer")
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }
