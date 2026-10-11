@@ -26,7 +26,7 @@ fn the_mirror_shows_the_draft_with_the_cursor_row_and_its_rack() {
     draft.down();
     let screen = text_of(&mirror_lines(&MirrorView {
         draft: Some(&draft),
-        word: Some("the tailor turns the mirror. that is you now."),
+        word: None,
         changed: true,
         saving: false,
     }));
@@ -47,7 +47,6 @@ fn the_mirror_shows_the_draft_with_the_cursor_row_and_its_rack() {
     );
     assert!(screen.contains(&format!("[{}]", look.mark)), "{screen}");
     assert!(screen.contains("[s] wear it"), "{screen}");
-    assert!(screen.contains("the tailor turns the mirror."), "{screen}");
     assert!(
         screen.contains("level 4 opens 9 new pieces and phosphor."),
         "the next unlock is named\n{screen}"

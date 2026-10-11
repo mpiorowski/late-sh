@@ -156,7 +156,20 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
 /// The city with `state` over it, `sheet` as the mirror, and `till` as the
 /// counter's last word, on a 120 by 40 terminal.
 fn render_with_sheet(state: &State, sheet: &Sheet, till: Option<&str>) -> String {
-    let backend = TestBackend::new(120, 40);
+    render_panel(120, 40, state, sheet, till, None)
+}
+
+/// [`render_with_sheet`] on a `width` by `height` terminal, with
+/// `tailor_word` as the tailor's last word.
+fn render_panel(
+    width: u16,
+    height: u16,
+    state: &State,
+    sheet: &Sheet,
+    till: Option<&str>,
+    tailor_word: Option<&str>,
+) -> String {
+    let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
@@ -173,7 +186,7 @@ fn render_with_sheet(state: &State, sheet: &Sheet, till: Option<&str>) -> String
                     till,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
-                        word: None,
+                        word: tailor_word,
                         changed: false,
                         saving: false,
                     },
@@ -238,6 +251,71 @@ fn a_shop_panel_keeps_its_frame_whatever_the_counter_says() {
     let bought = render_with_sheet(&state, &sheet, Some(word));
     assert!(bought.contains("you carry that, or better"), "{bought}");
     assert_eq!(corners(&bought), corners(&quiet), "{bought}");
+}
+
+/// On a short screen the armorer's wall gives way, never the keys: the
+/// tiers around the cursor stay, and so do both keys with their prices,
+/// the terms, and the counter's word. 22 rows is the city on a 24-row
+/// terminal, under the app's frame.
+#[test]
+fn a_short_screen_keeps_the_armorers_keys_and_prices() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Armorer);
+    state.pick_down();
+    state.pick_down();
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.level = 3;
+    sheet.bits = 1300;
+    sheet.weapon_tier = 2;
+    let word = "the armorer hands over the box cutter. 506 bits.";
+    for height in [22, 24, 26] {
+        let screen = render_panel(120, height, &state, &sheet, Some(word), None);
+        for needle in [
+            "▸    3  tire iron",
+            "[↑↓] pick a tier",
+            "[w] tire iron for 937 bits",
+            "[a] padded jacket for 1316 bits",
+            "power equals tier.",
+            word,
+        ] {
+            assert!(
+                screen.contains(needle),
+                "{needle} at {height} rows\n{screen}"
+            );
+        }
+    }
+
+    // The window walks with the cursor to the top of the wall.
+    for _ in 0..12 {
+        state.pick_down();
+    }
+    let screen = render_panel(120, 22, &state, &sheet, Some(word), None);
+    assert!(screen.contains("▸   15  the last broadcast"), "{screen}");
+    assert!(screen.contains("[w] the last broadcast for"), "{screen}");
+}
+
+/// The tailor's last word sits at the foot of the mirror's panel, where
+/// every counter's word goes.
+#[test]
+fn the_tailors_word_sits_at_the_foot_of_the_mirror() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Tailor);
+    let sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    let word = "the tailor turns the mirror. that is you now.";
+    let screen = render_panel(120, 40, &state, &sheet, None, Some(word));
+    assert!(screen.contains(word), "{screen}");
+    let (row, _) = spot(&screen, word);
+    let (foot, _) = spot(&screen, " Esc closes ");
+    assert!(
+        row < foot && foot - row <= 2,
+        "the word at the foot\n{screen}"
+    );
 }
 
 /// Dead Air lists what each glass does at this level, and spells the

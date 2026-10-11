@@ -114,4 +114,10 @@ fn the_ledge_box_keeps_its_frame() {
     assert_eq!(corner(&fell), corner(&idle), "{fell}");
     // Its last sentence, wrapped onto the last of the word's rows.
     assert!(fell.contains("owed."), "the whole answer\n{fell}");
+
+    // Narrower than the leaning-out line: it wraps, and the box is sized
+    // for that whether leaning out or not.
+    let idle = text_of(&render_with(60, 40, 3, false, None));
+    let armed = text_of(&render_with(60, 40, 3, true, None));
+    assert_eq!(corner(&armed), corner(&idle), "{idle}\n{armed}");
 }

@@ -310,49 +310,17 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64, view: LedgeView<'_>) {
         title_rect,
     );
 
-    // Three rows in either state, the keys on the last, and the row's
-    // answer in rows of its own under them: leaning out or a refusal
-    // never resizes the box.
-    let key = lit(Neon::Amber);
-    let (lines, border) = match view.armed {
-        true => (
-            vec![
-                Line::from(Span::styled(
-                    "you lean out over the drop. level 1, bare hands, empty pockets and locker.",
-                    lit(Neon::Red),
-                )),
-                Line::from(Span::styled(
-                    "the marks, the peak, and the debt come down with you.",
-                    ink(INK_DIM),
-                )),
-                Line::from(vec![
-                    Span::styled("[r] ", key),
-                    Span::styled("step off", ink(INK)),
-                    Span::styled("   any other key leans back", ink(INK_DIM)),
-                ]),
-            ],
-            lit(Neon::Red),
-        ),
-        false => (
-            vec![
-                Line::from(Span::styled(
-                    "a long way down, and a way to start over.",
-                    ink(INK_DIM),
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[r] ", key),
-                    Span::styled("lean out", ink(INK)),
-                    Span::styled("   [Enter] ", key),
-                    Span::styled("step back", ink(INK)),
-                ]),
-            ],
-            ink(INK_DIM),
-        ),
-    };
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    // Three lines in either state, the keys on the last, and the row's
+    // answer in rows of its own under them. The box is sized for the
+    // taller of the two states at this width, so leaning out or a refusal
+    // never resizes it.
     let width = LEDGE_WIDTH.min(area.width.saturating_sub(2));
-    let body_rows = body.line_count(width.saturating_sub(2)) as u16;
+    let rows = |armed: bool| {
+        Paragraph::new(ledge_lines(armed))
+            .wrap(Wrap { trim: false })
+            .line_count(width.saturating_sub(2)) as u16
+    };
+    let body_rows = rows(false).max(rows(true));
     let height = (body_rows + 1 + LEDGE_WORD_ROWS + 2).min(area.height.saturating_sub(1));
     let rect = Rect {
         x: area.x + area.width.saturating_sub(width + 1),
@@ -360,13 +328,54 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, t: u64, view: LedgeView<'_>) {
         width,
         height,
     };
+    let border = match view.armed {
+        true => lit(Neon::Red),
+        false => ink(INK_DIM),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .style(ink(INK))
         .border_style(border)
         .title(Span::styled(" the ledge ", lit(Neon::White)));
+    let body = Paragraph::new(ledge_lines(view.armed)).wrap(Wrap { trim: false });
     frame.render_widget(Clear, rect);
     draw_framed(frame, rect, block, body, view.till, LEDGE_WORD_ROWS);
+}
+
+/// What the ledge box says over the row's answer: the way back and the
+/// lean out, or, leaning out, what the step off takes and keeps.
+fn ledge_lines(armed: bool) -> Vec<Line<'static>> {
+    let key = lit(Neon::Amber);
+    match armed {
+        true => vec![
+            Line::from(Span::styled(
+                "you lean out over the drop. level 1, bare hands, empty pockets and locker.",
+                lit(Neon::Red),
+            )),
+            Line::from(Span::styled(
+                "the marks, the peak, and the debt come down with you.",
+                ink(INK_DIM),
+            )),
+            Line::from(vec![
+                Span::styled("[r] ", key),
+                Span::styled("step off", ink(INK)),
+                Span::styled("   any other key leans back", ink(INK_DIM)),
+            ]),
+        ],
+        false => vec![
+            Line::from(Span::styled(
+                "a long way down, and a way to start over.",
+                ink(INK_DIM),
+            )),
+            Line::default(),
+            Line::from(vec![
+                Span::styled("[r] ", key),
+                Span::styled("lean out", ink(INK)),
+                Span::styled("   [Enter] ", key),
+                Span::styled("step back", ink(INK)),
+            ]),
+        ],
+    }
 }
 
 #[cfg(test)]

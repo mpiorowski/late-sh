@@ -902,7 +902,7 @@ pub(crate) struct PickerView<'a> {
     pub own_username: &'a str,
     /// The city's animation clock: the bright nodes flicker on it.
     pub tick: u64,
-    /// The last step's word (`FightSession::till`): what the rest mended,
+    /// The last step's word (`FightSession::till`): what the rest cleared,
     /// what the cache held, why the row refused.
     pub word: Option<&'a str>,
 }

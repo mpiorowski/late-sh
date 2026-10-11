@@ -1658,7 +1658,9 @@ fn draw_popover(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
 /// counter's last word. Every panel says the same number of lines in
 /// every state (a refusal takes the row its key would have), and the
 /// word lands in rows already there, so nothing a key does moves the
-/// frame.
+/// frame. On a screen too short for all of it the blank row goes first,
+/// then the panel gives up the rows it is short by (the armorer from its
+/// wall, `panel_lines`), so the keys and the word stay on the screen.
 fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     let Some(landmark) = view.state.panel() else {
         return;
@@ -1690,10 +1692,26 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         | Landmark::Vids
         | Landmark::Pawn => view.till,
     };
-    let body = Paragraph::new(panel_lines(landmark, view)).wrap(Wrap { trim: false });
     let width = PANEL_WIDTH.min(area.width.saturating_sub(2));
-    let body_rows = body.line_count(width.saturating_sub(2)) as u16;
-    let height = (body_rows + 1 + PANEL_WORD_ROWS + 2).min(area.height.saturating_sub(1));
+    let inner_width = width.saturating_sub(2);
+    // The rows inside the frame, one row of street left showing, and what
+    // is left of them over the word.
+    let room = area.height.saturating_sub(1 + 2);
+    let body_room = usize::from(room.saturating_sub(PANEL_WORD_ROWS));
+    let body_for = |short_by: usize| {
+        Paragraph::new(panel_lines(landmark, view, short_by)).wrap(Wrap { trim: false })
+    };
+    let whole = body_for(0);
+    let body = match whole.line_count(inner_width).saturating_sub(body_room) {
+        0 => whole,
+        short_by => body_for(short_by),
+    };
+    let body_rows = body.line_count(inner_width) as u16;
+    let spacer = match body_rows + 1 + PANEL_WORD_ROWS <= room {
+        true => 1,
+        false => 0,
+    };
+    let height = (body_rows + spacer + PANEL_WORD_ROWS + 2).min(area.height.saturating_sub(1));
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
@@ -1746,7 +1764,10 @@ pub(super) fn draw_framed(
     }
 }
 
-fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
+/// What a shop's panel says. `short_by` is how many rows the screen is
+/// short of all of it: the armorer gives them up from its wall; every
+/// other panel says everything and is cut at its foot.
+fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
     let muted_text = ink(INK_MUTED);
@@ -1755,7 +1776,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let blank = || Line::default();
     match landmark {
-        Landmark::Armorer => lines.extend(armorer_lines(view)),
+        Landmark::Armorer => lines.extend(armorer_lines(view, short_by)),
         Landmark::Tailor => lines.extend(tailor_ui::mirror_lines(&view.tailor)),
         Landmark::Lockers => lines.extend(locker_lines(view)),
         Landmark::Bands => {
@@ -1941,8 +1962,8 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
 }
 
 /// The lockers: what is on hand and what is locked up, the two keys priced
-/// (the deposit net of the cut), the refusal ahead of a key that would
-/// meet one, and the locker's last word.
+/// (the deposit net of the cut), and the refusal ahead of a key that would
+/// meet one.
 fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -2020,7 +2041,7 @@ fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
 }
 
 /// The bits machine: what is owed against the cap, the two keys priced,
-/// its terms, and its last word.
+/// and its terms.
 fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -2103,9 +2124,10 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
 }
 
 /// The armorer's wall: the ladder with the cursor on it, what you carry
-/// lit, the two keys priced for the picked row net of the trade-in, and
-/// the last thing the armorer said.
-fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+/// lit, and the two keys priced for the picked row net of the trade-in.
+/// `short_by` rows come off the ladder, the tiers kept the ones around
+/// the cursor, so a short screen keeps the keys.
+fn armorer_lines(view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
     let muted_text = ink(INK_MUTED);
@@ -2140,7 +2162,12 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ),
         head,
     )));
-    for index in 0..data::COST_LADDER.len() {
+    let tiers = data::COST_LADDER.len();
+    let shown = tiers.saturating_sub(short_by).max(1);
+    let first = ((picked - 1) as usize)
+        .saturating_sub(shown / 2)
+        .min(tiers - shown);
+    for index in first..first + shown {
         let tier = index as i32 + 1;
         let price = wall_price(tier);
         let cell = |slot: GearSlot, name: &'static str| {
@@ -2211,9 +2238,8 @@ fn armorer_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
 }
 
 /// Dead Air: the crystals on hand and the glass in you, the menu with
-/// each glass's key and what it does at this level, the refusal the row
-/// would give spelled out ahead of the keys, and the bartender's last
-/// word.
+/// each glass's key and what it does at this level, and the refusal the
+/// row would give spelled out ahead of the keys.
 fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -2296,8 +2322,7 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
 }
 
 /// The blade shop: what the armorer won't sell for bits. The next tier
-/// up in each slot, priced in crystals alone, red where short, and the
-/// vendor's last word.
+/// up in each slot, priced in crystals alone, red where short.
 fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
