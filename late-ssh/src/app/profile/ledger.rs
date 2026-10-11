@@ -4,7 +4,8 @@
 //! the row it happened to. Most refs are ids only the database cares about.
 //! The ones a person can read (the other side of a gift or gild, the game a
 //! payout was for, who lost the crown, how many pot tickets, the quest, the
-//! gallery place, the round's size, the song, a drink, a SKU, a link) are
+//! gallery place, the round's size, who a gifted drink was for, the song, a
+//! drink, a SKU, a link) are
 //! followed here into a
 //! [`LedgerDetail`], a closed enum the profile modal turns into copy. One
 //! arm per [`ChipMove`] decides what its ref points at, so a new reason
@@ -68,6 +69,10 @@ pub enum LedgerDetail {
     RoundFor {
         patrons: i64,
     },
+    /// Who a one-person gift drink was left for.
+    DrinkFor {
+        username: String,
+    },
     Song {
         title: String,
     },
@@ -75,6 +80,14 @@ pub enum LedgerDetail {
     Sku(String),
     Link(String),
     StreakDay(String),
+    /// The invitee a referral reward was paid for.
+    Invited {
+        username: String,
+    },
+    /// The inviter behind a referral welcome bonus.
+    InvitedBy {
+        username: String,
+    },
 }
 
 /// A ledger row and its resolved detail, if the ref meant anything.
@@ -96,6 +109,8 @@ pub struct LedgerSources {
     pub quests: HashMap<Uuid, String>,
     pub awards: HashMap<Uuid, ProfileAward>,
     pub rounds: HashMap<Uuid, DrinkRound>,
+    /// Gift round id to the user the drink was bought for.
+    pub gift_recipients: HashMap<Uuid, Uuid>,
     /// YouTube video id to its title.
     pub songs: HashMap<String, String>,
     pub usernames: HashMap<Uuid, String>,
@@ -113,6 +128,9 @@ enum Side {
 enum Pointer {
     /// The other user of a gift.
     Counterparty(Side),
+    /// The other user of a referral: the invitee on the reward, the inviter
+    /// on the welcome bonus.
+    Referral(Side),
     /// A `chat_message_gilds` row (or, for old rows, the gilded message).
     Gild(Side),
     /// A `game_payout_claims` row.
@@ -126,8 +144,10 @@ enum Pointer {
     QuestAssignment,
     /// A `profile_awards` row.
     Award,
-    /// A `drink_rounds` row.
+    /// A `drink_rounds` row bought for the house.
     Round,
+    /// A `drink_rounds` row bought for one named patron.
+    GiftRound,
     /// A YouTube video id, not a row id.
     Video,
     Drink,
@@ -154,7 +174,10 @@ const fn pointer(mv: ChipMove) -> Pointer {
         ChipMove::QuestReward => Pointer::QuestAssignment,
         ChipMove::ArtboardPrize => Pointer::Award,
         ChipMove::RoundPurchase => Pointer::Round,
+        ChipMove::DrinkGift => Pointer::GiftRound,
         ChipMove::SongQueued => Pointer::Video,
+        ChipMove::ReferralReward => Pointer::Referral(Side::To),
+        ChipMove::ReferralWelcome => Pointer::Referral(Side::From),
         ChipMove::DailyPuzzleWin
         | ChipMove::AsterionEscape
         | ChipMove::DailyChessWin
@@ -165,6 +188,8 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::DailyCheckersWin
         | ChipMove::DailyBackgammonWin
         | ChipMove::DailyBriscolaWin
+        | ChipMove::DailyCribbageWin
+        | ChipMove::DailyGinWin
         | ChipMove::DailyEightBallWin
         | ChipMove::DailyNineBallWin
         | ChipMove::DailySnookerWin
@@ -182,7 +207,8 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::LateaniaArchdemonDefeat
         | ChipMove::LateaniaFrontierKingDefeat
         | ChipMove::LateaniaSunderingDeepDefeat
-        | ChipMove::LateaniaKaethyrAscendantDefeat => Pointer::PayoutClaim,
+        | ChipMove::LateaniaKaethyrAscendantDefeat
+        | ChipMove::OldSignalSlain => Pointer::PayoutClaim,
         ChipMove::LegacyTableCredit
         | ChipMove::LegacyTableDebit
         | ChipMove::BlackjackBet
@@ -203,7 +229,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
 /// The ids the ledger points at, bucketed by the table they live in.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LedgerRefs {
-    /// User ids: the other side of each gift.
+    /// User ids: the other side of each gift or referral.
     pub counterparties: Vec<Uuid>,
     /// Gild refs: gild row ids, or message ids on old rows.
     pub gilds: Vec<Uuid>,
@@ -217,8 +243,10 @@ pub struct LedgerRefs {
     pub quests: Vec<Uuid>,
     /// `profile_awards` ids.
     pub awards: Vec<Uuid>,
-    /// `drink_rounds` ids.
+    /// `drink_rounds` ids bought for the house.
     pub rounds: Vec<Uuid>,
+    /// `drink_rounds` ids bought for one patron.
+    pub gift_rounds: Vec<Uuid>,
     /// YouTube video ids.
     pub videos: Vec<String>,
 }
@@ -242,7 +270,7 @@ pub fn refs(entries: &[ChipLedgerEntry]) -> LedgerRefs {
             continue;
         };
         match pointer {
-            Pointer::Counterparty(_) => refs.counterparties.push(id),
+            Pointer::Counterparty(_) | Pointer::Referral(_) => refs.counterparties.push(id),
             Pointer::Gild(_) => refs.gilds.push(id),
             Pointer::PayoutClaim => refs.payouts.push(id),
             Pointer::Reign => refs.reigns.push(id),
@@ -250,6 +278,7 @@ pub fn refs(entries: &[ChipLedgerEntry]) -> LedgerRefs {
             Pointer::QuestAssignment => refs.quests.push(id),
             Pointer::Award => refs.awards.push(id),
             Pointer::Round => refs.rounds.push(id),
+            Pointer::GiftRound => refs.gift_rounds.push(id),
             Pointer::Video
             | Pointer::Drink
             | Pointer::Sku
@@ -261,12 +290,13 @@ pub fn refs(entries: &[ChipLedgerEntry]) -> LedgerRefs {
     refs
 }
 
-/// Every user the loaded gilds and reigns name, on top of the gift
-/// counterparties, so the service can load their names in one query.
+/// Every user the loaded gilds, reigns and gift drinks name, on top of the
+/// gift counterparties, so the service can load their names in one query.
 pub fn named_user_ids(
     refs: &LedgerRefs,
     gilds: &HashMap<Uuid, GildParties>,
     deposed: &HashMap<Uuid, Uuid>,
+    gift_recipients: &HashMap<Uuid, Uuid>,
 ) -> Vec<Uuid> {
     let mut ids = refs.counterparties.clone();
     for parties in gilds.values() {
@@ -274,6 +304,7 @@ pub fn named_user_ids(
         ids.extend(parties.buyer_user_ids.iter().copied());
     }
     ids.extend(deposed.values().copied());
+    ids.extend(gift_recipients.values().copied());
     ids
 }
 
@@ -299,6 +330,14 @@ fn detail(entry: &ChipLedgerEntry, sources: &LedgerSources) -> Option<LedgerDeta
             match side {
                 Side::To => Some(LedgerDetail::GiftTo { username }),
                 Side::From => Some(LedgerDetail::GiftFrom { username }),
+            }
+        }
+        Pointer::Referral(side) => {
+            let other: Uuid = source_ref.parse().ok()?;
+            let username = username(other)?;
+            match side {
+                Side::To => Some(LedgerDetail::Invited { username }),
+                Side::From => Some(LedgerDetail::InvitedBy { username }),
             }
         }
         Pointer::Gild(side) => {
@@ -368,6 +407,13 @@ fn detail(entry: &ChipLedgerEntry, sources: &LedgerSources) -> Option<LedgerDeta
             let round = sources.rounds.get(&round_id)?;
             Some(LedgerDetail::RoundFor {
                 patrons: entry.delta.abs() / round.price_per_patron,
+            })
+        }
+        Pointer::GiftRound => {
+            let round_id: Uuid = source_ref.parse().ok()?;
+            let recipient = *sources.gift_recipients.get(&round_id)?;
+            Some(LedgerDetail::DrinkFor {
+                username: username(recipient)?,
             })
         }
         Pointer::Video => Some(LedgerDetail::Song {

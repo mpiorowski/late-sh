@@ -30,6 +30,8 @@
 //     where you're headed, and the room panel then names the next exit to
 //     take until you get there; M toggles RPG mode (the live walk-around
 //     field beside the room) on/off - off is a plain text MUD.
+//   - = shows the room rail (the wide layout's side panel) full screen;
+//     the phone layout has no rail, so this is how it reads the whole room.
 //   - ! opens the Leaderboard: top adventurers currently online by level,
 //     pvp kills, and gold (read-only). Not `?`, which late.sh reserves
 //     globally for a cross-door help overlay.
@@ -436,6 +438,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.toggle_panel(Panel::Leaderboard);
             InputAction::Handled
         }
+        b'=' => {
+            // The room rail full screen: the phone layout has none, and this
+            // gives it the rail's whole room summary without a second layout.
+            state.toggle_panel(Panel::Rail);
+            InputAction::Handled
+        }
         b';' => {
             // Retreat to the nearest safe haven (out of combat only) - the
             // way back to a maze zone's gate without walking it.
@@ -548,7 +556,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.ability_swap_selection();
             } else if in_list {
                 state.sell_selection();
-            } else if panel == Panel::Room || panel == Panel::Character {
+            } else if matches!(panel, Panel::Room | Panel::Rail | Panel::Character) {
                 state.attack();
             }
             InputAction::Handled

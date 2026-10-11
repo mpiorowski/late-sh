@@ -137,7 +137,7 @@ pub enum ActivityKind {
     },
     /// The open pot draws soon: one reminder per pot, claimed in the table
     /// so one replica posts it. Nobody did anything, so there is no user;
-    /// the ticker line reads "pot draws in 30m ...". `pot_id` keys the
+    /// the ticker line reads "pot draws in 1h ...". `pot_id` keys the
     /// #lounge repeat throttle.
     PotClosing {
         pot_id: Uuid,
@@ -145,6 +145,15 @@ pub enum ActivityKind {
         total_tickets: i64,
         ticket_price: i64,
         draws_in_secs: i64,
+    },
+    /// Someone this user invited became a regular, and both of them were
+    /// paid for it. The event belongs to the inviter; `invitee` is the
+    /// friend they brought. Once per invitee forever (the referral row is
+    /// the claim), so it cannot repeat.
+    ReferralRewarded {
+        invitee: String,
+        inviter_chips: i64,
+        invitee_chips: i64,
     },
     /// A linked user published an entry on cyberspace.online from late.sh.
     /// Announces our user's own action, never cyberspace content.
@@ -168,6 +177,25 @@ pub enum ActivityKind {
     /// named.
     WatchingStream {
         streamer: String,
+    },
+    /// Somebody posted an event to the board ("mat posted Movie night, in
+    /// 2d 3h"). Shown in #lounge: the board exists to be seen from the room.
+    /// `event_id` keys the repeat throttle, so two posts in one sitting
+    /// both announce while a re-emit of one collapses. The title is
+    /// mention-safe (`feed_safe_title`).
+    EventPosted {
+        event_id: Uuid,
+        title: String,
+        starts_in_secs: i64,
+    },
+    /// A board event started: the one line per event the sweeper posts
+    /// once it claimed the row. Nobody did anything, so there is no user;
+    /// the ticker reads "board: Movie night is on, 6 in". `event_id` keys
+    /// the repeat throttle.
+    EventStarting {
+        event_id: Uuid,
+        title: String,
+        going: i64,
     },
     BonsaiWatered,
     BonsaiLost {
@@ -232,9 +260,12 @@ impl ActivityKind {
             | Self::RoundBought { .. }
             | Self::PotDrawn { .. }
             | Self::PotClosing { .. }
+            | Self::ReferralRewarded { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
-            | Self::WatchingStream { .. } => ActivityCategory::Session,
+            | Self::WatchingStream { .. }
+            | Self::EventPosted { .. }
+            | Self::EventStarting { .. } => ActivityCategory::Session,
             Self::GameWon { .. }
             | Self::GameEvent { .. }
             | Self::GameLost { .. }
@@ -826,8 +857,33 @@ impl ActivityEvent {
         )
     }
 
+    /// An invite paid out. Told from the inviter's side, with the friend's
+    /// name and what the inviter got; the welcome bonus rides the headline.
+    pub fn referral_rewarded(
+        inviter_id: Uuid,
+        inviter: impl Into<String>,
+        invitee: String,
+        inviter_chips: i64,
+        invitee_chips: i64,
+    ) -> Self {
+        let action = format!(
+            "earned {} chips for inviting {invitee}, now a regular",
+            crate::app::common::primitives::thousands(inviter_chips)
+        );
+        Self::new(
+            Some(inviter_id),
+            inviter,
+            ActivityKind::ReferralRewarded {
+                invitee,
+                inviter_chips,
+                invitee_chips,
+            },
+            action,
+        )
+    }
+
     /// The open pot is about to draw. Authored by nobody: the ticker line
-    /// names the pot itself, so it reads "pot draws in 30m: ...".
+    /// names the pot itself, so it reads "pot draws in 1h: ...".
     pub fn pot_closing(
         pot_id: Uuid,
         size: i64,
@@ -836,10 +892,10 @@ impl ActivityEvent {
         draws_in_secs: i64,
     ) -> Self {
         use crate::app::common::primitives::thousands;
-        use crate::app::pot::state::short_duration;
+        use crate::app::pot::state::lead_time;
         let action = format!(
             "draws in {}: {} chips on {} tickets",
-            short_duration(draws_in_secs),
+            lead_time(draws_in_secs),
             thousands(size),
             thousands(total_tickets)
         );
@@ -950,6 +1006,59 @@ impl ActivityEvent {
             Some(viewer_id),
             viewer,
             ActivityKind::WatchingStream { streamer },
+            action,
+        )
+    }
+
+    /// Somebody posted to the board: "mat posted Movie night, in 2d 3h".
+    /// The title goes through `feed_safe_title` so a title containing an
+    /// `@name` cannot mint a notification from a system line.
+    pub fn event_posted(
+        user_id: Uuid,
+        username: impl Into<String>,
+        event_id: Uuid,
+        title: String,
+        starts_in_secs: i64,
+    ) -> Self {
+        use crate::app::pot::state::lead_time;
+        let title = feed_safe_title(Some(&title)).unwrap_or_else(|| "an event".to_string());
+        let action = if starts_in_secs > 0 {
+            format!(
+                "posted {title} to the board, in {}",
+                lead_time(starts_in_secs)
+            )
+        } else {
+            format!("posted {title} to the board, on now")
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::EventPosted {
+                event_id,
+                title,
+                starts_in_secs,
+            },
+            action,
+        )
+    }
+
+    /// A board event is on. Authored by nobody: the ticker line names the
+    /// board itself, so it reads "board: Movie night is on, 6 in".
+    pub fn event_starting(event_id: Uuid, title: String, going: i64) -> Self {
+        let title = feed_safe_title(Some(&title)).unwrap_or_else(|| "an event".to_string());
+        let action = match going {
+            0 => format!("{title} is on"),
+            1 => format!("{title} is on, 1 in"),
+            n => format!("{title} is on, {n} in"),
+        };
+        Self::new(
+            None,
+            "board",
+            ActivityKind::EventStarting {
+                event_id,
+                title,
+                going,
+            },
             action,
         )
     }

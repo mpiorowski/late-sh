@@ -20,7 +20,10 @@
 //! impulse is perpendicular to the contact offset; the `2/7` is the same
 //! `1 + 5/2` denominator that gives the sliding phase its `7/2`.
 
-use crate::app::games::pool_core::{ball::Ball, table::TableSpec};
+use crate::app::games::pool_core::{
+    ball::{Ball, CUE},
+    table::TableSpec,
+};
 
 /// Approach speed below which an impact is not worth resolving. Well under a
 /// perceptible tap, but enough to stop two balls resting in contact from
@@ -129,6 +132,50 @@ pub fn throw(spec: &TableSpec, dir: [f64; 2], n: [f64; 2], side_spin: f64) -> f6
     // The object ball leaves with `jn` along the normal and `-p` along the
     // tangent.
     (-p).atan2(jn)
+}
+
+/// How far english turns a cushion rebound away from the mirror reflection,
+/// in radians, positive toward `ẑ × n`.
+///
+/// `dir` is the unit direction the ball arrives on, `n` the cushion's inward
+/// normal, and `side_spin` the ball's english as `R·ωz / V` — the same
+/// convention `throw` takes.
+///
+/// This is what lets the aim draw where a rebound *really* goes. It resolves
+/// the real impact rather than fitting a curve to it: a unit-speed rolling
+/// ball is pushed into the cushion by `ball_cushion` and the answer is the
+/// angle between what came back and the mirror. That is why it is here beside
+/// the resolver and not in `aim` — a second model of the same contact would
+/// drift from this one the first time a coefficient was retuned, and the whole
+/// complaint that prompted it was a drawn rebound that ignored the spin the
+/// simulator was applying.
+///
+/// The ball is taken as **rolling** on arrival, which is what a cue ball
+/// reaching a cushion is doing on all but the hardest strokes; the rebound of
+/// one still sliding differs, and by less than the drawn line is worth.
+pub fn cushion_deflection(spec: &TableSpec, dir: [f64; 2], n: [f64; 2], side_spin: f64) -> f64 {
+    let r = spec.ball_radius;
+    let mut ball = Ball {
+        id: CUE,
+        pos: [0.0, 0.0],
+        vel: dir,
+        // Unit speed, so `R·ωz / V` is `R·ωz`. A rolling ball's horizontal
+        // spin is whatever keeps its contact point with the cloth still.
+        spin: [-dir[1] / r, dir[0] / r, side_spin / r],
+        potted: None,
+    };
+    if ball_cushion(&mut ball, n, spec).is_none() {
+        return 0.0;
+    }
+    let along = dir[0] * n[0] + dir[1] * n[1];
+    let mirror = [dir[0] - 2.0 * along * n[0], dir[1] - 2.0 * along * n[1]];
+    // The signed angle from the mirror to what actually came back.
+    let sin = mirror[0] * ball.vel[1] - mirror[1] * ball.vel[0];
+    let cos = mirror[0] * ball.vel[0] + mirror[1] * ball.vel[1];
+    if sin == 0.0 && cos == 0.0 {
+        return 0.0;
+    }
+    sin.atan2(cos)
 }
 
 /// Resolve a ball-cushion impact.

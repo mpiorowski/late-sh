@@ -49,9 +49,10 @@ fn command_help_explains_audit_arguments() {
 fn command_help_explains_ban_arguments() {
     let lines = mod_help_lines(Some("ban"));
 
-    assert!(lines.iter().any(
-        |line| line == "ban <server|#room|artboard|audio|stream> @name [duration] [reason...]"
-    ));
+    assert!(
+        lines.iter().any(|line| line
+            == "ban <server|#room|art|audio|calendar|stream> @name [duration] [reason...]")
+    );
     assert!(
         lines.iter().any(|line| line.contains("s/m/h/d")),
         "ban help should explain duration syntax: {lines:?}"
@@ -62,6 +63,20 @@ fn command_help_explains_ban_arguments() {
 fn command_help_uses_limited_grouped_surface() {
     let lines = mod_help_lines(None);
 
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("=="))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "======== Lounge ====================================================",
+            "======== Artboard ==================================================",
+            "======== Bans, kicks, etc. =========================================",
+            "======== Help & Admin ==============================================",
+            "====================================================================",
+        ]
+    );
     assert!(
         lines
             .iter()
@@ -76,7 +91,7 @@ fn command_help_uses_limited_grouped_surface() {
     );
     assert!(
         lines.iter().any(|line| line
-            == "ban    <server|#room|artboard|audio|stream> @name [duration] [reason...]"),
+            == "ban    <server|#room|art|audio|calendar|stream> @name [duration] [reason...]"),
         "top-level help should show verb-primary ban form: {lines:?}"
     );
 }
@@ -300,6 +315,49 @@ fn parses_ban_listing_commands() {
 }
 
 #[test]
+fn parses_art_scope_commands() {
+    for scope in ["art", "artboard"] {
+        assert_eq!(
+            parse_mod_command(&format!("ban {scope} @alice 7d copied work")).unwrap(),
+            ModCommand::Artboard {
+                action: ArtboardAction::Ban,
+                username: "alice".into(),
+                duration: Some(chrono::Duration::days(7)),
+                reason: "copied work".into(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command(&format!("unban {scope} @alice appeal accepted")).unwrap(),
+            ModCommand::Artboard {
+                action: ArtboardAction::Unban,
+                username: "alice".into(),
+                duration: None,
+                reason: "appeal accepted".into(),
+            }
+        );
+        assert_eq!(
+            parse_mod_command(&format!("view {scope}")).unwrap(),
+            ModCommand::ArtboardSnapshots { page: DEFAULT_PAGE }
+        );
+        assert_eq!(
+            parse_mod_command(&format!("view {scope} 3")).unwrap(),
+            ModCommand::ArtboardSnapshots { page: 3 }
+        );
+        assert_eq!(
+            parse_mod_command(&format!("view bans {scope} 2")).unwrap(),
+            ModCommand::Bans {
+                scope: BanListScope::Artboard,
+                page: 2,
+            }
+        );
+        for command in ["ban", "unban", "view", "view bans"] {
+            let help = mod_help_lines(Some(&format!("{command} {scope}")));
+            assert!(help[0].starts_with(&format!("{command} art ")), "{help:?}");
+        }
+    }
+}
+
+#[test]
 fn parses_slow_mode_commands() {
     assert_eq!(
         parse_mod_command("slow #lobby @alice 90s 1d high volume").unwrap(),
@@ -313,18 +371,22 @@ fn parses_slow_mode_commands() {
             reason: "high volume".to_string(),
         }
     );
-    assert_eq!(
-        parse_mod_command("slow #lobby @alice 5m permanent").unwrap(),
-        ModCommand::Slow {
-            scope: SlowScope::Room {
-                slug: "lobby".to_string()
-            },
-            username: "alice".to_string(),
-            interval_secs: 300,
-            expires_in: None,
-            reason: String::new(),
+    for expiry in ["perma", "permanent"] {
+        for reason in ["", "high volume"] {
+            assert_eq!(
+                parse_mod_command(&format!("slow #lobby @alice 5m {expiry} {reason}")).unwrap(),
+                ModCommand::Slow {
+                    scope: SlowScope::Room {
+                        slug: "lobby".to_string()
+                    },
+                    username: "alice".to_string(),
+                    interval_secs: 300,
+                    expires_in: None,
+                    reason: reason.into(),
+                }
+            );
         }
-    );
+    }
     assert_eq!(
         parse_mod_command("unslow #lobby @alice improved").unwrap(),
         ModCommand::Unslow {
@@ -468,15 +530,7 @@ fn parses_artboard_gallery_commands() {
     assert!(parse_mod_command("artboard remove 0192").is_err());
     assert!(parse_mod_command("artboard remove notanid1 reason").is_err());
     assert!(parse_mod_command("artboard remove").is_err());
-    assert_eq!(
-        parse_mod_command("artboard gallery off").unwrap(),
-        ModCommand::ArtboardGallery { enabled: false }
-    );
-    assert_eq!(
-        parse_mod_command("artboard gallery on").unwrap(),
-        ModCommand::ArtboardGallery { enabled: true }
-    );
-    assert!(parse_mod_command("artboard gallery maybe").is_err());
+    assert!(parse_mod_command("artboard gallery off").is_err());
     assert_eq!(
         parse_mod_command("artboard feature 0192ABCD-1234").unwrap(),
         ModCommand::ArtboardFeaturePiece {
@@ -600,6 +654,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ServerUser { username, .. }
         | ModCommand::Artboard { username, .. }
         | ModCommand::Audio { username, .. }
+        | ModCommand::Calendar { username, .. }
         | ModCommand::Voice { username, .. }
         | ModCommand::Stream { username, .. }
         | ModCommand::Role { username, .. } => username,
@@ -616,8 +671,104 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ArtboardCurate { .. }
         | ModCommand::ArtboardRemovePiece { .. }
         | ModCommand::ArtboardFeaturePiece { .. }
-        | ModCommand::ArtboardGallery { .. } => {
+        | ModCommand::ArtboardMark { .. }
+        | ModCommand::ArtboardUnmarkBy { .. }
+        | ModCommand::ArtboardSafetyView { .. } => {
             panic!("command does not have a primary username: {command:?}")
         }
     }
+}
+
+#[test]
+fn parses_art_safety_tiers_clear_and_inspection() {
+    for command in ["artboard safety help", "help artboard safety"] {
+        assert_eq!(
+            parse_mod_command(command).unwrap(),
+            ModCommand::Help {
+                topic: Some("artboard safety".into()),
+            }
+        );
+    }
+    for admin in [false, true] {
+        for (word, rating) in [
+            ("sfw", Some(ArtContentRating::Sfw)),
+            ("nsfw", Some(ArtContentRating::Nsfw)),
+            ("none", None),
+        ] {
+            let tier = if admin { "admin " } else { "" };
+            assert_eq!(
+                parse_mod_command(&format!(
+                    "artboard safety {tier}{word} 1234abcd review reason"
+                ))
+                .unwrap(),
+                ModCommand::ArtboardMark {
+                    id_prefix: "1234abcd".into(),
+                    admin,
+                    rating,
+                    reason: "review reason".into()
+                }
+            );
+        }
+    }
+    assert_eq!(
+        parse_mod_command("artboard safety none 1234abcd by @reviewer mistaken").unwrap(),
+        ModCommand::ArtboardUnmarkBy {
+            id_prefix: "1234abcd".into(),
+            actor: "@reviewer".into(),
+            reason: "mistaken".into()
+        }
+    );
+    assert_eq!(
+        parse_mod_command("artboard safety view").unwrap(),
+        ModCommand::ArtboardSafetyView {
+            target: ArtboardSafetyViewTarget::Summary,
+        }
+    );
+    assert_eq!(
+        parse_mod_command("artboard safety view @artist").unwrap(),
+        ModCommand::ArtboardSafetyView {
+            target: ArtboardSafetyViewTarget::User {
+                username: "artist".into(),
+            },
+        }
+    );
+    assert_eq!(
+        parse_mod_command("artboard safety view 1234abcd").unwrap(),
+        ModCommand::ArtboardSafetyView {
+            target: ArtboardSafetyViewTarget::Piece {
+                id_prefix: "1234abcd".into(),
+            },
+        }
+    );
+    for command in [
+        "artboard safety",
+        "artboard safety nsfw",
+        "artboard safety admin",
+        "artboard safety admin sfw",
+        "artboard safety maybe 1234abcd",
+        "artboard safety sfw short",
+        "artboard safety none 1234abcd by",
+        "artboard safety sfw 1234abcd by @reviewer",
+        "artboard safety view @",
+        "artboard safety view short",
+        "artboard safety view 1234abcd extra",
+    ] {
+        assert!(parse_mod_command(command).is_err(), "{command}");
+    }
+    assert!(
+        mod_help_lines(Some("artboard safety"))
+            .iter()
+            .any(|line| line.starts_with("artboard safety"))
+    );
+    let help_shortcut = "artboard safety help          - view help for art nsfw/sfw commands";
+    assert!(
+        mod_help_lines(None)
+            .iter()
+            .any(|line| line == help_shortcut)
+    );
+    assert!(
+        mod_help_lines(Some("artboard"))
+            .iter()
+            .any(|line| line == help_shortcut)
+    );
 }

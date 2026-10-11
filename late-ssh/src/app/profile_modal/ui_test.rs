@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use late_core::models::chips::{ChipMove, UserChips};
+use late_core::models::showcase::{Showcase, ShowcaseParams};
 use late_core::test_utils::create_test_user;
 use ratatui::{Terminal, backend::TestBackend};
 use tokio::time::{Duration, timeout};
@@ -24,8 +25,8 @@ struct Fixture {
     user_id: Uuid,
 }
 
-/// A user with the stipend, a dozen earned rows, and one gift received,
-/// with the modal open on them and the snapshot already drained.
+/// A user with the stipend, a dozen earned rows, one gift received, and a
+/// showcase, with the modal open on them and the snapshot already drained.
 async fn fixture(slug: &str) -> Fixture {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
@@ -48,6 +49,19 @@ async fn fixture(slug: &str) -> Fixture {
         .expect("quest")
         .expect("credited");
     }
+    Showcase::create_by_user_id(
+        &client,
+        user.id,
+        ShowcaseParams {
+            user_id: user.id,
+            title: "Terminal garden".to_string(),
+            url: "https://example.com/garden".to_string(),
+            description: "A project.".to_string(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .expect("showcase");
     drop(client);
     {
         let mut client = db.get().await.expect("db client");
@@ -83,10 +97,19 @@ async fn fixture(slug: &str) -> Fixture {
 }
 
 fn render(state: &ProfileModalState, width: u16, height: u16) -> Vec<String> {
+    render_as(state, width, height, false)
+}
+
+fn render_as(
+    state: &ProfileModalState,
+    width: u16,
+    height: u16,
+    viewer_is_runner: bool,
+) -> Vec<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
-        .draw(|frame| draw(frame, frame.area(), state, 0))
+        .draw(|frame| draw(frame, frame.area(), state, 0, viewer_is_runner))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
@@ -110,8 +133,7 @@ async fn a_wide_terminal_shows_every_section_in_order() {
     let lines = render(&fixture.state, 130, 60);
     let text = lines.join("\n");
 
-    // The hero: a late.fetch heading, the name heading the grid, and the
-    // grid naming the facts.
+    // late.fetch: a heading over the grid naming the facts.
     let heading = row_of(&lines, "late.fetch ─").expect("late.fetch heading");
     // The name is the modal's title and nothing else: not repeated in the grid.
     assert_eq!(
@@ -140,8 +162,13 @@ async fn a_wide_terminal_shows_every_section_in_order() {
 
     // Then the sections, in the order the design fixes.
     let bio = row_of(&lines, "bio ─").expect("bio heading");
+    let showcases = row_of(&lines, "showcases (1) ─").expect("showcases heading");
+    let bonsai = row_of(&lines, "bonsai ─").expect("bonsai heading");
     let chips = row_of(&lines, "chips ─").expect("chips heading");
-    assert!(name < bio && bio < chips, "hero, bio, chips:\n{text}");
+    assert!(
+        name < bio && bio < showcases && showcases < bonsai && bonsai < chips,
+        "late.fetch, bio, showcases, bonsai, chips:\n{text}"
+    );
     assert!(
         lines[bio + 1].contains("Not set"),
         "an empty bio says so under its heading:\n{text}"
@@ -166,10 +193,213 @@ async fn a_wide_terminal_shows_every_section_in_order() {
     );
 }
 
+/// A standing runner's profile grows a runner column beside the late.fetch
+/// grid, for a runner looking: its own heading on the grid's heading row
+/// carrying the level badge, then the face beside one key column (the
+/// signal and exp bars, bits, the kit, the tally), no frame anywhere. A narrow body makes it a section under
+/// the grid, still above the bio. A civilian looking sees the profile they
+/// always did, and a runner who left has nothing to show.
+#[tokio::test]
+async fn a_runners_profile_shows_the_runner_to_runners_only() {
+    use crate::app::deadchannel::runner::state::Look;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    let fixture = fixture("runner").await;
+    let lines = render_as(&fixture.state, 130, 60, true);
+    assert!(
+        row_of(&lines, "signal  ").is_none(),
+        "no runner column for a civilian:\n{}",
+        lines.join("\n")
+    );
+
+    // The viewed user joins the row: the next open of their profile
+    // carries the runner.
+    let db = fixture._test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let mut rng = StdRng::seed_from_u64(7);
+    let look = Look::random(1, &mut rng);
+    DeadchannelRunner::ensure_for_user(&client, fixture.user_id, &look.to_json())
+        .await
+        .expect("runner row");
+    let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
+    let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);
+    let mut state = ProfileModalState::new(profile_service);
+    state.open(fixture.user_id, "runner-viewed".to_string());
+    timeout(Duration::from_secs(5), async {
+        loop {
+            snapshot_rx.changed().await.expect("watch open");
+            if snapshot_rx.borrow().runner.is_some() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("runner snapshot");
+    assert!(state.tick());
+
+    // Wide: the runner's heading shares the late.fetch heading's row, the
+    // rows run beside the grid, and all of it sits above the bio.
+    let lines = render_as(&state, 130, 60, true);
+    let text = lines.join("\n");
+    let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
+    assert!(
+        lines[heading].contains("late.fetch ─"),
+        "one row, two headings:\n{text}"
+    );
+    assert!(
+        lines[heading + 1].contains("country   "),
+        "beside the grid:\n{text}"
+    );
+    let face = look.rows().map(|worn| worn.piece.row);
+    let expected = [
+        format!("{}  signal  ████████████ 10/10", face[0]),
+        format!("{}  exp     ░░░░░░░░░░░░ 0/100", face[1]),
+        format!("{}  bits    50", face[2]),
+        "       weapon  bare hands".to_string(),
+        "       armor   street clothes".to_string(),
+        "       glyphs  0 down".to_string(),
+    ];
+    for (offset, expected) in expected.iter().enumerate() {
+        assert!(
+            lines[heading + 1 + offset].contains(expected),
+            "{expected}:\n{text}"
+        );
+    }
+    let bio = row_of(&lines, "bio ─").expect("bio heading");
+    assert!(
+        heading + expected.len() < bio,
+        "the runner, then bio:\n{text}"
+    );
+    assert!(
+        row_of(&lines, "level   ").is_none(),
+        "the level is the badge, not a row:\n{text}"
+    );
+
+    // Narrow: the same rows as a section under the grid, above the bio.
+    let lines = render_as(&state, 70, 80, true);
+    let text = lines.join("\n");
+    let langs = row_of(&lines, "langs     ").expect("last grid row");
+    let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
+    let bio = row_of(&lines, "bio ─").expect("bio heading");
+    assert!(
+        langs < heading && heading < bio,
+        "grid, runner, bio:\n{text}"
+    );
+    assert!(
+        lines[heading + 1].contains("signal  ████████████ 10/10"),
+        "{text}"
+    );
+
+    // The same profile to a civilian: the row is not theirs to see.
+    let lines = render_as(&state, 130, 60, false);
+    assert!(row_of(&lines, "signal  ").is_none(), "{}", lines.join("\n"));
+}
+
+/// A profile with a tank and a pet draws them as one row on a wide body:
+/// the reef under its heading, the pet under its own beside it, name and
+/// mood on a row each. A narrow body keeps them two sections, pet first.
+#[tokio::test]
+async fn a_pet_sits_beside_its_owners_reef() {
+    use late_core::models::marketplace::{
+        AQUARIUM_SKU, PET_COMPANION_SKU, purchase_durable_item_by_sku,
+    };
+
+    let fixture = fixture("reef").await;
+    let db = fixture._test_db.db.clone();
+    {
+        let mut client = db.get().await.expect("db client");
+        UserChips::admin_grant(&**client, fixture.user_id, 1_000_000)
+            .await
+            .expect("fund chips");
+        // The tank arrives with a welcome fry swimming, the pet with its row.
+        for sku in [AQUARIUM_SKU, PET_COMPANION_SKU] {
+            purchase_durable_item_by_sku(&mut client, fixture.user_id, sku)
+                .await
+                .expect("purchase")
+                .expect("affordable");
+        }
+    }
+    let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
+    let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);
+    let mut state = ProfileModalState::new(profile_service);
+    state.open(fixture.user_id, "reef-viewed".to_string());
+    timeout(Duration::from_secs(5), async {
+        loop {
+            snapshot_rx.changed().await.expect("watch open");
+            if snapshot_rx.borrow().pet.is_some() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("pet snapshot");
+    assert!(state.tick());
+    let (species, mood) = {
+        let snapshot = snapshot_rx.borrow();
+        let pet = snapshot.pet.as_ref().expect("pet");
+        assert!(!snapshot.aquarium_fish.is_empty(), "the welcome fry swims");
+        (pet.species.as_str(), pet.mood.as_str())
+    };
+    // Columns, not bytes: the rules are multi-byte.
+    let col_of = |line: &str, needle: &str| -> Option<usize> {
+        line.find(needle).map(|at| line[..at].chars().count())
+    };
+    let cells = |line: &str, from: usize, len: usize| -> String {
+        line.chars().skip(from).take(len).collect()
+    };
+
+    // Wide: one heading row for both, the pet's rows inside the band's
+    // eleven, and the reef stopping short of the pet's column.
+    let lines = render_as(&state, 130, 70, false);
+    let text = lines.join("\n");
+    let heading = row_of(&lines, "aquarium ─").expect("aquarium heading");
+    let pet_col = col_of(&lines[heading], "pet ─").expect("pet heading on the reef's row");
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("pet ─")).count(),
+        1,
+        "{text}"
+    );
+    let band = &lines[heading + 1..heading + 12];
+    let name = band
+        .iter()
+        .position(|line| cells(line, pet_col, species.len() + 1).trim_end() == species)
+        .unwrap_or_else(|| panic!("the pet's name under its heading:\n{text}"));
+    assert_eq!(
+        cells(&band[name + 1], pet_col, mood.len() + 1).trim_end(),
+        mood,
+        "the mood under the name:\n{text}"
+    );
+    assert!(name >= 3, "three art rows above the name:\n{text}");
+    for row in band {
+        assert_eq!(
+            cells(row, pet_col - 3, 3),
+            "   ",
+            "the reef keeps out of the gap:\n{text}"
+        );
+    }
+    assert!(
+        !cells(&band[0], pet_col - 10, 7).trim().is_empty(),
+        "the reef's surface runs up to the gap:\n{text}"
+    );
+
+    // Narrow: two sections, the pet's above the reef's, one caption row.
+    let lines = render_as(&state, 70, 70, false);
+    let text = lines.join("\n");
+    let pet = row_of(&lines, "pet ─").expect("pet heading");
+    let reef = row_of(&lines, "aquarium ─").expect("aquarium heading");
+    assert!(pet < reef, "pet, then aquarium:\n{text}");
+    assert!(
+        lines[pet + 4].contains(&format!("{species} · {mood}")),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn a_narrow_terminal_scrolls_the_same_column() {
     let fixture = fixture("narrow").await;
-    // Too short for the whole column: the top is the hero, and the ledger
+    // Too short for the whole column: the top is late.fetch, and the ledger
     // is below the fold.
     let top = render(&fixture.state, 70, 18);
     assert!(

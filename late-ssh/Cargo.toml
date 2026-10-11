@@ -20,6 +20,7 @@ irc-proto = { path = "../vendor/irc-proto" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
+humantime = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -41,6 +42,7 @@ tikv-jemallocator = "0.6"
 
 # Database
 tokio-postgres = { workspace = true }
+deadpool-postgres = { workspace = true }
 cozy-chess.workspace = true
 crossterm.workspace = true
 dartboard-core.workspace = true

@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use super::rows::InboxRow;
 use super::state::{Dir, KindPick, MAX_TILES, TileKind};
-use crate::app::{common::primitives::Banner, input::ParsedInput, state::App};
+use crate::app::{
+    chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
+};
 
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // A pressed `v` owns the next key everywhere; the page must not eat the
@@ -30,7 +32,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     handle_rice(app, event)
 }
 
-/// The chat keys and the tank feed `a`. The chat keys belong to the
+/// The chat keys, the Live tile's `s` prefix, the ascii tile's pieces, and
+/// the tank feed `a`. `[` `]` on a focused ascii tile step it through the
+/// pieces and Enter opens the picker over them. The chat keys belong to the
 /// focused chat tile: `[` `]` rebind it to the previous or next joined
 /// room, `i` and Enter write in its room, `j` `k` select in it, and the
 /// message actions act on its selection; with any other tile focused all
@@ -42,6 +46,16 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     let Some(byte) = event_byte(event) else {
         return false;
     };
+    // The Live prefix, as on Home: `s` then a row's number opens that row
+    // of the Live tile, from whichever tile has the focus, while the page
+    // draws one (one zoomed away is not shown). Any other key after `s` is
+    // swallowed, as on Home, so it is spent here, ahead of the focused
+    // tile's own keys.
+    if app.live_prefix_armed {
+        app.live_prefix_armed = false;
+        crate::app::live::input::open_from_prefix(app, byte);
+        return true;
+    }
     if app.zen.focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
         return true;
     }
@@ -52,7 +66,8 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     // The focused chat tile's message keys, the way the house table routes
     // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
     // leader always; `d` `r` `e` `p` `c` `t` `G` and Enter only while a
-    // message in that room is selected, so `r` flips the tile otherwise.
+    // message in that room is selected. The layout keys are uppercase
+    // (`S` `X` `F` `Z` `R`), so none of these collide with them.
     if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
         if crate::app::chat::input::chat_priority_key(app, byte)
             && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
@@ -65,22 +80,27 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
             return true;
         }
     }
+    // Lowercase only: `S` is the split.
+    if byte == b's' && app.zen.draws(TileKind::Live) {
+        app.live_prefix_armed = true;
+        return true;
+    }
     match byte {
         b'[' => {
-            if chat_focused {
-                cycle_room(app, -1);
-            }
+            cycle_tile(app, chat_focused, false);
             true
         }
         b']' => {
-            if chat_focused {
-                cycle_room(app, 1);
-            }
+            cycle_tile(app, chat_focused, true);
             true
         }
         b'i' | b'\r' | b'\n' => {
             if chat_focused && let Some(room_id) = app.zen_chat_room_id() {
                 app.chat.start_composing_in_room(room_id);
+            }
+            // Enter on an ascii tile picks its piece from the list.
+            if byte != b'i' && app.zen.focused_kind() == Some(TileKind::Ascii) {
+                crate::app::ascii::picker::input::open(app);
             }
             true
         }
@@ -94,6 +114,19 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         // on you and comes home here.
         b'`' => crate::app::workspace::cycle::cycle_game_workspace(app),
         _ => false,
+    }
+}
+
+/// `[` `]` on the focused tile: a chat walks its joined rooms, an ascii tile
+/// its pieces. Any other tile takes the key and does nothing.
+fn cycle_tile(app: &mut App, chat_focused: bool, forward: bool) {
+    match chat_focused {
+        true => cycle_room(app, if forward { 1 } else { -1 }),
+        false => {
+            if app.zen.cycle_focused_piece(forward) {
+                app.mark_zen_layout_dirty();
+            }
+        }
     }
 }
 
@@ -251,7 +284,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         b'>' | b'.' => resize_or_explain(app, Dir::Row, 1),
         b'{' => resize_or_explain(app, Dir::Column, -1),
         b'}' => resize_or_explain(app, Dir::Column, 1),
-        b'r' => app.zen.flip_focused(),
+        b'F' => app.zen.flip_focused(),
         b'z' => {
             app.zen.toggle_zoom();
             // The zoom is a view, not a layout edit; still resizes the tank.
@@ -326,7 +359,8 @@ pub(crate) fn focus_moved(app: &mut App) {
 /// nothing to trade.
 fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
     let (cols, rows) = app.size;
-    let (tiles_area, _) = super::layout::rice_areas(ratatui::layout::Rect::new(0, 0, cols, rows));
+    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
+    let (tiles_area, _) = super::layout::rice_areas(page, super::layout::rice_fits(page));
     if app.zen.resize_focused(dir, delta_cells, tiles_area) {
         return true;
     }
@@ -335,7 +369,7 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
         Dir::Column => "height",
     };
     app.banner = Some(Banner::info(&format!(
-        "No split to trade {axis} with; S splits, r flips"
+        "No split to trade {axis} with; S splits, F flips"
     )));
     false
 }
@@ -344,7 +378,8 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
 /// twice as tall as wide, so width is halved before comparing).
 fn focused_tile_is_wide(app: &App) -> bool {
     let (cols, rows) = app.size;
-    let (tiles_area, _) = super::layout::rice_areas(ratatui::layout::Rect::new(0, 0, cols, rows));
+    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
+    let (tiles_area, _) = super::layout::rice_areas(page, super::layout::rice_fits(page));
     let rects = super::layout::tile_rects(
         &app.zen.rice.root,
         tiles_area,
@@ -357,10 +392,30 @@ fn focused_tile_is_wide(app: &App) -> bool {
         .unwrap_or(true)
 }
 
-/// Walk the joined rooms in rail order and bind the focused chat tile to
-/// the one landed on; the binding is part of the layout, so it is saved.
+/// Walk the rooms in rail order, top to bottom, and bind the focused chat
+/// tile to the one landed on; the binding is part of the layout, so it is
+/// saved. The rail's synthetic rows (mentions, rss, voice, browse) are not
+/// rooms a tile can show and are stepped over, and so are the rooms of a
+/// collapsed section, which the rail does not show either.
 fn cycle_room(app: &mut App, delta: isize) {
-    let ids: Vec<Uuid> = app.chat.rooms.iter().map(|(room, _)| room.id).collect();
+    let ids: Vec<Uuid> = app
+        .chat
+        .visual_order()
+        .into_iter()
+        .filter_map(|slot| match slot {
+            RoomSlot::Room(room_id) => Some(room_id),
+            RoomSlot::Feeds
+            | RoomSlot::News
+            | RoomSlot::Cyberspace
+            | RoomSlot::CyberspaceNotifications
+            | RoomSlot::CyberspaceMail(_)
+            | RoomSlot::CyberspaceRoom(_)
+            | RoomSlot::Notifications
+            | RoomSlot::Discover
+            | RoomSlot::Showcase
+            | RoomSlot::Work => None,
+        })
+        .collect();
     if ids.is_empty() {
         return;
     }

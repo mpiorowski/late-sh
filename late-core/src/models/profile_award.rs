@@ -23,6 +23,9 @@ pub const BROGUE_MASTERY_AWARD_CATEGORY: &str = "brogue_mastery";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 pub const DARKROOM_ESCAPE_AWARD_CATEGORY: &str = "darkroom_escape";
 pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
+/// Deadchannel's Old Signal put down, the first time. The one door badge
+/// that pays no chips: the game's wallets never convert (GAME.md).
+pub const DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY: &str = "deadchannel_old_signal";
 /// The month's last crown holder. Monthly like the ranked boards (it is
 /// earned again every month and shows only for the month after), but
 /// rankless like a milestone: the crown has one holder, so a `#1` on the
@@ -39,6 +42,12 @@ pub const GALLERY_AWARD_CATEGORY: &str = "artboard";
 /// month. First place only, so rankless like the crown (`LATE`, never
 /// `LATE1`). The score is the month's online time in milliseconds.
 pub const LATE_TIME_AWARD_CATEGORY: &str = "late_time";
+/// The Top Drinkers board's monthly winner: whoever took the most buzz
+/// last month (`drink_pours`). First place only and no chips, like Late
+/// Time: buzz is bought with chips and a gifted drink pours more than it
+/// costs, so a ranked ladder or a prize would be worth farming between
+/// friends. An exact tie shares it. The score is the month's buzz points.
+pub const TOP_DRINKERS_AWARD_CATEGORY: &str = "top_drinkers";
 
 /// The chip prize behind each gallery placement. Paid inside the snapshot
 /// transaction, once per award row.
@@ -63,7 +72,7 @@ pub fn gallery_prize_chips(rank: i32) -> Option<i64> {
 /// ladder, to `BADGE_LADDERS` and `ladder_label`), and the two badge
 /// legends (`app/profile_modal/badges.rs`, `app/help_modal/data.rs`) are
 /// tested against this list so a new badge cannot ship undocumented.
-pub static MILESTONE_AWARD_CATEGORIES: [&str; 13] = [
+pub static MILESTONE_AWARD_CATEGORIES: [&str; 14] = [
     LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
@@ -77,6 +86,7 @@ pub static MILESTONE_AWARD_CATEGORIES: [&str; 13] = [
     GREENDRAGON_DRAGON_AWARD_CATEGORY,
     DARKROOM_ESCAPE_AWARD_CATEGORY,
     DARKROOM_BEACON_AWARD_CATEGORY,
+    DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY,
 ];
 
 /// Whether an award is one of those: granted outright, kept forever, shown
@@ -89,8 +99,11 @@ pub fn is_milestone_award(category: &str) -> bool {
 /// shown only for the month after, like the ranked boards, but a `#1` on the
 /// badge would be noise. The badge legends are tested against this list
 /// alongside [`MILESTONE_AWARD_CATEGORIES`].
-pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 2] =
-    [CROWN_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY];
+pub static SINGLE_HOLDER_AWARD_CATEGORIES: [&str; 3] = [
+    CROWN_AWARD_CATEGORY,
+    LATE_TIME_AWARD_CATEGORY,
+    TOP_DRINKERS_AWARD_CATEGORY,
+];
 
 /// The monthly ranked boards (`AW1`..`ART3`): the snapshot's `ranked` arms.
 pub static RANKED_AWARD_CATEGORIES: [&str; 6] = [
@@ -131,7 +144,7 @@ fn ladder_label(ladder: &[&str]) -> &'static str {
 /// If you can earn it, you can hide it.
 pub fn chat_badge_rows() -> Vec<ChatBadgeRow> {
     let mut rows = Vec::new();
-    for category in all_award_categories() {
+    for category in chat_award_categories() {
         match BADGE_LADDERS
             .iter()
             .find(|ladder| ladder.contains(&category))
@@ -159,8 +172,9 @@ pub fn chat_badge_rows() -> Vec<ChatBadgeRow> {
     rows
 }
 
-/// Every award category that can ever show on a chat label, in the order the
-/// label stacks them (`award_category_priority`).
+/// Every award category there is, in the order the chat label stacks them
+/// (`award_category_priority`). The profile lists all of them; the chat
+/// label shows [`chat_award_categories`].
 pub fn all_award_categories() -> Vec<&'static str> {
     let mut all: Vec<&'static str> = RANKED_AWARD_CATEGORIES
         .iter()
@@ -170,6 +184,17 @@ pub fn all_award_categories() -> Vec<&'static str> {
         .collect();
     all.sort_by_key(|category| award_category_priority(category));
     all
+}
+
+/// Every award category that can ever show in a chat label's `[...]` group,
+/// in stacking order. The crown is the one award left out: chat paints last
+/// month's crown as a glyph before the name (`CROWN_LAUREATE_GLYPH` in
+/// late-ssh, resolved from `crown_reigns`), so the code would say it twice.
+pub fn chat_award_categories() -> Vec<&'static str> {
+    all_award_categories()
+        .into_iter()
+        .filter(|category| *category != CROWN_AWARD_CATEGORY)
+        .collect()
 }
 
 /// Whether an award's badge is printed without a rank digit: every milestone
@@ -319,6 +344,7 @@ pub async fn list_profile_awards_for_user(
                         WHEN 'crown' THEN 5
                         WHEN 'artboard' THEN 6
                         WHEN 'late_time' THEN 7
+                        WHEN 'top_drinkers' THEN 8
                         ELSE 99
                       END,
                       awarded_at DESC",
@@ -343,9 +369,10 @@ pub struct AwardSnapshotOutcome {
 /// rows written. One transaction: an award row without its prize would be
 /// a prize lost forever, since the `ON CONFLICT DO NOTHING` re-run never
 /// sees that row again. `RETURNING` on the insert is what keeps a second
-/// replica's pass from paying: it inserts nothing, so it pays nothing. The
-/// gallery arm is settled once per month (see `gallery_best`), because its
-/// input, applause, is the one score that keeps moving after the rollover.
+/// replica's pass from paying: it inserts nothing, so it pays nothing.
+/// Every board is settled by the first pass that writes a row for it (see
+/// the final `NOT EXISTS`), because the inputs keep moving after the
+/// rollover and a later pass would otherwise rank the month again.
 pub async fn snapshot_previous_month_profile_awards(
     client: &mut Client,
 ) -> Result<AwardSnapshotOutcome> {
@@ -443,17 +470,6 @@ pub async fn snapshot_previous_month_profile_awards(
              -- The gallery: each hanger's best piece of the month by
              -- applause (earliest hang breaks a tie between their own),
              -- and only hangers whose best piece cleared the floor.
-             --
-             -- This arm pays chips, so it must run to completion exactly
-             -- once a month. `ArtboardPiece::toggle_applause` closes the
-             -- month at the rollover, but a mod removal (`removed_at`)
-             -- still moves the ranking afterwards, and `ON CONFLICT DO
-             -- NOTHING` alone would let a hanger who climbed into the top
-             -- 3 on a later pass (the 24h fallback, a restart, another
-             -- replica) get a fresh row and a fresh prize. The `NOT
-             -- EXISTS` settles it: once any `artboard` row exists for the
-             -- month every later pass ranks nobody, inserts nothing and
-             -- pays nothing.
              gallery_best AS (
                 SELECT DISTINCT ON (p.user_id)
                        p.user_id,
@@ -469,21 +485,10 @@ pub async fn snapshot_previous_month_profile_awards(
                 WHERE p.period_month = bounds.period_month
                   AND p.removed_at IS NULL
                   AND applause.count >= $3
-                  AND NOT EXISTS (
-                    SELECT 1 FROM profile_awards
-                    WHERE category = 'artboard'
-                      AND period_month = bounds.period_month
-                  )
                 ORDER BY p.user_id, applause.count DESC, p.created ASC
              ),
-             -- Late Time's first place. A segment is attributed to the
-             -- month it began, so last month's totals can still grow for
-             -- one checkpoint (five minutes) past the rollover. Settled
-             -- once like the gallery: without the `NOT EXISTS` a later
-             -- pass (the 24h fallback, a restart) could crown a second
-             -- user who overtook in that spill, and `ON CONFLICT` would
-             -- not stop it because the conflict key includes the user.
-             -- RANK, so an exact-millisecond tie shares first place.
+             -- Late Time's first place. RANK, so an exact-millisecond tie
+             -- shares it.
              late_time_leader AS (
                 SELECT user_id, value, rank
                 FROM (
@@ -493,11 +498,22 @@ pub async fn snapshot_previous_month_profile_awards(
                     FROM user_online_time_monthly online, bounds
                     WHERE online.month_start = bounds.period_month
                       AND online.total_milliseconds > 0
-                      AND NOT EXISTS (
-                        SELECT 1 FROM profile_awards
-                        WHERE category = 'late_time'
-                          AND period_month = bounds.period_month
-                      )
+                ) standings
+                WHERE rank = 1
+             ),
+             -- Top Drinkers' first place: the month's buzz from every drink
+             -- taken. RANK, so a tie shares it.
+             top_drinker AS (
+                SELECT user_id, value, rank
+                FROM (
+                    SELECT pours.user_id,
+                           SUM(pours.points)::bigint AS value,
+                           RANK() OVER (ORDER BY SUM(pours.points) DESC) AS rank
+                    FROM drink_pours pours, bounds
+                    WHERE pours.created >= bounds.period_start
+                      AND pours.created < bounds.period_end
+                    GROUP BY pours.user_id
+                    HAVING SUM(pours.points) > 0
                 ) standings
                 WHERE rank = 1
              ),
@@ -536,6 +552,13 @@ pub async fn snapshot_previous_month_profile_awards(
                        rank
                 FROM late_time_leader
                 UNION ALL
+                -- First place only; `award_badge` prints it bare.
+                SELECT user_id,
+                       'top_drinkers'::text AS category,
+                       value,
+                       rank
+                FROM top_drinker
+                UNION ALL
                 -- ROW_NUMBER, not RANK: this is the one arm that mints
                 -- chips, and RANK would hand every hanger tied at the top
                 -- the full first prize. Ties break toward the earlier
@@ -547,10 +570,25 @@ pub async fn snapshot_previous_month_profile_awards(
                        ROW_NUMBER() OVER (ORDER BY value DESC, hung_at ASC) AS rank
                 FROM gallery_best
              )
+             -- A board is settled by the first pass that writes any row for
+             -- it: every later pass (the 24h fallback, a restart, another
+             -- replica) inserts nothing for that board and pays nothing.
+             -- Last month's inputs keep moving after the rollover: a mod
+             -- takes a gallery piece down, connected time spills in for one
+             -- checkpoint, a player beats their best and it leaves the
+             -- window. `ON CONFLICT` alone would not hold the line, because
+             -- the conflict key includes the user: whoever a later ranking
+             -- lifts into the top 3 would get a fresh row, and in the
+             -- gallery a fresh prize.
              SELECT ranked.user_id, ranked.category, bounds.period_month, ranked.rank::int, ranked.value
              FROM ranked
              CROSS JOIN bounds
              WHERE ranked.rank <= $1
+               AND NOT EXISTS (
+                 SELECT 1 FROM profile_awards settled
+                 WHERE settled.category = ranked.category
+                   AND settled.period_month = bounds.period_month
+               )
              ON CONFLICT (user_id, category, period_month)
              DO NOTHING
              RETURNING id, user_id, category, rank"),
@@ -586,6 +624,82 @@ pub async fn snapshot_previous_month_profile_awards(
         inserted: inserted.len() as u64,
         gallery_prizes_paid,
     })
+}
+
+/// A settled month's award roll, as the #lounge announcement reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AwardRoll {
+    pub period_month: NaiveDate,
+    /// Rank order, then score, then name: the order medals are handed out.
+    pub entries: Vec<AwardRollEntry>,
+}
+
+/// One placement on the roll: the winner's name, not their id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AwardRollEntry {
+    pub username: String,
+    pub category: String,
+    pub rank: i32,
+    pub score_value: i64,
+}
+
+/// Claim the #lounge announcement for last UTC month's awards and read the
+/// roll to announce. "Last month" comes from the DB clock, the same
+/// expression `snapshot_previous_month_profile_awards` uses, so the two
+/// cannot disagree at the rollover. Once per month across every replica,
+/// restart and fallback pass: the claim row's unique month is the gate, so
+/// only the caller that inserts it gets `Some`. The claim and the read are
+/// one statement, so an error here never spends the month. A month with no
+/// monthly award rows is left unclaimed, so a later pass can still announce
+/// it once rows land. Milestones are not on the roll: they belong to the
+/// month they were earned in, not to the rollover.
+pub async fn claim_previous_month_award_announcement(client: &Client) -> Result<Option<AwardRoll>> {
+    let milestone_categories: Vec<&str> = MILESTONE_AWARD_CATEGORIES.to_vec();
+    let rows = client
+        .query(
+            "WITH bounds AS (
+                SELECT (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date AS period_month
+             ),
+             claimed AS (
+                INSERT INTO profile_award_announcements (period_month)
+                SELECT bounds.period_month
+                FROM bounds
+                WHERE EXISTS (
+                   SELECT 1
+                   FROM profile_awards
+                   WHERE period_month = bounds.period_month
+                     AND category <> ALL($1)
+                )
+                ON CONFLICT (period_month) DO NOTHING
+                RETURNING period_month
+             )
+             SELECT claimed.period_month, u.username, a.category, a.rank, a.score_value
+             FROM claimed
+             JOIN profile_awards a ON a.period_month = claimed.period_month
+             JOIN users u ON u.id = a.user_id
+             WHERE a.category <> ALL($1)
+             ORDER BY a.rank ASC, a.score_value DESC, u.username ASC",
+            &[&milestone_categories],
+        )
+        .await?;
+    // A won claim always has rows: the insert is guarded by the same award
+    // rows this reads, in the same snapshot.
+    let period_month: NaiveDate = match rows.first() {
+        Some(row) => row.get("period_month"),
+        None => return Ok(None),
+    };
+    Ok(Some(AwardRoll {
+        period_month,
+        entries: rows
+            .into_iter()
+            .map(|row| AwardRollEntry {
+                username: row.get("username"),
+                category: row.get("category"),
+                rank: row.get("rank"),
+                score_value: row.get("score_value"),
+            })
+            .collect(),
+    }))
 }
 
 /// Grant a one-time, rankless milestone award (Lateania bosses, NetHack
@@ -648,9 +762,11 @@ pub fn award_category_code(category: &str) -> &'static str {
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
         DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => "SIG",
         CROWN_AWARD_CATEGORY => "CRWN",
         GALLERY_AWARD_CATEGORY => "ART",
         LATE_TIME_AWARD_CATEGORY => "LATE",
+        TOP_DRINKERS_AWARD_CATEGORY => "DRNK",
         _ => "LB",
     }
 }
@@ -675,9 +791,11 @@ pub fn award_category_label(category: &str) -> &'static str {
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
         DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => "Old Signal",
         CROWN_AWARD_CATEGORY => "The Crown",
         GALLERY_AWARD_CATEGORY => "Artboard Gallery",
         LATE_TIME_AWARD_CATEGORY => "Late Time",
+        TOP_DRINKERS_AWARD_CATEGORY => "Top Drinkers",
         _ => "Leaderboard",
     }
 }
@@ -689,6 +807,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         CROWN_AWARD_CATEGORY => 5,
         GALLERY_AWARD_CATEGORY => 6,
         LATE_TIME_AWARD_CATEGORY => 7,
+        TOP_DRINKERS_AWARD_CATEGORY => 8,
         "tetris" => 2,
         "twenty_forty_eight" => 3,
         "snake" => 4,
@@ -705,6 +824,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         BROGUE_MASTERY_AWARD_CATEGORY => 20,
         DARKROOM_ESCAPE_AWARD_CATEGORY => 21,
         DARKROOM_BEACON_AWARD_CATEGORY => 22,
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => 23,
         _ => 99,
     }
 }
@@ -739,6 +859,8 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         | DARKROOM_BEACON_AWARD_CATEGORY => {
             format!("{value} chips")
         }
+        // No chips: the score is the mark the badge was granted on.
+        DEADCHANNEL_OLD_SIGNAL_AWARD_CATEGORY => format!("mark {value}"),
         // The crown's score is what the final holder burned to take it.
         CROWN_AWARD_CATEGORY => format!("{value} chips"),
         GALLERY_AWARD_CATEGORY => format!("{value} applause"),
@@ -746,6 +868,7 @@ pub fn format_score_value(category: &str, value: i64) -> String {
             let minutes = value / 60_000;
             format!("{}h {}m online", minutes / 60, minutes % 60)
         }
+        TOP_DRINKERS_AWARD_CATEGORY => format!("{value} buzz"),
         _ => format!("{value} score"),
     }
 }

@@ -192,10 +192,24 @@ fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
         extract_right_sidebar_components(&settings),
         default_right_sidebar_components()
     );
-    // Every panel ships enabled.
-    for setting in default_right_sidebar_components() {
-        assert!(setting.enabled, "{:?}", setting.component);
-    }
+    // A new user's rail: free space above the bonsai keeps the tree at the
+    // bottom; the pet and the tank are opt-in.
+    let shipped: Vec<(RightSidebarComponent, bool)> = default_right_sidebar_components()
+        .into_iter()
+        .map(|setting| (setting.component, setting.enabled))
+        .collect();
+    assert_eq!(
+        shipped,
+        vec![
+            (RightSidebarComponent::Music, true),
+            (RightSidebarComponent::Daily, true),
+            (RightSidebarComponent::Live, true),
+            (RightSidebarComponent::Spacer, true),
+            (RightSidebarComponent::Bonsai, true),
+            (RightSidebarComponent::Pet, false),
+            (RightSidebarComponent::Tank, false),
+        ]
+    );
 }
 
 #[test]
@@ -205,6 +219,7 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
             { "key": "bonsai", "enabled": false },
             { "key": "music", "enabled": true },
             { "key": "bogus", "enabled": true },
+            { "key": "pet", "enabled": true },
             { "key": "activity", "enabled": true },
             { "key": "visualizer", "enabled": true },
             { "key": "pot", "enabled": true },
@@ -212,12 +227,13 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
     });
     let components = extract_right_sidebar_components(&settings);
     // Stored order kept for known entries, unknown dropped (including the
-    // retired "pet", "activity", "visualizer", and "pot" keys — the
-    // visualizer now renders inline atop Music instead of as its own panel,
-    // and the pot lives only in the border HUD, see `common/sidebar.rs`),
-    // missing (daily) backfilled ENABLED at the end in ALL order: an
-    // existing user's stored list predates newer panels, so they should
-    // appear rather than silently stay hidden.
+    // retired "pet", "activity", "visualizer", and "pot" keys), missing
+    // panels placed under their ALL predecessor at their default: the
+    // lobby under the music, live under the lobby, free space under live,
+    // the pet under the bonsai and the tank under the pet, the lobby, live
+    // and free space on, the pet and the tank off. The
+    // retired "pet" key must not switch on the pet panel, which lives under
+    // "pet_box".
     assert_eq!(
         components,
         vec![
@@ -226,11 +242,27 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
                 enabled: false,
             },
             RightSidebarComponentSetting {
+                component: RightSidebarComponent::Pet,
+                enabled: false,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Tank,
+                enabled: false,
+            },
+            RightSidebarComponentSetting {
                 component: RightSidebarComponent::Music,
                 enabled: true,
             },
             RightSidebarComponentSetting {
                 component: RightSidebarComponent::Daily,
+                enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Live,
+                enabled: true,
+            },
+            RightSidebarComponentSetting {
+                component: RightSidebarComponent::Spacer,
                 enabled: true,
             },
         ]
@@ -276,7 +308,23 @@ fn sanitize_username_input_replaces_spaces_and_invalid_chars() {
     assert_eq!(sanitize_username_input("alice!!!bob"), "alice_bob");
     assert_eq!(sanitize_username_input("@alice"), "alice");
     assert_eq!(sanitize_username_input("a@b"), "ab");
-    assert_eq!(sanitize_username_input("...alice..."), "...alice...");
+}
+
+/// A handle never ends in a dot: "thanks @alice." has to read as alice and
+/// a full stop, so the dot is dropped wherever it ends up last, truncation
+/// included. Dots anywhere else stay.
+#[test]
+fn sanitize_username_input_refuses_a_trailing_dot() {
+    assert_eq!(sanitize_username_input("alice."), "alice");
+    assert_eq!(sanitize_username_input("...alice..."), "...alice");
+    assert_eq!(sanitize_username_input("j.doe"), "j.doe");
+    assert_eq!(sanitize_username_input("alice_."), "alice");
+    assert_eq!(sanitize_username_input("..."), "user");
+    let cut_on_a_dot = format!("{}.tail", "a".repeat(USERNAME_MAX_LEN - 1));
+    assert_eq!(
+        sanitize_username_input(&cut_on_a_dot),
+        "a".repeat(USERNAME_MAX_LEN - 1)
+    );
 }
 
 #[test]

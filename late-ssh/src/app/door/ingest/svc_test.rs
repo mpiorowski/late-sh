@@ -6,7 +6,7 @@ use super::stream::StatsFrame;
 use super::svc::DoorIngestService;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::games::chips::svc::ChipService;
-use crate::test_helpers::{new_test_db, wait_until};
+use crate::test_helpers::{age_payout_claims, new_test_db, wait_until};
 
 const HANDLE: &str = "Wormsong";
 
@@ -106,21 +106,6 @@ async fn award_chip_total_for(db: &late_core::db::Db, user_id: Uuid, game: &str)
         .await
         .expect("claim total")
         .get("total")
-}
-
-/// Age every claim this account holds for `game` by `days`, so a test can walk
-/// past the 7-day lockout without sleeping.
-async fn age_claims(db: &late_core::db::Db, user_id: Uuid, game: &str, days: i32) {
-    let client = db.get().await.expect("db client");
-    client
-        .execute(
-            "UPDATE game_payout_claims
-             SET created = created - make_interval(days => $3)
-             WHERE user_id = $1 AND game = $2",
-            &[&user_id, &game, &days],
-        )
-        .await
-        .expect("age claims");
 }
 
 async fn badge_count(db: &late_core::db::Db, user_id: Uuid, category: &str) -> i64 {
@@ -281,8 +266,16 @@ async fn a_run_past_the_lockout_pays_again_without_a_second_badge() {
     )
     .await;
 
-    // Walk the whole account past the week. A distinct run then pays in full.
-    age_claims(&test_db.db, user.id, "dcss", 8).await;
+    // A distinct run inside the month pays nothing: a week (the old
+    // lockout) is not enough.
+    age_payout_claims(&test_db.db, user.id, 8).await;
+    svc.handle_dcss_frame(&orb_frame(600))
+        .await
+        .expect("orb inside the month");
+    assert_eq!(award_chip_total(&test_db.db, user.id).await, 20_000);
+
+    // Walk the whole account past the month. A distinct run then pays in full.
+    age_payout_claims(&test_db.db, user.id, 23).await;
     svc.handle_dcss_frame(&orb_frame(900))
         .await
         .expect("later orb");

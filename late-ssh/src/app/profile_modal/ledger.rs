@@ -47,6 +47,7 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::ArtboardPrize => "gallery prize",
         ChipMove::SongQueued => "song queued",
         ChipMove::RoundPurchase => "bought a round",
+        ChipMove::DrinkGift => "bought a drink",
         ChipMove::DrinkPurchase => "drink",
         ChipMove::ShopPurchase => "shop",
         ChipMove::QuestReward => "quest reward",
@@ -61,6 +62,8 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::DailyCheckersWin => "checkers win",
         ChipMove::DailyBackgammonWin => "backgammon win",
         ChipMove::DailyBriscolaWin => "briscola win",
+        ChipMove::DailyCribbageWin => "cribbage win",
+        ChipMove::DailyGinWin => "gin rummy win",
         ChipMove::DailyEightBallWin => "eight-ball win",
         ChipMove::DailyNineBallWin => "nine-ball win",
         ChipMove::DailySnookerWin => "snooker frame",
@@ -81,6 +84,9 @@ pub(crate) fn label(mv: ChipMove) -> &'static str {
         ChipMove::LateaniaFrontierKingDefeat => "lateania: frontier king",
         ChipMove::LateaniaSunderingDeepDefeat => "lateania: sundering deep",
         ChipMove::LateaniaKaethyrAscendantDefeat => "lateania: kaethyr",
+        ChipMove::OldSignalSlain => "old signal",
+        ChipMove::ReferralReward => "invite reward",
+        ChipMove::ReferralWelcome => "welcome bonus",
     }
 }
 
@@ -105,11 +111,14 @@ pub(crate) fn detail(detail: &LedgerDetail) -> String {
             format!("#{rank} · {}", month.format("%b %Y"))
         }
         LedgerDetail::RoundFor { patrons } => format!("for {}", plural(*patrons, "patron")),
+        LedgerDetail::DrinkFor { username } => format!("for @{username}"),
         LedgerDetail::Song { title } => title.clone(),
         LedgerDetail::Drink(drink) => drink.clone(),
         LedgerDetail::Sku(sku) => sku.clone(),
         LedgerDetail::Link(url) => url.clone(),
         LedgerDetail::StreakDay(day) => format!("streak day {day}"),
+        LedgerDetail::Invited { username } => format!("for @{username}"),
+        LedgerDetail::InvitedBy { username } => format!("from @{username}"),
     }
 }
 

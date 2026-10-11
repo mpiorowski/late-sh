@@ -2,6 +2,7 @@ name "seahorse"
 title "seahorse"
 description "horses for land, seahorses for sea"
 sauce author=mevanlc date=20260513 license=CCBYSA4.0
+mini left="'@" right="@'"
 
 count 4
 

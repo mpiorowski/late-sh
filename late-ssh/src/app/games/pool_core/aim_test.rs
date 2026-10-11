@@ -110,17 +110,47 @@ fn a_miss_ends_on_the_rail_and_comes_off_it_at_the_same_angle() {
     assert_eq!(normal, [0.0, -1.0]);
     let rebound = line.rebound.expect("a rail sends it back");
     assert!(rebound[1] < at[1], "back up the table");
-    // Angle in equals angle out: the rebound climbs as fast as the approach fell.
-    let fell = at[1] - cue[1];
-    let ran = at[0] - cue[0];
-    let climbed = at[1] - rebound[1];
-    let ran_on = rebound[0] - at[0];
+    // Close to angle-in-angle-out, and deliberately not exactly it: a real
+    // cushion takes some of the tangential speed with it, and the drawn line
+    // asks `collide` what the rebound does rather than drawing the diagram.
+    // A couple of degrees at centre ball — enough to be the truth, far too
+    // little for a player to read as the line being wrong.
+    let fell = (at[1] - cue[1]).atan2(at[0] - cue[0]);
+    let out = (rebound[1] - at[1]).atan2(rebound[0] - at[0]);
+    let shortened = (-out) - fell;
     assert!(
-        (climbed / ran_on - fell / ran).abs() < 1e-9,
-        "in {fell}/{ran}, out {climbed}/{ran_on}"
+        shortened.abs() < 5.0_f64.to_radians(),
+        "centre ball comes off roughly as it went in: {:.1}°",
+        shortened.to_degrees()
     );
     assert_eq!(line.sighted, None, "no ball anywhere near the line");
     assert_eq!(line.object, None);
+}
+
+#[test]
+fn english_bends_the_drawn_rebound() {
+    // The complaint this fixes: english off a cushion visibly turned the ball
+    // in the simulation and did nothing at all to the line that predicted it,
+    // so the board was teaching the opposite of the table.
+    let cue = [0.3, 0.5];
+    let balls = [ball(CUE, cue)];
+    let rebound_x = |tip: f64| {
+        aim::shot_line(&SPEC, &SPEC.geometry(), &balls, cue, PI / 4.0, tip)
+            .rebound
+            .expect("a rail sends it back")
+    };
+    let straight = rebound_x(0.0);
+    let left = rebound_x(0.45);
+    let right = rebound_x(-0.45);
+    let angle = |to: [f64; 2]| (to[1] - straight[1]).atan2(to[0] - straight[0]);
+    assert!(
+        left != straight && right != straight,
+        "english has to move the rebound at all: {straight:?} {left:?} {right:?}"
+    );
+    assert!(
+        (angle(left) - angle(right)).abs() > 1.0_f64.to_radians(),
+        "and the two sides have to move it opposite ways"
+    );
 }
 
 #[test]

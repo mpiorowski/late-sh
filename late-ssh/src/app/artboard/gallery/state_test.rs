@@ -9,7 +9,7 @@ fn state() -> GalleryState {
 
 #[test]
 fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
-    // A disabled service reads as the switch being off.
+    // A disabled service has no database, so the gallery is off.
     let gallery = state();
     assert_eq!(
         gallery.rows(),
@@ -137,6 +137,7 @@ fn listed_piece(user: u128, period_month: NaiveDate) -> GalleryPiece {
         applauded_by_viewer: false,
         created: Utc::now(),
         period_month,
+        content_rating: Default::default(),
     }
 }
 
@@ -175,6 +176,176 @@ fn applause_and_take_down_refuse_before_the_round_trip() {
 /// hands the state every result itself.
 fn drain(state: &mut GalleryState) {
     while state.results_rx.try_recv().is_ok() {}
+}
+
+fn rating_dialog(piece_id: Uuid) -> RatingDialog {
+    RatingDialog {
+        piece_id,
+        selected: 0,
+        pending: true,
+        error: None,
+        action_areas: Cell::new(Vec::new()),
+    }
+}
+
+#[test]
+fn rating_dialog_offers_owner_flag_or_votes_and_keeps_mouse_targets() {
+    let mut gallery = state();
+    let piece = listed_piece(2, Utc::now().date_naive());
+    gallery.sections[0].pieces.push(piece.clone());
+    gallery.rating_dialog = Some(rating_dialog(piece.id));
+    assert!(gallery.captures_typing());
+    assert!(gallery.claims_escape());
+    assert!(gallery.claims_q());
+    assert_eq!(gallery.rating_actions().len(), 3);
+    gallery.rating_move(-1);
+    assert_eq!(gallery.rating_dialog.as_ref().unwrap().selected, 2);
+    gallery
+        .rating_dialog
+        .as_ref()
+        .unwrap()
+        .action_areas
+        .set(vec![Rect::new(10, 12, 40, 1)]);
+    assert_eq!(gallery.rating_action_at(15, 12), Some(0));
+    assert_eq!(gallery.rating_action_at(15, 12), Some(0));
+    gallery.viewer_id = piece.user_id;
+    assert_eq!(
+        gallery.rating_actions(),
+        vec![("Mark my piece NSFW", ContentRatingAction::OwnerFlag(true))]
+    );
+    gallery.sections[0].pieces[0]
+        .content_rating
+        .owner_marked_nsfw = true;
+    assert_eq!(
+        gallery.rating_actions(),
+        vec![("Remove my NSFW flag", ContentRatingAction::OwnerFlag(false))]
+    );
+    gallery.close_rating_dialog();
+    assert!(!gallery.captures_typing());
+}
+
+#[test]
+fn rating_result_updates_all_copies_after_close_and_invalidates_older_listing() {
+    use late_core::models::artboard_piece_rating::ContentRatingSummary;
+    let mut gallery = state();
+    drain(&mut gallery);
+    let piece = listed_piece(2, Utc::now().date_naive());
+    for section in &mut gallery.sections {
+        section.pieces.push(piece.clone());
+    }
+    gallery.reload(GallerySection::Newest);
+    drain(&mut gallery);
+    gallery.rating_generation = 2;
+    gallery.pending_rating = true;
+    gallery.rating_dialog = Some(rating_dialog(piece.id));
+    gallery.close_rating_dialog();
+    let summary = ContentRatingSummary {
+        nsfw_votes: 2,
+        viewer_vote: Some(ArtContentRating::Nsfw),
+        ..Default::default()
+    };
+    gallery
+        .results_tx
+        .send(GalleryResult::ContentRating {
+            piece_id: piece.id,
+            generation: 1,
+            outcome: ContentRatingOutcome::Rated(summary),
+        })
+        .unwrap();
+    gallery.tick();
+    assert!(
+        gallery.pending_rating,
+        "a stale answer must not finish a newer write"
+    );
+    assert_eq!(
+        gallery.sections[0].pieces[0].content_rating,
+        Default::default()
+    );
+    gallery
+        .results_tx
+        .send(GalleryResult::ContentRating {
+            piece_id: piece.id,
+            generation: 2,
+            outcome: ContentRatingOutcome::Rated(summary),
+        })
+        .unwrap();
+    gallery.tick();
+    drain(&mut gallery);
+    assert!(!gallery.pending_rating);
+    // The disabled test service answers its replacement request immediately;
+    // restore that section as if the real replacement request were still pending.
+    gallery.sections[0].pieces = vec![piece.clone()];
+    gallery.sections[0].pieces[0].content_rating = summary;
+    gallery
+        .results_tx
+        .send(GalleryResult::Listed {
+            listing: PieceListing::Newest,
+            generation: 1,
+            pieces: vec![piece],
+        })
+        .unwrap();
+    gallery.tick();
+    for section in &gallery.sections {
+        assert_eq!(section.pieces[0].content_rating, summary);
+    }
+}
+
+#[test]
+fn refused_and_failed_rating_results_leave_the_verdict_and_vote_unchanged() {
+    let mut gallery = state();
+    drain(&mut gallery);
+    let piece = listed_piece(2, Utc::now().date_naive());
+    gallery.sections[0].pieces.push(piece.clone());
+    gallery.rating_dialog = Some(rating_dialog(piece.id));
+    gallery.pending_rating = true;
+    gallery.rating_generation = 1;
+    gallery
+        .results_tx
+        .send(GalleryResult::ContentRating {
+            piece_id: piece.id,
+            generation: 1,
+            outcome: ContentRatingOutcome::Closed,
+        })
+        .unwrap();
+    gallery.tick();
+    assert_eq!(gallery.sections[0].pieces[0], piece);
+    assert!(!gallery.pending_rating);
+    assert_eq!(
+        gallery.rating_dialog.as_ref().unwrap().error.as_deref(),
+        Some("The gallery is closed.")
+    );
+    assert_eq!(gallery.notice(), Some("The gallery is closed."));
+
+    gallery.pending_rating = true;
+    gallery
+        .results_tx
+        .send(GalleryResult::ContentRatingFailed {
+            piece_id: piece.id,
+            generation: 1,
+            error: "The content rating did not go through. Try again.".to_string(),
+        })
+        .unwrap();
+    gallery.tick();
+    assert_eq!(gallery.sections[0].pieces[0], piece);
+    assert!(!gallery.pending_rating);
+    assert_eq!(
+        gallery.rating_dialog.as_ref().unwrap().error.as_deref(),
+        Some("The content rating did not go through. Try again.")
+    );
+}
+
+#[test]
+fn a_piece_disappearing_closes_its_rating_dialog_and_releases_keys() {
+    let mut gallery = state();
+    drain(&mut gallery);
+    gallery.rating_dialog = Some(rating_dialog(Uuid::now_v7()));
+    assert!(gallery.tick());
+    assert!(gallery.rating_dialog.is_none());
+    assert!(!gallery.captures_typing());
+    assert_eq!(
+        gallery.notice(),
+        Some("The piece is no longer in this listing.")
+    );
 }
 
 #[test]

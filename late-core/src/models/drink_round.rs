@@ -1,6 +1,6 @@
-//! The round: one patron buying a drink for everyone else at the bar.
+//! Credits bought for the house or one named patron, claimed on their order.
 //!
-//! Three rules live here and nowhere else.
+//! Four rules live here and nowhere else.
 //!
 //! **What counts as asking.** [`ROUND_PHRASES`] is the closed list of things a
 //! patron can say to @bartender to buy the house a round. It is deliberately
@@ -12,8 +12,21 @@
 //! different lists, the feature breaks for exactly the people most likely to
 //! use it, so there is one list.
 //!
+//! **A personal gift is a phrase too.** [`GIFT_PHRASES`] is the closed list
+//! of ways to put one drink on somebody else's tab, matched on the round's
+//! rules (a statement that opens its clause, outside backticks), and
+//! [`gift_drink_target`] accepts it only when the message names exactly one
+//! recipient. `chat/slur.rs` reads both lists through
+//! [`spending_phrase_spans`] so a drunk patron's spending instruction arrives
+//! intact. A message is one order at most: [`bar_order`] reads both lists
+//! once, and a gift and a round in the same message ring up neither.
+//!
 //! **What it costs.** [`ROUND_PRICE_PER_PATRON`] for every credit the round
-//! actually granted, burned whole.
+//! actually granted, burned whole; a personal gift is one credit at
+//! [`GIFT_DRINK_PRICE`]. Both pour the same [`ROUND_DRINK_POINTS`]; the
+//! Nightcap's round pours 1:1 ([`Bar::drink_points`]). The one table of
+//! every purchase, price and pour is in `late-ssh/src/app/chat/CONTEXT.md`
+//! §9d.
 //!
 //! **What it hands over.** Not a drink: a [`DrinkCredit`], cashed only when the
 //! patron walks up and orders one themselves. A pour makes someone type drunk
@@ -36,8 +49,15 @@ use uuid::Uuid;
 /// a round is a lot of small kindnesses, not one grand one.
 pub const ROUND_PRICE_PER_PATRON: i64 = 100;
 
+/// What one named patron's drink costs the buyer. Twice the round's price a
+/// head: a round pays for everyone online and most never collect, so its
+/// premium pour is carried by the credits that expire. A gift is aimed at one
+/// person who will drink it, so the same [`ROUND_DRINK_POINTS`] pour costs
+/// more than a head of a round, and less than buying that buzz yourself.
+pub const GIFT_DRINK_PRICE: i64 = 200;
+
 /// The buzz a cashed tavern round records, regardless of what the bartender
-/// named or priced the pour at. Four times what the buyer paid for it, and
+/// named or priced the pour at. Four times what the buyer paid a head, and
 /// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: buzzed starts at 300, so a
 /// flat 300 landed exactly on the line and the first decay tick (334 an hour)
 /// dropped the drinker back to tipsy within seconds of the pour. 400 buys
@@ -124,17 +144,311 @@ const ROUND_GRANT_LOCK: &str = "drink_round_grant";
 /// Everything a patron can say to buy the house a round, lowercase.
 ///
 /// Every phrase here has to survive `chat/slur.rs` unscrambled, which is why
-/// the list is protected there rather than merely matched loosely here. Keep
-/// them short and unmistakable: this list is a spending authorization, so a
-/// phrase that could turn up in ordinary conversation does not belong on it.
+/// the list is protected there rather than merely matched loosely here. The
+/// list is long so a patron can order the way people do at a bar, but every
+/// entry still names the whole house or says "on me": this list is a spending
+/// authorization, and "a round" alone, which could be for anybody, is not on
+/// it. A verb in front ("buy everyone a drink", "let's do a round for the
+/// house") is a lead-in ([`LEAD_INS`]), not part of the phrase.
 pub const ROUND_PHRASES: &[&str] = &[
     "round for all",
     "round for everyone",
     "round for everybody",
     "round for the house",
     "round for the bar",
+    "round for the whole bar",
+    "round for the room",
+    "drinks for all",
+    "drinks for everyone",
+    "drinks for everybody",
+    "drinks for the house",
+    "drinks for the bar",
+    "drinks for the whole bar",
+    "drinks for the room",
+    "drink for everyone",
+    "drink for everybody",
+    "drink for the house",
+    "drink for the bar",
+    "drink for the whole bar",
+    "round of drinks for everyone",
+    "round of drinks for everybody",
+    "round of drinks for the house",
+    "round of drinks for the bar",
+    "shots for everyone",
+    "shots for everybody",
+    "shots for the house",
+    "beers for everyone",
+    "beers for everybody",
+    "beers for the house",
+    "one for everyone",
+    "one for everybody",
+    "one for the house",
+    "everyone a drink",
+    "everybody a drink",
+    "the house a drink",
+    "the bar a drink",
+    "the whole bar a drink",
+    "everyone a round",
+    "everybody a round",
+    "the house a round",
+    "the bar a round",
+    "the whole bar a round",
     "round on me",
+    "round is on me",
+    "round's on me",
+    "round\u{2019}s on me",
+    "round of drinks on me",
+    "drinks on me",
+    "drinks are on me",
+    "drinks all round",
+    "drinks all around",
 ];
+
+/// Everything a patron can say to put one drink on somebody else's tab,
+/// lowercase, with `@` standing for the `@user` and `@'s` for `@user's`.
+///
+/// Same bar as [`ROUND_PHRASES`]: a phrase here is a spending authorization,
+/// so it has to read as an order and nothing else. "get @ one" is not on it
+/// because "I'll get @x one of those" is ordinary talk. Whatever the patron
+/// names (a beer, a shot), what lands on the tab is one drink credit.
+pub const GIFT_PHRASES: &[&str] = &[
+    "buy @ a drink",
+    "buy @ a round",
+    "buy @ a beer",
+    "buy @ a shot",
+    "get @ a drink",
+    "get @ a round",
+    "get @ a beer",
+    "get @ a shot",
+    "pour @ a drink",
+    "pour @ a beer",
+    "pour @ a shot",
+    "pour @ one",
+    "give @ a drink",
+    "give @ a beer",
+    "give @ a shot",
+    "send @ a drink",
+    "send @ a round",
+    "send @ a beer",
+    "send @ a shot",
+    "drink for @",
+    "beer for @",
+    "shot for @",
+    "one for @",
+    "@'s drink on me",
+    "@'s drink is on me",
+    "@'s next drink on me",
+    "@'s next drink is on me",
+    "@'s next one on me",
+    "@'s next one is on me",
+];
+
+/// Punctuation a phrase's last word may carry. Anything else glued to it
+/// ("drink!!1", "drink:)") is not the phrase.
+const GIFT_TRAILING_PUNCTUATION: &[char] = &['.', ',', '!', '?', ';', ':'];
+
+/// One [`GIFT_PHRASES`] hit: the byte range of the phrase in the text it was
+/// found in, and the recipient's handle without the `@`.
+struct GiftPhrase<'a> {
+    start: usize,
+    end: usize,
+    handle: &'a str,
+}
+
+/// The one patron a message puts a drink on the buyer's tab for, when it is an
+/// order. The caller removes a composer's reply quote before checking it.
+///
+/// Looser than the old whole-message form, on the round's rules
+/// ([`is_order`]): a [`GIFT_PHRASES`] entry in any case that opens a clause of
+/// the message, as long as its sentence does not run on to a `?` and it is
+/// not inside backticks. "drink for @mossy, she earned it" is an order; "can
+/// you buy @mossy a drink?" gets an answer, and so do "don't buy @mossy a
+/// drink" and "I already got a drink for @mossy". On top of that the message
+/// must name exactly one patron besides
+/// `bartender`: a second handle anywhere ("buy @alice a drink for @bob") makes
+/// who pays for whom a guess, and a guess does not move chips.
+pub fn gift_drink_target<'a>(text: &'a str, bartender: &str) -> Option<&'a str> {
+    let mut target: Option<&str> = None;
+    for (offset, segment) in spoken_segments(text) {
+        for phrase in gift_phrases(segment) {
+            if !is_order(text, offset + phrase.start, offset + phrase.end, bartender) {
+                continue;
+            }
+            match target {
+                None => target = Some(phrase.handle),
+                Some(known) if known.eq_ignore_ascii_case(phrase.handle) => {}
+                Some(_) => return None,
+            }
+        }
+    }
+    let target = target?;
+    let names_only_target = mentioned_handles(text)
+        .into_iter()
+        .filter(|handle| !handle.eq_ignore_ascii_case(bartender))
+        .all(|handle| handle.eq_ignore_ascii_case(target));
+    match names_only_target {
+        true => Some(target),
+        false => None,
+    }
+}
+
+/// Byte ranges in `text` covered by a [`GIFT_PHRASES`] entry, questions
+/// included, so `chat/slur.rs` keeps a drunk question from scrambling into
+/// something else.
+fn gift_phrase_spans(text: &str) -> Vec<(usize, usize)> {
+    gift_phrases(text)
+        .into_iter()
+        .map(|phrase| (phrase.start, phrase.end))
+        .collect()
+}
+
+/// Every byte range in `text` a drunk patron's typing must leave alone: the
+/// round phrases and the gift phrases, each widened back over the lead-in it
+/// opens its clause with (a scrambled "please" would stop the phrase being an
+/// order), in the order they appear. The one list `chat/slur.rs` protects,
+/// built from the same matchers the bartender reads, so the two cannot drift
+/// apart.
+pub fn spending_phrase_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = round_phrase_spans(text);
+    spans.extend(gift_phrase_spans(text));
+    for span in &mut spans {
+        if let Some(start) = lead_in_start(text, span.0, Address::Anyone) {
+            span.0 = start;
+        }
+    }
+    spans.sort_unstable();
+    spans
+}
+
+/// What a message to the bartender asks the bar to ring up by itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarOrder<'a> {
+    /// One drink on this patron's tab ([`gift_drink_target`]).
+    Gift(&'a str),
+    /// A round for the house ([`contains_round_request`]).
+    Round,
+    /// Nothing: the message goes to the bartender as conversation.
+    Talk,
+}
+
+/// The one order a message places. A gift and a round in the same message are
+/// two orders, and which one the patron meant to pay for is a guess, so
+/// neither is rung up and the bartender answers instead.
+pub fn bar_order<'a>(text: &'a str, bartender: &str) -> BarOrder<'a> {
+    match (
+        gift_drink_target(text, bartender),
+        contains_round_request(text, bartender),
+    ) {
+        (Some(target), false) => BarOrder::Gift(target),
+        (None, true) => BarOrder::Round,
+        (Some(_), true) => BarOrder::Talk,
+        (None, false) => BarOrder::Talk,
+    }
+}
+
+/// Every [`GIFT_PHRASES`] hit in `text`, word by word on whitespace. Only the
+/// phrase's last word may carry trailing punctuation, so "buy @alice! a
+/// drink" is not the phrase.
+fn gift_phrases(text: &str) -> Vec<GiftPhrase<'_>> {
+    let mut words: Vec<(usize, &str)> = Vec::new();
+    let mut offset = 0;
+    for piece in text.split_inclusive(char::is_whitespace) {
+        let word = piece.trim_end();
+        if !word.is_empty() {
+            words.push((offset, word));
+        }
+        offset += piece.len();
+    }
+    let mut found = Vec::new();
+    for index in 0..words.len() {
+        for pattern in GIFT_PHRASES {
+            if let Some(phrase) = gift_phrase_at(&words[index..], pattern) {
+                found.push(phrase);
+            }
+        }
+    }
+    found
+}
+
+/// The [`GIFT_PHRASES`] entry `pattern` starting at `words[0]`.
+fn gift_phrase_at<'a>(words: &[(usize, &'a str)], pattern: &str) -> Option<GiftPhrase<'a>> {
+    let expected: Vec<&str> = pattern.split(' ').collect();
+    if words.len() < expected.len() {
+        return None;
+    }
+    let last = expected.len() - 1;
+    let mut handle = None;
+    let mut end = 0;
+    for (index, expected) in expected.into_iter().enumerate() {
+        let (start, word) = words[index];
+        let core = match index == last {
+            true => word.trim_end_matches(GIFT_TRAILING_PUNCTUATION),
+            false => word,
+        };
+        match expected {
+            "@" => {
+                let name = handle_at(core, 0)?;
+                if core.len() != 1 + name.len() {
+                    return None;
+                }
+                handle = Some(name);
+            }
+            "@'s" => {
+                let name = handle_at(core, 0)?;
+                if !matches!(&core[1 + name.len()..], "'s" | "\u{2019}s") {
+                    return None;
+                }
+                handle = Some(name);
+            }
+            literal => {
+                if !core.eq_ignore_ascii_case(literal) {
+                    return None;
+                }
+            }
+        }
+        end = start + core.len();
+    }
+    Some(GiftPhrase {
+        start: words[0].0,
+        end,
+        handle: handle.expect("every gift phrase has an @ slot"),
+    })
+}
+
+/// Every `@handle` in `text`, code spans included: a stray name anywhere is
+/// enough to make a gift's recipient ambiguous.
+fn mentioned_handles(text: &str) -> Vec<&str> {
+    text.char_indices()
+        .filter(|(index, ch)| {
+            *ch == '@'
+                && text[..*index]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|before| !is_handle_char(before))
+        })
+        .filter_map(|(index, _)| handle_at(text, index))
+        .collect()
+}
+
+/// The handle after the `@` at byte `at`, without trailing dots: a username
+/// never ends in one (`sanitize_username_input`), so a sentence that ends on
+/// a name ("a drink for @mossy.") ends with a full stop.
+fn handle_at(text: &str, at: usize) -> Option<&str> {
+    let rest = text[at..].strip_prefix('@')?;
+    let len = rest
+        .find(|ch: char| !is_handle_char(ch))
+        .unwrap_or(rest.len());
+    let handle = rest[..len].trim_end_matches('.');
+    match handle.is_empty() {
+        true => None,
+        false => Some(handle),
+    }
+}
+
+/// What a username may be made of (`User::next_available_username`).
+fn is_handle_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.')
+}
 
 /// Byte ranges in `text` covered by a [`ROUND_PHRASES`] entry, in the order
 /// they appear.
@@ -164,32 +478,211 @@ pub fn round_phrase_spans(text: &str) -> Vec<(usize, usize)> {
 /// Whether the patron asked for a round. The bartender's gate.
 ///
 /// Stricter than [`round_phrase_spans`], which is the slur guard's view and
-/// protects the phrase wherever it turns up. An order is a statement, so the
-/// sentence the phrase sits in must not run on to a `?`: "how much is a round
-/// for everyone?" gets an answer, not a bill. Text inside backticks is never
-/// an order either, since a code span is how a patron quotes the words
+/// protects the phrase wherever it turns up. An order is said as one
+/// ([`is_order`]): "how much is a round for everyone?" gets an answer, not a
+/// bill, and so does "no round for everyone tonight". Text inside backticks is
+/// never an order either, since a code span is how a patron quotes the words
 /// without saying them. Segments alternate outside/inside starting outside,
 /// so an unbalanced backtick makes the rest of the message not an order,
 /// which is the safe way to be wrong about money.
-pub fn contains_round_request(text: &str) -> bool {
-    text.split('`').step_by(2).any(|segment| {
+pub fn contains_round_request(text: &str, bartender: &str) -> bool {
+    spoken_segments(text).any(|(offset, segment)| {
         round_phrase_spans(segment)
             .into_iter()
-            .any(|(_, end)| !sentence_ends_in_question(segment, end))
+            .any(|(start, end)| is_order(text, offset + start, offset + end, bartender))
     })
+}
+
+/// The stretches of `text` outside backticks, each with its byte offset in
+/// `text`. Phrases are looked for in these; what surrounds a phrase is read
+/// from the whole message at that offset.
+fn spoken_segments(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut next = 0;
+    text.split('`')
+        .map(move |segment| {
+            let offset = next;
+            next += segment.len() + 1;
+            (offset, segment)
+        })
+        .step_by(2)
+}
+
+/// Whether the phrase at `[start, end)` of the whole message is said as an
+/// order to `bartender`: it opens its clause and its sentence is not a
+/// question. The one rule both lists are read on.
+fn is_order(text: &str, start: usize, end: usize, bartender: &str) -> bool {
+    !sentence_ends_in_question(text, end)
+        && lead_in_start(text, start, Address::Only(bartender)).is_some()
 }
 
 /// Whether the sentence a phrase ending at `end` belongs to closes with a
 /// question mark. The first terminator after the phrase decides; a line break
-/// or the end of the text counts as a full stop.
+/// or the end of the text counts as a full stop. Code spans are skipped, so
+/// "round for everyone in `#lounge`?" is still a question and a `?` quoted in
+/// backticks is not one.
 fn sentence_ends_in_question(text: &str, end: usize) -> bool {
-    match text[end..]
-        .chars()
-        .find(|ch| matches!(ch, '.' | '!' | '?' | '\n'))
-    {
-        Some('?') => true,
-        Some(_) | None => false,
+    let mut in_code = false;
+    for ch in text[end..].chars() {
+        match ch {
+            '`' => in_code = !in_code,
+            '?' if !in_code => return true,
+            '.' | '!' | '\n' if !in_code => return false,
+            _ => {}
+        }
     }
+    false
+}
+
+/// What may stand between the start of a clause and an order: lowercase, the
+/// apostrophe dropped ("I'll" reads as "ill"), several words where only the
+/// run of them is a lead-in ("i want to" is one; "i" and "want" are not).
+/// Anything else there makes the phrase part of a longer sentence ("don't buy
+/// @x a drink", "I already got a drink for @x"), which is talk about a drink
+/// and not an order for one, so nothing negative, past or conditional belongs
+/// here.
+const LEAD_INS: &[&str] = &[
+    // Small talk on the way to the order.
+    "a",
+    "an",
+    "another",
+    "one more",
+    "the",
+    "this",
+    "next",
+    "and",
+    "then",
+    "also",
+    "now",
+    "so",
+    "just",
+    "please",
+    "ok",
+    "okay",
+    "alright",
+    "yes",
+    "yeah",
+    "yep",
+    "sure",
+    "well",
+    "hey",
+    "yo",
+    "tonight",
+    "bartender",
+    "barkeep",
+    // `chat/slur.rs`'s hiccup, which may land right before a wasted patron's
+    // order.
+    "hic",
+    // Saying you are about to order.
+    "ill",
+    "i will",
+    "id like to",
+    "i would like to",
+    "i want to",
+    "i wanna",
+    "im gonna",
+    "i am gonna",
+    "im going to",
+    "i am going to",
+    "let me",
+    "lemme",
+    "lets",
+    "let us",
+    "can i",
+    "could i",
+    "may i",
+    "can you",
+    "could you",
+    "go ahead and",
+    // The verb, when the phrase starts at what is being bought ("buy everyone
+    // a drink", "put a drink for @x on my tab").
+    "buy",
+    "get",
+    "pour",
+    "give",
+    "send",
+    "do",
+    "have",
+    "put",
+    "make it",
+    "make that",
+    "us",
+];
+
+/// Where a clause ends: "don't worry, round on me" is an order.
+const CLAUSE_BREAKS: &[char] = &[',', '.', '!', '?', ';', ':', '\n'];
+
+/// Whose `@name` may sit in front of an order.
+#[derive(Clone, Copy)]
+enum Address<'a> {
+    /// The bartender's, and nobody else's: "@alice drinks on me" is about
+    /// alice, not a round for the house.
+    Only(&'a str),
+    /// Anybody's. The slur guard's view, which does not know who is behind
+    /// the bar and is better off protecting too much.
+    Anyone,
+}
+
+/// Where the lead-in of a phrase starting at `start` begins, when the phrase
+/// opens its clause: what stands between the last [`CLAUSE_BREAKS`] character
+/// outside a code span and the phrase is nothing but the `@name` being spoken
+/// to and [`LEAD_INS`]. `None` is a phrase further into a sentence, or one
+/// with a code span in the way. Erring toward `None` is the safe way to be
+/// wrong about money; the bartender answers with the words to say.
+fn lead_in_start(text: &str, start: usize, address: Address<'_>) -> Option<usize> {
+    let mut clause_start = 0;
+    let mut in_code = false;
+    for (index, ch) in text[..start].char_indices() {
+        match ch {
+            '`' => in_code = !in_code,
+            ch if !in_code && CLAUSE_BREAKS.contains(&ch) => clause_start = index + ch.len_utf8(),
+            _ => {}
+        }
+    }
+    let lead_in = &text[clause_start..start];
+    if lead_in.contains('`') {
+        return None;
+    }
+    let mut words: Vec<String> = Vec::new();
+    for word in lead_in.split_whitespace() {
+        match (handle_at(word, 0), address) {
+            (Some(_), Address::Anyone) => {}
+            (Some(name), Address::Only(spoken_to)) => {
+                if !name.eq_ignore_ascii_case(spoken_to) {
+                    return None;
+                }
+            }
+            (None, _) => {
+                let bare: String = word
+                    .chars()
+                    .filter(|ch| !matches!(ch, '\'' | '\u{2019}'))
+                    .collect();
+                let bare = bare.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+                if !bare.is_empty() {
+                    words.push(bare.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    match is_lead_in(&words) {
+        true => Some(start - lead_in.trim_start().len()),
+        false => None,
+    }
+}
+
+/// Whether `words` is a run of [`LEAD_INS`] entries and nothing else.
+fn is_lead_in(words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    LEAD_INS.iter().any(|entry| {
+        let entry: Vec<&str> = entry.split(' ').collect();
+        words.len() >= entry.len()
+            && entry
+                .iter()
+                .zip(words)
+                .all(|(expected, word)| *expected == word.as_str())
+            && is_lead_in(&words[entry.len()..])
+    })
 }
 
 /// Whether `[start, end)` sits on word boundaries rather than inside a longer
@@ -220,8 +713,8 @@ pub struct DrinkRound {
     /// outlive them.
     pub buyer_user_id: Option<Uuid>,
     pub price_per_patron: i64,
-    /// Where it was bought: what the tab board counts and what a credit off
-    /// it pours ([`Bar::drink_points`]).
+    /// Where it was bought: what a credit off it pours
+    /// ([`Bar::drink_points`]).
     pub bar: Bar,
     pub created: DateTime<Utc>,
 }
@@ -401,6 +894,29 @@ impl DrinkRound {
 pub struct DrinkCredit;
 
 impl DrinkCredit {
+    /// Who a batch of one-person gift rounds were bought for, keyed by round
+    /// id, for the ledger's "for @user" detail. A gift round has exactly one
+    /// credit; handed a house round this keeps whichever patron came last,
+    /// so callers pass gift rounds only.
+    pub async fn recipients_for_rounds(
+        client: &impl GenericClient,
+        round_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if round_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT round_id, user_id FROM drink_credits WHERE round_id = ANY($1)",
+                &[&round_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("round_id"), row.get("user_id")))
+            .collect())
+    }
+
     /// The credit the patron would drink next: the one closest to going cold,
     /// out of however many they are holding. Read before pouring so the bar
     /// knows the pour is comped; who bought it comes from [`DrinkCredit::cash`],

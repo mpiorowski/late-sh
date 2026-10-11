@@ -6,20 +6,43 @@ use ratatui::layout::Rect;
 use super::state::{BorderKind, Dir, Look, Node, TileKind};
 use crate::app::pet::ui::{Neighbours, WatchSide};
 
-/// One row under the tree for its status line.
-pub const BONSAI_STATUS_ROWS: u16 = 1;
 /// The pet box at its smallest: its three art rows.
 pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
-/// The Rice page: one hint row at the bottom, tiles above.
-pub fn rice_areas(area: Rect) -> (Rect, Rect) {
-    let hint = Rect::new(
-        area.x,
-        area.bottom().saturating_sub(1),
-        area.width,
-        1.min(area.height),
-    );
-    let tiles = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-    (tiles, hint)
+/// The smallest page Rice draws. Under it the page is its too-small notice
+/// alone: no tiles, and no status row to click.
+pub const RICE_MIN_COLS: u16 = 40;
+pub const RICE_MIN_ROWS: u16 = 12;
+
+pub fn rice_fits(area: Rect) -> bool {
+    area.width >= RICE_MIN_COLS && area.height >= RICE_MIN_ROWS
+}
+
+/// Whether the page gives its bottom row to the status line: whenever it
+/// is drawn at all (`rice_fits`), unless a tile is zoomed, when that tile
+/// is the whole page, the way the screensaver is. Every caller of
+/// `rice_areas` that draws, clicks, or sizes what is on show reads it
+/// from here.
+pub fn rice_row(area: Rect, zoomed: bool) -> bool {
+    rice_fits(area) && !zoomed
+}
+
+/// The Rice page: the tiles, then the status row at the bottom (the user's
+/// status line and the page's keys) when `status_row` (`rice_row`); a page
+/// too small to draw has no row, nor does a zoomed one.
+pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
+    match status_row {
+        true => {
+            let row = Rect::new(
+                area.x,
+                area.bottom().saturating_sub(1),
+                area.width,
+                1.min(area.height),
+            );
+            let tiles = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
+            (tiles, Some(row))
+        }
+        false => (area, None),
+    }
 }
 
 /// Every tile's rect in layout order, with `gap` cells between siblings.

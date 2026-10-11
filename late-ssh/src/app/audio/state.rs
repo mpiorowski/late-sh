@@ -1,6 +1,6 @@
 use late_core::{
     audio::VizFrame,
-    models::user::{AudioSource, IcecastStream, RadioStation},
+    models::user::{AudioSource, RadioStation},
 };
 use std::time::Instant;
 use tokio::sync::{broadcast, watch};
@@ -8,9 +8,10 @@ use uuid::Uuid;
 
 use super::{
     svc::{AudioEvent, AudioService, QueueSnapshot},
+    thumbnail::Thumbnail,
     viz::{LiveBands, Spectrum},
 };
-use crate::app::common::primitives::Banner;
+use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
 
 pub struct AudioTick {
     pub banner: Option<Banner>,
@@ -62,16 +63,38 @@ impl AudioState {
         self.spectrum.as_ref().map(Spectrum::bands)
     }
 
+    /// The booth's tracks as the live strip weighs them.
+    pub fn live_candidates(&self) -> Vec<LiveCandidate> {
+        super::booth::live::candidates(&self.snapshot_rx.borrow())
+    }
+
+    /// Whether a track is still in the booth, playing or queued.
+    pub fn in_booth(&self, item_id: Uuid) -> bool {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .any(|item| item.id == item_id)
+    }
+
+    /// The thumbnail of one track in the booth, once it has been fetched.
+    pub fn queue_thumbnail(&self, item_id: Uuid) -> Option<Thumbnail> {
+        let snapshot = self.snapshot_rx.borrow();
+        snapshot
+            .current
+            .iter()
+            .chain(snapshot.queue.iter())
+            .find(|item| item.id == item_id)
+            .and_then(|item| item.thumbnail.clone())
+    }
+
     pub fn queue_snapshot(&self) -> QueueSnapshot {
         self.snapshot_rx.borrow().clone()
     }
 
     pub fn youtube_source_count(&self) -> usize {
         self.service.youtube_source_count()
-    }
-
-    pub fn icecast_source_count(&self) -> usize {
-        self.service.icecast_source_count()
     }
 
     pub fn radio_source_count(&self) -> usize {
@@ -143,9 +166,9 @@ impl AudioState {
         self.service.persist_audio_source_task(self.user_id, source);
     }
 
-    pub fn persist_icecast_stream(&self, stream: IcecastStream) {
+    pub fn persist_radio_slot(&self, index: usize, slot: Option<RadioStation>) {
         self.service
-            .persist_icecast_stream_task(self.user_id, stream);
+            .persist_radio_slot_task(self.user_id, index, slot);
     }
 
     pub fn persist_radio_station(&self, station: RadioStation) {

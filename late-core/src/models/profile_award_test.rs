@@ -4,21 +4,26 @@ use crate::models::artboard_piece::{ApplauseOutcome, ArtboardPiece, HangOutcome,
 use crate::models::artboard_piece_test::hang_params;
 use crate::models::chips::{ChipMove, Difficulty, UserChips};
 use crate::models::crown::CrownReign;
+use crate::models::drink_round::Bar;
+use crate::models::drinks::UserDrinks;
 use crate::models::leaderboard::{OnlineTimeIncrement, apply_online_time_batch};
 use crate::models::profile_award::{
-    CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY,
+    GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
     LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
-    NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, award_category_label,
-    find_profile_awards_by_ids, format_score_value, is_milestone_award, is_rankless_award,
-    list_profile_awards_for_user, snapshot_previous_month_profile_awards, top_badge_per_game,
+    NETHACK_ASCENSION_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, award_badge,
+    award_category_label, claim_previous_month_award_announcement, find_profile_awards_by_ids,
+    format_score_value, is_milestone_award, is_rankless_award, list_profile_awards_for_user,
+    snapshot_previous_month_profile_awards, top_badge_per_game,
 };
 use crate::models::rubiks_cube::DailyWin as RubiksCubeDailyWin;
 use crate::models::sliding_puzzle::DailyWin as SlidingPuzzleDailyWin;
 use crate::models::sudoku::DailyWin as SudokuDailyWin;
+use crate::models::tetris::HighScore as LaterisHighScore;
 use crate::test_utils::{
-    create_test_user, roll_artboard_pieces_back_a_month, roll_crown_reigns_back_a_month, test_db,
+    create_test_user, roll_artboard_pieces_back_a_month, roll_crown_reigns_back_a_month,
+    roll_drink_pours_back_a_month, roll_high_scores_back_a_month, test_db,
 };
 
 #[test]
@@ -138,13 +143,15 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
     let last = create_test_user(&test_db.db, "crown-award-last").await;
 
     let tx = client.transaction().await.expect("tx");
-    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000, taken_at)
         .await
         .expect("open");
-    CrownReign::close_in_tx(&tx, opened.id)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock replacement");
+    CrownReign::close_in_tx(&tx, opened.id, taken_at)
         .await
         .expect("close");
-    CrownReign::open_in_tx(&tx, last.id, 7_500)
+    CrownReign::open_in_tx(&tx, last.id, 7_500, taken_at)
         .await
         .expect("open");
     tx.commit().await.expect("commit");
@@ -171,6 +178,15 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
     assert_eq!(crowns[0].score_value, 7_500);
     assert_eq!(crowns[0].badge(), "CRWN");
 
+    // The profile keeps it, the chat label does not: chat paints last
+    // month's crown as a glyph before the name, so `[CRWN]` would say it
+    // twice.
+    let chat = crate::models::user::User::list_chat_author_metadata(&client, &[last.id])
+        .await
+        .expect("chat metadata");
+    assert_eq!(chat.len(), 1);
+    assert_eq!(chat[0].profile_award_badges, None);
+
     let earlier = list_profile_awards_for_user(&client, first.id)
         .await
         .expect("awards");
@@ -179,6 +195,60 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
             .iter()
             .any(|award| award.category == CROWN_AWARD_CATEGORY),
         "only the month's last holder is crowned"
+    );
+}
+
+/// The #lounge roll is posted by whichever replica claims the month first,
+/// and never again. A month whose snapshot wrote nothing stays unclaimed, so
+/// the announcement is not spent on an empty roll.
+#[tokio::test]
+async fn the_award_announcement_is_claimed_once_per_month() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let holder = create_test_user(&test_db.db, "award-roll-holder").await;
+    let last_month = (Utc::now().date_naive().with_day(1).expect("day 1"))
+        .checked_sub_months(Months::new(1))
+        .expect("last month");
+
+    assert_eq!(
+        claim_previous_month_award_announcement(&client)
+            .await
+            .expect("claim before the snapshot"),
+        None,
+        "a month with no awards must not spend the claim"
+    );
+
+    let tx = client.transaction().await.expect("tx");
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    CrownReign::open_in_tx(&tx, holder.id, 7_500, taken_at)
+        .await
+        .expect("open");
+    tx.commit().await.expect("commit");
+    roll_crown_reigns_back_a_month(&client).await;
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+
+    assert_eq!(
+        claim_previous_month_award_announcement(&client)
+            .await
+            .expect("first claim"),
+        Some(AwardRoll {
+            period_month: last_month,
+            entries: vec![AwardRollEntry {
+                username: holder.username.clone(),
+                category: CROWN_AWARD_CATEGORY.to_string(),
+                rank: 1,
+                score_value: 7_500,
+            }],
+        })
+    );
+    assert_eq!(
+        claim_previous_month_award_announcement(&client)
+            .await
+            .expect("second claim"),
+        None,
+        "the roll must be announced once"
     );
 }
 
@@ -273,6 +343,151 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .filter(|award| award.category == LATE_TIME_AWARD_CATEGORY)
         .collect();
     assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
+}
+
+/// Top Drinkers crowns last month's biggest drinker alone, bare `DRNK`, a
+/// tie at the top shared like Late Time's, and this month's drinks are not
+/// last month's standings.
+#[tokio::test]
+async fn top_drinkers_first_place_gets_the_badge_and_a_tie_shares_it() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let first = create_test_user(&test_db.db, "drnk-first").await;
+    let tied = create_test_user(&test_db.db, "drnk-tied").await;
+    let runner_up = create_test_user(&test_db.db, "drnk-runner-up").await;
+
+    UserDrinks::record_purchase(&client, first.id, Bar::Tavern, 1_000, true)
+        .await
+        .expect("pour");
+    UserDrinks::record_comped_pour(&client, first.id, Bar::Nightcap, 400, true)
+        .await
+        .expect("round credit");
+    UserDrinks::record_purchase(&client, tied.id, Bar::Nightcap, 1_000, true)
+        .await
+        .expect("pour");
+    UserDrinks::record_comped_pour(&client, tied.id, Bar::Tavern, 400, true)
+        .await
+        .expect("round credit");
+    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 500, true)
+        .await
+        .expect("pour");
+    roll_drink_pours_back_a_month(&client).await;
+    // This month's binge is not last month's standings.
+    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 1_000, true)
+        .await
+        .expect("pour this month");
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+
+    for winner in [&first, &tied] {
+        let won: Vec<_> = list_profile_awards_for_user(&client, winner.id)
+            .await
+            .expect("awards")
+            .into_iter()
+            .filter(|award| award.category == TOP_DRINKERS_AWARD_CATEGORY)
+            .collect();
+        assert_eq!(won.len(), 1, "{} shares first place", winner.username);
+        assert_eq!(won[0].rank, 1);
+        assert_eq!(won[0].score_value, 1_400);
+        assert_eq!(won[0].badge(), "DRNK");
+    }
+    let lost: Vec<_> = list_profile_awards_for_user(&client, runner_up.id)
+        .await
+        .expect("awards")
+        .into_iter()
+        .filter(|award| award.category == TOP_DRINKERS_AWARD_CATEGORY)
+        .collect();
+    assert!(lost.is_empty(), "only first place gets the badge: {lost:?}");
+
+    assert!(is_rankless_award(TOP_DRINKERS_AWARD_CATEGORY));
+    assert!(!is_milestone_award(TOP_DRINKERS_AWARD_CATEGORY));
+    assert_eq!(
+        format_score_value(TOP_DRINKERS_AWARD_CATEGORY, 1_400),
+        "1400 buzz"
+    );
+}
+
+#[tokio::test]
+async fn non_intoxicating_pours_cannot_win_the_top_drinkers_badge() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let sober = create_test_user(&test_db.db, "drnk-sober").await;
+    UserDrinks::record_purchase(&client, sober.id, Bar::Tavern, 50, false)
+        .await
+        .expect("coffee");
+    UserDrinks::record_comped_pour(&client, sober.id, Bar::Nightcap, 400, false)
+        .await
+        .expect("comped water");
+    roll_drink_pours_back_a_month(&client).await;
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+    let awards = list_profile_awards_for_user(&client, sober.id)
+        .await
+        .expect("awards");
+    assert!(
+        awards
+            .iter()
+            .all(|award| award.category != TOP_DRINKERS_AWARD_CATEGORY),
+        "a month with only non-intoxicating pours has no Top Drinkers winner"
+    );
+}
+
+/// Every board settles on the first pass that writes it. A placed player
+/// who beats their own best this month takes that best out of last month's
+/// window, and a later pass (a restart, the 24h fallback) would rank the
+/// month again without them: the conflict key includes the user, so the next
+/// player down would get a fresh medal beside the three already handed out.
+#[tokio::test]
+async fn a_score_board_settles_on_the_first_snapshot_pass() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let mut players = Vec::new();
+    for (name, best) in [
+        ("lateris-first", 400),
+        ("lateris-second", 300),
+        ("lateris-third", 200),
+        ("lateris-fourth", 100),
+    ] {
+        let player = create_test_user(&test_db.db, name).await;
+        LaterisHighScore::update_score_if_higher(&client, player.id, best)
+            .await
+            .expect("best");
+        players.push(player);
+    }
+    roll_high_scores_back_a_month(&client, "tetris_high_scores").await;
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+    // Third place beats their best this month; last month no longer sees it.
+    LaterisHighScore::update_score_if_higher(&client, players[2].id, 500)
+        .await
+        .expect("new best");
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot again");
+
+    let mut placements = Vec::new();
+    for player in &players {
+        let awards = list_profile_awards_for_user(&client, player.id)
+            .await
+            .expect("awards");
+        for award in awards {
+            placements.push((player.username.clone(), award.category, award.rank));
+        }
+    }
+    assert_eq!(
+        placements,
+        vec![
+            (players[0].username.clone(), "tetris".to_string(), 1),
+            (players[1].username.clone(), "tetris".to_string(), 2),
+            (players[2].username.clone(), "tetris".to_string(), 3),
+        ]
+    );
 }
 
 /// The persisted Arcade Wins award must score the same roster as the live
@@ -471,9 +686,13 @@ async fn the_gallery_award_ranks_best_pieces_and_pays_once() {
 
 /// The Settings badge picker covers every badge a label can show, each
 /// category exactly once, with every game ladder folded into a single row.
+/// The crown is not one of them: chat shows it as a glyph, not a code, so
+/// there is nothing to hide.
 #[test]
 fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
-    use crate::models::profile_award::{BADGE_LADDERS, all_award_categories, chat_badge_rows};
+    use crate::models::profile_award::{
+        BADGE_LADDERS, all_award_categories, chat_award_categories, chat_badge_rows,
+    };
 
     let rows = chat_badge_rows();
     let mut covered: Vec<&str> = rows
@@ -481,9 +700,11 @@ fn chat_badge_rows_cover_every_category_once_with_one_row_per_ladder() {
         .flat_map(|row| row.categories.iter().copied())
         .collect();
     covered.sort_unstable();
-    let mut all = all_award_categories();
-    all.sort_unstable();
-    assert_eq!(covered, all);
+    let mut on_chat = chat_award_categories();
+    on_chat.sort_unstable();
+    assert_eq!(covered, on_chat);
+    assert!(!covered.contains(&CROWN_AWARD_CATEGORY));
+    assert!(all_award_categories().contains(&CROWN_AWARD_CATEGORY));
 
     for ladder in BADGE_LADDERS {
         let owning: Vec<_> = rows

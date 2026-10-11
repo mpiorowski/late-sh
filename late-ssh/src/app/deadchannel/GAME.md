@@ -1,4 +1,4 @@
-# GAME.md — deadchannel, the character layer of late.sh
+# GAME.md: deadchannel, the character layer of late.sh
 
 Status: **seed doc, vision + decisions.** Successor to DRAGON.md (removed
 2026-08-07; its thesis survives here, its "extend Green Dragon" framing does
@@ -59,7 +59,16 @@ live in.
 - **Reuse the LoGD balance data 1:1.** Combat curves, price ladders, gem
   chances, level pacing: twenty-years-tested numbers, and they're
   fiction-free (rename the items, keep the math). Deviations from the curves
-  need a stated reason. This is the real salvage from the dragon work, plus
+  need a stated reason. Four stand: a glyph pays four times LoGD's bits
+  and over five times its exp (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`),
+  because a day is five fights and the climb is two to three weeks
+  ("The daily ration loop", "The road pass"); a drop keeps 65% of the
+  exp (`EXP_KEEP_ON_DEATH`); the armorer's wall costs 225% of LoGD's
+  ladder (`PRICE_PERCENT`, "The crystal pass"), because at LoGD's
+  prices a runner held the top kit half way up; and patch is a bit a
+  point (`PATCH_PERCENT`), the signal's price between rolls. The
+  fight itself is no longer LoGD's: the round ("The road pass")
+  replaced the exchange loop and the door's resolver. This is the real salvage from the dragon work, plus
   the pure-resolver + per-user save schema *shapes* as a parts bin.
 - **No full-screen game destination.** Interaction surfaces are: a
   lightweight modal (Lobby-modal shape) for spending rations / setting fight
@@ -153,6 +162,14 @@ glyphs and the Old Signal).
   point. Thin combat is a feature at this session length.
 - Ration status lives in the same mental slot as quests/streaks: sidebar
   line, streak bonuses mirroring the `QuestService` daily-streak shape.
+- **The climb is two to three weeks** (decided 2026-10-06; it was three
+  to four). A runner who walks every day's road and reads the hand puts
+  the Old Signal down in about two weeks; one who plays it on the
+  `Auto` key, in about three; one who is careless about it, a week
+  later. The first mark is a habit you come back to, not a run you
+  finish in a sitting and not a season. `fight/sim.rs` plays it a day at
+  a time and `sim_test.rs` holds the window; every balance change is
+  judged against it.
 
 ### The three surfaces (decided 2026-09-01)
 
@@ -262,9 +279,9 @@ place at all: scarcity of place is the fiction's spine, same as the
   wallet for any sub-surface; that's two identity systems fighting for one
   presence layer.
 - Cosmetics are the proven shop category (see Why), so lean in hard:
-  top-end looks priced absurdly (a 100k-chip legendary look is the point,
-  not a bug), rotating/limited seasonal stock for scarcity and shop
-  check-ins.
+  rotating/limited seasonal stock for scarcity and shop check-ins. No
+  legendary looks: a set only a few can wear becomes the look everyone
+  chases and then everyone wears.
 
 ### Chat encounters (the onboarding funnel)
 - The Mudae/Pokécord shape: something spawns in a room, runners present
@@ -294,16 +311,15 @@ place at all: scarcity of place is the fiction's spine, same as the
 
 Status (2026-09-02): all four stages and the eligibility gate exist in
 this directory, `late-ssh/src/app/deadchannel/` (see `CONTEXT.md` beside this file), built
-for several replicas (switches as `app_flags` rows, every cap and stamp
-a conditional claim on the user row). Stage 1 is universal behind the
-`haunt_live` fuse (`/haunt live on`), unlit, so nothing fires for
-non-staff users yet (staff: admins and moderators, the mods meeting it
-cold as the first playtest); stages 2-4 sit behind connected time, touched
+for several replicas (every cap and stamp a conditional claim on the
+user row). Stage 1 is staff only, a rule in code rather than a switch,
+so nothing fires for non-staff users yet (staff: admins and moderators,
+the mods meeting it cold as the first playtest); stages 2-4 sit behind connected time, touched
 settings, and an AI-screened bio with placeholder thresholds (7 days of
 online time, 2 keys, 100 characters; the length is only the floor under
 which no screen is spent, the AI screen does the judging). Copy, the
 voice's name, and the thresholds still face design review before the
-fuse is lit.
+haunting leaves staff.
 
 - **The game is never announced; it arrives.** Onboarding as haunting: the
   bridge fiction says the city is behind the screen and chat is the leak,
@@ -327,8 +343,8 @@ fuse is lit.
      see that?" gets "no?" back, which is deniability and gossip in one
      move), rare (order of once per hours-long session, at most once or
      twice a day per user), render-layer only (the one DB touch is the
-     per-user burst counter), behind the kill-switch and staff-scoped
-     until the fuse is lit. Ladder count (tuned 2026-09-01): **three
+     per-user burst counter), staff-scoped until the haunting is opened
+     up in code. Ladder count (tuned 2026-09-01): **three
      bursts total per person**, persisted; the third quiets the clock
      for good and opens stage 2, and the quiet is itself part of the
      escalation. Whether unchosen users keep an unbounded ambient clock
@@ -390,8 +406,8 @@ fuse is lit.
      per person**, the third arming the door; the two doors sit a day
      apart and the DM comes the day after the second, so for a person
      who connects daily the full ladder is one week),
-     render-layer only, no DB beyond the per-user arming counter,
-     kill-switch. Later variety (your name
+     render-layer only, no DB beyond the per-user arming counter.
+     Later variety (your name
      in the sidebar, the composer placeholder) rides the same
      machinery. Thematic payoff: when the stage-3 whisper says the
      static knows your name, it is describing what already happened.
@@ -498,7 +514,7 @@ fuse is lit.
     the failure mode. No fake errors, no fake disconnects, nothing
     resembling a real terminal failure. Static and corruption are
     obviously *voiced*, never mechanical.
-  - **Admin kill-switch from day one**, and a ready answer for the
+  - **Staff only until opened up in code**, and a ready answer for the
     inevitable "I found a display bug" report.
 - **First contact is a nonrenewable resource.** It works exactly once per
   person. Two timing rules: never burn it on real users while it is
@@ -573,6 +589,17 @@ fuse is lit.
   rare milestone awards (boss-slain / champion `profile_awards` + chip
   payouts, the shape NetHack and Lateania already use). Beware building a
   printing press into an already-flooded economy.
+- **The Old Signal pays 40,000 chips once a month**, on the Top Chips
+  board like every other boss, behind the same monthly rule as every
+  milestone on the site: once per mark and at most once every 30 days
+  per account (the `deadchannel_old_signal_slain` reward template). The
+  climb back is two to three weeks, so a runner who goes straight back
+  down meets the lockout: a second mark inside the month is kept, and
+  unpaid. That matches Lateania's full
+  run (four crowns at 10,000, each at most once every 30 days) on
+  purpose: the undercity is the accessible way to the top of the payout
+  ladder, five minutes a day and no skill ceiling. The number moves only
+  with the rest of that table.
 
 ### The retention model (honest version)
 - A player burns hot for 2-4 weeks, sees the content, then settles into
@@ -608,15 +635,19 @@ to allocate, and nothing on it another player cannot see.
 | On screen | What it is | Number | LoGD source |
 |---|---|---|---|
 | level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, scaled by marks | `lib/experience.php` |
+| a glyph's pay | bits and exp per kill | LoGD's creature table at 400% bits and 540% exp (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`): LoGD paced a season of ten fights a day, this ladder is two to three weeks of five; paying more per kill keeps prices and thresholds LoGD's | creature seeds |
+| a drop | exp kept | 65% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
+| crystals | the rare currency | one kill in twelve leaves one, a bright glyph always; a drop never takes them, a mark and the ledge do | forest gems |
 | signal | health | 10 per level, full at the day roll | `HP_PER_LEVEL` |
-| attack / defense | fight stats | level + weapon tier / level + armor tier | `battle-skills.php` |
-| rations | fights left today | 10 per UTC day | `TURNS_PER_DAY` |
+| attack / defense | what the cards are worth: a strike hits for the attack, a block holds a share of the defense | level + weapon tier / level + armor tier | `battle-skills.php` |
+| rations | steps of the road left today | 10 per UTC day, five of them fights | `TURNS_PER_DAY` |
 | charge | moves left today | band skill / 3 + 1 per UTC day | specialty uses |
 | bits | money on hand | start with 50 | `START_GOLD` |
-| stash | money in the city's locker | untouched by death | `bank.php` |
+| stash | money in the city's locker | untouched by death; a tenth kept on the way in, no interest; a mark or the ledge empties it | `bank.php` |
+| debt | owed to the bits machine | up to 50 a level; +10% of each loan, once; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
 | band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
 | band skill | move unlocks | +1 per level gained | specialty points |
-| marks | Old Signal kills | permanent; each resets level to 1 | dragon kills |
+| marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
 
 Vocabulary decided here, all passing the screenshot test: **signal** is
 health (the Old Signal is the deepest one; "mira's signal dropped" is a
@@ -650,8 +681,10 @@ replica-safe by construction, and a runner nobody touches costs nothing.
 
 **Signal dropped** means off the wire until the day roll. You still read
 the wire and still see the lounge theater; you cannot hit, and the wire
-says so when you try. You lose the bits on hand and a tenth of your exp
-(`EXP_KEEP_ON_DEATH`, 0.90); the stash is untouched, gear is untouched.
+says so when you try. You lose the bits on hand and 35% of your
+exp (`EXP_KEEP_ON_DEATH`, 0.65; LoGD's tenth made a drop too cheap to
+matter over a month); the stash is untouched, gear is untouched, and so
+is the debt.
 Punishment as spectatorship, in the exact surface you live in, and it is
 visible: **your mark renders as static (`░`) in chat until the roll**,
 so the room sees you are down before you tell them. No paid resurrection
@@ -696,9 +729,12 @@ Rules:
 
 ### Gear: two slots, fifteen tiers
 
-Weapon and armor, tiers 1 to 15, one shared `COST_LADDER` (48 bits at
-tier 1 to 10,350 at tier 15), power equals tier, 75% trade-in on the
-piece you hand back. Bought only at the city's armorer, only with bits.
+Weapon and armor, tiers 1 to 15, one shared `COST_LADDER` at
+`PRICE_PERCENT` (108 bits at tier 1 to 23,287 at tier 15), power equals
+tier, 75% trade-in on the piece you hand back. Bought at the city's
+armorer with bits, any tier the purse reaches: the price is what keeps
+the kit on the level ("The crystal pass"). The blade shop sells the
+next tier up for crystals.
 Chips never touch gear: this is the hard economy line made concrete. In
 LoGD the tier is the item and the name is pure fiction, so the rename is
 free and the names carry no balance.
@@ -740,19 +776,25 @@ pieces are the thing chips buy.
 **The portrait.** 5 columns by 3 rows, three slots, one row each: **hood**
 (top), **eyes** (middle), **coat** (bottom). Rows stack, so any hood
 composes with any coat and the set never needs compatibility rules. The
-starter set is three pieces per slot, free; a join assigns a random
-starter look so the mark exists from the first second, and starter
-pieces can be re-picked at the tailor for nothing, forever.
+rack is gated by level: three pieces per slot at level 1, three more
+at 4, 7, 10, and 13 (fifteen per slot), free once unlocked and
+re-picked at the tailor for nothing, forever. A join assigns a random
+level-1 look so the mark exists from the first second. There are no
+earned or legendary pieces: a piece only a few can wear becomes the
+look everyone chases and then everyone wears. Feats (the Old Signal
+kill) earn a badge, not clothes, and no piece carries the Signal's `╬`
+on the chest.
 
 **The mark.** One cell: a glyph, rendered in the chat author badge stack
 (beside the bonsai glyph, the existing precedent for a game glyph there)
 followed by the level, `▚7`, and as the runner's avatar glyph on the
 clubhouse floor, where runners become the only patrons who are not the
-default glyph. Starter marks are the ten characters of `GLYPH_ALPHABET`,
+default glyph. Starter marks are the characters of `MARK_ALPHABET`,
 free, so a fresh runner already wears the alphabet the city's fauna is
-made of. Rarer marks are bought or earned. The mark's **tint** is earned
-only, by marks (the prestige count): a colored mark is proof of an Old
-Signal kill and can never be bought, so the room learns to read it.
+made of: all of it but the Signal's `╬`, which is the paragon count and
+nobody's to wear. Rarer marks are bought. The badge's color is the newest tint the
+level opened, and an Old Signal kill shows as `╬N` after the level
+(`▚3╬2`): proof no chip can buy, so the room learns to read it.
 
 **Pieces come in two kinds, and the look tells the story:**
 
@@ -761,14 +803,17 @@ Signal kill and can never be bought, so the room learns to read it.
   rental treadmill is what made effects a moment). The tailor's rack
   rotates by season and a piece that leaves the rack never returns, so
   a look dates you the way a jersey does.
-- **Earned** pieces: milestones only (level 15, the first mark, a season
-  placement, later the arena title), never on any rack at any price.
+- **Level** pieces: the tailor's rack opens by level, three per slot
+  every three levels, so the look says how far down you have been.
+  There are no earned pieces: a piece only a few can wear becomes the
+  look everyone chases and then everyone wears. Milestones (the Old
+  Signal kill, a season placement, later the arena title) earn badges,
+  not clothes.
 
 Because the piece set is closed, a look is legible to anyone who has
-learned it: this coat says "was here in season one", that hood says
-"has killed the Signal", and the difference between bought and earned
-is the difference between "has chips" and "did the thing". Both are
-status; both are why you look.
+learned it: this coat says "was here in season one", that tint says
+"level ten", and the badge beside the name says "did the thing". Both
+are status; both are why you look.
 
 **Signal corrupts the look.** The portrait renders with cells replaced by
 static in proportion to missing signal (the haunting's `glitched_name`
@@ -830,20 +875,12 @@ ghost       visor       static      the glyph   tuner       jammer
   ▒░▒         ▟█▙         ▟▓▙         ▟╬▙        ▟═▙         ▟▒▙
 ```
 
-Legendary looks, where the whole set is one idea (the 100k pieces):
-
-```
-test pattern   old signal    the flicker    blackout
-   ▐▌▐▌          ╬╬╬            ▘ ▝           ███
-  ▐▓░▓▌         ▐◈▬◈▌          ▐▖ ▗▌         ▐█ █▌
-   ▟▒▙           ▟╬▙            ░▒░           ███
-```
-
 What the sketches decided:
 
 - **The coat's center cell is the emblem.** `▟╬▙`, `▟═▙`, `▟▓▙` are one
   coat with a different chest; emblems are the cheapest way to grow the
-  catalog, and an earned emblem (the Signal's `╬`) reads at a glance.
+  catalog. The Signal's `╬` is kept off every chest: it belongs to the
+  boss, not to a coat.
 - **Static shades inside a piece mean "half in the city already."** The
   ghost band's pieces mix `░▒▓` into themselves, so the corruption effect
   and the fashion speak one visual language and a wound never reads as
@@ -858,8 +895,8 @@ What the sketches decided:
 ```
 
 - **One tint per piece, never per cell**, from a closed palette of about
-  eight (static grey, amber, phosphor green, cyan, magenta, red, white,
-  and gold reserved for earned tint). Two people in the same three
+  seven (static grey, amber, phosphor green, cyan, magenta, red, white),
+  opened by level. No earned tint: gold stays out of the palette. Two people in the same three
   pieces and different tints already look different, so the catalog
   multiplies without more art. The wire prints portraits in plain text
   (chat bodies carry no color and IRC would need color codes); the
@@ -880,12 +917,12 @@ What the sketches decided:
 database, the way the door keeps its ladders in `data.rs`.
 
 - **Pieces are a Rust const table**, one entry per piece: a code, its
-  slot, the five-cell row, and whether it is starter, bought, or earned.
+  slot, the five-cell row, and the level that opens it.
   The width test above runs over this table, so a bad glyph fails the
   build instead of someone's card.
 - **A shop SKU references the piece code**; a catalog migration per rack
   in the existing `ON CONFLICT (sku)` shape, ownership in
-  `user_purchases`. Earned pieces have no SKU at all, so they cannot be
+  `user_purchases`. Level pieces have no SKU at all, so they cannot be
   sold by accident.
 - **The look is one JSONB column on the runner row**, parsed at load into
   a typed struct and rejected loudly on an unknown code (the boundary
@@ -914,11 +951,9 @@ database, the way the door keeps its ladders in `data.rs`.
 | common piece | 2,000 |
 | rare piece | 10,000 |
 | rare mark | 25,000 |
-| a legendary look (matched hood, eyes, coat, and its own mark) | 100,000 |
 
 Looks are deadchannel's chip sink from day one, before the arena or a
-single bounty exists; the 100k look is the point (see "The visibility
-layer"), not an outlier.
+single bounty exists.
 
 ### The sheet (what the profile card shows)
 
@@ -940,9 +975,10 @@ that is enough.
 ### What a runner is not (decisions)
 
 - No skill tree. Bands and their four-move ladders are the whole of it.
-- No charm, no flirting stat, no gems, no mounts, no mercenaries, no
+- No charm, no flirting stat, no mounts, no mercenaries, no
   companions in v1. (Companions as an earned fourth portrait slot is a
-  season idea, not a v1 idea.)
+  season idea, not a v1 idea.) *Amended 2026-10-04:* gems came back as
+  crystals ("The crystal pass"); the rest stands.
 - No timed regeneration of anything.
 - No inventory. Two slots, one item each, the tier is the item.
 - No point allocation on a level gained: a level is a level (LoGD gives
@@ -956,9 +992,9 @@ that is enough.
 ### Persistence (the row)
 
 `deadchannel_runners`, one row per user (`user_id` unique), id UUID v7.
-Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash,
+Columns: level, exp, signal, weapon_tier, armor_tier, bits, stash, debt,
 rations_left, charge_left, day (the UTC date of the last roll), band,
-band_skill, the benched band progress, alive, marks, and the look as
+band_skill, the benched band progress, alive, marks, peak_level, and the look as
 four piece codes (hood, eyes, coat, mark). All data ops in one late-core
 model, the multi-replica rule throughout: the day roll and every spend
 are conditional claims on the row (`WHERE day < $today`, `WHERE
@@ -1007,9 +1043,47 @@ on still bind every piece, band, and ration the city sells:
 Fourteen **operators** hold levels 2 to 15 (LoGD master stats: attack
 2L, defense 2L, signal 11L), each an old voice on the wire with a name
 and a line, beaten once per level to climb. Level 15 opens the **Old
-Signal** (45 / 25 / 300); putting it down resets you to level 1 with a
-mark, scales every exp threshold by marks (LoGD 1:1), and is the season
-loop's engine. Names and copy belong to the city pass.
+Signal**; putting it down leaves a mark and resets the climb (see
+"Marks: the reset"), and is the season loop's engine. Names and copy
+belong to the city pass.
+
+### Marks: the reset (decided)
+
+Classic LoGD, with Diablo's paragon feel: the climb resets, the status
+never does.
+
+- **The gate.** At level 15 with the exp to leave it (`exp_to_seek`, the
+  last rung of the curve), the next step into the screen meets the Old
+  Signal instead of a glyph. A dropped signal against it costs what any
+  drop costs, and the exp lost usually puts the gate a day or two of
+  glyphs away again.
+- **The numbers.** 290 signal, 39 attack, 22 defense, tuned for the
+  round and the drafted deck, not LoGD's dragon (300 / 45 / 25, numbers
+  for an exchange loop). From the top of the wall a first kill lands
+  about one try in two on the `Auto` key and nine in ten for a runner
+  reading the hand, whatever was drafted; a glass of static on ice makes
+  the key near sure. Held by the arena's contract for every build
+  (`fight/BALANCE.md`). Revisit when the bands ship.
+- **What the kill takes:** level back to 1, exp to 0, weapon and armor to
+  tier 0, bits to the starting 50, the locker emptied, the crystals gone. The climb is a
+  real climb again, and nothing saved for it carries over.
+- **What it keeps:** the peak level (the tailor's rack stays open), the
+  look, the badges, the kill count, today's rations, and the debt.
+- **What it gives:** a mark. Marks are the paragon number, shown behind
+  the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
+  defense up to a cap of five (the second climb is quicker, a veteran
+  never outgrows the room), scales every exp threshold (LoGD's formula,
+  a quarter of level times a hundred per mark), and climbs the title
+  ladder (placeholder copy: heard, tuned, carrier, broadcast, old
+  voice). The first kill grants the rankless `SIG` profile badge. A kill
+  pays 40,000 chips, at most once every 30 days: the one milestone payout
+  (see "Economy rules"), and the only place bits ever turn into chips. A
+  second mark inside the month is kept all the same, unpaid. The payout is
+  a debt on the row until the house answers: a grant that fails is retried
+  on the next step or connect, never lost with the mark.
+- **A mark empties the stash** (decided with the money pass below): a
+  full locker waiting at level 1 would make the second climb a shopping
+  trip.
 
 ### Build order for this phase
 
@@ -1081,16 +1155,17 @@ fixed:
   nobody can read it, which is the point.
 - **No function behind anything yet, and the panels say so.** Every shop
   opens and shows its real catalog (the fifteen gear tiers at LoGD prices,
-  the whole starter rack with the runner's portrait in the mirror, the
+  the rack cut to the runner's peak level with the portrait in the mirror, the
   three bands) under a line in the voice saying the till is not open. The
   street answers Enter at a cart with a line from a small pool. Placeholder
   copy, design review pending: the draft **move names** (tuner: retune,
   siphon, carrier, clear channel; jammer: hiss, jam, wither, blackout;
   ghost: smear, from behind, unseen, vanish), the board's four notices, the
   bar's drink list, the reader's lines (which point at the haunting).
-- **Nothing shared, nothing timed.** No crowd on the street (the design
-  says the city must never beat chat for standing around), no spawns, no
-  clock. The screen's static and the rain are render-only ambience.
+- **Shared, nothing timed.** Every runner who went down this session
+  stands on the street until they log out, lit while looking and dim while
+  on another page (CONTEXT.md §3b). No spawns, no clock. The screen's
+  static and the rain are render-only ambience.
 
 Done since: the signs smear into the wet ground, a car runs the street
 with its headlights ahead of it, the monorail crosses the sky,
@@ -1099,7 +1174,7 @@ the railing Enter looks over the ledge at the lower city (a half-block
 perspective picture, the showpiece). The screen is the forest (the
 fight pass, next section). The armorer's till trades and the tailor's
 mirror edits the look (pick, not draw: rows, racks, tints, the mark, the
-join's dice again; the starter rack free forever). Still to come on the
+join's dice again; the rack gated by level, free once unlocked). Still to come on the
 street: the locker, the band choice.
 
 ## The fight pass: where the ration goes (2026-09-24)
@@ -1123,7 +1198,12 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   the announcer's voice, three keys. The ASCII drama is the two faces
   corrupting to static as signal drops (the wound renderer from "The
   look", pointed at both). Five exchanges, twenty seconds, ten rations in
-  five minutes.
+  five minutes. The Old Signal is the exception, and the "diegetic
+  spectacle" line above made concrete: its scene takes the whole screen
+  in red, the empty rows fill with static, the frame's border loses
+  cells to static and the box shudders a column from frame to frame
+  while it broadcasts, and everything goes still once it is down. One
+  render function, no art team, nothing to explain.
 - **Interactive like LORD, state on the row.** Attack, run (bands and
   their moves come with the band choice). Each key is one transaction on
   the locked runner row with the fight as a JSON column, so a dropped
@@ -1146,7 +1226,9 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   copy at feed-template standards, design review pending with the rest.
 - **Levels climb on exp in the fight, for now.** The operators are the
   design (beaten once per level); until they exist this is the one
-  stated deviation, so the runner is not level 1 forever.
+  stated deviation, so the runner is not level 1 forever. It can carry a
+  runner into a glyph their gear cannot beat; the step down (the money
+  pass, below) is the way back.
 - **The armorer's till is open.** The first bits sink, and the LoGD one:
   a tier above what you carry, 75% back on the piece you hand in, no
   credit. It runs through the fight's command path on the locked row
@@ -1163,16 +1245,164 @@ ritual is the city's, the wire is the log); this pass fixed the shape:
   change trigger the join uses, so every surface that paints the look
   follows on the directory refresh. Nothing posts to the wire: the new
   face rides the runner's next message there, which is the be-seen fuel
-  doing its own work. The rack is a window of five around the worn piece
-  rather than the whole row, so the panel fits eighty columns and the
-  eye stays on the piece.
+  doing its own work. The rack is a window of up to five around the worn
+  piece rather than the whole row (the whole rack, once, while it is
+  shorter), so the panel fits eighty columns and the eye stays on the
+  piece.
 
-What comes next on this surface is decided in the next section, "The
-road pass": the exchange loop above is the placeholder it replaces.
+The exchange loop above (attack, run, the door's resolver) was the
+placeholder, and "The road pass" has replaced it: a step into the static
+is a step down the day's road, and a fight is a hand of cards. What this
+section fixed still stands under it: the fight as a panel over the
+street, the row as the fight, the Old Signal taking the screen, the
+wire hearing the news and never the play-by-play, one glyph a level, the
+armorer's till, and the tailor's mirror.
+
+## The money pass: the step down, the locker, the machine, the ledge
+
+Status: **built, staff only like the rest** (`fight/` and `city/`,
+`fight/MONEY.md`). The question was a real one: a
+runner walked past the armorer, levelled on exp into the hiss with bare
+hands, dropped, and stood at level 2 with no bits and a fight they win
+three times in a hundred. LoGD never locks there, because promotion is a
+choice (the master), you can go slumming, and the bank keeps your gold.
+Auto-levelling took the first away, so the rest had to exist, and each
+is harder than LoGD's on purpose: this game should cost more than the
+one it borrowed from.
+
+- **The picker before every step in.** `f` does not start a fight: it
+  shows the sheet and what waits, each glyph with its numbers, pay, and
+  a threat word (easy, even, risky, grim) that is the fight simulated to
+  the end from where you stand. LoGD's master told you after the fact
+  that you were not ready; the picker tells you before. A fight already
+  waiting skips it. *Amended 2026-10-06:* the picker is the road now
+  ("The road pass"): the same sheet and the same warning under the day's
+  map, for whichever node the cursor is on.
+- **The step down (`g`).** The glyph a level below, at half its pay
+  (LoGD's slumming pays in full). A way out of a fight you cannot win,
+  never a better farm than the fair one.
+- **The lockers.** The stash: a drop never reaches it, a tenth of every
+  deposit is the locker's (LoGD's bank is free and pays interest), out is
+  free, all or nothing. It is only worth anything
+  because it is a walk away: bits earned in a fight are on you until
+  you carry them there, which keeps "one more fight or bank it" a real
+  question.
+- **The bits machine.** The machine that hums on the street lends: fifty
+  bits a level, a tenth of the loan added to the debt once when it pays
+  out, half of every kill's bits taken until it is square, and nothing
+  clears it but paying. No daily rate: a day roll is any touch on the
+  row, a connect included, so interest at the roll would bill a runner
+  for days they never fought and compound past anything the garnish
+  could pay. The debt only goes down, and playing pays it.
+- **The ledge.** Two presses of `r` over the drop start the runner over:
+  level 1, bare hands, empty pockets and locker. The marks, the peak, the
+  kills, the face, and the debt come down too, no starting bits, and not
+  with the signal down, so it is never loan forgiveness, a bit farm, or a
+  way back on the wire before the roll. (The crystals go too.) The wire hears it, so a runner
+  with nothing to lose is refused: the fall is not a free line to post.
+- **The operators stay unbuilt.** The step down and the machine answer
+  the lock from below, for a fraction of fourteen named characters, and
+  the road pass may replace the exchange loop they would gate. If the
+  climb reads too soft once staff have played this, the operators are
+  the cleanest way to make it harder.
+
+## The crystal pass: the wall's price, the bright glyph, and something to want (2026-10-04)
+
+Status: **built, staff only like the rest** (`fight/`, `city/`,
+`fight/CRYSTALS.md`). A week of staff play asked two questions at once.
+A level 8 runner held the whole level 15 kit, both pieces, with bits to
+spare: the armorer was finished half way up the ladder. And with the kit
+done, a day was ten identical presses of the same key. LoGD answered the
+second with gems: a small chance of something special in every forest
+fight, spent on things gold could not buy. Both answers are in:
+
+- **The wall costs what a level pays.** The first cut gated the wall (a
+  tier a level) and was thrown out the same day: a gate makes the
+  reading come out right without making the game right, and hides the
+  number that was wrong. The number was the price. Under triple pay,
+  LoGD's ladder let a level buy two to four tiers. The wall now asks
+  225% of the ladder, at which a level's kills pay for about its own
+  pair of pieces, and patch asks half a bit a point, because at the old
+  patch price a runner one tier behind spent on patch what the next
+  tier needed and never caught up (`fight/BALANCE.md`, the sweep). The
+  careful runner now fights every level in that level's kit and wears
+  the top one at 15; gear takes over half the bits earned, patch under
+  a quarter. Nothing stops a rich runner buying ahead; a tier ahead is
+  worth two or three points of odds, so nobody needs to.
+- **Crystals.** One kill in twelve of the glyph of your level leaves
+  one. Rare enough to be a moment, common enough that a week holds a
+  few. They are the one thing a dropped signal does not take (LoGD's
+  gems survived death too): losing the purse is the cost of a drop,
+  losing the rare thing would make nobody carry it. A mark and the
+  ledge take them with everything else.
+- **The bright glyph.** Two steps of every day have a bright one waiting
+  behind them: the glyph of your level burning harder, for double the
+  bits and a certain crystal. The picker shows it with its threat word
+  like any other offer, so it is a choice and never an ambush, and it
+  is for that step only. The two steps come from the date alone, the
+  same for every runner (the Le Word lesson below: one object a day for
+  the room to compare, "the bright one is on six today"), which also
+  means no column and no reroll. *Amended 2026-10-06:* they are two
+  nodes of the day's road now, one lane each, on the map from the first
+  step: walked to, or walked around. It pays the plain glyph's exp on
+  purpose: the pace of the climb belongs to the rations, and a second
+  way to level faster would have to be balanced against the first.
+  From the wall's kit it is about a coin toss; one thing a crystal buys
+  makes it a fight to take. *Amended 2026-10-06:* in the round it is a
+  fight to read: near sure for a runner playing the hand, a real risk
+  on the `Auto` key, and most of a signal either way.
+- **Dead Air pours.** A glass for a crystal, one a day, gone at the
+  roll: attack, defense, or the signal's bars. The consumable sink, and
+  the reason to walk into the bar. The prepared runner's move is to
+  save one for the Old Signal (two tries in five dry, a little better
+  than even with a glass).
+- **The blade shop takes the other wallet.** The next tier up from what
+  a slot carries, for three crystals and no bits. The standing sink:
+  three crystals is a few days' luck, and what they buy grows with the
+  climb, so the choice between a glass tonight and a piece later is a
+  real one.
+- **Shops are the game, the street is flavor.** A runner could not tell
+  a shop that mattered from a painted wall: every sign burned alike, the
+  loan lived in a machine at the far end, crystal gear on a cart, and
+  the working shops were bunched at the west end. Now everything that
+  spends or earns is inside a lit shop, placed by how often it is
+  needed: the armorer and the blade shop in the middle, patch and Dead
+  Air beside them, the lockers at the wire stairs, loans toward the
+  screen, the tailor out west. A shop with nothing in it yet keeps its
+  sign barely on, in its own color, so the street still reads as lived
+  in (MARKET, SHRINE, PAWN, INK, which was CLINIC and read as a second
+  patch, BATHS, BANDS, SLEEP, COIN, VIDS), and says "not open yet" at
+  the door. They get lit one at a time, and a sign coming on is news.
+  Stalls and carts stay as flavor and, later, small bonuses.
+- **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
+  forest fights) and hired swords (a second attacker). More fights a day
+  breaks the ten-minute ritual, and a companion is a second combat
+  system; neither is here. A glass and one tier of gear are numbers the
+  sheet already has.
+- **The balance is measured.** `fight/arena.rs` plays every matchup and
+  four whole climbs through the real machine under any set of numbers
+  (`data::Rules`), and one contract holds every target as a band
+  (`fight/BALANCE.md`): the pace of the careful and reckless runners,
+  the kit tracking the level, where the bits go, the fair fight easy and
+  the bright one a coin toss, a glass that helps against the Old Signal
+  without handing it over, and the whole crystal pass worth days, not
+  weeks (the runner who plays all of it marks about two days ahead of
+  the one who plays none). The drop keeps 65% of the exp, down from 70,
+  to hold the reckless runner at four weeks.
+
+What this pass leaves for the next: the board's standing orders are the
+natural third crystal source ("put down three bright ones this week"),
+and the reader, who already talks about the static, is the natural place
+to ask which steps are bright tomorrow.
 
 ## The road pass: the daily run, the hand, and being seen (2026-09-24)
 
-Status: **decided, not built.** A design conversation after the fight,
+Status: **the round and the road are built, staff only like the rest**
+(2026-10-06; `fight/cards.rs`, `fight/road.rs`, `fight/policy.rs`,
+`CONTEXT.md` §3c, measured in `fight/BALANCE.md`). The level colors
+were built earlier. Ambush, the arena, and bounties are decided, not
+built. "As built" below says where the code differs from what this
+section decided, and why. A design conversation after the fight,
 the armorer, and the tailor landed. Three threads: what the game must
 give people (visibility, ten times what the bonsai and the arcade give),
 what to do about PvP at forty people, and what the fight itself should
@@ -1276,8 +1506,8 @@ talk about.
   run ever runs past that, we built a sudoku.
 - **Node kinds:** fight (the round); elite (both intents live, a card
   drop on the kill: where jokers enter later, one at a time, as rewards
-  rather than a shop); rest (clear static from the deck, or heal
-  signal: the one decision every Spire player argues about); cache
+  rather than a shop); rest (clear static from the deck; the signal
+  is patch's); cache
   (bits, which walk back up to the armorer: the road is the faucet, the
   street is the sink); event (a line and a choice, pure copy in the
   voice, an afternoon each: the content slot that never runs dry).
@@ -1297,21 +1527,135 @@ talk about.
   the dailies, so a bad road is a failing test and not a bad day for
   forty people.
 
+### As built (2026-10-06)
+
+The round and the road were built together, not a week apart, on one
+decision: the road is what makes the day a shared object, and a road
+over the old exchange loop would have been five presses of one key with
+a map over them. Where the build differs from the text above:
+
+- **The deck starts as five strikes, three blocks, a surge, and a
+  wipe** ("The draft" below is how it changes). The band choice is not
+  built, so there are no band moves to deal. The
+  surge (two and a half strikes for two energy) and the wipe (a block
+  that throws every static card out of the hand) are the bandless
+  deck's two moves; a band's replace them when the bands ship.
+- **Block stays up until a hit eats it.** It does not fall at the end
+  of the turn. Without that, a glyph that gathers shows you a heavy you
+  cannot prepare for, and the telegraph is a taunt. With it, "put it up
+  now or hit now" is the question on every gathering turn.
+- **Three intents, not two.** It hits, it gathers and comes down for
+  double, or it throws *noise*: two static cards, no damage, no block
+  stops it. Noise costs one enum arm and makes static a thing glyphs do
+  to you as well as a thing hits leave behind. Every glyph has its own
+  fixed order of moves, shown whole on the road before you step: the
+  howler only ever gathers and comes down, the ghost frame opens on
+  noise. That order is its identity.
+- **No dice but the shuffle, the run included.** Running takes whatever
+  the glyph meant to do this turn, against the block standing, and then
+  you are out. Run while it gathers and it is free. A coin toss on the
+  way out of a fight where everything else is shown would have been the
+  one hidden roll.
+- **Auto is a turn, not a fight.** `a` plays the obvious turn and ends
+  it, so the runner on the key presses it three or four times a fight
+  (the old attack key, the same finger) and can take the hand back on
+  any turn. It hits with everything, guards a heavy, and puts energy it
+  has left over on a block when something is landing. It never gives up
+  a hit to block a plain one and never thinks ahead: the hand played
+  well takes about a third of the damage, and that gap is the whole of
+  what skill is worth.
+- **Static rides the deck for the day**, capped at a hand's worth
+  (five), and playing a static card (one energy) throws it out for
+  good. A rest clears the deck; patch does not.
+- **Every road is five fights.** Not "about four out of ten": exactly
+  five steps are a fight in every lane, the first and the last always,
+  so no route levels faster than another and the pace of the climb
+  stays the rations'. What a route chooses is which fights are the
+  bright ones and what the five steps between them give.
+- **Four node kinds: glyph, bright, rest, cache.** The elite is the
+  bright glyph the crystal pass already had (harder, double bits, a
+  certain crystal); it moved from "two steps of the day" onto two nodes
+  of the map. Events and card drops wait, as data.
+- **The step down is a key on a glyph's node** (`g`), not a node of its
+  own, so the way back from a fight you cannot win is on every fight
+  step of every road.
+- **The share card is three lanes by ten steps**, the lane walked lit
+  by how each step went, in the arcade's card grammar. It gives nothing
+  away about the road and says how your day went on it.
+- **The climb is two to three weeks**, down from three to four ("The
+  daily ration loop").
+
+Measured, and what it taught (`fight/BALANCE.md`): a level a day for
+the first week, the Old Signal on the screen on day 16 whoever plays the
+cards, and the first mark that day for a careful runner and a day or so
+later on the `Auto` key. And the cost of no dice: odds move in steps, so
+the Old Signal and the bright glyph sit near cliffs that the arena's
+contract has to hold.
+
+### The draft: new cards for everyone (2026-10-06)
+
+Decided over the bands, which wait: a class choice splits the room into
+three decks to balance before anybody has played one. The draft gives
+every runner new cards to play with and keeps one deck to tune.
+
+- **Four drafts, two cards each, the same for everybody.** At levels 3,
+  6, 9, and 12 a new card is waiting on the road: one of two, and the
+  road waits until it is taken (`1` or `2`). "What did you take at
+  nine" is a thing the wire can ask, because everybody was asked the
+  same question.
+- **The deck stays ten.** The card goes in over a strike or a block,
+  never beside one. Draw odds do not move, a hand is still five of ten,
+  and a deck is still read at a glance. Sixteen decks exist, and the
+  arena fights all of them on every pass.
+- **Every question has two right answers.** Level 3, for a strike: a
+  *jab* (free, three quarters of a strike) or a *siphon* (a strike that
+  mends half of itself): tempo or sustain. Level 6, for a block: a
+  *riposte* (hits for a block's worth and all the block standing) or a
+  *bulwark* (two and a half blocks for two energy): armor as a weapon
+  or as a wall. Level 9, for a strike: a *burn* (free, two energy, and
+  one more for each static card in hand, burned up) or a *ground* (a
+  strike, and one more for each static card in hand, thrown out):
+  static turned into energy or into damage. Level 12, for a strike: a
+  *sever* (two and a half strikes once the glyph is at half) or a
+  *mute* (two energy, the glyph's move this turn does nothing): the
+  finisher or the cut-out.
+- **Nothing new on the table.** Every card is made of what the round
+  already had: a hit, a block, energy, static, the signal. Every number
+  is a share of the strike or the block, so the armorer still prices all
+  of it and a weapon tier makes every card bigger.
+- **No card is a trap on the key.** The first burn paid for its energy
+  with a static card, which the `Auto` key took every turn and choked
+  on. A card the floor cannot play is a wrong answer dressed as a
+  choice, so the burn now only gives, and the key learned to block with
+  the energy it has left. The contract holds every build to the pace
+  and every draft's two options to within a day and a half of each
+  other.
+- **A mark takes the cards back** with the level, and so does the
+  ledge. The next climb is asked again.
+
+Waits: card drops from bright glyphs (the collecting loop), a way to
+see the whole deck outside a fight, the wire saying what a runner took,
+and the bands, whose two moves would replace the surge and the wipe.
+
 ### Being seen: your color is your level
 
 The badge (mark plus level, `▚7`, decided 2026-09-02) is where the
 game's status lives in chat, and its color is earned, never bought:
 
-- **Level bands tint the badge.** Grey 1 to 4, amber 5 to 9, phosphor
-  10 to 14, white at 15; the earned tint only after an Old Signal kill.
-  The room learns the ladder in a week without a legend.
+- **Level bands tint the badge.** The badge wears the newest tint the
+  level unlocked: grey 1 to 3, phosphor 4 to 6, cyan 7 to 9, magenta 10
+  to 12, red 13 and 14, white at 15; the earned tint only after an Old
+  Signal kill. The room learns the ladder in a week without a legend.
 - **The badge carries the level color; the username keeps the shop
   color.** Username gradients are the shop's one hit. Both on one line
   would fight; side by side they read as "has chips" and "did the
   thing", the exact distinction "The look" draws.
-- **Tints in the tailor unlock by level band, not by price.** Bits stay
-  internal and buy gear; chips buy pieces. A tint you cannot pick yet
-  shows in the rack with its level: a reason to come back at five.
+- **Tints and pieces in the tailor unlock by level, not by price.** Every
+  three levels opens three pieces per slot and a tint: static and amber
+  at 1, phosphor at 4, cyan at 7, magenta at 10, red at 13, white alone
+  at 15. Bits stay internal and buy gear; chips buy pieces later. The
+  mirror names what the next unlock level opens: a reason to come back
+  at four.
 - All of it in #deadchannel only until the public flip.
 
 ### PvP at forty people
@@ -1352,15 +1696,16 @@ this pass:
 
 ### Build order
 
-1. The round as a pure state machine with the seeded simulation test, a
-   fixed starter deck, three foes with intents, the hand row on the
-   existing panel. Staff play it for a week before anything else.
-2. The road with three node kinds (fight, rest, cache), the map render,
-   the run share card, the one wire line per run. Elites and events
-   follow as data.
+1. *Built.* The round as a pure state machine with the seeded
+   simulation test, a fixed starter deck, fifteen foes with intents, the
+   hand row on the existing panel.
+2. *Built.* The road with four node kinds (glyph, bright, rest, cache),
+   the map render, the run share card, the one wire line per run.
+   Events and card drops follow as data.
 3. Level badge and color bands in #deadchannel, tints gated by level in
    the tailor.
-4. The locker, then ambush with the replay and the revenge token.
+4. Ambush with the replay and the revenge token (the locker is in, so
+   carrying bits into the day is already a choice).
 5. Arena and bets, then bounties. Bands as tribes when the band choice
    ships.
 
@@ -1426,9 +1771,9 @@ Sequencing, each phase testing something before paying for the next:
   reasons to care about spawns you'd see anyway. There is no walking, so
   "go here, click thing" quests cannot exist.
 - ~~**What dying means.**~~ Decided 2026-09-02: signal dropped, off the
-  wire until the day roll, bits on hand and a tenth of exp lost, the mark
-  renders as static in chat meanwhile; see "Death" in the phase 2 design
-  pass.
+  wire until the day roll, bits on hand and a share of the exp lost, the
+  mark renders as static in chat meanwhile; see "Death" in the phase 2
+  design pass.
 - **Who may start a fight.** Leading idea, undecided (extends the PvP
   consent question): unprovoked player-vs-player aggression does not
   exist; only the static starts trouble, and a bounty on your head is

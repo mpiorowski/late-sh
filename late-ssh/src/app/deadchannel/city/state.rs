@@ -3,8 +3,8 @@
 //! to you. Pure: no I/O, no clock reads (the tick is handed in).
 //!
 //! The city is the wallet (GAME.md, "The three surfaces"): nothing happens
-//! here that you could miss, so there is no shared lobby and no crowd. One
-//! runner, one street, the doors you walk up to.
+//! here that you could miss. This is your runner only; the other runners
+//! on the street are `deadchannel/street`'s.
 
 use super::data::COST_LADDER;
 use super::map::{self, Landmark};
@@ -21,16 +21,18 @@ const TIERS: usize = COST_LADDER.len();
 /// What Enter does at the landmark within reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Enter {
-    /// Opens the landmark's panel (the shops and the board).
+    /// Opens the landmark's panel (the shops, the board, the blade shop).
     Panel(Landmark),
-    /// The street answers with a line (carts, the screen, the stairs).
+    /// The street answers with a line (carts, the stairs, a shop that is
+    /// not open yet).
     Line(Landmark),
     /// Back up the wire: the way out of the city.
     Leave,
     /// Look over the ledge: the lower city fills the screen until Enter.
     Ledge,
-    /// Step into the static: the screen is the forest (`fight/`), a
-    /// ration spent against a glyph, the scene over the street.
+    /// Walk up to the static: the screen is where the road starts
+    /// (`fight/`). The road opens over the street (or a waiting fight
+    /// resumes), and a step spends a ration on what waits on its lane.
     Fight,
 }
 
@@ -45,13 +47,22 @@ impl Landmark {
             | Landmark::Bar
             | Landmark::Repairs
             | Landmark::Board
-            | Landmark::Bits => Enter::Panel(self),
+            | Landmark::Bits
+            | Landmark::Blades => Enter::Panel(self),
             Landmark::Screen => Enter::Fight,
-            Landmark::Noodles
-            | Landmark::Umbrellas
-            | Landmark::Blades
-            | Landmark::Reader
-            | Landmark::Stairs => Enter::Line(self),
+            Landmark::Noodles | Landmark::Umbrellas | Landmark::Reader | Landmark::Stairs => {
+                Enter::Line(self)
+            }
+            // Not open yet: the door says so. Opening a shop moves it up
+            // to `Enter::Panel`.
+            Landmark::Ink
+            | Landmark::Baths
+            | Landmark::Sleep
+            | Landmark::Shrine
+            | Landmark::Market
+            | Landmark::Coin
+            | Landmark::Vids
+            | Landmark::Pawn => Enter::Line(self),
             Landmark::Wire => Enter::Leave,
             Landmark::Ledge => Enter::Ledge,
         }
@@ -70,6 +81,8 @@ pub struct State {
     pick: usize,
     /// Looking over the ledge: the lower city instead of the street.
     ledge: bool,
+    /// Leaning out over the ledge: the next `r` steps off (`Command::Reset`).
+    reset_armed: bool,
     /// A line the street said, and the tick it stops showing.
     line: Option<(Landmark, usize, u64)>,
 }
@@ -89,6 +102,7 @@ impl State {
             panel: None,
             pick: 0,
             ledge: false,
+            reset_armed: false,
             line: None,
         }
     }
@@ -173,6 +187,20 @@ impl State {
 
     pub fn look_over(&mut self) {
         self.ledge = true;
+        self.reset_armed = false;
+    }
+
+    /// Leaning out: the first `r` at the ledge. The second steps off.
+    pub fn arm_reset(&mut self) {
+        self.reset_armed = self.ledge;
+    }
+
+    pub fn disarm_reset(&mut self) {
+        self.reset_armed = false;
+    }
+
+    pub fn reset_armed(&self) -> bool {
+        self.reset_armed
     }
 
     /// Back on the street: closes the panel and steps back from the ledge,
@@ -181,6 +209,7 @@ impl State {
     pub fn dismiss(&mut self) {
         self.panel = None;
         self.ledge = false;
+        self.reset_armed = false;
     }
 
     /// The street says something: which landmark spoke and which line of

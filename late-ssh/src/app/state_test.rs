@@ -1,7 +1,9 @@
+use crate::app::state::App;
 use crate::test_helpers::{
     SessionWorld, make_app, make_app_in_world, new_test_db, render_plain, wait_for_render_contains,
 };
 use late_core::models::leaderboard::{LeaderboardData, LeaderboardEntry};
+use late_core::test_utils::TestDb;
 use late_core::test_utils::create_test_user;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -89,22 +91,21 @@ async fn leaderboard_seeds_from_the_already_published_snapshot() {
     );
 }
 
-/// The status directory keeps one entry per user, but a status belongs to a
-/// session. One session clearing its own status must not erase a countdown
-/// another session of the same account is still running: the laptop's top
-/// bar would keep counting while every peer lost its badge.
+/// Away belongs to a session, but peers read it per user: the user is away
+/// only once every session is. A `/brb` on the desktop must not hide a laptop
+/// that is still being typed on, and a key on either brings the user back.
 #[tokio::test]
-async fn clearing_one_sessions_status_keeps_the_other_sessions_badge() {
-    use crate::app::common::status::{SessionStatus, Status, new_directory, snapshot};
+async fn a_user_is_away_only_once_every_session_is() {
+    use crate::app::common::away::{AWAY_AFTER, away_user_ids};
     use crate::state::{ActiveSession, ActiveUser, ActiveUsers};
 
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "status-two-sessions").await;
+    let user = create_test_user(&test_db.db, "away-two-sessions").await;
     let session = |token: &str| ActiveSession {
         token: token.to_string(),
         fingerprint: Some(user.fingerprint.clone()),
         peer_ip: None,
-        status: None,
+        away: false,
     };
     let active_users: ActiveUsers = Arc::new(std::sync::Mutex::new(
         [(
@@ -121,41 +122,188 @@ async fn clearing_one_sessions_status_keeps_the_other_sessions_badge() {
         .into(),
     ));
     let world = SessionWorld {
-        active_users: Some(active_users),
+        active_users: Some(active_users.clone()),
         ..SessionWorld::default()
     };
     let mut laptop = make_app_in_world(test_db.db.clone(), user.id, "laptop", world.clone());
     let mut desktop = make_app_in_world(test_db.db.clone(), user.id, "desktop", world);
-    let directory = new_directory();
-    laptop.status_directory = Some(directory.clone());
-    desktop.status_directory = Some(directory.clone());
+    let is_away = || away_user_ids(&active_users.lock().unwrap()).contains(&user.id);
 
-    let focus = SessionStatus {
-        status: Status::Focus,
-        ends_at: Some(chrono::Utc::now() + chrono::Duration::minutes(50)),
+    desktop.sent_away = true;
+    assert!(desktop.sync_away(), "/brb moves the desktop's flag");
+    assert!(!laptop.sync_away(), "the laptop was just used");
+    assert!(!is_away(), "the laptop keeps the user here");
+
+    laptop.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(laptop.sync_away());
+    assert!(is_away(), "both sessions are away now");
+    assert!(!laptop.sync_away(), "an unchanged flag is not rewritten");
+
+    desktop.handle_input(b"j");
+    assert!(!desktop.away, "any key brings the desktop back, at once");
+    assert!(!desktop.sync_away(), "the key already synced the flag");
+    assert!(!is_away());
+}
+
+/// `/brb` promises "until your next key". Any-event mouse tracking reports
+/// the pointer merely crossing the terminal, and that is not a key: a
+/// session sent away stays away through it and comes back on a real one.
+#[tokio::test]
+async fn brb_holds_through_mouse_motion_until_a_key() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "brb-motion").await;
+    let mut app = make_app_in_world(test_db.db.clone(), user.id, "brb", SessionWorld::default());
+
+    app.sent_away = true;
+    assert!(app.sync_away(), "/brb sends the session away");
+
+    // SGR any-event motion: button code 35 is the motion bit with no button.
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert!(!app.sync_away(), "a bare mouse move is not a key");
+    assert!(app.away);
+
+    app.handle_input(b"j");
+    assert!(!app.away, "a key brings the session back, at once");
+    assert!(!app.sync_away(), "the key already synced the flag");
+}
+
+/// The 30-minute clock counts from the last thing a person did. A pointer
+/// resting on (or drifting over) the terminal reports motion all the time
+/// under any-event tracking; it must not keep the session here, or a
+/// terminal left open under the mouse never goes away.
+#[tokio::test]
+async fn a_pointer_over_the_terminal_does_not_hold_off_away() {
+    use crate::app::common::away::AWAY_AFTER;
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "away-pointer").await;
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "pointer",
+        SessionWorld::default(),
+    );
+
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    app.handle_input(b"\x1b[<35;20;5M");
+    app.handle_input(b"\x1b[I");
+    assert!(
+        app.sync_away(),
+        "thirty quiet minutes are away, pointer or not"
+    );
+    assert!(app.away);
+}
+
+/// A session on Home with the aurora chosen as its screensaver, thirty
+/// quiet minutes in: the aurora covers the screen.
+async fn app_under_the_aurora(name: &str) -> (TestDb, App) {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, name).await;
+    let mut app = make_app_in_world(test_db.db.clone(), user.id, name, SessionWorld::default());
+    app.set_screen(crate::app::common::primitives::Screen::Dashboard);
+    let aurora = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
     };
-    desktop.set_status(Some(SessionStatus {
-        status: Status::Away,
-        ends_at: None,
-    }));
-    laptop.set_status(Some(focus));
-    assert_eq!(
-        snapshot(&directory).get(&user.id),
-        Some(&focus),
-        "the newest set wins the shared entry"
-    );
+    app.profile_state.profile.screensaver = Screensaver::Piece(aurora);
+    assert_eq!(app.screensaver(), None, "a session that is here has none");
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert_eq!(app.screensaver(), Some(aurora));
+    (test_db, app)
+}
 
-    desktop.set_status(None);
-    assert_eq!(
-        snapshot(&directory).get(&user.id),
-        Some(&focus),
-        "the laptop's countdown is still live, so its badge stays"
+/// The Tweak defaults to earthrise in dots, a slow piece: an away session
+/// with the default setting is under it.
+#[tokio::test]
+async fn the_screensaver_defaults_to_earthrise() {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "saver-default").await;
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        user.id,
+        "saver-default",
+        SessionWorld::default(),
     );
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert!(app.away);
+    assert_eq!(
+        app.screensaver(),
+        Some(AsciiPiece {
+            scene: Scene::Earthrise,
+            style: SceneStyle::Dots
+        })
+    );
+}
 
-    laptop.set_status(None);
-    assert_eq!(
-        snapshot(&directory).get(&user.id),
-        None,
-        "no session carries a status any more"
-    );
+/// Away with the aurora chosen, it covers the screen. The pointer crossing
+/// it changes nothing, and the key that drops it is swallowed: `?` over the
+/// screensaver opens no guide, the next one does.
+#[tokio::test]
+async fn the_key_that_drops_the_screensaver_is_swallowed() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-key").await;
+    let aurora = app.screensaver().expect("the aurora is up");
+
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.screensaver(), Some(aurora));
+
+    app.handle_input(b"?");
+    assert_eq!(app.screensaver(), None);
+    assert!(!app.away);
+    assert!(!app.show_help, "the waking key is not the page's");
+
+    app.handle_input(b"?");
+    assert!(app.show_help, "the next key is");
+}
+
+/// Only the one thing that woke the session is swallowed. A second key in
+/// the same chunk (a fast typist, a slow link) is the page's.
+#[tokio::test]
+async fn the_rest_of_the_waking_chunk_is_the_pages() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-chunk").await;
+    app.handle_input(b"??");
+    assert_eq!(app.screensaver(), None);
+    assert!(app.show_help, "the second `?` opened the guide");
+}
+
+/// A chunk boundary inside a mouse report: neither half wakes the session.
+/// The first is held until the second completes it, and the two read as
+/// the bare move they are; the same split through a click is a person.
+#[tokio::test]
+async fn a_report_cut_in_two_does_not_wake_the_screensaver() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-split").await;
+    let aurora = app.screensaver().expect("the aurora is up");
+    app.handle_input(b"\x1b[<35;2");
+    assert_eq!(app.screensaver(), Some(aurora), "half a move is held");
+    app.handle_input(b"0;5M");
+    assert_eq!(app.screensaver(), Some(aurora), "the other half is nobody");
+    assert!(app.away);
+
+    app.handle_input(b"\x1b[<0;2");
+    assert_eq!(app.screensaver(), Some(aurora), "half a click is held too");
+    app.handle_input(b"0;5M");
+    assert_eq!(app.screensaver(), None, "whole, it is a person");
+    assert!(!app.away);
+}
+
+/// A paste that wakes the session is swallowed to its close, across as
+/// many chunks as it spans: nothing pasted reaches the page as keys (here
+/// `q`, which would open the quit confirm), and the key after the close
+/// is the page's.
+#[tokio::test]
+async fn a_paste_that_wakes_the_screensaver_is_swallowed_whole() {
+    let (_test_db, mut app) = app_under_the_aurora("saver-paste").await;
+    app.handle_input(b"\x1b[200~q");
+    assert_eq!(app.screensaver(), None, "the paste woke the session");
+    assert!(!app.away);
+    assert!(!app.show_quit_confirm, "the pasted q is not a key");
+
+    app.handle_input(b"q\x1b[201~?");
+    assert!(!app.show_quit_confirm, "nor is the rest of the paste");
+    assert!(app.is_running());
+    assert!(app.show_help, "the key after the close is the page's");
 }

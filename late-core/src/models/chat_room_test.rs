@@ -3,6 +3,7 @@ use crate::{
         chat_message::{ChatMessage, ChatMessageParams},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
+        leaderboard::DoorGame,
         user::{User, UserParams},
     },
     test_utils::{create_test_user, test_db},
@@ -135,6 +136,79 @@ async fn test_chat_room_topic_slug_normalization() {
 
     assert_eq!(public_room.slug.as_deref(), Some("rust-nerds"));
     assert_eq!(private_room.slug.as_deref(), Some("vps-d9d0"));
+}
+
+#[tokio::test]
+async fn irc_channel_namespaces_preserve_same_slug_rooms_and_private_membership() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let member = create_test_user(&test_db.db, "irc_member").await;
+    let outsider = create_test_user(&test_db.db, "irc_outsider").await;
+    let private = ChatRoom::create_private_room(&client, "compel", member.id)
+        .await
+        .unwrap();
+    ChatRoomMember::join(&client, private.id, member.id)
+        .await
+        .unwrap();
+
+    // A single hash must not fall back to a private room, even for a member.
+    assert!(
+        ChatRoom::find_irc_channel_by_slug_for_user(&client, "public", "compel", member.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let public = ChatRoom::get_or_create_public_room(&client, "compel")
+        .await
+        .unwrap();
+
+    for user in [&member, &outsider] {
+        let found =
+            ChatRoom::find_irc_channel_by_slug_for_user(&client, "public", "compel", user.id)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(found.id, public.id);
+        let found_private =
+            ChatRoom::find_irc_channel_by_slug_for_user(&client, "private", "compel", user.id)
+                .await
+                .unwrap();
+        assert_eq!(
+            found_private.map(|room| room.id),
+            (user.id == member.id).then_some(private.id)
+        );
+
+        let rooms = ChatRoom::list_irc_channels(&client, user.id).await.unwrap();
+        let summaries = ChatRoom::list_irc_channel_summaries(&client, user.id)
+            .await
+            .unwrap();
+        for ids in [
+            rooms
+                .iter()
+                .filter(|room| room.slug.as_deref() == Some("compel"))
+                .map(|room| room.id)
+                .collect::<Vec<_>>(),
+            summaries
+                .iter()
+                .filter(|(room, _)| room.slug.as_deref() == Some("compel"))
+                .map(|(room, _)| room.id)
+                .collect::<Vec<_>>(),
+        ] {
+            assert!(ids.contains(&public.id));
+            assert_eq!(ids.contains(&private.id), user.id == member.id);
+            assert_eq!(ids.len(), if user.id == member.id { 2 } else { 1 });
+        }
+        if user.id == member.id {
+            assert_eq!(
+                summaries
+                    .iter()
+                    .find(|(room, _)| room.id == private.id)
+                    .unwrap()
+                    .1,
+                1
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -475,6 +549,45 @@ async fn test_stream_room_follows_the_account_not_the_username() {
         .expect("usurper stream room");
     assert_ne!(taken_over.id, original.id);
     assert_eq!(taken_over.created_by, Some(usurper.id));
+}
+
+#[tokio::test]
+async fn test_watch_room_is_one_per_player_per_door() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "Alice_B")
+        .await
+        .expect("watch room");
+    assert_eq!(room.kind, "game");
+    assert_eq!(room.visibility, "public");
+    assert!(!room.auto_join);
+    assert_eq!(room.slug.as_deref(), Some("dcss-alice_b"));
+
+    // Handles are unique case-insensitively, so case never forks the room.
+    let again = ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "alice_b")
+        .await
+        .expect("watch room again");
+    assert_eq!(again.id, room.id);
+
+    // Two handles that differ only in their underscores are two players.
+    let neighbour = ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "alice__b")
+        .await
+        .expect("neighbour watch room");
+    assert_ne!(neighbour.id, room.id);
+
+    // The same player in another door talks in another room.
+    let other_door = ChatRoom::get_or_create_watch_room(&client, DoorGame::Nethack, "Alice_B")
+        .await
+        .expect("other door watch room");
+    assert_ne!(other_door.id, room.id);
+
+    assert!(
+        ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "../alice")
+            .await
+            .is_err(),
+        "a name that is not an arcade handle gets no room"
+    );
 }
 
 #[tokio::test]

@@ -477,7 +477,9 @@ fn char_width(ch: char) -> usize {
     UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
-fn wrap_spans(
+/// Soft-wrap styled spans into rows, breaking at spaces when possible:
+/// the first row `first_width` wide, the rest `continuation_width`.
+pub(crate) fn wrap_spans(
     spans: &[Span<'static>],
     first_width: usize,
     continuation_width: usize,

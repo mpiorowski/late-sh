@@ -21,7 +21,7 @@ async fn wearing_a_look_puts_it_on_the_row_while_the_runner_stands() {
     let user = create_test_user(&test_db.db, "tailor-svc").await;
     let client = test_db.db.get().await.expect("db client");
     let mut rng = StdRng::seed_from_u64(1);
-    let born = Look::random(&mut rng);
+    let born = Look::random(1, &mut rng);
     DeadchannelRunner::ensure_for_user(&client, user.id, &born.to_json())
         .await
         .expect("a runner");
@@ -29,7 +29,7 @@ async fn wearing_a_look_puts_it_on_the_row_while_the_runner_stands() {
     let (tx, mut rx) = mpsc::unbounded_channel();
 
     let mut rng = StdRng::seed_from_u64(2);
-    let chosen = Look::random(&mut rng);
+    let chosen = Look::random(1, &mut rng);
     assert_ne!(chosen, born);
     svc.wear_task(user.id, chosen, tx.clone());
     assert_eq!(answer(&mut rx).await, TailorOutcome::Worn(chosen));

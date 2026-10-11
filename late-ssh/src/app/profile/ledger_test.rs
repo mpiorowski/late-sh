@@ -38,6 +38,7 @@ fn every_pointer_kind_resolves_from_its_source() {
     let assignment_id = Uuid::now_v7();
     let award_id = Uuid::now_v7();
     let round_id = Uuid::now_v7();
+    let gift_round_id = Uuid::now_v7();
     let entries = vec![
         entry(-300, "chip_gift_sent", Some(&alice.to_string())),
         entry(300, "chip_gift_received", Some(&stranger.to_string())),
@@ -53,6 +54,7 @@ fn every_pointer_kind_resolves_from_its_source() {
         entry(500, "quest_reward", Some(&assignment_id.to_string())),
         entry(20_000, "artboard_prize", Some(&award_id.to_string())),
         entry(-1200, "round_purchase", Some(&round_id.to_string())),
+        entry(-200, "drink_gift", Some(&gift_round_id.to_string())),
         entry(25, "song_queued", Some("dQw4w9WgXcQ")),
         entry(25, "song_queued", Some("untitled-video")),
         entry(-400, "drink_purchase", Some("Segfault Sour")),
@@ -76,6 +78,7 @@ fn every_pointer_kind_resolves_from_its_source() {
             quests: vec![assignment_id],
             awards: vec![award_id],
             rounds: vec![round_id],
+            gift_rounds: vec![gift_round_id],
             videos: vec!["dQw4w9WgXcQ".to_string(), "untitled-video".to_string()],
         }
     );
@@ -134,6 +137,7 @@ fn every_pointer_kind_resolves_from_its_source() {
                 created: Utc::now(),
             },
         )]),
+        gift_recipients: HashMap::from([(gift_round_id, bob)]),
         songs: HashMap::from([(
             "dQw4w9WgXcQ".to_string(),
             "Never Gonna Give You Up".to_string(),
@@ -141,8 +145,13 @@ fn every_pointer_kind_resolves_from_its_source() {
         usernames: HashMap::from([(alice, "alice".to_string()), (bob, "bob".to_string())]),
     };
     assert_eq!(
-        named_user_ids(&refs, &sources.gilds, &sources.deposed),
-        vec![alice, stranger, alice, bob, stranger, bob]
+        named_user_ids(
+            &refs,
+            &sources.gilds,
+            &sources.deposed,
+            &sources.gift_recipients
+        ),
+        vec![alice, stranger, alice, bob, stranger, bob, bob]
     );
 
     let details: Vec<Option<LedgerDetail>> = resolve(entries.clone(), &sources)
@@ -186,6 +195,9 @@ fn every_pointer_kind_resolves_from_its_source() {
                 month: NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
             }),
             Some(LedgerDetail::RoundFor { patrons: 3 }),
+            Some(LedgerDetail::DrinkFor {
+                username: "bob".to_string()
+            }),
             Some(LedgerDetail::Song {
                 title: "Never Gonna Give You Up".to_string()
             }),

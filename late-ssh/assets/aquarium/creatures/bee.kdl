@@ -2,6 +2,7 @@ name "bee"
 title "a small fish"
 description "a small roundish fish with an angular tail, small eye, and downward pointing body fins"
 sauce author=mevanlc date=20260512 license=CCBYSA4.0
+mini left="('" right="')"
 
 count 2
 

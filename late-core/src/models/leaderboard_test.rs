@@ -5,15 +5,18 @@ use uuid::Uuid;
 use crate::{
     models::{
         chips::{ChipMove, Difficulty, UserChips},
+        drink_round::Bar,
+        drinks::{UserDrinks, WELCOME_DRINK_POINTS},
         le_word,
         leaderboard::{
-            DailyPuzzle, OnlineTimeIncrement, RankedEntry, apply_online_time_batch,
+            DailyPuzzle, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
+            OnlineTimeIncrement, RankedEntry, ScoreGame, apply_online_time_batch,
             fetch_leaderboard_data,
         },
         mud_character::MudCharacter,
-        rubiks_cube, sliding_puzzle, sudoku,
+        rubiks_cube, sliding_puzzle, snake, sudoku, tetris, twenty_forty_eight,
     },
-    test_utils::{create_test_user, test_db},
+    test_utils::{create_test_user, roll_high_scores_back_a_month, test_db},
 };
 
 fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
@@ -268,84 +271,97 @@ async fn replayed_daily_win_does_not_double_count_all_time() {
     assert_eq!(entry_for(&board.all_time, solver.id).value, 2);
 }
 
-/// The Lateania boards read the game-owned character blobs: level ranks the
-/// adventurers with experience as the tiebreak and the class carried as the
-/// row note, the visited-room list yields the deepest Frontier zone, and a
-/// pre-class-select shell stays off both boards.
+/// The Lateania boards read the game-owned character blobs. Adventurers ranks
+/// by level with experience as the tiebreak and the class as the row note, and
+/// keeps counting past the level cap: every `LATEANIA_XP_PER_PARAGON_LEVEL` of
+/// xp beyond the cap's threshold is one more level on the board, so capped
+/// characters still separate. PvP ranks lifetime Wildbound Waste kills. A
+/// pre-class-select shell, or a character that never killed a rival, stays off.
 #[tokio::test]
 async fn lateania_boards_rank_living_characters() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
+    let paragon = create_test_user(&test_db.db, "lb_lateania_paragon").await;
+    let capped = create_test_user(&test_db.db, "lb_lateania_capped").await;
     let hero = create_test_user(&test_db.db, "lb_lateania_hero").await;
     let rival = create_test_user(&test_db.db, "lb_lateania_rival").await;
     let shell = create_test_user(&test_db.db, "lb_lateania_shell").await;
 
+    let save = |user_id: Uuid, data: serde_json::Value| {
+        let client = &client;
+        async move {
+            MudCharacter::save(client, user_id, 0, data)
+                .await
+                .expect("save character");
+        }
+    };
+    // 37 paragon levels and a bit past the cap's threshold.
+    save(
+        paragon.id,
+        json!({
+            "version": 17, "class": "warrior", "level": 100,
+            "xp": LATEANIA_XP_AT_LEVEL_CAP + 37 * LATEANIA_XP_PER_PARAGON_LEVEL + 10,
+            "pvp_kills": 3,
+        }),
+    )
+    .await;
+    // Exactly at the cap: level 100, no paragon levels yet.
+    save(
+        capped.id,
+        json!({
+            "version": 17, "class": "druid", "level": 100,
+            "xp": LATEANIA_XP_AT_LEVEL_CAP + LATEANIA_XP_PER_PARAGON_LEVEL - 1,
+            "pvp_kills": 12,
+        }),
+    )
+    .await;
     // Hero and rival share level 42; the hero's higher experience breaks the
-    // tie. Room 2749 sits in Frontier zone 15 (rooms 2000..=2999, 50 per
-    // zone); room 2000 is zone 1; room 150 is not Frontier at all.
-    MudCharacter::save(
-        &client,
+    // tie. The rival never killed anyone.
+    save(
         hero.id,
-        0,
-        json!({
-            "version": 17,
-            "class": "runemaster",
-            "level": 42,
-            "xp": 900_000,
-            "visited": [1, 150, 2000, 2749],
-        }),
+        json!({ "version": 17, "class": "runemaster", "level": 42, "xp": 900_000, "pvp_kills": 3 }),
     )
-    .await
-    .expect("save hero");
-    MudCharacter::save(
-        &client,
+    .await;
+    save(
         rival.id,
-        0,
-        json!({
-            "version": 17,
-            "class": "warrior",
-            "level": 42,
-            "xp": 800_000,
-            "visited": [1, 2000],
-        }),
+        json!({ "version": 17, "class": "warrior", "level": 42, "xp": 800_000, "pvp_kills": 0 }),
     )
-    .await
-    .expect("save rival");
-    MudCharacter::save(
-        &client,
+    .await;
+    save(
         shell.id,
-        0,
-        json!({ "version": 17, "class": null, "level": 1, "xp": 0, "visited": [150] }),
+        json!({ "version": 17, "class": null, "level": 1, "xp": 0, "pvp_kills": 5 }),
     )
-    .await
-    .expect("save shell");
+    .await;
 
     let data = fetch_leaderboard_data(&client)
         .await
         .expect("fetch leaderboard");
 
-    let hero_row = entry_for(&data.lateania_adventurers, hero.id);
-    assert_eq!(hero_row.rank, 1, "experience breaks the level tie");
+    let adventurers = &data.lateania_adventurers;
+    assert_eq!(entry_for(adventurers, paragon.id).value, 137);
+    assert_eq!(entry_for(adventurers, paragon.id).rank, 1);
+    assert_eq!(entry_for(adventurers, capped.id).value, 100);
+    assert_eq!(entry_for(adventurers, capped.id).rank, 2);
+    let hero_row = entry_for(adventurers, hero.id);
+    assert_eq!(hero_row.rank, 3, "experience breaks the level tie");
     assert_eq!(hero_row.value, 42);
     assert_eq!(hero_row.note.as_deref(), Some("Runemaster"));
-    assert_eq!(entry_for(&data.lateania_adventurers, rival.id).rank, 2);
+    assert_eq!(entry_for(adventurers, rival.id).rank, 4);
     assert!(
-        !data
-            .lateania_adventurers
-            .iter()
-            .any(|entry| entry.user_id == shell.id),
+        !adventurers.iter().any(|entry| entry.user_id == shell.id),
         "a character without a chosen class stays off the board"
     );
 
-    assert_eq!(entry_for(&data.lateania_frontier, hero.id).value, 15);
-    assert_eq!(entry_for(&data.lateania_frontier, rival.id).value, 1);
+    let pvp = &data.lateania_pvp;
+    assert_eq!(entry_for(pvp, capped.id).value, 12);
+    assert_eq!(entry_for(pvp, capped.id).rank, 1);
+    assert_eq!(entry_for(pvp, paragon.id).rank, 2);
+    assert_eq!(entry_for(pvp, hero.id).rank, 2, "equal kills share a rank");
     assert!(
-        !data
-            .lateania_frontier
-            .iter()
-            .any(|entry| entry.user_id == shell.id),
-        "no Frontier room visited, no Frontier row"
+        !pvp.iter()
+            .any(|entry| entry.user_id == rival.id || entry.user_id == shell.id),
+        "no kills, or no class, no PvP row"
     );
 }
 
@@ -642,4 +658,158 @@ async fn top_chips_counts_earnings_and_never_spending() {
     );
     // 1,000 stipend + 18,200 credited - 12,300 spent.
     assert_eq!(month.net, 6_900, "the net is every row");
+}
+
+/// A best score belongs to the month it was set in. Playing again without
+/// beating it must not carry the old best onto this month's board: the
+/// monthly window reads the best-score tables by `updated`, so `updated`
+/// may only move when the best does.
+#[tokio::test]
+async fn an_old_best_stays_off_the_monthly_board_when_the_player_plays_again() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let veteran = create_test_user(&test_db.db, "score-veteran").await;
+
+    tetris::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("lateris best");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("2048 best");
+    snake::HighScore::update_score_if_higher(&client, veteran.id, 9_000)
+        .await
+        .expect("snake best");
+    for table in [
+        "tetris_high_scores",
+        "twenty_forty_eight_high_scores",
+        "snake_high_scores",
+    ] {
+        roll_high_scores_back_a_month(&client, table).await;
+    }
+
+    // This month: a run still in progress, nowhere near the old best.
+    tetris::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("lateris run");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("2048 run");
+    snake::HighScore::update_score_if_higher(&client, veteran.id, 50)
+        .await
+        .expect("snake run");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    for game in [
+        ScoreGame::Lateris,
+        ScoreGame::TwentyFortyEight,
+        ScoreGame::Snake,
+    ] {
+        let board = data.score_board(game).expect("score board");
+        let monthly: Vec<i64> = board
+            .monthly
+            .iter()
+            .filter(|entry| entry.user_id == veteran.id)
+            .map(|entry| entry.value)
+            .collect();
+        assert_eq!(
+            monthly,
+            Vec::<i64>::new(),
+            "{game:?}: last month's best is not this month's score"
+        );
+        assert_eq!(entry_for(&board.all_time, veteran.id).value, 9_000);
+    }
+}
+
+/// Top Drinkers sums the buzz of every drink taken: paid or comped, either
+/// bar, past the buzz cap, this month and this year. The welcome pour is not
+/// a drink anybody took, non-intoxicating pours add no points, and last
+/// year's drinks are off both windows.
+#[tokio::test]
+async fn top_drinkers_sums_buzz_by_month_and_year() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let binger = create_test_user(&test_db.db, "drinkers-binger").await;
+    let steady = create_test_user(&test_db.db, "drinkers-steady").await;
+    let newcomer = create_test_user(&test_db.db, "drinkers-newcomer").await;
+    let lapsed = create_test_user(&test_db.db, "drinkers-lapsed").await;
+    let sober = create_test_user(&test_db.db, "drinkers-sober").await;
+
+    // Three big pours: the stored buzz caps at 4000, the board does not.
+    for _ in 0..3 {
+        UserDrinks::record_purchase(&client, binger.id, Bar::Tavern, 2_000, true)
+            .await
+            .expect("pour");
+    }
+    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 250, true)
+        .await
+        .expect("pour");
+    UserDrinks::record_comped_pour(&client, steady.id, Bar::Tavern, 400, true)
+        .await
+        .expect("round credit");
+    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 1_000, true)
+        .await
+        .expect("pour");
+    UserDrinks::record_welcome_pour(&client, newcomer.id, WELCOME_DRINK_POINTS)
+        .await
+        .expect("welcome");
+    UserDrinks::record_purchase(&client, lapsed.id, Bar::Tavern, 1_000, true)
+        .await
+        .expect("pour");
+    for user in [&steady, &sober] {
+        UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 50, false)
+            .await
+            .expect("coffee");
+        UserDrinks::record_comped_pour(&client, user.id, Bar::Nightcap, 400, false)
+            .await
+            .expect("comped water");
+    }
+
+    // steady's top shelf was the first night of the year; lapsed drank last
+    // year. Only drink_pours is moved: it is the table the board reads.
+    client
+        .execute(
+            "UPDATE drink_pours
+             SET created = date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+             WHERE user_id = $1 AND points = 1000",
+            &[&steady.id],
+        )
+        .await
+        .expect("backdate to new year");
+    client
+        .execute(
+            "UPDATE drink_pours
+             SET created = date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                 - interval '1 day'
+             WHERE user_id = $1",
+            &[&lapsed.id],
+        )
+        .await
+        .expect("backdate to last year");
+
+    let data = fetch_leaderboard_data(&client).await.expect("data");
+    let monthly: Vec<(Uuid, i64, i64)> = data
+        .top_drinkers
+        .monthly
+        .iter()
+        .map(|entry| (entry.user_id, entry.rank, entry.value))
+        .collect();
+    let yearly: Vec<(Uuid, i64, i64)> = data
+        .top_drinkers
+        .yearly
+        .iter()
+        .map(|entry| (entry.user_id, entry.rank, entry.value))
+        .collect();
+
+    // In January the first night of the year is also this month.
+    let steady_monthly = match Utc::now().month() {
+        1 => 1_650,
+        _ => 650,
+    };
+    assert_eq!(
+        monthly,
+        vec![(binger.id, 1, 6_000), (steady.id, 2, steady_monthly)]
+    );
+    assert_eq!(yearly, vec![(binger.id, 1, 6_000), (steady.id, 2, 1_650)]);
 }

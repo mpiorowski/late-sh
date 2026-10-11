@@ -3,10 +3,9 @@
 ## Metadata
 - Domain: the mutual `/pair @user` handshake and the two-person shared live text scratchpad (`Screen::Scratchpad`)
 - Primary audience: LLM agents working in `late-ssh/src/app/scratchpad`, the `/pair` chat command, or `Screen::Scratchpad`
-- Last updated: 2026-07-27
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
-- Related context: `../chat/CONTEXT.md` (command parsing/dispatch), `../clubhouse/CONTEXT.md` (the `SharedLobby` registry idiom this mirrors)
+- Related context: `../chat/CONTEXT.md` (command parsing/dispatch)
 
 ---
 
@@ -19,7 +18,7 @@ Owned by this domain:
 - `Screen::Scratchpad` input/render.
 
 Out of scope (deliberate v1 boundaries, see root roadmap's "Micro-collab tools" line):
-- DB persistence. The pairing is in-memory only, same tier as `SessionRegistry`/`active_users`/`clubhouse::lobby::SharedLobby`; it is lost if both sides disconnect or the process restarts.
+- DB persistence. The pairing is in-memory only, same tier as `SessionRegistry`/`active_users`; it is lost if both sides disconnect or the process restarts.
 - Operational-transform/CRDT merge. Every publish overwrites the whole buffer; concurrent edits from both sides can clobber each other. Acceptable for a two-person scratchpad, not for a real collaborative editor.
 - More than two participants.
 - Mouse click targets (keyboard-only editing via `ratatui-textarea`).
@@ -45,9 +44,9 @@ late-ssh/src/app/scratchpad/
 ```
 
 Cross-crate/cross-module touchpoints:
-- `late-ssh/src/state.rs`: root `State::scratchpad_registry` (constructed once in `main.rs`, alongside `clubhouse_lobby`).
+- `late-ssh/src/state.rs`: root `State::scratchpad_registry` (constructed once in `main.rs`).
 - `late-ssh/src/app/state.rs`: `SessionConfig::scratchpad_registry`, `App::{scratchpad_registry, scratchpad}`, and the `Screen::Scratchpad` leave hook in `App::set_screen`.
-- `late-ssh/src/session_bootstrap.rs`, `late-ssh/src/ssh.rs`, `late-ssh/src/test_helpers.rs`: thread `scratchpad_registry` through `SessionConfig` construction, same sites as `clubhouse_lobby`.
+- `late-ssh/src/session_bootstrap.rs`, `late-ssh/src/ssh.rs`, `late-ssh/src/test_helpers.rs`: thread `scratchpad_registry` through `SessionConfig` construction.
 - `late-ssh/src/app/tick.rs`: calls `pair::poll` and `scratchpad.sync_from_shared()` once per tick.
 - `late-ssh/src/app/input.rs`: the `Screen::Scratchpad` dedicated-input dispatch. Nothing in this domain gates global input.
 - `late-ssh/src/app/render.rs`: `DrawContext::scratchpad`, the `Screen::Scratchpad` draw arm, and the page-title match.
@@ -63,7 +62,7 @@ Keep `mod.rs` declaration-only.
 
 Pairing is a **mutual handshake**, and that is the load-bearing decision here. `/pair @b` from a records a one-sided intent and leaves b a banner; b's session is otherwise untouched. The pairing exists only once b answers `/pair @a`. Nothing in this domain can push state onto a session that did not ask for it, which is why there is no accept/decline prompt and nothing that gates global input. Do not reintroduce a one-sided invite: a remote-triggered prompt that owns the keyboard wedges the session it lands on.
 
-`SharedScratchpadRegistry` (`registry.rs`) is a single-replica, in-process `Arc<Mutex<..>>`, modeled on `clubhouse::lobby::SharedLobby`:
+`SharedScratchpadRegistry` (`registry.rs`) is a single-replica, in-process `Arc<Mutex<..>>`:
 - `intents: HashMap<Uuid, PairIntent>`: one-sided asks keyed by the user who ran `/pair` first, carrying that session's token and the timestamp. A newer ask from the same user overwrites the old one.
 - `notices: HashMap<Uuid, PairNotice>`: undrained "@x wants to pair" banners keyed by the target. Purely informational.
 - `notified_at: HashMap<(Uuid, Uuid), Instant>`: when each asker last pinged each target, so re-running `/pair` in a loop cannot spam a banner slot. Keyed by both ends on purpose: one asker must not be able to mute anyone else's ask.
@@ -96,7 +95,7 @@ Unlike `Screen::DailyMatch`/`Screen::HouseTable`, the scratchpad's arm in `handl
 
 `ratatui-textarea` cannot render either of these itself: its `Widget` impl (checked against the vendored 0.9.2 source) supports exactly one uniform `Style` for the whole buffer plus cursor/selection/search overlays, with no hook for per-token colors, and its built-in `set_line_number_style` gutter only applies to that same internal render. Both features therefore live in `ui.rs::draw`, which no longer calls `frame.render_widget(&state.editor, body_area)` — it reads `state.editor.lines()` and `state.editor.screen_cursor()` and builds the display by hand via `highlight.rs`. `TextArea` still owns every bit of editing state (insert/delete/cursor/undo); only its *rendering* was replaced.
 
-- **`Language`** (`highlight.rs`) is a small curated cycle — `Plain, Rust, Python, JavaScript, TypeScript, Go, C, Cpp, Java, Ruby, Bash, Json, Yaml` — not free-form, since syntect bundles ~200 syntaxes and cycling through all of them with one key would be unusable. It lives as a field on the shared `ScratchpadBuffer`, not a `/pair @user <language>` command arg: pairing is a mutual handshake between two independent commands, so a per-command language could leave the two sides disagreeing, where a field on the buffer they already both read cannot. `Ctrl+L` (unbound anywhere else — root `CONTEXT.md` already notes it's no longer a global help key) calls `ScratchpadState::cycle_language`, which mutates the shared buffer directly and bumps `revision` so the partner's next tick picks it up, same mechanism as the `left` bump.
+- **`Language`** (`highlight.rs`) is a small curated cycle — `Plain, Rust, Python, JavaScript, TypeScript, Go, C, Cpp, Java, Ruby, Bash, Json, Yaml` — not free-form, since syntect bundles ~200 syntaxes and cycling through all of them with one key would be unusable. It lives as a field on the shared `ScratchpadBuffer`, not a `/pair @user <language>` command arg: pairing is a mutual handshake between two independent commands, so a per-command language could leave the two sides disagreeing, where a field on the buffer they already both read cannot. `Ctrl+L` (not a global chord; on Home it scrolls the room rail, which never overlaps this screen) calls `ScratchpadState::cycle_language`, which mutates the shared buffer directly and bumps `revision` so the partner's next tick picks it up, same mechanism as the `left` bump.
 - **Highlighting** uses `syntect`, loaded once process-wide (`OnceLock`s in `highlight.rs`, not per-session) via `SyntaxSet::load_defaults_newlines()` and a single fixed `Theme` (`base16-ocean.dark` from `ThemeSet::load_defaults()`). Both loads are ~0.6ms, so paying them lazily on the first non-`Plain` render is fine. `Language::Plain` skips syntect entirely.
 - **Highlighting is the most expensive thing this app draws, so it is cached.** Measured on a release build: a full 8,000-char buffer (`MAX_CHARS`, ~200 lines) costs **~23ms per frame**, against ~15us for the plain-text path, while the render loop's whole input-to-frame budget (`MIN_RENDER_GAP`) is 15ms. Two mitigations, both in `highlight.rs`:
   - `HighlightCache` (owned by `ScratchpadState`, behind a `RefCell` because `ui::draw` only gets `&self`) keys on the **lines themselves**, not `revision`: cursor moves, scrolling, resizes, and partner-cursor updates all re-render without changing text, and arrow keys go through `publish()` and bump `revision` with identical content. Only a real edit re-parses.

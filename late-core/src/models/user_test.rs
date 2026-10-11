@@ -4,6 +4,32 @@ use serde_json::json;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
+#[test]
+fn art_splash_defaults_to_sfw_and_cycles_both_directions() {
+    use super::user::{ArtSplashMode, extract_art_splash_mode};
+    for settings in [
+        json!({}),
+        json!({"art_splash_mode": null}),
+        json!({"art_splash_mode": "invalid"}),
+    ] {
+        assert_eq!(extract_art_splash_mode(&settings), ArtSplashMode::Sfw);
+    }
+    for mode in [
+        ArtSplashMode::Sfw,
+        ArtSplashMode::Always,
+        ArtSplashMode::Never,
+    ] {
+        assert_eq!(
+            extract_art_splash_mode(&json!({"art_splash_mode": mode.as_str()})),
+            mode
+        );
+        assert_eq!(mode.cycle(true).cycle(false), mode);
+    }
+    assert_eq!(ArtSplashMode::Sfw.cycle(true), ArtSplashMode::Always);
+    assert_eq!(ArtSplashMode::Always.cycle(true), ArtSplashMode::Never);
+    assert_eq!(ArtSplashMode::Never.cycle(true), ArtSplashMode::Sfw);
+}
+
 async fn setup_db() -> (deadpool_postgres::Client, TestDb) {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("failed to get connection");
@@ -734,6 +760,102 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
     );
 }
 
+#[test]
+fn screensaver_reads_the_choice_and_falls_back_to_earthrise() {
+    use crate::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver, extract_screensaver};
+    let earthrise = Screensaver::Piece(AsciiPiece {
+        scene: Scene::Earthrise,
+        style: SceneStyle::Dots,
+    });
+    assert_eq!(extract_screensaver(&json!({})), earthrise);
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "off" })),
+        Screensaver::Off
+    );
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "aurora_fjord" })),
+        Screensaver::Piece(AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Dots
+        })
+    );
+    assert_eq!(
+        extract_screensaver(&json!({ "screensaver": "alpine_dawn_pixels" })),
+        Screensaver::Piece(AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels
+        })
+    );
+    // A piece this binary does not know (a rolled-back deploy, or one of the
+    // text pieces that were dropped) plays the default rather than
+    // switching the screensaver off.
+    for gone in ["night_coast", "plasma", "lava_lamp", "donut"] {
+        assert_eq!(
+            extract_screensaver(&json!({ "screensaver": gone })),
+            earthrise,
+            "{gone}"
+        );
+    }
+    // Every stored key reads back as itself.
+    for saver in
+        std::iter::once(Screensaver::Off).chain(AsciiPiece::ALL.into_iter().map(Screensaver::Piece))
+    {
+        assert_eq!(Screensaver::from_key(saver.as_str()), Some(saver));
+    }
+}
+
+#[test]
+fn screensaver_cycle_walks_off_then_every_piece() {
+    use crate::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    let mut seen = vec![Screensaver::Off];
+    let mut at = Screensaver::Off.cycle(true);
+    while at != Screensaver::Off {
+        seen.push(at);
+        at = at.cycle(true);
+    }
+    assert_eq!(
+        seen,
+        vec![
+            Screensaver::Off,
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::Earthrise,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::Earthrise,
+                style: SceneStyle::Pixels
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::MistyForest,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::MistyForest,
+                style: SceneStyle::Pixels
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AuroraFjord,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AuroraFjord,
+                style: SceneStyle::Pixels
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AlpineDawn,
+                style: SceneStyle::Dots
+            }),
+            Screensaver::Piece(AsciiPiece {
+                scene: Scene::AlpineDawn,
+                style: SceneStyle::Pixels
+            }),
+        ]
+    );
+    for saver in seen {
+        assert_eq!(saver.cycle(true).cycle(false), saver);
+    }
+}
+
 #[tokio::test]
 async fn paper_shown_claim_wins_once_per_edition_and_only_moves_forward() {
     let (client, _test_db) = setup_db().await;
@@ -883,4 +1005,222 @@ async fn country_counts_can_ignore_the_long_gone() {
         vec![("PL".to_string(), 2), ("RO".to_string(), 1)],
         "the long-dormant drop out, the rest stay"
     );
+}
+
+#[test]
+fn sidebar_modes_cycle_in_both_directions_and_wrap() {
+    use crate::models::user::{RightSidebarMode, RoomListMode};
+    for mode in [
+        RightSidebarMode::On,
+        RightSidebarMode::Off,
+        RightSidebarMode::Auto,
+    ] {
+        assert_eq!(mode.cycle(true).cycle(false), mode);
+        assert_eq!(mode.cycle(false).cycle(true), mode);
+        assert_eq!(mode.cycle(true).cycle(true).cycle(true), mode);
+    }
+    assert_eq!(RightSidebarMode::On.cycle(false), RightSidebarMode::Auto);
+    for mode in [RoomListMode::On, RoomListMode::Off, RoomListMode::Auto] {
+        assert_eq!(mode.cycle(true).cycle(false), mode);
+        assert_eq!(mode.cycle(false).cycle(true), mode);
+        assert_eq!(mode.cycle(false).cycle(false).cycle(false), mode);
+    }
+    assert_eq!(RoomListMode::On.cycle(false), RoomListMode::Auto);
+}
+
+/// Seeds users in the pre-migration shape, runs migration 220 over them,
+/// then drives the ordinary writes a listener makes afterwards.
+#[tokio::test]
+async fn migration_220_moves_icecast_users_to_radio_on_their_mount() {
+    use crate::models::user::{AudioSource, RadioSlots, RadioStation};
+    let (client, _test_db) = setup_db().await;
+    let station = |key: &str| RadioStation::from_key(key).expect("catalogue station");
+
+    let mut ids = Vec::new();
+    for (name, settings) in [
+        // On the classical mount, with a Nightride pick left over from
+        // before they moved to icecast.
+        (
+            "mig220_classical",
+            json!({"audio_source": "icecast", "icecast_stream": "classical", "radio_station": "datawave"}),
+        ),
+        // Never picked a mount: was on chill.
+        ("mig220_chill", json!({"audio_source": "icecast"})),
+        // A radio listener tuned outside the default slots.
+        ("mig220_ambient", json!({"radio_station": "rektify"})),
+        // Nothing to migrate.
+        ("mig220_fresh", json!({})),
+    ] {
+        let user = User::create(
+            &client,
+            UserParams {
+                fingerprint: format!("fp-{name}"),
+                username: name.to_string(),
+                settings,
+            },
+        )
+        .await
+        .expect("failed to create user");
+        ids.push(user.id);
+    }
+    let [classical, chill, ambient, fresh] = ids[..] else {
+        panic!("four users");
+    };
+
+    client
+        .batch_execute(include_str!(
+            "../../migrations/220_retire_icecast_audio_source.sql"
+        ))
+        .await
+        .expect("migration 220");
+
+    let source = User::audio_source(&client, classical).await.unwrap();
+    assert_eq!(source, AudioSource::Radio);
+    let tuned = User::radio_station(&client, classical).await.unwrap();
+    assert_eq!(tuned, station("classical"));
+    let slots = User::radio_slots(&client, classical).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("classical")));
+    assert_eq!(slots.get(1), Some(station("nightride")));
+
+    let tuned = User::radio_station(&client, chill).await.unwrap();
+    assert_eq!(tuned.label(), "lofi");
+    let slots = User::radio_slots(&client, chill).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("chill")));
+
+    let slots = User::radio_slots(&client, ambient).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("rektify")));
+
+    let slots = User::radio_slots(&client, fresh).await.unwrap();
+    assert_eq!(slots, RadioSlots::default());
+
+    // Switching source and back keeps the mount.
+    User::set_audio_source(&client, classical, AudioSource::Youtube)
+        .await
+        .unwrap();
+    let tuned = User::radio_station(&client, classical).await.unwrap();
+    assert_eq!(tuned, station("classical"));
+
+    // A station pick sticks, and retuning does not move the slots.
+    User::set_radio_station(&client, classical, station("plaza"))
+        .await
+        .unwrap();
+    let tuned = User::radio_station(&client, classical).await.unwrap();
+    assert_eq!(tuned, station("plaza"));
+    let slots = User::radio_slots(&client, classical).await.unwrap();
+    assert_eq!(slots.get(0), Some(station("classical")));
+}
+
+#[tokio::test]
+async fn set_radio_slot_changes_one_stored_slot() {
+    use crate::models::user::RadioStation;
+    let (client, _test_db) = setup_db().await;
+    let station = |key: &str| RadioStation::from_key(key).expect("catalogue station");
+
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "fp-radio-slot".to_string(),
+            username: "radio_slot_user".to_string(),
+            settings: json!({"theme": "dark"}),
+        },
+    )
+    .await
+    .expect("failed to create user");
+    let slots = || async { User::radio_slots(&client, user.id).await.unwrap() };
+
+    // Nothing saved yet: the write lands on the defaults.
+    User::set_radio_slot(&client, user.id, 2, Some(station("plaza")))
+        .await
+        .unwrap();
+    // A second writer that never saw the first pin does not undo it.
+    User::set_radio_slot(&client, user.id, 0, Some(station("mellow")))
+        .await
+        .unwrap();
+    let stored = slots().await;
+    assert_eq!(stored.get(0), Some(station("mellow")));
+    assert_eq!(stored.get(1), Some(station("nightride")));
+    assert_eq!(stored.get(2), Some(station("plaza")));
+
+    // Pinning a station that already holds a slot moves it.
+    User::set_radio_slot(&client, user.id, 1, Some(station("plaza")))
+        .await
+        .unwrap();
+    let stored = slots().await;
+    assert_eq!(stored.get(1), Some(station("plaza")));
+    assert_eq!(stored.get(2), None);
+
+    User::set_radio_slot(&client, user.id, 0, None)
+        .await
+        .unwrap();
+    let stored = slots().await;
+    assert_eq!(stored.get(0), None);
+    assert_eq!(stored.get(1), Some(station("plaza")));
+
+    assert!(
+        User::set_radio_slot(&client, user.id, crate::radio::RADIO_SLOTS, None)
+            .await
+            .is_err()
+    );
+    let refreshed = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(refreshed.settings["theme"], json!("dark"));
+}
+
+#[test]
+fn radio_settings_read_the_station_and_pinned_slots() {
+    use crate::models::user::{extract_radio_slots, extract_radio_station};
+    let settings = json!({
+        "audio_source": "radio",
+        "radio_station": "rektify",
+        "radio_slots": ["spacesynth", null, "rektify", "nope"]
+    });
+    assert_eq!(extract_radio_station(&settings).as_str(), "rektify");
+    let slots = extract_radio_slots(&settings);
+    assert_eq!(slots.get(0).map(|s| s.as_str()), Some("spacesynth"));
+    assert_eq!(slots.get(1), None);
+    assert_eq!(slots.get(2).map(|s| s.as_str()), Some("rektify"));
+    assert_eq!(slots.get(3), None);
+    // No slots saved: the defaults, whatever station is current.
+    let settings = json!({ "radio_station": "spacesynth" });
+    assert_eq!(
+        extract_radio_slots(&settings),
+        crate::models::user::RadioSlots::default()
+    );
+}
+#[test]
+fn artboard_disclaimer_defaults_on_and_reads_explicit_choices() {
+    use super::user::extract_artboard_disclaimer;
+    for settings in [
+        json!({}),
+        json!({"artboard_disclaimer": null}),
+        json!({"artboard_disclaimer": "off"}),
+    ] {
+        assert!(extract_artboard_disclaimer(&settings));
+    }
+    assert!(!extract_artboard_disclaimer(
+        &json!({"artboard_disclaimer": false})
+    ));
+    assert!(extract_artboard_disclaimer(
+        &json!({"artboard_disclaimer": true})
+    ));
+}
+
+#[test]
+fn an_ascii_piece_serialises_as_its_key() {
+    use crate::models::user::{AsciiPiece, Scene, SceneStyle};
+    let piece = AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    };
+    assert_eq!(
+        serde_json::to_string(&piece).unwrap(),
+        "\"alpine_dawn_pixels\""
+    );
+    assert_eq!(
+        serde_json::from_str::<AsciiPiece>("\"alpine_dawn_pixels\"").unwrap(),
+        piece
+    );
+    assert!(serde_json::from_str::<AsciiPiece>("\"night_coast\"").is_err());
+    for piece in AsciiPiece::ALL {
+        assert_eq!(AsciiPiece::from_key(piece.as_str()), Some(piece));
+    }
 }

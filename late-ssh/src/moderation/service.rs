@@ -4,11 +4,15 @@ use dartboard_core::Canvas;
 use late_core::{
     db::Db,
     models::{
-        app_flag::{AppFlag, AppFlags},
         artboard::{Snapshot as ArtboardSnapshot, SnapshotSummary as ArtboardSnapshotSummary},
         artboard_ban::{ArtboardBan, ArtboardBanListItem},
         artboard_piece::{ArtboardPiece, PieceLookup},
+        artboard_piece_rating::{
+            ArtContentRating, ArtSafetyPiece, ArtboardPieceRating, ContentRatingSummary,
+            RatingSource, RemoveMarkOutcome, StaffAuthority, StaffMarkOutcome,
+        },
         audio_ban::{AudioBan, AudioBanListItem},
+        calendar_ban::{CalendarBan, CalendarBanListItem},
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chat_slow_mode::{ChatSlowMode, ChatSlowModeListItem},
@@ -20,6 +24,7 @@ use late_core::{
         voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
+use ratatui::text::Line;
 use serde_json::json;
 use tokio::sync::broadcast;
 use tokio_postgres::error::SqlState;
@@ -33,9 +38,10 @@ use crate::app::voice::svc::VoiceService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
-    ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
-    RoleAction, RoomModAction, ServerUserAction, SlowListScope, SlowScope, StreamAction,
-    VoiceAction, mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
+    ArtboardAction, ArtboardCurateSource, ArtboardSafetyViewTarget, AudioAction, BanListScope,
+    CalendarAction, LIST_PAGE_SIZE, ModCommand, RoleAction, RoomModAction, ServerUserAction,
+    SlowListScope, SlowScope, StreamAction, VoiceAction, mod_help_lines, normalize_mod_slug,
+    parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -288,9 +294,65 @@ impl ModerationService {
                 self.artboard_feature_piece(actor_user_id, permissions, id_prefix)
                     .await
             }
-            ModCommand::ArtboardGallery { enabled } => {
-                self.artboard_gallery_switch(actor_user_id, permissions, enabled)
+            ModCommand::ArtboardMark {
+                id_prefix,
+                admin,
+                rating,
+                reason,
+            } => {
+                self.artboard_mark(
+                    actor_user_id,
+                    permissions,
+                    &id_prefix,
+                    admin,
+                    rating,
+                    &reason,
+                )
+                .await
+            }
+            ModCommand::ArtboardUnmarkBy {
+                id_prefix,
+                actor,
+                reason,
+            } => {
+                self.artboard_unmark_by(actor_user_id, permissions, &id_prefix, &actor, &reason)
                     .await
+            }
+            ModCommand::ArtboardSafetyView { target } => {
+                ensure_has(permissions, Caps::VIEW_STAFF_INFO)?;
+                let client = self.db.get().await?;
+                match target {
+                    ArtboardSafetyViewTarget::Piece { id_prefix } => {
+                        let piece_id = lookup_gallery_piece(&client, &id_prefix).await?;
+                        self.artboard_marks(&client, piece_id).await
+                    }
+                    ArtboardSafetyViewTarget::User { username } => {
+                        let user = find_user_by_mod_name(&client, &username).await?;
+                        let pieces =
+                            ArtboardPieceRating::list_safety(&client, Some(user.id)).await?;
+                        Ok(artboard_safety_user_lines(&user.username, &pieces))
+                    }
+                    ArtboardSafetyViewTarget::Summary => {
+                        let pieces = ArtboardPieceRating::list_safety(&client, None).await?;
+                        Ok(artboard_safety_summary_lines(&pieces))
+                    }
+                }
+            }
+            ModCommand::Calendar {
+                action,
+                username,
+                duration,
+                reason,
+            } => {
+                self.calendar(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &username,
+                    duration,
+                    reason,
+                )
+                .await
             }
             ModCommand::Audio {
                 action,
@@ -411,12 +473,16 @@ impl ModerationService {
                     AudioBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
                 let stream =
                     StreamBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                let calendar =
+                    CalendarBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
                 let room =
                     RoomBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
                 if server.is_empty()
                     && artboard.is_empty()
                     && audio.is_empty()
                     && stream.is_empty()
+                    && calendar.is_empty()
                     && room.is_empty()
                 {
                     return Ok(vec!["no active bans".to_string()]);
@@ -451,6 +517,14 @@ impl ModerationService {
                     stream
                         .iter()
                         .map(format_stream_ban_item)
+                        .collect::<Vec<_>>(),
+                );
+                append_section(
+                    &mut lines,
+                    "calendar bans",
+                    calendar
+                        .iter()
+                        .map(format_calendar_ban_item)
                         .collect::<Vec<_>>(),
                 );
                 append_section(
@@ -495,6 +569,16 @@ impl ModerationService {
                     &format!("active stream bans (page {page})"),
                     "no active stream bans",
                     items.iter().map(format_stream_ban_item).collect(),
+                ))
+            }
+            BanListScope::Calendar => {
+                let items =
+                    CalendarBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset)
+                        .await?;
+                Ok(single_section(
+                    &format!("active calendar bans (page {page})"),
+                    "no active calendar bans",
+                    items.iter().map(format_calendar_ban_item).collect(),
                 ))
             }
             BanListScope::Room { slug } => {
@@ -1354,6 +1438,66 @@ impl ModerationService {
         )])
     }
 
+    /// Take posting to the events board away, or give it back. The ban is
+    /// read inside the post transaction (`CalendarStore::save`), so there
+    /// is no session to notify: the next post simply refuses.
+    async fn calendar(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: CalendarAction,
+        username: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            CalendarAction::Ban => Caps::BAN_FROM_CALENDAR,
+            CalendarAction::Unban => Caps::UNBAN_FROM_CALENDAR,
+        };
+        ensure_can(permissions, cap, target_tier)?;
+        let expires_at = matches!(action, CalendarAction::Ban)
+            .then(|| duration.map(|d| Utc::now() + d))
+            .flatten();
+        let tx = client.transaction().await?;
+        match action {
+            CalendarAction::Ban => {
+                CalendarBan::activate(&tx, target.id, actor_user_id, &reason, expires_at).await?;
+            }
+            CalendarAction::Unban => {
+                CalendarBan::delete_for_user(&tx, target.id).await?;
+            }
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
+        )
+        .await?;
+        tx.commit().await?;
+        let banned = matches!(action, CalendarAction::Ban);
+        let _ = self.event_tx.send(ModerationEvent::CalendarAction {
+            actor_user_id,
+            target_user_id: target.id,
+            action,
+            banned,
+            expires_at,
+            reason,
+        });
+        Ok(vec![format!(
+            "{} @{}",
+            action.past_tense(),
+            target.username
+        )])
+    }
+
     async fn voice_action(
         &self,
         actor_user_id: Uuid,
@@ -1581,9 +1725,174 @@ impl ModerationService {
         Ok(lines)
     }
 
+    /// Set or clear the caller's mark at the explicitly selected staff tier.
+    async fn artboard_mark(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        id_prefix: &str,
+        admin: bool,
+        rating: Option<ArtContentRating>,
+        reason: &str,
+    ) -> Result<Vec<String>> {
+        ensure_mod_surface(permissions)?;
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let actor_authority = self.artboard_mark_authority(&tx, actor_user_id).await?;
+        let authority = if admin {
+            ensure_admin(permissions)?;
+            anyhow::ensure!(actor_authority == StaffAuthority::Admin, "admin only");
+            StaffAuthority::Admin
+        } else {
+            StaffAuthority::Moderator
+        };
+        let piece_id = lookup_gallery_piece(&tx, id_prefix).await?;
+        let owner = match ArtboardPieceRating::set_staff_mark(
+            &tx,
+            piece_id,
+            actor_user_id,
+            authority,
+            rating,
+            reason,
+        )
+        .await?
+        {
+            StaffMarkOutcome::Saved { owner } => owner,
+            StaffMarkOutcome::NotFound => anyhow::bail!("the piece is no longer hanging"),
+        };
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            if rating.is_some() {
+                "artboard_mark"
+            } else {
+                "artboard_unmark"
+            },
+            "artboard_piece",
+            Some(owner),
+            json!({"piece_id": piece_id, "rating": rating.map(ArtContentRating::label),
+                "authority": authority.as_str(), "reason": reason}),
+        )
+        .await?;
+        let lines = self.artboard_marks(&tx, piece_id).await?;
+        tx.commit().await?;
+        Ok(lines)
+    }
+
+    /// An admin removes the mark another actor left, at whichever tier it
+    /// holds. Marks outlive their actor's role and account, so this is how a
+    /// mark by a demoted or deleted admin comes off.
+    async fn artboard_unmark_by(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        id_prefix: &str,
+        actor: &str,
+        reason: &str,
+    ) -> Result<Vec<String>> {
+        ensure_admin(permissions)?;
+        let mut client = self.db.get().await?;
+        // A deleted account has no name left; its marks are found by id.
+        let marked_by = match Uuid::parse_str(actor) {
+            Ok(id) => id,
+            Err(_) => find_user_by_mod_name(&client, actor).await?.id,
+        };
+        let tx = client.transaction().await?;
+        anyhow::ensure!(
+            self.artboard_mark_authority(&tx, actor_user_id).await? == StaffAuthority::Admin,
+            "admin only"
+        );
+        let piece_id = lookup_gallery_piece(&tx, id_prefix).await?;
+        let (owner, authority) =
+            match ArtboardPieceRating::remove_staff_mark(&tx, piece_id, marked_by).await? {
+                RemoveMarkOutcome::Removed { owner, authority } => (owner, authority),
+                RemoveMarkOutcome::NoMark => {
+                    anyhow::bail!("no mark by {actor} exists on that piece")
+                }
+                RemoveMarkOutcome::NotFound => anyhow::bail!("the piece is no longer hanging"),
+            };
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "artboard_unmark_by",
+            "artboard_piece",
+            Some(owner),
+            json!({"piece_id": piece_id, "marked_by": marked_by,
+                "authority": authority.as_str(), "reason": reason}),
+        )
+        .await?;
+        let lines = self.artboard_marks(&tx, piece_id).await?;
+        tx.commit().await?;
+        Ok(lines)
+    }
+
+    /// The actor's staff tier as the database has it now, not as the session
+    /// remembers it, so a demoted session cannot keep marking.
+    async fn artboard_mark_authority(
+        &self,
+        client: &impl deadpool_postgres::GenericClient,
+        actor: Uuid,
+    ) -> Result<StaffAuthority> {
+        let flags = User::staff_flags_by_ids(client, &[actor]).await?;
+        match (self.infra.force_admin, flags.get(&actor)) {
+            (true, _) | (false, Some((true, _))) => Ok(StaffAuthority::Admin),
+            (false, Some((false, true))) => Ok(StaffAuthority::Moderator),
+            (false, Some((false, false))) | (false, None) => {
+                anyhow::bail!("moderator or admin only")
+            }
+        }
+    }
+
+    async fn artboard_marks(
+        &self,
+        client: &impl deadpool_postgres::GenericClient,
+        piece_id: Uuid,
+    ) -> Result<Vec<String>> {
+        let summary = ArtboardPieceRating::read(client, piece_id, Uuid::nil())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the piece is no longer hanging"))?;
+        let (rating, source) = summary.determination();
+        let mut lines = vec![
+            format!("Art id: {piece_id}"),
+            format!("{} ({})", rating.label(), source.label()),
+            format!(
+                "Owner NSFW: {}; community SFW {} / NSFW {}",
+                summary.owner_marked_nsfw, summary.sfw_votes, summary.nsfw_votes
+            ),
+            format!(
+                "Moderators SFW {} / NSFW {}; admins SFW {} / NSFW {}",
+                summary.mod_sfw, summary.mod_nsfw, summary.admin_sfw, summary.admin_nsfw
+            ),
+        ];
+        let votes = ArtboardPieceRating::content_votes(client, piece_id).await?;
+        for rating in [ArtContentRating::Nsfw, ArtContentRating::Sfw] {
+            let voters: Vec<String> = votes
+                .iter()
+                .filter(|vote| vote.rating == rating)
+                .map(|vote| format!("@{}", vote.username))
+                .collect();
+            if !voters.is_empty() {
+                lines.push(format!("Voted {}: {}", rating.label(), voters.join(", ")));
+            }
+        }
+        for mark in ArtboardPieceRating::staff_marks(client, piece_id).await? {
+            let actor = mark
+                .username
+                .map(|name| format!("@{name}"))
+                .unwrap_or_else(|| mark.actor_user_id.to_string());
+            lines.push(format!(
+                "{} {actor}: {} · {} · {}",
+                mark.authority.as_str(),
+                mark.rating.label(),
+                mark.updated.format("%Y-%m-%d %H:%M UTC"),
+                mark.reason
+            ));
+        }
+        Ok(lines)
+    }
+
     /// Take a gallery piece down. The applause goes with it; an award
-    /// already snapshotted from it stays. The audit row keeps what was
-    /// removed, since the piece itself is gone.
+    /// already snapshotted from it stays. The audit row keeps what was removed.
     async fn artboard_remove_piece(
         &self,
         actor_user_id: Uuid,
@@ -1675,44 +1984,6 @@ impl ModerationService {
             "gallery piece {piece_id} (\"{}\") is today's Sliding Puzzle art; reopen the board from the lobby to see it",
             featured.title
         )])
-    }
-
-    /// The gallery's kill switch. A row flip, so every replica follows
-    /// (`app_flags` trigger); the rail on each session hides the gallery on
-    /// its next tick.
-    async fn artboard_gallery_switch(
-        &self,
-        actor_user_id: Uuid,
-        permissions: Permissions,
-        enabled: bool,
-    ) -> Result<Vec<String>> {
-        ensure_admin(permissions)?;
-        let mut client = self.db.get().await?;
-        let tx = client.transaction().await?;
-        AppFlags::set(&tx, AppFlag::ArtboardGalleryEnabled, enabled).await?;
-        ModerationAuditLog::record(
-            &tx,
-            actor_user_id,
-            "artboard_gallery_switch",
-            "artboard_piece",
-            None,
-            json!({ "enabled": enabled }),
-        )
-        .await?;
-        tx.commit().await?;
-
-        let _ = self
-            .event_tx
-            .send(ModerationEvent::ArtboardGallerySwitched {
-                actor_user_id,
-                enabled,
-            });
-
-        Ok(vec![if enabled {
-            "artboard gallery on".to_string()
-        } else {
-            "artboard gallery off: nothing hangs or applauds until it is back".to_string()
-        }])
     }
 
     async fn artboard_curate(
@@ -1913,6 +2184,204 @@ async fn resolve_room_ownership(
     Ok(permissions)
 }
 
+const ART_SAFETY_VIEW_LIMIT: usize = 20;
+
+fn artboard_safety_piece_line(piece: &ArtSafetyPiece) -> String {
+    let (rating, source) = piece.summary.determination();
+    format!(
+        "{}: {} ({}) | @{} | {}",
+        &piece.id.to_string()[..13],
+        rating.label(),
+        source.label(),
+        piece.username,
+        piece.title
+    )
+}
+
+/// Why a piece is on the staff review list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SafetyReviewReason {
+    StaffDisagree,
+    OwnerNsfwUnreviewed,
+    CommunityNsfwUnreviewed,
+}
+
+impl SafetyReviewReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::StaffDisagree => "staff disagree",
+            Self::OwnerNsfwUnreviewed => "owner NS; no staff",
+            Self::CommunityNsfwUnreviewed => "community NS; no staff",
+        }
+    }
+}
+
+fn artboard_safety_review_reason(summary: &ContentRatingSummary) -> Option<SafetyReviewReason> {
+    let staff_sfw = summary.mod_sfw + summary.admin_sfw;
+    let staff_nsfw = summary.mod_nsfw + summary.admin_nsfw;
+    if staff_sfw > 0 && staff_nsfw > 0 {
+        Some(SafetyReviewReason::StaffDisagree)
+    } else if staff_sfw + staff_nsfw == 0 && summary.owner_marked_nsfw {
+        Some(SafetyReviewReason::OwnerNsfwUnreviewed)
+    } else if staff_sfw + staff_nsfw == 0 && summary.nsfw_votes > 0 {
+        Some(SafetyReviewReason::CommunityNsfwUnreviewed)
+    } else {
+        None
+    }
+}
+
+fn artboard_safety_review_table(review: &[(&ArtSafetyPiece, SafetyReviewReason)]) -> Vec<String> {
+    if review.is_empty() {
+        return Vec::new();
+    }
+    let headers = ["art id", "state", "reason", "summary", "user", "art title"].map(String::from);
+    let rows: Vec<[String; 6]> = review
+        .iter()
+        .map(|(piece, summary)| {
+            let (rating, source) = piece.summary.determination();
+            let reason = match source {
+                RatingSource::Admin => "admin",
+                RatingSource::Moderator => "mod",
+                RatingSource::Owner => "owner",
+                RatingSource::Community => "commu.",
+                RatingSource::Default => "none",
+            };
+            [
+                piece.id.to_string()[..13].to_owned(),
+                rating.label().into(),
+                reason.into(),
+                summary.label().into(),
+                piece.username.clone(),
+                piece.title.clone(),
+            ]
+        })
+        .collect();
+    let widths: [usize; 6] = std::array::from_fn(|column| {
+        rows.iter()
+            .chain(std::iter::once(&headers))
+            .map(|row| Line::from(row[column].as_str()).width())
+            .max()
+            .unwrap_or_default()
+    });
+    let format_row = |row: &[String; 6]| {
+        row.iter()
+            .enumerate()
+            .map(|(column, cell)| {
+                if column == row.len() - 1 {
+                    cell.clone()
+                } else {
+                    format!(
+                        "{cell}{}",
+                        " ".repeat(
+                            widths[column].saturating_sub(Line::from(cell.as_str()).width())
+                        )
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let mut lines = vec![
+        format_row(&headers),
+        widths.map(|width| "-".repeat(width)).join("-|-"),
+    ];
+    lines.extend(rows.iter().map(format_row));
+    lines
+}
+
+fn artboard_safety_summary_lines(pieces: &[ArtSafetyPiece]) -> Vec<String> {
+    let nsfw = pieces
+        .iter()
+        .filter(|piece| piece.summary.determination().0.is_nsfw())
+        .count();
+    let mut lines = vec![format!(
+        "Gallery safety: {} hanging pieces; SFW {}, NSFW {nsfw}",
+        pieces.len(),
+        pieces.len() - nsfw
+    )];
+    let today = Utc::now().date_naive();
+    if let Some(piece) = pieces.iter().find(|piece| piece.splash_on == Some(today)) {
+        lines.push(format!(
+            "Today's splash: {}",
+            artboard_safety_piece_line(piece)
+        ));
+    } else {
+        lines.push(format!("Today's splash: no piece assigned for {today} UTC"));
+    }
+    let mut review: Vec<_> = pieces
+        .iter()
+        .filter_map(|piece| {
+            artboard_safety_review_reason(&piece.summary).map(|reason| (piece, reason))
+        })
+        .collect();
+    review.sort_by_key(|(piece, reason)| match reason {
+        SafetyReviewReason::StaffDisagree => 0,
+        SafetyReviewReason::OwnerNsfwUnreviewed | SafetyReviewReason::CommunityNsfwUnreviewed => {
+            if piece.summary.determination().0.is_nsfw() {
+                1
+            } else {
+                2
+            }
+        }
+    });
+    lines.push(format!("Review candidates: {}", review.len()));
+    lines.extend(artboard_safety_review_table(
+        &review[..review.len().min(ART_SAFETY_VIEW_LIMIT)],
+    ));
+    if review.len() > ART_SAFETY_VIEW_LIMIT {
+        lines.push(format!(
+            "Showing the first {ART_SAFETY_VIEW_LIMIT} review candidates; use view @artist to narrow the list."
+        ));
+    }
+    lines.push("Inspect a piece: artboard safety view <id>".into());
+    lines
+}
+
+fn artboard_safety_user_lines(username: &str, pieces: &[ArtSafetyPiece]) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Gallery safety for @{username}: {} hanging pieces",
+        pieces.len()
+    )];
+    for piece in pieces.iter().take(ART_SAFETY_VIEW_LIMIT) {
+        lines.push(artboard_safety_piece_line(piece));
+        let summary = &piece.summary;
+        lines.push(format!(
+            "  Owner NSFW {}; votes SFW {} / NSFW {}; mods SFW {} / NSFW {}; admins SFW {} / NSFW {}",
+            summary.owner_marked_nsfw,
+            summary.sfw_votes,
+            summary.nsfw_votes,
+            summary.mod_sfw,
+            summary.mod_nsfw,
+            summary.admin_sfw,
+            summary.admin_nsfw
+        ));
+    }
+    if pieces.len() > ART_SAFETY_VIEW_LIMIT {
+        lines.push(format!(
+            "Showing the newest {ART_SAFETY_VIEW_LIMIT} pieces."
+        ));
+    }
+    lines.push("Inspect a piece: artboard safety view <id>".into());
+    lines
+}
+
+async fn lookup_gallery_piece(
+    client: &impl deadpool_postgres::GenericClient,
+    prefix: &str,
+) -> Result<Uuid> {
+    match ArtboardPiece::lookup_by_id_prefix(client, prefix).await? {
+        PieceLookup::One(id) => Ok(id),
+        PieceLookup::NotFound => anyhow::bail!("no gallery piece starts with {prefix}"),
+        PieceLookup::Ambiguous(count) => {
+            anyhow::bail!("{count} gallery pieces start with {prefix}; give more of the id")
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "service_test.rs"]
+mod service_test;
+
 pub(crate) fn ensure_mod_surface(permissions: Permissions) -> Result<()> {
     ensure_has(permissions, Caps::OPEN_MOD_SURFACE)
 }
@@ -2024,6 +2493,24 @@ fn format_server_ban_item(item: &ServerBanListItem) -> String {
         "- {target} by {actor} expires: {}{} reason: {}",
         format_expires_at(item.ban.expires_at),
         ip,
+        format_reason(&item.ban.reason)
+    )
+}
+
+fn format_calendar_ban_item(item: &CalendarBanListItem) -> String {
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    format!(
+        "- {target} by {actor} expires: {} reason: {}",
+        format_expires_at(item.ban.expires_at),
         format_reason(&item.ban.reason)
     )
 }

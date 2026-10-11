@@ -235,7 +235,7 @@ fn chat_row_after_an_emoji_lands_at_its_own_column() {
 
 /// The bytes one full repaint of a bordered frame costs, through `backend`.
 /// Every panel and modal draws a border, so this is the chrome the isolation
-/// rule taxes on every `force_full_repaint`, resize and Ctrl+L.
+/// rule taxes on every `force_full_repaint`, resize and Ctrl+R.
 fn bordered_full_frame_bytes<B: Backend>(backend: B, shared: &SharedBuffer) -> usize {
     let viewport = Viewport::Fixed(Rect::new(0, 0, 160, 40));
     let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();

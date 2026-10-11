@@ -49,6 +49,41 @@ fn desktop_media_selects_metadata_for_each_source() {
     let radio = media.current_track().unwrap();
     assert_eq!(radio.title, "Night Drive");
     assert_eq!(radio.artist.as_deref(), Some("Synth Artist"));
+    assert_eq!(radio.duration_ms, None);
+}
+
+/// The house mounts are radio stations: the track comes from the radio map
+/// the server fills for them, the length from the mount map.
+#[test]
+fn a_house_station_under_radio_shows_its_track_and_length() {
+    let mut media = DesktopMedia::for_test();
+    media.source = Some(MediaSource::Radio);
+    media.station = Some("classical".to_string());
+
+    // Before any metadata: the station key, and nobody else's name on it.
+    let bare = media.current_track().unwrap();
+    assert_eq!(bare.title, "classical");
+    assert_eq!(bare.artist, None);
+
+    media.radio_tracks.insert(
+        "classical".to_string(),
+        RadioTrack {
+            artist: "A pianist".to_string(),
+            title: "Nocturne".to_string(),
+        },
+    );
+    media.icecast_tracks.insert(
+        "classical".to_string(),
+        IcecastTrack {
+            title: "Nocturne".to_string(),
+            artist: Some("A pianist".to_string()),
+            duration_seconds: Some(180),
+        },
+    );
+    let house = media.current_track().unwrap();
+    assert_eq!(house.title, "Nocturne");
+    assert_eq!(house.artist.as_deref(), Some("A pianist"));
+    assert_eq!(house.duration_ms, Some(180_000));
 }
 
 #[cfg(target_os = "linux")]

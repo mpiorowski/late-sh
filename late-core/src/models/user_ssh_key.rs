@@ -55,9 +55,9 @@ const AUDIO_VOLUME_KEY: &str = "audio_volume_percent";
 /// to the machine with the speakers: muting on a laptop must not silence the
 /// desktop. The server writes this from what the paired CLI reports after
 /// applying a control (the webview helper's reports are never persisted; the
-/// CLI is the surface of record), so `m`, `+`/`-`, a media key, and `/brb`'s
-/// auto-mute all land here through one path, and a session resumes exactly
-/// where the last one left off.
+/// CLI is the surface of record), so `m`, `+`/`-`, and a media key all land
+/// here through one path, and a session resumes exactly where the last one
+/// left off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyAudio {
     pub muted: bool,

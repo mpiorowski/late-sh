@@ -3,6 +3,7 @@ kindom plant
 title "a seafloor plant"
 description "a wiggly stalk anchored to the seafloor, swaying between two poses"
 sauce author=mevanlc date=20260512 license=CCBYSA4.0
+mini left=")(" right=")("
 
 count 8
 

@@ -1,6 +1,6 @@
 use dartboard_core::{Canvas, Pos, RgbColor};
 use dartboard_editor::Bounds;
-use late_core::models::artboard_piece::{PIECE_MAX_WIDTH, PIECE_MIN_GLYPHS};
+use late_core::models::artboard_piece::{PIECE_MAX_HEIGHT, PIECE_MAX_WIDTH, PIECE_MIN_GLYPHS};
 
 use super::{Credit, FrameError, frame_piece};
 use crate::app::artboard::provenance::ArtboardProvenance;
@@ -116,6 +116,18 @@ fn the_rails_refuse_small_large_and_borrowed_frames() {
         Err(FrameError::TooLarge {
             width: PIECE_MAX_WIDTH + 1,
             height: 6
+        })
+    );
+    assert_eq!(
+        frame_piece(
+            &canvas,
+            &provenance,
+            frame(0, 0, 5, PIECE_MAX_HEIGHT),
+            "painter"
+        ),
+        Err(FrameError::TooLarge {
+            width: 6,
+            height: PIECE_MAX_HEIGHT + 1
         })
     );
 

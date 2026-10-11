@@ -5,8 +5,6 @@ use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
-use crate::models::drink_round::Bar;
-
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
@@ -16,7 +14,7 @@ pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
 pub const MONTH_TS_FILTER: &str =
     "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// How many ledger rows a profile shows.
-pub const PROFILE_LEDGER_ROWS: i64 = 40;
+pub const PROFILE_LEDGER_ROWS: i64 = 100;
 
 /// The three daily-puzzle difficulty tiers. One enum owns both reward
 /// scales: the chip bonus a daily win pays (mirrored in seeded
@@ -183,6 +181,13 @@ chip_moves!(
     /// [`crate::models::drink_round::DrinkCredit`] rather than chips.
     /// `source_ref` is the round id.
     RoundPurchase,
+    /// Chips paid to leave one drink on a named patron's tab
+    /// (`@bartender buy @user a drink`): a one-credit `drink_rounds` row at
+    /// `GIFT_DRINK_PRICE`, floor-guarded and burned whole like a round. Its
+    /// own reason so the ledger can say who it was for and the round
+    /// dashboards never count it. `source_ref` is the round id; the
+    /// recipient is that round's single `drink_credits` row.
+    DrinkGift,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -197,6 +202,8 @@ chip_moves!(
     DailyCheckersWin,
     DailyBackgammonWin,
     DailyBriscolaWin,
+    DailyCribbageWin,
+    DailyGinWin,
     DailyEightBallWin,
     DailyNineBallWin,
     DailySnookerWin,
@@ -225,6 +232,19 @@ chip_moves!(
     LateaniaFrontierKingDefeat,
     LateaniaSunderingDeepDefeat,
     LateaniaKaethyrAscendantDefeat,
+    /// The Old Signal put down in the undercity (`deadchannel`): the one
+    /// milestone the fight pays, once per mark and at most once every 30
+    /// days per account, through the same two-gate grant as the door
+    /// milestones. `source_ref` is the `game_payout_claims` row id.
+    OldSignalSlain,
+    /// The inviter's side of a referral that turned into a regular, paid
+    /// once per invitee when the sweeper settles the `referrals` row
+    /// (`late-ssh/src/app/referral`). Minted rather than moved. `source_ref`
+    /// is the invitee's user id, which is also the referral's key.
+    ReferralReward,
+    /// The invitee's welcome bonus, paid in the same transaction as
+    /// [`ChipMove::ReferralReward`]. `source_ref` is the inviter's user id.
+    ReferralWelcome,
 );
 
 /// Which way a move touches the balance, and under what guard.
@@ -268,6 +288,7 @@ impl ChipMove {
             Self::ArtboardPrize => "artboard_prize",
             Self::SongQueued => "song_queued",
             Self::RoundPurchase => "round_purchase",
+            Self::DrinkGift => "drink_gift",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -282,6 +303,8 @@ impl ChipMove {
             Self::DailyCheckersWin => "daily_checkers_win",
             Self::DailyBackgammonWin => "daily_backgammon_win",
             Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::DailyCribbageWin => "daily_cribbage_win",
+            Self::DailyGinWin => "daily_gin_win",
             Self::DailyEightBallWin => "daily_eightball_win",
             Self::DailyNineBallWin => "daily_nineball_win",
             Self::DailySnookerWin => "daily_snooker_win",
@@ -302,6 +325,9 @@ impl ChipMove {
             Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
             Self::LateaniaSunderingDeepDefeat => "lateania_sundering_deep_defeat",
             Self::LateaniaKaethyrAscendantDefeat => "lateania_kaethyr_ascendant_defeat",
+            Self::OldSignalSlain => "old_signal_slain",
+            Self::ReferralReward => "referral_reward",
+            Self::ReferralWelcome => "referral_welcome",
         }
     }
 
@@ -313,6 +339,7 @@ impl ChipMove {
             Self::PokerBet | Self::PokerPayout => "poker_hands",
             Self::FloorRestore => "house_rounds",
             Self::GiftSent | Self::GiftReceived | Self::InitialBalance => "users",
+            Self::ReferralReward | Self::ReferralWelcome => "referrals",
             Self::SsnakeArenaEarned | Self::SsnakeArenaLost => "ssnake_visits",
             Self::BonsaiWatered => "bonsai_trees",
             Self::PetFed | Self::PetPetted => "pet_companions",
@@ -323,7 +350,7 @@ impl ChipMove {
             Self::NewsShared => "articles",
             Self::ArtboardPrize => "profile_awards",
             Self::SongQueued => "media_queue_items",
-            Self::RoundPurchase => "drink_rounds",
+            Self::RoundPurchase | Self::DrinkGift => "drink_rounds",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -338,6 +365,8 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
@@ -355,7 +384,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => "game_payout_claims",
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => "game_payout_claims",
         }
     }
 
@@ -387,6 +417,8 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
@@ -405,7 +437,10 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => ChipDirection::Credit,
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain
+            | Self::ReferralReward
+            | Self::ReferralWelcome => ChipDirection::Credit,
             Self::BlackjackBet | Self::PokerBet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
@@ -414,6 +449,7 @@ impl ChipMove {
             | Self::CrownTaken
             | Self::PotTicket
             | Self::RoundPurchase
+            | Self::DrinkGift
             | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
             Self::FloorRestore => ChipDirection::Restore,
         }
@@ -429,7 +465,12 @@ impl ChipMove {
     /// the two house tables, because a table can fold every hand to one
     /// seat and walk it up the board; gifts, because a group can funnel
     /// chips into one player at no cost to the board; and the starting
-    /// stipend, which everyone gets once. Gilds received stay in: a gild
+    /// stipend, which everyone gets once. Referral payouts stay out too:
+    /// one is worth a month of anything else, so a single invite would
+    /// decide the board. Monthly prizes stay out, every one, today's
+    /// gallery prize and any added later: a prize is the result of a
+    /// month's board, never an earning on Top Chips, and one first place
+    /// would decide the next month. Gilds received stay in: a gild
     /// burns a third on the way, so it cannot funnel for free, and it is
     /// paid for a message other people rated. The pot stays in: the house
     /// mints it. Admin grants never reach the ledger at all
@@ -450,9 +491,13 @@ impl ChipMove {
             | Self::CrownTaken
             | Self::PotTicket
             | Self::RoundPurchase
+            | Self::DrinkGift
             | Self::DrinkPurchase
             | Self::ShopPurchase
-            | Self::SsnakeArenaLost => false,
+            | Self::SsnakeArenaLost
+            | Self::ReferralReward
+            | Self::ReferralWelcome
+            | Self::ArtboardPrize => false,
             Self::BonsaiWatered
             | Self::PetFed
             | Self::AquariumFed
@@ -460,7 +505,6 @@ impl ChipMove {
             | Self::GildReceived
             | Self::PotWon
             | Self::NewsShared
-            | Self::ArtboardPrize
             | Self::SongQueued
             | Self::QuestReward
             | Self::DailyQuestStreakReward
@@ -474,6 +518,8 @@ impl ChipMove {
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
+            | Self::DailyCribbageWin
+            | Self::DailyGinWin
             | Self::DailyEightBallWin
             | Self::DailyNineBallWin
             | Self::DailySnookerWin
@@ -492,7 +538,8 @@ impl ChipMove {
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat
             | Self::LateaniaSunderingDeepDefeat
-            | Self::LateaniaKaethyrAscendantDefeat => true,
+            | Self::LateaniaKaethyrAscendantDefeat
+            | Self::OldSignalSlain => true,
         }
     }
 
@@ -530,15 +577,6 @@ impl ChipLedgerEntry {
     pub fn chip_move(&self) -> Option<ChipMove> {
         ChipMove::from_reason(&self.reason)
     }
-}
-
-/// One line of the tab board, from [`UserChips::top_round_buyers`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoundBuyer {
-    pub user_id: Uuid,
-    pub username: String,
-    pub rounds: i64,
-    pub chips: i64,
 }
 
 /// A user's chips this UTC month, from [`UserChips::month_figures`].
@@ -940,41 +978,6 @@ impl UserChips {
             earned: row.get("earned"),
             net: row.get("net"),
         })
-    }
-
-    /// The biggest round buyers at one bar, all time, by chips spent: the
-    /// tab board out back counts what the Nightcap sold and nothing else.
-    /// The ledger row does not say which bar took the order, so the round it
-    /// is keyed on does ([`Bar`], `source_ref` = the round id). Rounds
-    /// bought before that column exists read as the tavern's.
-    pub async fn top_round_buyers(
-        client: &Client,
-        bar: Bar,
-        limit: i64,
-    ) -> Result<Vec<RoundBuyer>> {
-        let rows = client
-            .query(
-                "SELECT l.user_id, u.username, count(*) AS rounds, sum(-l.delta)::BIGINT AS chips
-                 FROM chip_ledger l
-                 JOIN drink_rounds r ON r.id::TEXT = l.source_ref
-                 JOIN users u ON u.id = l.user_id
-                 WHERE l.reason = $1
-                   AND r.bar = $2
-                 GROUP BY l.user_id, u.username
-                 ORDER BY chips DESC, rounds DESC, u.username ASC
-                 LIMIT $3",
-                &[&ChipMove::RoundPurchase.reason(), &bar.as_str(), &limit],
-            )
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| RoundBuyer {
-                user_id: row.get("user_id"),
-                username: row.get("username"),
-                rounds: row.get("rounds"),
-                chips: row.get("chips"),
-            })
-            .collect())
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

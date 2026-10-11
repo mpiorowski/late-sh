@@ -25,12 +25,34 @@
 use crate::app::games::pool_core::{
     canvas::{Canvas, Rgb, mix},
     cue::{MISCUE_LIMIT, PowerBand, ShotMode},
-    table_ui::{self, CUE_BALL, GUIDE, WHITE, ball_colour, is_stripe},
+    table_ui::{self, CUE_BALL, FAULT, GUIDE, WHITE, ball_colour, is_stripe},
 };
 
 /// The panel's own background. Public so the board screen fills its canvas
 /// with the same colour the panel paints over it.
 pub const BACKDROP: Rgb = [14, 20, 18];
+
+/// How much of the drawn cue ball's radius the tip may actually be placed
+/// within: `MISCUE_LIMIT` lands here, not at the ball's edge.
+///
+/// The face is still magnified — a true-to-life face spends most of a small
+/// ball drawing the part nobody may strike — but magnifying it all the way to
+/// the rim put maximum screw on the very bottom pixel of the ball, which reads
+/// as "the edge is the limit" and makes every extreme a click away. Inset, the
+/// mark for a full draw sits visibly inside the ball and the extremes have to
+/// be aimed at rather than fallen into. The rim between this and the ball's
+/// edge is still the ball: a click there clamps to the limit (`nudge_tip`
+/// already does) rather than falling through to the cue below it.
+pub const TIP_FACE: f64 = 0.78;
+
+/// Clear air below the cue ball before the cue begins, in radii of the ball.
+///
+/// Both a drawing and a hit-test number, which is why it is one constant: the
+/// cue at rest starts here, and so does the strip where a click arms the
+/// stroke. Without it the stroke zone began at the ball's own edge, so a click
+/// aimed at the bottom of the face and landing a pixel low armed the cue
+/// instead of placing the tip.
+pub const CUE_GAP: f64 = 0.55;
 const CUE_WOOD: Rgb = [186, 146, 92];
 const CUE_TIP: Rgb = [80, 120, 170];
 const TIP_MARK: Rgb = [210, 60, 60];
@@ -42,6 +64,14 @@ const RAIL_TARGET: Rgb = [120, 92, 64];
 pub struct CueView {
     /// The ball being shot at, or `None` when the target is a cushion.
     pub target: Option<u8>,
+    /// That ball is not one the striker may hit first, so the shot as aimed
+    /// is a foul. Said **in words** here rather than drawn: the panel's ball
+    /// is a single huge disc with nothing beside it to compare against, so a
+    /// coloured rim on it reads as decoration where the same rim on the table
+    /// reads as "this one, not those". A line of red text cannot be mistaken
+    /// for styling. Nothing is said about a legal target or a cushion — the
+    /// panel only speaks up when the shot as aimed is a foul.
+    pub target_fault: bool,
     /// Cue ball to target, in metres. Only scales the drawing.
     pub distance: f64,
     /// How far the aim line passes from the target's centre, in ball radii.
@@ -71,6 +101,12 @@ pub struct CueView {
 pub struct PanelHit {
     pub cue: (f64, f64),
     pub cue_radius: f64,
+    /// Radius of the *settable* face, which is smaller than the drawn ball —
+    /// see `TIP_FACE`. A click is turned into a tip offset against this.
+    pub tip_radius: f64,
+    /// First row that belongs to the cue. Below the ball with `CUE_GAP` of
+    /// clear air between, so the two zones do not touch.
+    pub cue_top: f64,
     pub target: (f64, f64),
     pub target_radius: f64,
 }
@@ -79,6 +115,7 @@ impl Default for CueView {
     fn default() -> Self {
         Self {
             target: None,
+            target_fault: false,
             distance: 0.5,
             aim_offset: 0.0,
             tip: [0.0, 0.0],
@@ -97,34 +134,58 @@ pub fn draw(canvas: &mut Canvas, view: &CueView) -> PanelHit {
     canvas.fill_rect(0, 0, canvas.cols() as i32, canvas.height() as i32, BACKDROP);
 
     let centre_x = w / 2.0;
+    let target_y = h * 0.14;
+    // The balls take a share of the panel rather than a fixed size, so the
+    // whole drawing grows with the terminal. A modest share: past about a
+    // sixth they stop being easier to aim at and start crowding out the cue.
+    // The height cap is generous enough that a tall panel never shrinks them
+    // — the extra rows are for the cue, not against the balls.
+    let cue_r = (w * 0.16).clamp(3.0, h * 0.3);
+
+    // A distant ball is a smaller ball. Floored so a long table shot still
+    // leaves something aimable rather than a single pixel — and high enough
+    // that the rim the ball wears (see `draw_target`) cannot swallow the
+    // whole of it, which at a two-pixel floor it did.
+    let shrink = (0.55 / view.distance.max(0.15)).clamp(0.35, 1.0);
+    let target_r = (cue_r * 0.85 * shrink).max(3.0);
+
     // The cue ball sits low, the target high — the wireframe's depth cue. Not
     // as low as it looks, though: everything under the cue ball is the cue,
     // and the cue is the part that *moves*. Sitting the ball at two thirds
     // left the stroke a sliver to happen in, which is precisely the gesture a
     // player is trying to read.
-    let cue_y = h * 0.58;
-    let target_y = h * 0.14;
-    // The balls take a share of the panel rather than a fixed size, so the
-    // whole drawing grows with the terminal. A modest share: past about a
-    // sixth they stop being easier to aim at and start crowding out the cue.
-    let cue_r = (w * 0.16).clamp(3.0, h * 0.18);
-
-    // A distant ball is a smaller ball. Clamped so a long table shot still
-    // leaves something aimable rather than a single pixel.
-    let shrink = (0.55 / view.distance.max(0.15)).clamp(0.35, 1.0);
-    let target_r = (cue_r * 0.85 * shrink).max(2.0);
+    //
+    // **Capped in absolute pixels as well as by the fraction.** Once the
+    // sighting line is long enough to read, more of it buys nothing, where
+    // more cue keeps buying resolution on the draw-and-push gesture that sets
+    // the speed. So a tall panel spends its extra rows below the ball: the
+    // ball stops descending and the cue grows.
+    let sight = (cue_r * 2.5).max(6.0);
+    let cue_y = (h * 0.58).min(target_y + target_r + cue_r + sight);
 
     draw_target(canvas, view, centre_x, target_y, target_r);
     draw_sighting_line(canvas, view, centre_x, target_y, target_r, cue_y, cue_r);
     draw_cue_ball(canvas, view, centre_x, cue_y, cue_r);
     draw_cue(canvas, view, centre_x, cue_y, cue_r, h);
+    // Last, so it sits over the sighting line it shares a row with.
+    if view.target_fault {
+        draw_fault_warning(canvas, centre_x, target_y + target_r);
+    }
 
     PanelHit {
         cue: (centre_x, cue_y),
         cue_radius: cue_r,
+        tip_radius: cue_r * TIP_FACE,
+        cue_top: cue_y + cue_rest_offset(cue_r),
         target: (centre_x, target_y),
         target_radius: target_r,
     }
+}
+
+/// How far below the cue ball's centre the cue sits at rest: the ball, plus
+/// the clear air the click map also uses.
+fn cue_rest_offset(cue_r: f64) -> f64 {
+    cue_r * (1.0 + CUE_GAP)
 }
 
 fn draw_target(canvas: &mut Canvas, view: &CueView, x: f64, y: f64, r: f64) {
@@ -144,42 +205,57 @@ fn draw_target(canvas: &mut Canvas, view: &CueView, x: f64, y: f64, r: f64) {
     let colour = ball_colour(id);
     canvas.disc(x, y, r, colour);
     if is_stripe(id) {
-        let band = r * 0.42;
-        canvas.fill_rect(
-            (x - r) as i32,
-            (y - r) as i32,
-            (x + r) as i32,
-            (y - band) as i32,
-            WHITE,
-        );
-        canvas.fill_rect(
-            (x - r) as i32,
-            (y + band) as i32,
-            (x + r) as i32,
-            (y + r) as i32,
-            WHITE,
-        );
-        // Re-round the caps that the rectangles squared off.
-        reround(canvas, x, y, r, BACKDROP);
+        stripe_caps(canvas, x, y, r, r * 0.42);
     }
     // The target always wears its number: this is the one place there is room
     // for two digits, which is why the table view can go without.
     write_number(canvas, x, y, id);
 }
 
-/// A ring of background pixels just outside `r`, to undo a rectangle that
-/// overshot the disc.
-fn reround(canvas: &mut Canvas, cx: f64, cy: f64, r: f64, colour: Rgb) {
+/// The one thing the panel says about legality, and only when the answer is
+/// no: a line of red under the target ball.
+///
+/// Words rather than a rim, because this ball is drawn alone and enormous —
+/// there is nothing beside it for a coloured edge to be read against, which is
+/// exactly what makes the same mark work on the table. Centred, and skipped
+/// rather than clipped on a panel too narrow to hold it; the table is still
+/// ringing the ball in red either way.
+fn draw_fault_warning(canvas: &mut Canvas, centre_x: f64, below: f64) {
+    const TEXT: &str = "Invalid Target";
+    let width = TEXT.chars().count() as f64;
+    if width > canvas.cols() as f64 {
+        return;
+    }
+    // A whole terminal row below the ball, so the glyphs never land in the
+    // cell the ball's own bottom pixel is in.
+    let y = below + 2.0;
+    let start = (centre_x - width / 2.0).round() as i32;
+    for (index, ch) in TEXT.chars().enumerate() {
+        canvas.glyph(start + index as i32, y.round() as i32, ch, FAULT);
+    }
+}
+
+/// The white caps of a stripe, painted **only on the pixels the ball owns**.
+///
+/// They used to be two rectangles with the overshoot erased afterwards, and the
+/// erase was a bug: it tested a pixel at `dx + 0.5` from the centre and wrote
+/// to `round(cx + dx)`, which are two different pixels whenever the ball's
+/// centre is not on a whole one. So it ate a column down one side of the ball
+/// and left the squared-off corners standing on the other, which is what the
+/// panel's big target ball looked wrong on the right for. Filling only what the
+/// disc owns cannot be off by anything: it is the same test `disc` itself uses.
+fn stripe_caps(canvas: &mut Canvas, cx: f64, cy: f64, r: f64, band: f64) {
     let span = r.ceil() as i32;
+    let (px0, py0) = (cx.floor() as i32, cy.floor() as i32);
     for dy in -span..=span {
         for dx in -span..=span {
-            let x = cx + dx as f64;
-            let y = cy + dy as f64;
-            let ddx = x + 0.5 - cx;
-            let ddy = y + 0.5 - cy;
-            if ddx * ddx + ddy * ddy > r * r {
-                canvas.set(x.round() as i32, y.round() as i32, colour);
+            let (px, py) = (px0 + dx, py0 + dy);
+            let ddx = px as f64 + 0.5 - cx;
+            let ddy = py as f64 + 0.5 - cy;
+            if ddx * ddx + ddy * ddy > r * r || ddy.abs() < band {
+                continue;
             }
+            canvas.set(px, py, WHITE);
         }
     }
 }
@@ -263,32 +339,29 @@ fn draw_cue_ball(canvas: &mut Canvas, view: &CueView, x: f64, y: f64, r: f64) {
         }
     }
 
-    // The miscue limit is drawn at the ball's own edge, because the face here
-    // is magnified: the whole drawn ball is the half-radius the tip may
-    // actually use. A player aiming at a mark a few pixels wide needs the
-    // travel, and the alternative — a true-to-life face with the usable part
-    // a small circle in the middle — throws away most of the ball to draw a
-    // region nobody is allowed to strike.
-    table_ui::ring(
-        canvas,
-        x,
-        y,
-        r,
-        if view.mode == ShotMode::Spin {
-            GUIDE
-        } else {
-            DIM
-        },
-    );
+    // The miscue limit, drawn **only while the tip is being placed**. It used
+    // to sit there in grey the whole time, and a grey circle inside a white
+    // ball reads as part of the ball rather than as a boundary — it was the
+    // busiest thing on a panel whose job is to show one ball clearly. The
+    // limit itself is unchanged: the tip still lives inside `TIP_FACE` of the
+    // drawn ball whether or not the ring is there to say so.
+    if view.mode == ShotMode::Spin {
+        table_ui::ring(canvas, x, y, r * TIP_FACE, GUIDE);
+    }
 
     // The tip mark, on the same magnified scale. Screen y grows downward while
     // `tip[1]` is "up the face", hence the negation — get this wrong and
     // follow looks like draw.
-    let scale = r / MISCUE_LIMIT;
+    let scale = r * TIP_FACE / MISCUE_LIMIT;
     let mark_x = x + view.tip[0] * scale;
     let mark_y = y - view.tip[1] * scale;
     canvas.disc(mark_x, mark_y, (r * 0.18).max(1.0), TIP_MARK);
 }
+
+/// How much of the room below the cue ball a full pull uses. The rest is the
+/// butt of the cue, which has to stay on screen: a cue drawn back until it
+/// vanishes off the bottom reads as no cue at all.
+const PULL_SHARE: f64 = 0.72;
 
 /// The cue, pointing up at the ball from below and drawn back by the power.
 fn draw_cue(canvas: &mut Canvas, view: &CueView, x: f64, cue_y: f64, cue_r: f64, h: f64) {
@@ -296,9 +369,9 @@ fn draw_cue(canvas: &mut Canvas, view: &CueView, x: f64, cue_y: f64, cue_r: f64,
     // Pulling back by a fixed multiple of the radius looks right on a tall
     // panel and slides the whole cue off the bottom of a short one — at which
     // point the player has no cue at exactly the moment they are aiming it.
-    let rest_y = cue_y + cue_r + 1.0;
+    let rest_y = cue_y + cue_rest_offset(cue_r) + 1.0;
     let space = (h - rest_y).max(2.0);
-    let pull = view.power.clamp(0.0, 1.0) * space * 0.6;
+    let pull = view.power.clamp(0.0, 1.0) * space * PULL_SHARE;
     // Struck: the cue is thrown *through* where the ball was and left there
     // until the shot finishes playing. A cue that returned to rest the instant
     // the stroke registered gave the player nothing to tell a struck shot from

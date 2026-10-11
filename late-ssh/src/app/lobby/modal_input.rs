@@ -1,5 +1,6 @@
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseEventKind, ParsedInput};
+use crate::app::lobby::daily::state::BoardEntry;
 use crate::app::lobby::state::LobbyEntry;
 use crate::app::state::App;
 
@@ -46,11 +47,7 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         }
         ParsedInput::Byte(b'c') | ParsedInput::Char('c') => {
             app.lobby.confirm_claim = None;
-            app.daily.begin_challenge_draft(false);
-        }
-        ParsedInput::Byte(b'C') | ParsedInput::Char('C') => {
-            app.lobby.confirm_claim = None;
-            app.daily.begin_challenge_draft(true);
+            app.daily.begin_challenge_draft();
         }
         // Watch without committing: a realm you could join is exactly the
         // one you most want to look at first.
@@ -179,33 +176,17 @@ fn activate_selection(app: &mut App) {
         }
         None => None,
     };
-    // Switching surfaces while a board or table is already open keeps the
-    // original return screen, so Esc never lands on a dead board.
-    let return_screen = if app.screen == Screen::DailyMatch {
-        app.daily
-            .board
-            .as_ref()
-            .map(|board| board.return_screen)
-            .unwrap_or(Screen::Dashboard)
-    } else if app.screen == Screen::HouseTable {
-        app.house.return_screen
-    } else if app.screen == Screen::Realm {
-        app.realm
-            .board
-            .as_ref()
-            .map(|board| board.return_screen)
-            .unwrap_or(Screen::Dashboard)
-    } else {
-        app.screen
-    };
+    let return_screen = return_screen_for_opening(app);
     match action {
         Some(Action::OpenBoard(item)) => {
-            app.daily.open_board(&item, return_screen);
+            app.daily
+                .open_board(&item, return_screen, BoardEntry::Lobby);
             app.show_lobby_modal = false;
             app.set_screen(Screen::DailyMatch);
         }
         Some(Action::OpenFinished(item)) => {
-            app.daily.open_finished_board(&item, return_screen);
+            app.daily
+                .open_finished_board(&item, return_screen, BoardEntry::Lobby);
             app.show_lobby_modal = false;
             app.set_screen(Screen::DailyMatch);
         }
@@ -246,15 +227,36 @@ fn activate_selection(app: &mut App) {
     }
 }
 
-/// Keys on the challenge picker overlay. The picker step navigates the game
-/// list; the directed username step owns printable input (so `j`/`k` type,
-/// they don't scroll). Esc steps back, Enter advances/posts.
+/// Keys on the challenge picker overlay: `j`/`k` walk the game list, Esc
+/// closes it, Enter posts the picked game.
+/// The page a board or table opened right now hands back when it closes:
+/// the current page, unless that is itself a board or a table. Switching
+/// surfaces while one is already open keeps the original return screen, so
+/// Esc never lands on a dead board. Every entry that can fire with a board
+/// or table up reads it from here: the modal, and the live strip's opener
+/// (`live/input.rs`), which the status line's Live segment reaches from
+/// any page.
+pub(crate) fn return_screen_for_opening(app: &App) -> Screen {
+    if app.screen == Screen::DailyMatch {
+        app.daily
+            .board
+            .as_ref()
+            .map(|board| board.return_screen)
+            .unwrap_or(Screen::Dashboard)
+    } else if app.screen == Screen::HouseTable {
+        app.house.return_screen
+    } else if app.screen == Screen::Realm {
+        app.realm
+            .board
+            .as_ref()
+            .map(|board| board.return_screen)
+            .unwrap_or(Screen::Dashboard)
+    } else {
+        app.screen
+    }
+}
+
 fn handle_draft_input(app: &mut App, event: ParsedInput) {
-    let username_stage = app
-        .daily
-        .challenge_draft
-        .as_ref()
-        .is_some_and(|draft| draft.username.is_some());
     match event {
         ParsedInput::Byte(0x1B) => {
             app.daily.draft_back();
@@ -262,20 +264,6 @@ fn handle_draft_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'\r' | b'\n') => {
             app.daily.draft_advance();
         }
-        _ if username_stage => match event {
-            ParsedInput::Byte(0x7F | 0x08) => {
-                if let Some(buffer) = draft_username_buffer(app) {
-                    buffer.pop();
-                }
-            }
-            ParsedInput::Byte(byte) if byte.is_ascii_graphic() => {
-                push_prompt_char(app, byte as char);
-            }
-            ParsedInput::Char(ch) if !ch.is_control() => {
-                push_prompt_char(app, ch);
-            }
-            _ => {}
-        },
         ParsedInput::Arrow(b'B')
         | ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J') => {
@@ -290,25 +278,6 @@ fn handle_draft_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-fn draft_username_buffer(app: &mut App) -> Option<&mut String> {
-    app.daily
-        .challenge_draft
-        .as_mut()
-        .and_then(|draft| draft.username.as_mut())
-}
-
-fn push_prompt_char(app: &mut App, ch: char) {
-    const MAX_USERNAME_PROMPT: usize = 32;
-    if let Some(buffer) = draft_username_buffer(app)
-        && buffer.chars().count() < MAX_USERNAME_PROMPT
-    {
-        buffer.push(ch);
-    }
-}
-
-/// Keys on the realm create-game overlay: pick a ruleset, then the daily
-/// reset hour, then type a name; Enter advances and finally creates. The
-/// name step owns printable input, so `j`/`k` type rather than scroll.
 /// The join overlay: pick a colour nobody there is wearing, or back out.
 fn handle_realm_join_input(app: &mut App, event: ParsedInput) {
     match event {
@@ -337,6 +306,7 @@ fn handle_realm_join_input(app: &mut App, event: ParsedInput) {
     }
 }
 
+/// The name step owns printable input, so `j`/`k` type rather than scroll.
 fn handle_realm_draft_input(app: &mut App, event: ParsedInput) {
     use crate::app::lobby::realm::state::CreateStep;
     let step = app.realm.create_draft.as_ref().map(|draft| draft.step);
@@ -394,15 +364,7 @@ fn handle_realm_draft_input(app: &mut App, event: ParsedInput) {
 /// Open a realm's board from the Lobby, keeping the return screen the way
 /// `activate_selection` does.
 fn open_realm_board(app: &mut App, game_id: uuid::Uuid) {
-    let return_screen = if app.screen == Screen::Realm {
-        app.realm
-            .board
-            .as_ref()
-            .map(|board| board.return_screen)
-            .unwrap_or(Screen::Dashboard)
-    } else {
-        app.screen
-    };
+    let return_screen = return_screen_for_opening(app);
     app.realm.open_board(game_id, return_screen);
     app.show_lobby_modal = false;
     app.set_screen(Screen::Realm);

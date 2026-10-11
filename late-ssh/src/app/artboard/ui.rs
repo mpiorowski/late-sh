@@ -46,7 +46,13 @@ pub(crate) enum SwatchHit {
     Pin(usize),
 }
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool) {
+pub fn draw_game(
+    frame: &mut Frame,
+    area: Rect,
+    state: &State,
+    interacting: bool,
+    can_moderate: bool,
+) {
     // The rail is the page's table of contents: it shows while it (or a
     // pane under it) has focus and folds away when the board takes the
     // keys, so painting and looking both get the full width.
@@ -63,11 +69,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
 
     if state.gallery().shows_gallery_pane() {
         match state.gallery().focus() {
-            GalleryFocus::Piece => draw_piece_view(frame, board_area, state),
+            GalleryFocus::Piece => draw_piece_view(frame, board_area, state, can_moderate),
             GalleryFocus::Canvas
             | GalleryFocus::Rail
             | GalleryFocus::List
-            | GalleryFocus::Archive => draw_gallery_pane(frame, board_area, state),
+            | GalleryFocus::Archive => draw_gallery_pane(frame, board_area, state, can_moderate),
         }
     } else {
         let info = artboard_info_lines(state, interacting);
@@ -94,6 +100,9 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
     }
     if state.is_help_open() {
         draw_help(frame, area, state);
+    }
+    if state.gallery().rating_dialog.is_some() {
+        super::gallery::ui::draw_rating_dialog(frame, area, state.gallery());
     }
     if state.is_glyph_picker_open()
         && let Some(catalog) = state.glyph_catalog()

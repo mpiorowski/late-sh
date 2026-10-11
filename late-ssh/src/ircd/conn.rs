@@ -42,6 +42,7 @@ use crate::{
     moderation::{
         command::{RoleAction, RoomModAction},
         event::ModerationEvent,
+        service::{RoomModRequest, RoomRef},
     },
     state::{ActiveSession, ActiveUser, State},
     usernames,
@@ -60,7 +61,7 @@ const PRESENCE_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// security boundary (FRD §5.2 A4).
 const AUTH_FAIL_DELAY: Duration = Duration::from_secs(1);
 const AUTH_FAIL_DELAY_LIMITED: Duration = Duration::from_secs(8);
-const SUPPORTED_CAPS: &[&str] = &["message-tags", "server-time", "echo-message"];
+const SUPPORTED_CAPS: &[&str] = &["message-tags", "server-time", "echo-message", "away-notify"];
 
 pub trait IrcIo: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -118,6 +119,7 @@ where
 
     let mut session = Session {
         state: state.clone(),
+        conn_id,
         user_id: registration.user_id,
         nick: registration.nick,
         is_admin: registration.is_admin,
@@ -132,6 +134,10 @@ where
         recent_commands: VecDeque::new(),
         last_rate_notice: None,
         last_online: HashSet::new(),
+        last_away: HashSet::new(),
+        sent_away: false,
+        last_spoke_at: Instant::now(),
+        away: false,
     };
 
     let result = session.run(&mut framed, control_rx).await;
@@ -171,6 +177,9 @@ struct IrcCapabilities {
     message_tags: bool,
     server_time: bool,
     echo_message: bool,
+    /// IRCv3 `away-notify`: an `AWAY` line when someone sharing a channel
+    /// goes away or comes back (`common/away.rs`).
+    away_notify: bool,
 }
 
 impl IrcCapabilities {
@@ -179,6 +188,7 @@ impl IrcCapabilities {
             "message-tags" => self.message_tags = true,
             "server-time" => self.server_time = true,
             "echo-message" => self.echo_message = true,
+            "away-notify" => self.away_notify = true,
             _ => {}
         }
     }
@@ -188,6 +198,7 @@ impl IrcCapabilities {
             "message-tags" => self.message_tags = false,
             "server-time" => self.server_time = false,
             "echo-message" => self.echo_message = false,
+            "away-notify" => self.away_notify = false,
             _ => {}
         }
     }
@@ -202,6 +213,9 @@ impl IrcCapabilities {
         }
         if self.echo_message {
             caps.push("echo-message");
+        }
+        if self.away_notify {
+            caps.push("away-notify");
         }
         caps.join(" ")
     }
@@ -444,7 +458,7 @@ fn track_active_irc_user(
         token: irc_session_token(conn_id),
         fingerprint: Some(registered.fingerprint.clone()),
         peer_ip: client_ip,
-        status: None,
+        away: false,
     };
 
     let became_online = if let Some(active) = active_users.get_mut(&registered.user_id) {
@@ -531,6 +545,9 @@ struct DmPeer {
 
 struct Session {
     state: State,
+    /// This connection's id; its roster session token is
+    /// `irc_session_token(conn_id)`.
+    conn_id: u64,
     user_id: Uuid,
     nick: String,
     is_admin: bool,
@@ -556,6 +573,16 @@ struct Session {
     last_rate_notice: Option<Instant>,
     /// Online users at the last presence poll, for JOIN/QUIT projection.
     last_online: HashSet<Uuid>,
+    /// Away users at the last presence poll, for `away-notify` projection.
+    last_away: HashSet<Uuid>,
+    /// `AWAY :msg` was sent and not yet cleared by a bare `AWAY`.
+    sent_away: bool,
+    /// When this connection last sent a PRIVMSG or NOTICE: IRC's "input".
+    /// PINGs and client-side polls do not count, or no IRC session would
+    /// ever go quiet.
+    last_spoke_at: Instant,
+    /// This connection's away flag as last written to the roster.
+    away: bool,
 }
 
 impl Session {
@@ -576,6 +603,7 @@ impl Session {
 
         self.force_join_lounge(framed).await?;
         self.last_online = self.online_user_ids();
+        self.last_away = self.away_user_ids();
 
         loop {
             tokio::select! {
@@ -634,6 +662,7 @@ impl Session {
                     }
                 }
                 _ = presence_timer.tick() => {
+                    self.sync_away();
                     self.project_presence_changes(framed).await?;
                 }
                 _ = ping_timer.tick() => {
@@ -681,10 +710,12 @@ impl Session {
                 return Ok(false);
             }
             Command::PRIVMSG(target, text) => {
+                self.note_spoke();
                 self.handle_privmsg(framed, &target, text, true, tags.as_deref())
                     .await?;
             }
             Command::NOTICE(target, text) => {
+                self.note_spoke();
                 // RFC: never generate error replies to NOTICE.
                 self.handle_privmsg(framed, &target, text, false, tags.as_deref())
                     .await?;
@@ -860,6 +891,8 @@ impl Session {
                     .await?;
             }
             Command::AWAY(Some(_)) => {
+                self.sent_away = true;
+                self.sync_away();
                 framed
                     .send(replies::numeric(
                         &self.nick,
@@ -869,6 +902,8 @@ impl Session {
                     .await?;
             }
             Command::AWAY(None) => {
+                self.sent_away = false;
+                self.note_spoke();
                 framed
                     .send(replies::numeric(
                         &self.nick,
@@ -1061,11 +1096,12 @@ impl Session {
             {
                 return Ok(());
             }
+            let peer_nick = proj::nick_for_username(&target_username);
             self.dm_peers.insert(
                 room.id,
                 DmPeer {
                     peer_user_id: target_id,
-                    peer_nick: proj::nick_for_username(&target_username),
+                    peer_nick: peer_nick.clone(),
                 },
             );
             self.state.chat_service.send_message_with_reply_task(
@@ -1079,6 +1115,10 @@ impl Session {
                     is_admin: self.is_admin,
                 },
             );
+            // The standard courtesy: tell the sender their peer is away.
+            if reply_errors && self.is_user_away(target_id) {
+                framed.send(away_reply(&self.nick, &peer_nick)).await?;
+            }
         }
         Ok(())
     }
@@ -1379,10 +1419,11 @@ impl Session {
     }
 
     async fn handle_join(&mut self, framed: &mut IrcStream, name: &str) -> Result<()> {
-        if self.channels.contains_key(&proj::normalize_channel(name)) {
+        let normalized = proj::normalize_channel(name);
+        if self.channels.contains_key(&normalized) {
             return Ok(()); // already joined; ignore
         }
-        let Some(slug) = proj::slug_for_channel(name) else {
+        let Some((visibility, slug)) = proj::channel_parts(&normalized) else {
             framed
                 .send(replies::numeric(
                     &self.nick,
@@ -1393,7 +1434,9 @@ impl Session {
             return Ok(());
         };
         let client = self.state.db.get().await?;
-        let room = ChatRoom::find_irc_channel_by_slug_for_user(&client, slug, self.user_id).await?;
+        let room =
+            ChatRoom::find_irc_channel_by_slug_for_user(&client, visibility, slug, self.user_id)
+                .await?;
         let Some(room) = room.filter(proj::is_irc_channel_kind) else {
             framed
                 .send(replies::numeric(
@@ -1619,12 +1662,13 @@ impl Session {
                 let staff = User::staff_flags_by_ids(&client, &online).await?;
                 drop(client);
                 let directory = usernames::snapshot(&self.state.username_directory);
+                let away_ids = self.away_user_ids();
                 for id in online {
                     let Some(username) = directory.get(&id) else {
                         continue;
                     };
                     let nick = proj::nick_for_username(username);
-                    let flags = if staff.contains_key(&id) { "H@" } else { "H" };
+                    let flags = who_flags(away_ids.contains(&id), staff.contains_key(&id));
                     out.push(replies::numeric(
                         &self.nick,
                         Response::RPL_WHOREPLY,
@@ -1634,7 +1678,7 @@ impl Session {
                             replies::USER_HOSTNAME.to_string(),
                             SERVER_NAME.to_string(),
                             nick.clone(),
-                            flags.to_string(),
+                            flags,
                             format!("0 {nick}"),
                         ],
                     ));
@@ -1646,6 +1690,7 @@ impl Session {
                 && (self.is_user_online(id) || id == self.user_id)
             {
                 let nick = proj::nick_for_username(&username);
+                let flags = who_flags(self.is_user_away(id), false);
                 out.push(replies::numeric(
                     &self.nick,
                     Response::RPL_WHOREPLY,
@@ -1655,7 +1700,7 @@ impl Session {
                         replies::USER_HOSTNAME.to_string(),
                         SERVER_NAME.to_string(),
                         nick.clone(),
-                        "H".to_string(),
+                        flags,
                         format!("0 {nick}"),
                     ],
                 ));
@@ -1718,6 +1763,9 @@ impl Session {
                 ],
             ),
         ];
+        if self.is_user_away(id) {
+            out.push(away_reply(&self.nick, &nick));
+        }
         if staff.get(&id).is_some_and(|(is_admin, _)| *is_admin) {
             out.push(replies::numeric(
                 &self.nick,
@@ -1755,7 +1803,15 @@ impl Session {
                 .send(replies::numeric(
                     &self.nick,
                     Response::RPL_CHANNELMODEIS,
-                    vec![channel.to_string(), "+nt".to_string()],
+                    vec![
+                        channel.to_string(),
+                        if channel.starts_with("##") {
+                            "+inst"
+                        } else {
+                            "+nt"
+                        }
+                        .to_string(),
+                    ],
                 ))
                 .await?;
             return Ok(());
@@ -1768,10 +1824,12 @@ impl Session {
                     self.send_banlist(framed, channel, room_id).await?;
                 }
                 Mode::Plus(ChannelMode::Ban, Some(mask)) => {
-                    self.handle_ban_mode(framed, channel, &mask, true).await?;
+                    self.handle_ban_mode(framed, channel, room_id, &mask, true)
+                        .await?;
                 }
                 Mode::Minus(ChannelMode::Ban, Some(mask)) => {
-                    self.handle_ban_mode(framed, channel, &mask, false).await?;
+                    self.handle_ban_mode(framed, channel, room_id, &mask, false)
+                        .await?;
                 }
                 Mode::Plus(ChannelMode::InviteOnly, _)
                 | Mode::Minus(ChannelMode::InviteOnly, _)
@@ -1816,10 +1874,7 @@ impl Session {
                 .await?;
             return Ok(());
         }
-        if !self
-            .channels
-            .contains_key(&proj::normalize_channel(channel))
-        {
+        let Some((room_id, _)) = self.authorized_joined_channel(channel).await? else {
             framed
                 .send(replies::numeric(
                     &self.nick,
@@ -1828,13 +1883,22 @@ impl Session {
                 ))
                 .await?;
             return Ok(());
-        }
+        };
         let reason = reason.unwrap_or("IRC KICK");
         for nick in users.split(',').filter(|nick| !nick.trim().is_empty()) {
             let username = proj::username_for_nick(nick.trim());
-            let command = format!("kick {channel} @{username} {reason}");
-            self.run_moderation_command(framed, channel, &command)
-                .await?;
+            self.run_room_moderation_command(
+                framed,
+                channel,
+                RoomModRequest {
+                    action: RoomModAction::Kick,
+                    room: RoomRef::Id(room_id),
+                    username,
+                    duration: None,
+                    reason: reason.to_string(),
+                },
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1864,6 +1928,7 @@ impl Session {
         &mut self,
         framed: &mut IrcStream,
         channel: &str,
+        room_id: Uuid,
         mask: &str,
         add: bool,
     ) -> Result<()> {
@@ -1890,12 +1955,22 @@ impl Session {
             return Ok(());
         };
         let username = proj::username_for_nick(nick);
-        let command = if add {
-            format!("ban {channel} @{username} IRC MODE +b")
-        } else {
-            format!("unban {channel} @{username} IRC MODE -b")
-        };
-        self.run_moderation_command(framed, channel, &command).await
+        self.run_room_moderation_command(
+            framed,
+            channel,
+            RoomModRequest {
+                action: if add {
+                    RoomModAction::Ban
+                } else {
+                    RoomModAction::Unban
+                },
+                room: RoomRef::Id(room_id),
+                username,
+                duration: None,
+                reason: if add { "IRC MODE +b" } else { "IRC MODE -b" }.to_string(),
+            },
+        )
+        .await
     }
 
     async fn send_banlist(
@@ -1938,12 +2013,36 @@ impl Session {
         command: &str,
     ) -> Result<()> {
         let permissions = self.reload_permissions().await?;
-        match self
+        let result = self
             .state
             .chat_service
             .run_mod_command(self.user_id, permissions, command)
-            .await
-        {
+            .await;
+        self.send_moderation_result(framed, context, result).await
+    }
+
+    async fn run_room_moderation_command(
+        &mut self,
+        framed: &mut IrcStream,
+        channel: &str,
+        request: RoomModRequest,
+    ) -> Result<()> {
+        let permissions = self.reload_permissions().await?;
+        let result = self
+            .state
+            .chat_service
+            .run_room_mod_command(self.user_id, permissions, request)
+            .await;
+        self.send_moderation_result(framed, channel, result).await
+    }
+
+    async fn send_moderation_result(
+        &self,
+        framed: &mut IrcStream,
+        context: &str,
+        result: Result<Vec<String>>,
+    ) -> Result<()> {
+        match result {
             Ok(lines) => {
                 for line in lines {
                     framed
@@ -2598,6 +2697,42 @@ impl Session {
         Ok(!memberships.is_empty())
     }
 
+    /// Recompute this connection's away flag (`common/away.rs`) and write it
+    /// to the roster when it changed.
+    fn sync_away(&mut self) {
+        let away =
+            crate::app::common::away::session_is_away(self.last_spoke_at.elapsed(), self.sent_away);
+        if away == self.away {
+            return;
+        }
+        self.away = away;
+        crate::app::common::away::set_session_away(
+            &self.state.active_users,
+            self.user_id,
+            &irc_session_token(self.conn_id),
+            away,
+        );
+    }
+
+    /// The user spoke from this connection: it is here again (unless an
+    /// explicit `AWAY :msg` still stands).
+    fn note_spoke(&mut self) {
+        self.last_spoke_at = Instant::now();
+        self.sync_away();
+    }
+
+    fn is_user_away(&self, user_id: Uuid) -> bool {
+        self.state
+            .active_users
+            .lock_recover()
+            .get(&user_id)
+            .is_some_and(crate::app::common::away::user_is_away)
+    }
+
+    fn away_user_ids(&self) -> HashSet<Uuid> {
+        crate::app::common::away::away_user_ids(&self.state.active_users.lock_recover())
+    }
+
     fn is_user_online(&self, user_id: Uuid) -> bool {
         self.state
             .active_users
@@ -2671,10 +2806,76 @@ impl Session {
             }
         }
 
+        // `away-notify`: an AWAY line for everyone online sharing a channel
+        // whose away flag moved since the last poll. An arrival who is away
+        // lands here too, right after their JOIN above, as the spec asks.
+        let now_away = self.away_user_ids();
+        if self.caps.away_notify && !self.joined.is_empty() {
+            let changed: Vec<Uuid> = now_away
+                .symmetric_difference(&self.last_away)
+                .filter(|id| **id != self.user_id && now_online.contains(*id))
+                .copied()
+                .collect();
+            if !changed.is_empty() {
+                let client = self.state.db.get().await?;
+                let joined_room_ids: Vec<Uuid> = self.joined.keys().copied().collect();
+                let memberships = ChatRoomMember::list_memberships_for_users_in_rooms(
+                    &client,
+                    &changed,
+                    &joined_room_ids,
+                )
+                .await?;
+                drop(client);
+                let sharing: HashSet<Uuid> = memberships
+                    .into_iter()
+                    .map(|(user_id, _)| user_id)
+                    .collect();
+                for user_id in sharing {
+                    let Some(nick) = directory
+                        .get(&user_id)
+                        .map(|username| proj::nick_for_username(username))
+                    else {
+                        continue;
+                    };
+                    let message = match now_away.contains(&user_id) {
+                        true => Some(crate::app::common::away::AWAY_GLYPH.to_string()),
+                        false => None,
+                    };
+                    out.push(replies::from_user(&nick, Command::AWAY(message)));
+                }
+            }
+        }
+
         self.last_online = now_online;
+        self.last_away = now_away;
         send_all(framed, out).await?;
         Ok(())
     }
+}
+
+/// A WHO reply's flags: `H` here or `G` gone (away), then `@` for staff.
+fn who_flags(away: bool, staff: bool) -> String {
+    let presence = match away {
+        true => "G",
+        false => "H",
+    };
+    match staff {
+        true => format!("{presence}@"),
+        false => presence.to_string(),
+    }
+}
+
+/// `RPL_AWAY` (301) about `target_nick`, sent to `nick`. The away message
+/// is the away glyph: late.sh away carries no text.
+fn away_reply(nick: &str, target_nick: &str) -> Message {
+    replies::numeric(
+        nick,
+        Response::RPL_AWAY,
+        vec![
+            target_nick.to_string(),
+            crate::app::common::away::AWAY_GLYPH.to_string(),
+        ],
+    )
 }
 
 fn is_rate_limited_command(command: &Command) -> bool {

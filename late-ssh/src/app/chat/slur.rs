@@ -11,15 +11,13 @@
 //! `ing` contraction is the one deliberate exception, and it reads as speech
 //! rather than as damage.
 //!
-//! One thing a patron says is never touched at any level: the phrases in
-//! [`round_phrase_spans`] that buy the house a round. Everything else here is
-//! cosmetic, but that sentence is a spending authorization the bartender
-//! matches literally, and the patrons most likely to buy a round are exactly
-//! the ones drunk enough to have it scrambled out from under them. The list
-//! lives in `late_core::models::drink_round` so the matcher and the guard can
-//! never read different phrases.
+//! Spending instructions are never touched at any level: the phrases in
+//! [`spending_phrase_spans`] that buy the house a round or put one drink on
+//! a named patron's tab. The bartender matches these literally, so slurring
+//! them would silently lose an order. The matchers live in
+//! `late_core::models::drink_round` and are shared here.
 
-use late_core::models::drink_round::round_phrase_spans;
+use late_core::models::drink_round::spending_phrase_spans;
 
 /// Shortest word that can take a typo. Below this there is no interior left
 /// once the first and last characters are off limits.
@@ -141,7 +139,7 @@ fn slur_line(line: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
 }
 
 fn slur_segment(segment: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
-    let protected = round_phrase_spans(segment);
+    let protected = spending_phrase_spans(segment);
     let mut out = String::with_capacity(segment.len());
     let mut offset = 0;
     // Inclusive split keeps each token's trailing whitespace attached, so
@@ -177,7 +175,7 @@ fn slur_token(token: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
 
 /// The byte range of the ASCII-letter core of `token`, or `None` when the
 /// token is off limits. Protected: handles (`@mat`), room slugs (`#lounge`),
-/// slash commands, URLs, the `---NEWS---` family of card markers, and anything
+/// slash commands, URLs, the `---BUG---` family of card markers, and anything
 /// carrying non-ASCII, so CJK and emoji pass through whole rather than being
 /// sliced at a byte boundary.
 fn word_span(token: &str) -> Option<(usize, usize)> {
@@ -270,11 +268,11 @@ fn slurred(chars: &[char], rng: &mut SlurRng) -> Option<String> {
 
 /// Drop a single `*hic*` between two words. It only ever widens a gap, so no
 /// token is split, but the gap itself still has to be fair game: gaps inside a
-/// code span, inside a round phrase (a hiccup mid-order would break the match
+/// code span, inside a spending phrase (a hiccup mid-order would break the match
 /// the same way a scramble would), or in the quoted line before `from` are off
 /// limits. With nothing eligible the hiccup goes on the end.
 fn with_hiccup(text: &str, from: usize, rng: &mut SlurRng) -> String {
-    let protected = round_phrase_spans(text);
+    let protected = spending_phrase_spans(text);
     let mut gaps = Vec::new();
     let mut in_code = false;
     for (index, c) in text.char_indices() {

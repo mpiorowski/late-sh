@@ -2,12 +2,7 @@ use super::*;
 use crate::app::audio::client_state::{ClientKind, ClientPlatform, ClientSshMode};
 
 fn expected_source(source: AudioSource) -> PairControlMessage {
-    playback_message(
-        "https://audio.late.sh",
-        source,
-        IcecastStream::default(),
-        RadioStation::default(),
-    )
+    playback_message("https://audio.late.sh", source, RadioStation::default())
 }
 
 #[test]
@@ -388,7 +383,7 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
 
     let (cli_tx, mut cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
     let cli_id = registry
-        .register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast)
+        .register("tok1".to_string(), cli_tx, user_id, AudioSource::Radio)
         .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
@@ -404,12 +399,7 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
     );
     let (webview_tx, mut webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
     let webview_entry_id = registry
-        .register(
-            "tok1".to_string(),
-            webview_tx,
-            user_id,
-            AudioSource::Icecast,
-        )
+        .register("tok1".to_string(), webview_tx, user_id, AudioSource::Radio)
         .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
@@ -434,14 +424,14 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
         expected_source(AudioSource::Youtube)
     );
 
-    registry.set_audio_source(user_id, AudioSource::Icecast);
+    registry.set_audio_source(user_id, AudioSource::Radio);
     assert_eq!(
         cli_rx.try_recv().unwrap(),
-        expected_source(AudioSource::Icecast)
+        expected_source(AudioSource::Radio)
     );
     assert_eq!(
         webview_rx.try_recv().unwrap(),
-        expected_source(AudioSource::Icecast)
+        expected_source(AudioSource::Radio)
     );
 }
 

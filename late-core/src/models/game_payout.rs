@@ -61,8 +61,8 @@ pub enum GamePayoutKey<'a> {
 }
 
 /// An all-or-nothing payout behind several gates at once: the Lateania crowns
-/// pay once per character AND at most once a week per account, the roguelike
-/// doors once per ingested run AND at most once a week.
+/// pay once per character AND at most once a month per account, the roguelike
+/// doors once per ingested run AND at most once a month.
 ///
 /// Every row carries the full `amount`, because the table's CHECK forbids a
 /// zero and a claim row records what the claim was worth. The money witness is

@@ -142,6 +142,7 @@ fn a_legal_hit_that_reaches_no_rail_is_a_foul() {
     let s = state(&[3, NINE], 4);
     let mut outcome = shot(Some(3), &[]);
     outcome.cushion_after_contact = false;
+    outcome.balls_to_rail.clear();
     let r = judge(&s, &outcome);
     assert_eq!(r.foul, Some(Foul::NoRail));
 }

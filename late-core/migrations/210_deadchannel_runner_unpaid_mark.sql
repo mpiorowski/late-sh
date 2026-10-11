@@ -1,0 +1,18 @@
+-- The Old Signal's payout is durable (GAME.md, "Marks: the reset"). The
+-- kill commits first and the chips are granted after, on another
+-- connection, so a pool timeout or a restart between the two used to leave
+-- the mark on the row and the month's 40,000 chips nowhere, with nothing
+-- recording the debt.
+--
+-- `unpaid_mark` is the mark whose chips have not been settled yet: written
+-- in the kill's transaction beside `marks`, cleared once the grant answers
+-- either way (paid, or refused by the 30-day gate), left standing when the
+-- grant errors. While it stands, the next command or reload on the row
+-- retries the grant with the same event key (`<runner row id>:<mark>`),
+-- which the unique gate makes safe to repeat. A refused grant writes no
+-- claim row, so the flag, not a blind re-grant of `marks`, is what stops a
+-- mark the gate turned down from being paid once the window opens.
+--
+-- The change trigger (migration 202) does not watch this column: the
+-- directory has no use for it.
+ALTER TABLE deadchannel_runners ADD COLUMN unpaid_mark INTEGER;

@@ -273,6 +273,29 @@ impl ActivityPublisher {
         });
     }
 
+    /// An invite paid out. Both names are resolved here, after the payout
+    /// committed, like every other line.
+    pub fn referral_rewarded_task(
+        &self,
+        inviter_id: Uuid,
+        invitee_id: Uuid,
+        inviter_chips: i64,
+        invitee_chips: i64,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let inviter = publisher.username_for(inviter_id).await;
+            let invitee = publisher.username_for(invitee_id).await;
+            let _ = publisher.tx.send(ActivityEvent::referral_rewarded(
+                inviter_id,
+                inviter,
+                invitee,
+                inviter_chips,
+                invitee_chips,
+            ));
+        });
+    }
+
     /// No username to resolve: the reminder is the pot's own line.
     pub fn pot_closing(
         &self,
@@ -321,6 +344,36 @@ impl ActivityPublisher {
                 .tx
                 .send(ActivityEvent::cyberspace_posted(user_id, username, title));
         });
+    }
+
+    /// Somebody posted to the board. `starts_at` is the event's own
+    /// instant; the line says how far off it is from now.
+    pub fn event_posted_task(
+        &self,
+        user_id: Uuid,
+        event_id: Uuid,
+        title: String,
+        starts_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let starts_in_secs = (starts_at - chrono::Utc::now()).num_seconds();
+            let _ = publisher.tx.send(ActivityEvent::event_posted(
+                user_id,
+                username,
+                event_id,
+                title,
+                starts_in_secs,
+            ));
+        });
+    }
+
+    /// No username to resolve: the start is the board's own line.
+    pub fn event_starting(&self, event_id: Uuid, title: String, going: i64) {
+        let _ = self
+            .tx
+            .send(ActivityEvent::event_starting(event_id, title, going));
     }
 
     pub fn game_scored_task(

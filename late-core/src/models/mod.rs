@@ -1,5 +1,4 @@
 pub mod account_link;
-pub mod app_flag;
 pub mod aquarium_care;
 #[cfg(test)]
 mod aquarium_care_test;
@@ -10,14 +9,15 @@ mod arcade_handle_test;
 pub mod artboard;
 pub mod artboard_ban;
 pub mod artboard_piece;
+pub mod artboard_piece_rating;
 #[cfg(test)]
 mod artboard_piece_test;
 #[cfg(test)]
 mod artboard_test;
 pub mod article;
-pub mod article_feed_read;
+pub mod article_read;
 #[cfg(test)]
-mod article_feed_read_test;
+mod article_read_test;
 #[cfg(test)]
 mod article_test;
 pub mod asterion;
@@ -30,6 +30,10 @@ pub mod bonsai;
 pub mod bonsai_decay_protection;
 #[cfg(test)]
 mod bonsai_test;
+pub mod calendar;
+pub mod calendar_ban;
+#[cfg(test)]
+mod calendar_test;
 pub mod character_sheet;
 pub mod chat_message;
 pub mod chat_message_gild;
@@ -54,6 +58,8 @@ pub mod crown;
 mod crown_test;
 pub mod cyberspace_account;
 pub mod daily_match;
+#[cfg(test)]
+mod daily_match_test;
 pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
@@ -130,12 +136,16 @@ mod pet_test;
 pub mod pot;
 #[cfg(test)]
 mod pot_test;
+pub mod presence;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
 pub mod quest;
 pub mod realm_game;
+pub mod referral;
+#[cfg(test)]
+mod referral_test;
 pub mod rental;
 pub mod reward;
 #[cfg(test)]
@@ -156,6 +166,9 @@ pub mod sliding_puzzle;
 mod sliding_puzzle_test;
 pub mod snake;
 pub mod solitaire;
+pub mod statusline;
+#[cfg(test)]
+mod statusline_test;
 pub mod stream_ban;
 pub mod sudoku;
 pub mod tetris;

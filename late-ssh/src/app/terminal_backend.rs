@@ -9,7 +9,7 @@
 //! and the server has no way to know which. Every cell written after the
 //! disagreement lands in the wrong column, and the diff never rewrites what
 //! it believes are unchanged padding cells, so the stray tail stays on the
-//! client until Ctrl+L.
+//! client until Ctrl+R.
 //!
 //! This backend never trusts contiguity across a cell that is not a single
 //! ASCII byte: the cell after it gets an absolute cursor move, and a cell the
@@ -27,7 +27,11 @@
 //! a full row-and-column move. Only a multi-codepoint grapheme, which a
 //! per-codepoint terminal can draw several columns wide and past the row
 //! end, loses the row too and forces the full move. `terminal_backend_test`
-//! pins the bytes a bordered full frame costs.
+//! pins the bytes a bordered full frame costs, and the ascii pieces' wire
+//! budget (`ascii/ui_test.rs`, `every_piece_stays_under_the_wire_budget`)
+//! is measured through this backend: a change to the bytes a cell costs
+//! here moves every piece's KB/s, and the closest piece sits a few percent
+//! under the budget.
 
 use std::io::{self, Write};
 

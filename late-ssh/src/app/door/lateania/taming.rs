@@ -722,6 +722,20 @@ pub fn tame_xp(beast: &PetSpecies) -> i32 {
     30 + beast.tame_level() * beast.tame_level() / 2
 }
 
+/// Share (percent) of a kill's combat xp that also trains Animal Taming when a
+/// standing companion fought beside the player. The passive lane: a player who
+/// never grinds the forest gates still drifts to roughly ten or fifteen taming
+/// levels under their class level (about 34 at class 50, 50 at class 100), so
+/// the beasts of the lands they fight in open up, while the Wildbound summit
+/// stays a reward for working the gates.
+pub const COMPANION_KILL_TAMING_PCT: i64 = 15;
+
+/// Animal Taming xp earned by a kill worth `kill_xp` combat xp, made with a
+/// standing companion at the player's heel.
+pub fn companion_kill_taming_xp(kill_xp: i32) -> i64 {
+    i64::from(kill_xp) * COMPANION_KILL_TAMING_PCT / 100
+}
+
 // ---- Pet auto-skills ------------------------------------------------------
 //
 // A companion (bought or tamed) unlocks abilities as it gains levels, and they

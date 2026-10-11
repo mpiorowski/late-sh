@@ -25,6 +25,7 @@ fn craft_entry(name: &str, skill: &str) -> CraftEntryView {
         worn_stats: None,
         desc: "",
         category: "Goods",
+        held: None,
         craftable: true,
         reason: String::new(),
     }
@@ -314,6 +315,63 @@ fn crafting_needs_both_the_station_and_the_materials() {
         0,
         "a failed craft trains nothing"
     );
+}
+
+#[test]
+fn the_craft_panel_leads_with_alchemy_and_counts_the_made_goods_you_hold() {
+    use super::super::items::{ingot_id, potion_id, smith_weapon_id};
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 3; // Embergate's crafters' row: all five stations
+        p.inventory
+            .extend([potion_id(0), potion_id(0), potion_id(0)]);
+        p.inventory.extend([ingot_id(0), ingot_id(0)]);
+    }
+    let craft = s.snapshot().players[&uid(1)]
+        .crafting
+        .clone()
+        .expect("stations stand in room 3");
+
+    // Alchemy is the trade worked most, so it opens the list.
+    let mut trades: Vec<&str> = Vec::new();
+    for e in &craft.entries {
+        if !trades.contains(&e.skill.as_str()) {
+            trades.push(&e.skill);
+        }
+    }
+    assert_eq!(
+        trades,
+        [
+            "Alchemy",
+            "Smithing",
+            "Woodworking",
+            "Leatherworking",
+            "Cooking"
+        ]
+    );
+    assert_eq!(
+        craft.stations,
+        "alchemy lab, forge, workbench, tannery, cooking fire"
+    );
+
+    // A stock good carries how many are already in the pack; gear (weighed
+    // against what is worn) and a crafted material (an ingot is a resource)
+    // carry none.
+    let held = |id: u32| {
+        craft
+            .entries
+            .iter()
+            .find(|e| e.item_id == id)
+            .expect("the recipe is listed")
+            .held
+    };
+    assert_eq!(held(potion_id(0)), Some(3));
+    assert_eq!(held(potion_id(1)), Some(0));
+    assert_eq!(held(ingot_id(0)), None);
+    assert_eq!(held(smith_weapon_id(0)), None);
 }
 
 #[test]
@@ -1901,6 +1959,35 @@ fn monk_iron_body_blunts_physical_but_not_elemental() {
 }
 
 #[test]
+fn reaching_the_level_cap_announces_the_real_cap() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = Class::MAX_LEVEL - 1;
+        p.xp = xp_for_level(Class::MAX_LEVEL);
+    }
+    s.check_level_up(uid(1));
+    let texts: Vec<String> = s.players[&uid(1)]
+        .log
+        .iter()
+        .map(|l| l.text.clone())
+        .collect();
+    let cap = format!("level {}", Class::MAX_LEVEL);
+    let pinnacle: Vec<&String> = texts.iter().filter(|t| t.contains("pinnacle")).collect();
+    assert_eq!(
+        pinnacle.len(),
+        2,
+        "personal and world announcements: {texts:?}"
+    );
+    assert!(
+        pinnacle.iter().all(|t| t.contains(&cap)),
+        "the pinnacle names the real cap: {pinnacle:?}"
+    );
+}
+
+#[test]
 fn level_up_announces_concrete_gains_and_milestones() {
     let mut s = world();
     s.join(uid(1));
@@ -3005,6 +3092,47 @@ fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
 
     assert!(success_count > 0);
     assert!(failure_count > 0);
+}
+
+#[test]
+fn a_kill_trains_taming_only_beside_a_standing_companion() {
+    let mut s = world();
+    let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+    for n in 1..=3 {
+        s.join(uid(n));
+        s.choose_class(uid(n), Class::Ranger);
+    }
+    // uid(1) fights beside a standing hound, uid(2) has no companion, and
+    // uid(3)'s hound is beaten down.
+    s.players.get_mut(&uid(1)).unwrap().pet = Some(super::super::pets::Pet::new(species, 0));
+    let mut downed = super::super::pets::Pet::new(species, 0);
+    downed.downed = true;
+    s.players.get_mut(&uid(3)).unwrap().pet = Some(downed);
+    let (mob_id, mob_xp) = s
+        .mobs
+        .iter()
+        .map(|(id, m)| (*id, m.spawn.xp))
+        .max_by_key(|(_, xp)| *xp)
+        .expect("world has mobs");
+    for n in 1..=3 {
+        s.kill_mob(uid(n), mob_id);
+    }
+    let expected = i64::from(mob_xp) * 15 / 100;
+    assert!(expected > 0, "the richest foe is worth some taming");
+    assert_eq!(s.players[&uid(1)].taming_xp, expected);
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains(&format!("+{expected} Animal Taming xp"))),
+        "the kill line names the taming share"
+    );
+    assert_eq!(s.players[&uid(2)].taming_xp, 0, "no companion, no taming");
+    assert_eq!(
+        s.players[&uid(3)].taming_xp,
+        0,
+        "a downed companion did not fight"
+    );
 }
 
 #[test]

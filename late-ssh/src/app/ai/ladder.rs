@@ -3,7 +3,7 @@
 //! Rapid-fire mentions of @bot or @bartender in one room climb a ladder of
 //! growing cooldowns, so one patron cannot fill the room with bot replies;
 //! coming back after a quiet spell is free again. The state is process-global
-//! (single-replica by design, like the clubhouse `SharedLobby`): the ghost
+//! (single-replica by design, like the ghost bots themselves): the ghost
 //! responder loops step it when they answer, and every SSH session holds a
 //! read handle so the composer can warn the author at submit time that a
 //! mentioned bot is still cooling down.

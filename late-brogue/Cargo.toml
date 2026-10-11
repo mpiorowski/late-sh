@@ -31,6 +31,11 @@ tokio = { workspace = true }
 # SSH transport
 russh = { workspace = true }
 
+# Host-side mirror of each live game's screen, diffed out to watchers (see
+# src/watch.rs). The same parser late-ssh renders with, so a watcher's screen
+# is exactly what the player's late-ssh session sees.
+vt100 = { workspace = true }
+
 # Identity: shared-secret -> derived ed25519 client key (mirrors the dcss host)
 blake3 = { workspace = true }
 

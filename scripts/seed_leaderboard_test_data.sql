@@ -423,11 +423,13 @@ CROSS JOIN month_days m
 CROSS JOIN difficulties d
 WHERE EXTRACT(day FROM m.puzzle_date)::int <= 26 - CEIL(p.idx / 2.0)::int - d.day_offset;
 
--- Lateania characters for the Games boards: paired levels so the experience
--- tiebreak is visible, classes cycling the full roster, and the top half of
--- the field carrying Frontier rooms (2000..=2999, 50 per zone) at spread
--- depths. The blob shape mirrors the game's save schema; unknown fields
--- default on load, and these users never log in anyway.
+-- Lateania characters for the Games boards: the first six sit at the level
+-- cap (100) with xp past its threshold (4,967,282) so the Adventurers board
+-- shows paragon levels (one per 75k xp), the rest have paired levels so the
+-- experience tiebreak is visible, classes cycle the full roster, and the top
+-- half of the field carries spread pvp_kills for the PvP board. The blob
+-- shape mirrors the game's save schema; unknown fields default on load, and
+-- these users never log in anyway.
 INSERT INTO mud_characters (user_id, data)
 SELECT
     p.user_id,
@@ -438,8 +440,15 @@ SELECT
             'necromancer', 'bard', 'monk', 'paladin', 'warlock', 'berserker',
             'beastlord', 'skald', 'runemaster', 'valewalker', 'spiritmaster'
         ])[1 + (p.idx % 17)],
-        'level', GREATEST(3, 50 - ((p.idx - 1) / 2) * 2),
-        'xp', GREATEST(3, 50 - ((p.idx - 1) / 2) * 2) * 40000 + (48 - p.idx) * 977,
+        'level', CASE
+            WHEN p.idx <= 6 THEN 100
+            ELSE GREATEST(3, 50 - ((p.idx - 1) / 2) * 2)
+        END,
+        'xp', CASE
+            WHEN p.idx <= 6 THEN 4967282 + (7 - p.idx) * 9 * 75000 + 1234
+            ELSE GREATEST(3, 50 - ((p.idx - 1) / 2) * 2) * 40000 + (48 - p.idx) * 977
+        END,
+        'pvp_kills', CASE WHEN p.idx <= 24 THEN (25 - p.idx) * 3 ELSE 0 END,
         'hp', 200,
         'gold', 50 * p.idx,
         'visited',
@@ -692,6 +701,7 @@ SELECT
         'xp', 29 * 40000,
         'hp', 300,
         'gold', 800,
+        'pvp_kills', 7,
         'visited', jsonb_build_array(1, 5, 12, 2000, 2400)
     )
 FROM seed_current_player

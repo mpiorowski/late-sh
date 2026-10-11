@@ -75,6 +75,7 @@ pub enum Screen {
     Artboard,
     Profiles,
     Leaderboard,
+    Calendars,
     Clubhouse,
     /// A small bar out back of the Clubhouse (`app/clubhouse/nightcap`): a handful of
     /// sittable seats and a round of drinks, no walking. Entered with `n`
@@ -105,7 +106,7 @@ pub enum Screen {
 
 impl Screen {
     /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
-    /// through Leaderboards (`6`). The door games (Lateania, Rebels, Nethack,
+    /// through Calendars (`7`). The door games (Lateania, Rebels, Nethack,
     /// Green Dragon) are reached through the Games hub, not the tab bar, so
     /// they are absent from the cycle; if one is somehow current,
     /// `next`/`prev` fall back to the hub that owns them.
@@ -117,7 +118,8 @@ impl Screen {
             Screen::Games => Screen::Artboard,
             Screen::Artboard => Screen::Profiles,
             Screen::Profiles => Screen::Leaderboard,
-            Screen::Leaderboard => Screen::Clubhouse,
+            Screen::Leaderboard => Screen::Calendars,
+            Screen::Calendars => Screen::Clubhouse,
             Screen::City => Screen::Clubhouse,
             Screen::Zen => Screen::Dashboard,
             Screen::Lateania
@@ -141,7 +143,8 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Clubhouse => Screen::Leaderboard,
+            Screen::Clubhouse => Screen::Calendars,
+            Screen::Calendars => Screen::Leaderboard,
             Screen::City => Screen::Clubhouse,
             Screen::Zen => Screen::Dashboard,
             Screen::Dashboard => Screen::Clubhouse,
@@ -218,6 +221,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Artboard => "Artboard",
         Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
+        Screen::Calendars => "Calendars",
         Screen::Clubhouse => "Clubhouse",
         Screen::Nightcap => "Nightcap",
         Screen::City => "Undercity",

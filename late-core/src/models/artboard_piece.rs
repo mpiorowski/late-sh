@@ -34,14 +34,14 @@ use serde_json::Value;
 use tokio_postgres::{Row, error::SqlState};
 use uuid::Uuid;
 
-use super::app_flag::AppFlag;
+use super::artboard_piece_rating::ContentRatingSummary;
 
 /// Fewest non-blank glyphs a frame may hold. A smiley is not a piece.
 pub const PIECE_MIN_GLYPHS: usize = 40;
 /// Largest frame, in cells. Every piece fits a terminal, which is what makes
 /// the splash and the profile able to show one without cropping.
 pub const PIECE_MAX_WIDTH: usize = 120;
-pub const PIECE_MAX_HEIGHT: usize = 40;
+pub const PIECE_MAX_HEIGHT: usize = 50;
 /// The share of a frame's glyphs the hanger must have painted, per cell
 /// provenance. Below it the frame is somebody else's work, or a collage.
 pub const PIECE_MIN_OWN_SHARE_PERCENT: u32 = 75;
@@ -75,6 +75,7 @@ pub struct ArtboardPiece {
     pub period_month: NaiveDate,
     pub applause: i64,
     pub applauded_by_viewer: bool,
+    pub content_rating: ContentRatingSummary,
 }
 
 impl From<Row> for ArtboardPiece {
@@ -94,6 +95,7 @@ impl From<Row> for ArtboardPiece {
             period_month: row.get("period_month"),
             applause: row.get("applause"),
             applauded_by_viewer: row.get("applauded_by_viewer"),
+            content_rating: ContentRatingSummary::from_row(&row),
         }
     }
 }
@@ -115,7 +117,7 @@ pub struct HangParams {
 /// everything the hanger checks itself (size, share) never reaches here.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HangOutcome {
-    Hung(ArtboardPiece),
+    Hung(Box<ArtboardPiece>),
     DailyCapReached,
     Duplicate,
 }
@@ -230,9 +232,14 @@ const PIECE_VIEW_SQL: &str =
             EXISTS (
                 SELECT 1 FROM artboard_piece_votes v
                 WHERE v.piece_id = p.id AND v.user_id = $1
-            ) AS applauded_by_viewer
+            ) AS applauded_by_viewer,
+            r.owner_marked_nsfw, r.sfw_votes, r.nsfw_votes, r.mod_sfw, r.mod_nsfw,
+            r.admin_sfw, r.admin_nsfw,
+            (SELECT nsfw FROM artboard_piece_content_votes
+             WHERE piece_id = p.id AND user_id = $1) AS viewer_content_vote
      FROM (SELECT * FROM artboard_pieces WHERE removed_at IS NULL) p
-     JOIN users u ON u.id = p.user_id";
+     JOIN users u ON u.id = p.user_id
+     JOIN artboard_piece_content_ratings r ON r.piece_id = p.id";
 
 impl ArtboardPiece {
     /// Hang a piece. The per-month duplicate is the unique index, so two
@@ -287,7 +294,7 @@ impl ArtboardPiece {
         };
         let id: Uuid = row.get("id");
         match Self::find(client, params.user_id, id).await? {
-            Some(piece) => Ok(HangOutcome::Hung(piece)),
+            Some(piece) => Ok(HangOutcome::Hung(Box::new(piece))),
             None => anyhow::bail!("hung artboard piece {id} vanished before it could be read back"),
         }
     }
@@ -405,10 +412,7 @@ impl ArtboardPiece {
     /// but keeps its stamp, and the claim refuses any day a row (removed
     /// or not) already holds, so a removal after the day was assigned
     /// leaves the day without a piece (the cup); nothing is promoted into
-    /// the gap. The gallery's
-    /// kill switch (`artboard_gallery_enabled`) is in both statements, so
-    /// a day the gallery was off assigns nothing and burns no piece.
-    /// `None` is an empty queue or the switch off.
+    /// the gap. `None` is an empty queue.
     pub async fn splash_for_day(
         client: &impl GenericClient,
         day: NaiveDate,
@@ -428,9 +432,8 @@ impl ArtboardPiece {
                     ORDER BY p.created ASC
                     LIMIT 1
                  )
-                 AND NOT EXISTS (SELECT 1 FROM artboard_pieces WHERE splash_on = $1)
-                 AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
-                &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
+                 AND NOT EXISTS (SELECT 1 FROM artboard_pieces WHERE splash_on = $1)",
+                &[&day],
             )
             .await;
         match claimed {
@@ -463,10 +466,9 @@ impl ArtboardPiece {
             .query_opt(
                 &format!(
                     "{PIECE_VIEW_SQL}
-                     WHERE p.splash_on = $2
-                       AND EXISTS (SELECT 1 FROM app_flags WHERE key = $3 AND enabled)"
+                     WHERE p.splash_on = $2"
                 ),
-                &[&Uuid::nil(), &day, &AppFlag::ArtboardGalleryEnabled.key()],
+                &[&Uuid::nil(), &day],
             )
             .await?;
         Ok(row.map(Self::from))
@@ -481,10 +483,8 @@ impl ArtboardPiece {
     /// The claim is one `UPDATE` racing on the partial unique index over
     /// `featured_on` (migration 188): the loser's stamp is refused and it
     /// reads the winner's row back. A piece taken down leaves the index, so
-    /// a removal frees the day for the next in line. The gallery's kill
-    /// switch (`artboard_gallery_enabled`) is in both statements, the way
-    /// the splash wall obeys it. `None` is an empty backlog or the
-    /// switch off.
+    /// a removal frees the day for the next in line. `None` is an empty
+    /// backlog.
     pub async fn feature_for_day(
         client: &impl GenericClient,
         day: NaiveDate,
@@ -504,9 +504,8 @@ impl ArtboardPiece {
                     ORDER BY (SELECT count(*) FROM artboard_piece_votes v WHERE v.piece_id = p.id) DESC,
                              p.created ASC
                     LIMIT 1
-                 )
-                 AND EXISTS (SELECT 1 FROM app_flags WHERE key = $2 AND enabled)",
-                &[&day, &AppFlag::ArtboardGalleryEnabled.key()],
+                 )",
+                &[&day],
             )
             .await;
         match claimed {
@@ -553,10 +552,9 @@ impl ArtboardPiece {
             .query_opt(
                 &format!(
                     "{PIECE_VIEW_SQL}
-                     WHERE p.featured_on = $2
-                       AND EXISTS (SELECT 1 FROM app_flags WHERE key = $3 AND enabled)"
+                     WHERE p.featured_on = $2"
                 ),
-                &[&Uuid::nil(), &day, &AppFlag::ArtboardGalleryEnabled.key()],
+                &[&Uuid::nil(), &day],
             )
             .await?;
         Ok(row.map(Self::from))

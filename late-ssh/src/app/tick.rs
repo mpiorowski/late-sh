@@ -1,3 +1,4 @@
+use late_core::MutexRecover;
 use std::time::{Duration, Instant};
 
 use super::state::{
@@ -7,17 +8,21 @@ use super::state::{
 use crate::app::activity::event::ActivityKind;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
+use crate::app::directory::state::Shelf;
 use crate::app::files::inline_image::InlineImageRenderSettings;
+use crate::metrics::Place;
 use crate::session::SessionMessage;
 
 /// The hot world-tick cadence (the classic 15fps): animations that earn
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
-/// Half-rate cadence (~7.5fps): Clubhouse ambience, riding the shared
+/// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
+/// (a drawn Zen ascii tile, the away screensaver), riding the shared
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
 /// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
-/// tile + profile-modal reef), stepping on the `anim_quarter` /4 edge in tick().
+/// tile + profile-modal reef) and the lively ascii pieces in pixels,
+/// stepping on the `anim_quarter` /4 edge in tick().
 pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
 /// Idle floor: nothing visible animates, ticks only drain service channels.
 /// Worst-case latency for an unprompted event (a chat message arriving
@@ -68,6 +73,10 @@ impl App {
         if one_hz {
             self.flush_zen_layout();
             self.record_attention();
+            if let Some(minute) = self.newcomer_clock.take_minute() {
+                self.referral_service
+                    .record_minute_task(self.user_id, minute);
+            }
         }
         // Shared animation frame edges, both divisors of the one wall
         // clock. Half (132ms, ~7.5fps): pet, bonsai sway, clubhouse
@@ -119,6 +128,11 @@ impl App {
         }
 
         self.sync_visible_chat_room();
+        // Presence (`app/presence`): everyone's records into the tavern,
+        // the stools and the street, and this session's record out: a send
+        // only when it changed, so a step or leaving a page reaches every
+        // replica.
+        changed |= self.sync_presence();
         self.tick_clubhouse();
         changed |= self.tick_nightcap();
         changed |= crate::app::scratchpad::pair::poll(self);
@@ -127,25 +141,13 @@ impl App {
         {
             changed = true;
         }
-        // A countdown reaching zero is not urgent to the millisecond, so this
-        // rides the existing 1Hz edge rather than checking every tick. A
-        // running countdown dirties every one of those edges because the HUD
-        // badge counts down in seconds; an open-ended status has nothing to
-        // count and is cleared by a chat message instead, so it never dirties
-        // anything here and an idle session still settles.
-        if one_hz
-            && let Some(status) = self.status
-            && !status.clears_on_post()
-        {
-            if status.is_expired(chrono::Utc::now()) {
-                let word = status.status.word();
-                self.set_status(None);
-                self.banner = Some(crate::app::common::primitives::Banner::success(&format!(
-                    "{word} done!"
-                )));
-                self.notifier
-                    .push(crate::app::notify::Notification::status_done(word));
-            }
+        // Going away is not urgent to the millisecond, so this session's away
+        // flag rides the 1Hz edge. It only writes the roster on a change, and
+        // paints nothing of its own unless the screensaver comes up with it:
+        // peers pick it up on their presence edge below, so an idle session
+        // with the Tweak off still settles. Coming back is input's, which
+        // syncs at once and repaints anyway.
+        if one_hz && self.sync_away() && self.screensaver().is_some() {
             changed = true;
         }
         // UTC midnight rolls the Arcade dailies over. This rides the 1Hz edge
@@ -178,8 +180,12 @@ impl App {
         if self.screen == Screen::City && anim_half {
             // Rain, neon, steam and the screen's static ride the same
             // ~7.5fps ambience edge as the clubhouse; the runner's steps
-            // are input-driven.
+            // are input-driven, the other runners' arrive with presence.
             self.city.tick(self.marquee_tick as u64);
+            changed = true;
+        }
+        if anim_half && crate::app::door::hub::state::animates(self) {
+            // Night City's card in the Games hub rains on the same edge.
             changed = true;
         }
 
@@ -196,8 +202,21 @@ impl App {
         }
 
         // Services
+        // Only the page and its modals read the session's own month; Home's
+        // strip and Live panel read the replica's shared board snapshot.
+        changed |= self.calendar.tick(
+            self.screen == Screen::Calendars || self.calendar.modal.is_some(),
+            late_core::models::calendar::effective_timezone(
+                self.profile_state.profile().timezone.as_deref(),
+            ),
+        );
         let chat_tick = self.chat.tick();
         changed |= chat_tick.changed;
+        if chat_tick.changed {
+            self.directory_state.feed_changed();
+            self.directory_editor.feed_changed();
+            self.jobs.feed_changed();
+        }
         if let Some(b) = chat_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -244,7 +263,7 @@ impl App {
         changed |= self.chat.poll_terminal_images();
         for output in self.chat.take_mod_outputs() {
             self.mod_modal_state
-                .append_result(output.success, output.lines);
+                .append_result(output.request_id, output.success, output.lines);
             changed = true;
         }
         self.sync_visible_chat_room();
@@ -295,6 +314,7 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
@@ -303,6 +323,9 @@ impl App {
             self.banner = Some(b);
             changed = true;
         }
+        // The saved Artboard disclaimer tweak may land after the page was
+        // opened; the board seat follows it.
+        self.sync_dartboard_connection();
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         self.chat
@@ -316,7 +339,7 @@ impl App {
         // The AFK line: how long this terminal's keyboard has been quiet is
         // an `App` fact, mirrored into chat the same way the timezone is,
         // because chat is what knows which room is on screen to hang it on.
-        changed |= self.chat.sync_afk_line(self.last_input_at.elapsed());
+        changed |= self.chat.sync_afk_line(self.last_active_at.elapsed());
         let translate_to = self.profile_state.profile().translate_to;
         let auto_translate = self.profile_state.profile().auto_translate;
         changed |= self
@@ -478,8 +501,20 @@ impl App {
                 _ => (),
             }
         }
+        let reading = self.lounge_card_shown() && self.chat.selected_message_id.is_some();
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
+        let picture_settings = self.inline_image_render_settings();
+        changed |= self.live.tick(
+            &self.daily,
+            &self.audio,
+            self.chat.news.all_articles(),
+            &self.chat.live_streams,
+            &self.live_games.live_rows(),
+            &self.calendar,
+            reading,
+            picture_settings,
+        );
         if let Some(b) = daily_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -574,6 +609,66 @@ impl App {
         }
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
+        }
+        // The live-game rosters feed the hub rail's live rows and the watcher
+        // count in a running watchable game's chrome: drain always, pay a
+        // frame only where one of them is drawn.
+        let rosters_changed = self.live_games.tick();
+        changed |= rosters_changed
+            && (self.screen == Screen::Games
+                || crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
+                    .is_some());
+        // The watch chat: the watchers' pane and the player's own pane each
+        // hang on a room that resolves and joins in the background.
+        changed |= crate::app::door::spectate::chat::tick(self);
+        // A preview lives only on the Games hub, so leaving the hub ends it.
+        // An open watch is only ever on the hub: leaving steps away from it
+        // (`App::away_watches`, below). The watched game ending (or its
+        // stream dropping) ends either, with a word on why it went away.
+        let now = std::time::Instant::now();
+        let on_hub = self.screen == Screen::Games;
+        let watch_end = self
+            .spectate_state
+            .as_ref()
+            .and_then(|state| state.end_reason(on_hub, now));
+        match watch_end {
+            Some(
+                crate::app::door::spectate::state::WatchEnd::LeftHub
+                | crate::app::door::spectate::state::WatchEnd::WentAway,
+            ) => {
+                self.stop_spectating();
+                changed = true;
+            }
+            Some(crate::app::door::spectate::state::WatchEnd::GameEnded(playname)) => {
+                self.banner = Some(crate::app::common::primitives::Banner::info(&format!(
+                    "{playname}'s game is no longer running."
+                )));
+                self.stop_spectating();
+                changed = true;
+            }
+            None => {}
+        }
+        // A kept watch ends with its game, or once it has been off screen
+        // for `AWAY_WINDOW`, quietly: nobody is looking at it.
+        let mut index = 0;
+        while index < self.away_watches.len() {
+            match self.away_watches[index].end_reason(false, now) {
+                Some(crate::app::door::spectate::state::WatchEnd::GameEnded(playname)) => {
+                    self.banner = Some(crate::app::common::primitives::Banner::info(&format!(
+                        "{playname}'s game is no longer running."
+                    )));
+                    self.away_watches.remove(index);
+                    changed = true;
+                }
+                Some(crate::app::door::spectate::state::WatchEnd::WentAway) => {
+                    self.away_watches.remove(index);
+                    changed = true;
+                }
+                Some(crate::app::door::spectate::state::WatchEnd::LeftHub) => {
+                    unreachable!("only a preview leaves with the hub, and a kept watch is open")
+                }
+                None => index += 1,
+            }
         }
         // A detached roguelike whose game has ended (death, save, idle
         // shutdown, network drop) has nothing left to resume: drop the state
@@ -768,7 +863,7 @@ impl App {
         // into paintable styles (which is also what steps shimmer at 1 Hz)
         // and expired at read.
         if one_hz {
-            let drunk_levels = self.clubhouse.drunk_levels();
+            let drunk_levels = self.clubhouse.drunk_levels(chrono::Utc::now());
             if self.drunk_levels != drunk_levels {
                 self.drunk_levels = drunk_levels;
                 self.chat_ctx_epoch += 1;
@@ -778,15 +873,17 @@ impl App {
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
                 // The crown rides the same map, and lapses the same way: an
                 // entry from a finished UTC month resolves to nobody, which
-                // is what empties the slot at the rollover with no sweeper.
-                let crown_holder = self
-                    .crown_holder_rx
-                    .as_mut()
-                    .and_then(|rx| *rx.borrow_and_update())
-                    .and_then(|holder| holder.if_current(now));
+                // is what empties the slot at the rollover with no sweeper,
+                // and the same rollover hands the laureate's crown on.
+                let crown_wearers = match self.crown_wearers_rx.as_mut() {
+                    Some(rx) => *rx.borrow_and_update(),
+                    // Only a test harness builds an app without the crown.
+                    None => crate::app::crown::svc::CrownWearers::default(),
+                };
                 let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
-                    crown_holder,
+                    crown_wearers.holder(now),
+                    crown_wearers.laureate(now),
                     phase,
                     now,
                 );
@@ -806,11 +903,25 @@ impl App {
                 // other replica. This edge is the only place in the process
                 // that can notice: the gate on `0` guards the descent, not
                 // the standing there.
+                if !self.is_runner() {
+                    self.street.leave();
+                }
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();
+                    self.guide.state.close();
                     self.set_screen(Screen::Clubhouse);
                     changed = true;
+                }
+                // The sheet mirror follows the standing: a runner re-reads
+                // it (the edge fires on a level change too, per the
+                // migration 202 trigger, so the frame HUD keeps up with a
+                // fight on another session), and a leaver drops it so the
+                // HUD stops reading a row that is gone.
+                if self.is_runner() {
+                    self.fight.reload();
+                } else {
+                    self.fight.drop_sheet();
                 }
             }
             // The pot resolves on the same edge, and for the same reason:
@@ -829,37 +940,33 @@ impl App {
                     changed = true;
                 }
             }
-            // Peer statuses resolve on the same edge, and only the minute
-            // rollovers survive the comparison: a badge that reads the same
-            // must not bump the epoch, or every second would invalidate every
-            // cached chat row for the whole room.
-            if let Some(directory) = &self.status_directory {
-                let peer_statuses = crate::app::common::status::resolve_all(
-                    &crate::app::common::status::snapshot(directory),
-                    chrono::Utc::now(),
-                );
-                if self.peer_statuses != peer_statuses {
-                    self.peer_statuses = peer_statuses;
-                    self.chat_ctx_epoch += 1;
-                }
-            }
-            // Presence reads on the same cadence: renders consume these owned
-            // values instead of locking `active_users` twice per frame.
+            // Presence reads on the same cadence, under one lock: renders
+            // consume these owned values instead of locking `active_users`
+            // per frame. The away set bumps the chat row epoch only when it
+            // actually moves, or every second would invalidate every cached
+            // chat row.
             if let Some(active_users) = &self.active_users {
-                let online_count = crate::state::online_human_count(active_users);
+                let (online_count, away_user_ids, active_friends) = {
+                    let roster = active_users.lock_recover();
+                    (
+                        crate::state::online_human_count(&roster),
+                        crate::app::common::away::away_user_ids(&roster),
+                        self.chat.active_friends(&roster),
+                    )
+                };
                 if online_count != self.online_count {
                     self.online_count = online_count;
                     changed = true;
                 }
-            }
-            let active_friends = self.chat.active_friends();
-            if active_friends != self.active_friends {
-                self.active_friend_names = active_friends
-                    .iter()
-                    .map(|friend| friend.username.clone())
-                    .collect();
-                self.active_friends = active_friends;
-                changed = true;
+                if away_user_ids != self.away_user_ids {
+                    self.away_user_ids = away_user_ids;
+                    self.chat_ctx_epoch += 1;
+                    changed = true;
+                }
+                if active_friends != self.active_friends {
+                    self.active_friends = active_friends;
+                    changed = true;
+                }
             }
             // Mentions load only when asked for. An Inbox tile on the page
             // asks whenever the unread count moves, so a new mention lands.
@@ -1036,6 +1143,11 @@ impl App {
             self.aquarium_state.tick();
             changed = true;
         }
+        // The ascii pieces (`app/ascii`) are pure functions of the shared
+        // clock: a new frame on every edge of a drawn piece's cadence, the
+        // half edge for the lively ones in dots, the quarter edge for the
+        // lively ones in pixels, and the 1Hz edge for the slow.
+        changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -1195,6 +1307,9 @@ impl App {
         // strip, which the frame diff then drops.
         changed |=
             anim_half && (sidebar_visible || self.show_bonsai_modal || self.screen == Screen::Zen);
+        // The live strip draws a shooter's cue: the aim is stored, the
+        // half-tick edge paints it.
+        changed |= anim_half && self.live_strip_shown() && self.live.aiming();
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1204,22 +1319,12 @@ impl App {
             != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             && sidebar_visible
         {
-            let selected_icecast_stream = self.selected_icecast_stream;
-            let icecast_now_playing = self
-                .now_playing_rx
-                .as_ref()
-                .and_then(|rx| rx.borrow().get(selected_icecast_stream.as_str()).cloned());
             let selected_radio_station = self.selected_radio_station;
-            let radio_now_playing = self.radio_meta_rx.as_ref().and_then(|rx| {
-                rx.borrow()
-                    .get(selected_radio_station.as_str())
-                    .map(|meta| format!("{} - {}", meta.artist, meta.title))
-            });
+            let radio_now_playing = self.station_now_playing(selected_radio_station);
             let queue = self.audio.queue_snapshot();
             let inputs = crate::app::common::sidebar::SidebarMarqueeInputs {
                 components: &self.profile_state.profile().right_sidebar_components,
-                active_friend_names: &self.active_friend_names,
-                icecast_now_playing: icecast_now_playing.as_ref(),
+                active_friends: &self.active_friends,
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,
                 source: self.paired_source,
@@ -1273,7 +1378,7 @@ impl App {
         if self.show_profile_modal && anim_quarter {
             changed |= self.profile_modal_state.step_reef();
         }
-        // The profile hero's bonsai sways like the sidebar's.
+        // The profile's bonsai sways like the sidebar's.
         changed |=
             self.show_profile_modal && anim_half && self.profile_modal_state.bonsai().is_some();
 
@@ -1302,6 +1407,17 @@ impl App {
     /// clean tick, never a frame. Input, resize, and push wakes
     /// (RenderSignal) interrupt the sleep regardless.
     pub fn wake_hint(&self) -> Duration {
+        // The screensaver covers everything else, so nothing under it earns
+        // a faster tier, and the pointer moving over it never wakes it hot.
+        // A slow piece rides the idle floor's 1Hz edge (a frame every one
+        // or every few of them; a repaint between frames diffs to nothing).
+        if let Some(piece) = self.screensaver() {
+            return match crate::app::ascii::piece::cadence(piece) {
+                crate::app::ascii::piece::Cadence::Half => ANIM_HALF_TICK,
+                crate::app::ascii::piece::Cadence::Quarter => ANIM_QUARTER_TICK,
+                crate::app::ascii::piece::Cadence::Slow { .. } => IDLE_TICK,
+            };
+        }
         let hot = self.show_splash
             || self.haunt.breakthrough_playing()
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
@@ -1318,14 +1434,19 @@ impl App {
         // Slower tiers match the frame edges their surfaces paint on. The
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
         // so the pet box rides the half tier it paints on. The
-        // bonsai care modal and the profile hero sway on the same edge as
+        // bonsai care modal and the profile's bonsai sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway. A
         // Zen music or visualizer tile paints its eq on that edge too; left
-        // to the aquarium's quarter tier it drops to ~3.8fps.
+        // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
+        // tile in dots plays its frames on this edge too; one in pixels
+        // rides the quarter tier below.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
+            || crate::app::door::hub::state::animates(self)
             || self.right_sidebar_visible()
+            || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
+            || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
@@ -1334,10 +1455,54 @@ impl App {
         }
         if self.aquarium_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
+            || self.quarter_ascii_visible()
         {
             return ANIM_QUARTER_TICK;
         }
         IDLE_TICK
+    }
+
+    /// The ascii pieces on screen: the away screensaver's, or the Zen ascii
+    /// tiles' that are drawn (not zoomed away).
+    fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
+        match (self.screensaver(), self.screen) {
+            (Some(piece), _) => vec![piece],
+            (None, Screen::Zen) => self.zen.drawn_pieces(),
+            (None, _) => Vec::new(),
+        }
+    }
+
+    /// Whether a piece on screen plays a new frame on this tick: the lively
+    /// ones on the half edge in dots and the quarter edge in pixels, the
+    /// slow ones on the 1Hz edge.
+    fn ascii_edge(&self, anim_half: bool, anim_quarter: bool, one_hz: bool) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| match cadence(piece) {
+                Cadence::Half => anim_half,
+                Cadence::Quarter => anim_quarter,
+                Cadence::Slow { .. } => one_hz,
+            })
+    }
+
+    /// Whether a piece on screen plays at the half tier, which earns it.
+    /// A slow piece asks for nothing: the idle floor already carries the
+    /// 1Hz edge it plays on.
+    fn lively_ascii_visible(&self) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| cadence(piece) == Cadence::Half)
+    }
+
+    /// Whether a piece on screen plays at the quarter tier: a lively piece
+    /// in pixels.
+    fn quarter_ascii_visible(&self) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| cadence(piece) == Cadence::Quarter)
     }
 
     /// Whether the reef is actually on screen: the Zen page draws it for
@@ -1357,6 +1522,23 @@ impl App {
             None => false,
             Some(client) => !client.muted,
         }
+    }
+
+    /// Whether Home is showing the #lounge card, the one surface that
+    /// carries the live strip.
+    pub(crate) fn lounge_card_shown(&self) -> bool {
+        self.screen == Screen::Dashboard
+            && crate::app::render::dashboard_home_selected(
+                self.chat.lounge_room_id(),
+                self.chat.selected_room_id,
+                self.chat.synthetic_entry_selected(),
+            )
+    }
+
+    /// Whether the live strip is on screen: the #lounge card (Zen's Live
+    /// tile is the panel, which does not animate).
+    fn live_strip_shown(&self) -> bool {
+        self.lounge_card_shown()
     }
 
     /// Whether the right sidebar draws this frame (the settings draft
@@ -1399,24 +1581,80 @@ impl App {
 }
 
 impl App {
-    /// Add the seconds since the last mark to the screen in front of the
-    /// user (and the Arcade game, while a board is open). Rides the 1Hz
-    /// edge; a screen switched mid-second lands on the new screen.
+    /// Add the seconds since the last mark to the screen and place in front
+    /// of the user, and count a visit when either moved since the last edge.
+    /// Rides the 1Hz edge; a screen switched mid-second lands on the new
+    /// screen, and a place held under a second may never count as a visit.
     fn record_attention(&mut self) {
         let now = Instant::now();
         let seconds = now.duration_since(self.attention_mark).as_secs_f64();
         self.attention_mark = now;
-        let arcade_game = match (self.screen, self.is_playing_game) {
-            (Screen::Arcade, true) => Some(crate::app::arcade::ui::game_for_selection(
-                self.game_selection,
-            )),
-            _ => None,
-        };
-        let presence = match self.last_input_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
+        let place = self.attention_place();
+        let spot = Some((self.screen, place));
+        if self.attention_spot != spot {
+            self.attention_spot = spot;
+            crate::metrics::record_place_visit(self.screen, place);
+        }
+        let presence = match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
             true => crate::metrics::Presence::Active,
             false => crate::metrics::Presence::Idle,
         };
-        crate::metrics::record_attention(self.screen, arcade_game, presence, seconds);
+        crate::metrics::record_attention(self.screen, place, presence, seconds);
+    }
+
+    /// Where inside the current screen the user is, for the screens that
+    /// hold more than one place.
+    pub(crate) fn attention_place(&self) -> Place {
+        match self.screen {
+            Screen::Dashboard => match self.chat.home_room() {
+                Some(room) => Place::Home(room),
+                None => Place::Whole,
+            },
+            Screen::Arcade => match self.is_playing_game {
+                true => Place::Game(crate::app::arcade::ui::game_for_selection(
+                    self.game_selection,
+                )),
+                false => Place::Whole,
+            },
+            Screen::HouseTable => match self.house.client() {
+                Some(client) => Place::Game(crate::app::lobby::house::registry::activity_game_for(
+                    client.table(),
+                )),
+                None => Place::Whole,
+            },
+            Screen::Profiles => match self.directory_state.shelf() {
+                Shelf::People => Place::PeopleShelf,
+                Shelf::Jobs => Place::JobsShelf,
+            },
+            Screen::Artboard => match &self.dartboard_state {
+                None => Place::Whole,
+                Some(state) => match state.gallery().shows_gallery_pane() {
+                    true => Place::ArtboardGallery,
+                    false => Place::ArtboardCanvas,
+                },
+            },
+            Screen::Games
+            | Screen::Lateania
+            | Screen::Rebels
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Dopewars
+            | Screen::Bashquest
+            | Screen::Codekeep
+            | Screen::Usurper
+            | Screen::GreenDragon
+            | Screen::Darkroom
+            | Screen::Leaderboard
+            | Screen::Calendars
+            | Screen::Clubhouse
+            | Screen::Nightcap
+            | Screen::City
+            | Screen::Zen
+            | Screen::DailyMatch
+            | Screen::Realm
+            | Screen::Scratchpad => Place::Whole,
+        }
     }
 }
 

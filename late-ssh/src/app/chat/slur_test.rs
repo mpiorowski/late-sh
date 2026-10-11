@@ -1,7 +1,23 @@
 use super::*;
 
-use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request};
+use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request, gift_drink_target};
 use late_core::models::drinks::DRUNK_MAX_LEVEL;
+
+/// The gift phrase can open any clause of a message, so the guard is a span,
+/// not the whole line: the words around it still slur, the order and the
+/// lead-in it rides in on never do.
+#[test]
+fn personal_gift_survives_drunk_typing() {
+    let body = format!("@bartender {CORPUS}, okay then please pour @alice a drink");
+    for seed in 1..=100 {
+        let slurred = slur(&body, DRUNK_MAX_LEVEL, seed);
+        assert_eq!(
+            gift_drink_target(&slurred, "bartender"),
+            Some("alice"),
+            "{slurred}"
+        );
+    }
+}
 
 /// A few dozen ordinary chat words, long enough that per-word odds average out.
 const CORPUS: &str = "the deploy went through but the migration is still pending on staging \
@@ -127,10 +143,10 @@ fn only_the_top_of_the_ladder_hiccups() {
 fn the_things_that_carry_meaning_are_never_garbled() {
     // Each of these breaks a real feature if a typo lands in it: mentions
     // drive notifications and the mention highlight, slugs drive room jump,
-    // links drive news cards, code is code, and the marker drives card
+    // links are links, code is code, and the marker drives card
     // parsing. The quote line is someone else's words.
     let body = "> @alice: original message\n\
-        @alice check https://late.sh/docs and #lounge for the `cargo nextest run` output ---NEWS---";
+        @alice check https://late.sh/docs and #lounge for the `cargo nextest run` output ---BUG---";
 
     for seed in 1..200 {
         let slurred = slur(body, DRUNK_MAX_LEVEL, seed);
@@ -149,7 +165,7 @@ fn the_things_that_carry_meaning_are_never_garbled() {
         assert!(slurred.contains("https://late.sh/docs"), "{slurred}");
         assert!(slurred.contains("#lounge"), "{slurred}");
         assert!(slurred.contains("`cargo nextest run`"), "{slurred}");
-        assert!(slurred.contains("---NEWS---"), "{slurred}");
+        assert!(slurred.contains("---BUG---"), "{slurred}");
     }
 }
 
@@ -169,7 +185,7 @@ fn an_order_for_a_round_survives_any_amount_of_drink() {
                     "level {level} seed {seed} lost the order: {slurred}"
                 );
                 assert!(
-                    contains_round_request(&slurred),
+                    contains_round_request(&slurred, "bartender"),
                     "level {level} seed {seed} no longer reads as a round: {slurred}"
                 );
             }

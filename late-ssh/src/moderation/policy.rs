@@ -52,6 +52,8 @@ bitflags! {
         const KICK_STREAM = 1 << 25;
         const BAN_FROM_STREAM = 1 << 26;
         const UNBAN_FROM_STREAM = 1 << 27;
+        const BAN_FROM_CALENDAR = 1 << 28;
+        const UNBAN_FROM_CALENDAR = 1 << 29;
     }
 }
 
@@ -109,7 +111,9 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::SET_ROOM_VOICE)
     .union(Caps::KICK_STREAM)
     .union(Caps::BAN_FROM_STREAM)
-    .union(Caps::UNBAN_FROM_STREAM);
+    .union(Caps::UNBAN_FROM_STREAM)
+    .union(Caps::BAN_FROM_CALENDAR)
+    .union(Caps::UNBAN_FROM_CALENDAR);
 
 const ADMIN: Caps = Caps::all();
 

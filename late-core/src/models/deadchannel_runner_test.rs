@@ -1,4 +1,4 @@
-use crate::models::deadchannel_runner::{DeadchannelRunner, RunnerOrigin};
+use crate::models::deadchannel_runner::{DeadchannelRunner, RunnerOrigin, StandingRunner};
 use crate::test_utils::{create_test_user, test_db};
 
 #[tokio::test]
@@ -33,10 +33,19 @@ async fn ensure_creates_once_and_keeps_the_first_look() {
     assert_eq!(again.id, created.id);
     assert_eq!(again.look, first_look);
 
-    let looks = DeadchannelRunner::list_looks(&client)
+    let standing = DeadchannelRunner::list_standing(&client)
         .await
-        .expect("list looks");
-    assert_eq!(looks, vec![(user.id, first_look)]);
+        .expect("list standing");
+    assert_eq!(
+        standing,
+        vec![StandingRunner {
+            user_id: user.id,
+            look: first_look,
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        }]
+    );
 }
 
 #[tokio::test]
@@ -66,9 +75,9 @@ async fn leaving_hides_the_runner_but_keeps_the_character() {
     // Gone from the directory, so the gate is shut everywhere and the old
     // messages lose their portrait.
     assert!(
-        DeadchannelRunner::list_looks(&client)
+        DeadchannelRunner::list_standing(&client)
             .await
-            .expect("list looks")
+            .expect("list standing")
             .is_empty()
     );
     // The character is still there, stamped.
@@ -90,10 +99,16 @@ async fn leaving_hides_the_runner_but_keeps_the_character() {
     assert_eq!(back.look, look);
     assert!(back.left_at.is_none());
     assert_eq!(
-        DeadchannelRunner::list_looks(&client)
+        DeadchannelRunner::list_standing(&client)
             .await
-            .expect("list looks again"),
-        vec![(user.id, look)]
+            .expect("list standing again"),
+        vec![StandingRunner {
+            user_id: user.id,
+            look,
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        }]
     );
 }
 
@@ -115,10 +130,16 @@ async fn the_tailor_dresses_a_standing_runner_only() {
             .expect("store look")
     );
     assert_eq!(
-        DeadchannelRunner::list_looks(&client)
+        DeadchannelRunner::list_standing(&client)
             .await
-            .expect("list looks"),
-        vec![(user.id, new_look.clone())]
+            .expect("list standing"),
+        vec![StandingRunner {
+            user_id: user.id,
+            look: new_look.clone(),
+            level: 1,
+            peak_level: 1,
+            marks: 0,
+        }]
     );
 
     // A runner who left keeps the look they left in.
@@ -135,4 +156,54 @@ async fn the_tailor_dresses_a_standing_runner_only() {
         .expect("find")
         .expect("row");
     assert_eq!(left.look, new_look);
+}
+
+#[tokio::test]
+async fn the_guide_is_claimed_once_and_only_by_a_standing_runner() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "runner-guide").await;
+
+    // Nobody to stamp: no row yet.
+    assert!(
+        !DeadchannelRunner::mark_guide_seen(&client, user.id)
+            .await
+            .expect("mark guide seen with no runner")
+    );
+
+    let look = serde_json::json!({"hood": "hood.cross"});
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look)
+        .await
+        .expect("ensure");
+
+    // The first descent claims it; the second finds it claimed.
+    assert!(
+        DeadchannelRunner::mark_guide_seen(&client, user.id)
+            .await
+            .expect("first descent")
+    );
+    assert!(
+        !DeadchannelRunner::mark_guide_seen(&client, user.id)
+            .await
+            .expect("second descent")
+    );
+    let row = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert!(row.guide_seen_at.is_some());
+
+    // A leaver cannot be stamped, and the stamp survives the leave.
+    let other = create_test_user(&test_db.db, "runner-guide-left").await;
+    DeadchannelRunner::ensure_for_user(&client, other.id, &look)
+        .await
+        .expect("ensure other");
+    DeadchannelRunner::mark_left(&client, other.id)
+        .await
+        .expect("mark left");
+    assert!(
+        !DeadchannelRunner::mark_guide_seen(&client, other.id)
+            .await
+            .expect("mark guide seen after leaving")
+    );
 }

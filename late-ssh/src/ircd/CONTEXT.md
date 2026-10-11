@@ -3,7 +3,6 @@
 ## Metadata
 - Domain: embedded IRC server for late.sh chat
 - Primary audience: LLM agents working in `late-ssh/src/ircd`, IRC token auth, or IRC/chat integration paths
-- Last updated: 2026-08-08 (IRC resolves client IPs from trusted PROXY v1 headers before TLS; proxy transport addresses are never persisted or applied as client IPs)
 - Status: Active
 - Parent context: `../../../CONTEXT.md`
 - Related context: `../app/chat/CONTEXT.md`
@@ -143,8 +142,8 @@ Room/channel projection lives in `proj.rs`.
 
 Exposed IRC channels:
 - `lounge` and `language` rooms.
-- `topic` rooms with public visibility.
-- `topic` rooms with private visibility, but only for members.
+- `topic` rooms with public visibility as `#slug`.
+- `topic` rooms with private visibility as `##slug`, but only for members.
 
 Not exposed as normal IRC channels:
 - DMs.
@@ -156,9 +155,11 @@ Behavior:
 - The JOIN burst is JOIN, then the topic (`replies::topic`: 332 with `chat_rooms.topic`, 331 when unset), then NAMES. A `TOPIC #room` query answers the same way. `TOPIC #room :text` still refuses with 482: a private room's topic answers to its owner and a public one to the mods, and that authority lives in the chat service, not in the IRC layer.
 - Joining a public channel calls the normal room membership path.
 - Joining a private channel requires existing membership; IRC presents private rooms as invite-only.
+- Single-hash names address public rooms only; double-hash names address private rooms only. JOIN never creates a room or falls back between namespaces. Channel lookup is ASCII case-insensitive.
 - PART detaches the IRC view for normal rooms but does not leave late.sh room membership.
 - PART on `#lounge` is refused and the JOIN/NAMES burst is resent.
 - `/LIST` returns IRC-visible channels plus member counts.
+- LIST keeps same-slug public and private rooms as separate entries. Private rooms remain hidden from non-members (including a 403 on JOIN); `MODE ##room` reports `+inst`.
 - `/NAMES`, `/WHO`, `/WHOIS`, `ISON`, and related compatibility commands should use shared username/presence sources and avoid per-row DB work where possible.
 
 Message send:
@@ -190,7 +191,8 @@ Mappings:
 
 Invariants:
 - Re-check permissions before executing moderation commands. Do not trust permissions cached when the IRC session registered.
-- Use `ChatService::run_mod_command` so audit logs, notifications, session effects, voice revocation, and DB state stay shared with TUI moderation.
+- Use the `ChatService` moderation adapters so audit logs, notifications, session effects, voice revocation, and DB state stay shared with TUI moderation. Server KILL uses `run_mod_command`.
+- Channel KICK and MODE ±b use `ChatService::run_room_mod_command` with the joined room ID. Never resolve these actions by slug: a public room and a private room may share one.
 - Server kick/ban and account deletion must disconnect live IRC sessions through `IrcRegistry`.
 - Room moderation events should be projected to IRC clients in affected joined channels.
 - Moderator grant/revoke events are projected as IRC channel `+o`/`-o` across joined channels, and the target session updates its cached staff flags.
@@ -211,6 +213,12 @@ Presence projection:
 - Departures render as IRC `QUIT`.
 - Arrivals render as `JOIN` only for channels shared with the current IRC session.
 - Avoid per-arrival/per-room DB loops. Batch membership lookups for arrivals against joined rooms.
+
+Away (`app/common/away.rs`, shared with the TUI):
+- Each IRC connection is an `ActiveSession` on the roster with its own `away` flag. It is away on `AWAY :msg` (until a bare `AWAY`), or after `AWAY_AFTER` (30 min) without a PRIVMSG or NOTICE from it; PINGs and client polls do not count. A user reads as away only when every session, TUI or IRC, is.
+- `Session::sync_away` writes the flag to the roster on a change: at once on `AWAY` and on every PRIVMSG/NOTICE, and on the presence poll for the idle threshold.
+- `WHO` flags an away user `G` instead of `H`; `WHOIS` and a PRIVMSG to an away user's DM answer `RPL_AWAY` (301). The away message is the glyph `💤`: late.sh away carries no text.
+- The `away-notify` capability sends `AWAY` (with the glyph) and bare `AWAY` for users sharing a joined channel whose flag moved since the last poll, one batched membership lookup per poll, and right after the JOIN of an arrival who is already away. Latency is the presence poll (30s).
 
 `IrcRegistry` is not durable and does not need to be. On process restart, IRC clients reconnect and re-register with their token.
 

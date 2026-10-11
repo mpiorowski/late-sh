@@ -3,6 +3,21 @@ use ratatui_textarea::{Input, Key};
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::input::{ParsedInput, insert_pasted_text};
 use crate::app::{mod_modal::state::ModModalState, state::App};
+use crate::moderation::command::{ModCommand, parse_mod_command};
+
+pub(crate) fn open(app: &mut App, help_topic: Option<&str>) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_bonsai_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_quit_confirm = false;
+    app.mod_modal_state
+        .open(app.permissions.can_access_mod_surface(), help_topic);
+    app.show_mod_modal = true;
+}
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     if let ParsedInput::Paste(pasted) = event {
@@ -113,21 +128,26 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 }
 
 fn submit(app: &mut App) {
+    let command = app.mod_modal_state.command_text();
+    submit_command(app, command);
+    app.mod_modal_state.clear_command();
+}
+
+/// Run a command without changing the user's command draft.
+pub(crate) fn submit_command(app: &mut App, command: String) {
     if !app.permissions.can_access_mod_surface() {
         app.mod_modal_state
             .append_error("access denied: moderator or admin only");
-        app.mod_modal_state.clear_command();
         return;
     }
-    let command = app.mod_modal_state.command_text();
     if command.is_empty() {
         app.mod_modal_state.append_info("type help for commands");
         return;
     }
     app.mod_modal_state.append_input(&command);
+    let is_help = matches!(parse_mod_command(&command), Ok(ModCommand::Help { .. }));
     let request_id = app.chat.submit_mod_command(command);
-    app.mod_modal_state.append_pending(request_id);
-    app.mod_modal_state.clear_command();
+    app.mod_modal_state.append_pending(request_id, is_help);
 }
 
 fn update_autocomplete(app: &mut App) {

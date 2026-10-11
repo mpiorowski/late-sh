@@ -13,7 +13,7 @@ use crate::app::games::pool_core::{
     rules::{Group, PoolRules},
     shot::Shot,
 };
-use crate::app::lobby::daily::pool_draft::{PoolDraft, PoolPlayback};
+use crate::app::lobby::daily::pool_draft::{PoolDetail, PoolDraft, PoolPlayback};
 
 fn pool_state() -> DailyPoolState {
     DailyPoolState::new(PoolRules::EightBall, Uuid::new_v4(), Uuid::new_v4())
@@ -103,7 +103,7 @@ fn a_tall_board_shows_the_whole_key_legend_and_caps_the_cue() {
     // The right column is info, cue drawing, readouts, legend. The legend is
     // all or nothing: half a key map teaches nothing, and the cue drawing
     // stops growing so a tall terminal spends its rows on the keys instead.
-    let (cue_rows, legend_rows) = column_split(60);
+    let (cue_rows, legend_rows) = column_split(80);
     assert_eq!(legend_rows, LEGEND_ROWS);
     assert_eq!(
         cue_rows,
@@ -195,8 +195,12 @@ fn the_legend_only_teaches_keys_that_act() {
         "waiting, nothing but the camera acts"
     );
     assert!(!plays(LegendKeys::Watching));
-    assert!(has(LegendKeys::Waiting, "v") && has(LegendKeys::Waiting, "r"));
-    assert!(has(LegendKeys::Watching, "v") && !has(LegendKeys::Watching, "r"));
+    // The camera and the replay answer whoever is looking; resigning is only
+    // a player's, so a spectator is not taught it.
+    assert!(has(LegendKeys::Waiting, "v") && has(LegendKeys::Waiting, "r R"));
+    assert!(has(LegendKeys::Waiting, "X"), "a player can always resign");
+    assert!(has(LegendKeys::Watching, "v") && has(LegendKeys::Watching, "r R"));
+    assert!(!has(LegendKeys::Watching, "X"));
     for keys in [
         LegendKeys::AtTheTable,
         LegendKeys::Waiting,
@@ -423,5 +427,116 @@ fn playback_runs_then_retires() {
     assert!(
         duration > 0.0,
         "a break takes time, or there is nothing to animate"
+    );
+}
+
+#[test]
+fn the_panel_keeps_the_result_to_itself_until_the_shot_has_played() {
+    let mut state = pool_state();
+    state
+        .apply_shot(
+            0,
+            &Shot {
+                place: None,
+                azimuth: 0.0,
+                tip: [0.0, 0.0],
+                speed: 7.0,
+                called_pocket: None,
+                play_again: false,
+            },
+        )
+        .expect("the break is legal");
+    let timeline = state.last_timeline().expect("the break replays");
+    let said = |pool: &PoolDetail, shot_pending: bool| -> String {
+        last_shot_lines(pool, shot_pending)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.to_string())
+            .collect()
+    };
+
+    let mut pool = PoolDetail::new(state);
+    assert!(
+        said(&pool, false).contains("last:"),
+        "a settled board says what the last shot did"
+    );
+    assert!(
+        !said(&pool, true).contains("last:"),
+        "a shot waiting on its animation has not been seen yet"
+    );
+    // The animation itself is the long part of the wait, seconds where the
+    // other two are a tick apiece, and the status line and the win banner
+    // already sit through it.
+    pool.playback = Some(PoolPlayback::new(timeline));
+    assert!(
+        !said(&pool, false).contains("last:"),
+        "the result was on the panel while the shot was still rolling"
+    );
+    // A replay is watched with the result already known.
+    pool.replaying = true;
+    assert!(said(&pool, false).contains("last:"));
+}
+
+#[test]
+fn the_list_of_balls_on_is_written_in_their_own_colours() {
+    // A ball on the table is a few pixels and its number a few more, so the
+    // panel's list is where a player actually reads which ball is which. Plain
+    // digits made them look it up twice.
+    use crate::app::games::pool_core::{
+        canvas::rgb,
+        rules_snooker::{BLACK, RED_FIRST, YELLOW},
+        table_ui::text_colour,
+    };
+
+    let state = pool_state();
+    let spans = on_line(&state, &[1, 8, 14]);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "on: 1 8 14");
+    for id in [1u8, 8, 14] {
+        let want = rgb(text_colour(id));
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content == id.to_string() && span.style.fg == Some(want)),
+            "the {id} is written in its own colour"
+        );
+    }
+
+    // The 8 is near-black on the cloth and would be a silhouette as text, so
+    // it is lifted — and everything readable already is left exactly as the
+    // table paints it, or the list and the balls stop matching.
+    assert_ne!(
+        text_colour(8),
+        crate::app::games::pool_core::table_ui::ball_colour(8)
+    );
+    assert_eq!(
+        text_colour(1),
+        crate::app::games::pool_core::table_ui::ball_colour(1)
+    );
+
+    // Snooker names its balls, and colours those too.
+    let mut frame = DailyPoolState::new(PoolRules::Snooker, Uuid::new_v4(), Uuid::new_v4());
+    let reds: Vec<u8> = (RED_FIRST..RED_FIRST + 3).collect();
+    let spans = on_line(&frame, &reds);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "on: a red (3 up)");
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.content == "a red"
+                && span.style.fg == Some(rgb(text_colour(RED_FIRST))))
+    );
+
+    frame.on_colour = true;
+    let spans = on_line(&frame, &[YELLOW, BLACK]);
+    let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(
+        text, "on: yellow black",
+        "a colour of choice names the choice"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.content == "black" && span.style.fg == Some(rgb(text_colour(BLACK))))
     );
 }

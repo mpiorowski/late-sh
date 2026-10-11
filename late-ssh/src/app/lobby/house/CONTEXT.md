@@ -2,7 +2,6 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/lobby/house` — the fixed multiplayer "house tables" behind the Lobby modal (`Ctrl+G`), plus the five game runtimes (Poker, Blackjack, Asterion, Tron, Super Snake).
-- Last updated: 2026-08-17 (Super Snake became perpetual: no match, no lives, no winner — one arena runs forever, players join and leave mid-flight, and each food is worth chips scaled by the moving-snake count. The seat's take is an in-memory tally that reaches the ledger once, when the seat is given up. The `ssnake_win` cooldown template is retired, migration 131)
 - Parent context: `../CONTEXT.md` (the Lobby domain), then the root `CONTEXT.md`; read `../daily/CONTEXT.md` for the daily correspondence domain.
 - Status: Active.
 

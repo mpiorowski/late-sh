@@ -48,9 +48,12 @@ async fn spawn_upstream() -> (String, oneshot::Sender<()>) {
                 "streams": { "chill": { "artist": "Ketsa", "title": "Blue Dream" } },
                 "stations": {
                     "chillsynth": {
+                        "label": "chillsynth",
                         "artist": "Waveshaper",
                         "title": "Client",
-                        "stream_url": "https://stream.nightride.fm/chillsynth.mp3"
+                        "stream_url": "https://stream.nightride.fm/chillsynth.mp3",
+                        "provider": "nightride",
+                        "provider_url": "https://nightride.fm"
                     }
                 },
                 "youtube": { "current": null, "queue": [] }
@@ -90,10 +93,14 @@ async fn listen_page_renders_without_a_token() {
 
     // Product rule: the house stream sits last. Guest stations and the
     // community queue lead, our own playlist is the fallback option.
-    let nightride = body.find("nightride fm").expect("nightride section");
+    // Guest sections are built per provider from the polled state, so the
+    // static page carries their shared credit line, not a provider name.
+    let guests = body
+        .find("streamed directly from")
+        .expect("guest stations section");
     let community = body.find("community queue").expect("community section");
     let house = body.find("house radio").expect("house section");
-    assert!(nightride < house, "house radio must not lead the page");
+    assert!(guests < house, "house radio must not lead the page");
     assert!(community < house, "house radio must sit below the queue");
 
     let _ = shutdown_tx.send(());
@@ -119,6 +126,7 @@ async fn listen_state_forwards_the_upstream_body_verbatim() {
         body["stations"]["chillsynth"]["stream_url"],
         "https://stream.nightride.fm/chillsynth.mp3"
     );
+    assert_eq!(body["stations"]["chillsynth"]["provider"], "nightride");
     assert!(body["youtube"]["queue"].is_array());
 
     let _ = shutdown_tx.send(());

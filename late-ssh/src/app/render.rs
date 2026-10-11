@@ -9,9 +9,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
-use unicode_width::UnicodeWidthStr;
 
 use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::statusline::StatusComponentSetting;
 use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
 use super::{
@@ -26,7 +26,6 @@ use super::{
     help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
     room_search_modal, settings_modal, sheet_modal,
     state::App,
-    status_picker,
 };
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
@@ -171,6 +170,7 @@ fn push_quit_confirm_sayonara_placement(
 }
 
 struct DrawContext<'a> {
+    calendar: &'a crate::app::calendar::state::CalendarState,
     dashboard_view: chat::ui::DashboardChatView<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
@@ -182,6 +182,9 @@ struct DrawContext<'a> {
     daily_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     house: &'a crate::app::lobby::house::state::HouseState,
     house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// The Games hub cards this session sees (`HubGame::roster`): Night
+    /// City heads it for runners only.
+    games_hub_roster: &'static [crate::app::door::hub::state::HubGame],
     games_hub_selected: usize,
     /// Rows the selected Games hub landing is scrolled down.
     games_hub_scroll: u16,
@@ -212,6 +215,32 @@ struct DrawContext<'a> {
     brogue_live: bool,
     darkroom_live: bool,
     greendragon_live: bool,
+    /// The live game this session is watching; the hub draws it instead of
+    /// its selector while one is held.
+    spectate_state: Option<&'a crate::app::door::spectate::state::State>,
+    /// Every live game on a watchable door: the hub rail's live rows and
+    /// the watch view's header.
+    live_rows: Vec<crate::app::door::spectate::state::LiveRow>,
+    /// The same games as the sidebar's Live panel lists them, with who is
+    /// watching each, and the panel's click slot.
+    live_panel_rows: Vec<crate::app::live::panel::LivePanelRow>,
+    live_panel_now: chrono::DateTime<chrono::Utc>,
+    live_panel_hit: &'a crate::app::live::panel::LivePanelHit,
+    /// People with a watch open on this player's own running game on the
+    /// watchable door whose screen is up, for its watcher chat.
+    own_watchers: usize,
+    /// People with the held watch open, this session included, for its
+    /// watch chat's header.
+    held_watchers: usize,
+    /// The watch chat on show: the watched player's room on the Games hub,
+    /// this player's own room beside their running game on a watchable
+    /// door's screen. `None` until this session is in the room.
+    watch_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
+    /// Whether this player's running game makes room for watcher chat (the
+    /// `show_watch_chat` setting), and the newest line for the one-row form
+    /// of it.
+    show_watch_chat: bool,
+    own_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -271,14 +300,28 @@ struct DrawContext<'a> {
     /// The night city page: the runner's spot and its look.
     city_state: &'a crate::app::deadchannel::city::state::State,
     city_look: Option<&'a crate::app::deadchannel::runner::state::Look>,
+    /// The runner's sheet mirror (`None` for anyone not standing on the
+    /// row): the street's strip, and the frame HUD on every other page.
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
+    city_picker: Option<&'a crate::app::deadchannel::fight::session::Picker>,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
+    city_guide: &'a crate::app::deadchannel::guide::state::State,
+    /// The other runners on the shared street, their marks, and (through
+    /// `usernames`) their names.
+    city_street: &'a crate::app::deadchannel::street::state::StreetView,
+    city_own_user_id: uuid::Uuid,
+    city_runner_looks: &'a std::collections::HashMap<
+        uuid::Uuid,
+        crate::app::deadchannel::runner::svc::RunnerEntry,
+    >,
     /// A chat overlay that lands on the Lounge (a `/summary` or reaction list
     /// requested on Home); the Lounge composer itself opens none.
     clubhouse_overlay: Option<&'a crate::app::common::overlay::Overlay>,
     artboard_interacting: bool,
+    artboard_disclaimer_visible: bool,
+    artboard_disclaimer_choices: &'a std::cell::Cell<[Rect; 3]>,
     leaderboard: &'a Arc<LeaderboardData>,
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
@@ -288,6 +331,7 @@ struct DrawContext<'a> {
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
+    can_access_mod_surface: bool,
     show_right_sidebar: bool,
     /// Resolved ordered sidebar panels (draft while the settings modal is open,
     /// else the saved profile). Order is render order, top to bottom.
@@ -300,12 +344,16 @@ struct DrawContext<'a> {
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     aquarium_care: &'a crate::app::hub::aquarium::state::AquariumCare,
+    pet_state: &'a crate::app::pet::state::PetState,
     leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    /// `App::is_runner` for this session: the profile modal's runner
+    /// section shows only to runners until the public flip.
+    viewer_is_runner: bool,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
@@ -320,9 +368,6 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     realm: &'a crate::app::lobby::realm::state::RealmState,
-    /// The pot as this viewer sees it, resolved on the ~1s tick. Feeds the
-    /// border HUD segment; there is no pot panel in the sidebar.
-    pot: &'a crate::app::pot::state::PotView,
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -333,6 +378,12 @@ struct DrawContext<'a> {
     show_ultimate_modal: bool,
     ultimate_state: &'a crate::app::ultimates::UltimateState,
     show_splash: bool,
+    /// The away screensaver: the piece that covers the whole frame while the
+    /// session is away (`App::screensaver`).
+    screensaver: Option<late_core::models::user::AsciiPiece>,
+    /// The shared clock every ascii piece is drawn at this frame
+    /// (`ascii::piece::clock_now`).
+    ascii_clock: u64,
     splash_ticks: usize,
     splash_hint: &'a str,
     /// The day's wall piece, hung over the splash when it fits; the
@@ -348,28 +399,31 @@ struct DrawContext<'a> {
     listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
-    status_picker: &'a status_picker::state::StatusPickerState,
     room_info_modal_open: bool,
     room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     directory_editor: &'a crate::app::directory::editor::state::EditorState,
     tag_picker: &'a crate::app::tag_picker::state::TagPickerState,
+    piece_picker: &'a crate::app::ascii::picker::state::PiecePickerState,
     /// The showcase feed, for the editor's projects page.
     showcase_items: &'a [chat::showcase::svc::ShowcaseFeedItem],
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
     booth_submit_enabled: bool,
+    stations_modal_open: bool,
+    stations_modal_state: &'a crate::app::audio::stations_modal::state::StationsModalState,
+    /// Catalogue rows with live now-playing; only filled while the
+    /// stations modal is open.
+    stations_rows: Vec<crate::app::audio::stations_modal::ui::StationRow>,
     youtube_source_count: usize,
-    icecast_source_count: usize,
     radio_source_count: usize,
     paired_source: late_core::models::user::AudioSource,
-    selected_icecast_stream: late_core::models::user::IcecastStream,
     selected_radio_station: late_core::models::user::RadioStation,
+    radio_slots: late_core::models::user::RadioSlots,
     radio_now_playing: Option<&'a str>,
     /// Humans currently connected (bots excluded) plus connected friends,
     /// for the sidebar's pinned presence rows.
     online_count: usize,
-    active_friend_names: &'a [String],
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
@@ -379,17 +433,15 @@ struct DrawContext<'a> {
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
-    mentions_unread_count: i64,
-    chip_balance: i64,
-    /// Slot for where the top-border mentions text lands this frame, read by
-    /// the HUD click hit test in `input.rs`.
-    mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
-    voice_badge: Option<String>,
-    /// This session's `/status`, already rendered to `MM:SS word` (a
-    /// countdown) or `glyph word` (open-ended).
-    /// Formatting once per frame here keeps the HUD builder a pure function
-    /// of its inputs (no clock read inside the draw path).
-    status_badge: Option<String>,
+    /// The user's ordered bottom status bar (draft while the settings modal is
+    /// open, else the saved profile). Order is paint order, left to right.
+    statusline_components: Vec<StatusComponentSetting>,
+    /// Configurable readings for either status bar, with the clock pre-formatted
+    /// so the bar builder stays a pure function of its inputs.
+    status_data: crate::app::statusline::data::StatusData<'a>,
+    /// Slot for where each clickable top- or bottom-bar segment landed this
+    /// frame, read by the hit test in `input.rs`.
+    status_hits: &'a std::cell::RefCell<Vec<(crate::app::statusline::bar::StatusClick, Rect)>>,
     home_selected: bool,
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
@@ -400,11 +452,14 @@ struct DrawContext<'a> {
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
-    zen_peer_statuses: &'a std::collections::HashMap<uuid::Uuid, String>,
+    /// The pane beside this player's own running game, published for the
+    /// click that opens its composer; cleared every frame like the hits.
+    own_chat_hit: &'a std::cell::Cell<Option<Rect>>,
 }
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        self.calendar.invalidate_geometry();
         // Computed up front: the method borrows all of `self`, which would
         // collide with the mutable field borrows the view structs hold below
         // (some door states are even taken out of `self` for the draw).
@@ -415,10 +470,34 @@ impl App {
         let brogue_live = HubGame::Brogue.live_screen(self).is_some();
         let darkroom_live = HubGame::Darkroom.live_screen(self).is_some();
         let greendragon_live = HubGame::GreenDragon.live_screen(self).is_some();
+        // The watchable door whose screen is up, where this player's own
+        // game shows its watchers and their chat.
+        let own_screen_game =
+            crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
+        let own_game_key = own_screen_game.and_then(|game| {
+            let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
+            crate::app::door::spectate::state::LiveGameKey::new(game, &handle)
+        });
+        // No game of theirs on the roster: nobody can be watching it.
+        let own_watchers = match own_game_key {
+            Some(key) => self.live_games.watchers_of(key),
+            None => 0,
+        };
+        let held_watchers = match self.spectate_state.as_ref() {
+            Some(state) => self.live_games.watchers_of(state.key()),
+            None => 0,
+        };
+        let games_hub_roster = HubGame::roster(self.is_runner());
+        // Away with the Tweak on: the piece covers everything this frame.
+        let screensaver = self.screensaver();
+        let ascii_clock = crate::app::ascii::piece::clock_now();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_rect.set(None);
         self.last_pet_frame.set(None);
+        self.live.hit.set(None);
+        self.live.panel_hit.set(None);
+        self.own_chat_hit.set(None);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -427,8 +506,10 @@ impl App {
         // and desync it from the widget's real (persistent) viewport whenever
         // the cursor moves up inside the visible window.
         self.chat.last_chat_hit_layout.set(None);
+        self.leaderboard_page.clear_hit_regions();
 
         // Init theme and layout sync — preview settings-modal draft live while open.
+        let artboard_disclaimer_visible = self.artboard_disclaimer_visible();
         let active_theme_id = if self.show_settings {
             self.settings_modal_state
                 .draft()
@@ -507,6 +588,9 @@ impl App {
                 .right_sidebar_components
                 .clone()
         };
+        // Same draft-aware live preview as the sidebar panels above. These are
+        // the user-arranged bottom-left components; the top bar is fixed.
+        let statusline_components = self.statusline_components().to_vec();
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.synthetic_entry_selected();
         let home_selected = dashboard_home_selected(
@@ -535,20 +619,45 @@ impl App {
             .collect();
         self.zen_chat_rows_caches
             .resize_with(zen_chat_rooms.len(), Default::default);
-        // The icecast rows render the USER'S SELECTED stream's track, not a
-        // global single mount.
-        let selected_icecast_stream = self.selected_icecast_stream;
-        let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
-            rx.borrow_and_update()
-                .get(selected_icecast_stream.as_str())
-                .cloned()
-        });
+        // The house jukebox for the clubhouse and nightcap pages: the
+        // USER'S SELECTED station when it is a house mount, else the house
+        // `chill` mount (the jukebox never goes quiet because someone is
+        // tuned to Nightride). Both watches are marked seen here so the
+        // tick's `has_changed` repaint gate rests.
         let selected_radio_station = self.selected_radio_station;
-        let radio_now_playing: Option<String> = self.radio_meta_rx.as_mut().and_then(|rx| {
-            rx.borrow_and_update()
-                .get(selected_radio_station.as_str())
-                .map(|meta| format!("{} - {}", meta.artist, meta.title))
+        let now_playing: Option<NowPlaying> = self.now_playing_rx.as_mut().and_then(|rx| {
+            let map = rx.borrow_and_update();
+            use late_core::radio::Provider;
+            let mount = match selected_radio_station.provider() {
+                Provider::House => selected_radio_station.as_str(),
+                Provider::Nightride
+                | Provider::Plaza
+                | Provider::CodeRadio
+                | Provider::RadioParadise
+                | Provider::Fip
+                | Provider::RadioSwiss => "chill",
+            };
+            map.get(mount).cloned()
         });
+        if let Some(rx) = self.radio_meta_rx.as_mut() {
+            rx.borrow_and_update();
+        }
+        let radio_now_playing: Option<String> = self.station_now_playing(selected_radio_station);
+        let stations_rows: Vec<crate::app::audio::stations_modal::ui::StationRow> =
+            if self.stations_modal_state.is_open() {
+                self.stations_modal_state
+                    .stations()
+                    .into_iter()
+                    .map(
+                        |station| crate::app::audio::stations_modal::ui::StationRow {
+                            now_playing: self.station_now_playing(station),
+                            station,
+                        },
+                    )
+                    .collect()
+            } else {
+                Vec::new()
+            };
         let paired_client = self.paired_client_state();
         let eq_state =
             crate::app::audio::viz::eq_state(paired_client.as_ref(), self.audio.live_bands());
@@ -573,6 +682,31 @@ impl App {
             username_directory_snapshot.as_deref(),
         );
         let chat_usernames = &render_usernames;
+        // One watch chat is on show at a time: the watched player's room on
+        // the Games hub, this player's own room beside their running game.
+        let watch_chat_room_id = match (self.screen, own_screen_game) {
+            (Screen::Games, _) => self.spectate_chat_room_id(),
+            (_, Some(game)) => self.own_watch_chat_room_id(game),
+            (_, None) => None,
+        };
+        // The player's own composer: open in their room, on their game's
+        // screen (`App::handle_input` opens it on F2 or a click on the pane).
+        // Until then their pane's strip is inert and says so.
+        let own_chat_composing = own_screen_game.is_some()
+            && watch_chat_room_id.is_some()
+            && self.chat.is_composing()
+            && self.chat.composer_room_id() == watch_chat_room_id;
+        // The newest thing a watcher said, for the one-row form of the chat
+        // a narrow terminal shows under this player's own running game.
+        let own_watch_line = own_screen_game
+            .and_then(|game| self.own_watch_chat_room_id(game))
+            .and_then(|room_id| {
+                crate::app::door::spectate::chat::latest_line(
+                    self.chat.messages_for_room(room_id),
+                    chat_usernames,
+                    chrono::Utc::now(),
+                )
+            });
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
@@ -602,9 +736,6 @@ impl App {
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
-        let active_friend_names = &self.active_friend_names;
-        let dashboard_selected_news_message = shell_active_room
-            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let dashboard_room_effects = shell_active_room
@@ -613,6 +744,38 @@ impl App {
             .unwrap_or_default();
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
+        // The live games on the watchable doors: the hub rail's live rows,
+        // and a live strip source.
+        let live_rows = self.live_games.live_rows();
+        let live_panel_now = chrono::Utc::now();
+        let live_panel_rows = crate::app::live::panel::rows(
+            &self.chat.live_streams,
+            &live_rows,
+            &crate::app::calendar::live::panel_events(
+                &self.calendar.live_at(live_panel_now),
+                self.calendar.tz,
+            ),
+            self.chat.news.all_articles(),
+            self.chat.news.reads(),
+            self.live_games.open_watches(),
+            live_panel_now,
+        );
+        // The strip is the #lounge card's alone; another room's card, or
+        // the chat center, never carries it.
+        let dashboard_live_strip = if home_selected {
+            self.live.view(
+                &self.daily,
+                &self.audio,
+                self.paired_source,
+                self.chat.news.all_articles(),
+                &self.chat.live_streams,
+                &live_rows,
+                &self.live_games,
+                &self.calendar,
+            )
+        } else {
+            None
+        };
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
             .map(|channel| channel.id);
@@ -638,9 +801,53 @@ impl App {
                         })
                     })
             });
-        let status_badge = self
-            .status
-            .map(|status| status.hud_badge(chrono::Utc::now()));
+        // Status bar inputs. Formatted here, once, so the draw path reads no
+        // wall clock and a frame stays reproducible from its inputs.
+        let status_local_now = crate::app::common::time::timezone_now(
+            chrono::Utc::now(),
+            self.profile_state.profile().timezone.as_deref(),
+        );
+        let status_clock_24 = status_local_now.format("%H:%M").to_string();
+        let status_clock_ampm = status_local_now.format("%-I:%M %P").to_string();
+        let status_date_short = status_local_now.format("%a %-d %b").to_string();
+        let status_date_full = status_local_now.format("%A, %-d %B").to_string();
+        let status_date_iso = status_local_now.format("%Y-%m-%d").to_string();
+        // What the live strip shows, in a line, built only while the bar
+        // carries the Live segment.
+        let status_live = if statusline_components.iter().any(|setting| {
+            setting.enabled
+                && setting.component == late_core::models::statusline::StatusComponent::Live
+        }) {
+            self.live
+                .view(
+                    &self.daily,
+                    &self.audio,
+                    self.paired_source,
+                    self.chat.news.all_articles(),
+                    &self.chat.live_streams,
+                    &live_rows,
+                    &self.live_games,
+                    &self.calendar,
+                )
+                .map(|strip| crate::app::live::ui::status_text(&strip))
+        } else {
+            None
+        };
+        let (status_quests_daily, status_quests_weekly) = self.quest_state.open_counts();
+        let status_station_name = match self.paired_source {
+            late_core::models::user::AudioSource::Radio => selected_radio_station.label(),
+            late_core::models::user::AudioSource::Youtube => "youtube",
+        };
+        let status_youtube_track = match self.paired_source {
+            late_core::models::user::AudioSource::Youtube => {
+                crate::app::common::sidebar::youtube_track(&self.audio.queue_snapshot())
+            }
+            late_core::models::user::AudioSource::Radio => None,
+        };
+        let status_station_track = match self.paired_source {
+            late_core::models::user::AudioSource::Radio => radio_now_playing.as_deref(),
+            late_core::models::user::AudioSource::Youtube => status_youtube_track.as_deref(),
+        };
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -675,7 +882,6 @@ impl App {
             show_flag_fallback: self.profile_state.profile().show_flag_fallback,
             selected_message_id: self.chat.selected_message_id,
             selected_image_message: dashboard_selected_image_message,
-            selected_news_message: dashboard_selected_news_message,
             highlighted_message_id: self.chat.highlighted_message_id,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
@@ -691,12 +897,23 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             runner_looks: &self.runner_looks,
-            peer_statuses: &self.peer_statuses,
+            away_user_ids: &self.away_user_ids,
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
+            live_strip: dashboard_live_strip,
+            live_strip_hit: &self.live.hit,
+            // The board's day, on the #lounge card alone like the strip.
+            board_day: if home_selected {
+                crate::app::calendar::live::day_text(
+                    &self.calendar.live_at(live_panel_now),
+                    live_panel_now,
+                )
+            } else {
+                None
+            },
             inline_images: &self.chat.inline_image_cache,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
@@ -707,7 +924,7 @@ impl App {
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
             selected_index: self.chat.news.selected_index(),
-            marker_read_at: self.chat.news.marker_read_at(),
+            marker: self.chat.news.marker(),
             mine_only: self.chat.news.mine_only(),
         };
         let feeds_view = chat::feeds::ui::FeedListView {
@@ -757,10 +974,6 @@ impl App {
                 payload: &modal.payload,
                 meta: &modal.meta,
             });
-        let selected_news_message = self
-            .chat
-            .selected_room_id
-            .is_some_and(|room_id| self.chat.selected_message_is_news_in_room(room_id));
         let selected_image_message = self
             .chat
             .selected_room_id
@@ -821,9 +1034,9 @@ impl App {
             selected_room_id: self.chat.selected_room_id,
             room_jump_active: self.chat.room_jump_active,
             room_section_prefix_armed: self.room_section_prefix_armed,
+            rail_scroll_nudge: self.chat.rail_scroll_nudge(),
             selected_message_id: self.chat.selected_message_id,
             selected_image_message,
-            selected_news_message,
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             highlighted_message_id: self.chat.highlighted_message_id,
             composer: self.chat.composer(),
@@ -842,7 +1055,7 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_flair: &self.name_flair,
             runner_looks: &self.runner_looks,
-            peer_statuses: &self.peer_statuses,
+            away_user_ids: &self.away_user_ids,
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -914,7 +1127,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_inert: false,
+                    composer_inert: chat::ui::ComposerInert::No,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -926,7 +1139,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_statuses: &self.peer_statuses,
+                    away_user_ids: &self.away_user_ids,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -979,7 +1192,7 @@ impl App {
                     highlighted_message_id: self.chat.highlighted_message_id,
                     reaction_picker_active: self.chat.is_reaction_leader_active(),
                     composer: self.chat.composer(),
-                    composer_inert: false,
+                    composer_inert: chat::ui::ComposerInert::No,
                     composing: self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -991,7 +1204,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_statuses: &self.peer_statuses,
+                    away_user_ids: &self.away_user_ids,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -1001,6 +1214,76 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
+        // The watch chat: docked beside the watched screen for a watcher,
+        // read-only beside their own game for the player.
+        let watch_chat_view =
+            watch_chat_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
+                messages_inset: 1,
+                title: "Watch Chat",
+                messages: self.chat.messages_for_room(chat_room_id),
+                overlay: self.chat.overlay(),
+                image_modal,
+                rows_cache: &mut self.watch_chat_rows_cache,
+                rows_versions: chat::ui::ChatRowsVersions {
+                    room_id: Some(chat_room_id),
+                    room_version: self.chat.room_version(chat_room_id),
+                    chat_ctx_epoch: self.chat.context_epoch(),
+                    app_ctx_epoch: self.chat_ctx_epoch,
+                },
+                usernames: chat_usernames,
+                countries: chat_countries,
+                friend_user_ids: self.chat.friend_user_ids(),
+                live_user_ids: &self.chat.live_user_ids,
+                message_reactions,
+                message_gilds,
+                inline_images: &self.chat.inline_image_cache,
+                dividers: crate::app::chat::ui::ChatDividers {
+                    afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                    left_app: self.chat.device_left_at(),
+                },
+                current_user_id: self.user_id,
+                voice_channel_id: self
+                    .chat
+                    .voice_channels_by_room_id
+                    .get(&chat_room_id)
+                    .map(|channel| channel.id),
+                voice_snapshot,
+                voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                selected_message_id: self.chat.selected_message_id,
+                selected_image_message: self
+                    .chat
+                    .selected_message_has_inline_image_in_room(chat_room_id),
+                highlighted_message_id: self.chat.highlighted_message_id,
+                reaction_picker_active: self.chat.is_reaction_leader_active(),
+                composer: self.chat.composer(),
+                // The player's own pane keeps the strip inert until F2 or a
+                // click opens it; a watcher's pane (Games) composes as is.
+                composer_inert: match (own_screen_game.is_some(), own_chat_composing) {
+                    (true, false) => chat::ui::ComposerInert::OwnWatchChat,
+                    (true, true) | (false, _) => chat::ui::ComposerInert::No,
+                },
+                composing: self.chat.composing,
+                mention_matches: &self.chat.mention_ac.matches,
+                mention_selected: self.chat.mention_ac.selected,
+                mention_active: self.chat.mention_ac.active,
+                reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                is_editing: self.chat.edited_message_id.is_some(),
+                bonsai_glyphs,
+                chat_badges,
+                profile_award_badges,
+                drunk_levels: &self.drunk_levels,
+                name_flair: &self.name_flair,
+                away_user_ids: &self.away_user_ids,
+                name_flicker,
+                translations: &self.chat.translations,
+                translation_hidden: &self.chat.translation_hidden,
+                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                composer_rect_slot: Some(&self.chat.last_composer_rect),
+                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                selection_scroll: Some(&self.chat.selection_scroll),
+            });
         // Every chat tile draws a composer, focused or not: an input box
         // that appears and disappears as the focus walks moves every row
         // under the reader. Only the active tile's composer is live, so the
@@ -1067,7 +1350,10 @@ impl App {
                     } else {
                         &idle_composer
                     },
-                    composer_inert: !active,
+                    composer_inert: match active {
+                        true => chat::ui::ComposerInert::No,
+                        false => chat::ui::ComposerInert::ZenTile,
+                    },
                     composing: active && self.chat.composing,
                     mention_matches: &self.chat.mention_ac.matches,
                     mention_selected: self.chat.mention_ac.selected,
@@ -1083,7 +1369,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_flair: &self.name_flair,
-                    peer_statuses: &self.peer_statuses,
+                    away_user_ids: &self.away_user_ids,
                     name_flicker,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -1109,12 +1395,11 @@ impl App {
             .collect();
         let zen_track = crate::app::common::sidebar::current_track_text(
             self.paired_source,
-            now_playing.as_ref(),
             &self.audio.queue_snapshot(),
             self.selected_radio_station,
             radio_now_playing.as_deref(),
         );
-        let zen_date = zen_date_text(self.profile_state.profile().timezone.as_deref());
+        let zen_date = status_date_full.clone();
         let care_day = chrono::Utc::now().date_naive();
         let zen_care = crate::app::zen::ui::Care {
             bonsai: crate::app::zen::ui::Chore::of(
@@ -1171,7 +1456,6 @@ impl App {
             composing: self.chat.composing,
             selected_message: false,
             selected_image_message: false,
-            selected_news_message: false,
             reaction_picker_active: false,
             reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
             is_editing: self.chat.edited_message_id.is_some(),
@@ -1179,7 +1463,7 @@ impl App {
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-            inert: false,
+            inert: chat::ui::ComposerInert::No,
         });
         let (clubhouse_composer, nightcap_composer) = match screen {
             Screen::Clubhouse => (embedded_composer, None),
@@ -1214,15 +1498,15 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
+            || screensaver.is_some()
             || news_modal.is_some()
             || self.icon_picker_open
             || self.usermap.is_open()
             || self.room_search_modal_state.is_open()
-            || self.status_picker.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.stream_modal.is_some()
-            || self.chat.history_modal.is_open()
-            || self.usermap.is_open();
+            || self.chat.history_modal.is_open();
         let suppress_new_raster = self.show_settings
             || self.show_mod_modal
             || self.show_hub_modal
@@ -1237,11 +1521,12 @@ impl App {
             || self.show_help
             || self.show_ultimate_modal
             || self.show_splash
+            || screensaver.is_some()
             || news_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
-            || self.status_picker.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
         // No screen places a non-modal persistent raster today; the slot
@@ -1280,6 +1565,7 @@ impl App {
                     area,
                     screen,
                     DrawContext {
+                        calendar: &self.calendar,
                         dashboard_view,
                         chat_view,
                         game_selection: self.game_selection,
@@ -1289,7 +1575,8 @@ impl App {
                         daily_chat_view,
                         house: &self.house,
                         house_chat_view,
-                        games_hub_selected: self.games_hub_state.selected(),
+                        games_hub_roster,
+                        games_hub_selected: self.games_hub_state.selected(games_hub_roster),
                         games_hub_scroll: self.games_hub_state.scroll(),
                         games_hub_max_scroll: self.games_hub_state.max_scroll(),
                         door_rc_modal: self
@@ -1313,6 +1600,16 @@ impl App {
                         brogue_live,
                         darkroom_live,
                         greendragon_live,
+                        spectate_state: self.spectate_state.as_ref(),
+                        live_rows,
+                        live_panel_rows,
+                        live_panel_now,
+                        live_panel_hit: &self.live.panel_hit,
+                        own_watchers,
+                        held_watchers,
+                        watch_chat_view,
+                        show_watch_chat: self.profile_state.profile().show_watch_chat,
+                        own_watch_line,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1353,9 +1650,13 @@ impl App {
                         nightcap_composer,
                         drunk_levels: &self.drunk_levels,
                         city_state: &self.city,
-                        city_look: self.runner_looks.get(&self.user_id),
+                        city_look: self
+                            .runner_looks
+                            .get(&self.user_id)
+                            .map(|entry| &entry.look),
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
+                        city_picker: self.fight.picker.as_ref(),
                         city_till: self.fight.till.as_deref(),
                         city_tailor: crate::app::deadchannel::tailor::ui::MirrorView {
                             draft: self.tailor.draft.as_ref(),
@@ -1363,8 +1664,14 @@ impl App {
                             changed: self.tailor.changed(),
                             saving: self.tailor.saving,
                         },
+                        city_guide: &self.guide.state,
+                        city_street: &self.street.view,
+                        city_own_user_id: self.user_id,
+                        city_runner_looks: &self.runner_looks,
                         clubhouse_overlay: self.chat.overlay(),
                         artboard_interacting: self.artboard_interacting,
+                        artboard_disclaimer_visible,
+                        artboard_disclaimer_choices: &self.artboard_disclaimer_choices,
                         leaderboard: &self.leaderboard,
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
@@ -1374,6 +1681,7 @@ impl App {
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
+                        can_access_mod_surface: self.permissions.can_access_mod_surface(),
                         show_right_sidebar,
                         right_sidebar_components,
                         show_room_list_sidebar,
@@ -1384,12 +1692,14 @@ impl App {
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
                         aquarium_care: &self.aquarium_care,
+                        pet_state: &self.pet_state,
                         leaderboard_page: &self.leaderboard_page,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        viewer_is_runner: self.runner_looks.contains_key(&self.user_id),
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
@@ -1406,7 +1716,6 @@ impl App {
                         lobby: &self.lobby,
                         daily: &self.daily,
                         realm: &self.realm,
-                        pot: &self.pot_view,
                         paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
@@ -1415,6 +1724,8 @@ impl App {
                         show_ultimate_modal: self.show_ultimate_modal,
                         ultimate_state: &self.ultimate_state,
                         show_splash: self.show_splash,
+                        screensaver,
+                        ascii_clock,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
                         splash_piece: self.splash_piece.as_ref(),
@@ -1430,25 +1741,26 @@ impl App {
                         listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
-                        status_picker: &self.status_picker,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
                         room_info_modal_state: &self.room_info_modal_state,
                         directory_editor: &self.directory_editor,
                         tag_picker: &self.tag_picker,
+                        piece_picker: &self.piece_picker,
                         showcase_items: self.chat.showcase.all_items(),
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
                         booth_submit_enabled: self.audio.booth_submit_enabled(),
+                        stations_modal_open: self.stations_modal_state.is_open(),
+                        stations_modal_state: &self.stations_modal_state,
+                        stations_rows,
                         youtube_source_count: self.audio.youtube_source_count(),
-                        icecast_source_count: self.audio.icecast_source_count(),
                         radio_source_count: self.audio.radio_source_count(),
                         paired_source: self.paired_source,
-                        selected_icecast_stream,
                         selected_radio_station,
+                        radio_slots: self.radio_slots,
                         radio_now_playing: radio_now_playing.as_deref(),
                         online_count,
-                        active_friend_names,
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
@@ -1458,11 +1770,33 @@ impl App {
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
-                        mentions_unread_count: self.chat.notifications.unread_count(),
-                        chip_balance: self.chip_balance,
-                        mentions_hud_rect: &self.last_mentions_hud_rect,
-                        voice_badge,
-                        status_badge,
+                        statusline_components,
+                        status_data: crate::app::statusline::data::StatusData {
+                            clock_24: &status_clock_24,
+                            clock_ampm: &status_clock_ampm,
+                            hour: chrono::Timelike::hour(&status_local_now),
+                            date_short: &status_date_short,
+                            date_full: &status_date_full,
+                            date_iso: &status_date_iso,
+                            chip_balance: self.chip_balance,
+                            mentions_unread: self.chat.notifications.unread_count(),
+                            dms_unread: self.chat.unread_dm_count(),
+                            pot_size: self.pot_view.open.then_some(self.pot_view.size),
+                            pot_draws_in: self
+                                .pot_view
+                                .open
+                                .then_some(self.pot_view.draws_in.as_str()),
+                            online_count,
+                            turns_waiting: self.daily.my_turn_matches().len(),
+                            station_name: status_station_name,
+                            station_track: status_station_track,
+                            quests_open_daily: status_quests_daily,
+                            quests_open_weekly: status_quests_weekly,
+                            care_due: zen_care.due_count(),
+                            voice: voice_badge.as_deref(),
+                            live: status_live.as_deref(),
+                        },
+                        status_hits: &self.last_status_hits,
                         home_selected,
                         zen: &self.zen,
                         zen_chat_tiles,
@@ -1471,7 +1805,7 @@ impl App {
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
-                        zen_peer_statuses: &self.peer_statuses,
+                        own_chat_hit: &self.own_chat_hit,
                     },
                     &mut terminal_image_frame,
                 );
@@ -1533,9 +1867,9 @@ impl App {
         terminal_images: &mut TerminalImageFrame,
     ) {
         if ctx.show_splash {
-            // No HUD on the splash: keep the click slot in step with what is
-            // actually on screen.
-            ctx.mentions_hud_rect.set(None);
+            // No status bars on the splash: keep the click slots in step with
+            // what is actually on screen.
+            ctx.status_hits.borrow_mut().clear();
             let msg = "take a break, grab a coffee";
             // Animate typing the message (1 char per tick instead of 1 char per 2 ticks)
             let len = msg.len();
@@ -1654,11 +1988,21 @@ impl App {
             return;
         }
 
+        // Away: the screensaver covers the page, its frame, and every modal.
+        // Nothing under it is clickable, and the input that dismisses it is
+        // swallowed (`App::handle_input`).
+        if let Some(piece) = ctx.screensaver {
+            ctx.status_hits.borrow_mut().clear();
+            frame.render_widget(Clear, area);
+            crate::app::ascii::ui::draw_piece(frame, area, piece, ctx.ascii_clock);
+            return;
+        }
+
         // The Zen pages are full-bleed: no frame, no HUD, no tab bar. Every
-        // other page keeps the app frame.
+        // other page keeps the app frame. Zen paints its own status row and
+        // fills the click slots below.
         let zen_page = screen == Screen::Zen;
         let inner = if zen_page {
-            ctx.mentions_hud_rect.set(None);
             frame.render_widget(Clear, area);
             area
         } else {
@@ -1668,39 +2012,29 @@ impl App {
                 .title(title)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-            match status_hud_title(StatusHudInputs {
-                balance: Some(ctx.chip_balance),
-                unread: ctx.mentions_unread_count,
-                voice_badge: ctx.voice_badge.as_deref(),
-                status_badge: ctx.status_badge.as_deref(),
-                pot: Some(ctx.pot).filter(|view| view.open),
-                border_width: area.width,
-                title_width,
-            }) {
-                Some(hud) => {
-                    // The right-aligned title's last cell sits just inside the
-                    // top-right corner; the mentions segment sits `mentions_offset`
-                    // cells into the line, after the status and voice badges.
-                    let total = hud.line.width() as u16;
-                    let rect = (hud.mentions_width > 0).then(|| Rect {
-                        x: area
-                            .right()
-                            .saturating_sub(total + 1)
-                            .saturating_add(hud.mentions_offset),
-                        y: area.y,
-                        width: hud.mentions_width,
-                        height: 1,
-                    });
-                    ctx.mentions_hud_rect.set(rect);
-                    block = block.title_top(hud.line);
-                }
-                None => ctx.mentions_hud_rect.set(None),
+            // Bottom first: the top bar skips whatever the bottom one painted.
+            let mut status_hits = Vec::new();
+            let mut painted_on_bottom = Vec::new();
+            let (bottom_bar, sponsor_title) =
+                app_frame_bottom_titles(&ctx.statusline_components, &ctx.status_data, area);
+            if let Some(bar) = bottom_bar {
+                painted_on_bottom = bar.painted;
+                status_hits.extend(bar.hits);
+                block = block.title_bottom(bar.line);
             }
-            let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
-            block = block.title_bottom(help_hint_title);
             if let Some(sponsor_title) = sponsor_title {
                 block = block.title_bottom(sponsor_title);
             }
+            if let Some(bar) = crate::app::statusline::bar::build_top_status_bar(
+                &ctx.status_data,
+                area,
+                title_width,
+                &painted_on_bottom,
+            ) {
+                status_hits.extend(bar.hits);
+                block = block.title_top(bar.line);
+            }
+            *ctx.status_hits.borrow_mut() = status_hits;
 
             let inner = app_frame_inner_area(area);
             frame.render_widget(block, area);
@@ -1714,6 +2048,20 @@ impl App {
             app_content_and_sidebar_areas(inner, ctx.show_right_sidebar)
         };
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
+        // The tour stops that write into a real surface: the two modals take
+        // the header themselves, the practice table and the dungeon fight
+        // get it drawn across the top of the page.
+        let tour_header = crate::app::clubhouse::ui::tour_header(
+            ctx.clubhouse_state.tutorial,
+            crate::app::clubhouse::ui::table_stop(content_area, ctx.daily.practice_played()),
+            ctx.clubhouse_state.tour_fight.won(),
+        );
+        let board_area = match (&tour_header, screen) {
+            (Some(header), Screen::DailyMatch | Screen::Games) => {
+                header.draw_above(frame, content_area)
+            }
+            (Some(_), _) | (None, _) => content_area,
+        };
         match screen {
             Screen::Dashboard => {
                 const HOME_RAIL_WIDTH: u16 = 24;
@@ -1743,15 +2091,67 @@ impl App {
                 }
             }
             Screen::Artboard => {
-                if let Some(state) = ctx.dartboard_state {
-                    artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
+                if ctx.artboard_disclaimer_visible {
+                    // The tour's own stop box offers show or skip; the
+                    // page under it stays bare so no art shows.
+                    if ctx.clubhouse_state.tutorial_forced_step().is_some() {
+                        frame.render_widget(ratatui::widgets::Clear, content_area);
+                    } else {
+                        artboard::disclaimer::draw(
+                            frame,
+                            content_area,
+                            ctx.artboard_disclaimer_choices,
+                        );
+                    }
+                } else if let Some(state) = ctx.dartboard_state {
+                    artboard::ui::draw_game(
+                        frame,
+                        content_area,
+                        state,
+                        ctx.artboard_interacting,
+                        ctx.can_access_mod_surface,
+                    );
+                }
+            }
+            Screen::Calendars => crate::app::calendar::ui::draw(frame, inner, ctx.calendar),
+            // The tour's dungeon stop plays its fight where the hub would be.
+            Screen::Games if tour_header.is_some() => crate::app::clubhouse::fight::draw(
+                frame,
+                board_area,
+                &ctx.clubhouse_state.tour_fight,
+                ctx.clubhouse_state.username(),
+            ),
+            // An open watch takes the whole page, the hub's rail included.
+            Screen::Games if ctx.spectate_state.is_some_and(|state| state.is_open()) => {
+                if let Some(state) = ctx.spectate_state {
+                    crate::app::door::spectate::ui::draw(
+                        frame,
+                        content_area,
+                        &crate::app::door::spectate::ui::SpectateView {
+                            state,
+                            entry: state
+                                .row_in(&ctx.live_rows)
+                                .map(|index| &ctx.live_rows[index].entry),
+                            watchers: ctx.held_watchers,
+                        },
+                        crate::app::door::spectate::ui::WatchPane::Open(
+                            ctx.watch_chat_view.take().map(Box::new),
+                        ),
+                        terminal_images,
+                    );
                 }
             }
             Screen::Games => {
+                // The rail's selection sits on a live row while this session
+                // previews one; the preview then draws in the landing's place.
+                let live_selected = ctx
+                    .spectate_state
+                    .and_then(|state| state.row_in(&ctx.live_rows));
                 crate::app::door::hub::ui::draw_games_hub(
                     frame,
                     content_area,
                     &crate::app::door::hub::ui::HubView {
+                        roster: ctx.games_hub_roster,
                         selected: ctx.games_hub_selected,
                         scroll: ctx.games_hub_scroll,
                         max_scroll: ctx.games_hub_max_scroll,
@@ -1773,11 +2173,37 @@ impl App {
                         brogue_live: ctx.brogue_live,
                         darkroom_live: ctx.darkroom_live,
                         greendragon_live: ctx.greendragon_live,
+                        live: &ctx.live_rows,
+                        live_selected,
+                        watching: ctx.spectate_state.is_some(),
+                        show_watch_chat: ctx.show_watch_chat,
                         rc_modal: ctx.door_rc_modal.map(|(game, content)| {
                             crate::app::door::hub::ui::RcModalView { game, content }
                         }),
+                        night_city: crate::app::deadchannel::city::landing::LandingView {
+                            sheet: ctx.city_sheet,
+                            street: ctx.city_street,
+                            own_user_id: ctx.city_own_user_id,
+                            tick: ctx.marquee_tick,
+                        },
                     },
                 );
+                if let (Some(state), Some(pane)) = (
+                    ctx.spectate_state,
+                    crate::app::door::hub::ui::watch_pane_area(content_area),
+                ) {
+                    crate::app::door::spectate::ui::draw(
+                        frame,
+                        pane,
+                        &crate::app::door::spectate::ui::SpectateView {
+                            state,
+                            entry: live_selected.map(|index| &ctx.live_rows[index].entry),
+                            watchers: ctx.held_watchers,
+                        },
+                        crate::app::door::spectate::ui::WatchPane::Preview,
+                        terminal_images,
+                    );
+                }
             }
             Screen::Lateania => {
                 crate::app::door::lateania::screen::GAME.draw(
@@ -1824,25 +2250,71 @@ impl App {
                     crate::app::door::rebels::render::draw_page(frame, content_area, state);
                 }
             }
+            // The watchable doors: a running game makes room for its
+            // watchers' chat when the player keeps that on, a read-only pane
+            // on the right or one row underneath on a narrow terminal. The
+            // room comes off the PTY, never over the game.
             Screen::Nethack => {
                 if let Some(state) = ctx.nethack_state.as_deref_mut() {
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Nethack,
+                        ctx.show_watch_chat && state.is_running(),
+                        content_area,
+                    );
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::nethack::render::draw_page(frame, content_area, state);
+                    state.set_viewport(game_area);
+                    crate::app::door::nethack::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Dcss => {
                 if let Some(state) = ctx.dcss_state.as_deref_mut() {
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Dcss,
+                        ctx.show_watch_chat && state.is_running(),
+                        content_area,
+                    );
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::dcss::render::draw_page(frame, content_area, state);
+                    state.set_viewport(game_area);
+                    crate::app::door::dcss::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Brogue => {
                 if let Some(state) = ctx.brogue_state.as_deref_mut() {
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Brogue,
+                        ctx.show_watch_chat && state.is_running(),
+                        content_area,
+                    );
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::brogue::render::draw_page(frame, content_area, state);
+                    state.set_viewport(game_area);
+                    crate::app::door::brogue::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Usurper => {
@@ -1885,6 +2357,8 @@ impl App {
                         work_marker: ctx.chat_view.work_view.marker_read_at,
                         showcase_marker: ctx.chat_view.showcase_view.marker_read_at,
                         current_user_id: ctx.chat_view.work_view.current_user_id,
+                        can_moderate: ctx.chat_view.work_view.is_admin,
+                        can_retract_jobs: ctx.is_admin || ctx.is_moderator,
                         profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
                 );
@@ -1944,8 +2418,14 @@ impl App {
                     look: ctx.city_look,
                     sheet: ctx.city_sheet,
                     scene: ctx.city_scene,
+                    picker: ctx.city_picker,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
+                    guide: ctx.city_guide,
+                    own_user_id: ctx.city_own_user_id,
+                    street: ctx.city_street,
+                    runner_looks: ctx.city_runner_looks,
+                    usernames: ctx.usernames,
                 },
             ),
             Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(
@@ -1961,7 +2441,26 @@ impl App {
                 },
             ),
             Screen::Zen => {
+                // A page too small to draw has no row, so it keeps no
+                // click target either; nor does a zoomed one, the tile
+                // takes the whole page.
+                let (_, row) = crate::app::zen::layout::rice_areas(
+                    content_area,
+                    crate::app::zen::layout::rice_row(content_area, ctx.zen.zoomed),
+                );
+                let status_row = row.map(|row| {
+                    crate::app::statusline::bar::build_zen_status_row(
+                        &ctx.statusline_components,
+                        &ctx.status_data,
+                        row,
+                    )
+                });
+                *ctx.status_hits.borrow_mut() = match &status_row {
+                    Some(status_row) => status_row.hits.clone(),
+                    None => Vec::new(),
+                };
                 let view = crate::app::zen::ui::ZenView {
+                    status_row,
                     zen: ctx.zen,
                     bonsai: ctx.bonsai,
                     aquarium: ctx.aquarium_state,
@@ -1973,19 +2472,17 @@ impl App {
                     station: crate::app::zen::ui::station_text(
                         ctx.paired_source,
                         ctx.selected_radio_station,
-                        ctx.selected_icecast_stream,
                     ),
                     eq_state: ctx.eq_state,
                     clock: ctx.sidebar_clock,
                     date: ctx.zen_date.clone(),
                     online_count: ctx.online_count,
-                    mentions_unread: ctx.mentions_unread_count,
+                    mentions_unread: ctx.status_data.mentions_unread,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
                     active_friends: ctx.zen_active_friends,
-                    peer_statuses: ctx.zen_peer_statuses,
-                    chip_balance: ctx.chip_balance,
+                    chip_balance: ctx.status_data.chip_balance,
                     care: ctx.zen_care,
                     inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
                         crate::app::zen::rows::inbox_rows(
@@ -2007,13 +2504,19 @@ impl App {
                     } else {
                         Vec::new()
                     },
+                    live_panel: crate::app::live::panel::LivePanelProps {
+                        rows: &ctx.live_panel_rows,
+                        hit: ctx.live_panel_hit,
+                        now: ctx.live_panel_now,
+                    },
                     wall_tick: ctx.marquee_tick,
+                    ascii_clock: ctx.ascii_clock,
                 };
                 crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
             }
             Screen::DailyMatch => crate::app::lobby::daily::board_ui::draw(
                 frame,
-                content_area,
+                board_area,
                 ctx.daily,
                 ctx.terminal_image_protocol,
                 terminal_images,
@@ -2041,23 +2544,37 @@ impl App {
                 sidebar_area,
                 &SidebarProps {
                     components: &ctx.right_sidebar_components,
-                    now_playing: ctx.now_playing,
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
+                    pet: ctx
+                        .shop_state
+                        .entitlements()
+                        .has_pet_companion()
+                        .then_some(ctx.pet_state),
+                    tank: ctx.shop_state.entitlements().has_aquarium().then_some(
+                        crate::app::common::sidebar::SidebarTank {
+                            aquarium: ctx.aquarium_state,
+                            hungry: ctx.aquarium_care.hungry(),
+                        },
+                    ),
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
-                    icecast_source_count: ctx.icecast_source_count,
                     radio_source_count: ctx.radio_source_count,
                     paired_source: ctx.paired_source,
-                    selected_icecast_stream: ctx.selected_icecast_stream,
                     selected_radio_station: ctx.selected_radio_station,
+                    radio_slots: ctx.radio_slots,
                     radio_now_playing: ctx.radio_now_playing,
                     daily: ctx.daily,
+                    live: crate::app::live::panel::LivePanelProps {
+                        rows: &ctx.live_panel_rows,
+                        hit: ctx.live_panel_hit,
+                        now: ctx.live_panel_now,
+                    },
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
-                    active_friend_names: ctx.active_friend_names,
+                    active_friends: ctx.zen_active_friends,
                     marquee_tick: ctx.marquee_tick,
                 },
             );
@@ -2076,6 +2593,7 @@ impl App {
                 inner,
                 ctx.clubhouse_state.tutorial,
                 screen,
+                ctx.artboard_disclaimer_visible,
             );
         }
 
@@ -2115,8 +2633,18 @@ impl App {
             draw_banner(frame, notif_inner, &banner);
         }
 
+        crate::app::calendar::ui::draw_modal(frame, inner, ctx.calendar);
+
         if ctx.show_settings {
-            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
+            settings_modal::ui::draw(
+                frame,
+                inner,
+                ctx.settings_modal_state,
+                crate::app::common::sidebar::SidebarOwnership {
+                    pet: ctx.shop_state.entitlements().has_pet_companion(),
+                    tank: ctx.shop_state.entitlements().has_aquarium(),
+                },
+            );
         }
 
         if ctx.show_mod_modal {
@@ -2136,7 +2664,13 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
+            profile_modal::ui::draw(
+                frame,
+                inner,
+                ctx.profile_modal_state,
+                ctx.marquee_tick,
+                ctx.viewer_is_runner,
+            );
         }
 
         if ctx.show_sheet_modal {
@@ -2148,7 +2682,12 @@ impl App {
         }
 
         if ctx.show_gild_modal {
-            chat::gild::ui::draw_modal(frame, inner, ctx.gild_modal_state, ctx.chip_balance);
+            chat::gild::ui::draw_modal(
+                frame,
+                inner,
+                ctx.gild_modal_state,
+                ctx.status_data.chip_balance,
+            );
         }
 
         if let Some(cyberspace_modal) = ctx.cyberspace_modal {
@@ -2161,7 +2700,13 @@ impl App {
 
         if ctx.show_lobby_modal {
             crate::app::lobby::modal_ui::draw(
-                frame, inner, ctx.lobby, ctx.daily, ctx.realm, ctx.house,
+                frame,
+                inner,
+                ctx.lobby,
+                ctx.daily,
+                ctx.realm,
+                ctx.house,
+                tour_header.as_ref(),
             );
         }
 
@@ -2223,10 +2768,6 @@ impl App {
             );
         }
 
-        if let Some(modal) = ctx.paper_modal {
-            crate::app::paper::ui::draw(frame, inner, modal);
-        }
-
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
         }
@@ -2263,10 +2804,6 @@ impl App {
             );
         }
 
-        if ctx.status_picker.is_open() {
-            status_picker::ui::draw(frame, inner, ctx.status_picker);
-        }
-
         // Drawn after the search modal: a jump too old to land in the room
         // opens history over the top of whatever was showing.
         if ctx.chat_state.history_modal.is_open() {
@@ -2301,6 +2838,11 @@ impl App {
             crate::app::tag_picker::ui::draw(frame, inner, ctx.tag_picker);
         }
 
+        // Over the Zen page, from its ascii tile.
+        if ctx.piece_picker.is_open() {
+            crate::app::ascii::picker::ui::draw(frame, inner, ctx.piece_picker);
+        }
+
         if ctx.booth_modal_open {
             crate::app::audio::booth::ui::draw(
                 frame,
@@ -2309,6 +2851,23 @@ impl App {
                 &ctx.booth_snapshot,
                 ctx.booth_submit_enabled,
                 ctx.is_admin || ctx.is_moderator,
+            );
+        }
+
+        // The tour holds this modal open through a quit confirm, and it would
+        // draw over the prompt.
+        if ctx.stations_modal_open && !ctx.show_quit_confirm {
+            crate::app::audio::stations_modal::ui::draw(
+                frame,
+                inner,
+                ctx.stations_modal_state,
+                &crate::app::audio::stations_modal::ui::StationsView {
+                    rows: &ctx.stations_rows,
+                    current: ctx.selected_radio_station,
+                    slots: ctx.radio_slots,
+                    source: ctx.paired_source,
+                },
+                tour_header.as_ref(),
             );
         }
 
@@ -2343,6 +2902,12 @@ impl App {
             None => {}
         }
 
+        // The paper captures input before every ordinary modal, so it must
+        // also be drawn above them, including a pending stream handoff.
+        if let Some(modal) = ctx.paper_modal {
+            crate::app::paper::ui::draw(frame, inner, modal);
+        }
+
         // First contact's breakthrough (`app/deadchannel/haunt`): the whole
         // frame, over every modal.
         if let Some(breakthrough) = &ctx.breakthrough {
@@ -2352,7 +2917,9 @@ impl App {
 }
 
 fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
-    ctx.show_settings
+    ctx.calendar.modal.is_some()
+        || ctx.calendar.context_menu.is_some()
+        || ctx.show_settings
         || ctx.show_quit_confirm
         || ctx.show_mod_modal
         || ctx.show_hub_modal
@@ -2367,10 +2934,22 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
         || ctx.room_search_modal_open
-        || ctx.status_picker.is_open()
         || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open
         || ctx.icon_picker_open
+}
+
+/// A watchable door's content area split between its game and the player's
+/// own watch chat, when `chat_wanted` (the setting is on and the game runs).
+fn own_chat_split(
+    game: crate::app::door::spectate::state::SpectateGame,
+    chat_wanted: bool,
+    area: Rect,
+) -> (Rect, crate::app::door::spectate::ui::OwnChat) {
+    match chat_wanted {
+        true => crate::app::door::spectate::ui::own_game_split(area, game),
+        false => (area, crate::app::door::spectate::ui::OwnChat::Hidden),
+    }
 }
 
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
@@ -2390,6 +2969,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Artboard, "4"),
         (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
+        (Screen::Calendars, "7"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -2446,6 +3026,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Artboard => "Artboard",
         Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
+        Screen::Calendars => "Calendars",
         Screen::Clubhouse => "Clubhouse",
         Screen::Nightcap => "Nightcap",
         Screen::City => "Undercity",
@@ -2463,6 +3044,17 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         format!("{page_title} "),
         Style::default().fg(theme::TEXT_MUTED()),
     ));
+
+    // The street's keys worth a hint: `f` steps into the static and `p`
+    // opens patch from anywhere (`app/deadchannel/city/input.rs`), and the
+    // street has its own guide (`app/deadchannel/guide`) on the site guide's
+    // key. The chrome says so, the way the door games do.
+    if screen == Screen::City {
+        spans.push(Span::styled(
+            "· f road · p patch · ? guide ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
 
     if screen == Screen::Lateania {
         spans.push(Span::styled(
@@ -2624,7 +3216,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
+                "· {} inside · Tab/0-7 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),
@@ -2643,7 +3235,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         let gallery_focus = ctx
             .dartboard_state
             .map(|state| (state.gallery().focus(), state.gallery().is_framing()));
-        let hints: &[(&str, &str)] = if ctx.artboard_interacting {
+        let hints: &[(&str, &str)] = if ctx.artboard_disclaimer_visible {
+            if ctx.clubhouse_state.tutorial_forced_step().is_some() {
+                &[("S", "show"), ("Enter", "skip")]
+            } else {
+                &[("V", "view"), ("A", "always view"), ("B", "back to chat")]
+            }
+        } else if ctx.artboard_interacting {
             &[
                 ("active", "draw"),
                 ("Space", "drop"),
@@ -2669,13 +3267,17 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ],
                 Some((crate::app::artboard::gallery::state::Focus::List, _)) => &[
                     ("gallery", "j/k"),
+                    ("n", "rating"),
                     ("v", "applaud"),
                     ("Enter", "full frame"),
                     ("Esc", "rail"),
                 ],
-                Some((crate::app::artboard::gallery::state::Focus::Piece, _)) => {
-                    &[("piece", "j/k next"), ("v", "applaud"), ("Esc", "back")]
-                }
+                Some((crate::app::artboard::gallery::state::Focus::Piece, _)) => &[
+                    ("piece", "j/k next"),
+                    ("n", "rating"),
+                    ("v", "applaud"),
+                    ("Esc", "back"),
+                ],
                 Some((crate::app::artboard::gallery::state::Focus::Canvas, _)) | None => &[
                     ("view", "pan"),
                     ("Alt+arrows/R-drag", "pan"),
@@ -2684,20 +3286,29 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 ],
             }
         };
-        // The page's own help is Ctrl+P in every state, and the top border
-        // always says so (`?` is the global guide, here as everywhere).
-        let help_hint: &[(&str, &str)] = if ctx.artboard_interacting {
-            &[]
-        } else {
-            &[("Ctrl+P", "help")]
-        };
+        // The page's own help is Ctrl+P once content has been accepted
+        // (`?` is the global guide, here as everywhere).
+        let help_hint: &[(&str, &str)] =
+            if ctx.artboard_interacting || ctx.artboard_disclaimer_visible {
+                &[]
+            } else {
+                &[("Ctrl+P", "help")]
+            };
         for (key, desc) in hints.iter().chain(help_hint) {
+            let key_color = if ctx.artboard_disclaimer_visible {
+                match *key {
+                    "V" => ratatui::style::Color::Yellow,
+                    "A" => ratatui::style::Color::Red,
+                    "B" => ratatui::style::Color::Green,
+                    _ => theme::AMBER_DIM(),
+                }
+            } else {
+                theme::AMBER_DIM()
+            };
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(
                 *key,
-                Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(key_color).add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::styled(
                 format!(" {desc} "),
@@ -2764,93 +3375,55 @@ fn append_home_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<'_
 }
 
 fn line_width(line: &Line<'_>) -> usize {
-    line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum()
+    line.width()
 }
 
-fn app_frame_bottom_titles(area_width: u16) -> (Line<'static>, Option<Line<'static>>) {
-    let title_width = usize::from(area_width.saturating_sub(2));
-    for hint_style in [
-        HelpHintStyle::DottedCtrl,
-        HelpHintStyle::SpacedCtrl,
-        HelpHintStyle::SpacedCaret,
-    ] {
-        let help_hint_title = app_frame_help_hint_title(hint_style);
-        let help_hint_width = line_width(&help_hint_title);
-        if help_hint_width <= title_width {
-            let sponsor_title = app_frame_sponsor_title(title_width - help_hint_width);
-            return (help_hint_title, sponsor_title);
-        }
-    }
-
-    (app_frame_help_hint_title(HelpHintStyle::SpacedCaret), None)
-}
-
-fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
-    [
-        sponsor_line(true, true),
-        sponsor_line(false, true),
-        sponsor_line(false, false),
-    ]
-    .into_iter()
-    .find(|line| line_width(line) <= sponsor_width)
-}
-
-#[derive(Clone, Copy)]
-enum HelpHintStyle {
-    DottedCtrl,
-    SpacedCtrl,
-    SpacedCaret,
-}
-
-fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let key = Style::default()
-        .fg(theme::AMBER_DIM())
-        .add_modifier(Modifier::BOLD);
-    let sep_style = Style::default().fg(theme::TEXT_FAINT());
-    let separator = match hint_style {
-        HelpHintStyle::DottedCtrl => " · ",
-        HelpHintStyle::SpacedCtrl | HelpHintStyle::SpacedCaret => "  ",
+/// The two titles sharing the app frame's bottom border row: the user's
+/// status bar on the left and the sponsor line on the right.
+///
+/// The sponsor's link is set aside first and the bar gets the rest of the
+/// row; segments with no room there are dropped (`statusline::bar::fit`).
+/// The one thing that flexes is the sponsor's own "thanks for hanging out",
+/// shown only when the fitted bar leaves room for it. A row too narrow for
+/// the link at all goes to the bar.
+fn app_frame_bottom_titles(
+    components: &[StatusComponentSetting],
+    data: &crate::app::statusline::data::StatusData<'_>,
+    area: Rect,
+) -> (
+    Option<crate::app::statusline::bar::StatusBar>,
+    Option<Line<'static>>,
+) {
+    let row_width = area.width.saturating_sub(2);
+    let link_width = line_width(&sponsor_line(false)) as u16;
+    let reserved_for_sponsor = match link_width <= row_width {
+        true => link_width,
+        false => 0,
     };
-    let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
-    let hints = [
-        ("Settings", ctrl_hint("O", use_caret)),
-        ("Lobby", ctrl_hint("G", use_caret)),
-        ("Zen", ctrl_hint("F", use_caret)),
-        ("Shop", "/shop"),
-        ("Guide", "?"),
-        ("Exit", "qq"),
-    ];
-
-    let mut spans = Vec::new();
-    for (idx, (label, key_text)) in hints.into_iter().enumerate() {
-        if idx == 0 {
-            spans.push(Span::styled(" ", dim));
-        } else {
-            spans.push(Span::styled(separator, sep_style));
-        }
-        spans.push(Span::styled(format!("{label} "), dim));
-        spans.push(Span::styled(key_text, key));
-    }
-    spans.push(Span::styled(" ", dim));
-    Line::from(spans)
+    let bar = crate::app::statusline::bar::build_status_bar(
+        components,
+        data,
+        crate::app::statusline::bar::Placement::BottomLeft,
+        area,
+        reserved_for_sponsor,
+    );
+    let bar_width = match &bar {
+        Some(bar) => line_width(&bar.line),
+        None => 0,
+    };
+    let sponsor = app_frame_sponsor_title(usize::from(row_width).saturating_sub(bar_width));
+    (bar, sponsor)
 }
 
-fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
-    match (use_caret, key) {
-        (true, "O") => "^O",
-        (true, "G") => "^G",
-        (true, "F") => "^F",
-        (false, "O") => "Ctrl+O",
-        (false, "G") => "Ctrl+G",
-        (false, "F") => "Ctrl+F",
-        _ => key,
-    }
+/// The sponsor line for the room it is given: with its thanks when that
+/// fits, the bare link when only that does, nothing when neither does.
+fn app_frame_sponsor_title(sponsor_width: usize) -> Option<Line<'static>> {
+    [sponsor_line(true), sponsor_line(false)]
+        .into_iter()
+        .find(|line| line_width(line) <= sponsor_width)
 }
 
-fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
+fn sponsor_line(include_thanks: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if include_thanks {
         spans.push(Span::styled(
@@ -2862,219 +3435,13 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     // The link carries its own blank cell on each side: this line is drawn
     // over the bottom border, so without them the `─` glyphs on either side
     // get swallowed into the URL by terminals that linkify what they see.
-    let url = if include_protocol {
-        " https://ko-fi.com/mateuszpiorowski "
-    } else {
-        " ko-fi.com/mateuszpiorowski "
-    };
-    spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
+    spans.push(Span::styled(
+        " https://late.sh/thanks ",
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
     Line::from(spans).right_aligned()
-}
-
-/// The top-border status line plus where its mentions segment sits, so the
-/// click hit test can find the mentions text inside the right-aligned line
-/// (no other segment is clickable).
-struct StatusHud {
-    line: Line<'static>,
-    /// Display cells of the mentions segment, 0 when nothing is unread.
-    mentions_width: u16,
-    /// Cells between the start of the line and the mentions segment, so the
-    /// hit test still lands on the text behind the badges leading the HUD.
-    mentions_offset: u16,
-}
-
-/// Everything the status HUD needs, named: `voice_badge` and `status_badge`
-/// are both `Option<&str>`, so positional arguments would let a call site swap
-/// them without a compile error. `border_width` and `title_width` come in raw
-/// rather than pre-subtracted so the fitting math below is covered by the
-/// tests instead of living uncovered at the one call site.
-struct StatusHudInputs<'a> {
-    balance: Option<i64>,
-    unread: i64,
-    voice_badge: Option<&'a str>,
-    status_badge: Option<&'a str>,
-    /// The open pot, `None` before the first refresh or without a pot
-    /// service. Sits right before the chips so the prize reads against the
-    /// viewer's own balance.
-    pot: Option<&'a crate::app::pot::state::PotView>,
-    /// Full width of the bordered frame, corners included.
-    border_width: u16,
-    /// Width of the left-aligned frame title sharing the top border row.
-    title_width: u16,
-}
-
-/// One HUD segment: the spans between two dividers, padding spaces included.
-type HudSegment = Vec<Span<'static>>;
-
-fn hud_segment_width(segment: &HudSegment) -> u16 {
-    segment.iter().map(Span::width).sum::<usize>() as u16
-}
-
-fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
-    let StatusHudInputs {
-        balance,
-        unread,
-        voice_badge,
-        status_badge,
-        pot,
-        border_width,
-        title_width,
-    } = inputs;
-    // What the right-aligned HUD can use before it starts painting over the
-    // left title (both live on the top border row, corners excluded).
-    let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
-
-    // The three long-standing segments always render; the order of the line
-    // is status | voice | mentions | pot | chips, and the two newcomers are
-    // fitted against whatever the fixed three leave, the pot last, so under a
-    // tight border the pot yields before the countdown does.
-    let mentions: Option<HudSegment> = (unread > 0).then(|| {
-        let noun = if unread == 1 { "mention" } else { "mentions" };
-        vec![
-            Span::styled(
-                format!(" {unread}"),
-                Style::default()
-                    .fg(theme::MENTION())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" unread {noun} "),
-                Style::default().fg(theme::TEXT_MUTED()),
-            ),
-        ]
-    });
-    let voice: Option<HudSegment> = voice_badge.map(|voice_badge| {
-        vec![Span::styled(
-            voice_badge.to_string(),
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD),
-        )]
-    });
-    let chips: Option<HudSegment> = balance.map(|balance| {
-        vec![
-            Span::styled(
-                format!(" {balance}"),
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" chips ", Style::default().fg(theme::TEXT_MUTED())),
-        ]
-    });
-
-    // Width the fixed segments take, dividers between them included, so a
-    // newcomer fits when its own width plus its one divider still fits.
-    let fixed: Vec<&HudSegment> = [&mentions, &voice, &chips].into_iter().flatten().collect();
-    let mut count = fixed.len() as u16;
-    let mut used = fixed
-        .iter()
-        .map(|segment| hud_segment_width(segment))
-        .sum::<u16>()
-        + count.saturating_sub(1);
-    let fits = |used: u16, count: u16, text_width: u16| {
-        // +2 for the spaces padding the badge inside its segment, +1 for the
-        // divider it brings when it is not the only segment.
-        let divider = u16::from(count > 0);
-        used + divider + text_width + 2 <= spare_cols
-    };
-
-    // The HUD is a right-aligned title on the same border row as the left
-    // title, and ratatui paints it over anything already there: a HUD wider
-    // than `spare_cols` eats the page tabs. The status yields: the full
-    // `MM:SS word` (or `glyph word`) when it fits, its leading `MM:SS` (or
-    // glyph) when only that does, dropped when neither does. Losing the badge
-    // is survivable because expiry still banners and notifies.
-    let status: Option<HudSegment> = status_badge.and_then(|status_badge| {
-        let time_only = status_badge
-            .split_once(' ')
-            .map_or(status_badge, |(time, _)| time);
-        let text = [status_badge, time_only]
-            .into_iter()
-            .find(|text| fits(used, count, UnicodeWidthStr::width(*text) as u16))?;
-        Some(vec![Span::styled(
-            format!(" {text} "),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )])
-    });
-    if let Some(status) = &status {
-        used += hud_segment_width(status) + u16::from(count > 0);
-        count += 1;
-    }
-
-    // The pot: `pot 84,200 · 3h12m` when it fits, `pot 84,200` when only
-    // that does, nothing when neither does. It is ambient, so it is the
-    // first thing the border sheds; `/pot` and the #lounge lines still
-    // carry it.
-    let pot: Option<HudSegment> = pot.and_then(|view| {
-        let size = crate::app::common::primitives::thousands(view.size);
-        let label = " pot ".to_string();
-        let with_clock = format!(" · {} ", view.draws_in);
-        let without_clock = " ".to_string();
-        let tail = [with_clock, without_clock].into_iter().find(|tail| {
-            let width = UnicodeWidthStr::width(label.as_str())
-                + UnicodeWidthStr::width(size.as_str())
-                + UnicodeWidthStr::width(tail.as_str());
-            // The padding is already inside the label and the tail.
-            fits(used, count, width.saturating_sub(2) as u16)
-        })?;
-        Some(vec![
-            Span::styled(label, Style::default().fg(theme::TEXT_MUTED())),
-            Span::styled(
-                size,
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(tail, Style::default().fg(theme::TEXT_MUTED())),
-        ])
-    });
-
-    // Mentions sit behind the status and the voice badge, so the hit test
-    // needs how far into the line they start: every segment before them, each
-    // with the divider it brings.
-    let mentions_width = mentions.as_ref().map_or(0, hud_segment_width);
-    let mentions_offset: u16 = match &mentions {
-        Some(_) => [&status, &voice]
-            .into_iter()
-            .flatten()
-            .map(|segment| hud_segment_width(segment) + 1)
-            .sum(),
-        None => 0,
-    };
-    let segments: Vec<HudSegment> = [status, voice, mentions, pot, chips]
-        .into_iter()
-        .flatten()
-        .collect();
-    if segments.is_empty() {
-        return None;
-    }
-    let mut spans = Vec::new();
-    for (index, segment) in segments.into_iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
-        }
-        spans.extend(segment);
-    }
-    Some(StatusHud {
-        line: Line::from(spans).right_aligned(),
-        mentions_width,
-        mentions_offset,
-    })
 }
 
 #[cfg(test)]
 #[path = "render_test.rs"]
 mod render_test;
-
-/// Today's date in the profile timezone (UTC when unset or unparseable),
-/// for the Zen clock tile.
-fn zen_date_text(timezone: Option<&str>) -> String {
-    let now = chrono::Utc::now();
-    match timezone.and_then(|tz| tz.parse::<chrono_tz::Tz>().ok()) {
-        Some(tz) => now.with_timezone(&tz).format("%A, %-d %B").to_string(),
-        None => now.format("%A, %-d %B").to_string(),
-    }
-}

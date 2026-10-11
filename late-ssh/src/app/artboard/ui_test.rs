@@ -125,7 +125,7 @@ fn color_picker_modal_shows_the_working_color() {
         state.color_picker_mut().unwrap().type_hex(ch);
     }
     terminal
-        .draw(|frame| draw_game(frame, frame.area(), &state, true))
+        .draw(|frame| draw_game(frame, frame.area(), &state, true, false))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     let rows: Vec<String> = (0..buffer.area.height)

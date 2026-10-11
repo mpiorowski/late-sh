@@ -113,6 +113,17 @@ fn every_beast_has_a_roaming_spot_in_broceliande() {
 }
 
 #[test]
+fn a_companion_kill_trains_taming_by_fifteen_percent_of_its_xp() {
+    assert_eq!(companion_kill_taming_xp(1000), 150);
+    assert_eq!(companion_kill_taming_xp(47), 7, "the share rounds down");
+    assert_eq!(
+        companion_kill_taming_xp(6),
+        0,
+        "a trivial kill trains nothing"
+    );
+}
+
+#[test]
 fn tame_chance_rises_with_surplus_and_refuses_under_level() {
     let beast = &TAMEABLE[TAMEABLE_COUNT - 1]; // needs level 50
     // A novice cannot tame the greatest beast.

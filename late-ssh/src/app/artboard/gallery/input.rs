@@ -12,9 +12,8 @@ use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 
 use super::state::{Focus, HangFlow, RailActivation, RailRow};
 
-/// What the page must do after a gallery key: nothing, or one of the rail
-/// actions that need the page (the live board, the ban gate, the archive
-/// lists).
+/// What the page must do after a gallery key: nothing, or an action that needs
+/// the app (the live board, hang gate, archives, or staff moderation console).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GalleryAction {
     Ignored,
@@ -23,6 +22,7 @@ pub enum GalleryAction {
     FocusBoard,
     BeginHang,
     OpenArchive(ArtboardSnapshotKind),
+    OpenModeration(uuid::Uuid),
 }
 
 fn from_activation(activation: RailActivation) -> GalleryAction {
@@ -35,6 +35,16 @@ fn from_activation(activation: RailActivation) -> GalleryAction {
 }
 
 pub fn handle_key(state: &mut State, screen_size: (u16, u16), byte: u8) -> GalleryAction {
+    if state.gallery().rating_dialog.is_some() {
+        match byte {
+            b'j' | b'J' => state.gallery_mut().rating_move(1),
+            b'k' | b'K' => state.gallery_mut().rating_move(-1),
+            b'\r' | b'\n' => state.gallery_mut().submit_rating_action(),
+            0x1b | b'q' | b'Q' | b'\t' => state.gallery_mut().close_rating_dialog(),
+            _ => {}
+        }
+        return GalleryAction::Handled;
+    }
     match state.gallery().hang() {
         HangFlow::Framing => return handle_framing_key(state, screen_size, byte),
         HangFlow::Confirm { .. } => return handle_confirm_key(state, byte),
@@ -76,6 +86,14 @@ fn handle_tab(state: &mut State) -> GalleryAction {
 }
 
 pub fn handle_arrow(state: &mut State, screen_size: (u16, u16), key: u8) -> GalleryAction {
+    if state.gallery().rating_dialog.is_some() {
+        match key {
+            b'A' => state.gallery_mut().rating_move(-1),
+            b'B' => state.gallery_mut().rating_move(1),
+            _ => {}
+        }
+        return GalleryAction::Handled;
+    }
     match state.gallery().hang() {
         HangFlow::Framing => return framing_arrow(state, screen_size, key, false),
         HangFlow::Confirm { .. } | HangFlow::Submitting => return GalleryAction::Handled,
@@ -156,6 +174,29 @@ pub fn handle_event(
     screen_size: (u16, u16),
     event: &ParsedInput,
 ) -> GalleryAction {
+    if state.gallery().rating_dialog.is_some() {
+        return match event {
+            ParsedInput::Mouse(mouse) => {
+                if let Some((x, y)) = frame_cell(mouse) {
+                    let hit = state.gallery().rating_action_at(x, y);
+                    if mouse.kind == MouseEventKind::Down
+                        && mouse.button == Some(MouseButton::Left)
+                        && let Some(index) = hit
+                    {
+                        if let Some(dialog) = &mut state.gallery_mut().rating_dialog {
+                            dialog.selected = index;
+                        }
+                        state.gallery_mut().submit_rating_action();
+                    }
+                }
+                GalleryAction::Handled
+            }
+            ParsedInput::Byte(_) | ParsedInput::Char(_) | ParsedInput::Arrow(_) => {
+                GalleryAction::Ignored
+            }
+            _ => GalleryAction::Handled,
+        };
+    }
     // Keys arrive as bytes through `handle_key` after this; only the rich
     // events the flow needs are taken here, everything else is `Ignored`
     // so the byte path still sees Enter, Esc, and the title's letters.
@@ -349,6 +390,11 @@ fn handle_archive_event(state: &mut State, event: &ParsedInput) -> GalleryAction
 
 fn handle_list_key(state: &mut State, byte: u8) -> GalleryAction {
     match byte {
+        b'm' | b'M' => moderation_action(state),
+        b'n' | b'N' => {
+            state.gallery_mut().open_rating_dialog();
+            GalleryAction::Handled
+        }
         b'j' | b'J' => {
             state.gallery_mut().list_move(1);
             GalleryAction::Handled
@@ -379,6 +425,11 @@ fn handle_list_key(state: &mut State, byte: u8) -> GalleryAction {
 
 fn handle_piece_key(state: &mut State, byte: u8) -> GalleryAction {
     match byte {
+        b'm' | b'M' => moderation_action(state),
+        b'n' | b'N' => {
+            state.gallery_mut().open_rating_dialog();
+            GalleryAction::Handled
+        }
         b'j' | b'J' => {
             state.gallery_mut().list_move(1);
             GalleryAction::Handled
@@ -401,6 +452,15 @@ fn handle_piece_key(state: &mut State, byte: u8) -> GalleryAction {
         }
         _ => GalleryAction::Ignored,
     }
+}
+
+fn moderation_action(state: &State) -> GalleryAction {
+    state
+        .gallery()
+        .selected_piece()
+        .map_or(GalleryAction::Handled, |piece| {
+            GalleryAction::OpenModeration(piece.id)
+        })
 }
 
 // ----- framing -----

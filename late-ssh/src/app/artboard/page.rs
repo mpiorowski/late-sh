@@ -272,6 +272,16 @@ fn handle_gallery_action(app: &mut App, action: GalleryAction) -> bool {
             }
             true
         }
+        GalleryAction::OpenModeration(piece_id) => {
+            if app.permissions.can_access_mod_surface() {
+                crate::app::mod_modal::input::open(app, Some("artboard safety"));
+                crate::app::mod_modal::input::submit_command(
+                    app,
+                    format!("artboard safety view {piece_id}"),
+                );
+            }
+            true
+        }
     }
 }
 

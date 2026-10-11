@@ -29,7 +29,7 @@ use crate::app::games::pool_core::{
     table::{Geometry, PocketKind, TableSpec},
     table_ui::{
         CLOTH, GHOST, MARKING, Overlay, POCKET, POCKET_CALLED, RAIL, RAIL_DARK, SURROUND,
-        leg_style, marking_at, paint_ball,
+        leg_style, marking_at, paint_ball, ring,
     },
 };
 
@@ -332,23 +332,6 @@ fn paint_balls(
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, x, y, r, id) in drawn {
         paint_ball(canvas, x, y, r, id, sight.look(id));
-    }
-}
-
-fn ring(canvas: &mut Canvas, cx: f64, cy: f64, radius: f64, colour: Rgb) {
-    let inner = (radius - 1.0).max(0.0);
-    let (r2, inner2) = (radius * radius, inner * inner);
-    let span = radius.ceil() as i32;
-    for dy in -span..=span {
-        for dx in -span..=span {
-            let (x, y) = (cx.floor() as i32 + dx, cy.floor() as i32 + dy);
-            let ddx = x as f64 + 0.5 - cx;
-            let ddy = y as f64 + 0.5 - cy;
-            let d2 = ddx * ddx + ddy * ddy;
-            if d2 <= r2 && d2 > inner2 {
-                canvas.set(x, y, colour);
-            }
-        }
     }
 }
 

@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use super::arcade_handle::handle_shape_valid;
 use super::game_room::GameKind;
+use super::leaderboard::DoorGame;
 
 crate::model! {
     table = "chat_rooms";
@@ -140,8 +142,11 @@ impl ChatRoom {
         Ok(row.map(Self::from))
     }
 
+    /// Resolve within the requested visibility namespace, never falling back
+    /// between public (`#slug`) and private (`##slug`) IRC channels.
     pub async fn find_irc_channel_by_slug_for_user(
         client: &Client,
+        visibility: &str,
         slug: &str,
         user_id: Uuid,
     ) -> Result<Option<Self>> {
@@ -150,6 +155,7 @@ impl ChatRoom {
                 "SELECT r.*
                  FROM chat_rooms r
                  WHERE r.slug = $1
+                   AND r.visibility = $3
                    AND (r.kind IN ('lounge', 'language')
                         OR (r.kind = 'topic' AND r.visibility = 'public')
                         OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
@@ -163,7 +169,7 @@ impl ChatRoom {
                     ELSE 4
                  END
                  LIMIT 1",
-                &[&slug, &user_id],
+                &[&slug, &user_id, &visibility],
             )
             .await?;
         Ok(row.map(Self::from))
@@ -333,6 +339,37 @@ impl ChatRoom {
                  DO UPDATE SET updated = current_timestamp
                  RETURNING *",
                 &[&slug, &owner],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
+    /// Permanent watch-chat room for one player's runs of a door game:
+    /// where the people spectating that player talk. `kind='game'` (hidden
+    /// from the Home rail, Mentions and IRC, joinable by anyone through the
+    /// public game-room join path), `game_kind='watch'`, slug
+    /// `{door}-{playname}`. The playname is the player's arcade handle,
+    /// which is immutable and unique case-insensitively, so the lowercased
+    /// handle is written as it stands: `normalize_game_slug` folds `_` into
+    /// `-` and would merge `a_b` with `a__b`. Chat history persists between
+    /// runs.
+    pub async fn get_or_create_watch_room(
+        client: &Client,
+        door: DoorGame,
+        playname: &str,
+    ) -> Result<Self> {
+        if !handle_shape_valid(playname) {
+            bail!("cannot create watch room for malformed playname {playname:?}");
+        }
+        let slug = format!("{}-{}", door.key(), playname.to_ascii_lowercase());
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                 VALUES ('game', 'public', false, $1, 'watch')
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug],
             )
             .await?;
         Ok(Self::from(row))
@@ -697,6 +734,7 @@ impl ChatRoom {
 
     /// Rooms visible to the user as IRC channels: the lounge, language rooms,
     /// public topic rooms, plus private topic rooms the user is a member of.
+    /// Same-slug public/private rooms are distinct IRC channel names.
     /// See devdocs/FRD-IRCD.md §6.
     pub async fn list_irc_channels(client: &Client, user_id: Uuid) -> Result<Vec<Self>> {
         let rows = client
@@ -704,7 +742,7 @@ impl ChatRoom {
                 "WITH visible AS (
                     SELECT r.*,
                            ROW_NUMBER() OVER (
-                               PARTITION BY r.slug
+                               PARTITION BY r.visibility, r.slug
                                ORDER BY CASE
                                    WHEN r.kind = 'lounge' THEN 0
                                    WHEN r.kind = 'language' THEN 1
@@ -740,7 +778,7 @@ impl ChatRoom {
                 "WITH visible AS (
                     SELECT r.*,
                            ROW_NUMBER() OVER (
-                               PARTITION BY r.slug
+                               PARTITION BY r.visibility, r.slug
                                ORDER BY CASE
                                    WHEN r.kind = 'lounge' THEN 0
                                    WHEN r.kind = 'language' THEN 1

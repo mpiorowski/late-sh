@@ -1,6 +1,6 @@
 //! The Lobby: the single front door for multiplayer play (`Ctrl+G`). Fronts
-//! two game domains that stay separate services: async daily correspondence
-//! matches (`daily/`) and live fixed house tables (`house/`).
+//! three game domains that stay separate services: async daily correspondence
+//! matches (`daily/`), territory conquest (`realm/`), and live house tables (`house/`).
 
 pub mod daily;
 pub mod house;

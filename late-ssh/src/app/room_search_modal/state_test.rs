@@ -191,6 +191,7 @@ async fn picker_lists_live_streams_only() {
             voice_channel_id: Uuid::now_v7(),
             stream_id: username.to_string(),
             live,
+            went_live_at: None,
             watching: 0,
             watch_url: String::new(),
         }

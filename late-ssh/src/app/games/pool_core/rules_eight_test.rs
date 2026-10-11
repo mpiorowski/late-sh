@@ -195,8 +195,27 @@ fn a_legal_hit_that_goes_nowhere_is_a_foul() {
     let s = state(&[1, 9, EIGHT], Some([Group::Solids, Group::Stripes]), 4);
     let mut outcome = shot(Some(1), &[]);
     outcome.cushion_after_contact = false;
+    outcome.balls_to_rail.clear();
     let r = judge(&s, &outcome, None);
     assert_eq!(r.foul, Some(Foul::NoRail));
+}
+
+#[test]
+fn a_rail_before_the_contact_is_still_a_rail() {
+    // The book calls this one: the rail has to come *after* the contact. This
+    // build does not, because the shape it catches is the cue ball off a rail
+    // and then thinly onto the ball on, which is a clean safety anywhere real.
+    let s = state(&[1, 9, EIGHT], Some([Group::Solids, Group::Stripes]), 4);
+    let mut outcome = shot(Some(1), &[]);
+    outcome.cushion_after_contact = false;
+    outcome.balls_to_rail = vec![CUE];
+    let r = judge(&s, &outcome, None);
+    assert_eq!(r.foul, None, "a rail is a rail whenever it was reached");
+    assert_eq!(
+        r.turn,
+        Turn::Pass,
+        "and nothing went down, so the table goes"
+    );
 }
 
 #[test]

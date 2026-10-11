@@ -254,6 +254,13 @@ impl State {
     /// Test-only: fabricate a Running state around a proxy pointed at a dead
     /// address, so detach/idle paths can be exercised without a live host.
     /// Needs a Tokio runtime (the proxy spawns its bridge task).
+    /// Claim `handle` for this player without a lookup, so a fabricated
+    /// game runs under a known name (its watch-chat room, the roster key).
+    #[cfg(test)]
+    pub fn force_claimed_handle_for_test(&mut self, handle: &str) {
+        self.handle.force_claimed_for_test(handle);
+    }
+
     #[cfg(test)]
     pub fn force_running_for_test(&mut self) {
         self.proxy = Some(NethackProcess::spawn(ProcessConfig {

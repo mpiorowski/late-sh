@@ -37,10 +37,10 @@ fn guide_text() -> String {
         .join("\n")
 }
 
-/// Every badge a chat label can carry, ranked monthly boards included. The
-/// settings modal's Chat badges picker is built from the same list
+/// Every badge there is, ranked monthly boards included. The settings
+/// modal's Chat badges picker is built from the same list less the crown
 /// (`chat_badge_rows`), so it is never missing one; the guide is written by
-/// hand and this is what keeps it level with the picker.
+/// hand and this is what keeps it level with the awards.
 #[test]
 fn the_leaderboards_guide_explains_every_badge() {
     let guide = guide_text();
@@ -56,8 +56,8 @@ fn the_leaderboards_guide_explains_every_badge() {
     );
 }
 
-/// The guide reads in the picker's order (the order a chat label stacks
-/// badges), so the two lists line up row for row.
+/// The guide reads in stacking order (the order a chat label stacks badges,
+/// and the picker's order with the crown skipped), so the lists line up.
 #[test]
 fn the_leaderboards_guide_lists_badges_in_the_pickers_order() {
     let guide = guide_text();

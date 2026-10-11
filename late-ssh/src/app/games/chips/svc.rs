@@ -3,7 +3,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::drink_round::{
-    Bar, DrinkCredit, DrinkRound, MAX_OPEN_CREDITS, OpenCredit, ROUND_CREDIT_TTL_HOURS,
+    Bar, DrinkCredit, DrinkRound, GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, OpenCredit,
+    ROUND_CREDIT_TTL_HOURS,
 };
 use late_core::models::drinks::UserDrinks;
 use late_core::models::game_payout::{
@@ -63,6 +64,49 @@ pub struct RoundPurchase {
     /// The buyer's buzz after their own pour: "round on me" includes me.
     pub drunk_points: i64,
     pub last_drink_at: DateTime<Utc>,
+}
+
+/// One drink left on another patron's tab, without pouring the buyer one.
+#[derive(Debug, Clone, Copy)]
+pub struct GiftDrinkPurchase {
+    pub round_id: Uuid,
+    pub balance: i64,
+}
+
+/// Why the bar would not sell a gift drink. A one-credit grant has exactly
+/// two ways to say no, so this is not [`RoundRefusal`]: an empty house is
+/// impossible with a named recipient and does not get an arm. Uncharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftRefusal {
+    /// The recipient already holds `MAX_OPEN_CREDITS` uncashed drinks.
+    AllHolding,
+    /// `GIFT_DRINK_PRICE` would take the buyer below the chip floor.
+    InsufficientChips,
+}
+
+/// A gift that did not pay: a rule said no, or the database did.
+#[derive(Debug)]
+pub enum GiftError {
+    Refused(GiftRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for GiftError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// Why a personal gift drink did not happen, for the refusal metric. The
+/// first three are the bartender's own checks, made before this service is
+/// asked; the last two mirror [`GiftRefusal`]. Every arm is uncharged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GiftDrinkRefusal {
+    UnknownRecipient,
+    SelfGift,
+    BotRecipient,
+    AllHolding,
+    InsufficientChips,
 }
 
 /// Why a round did not happen. Every arm is uncharged: a refused round leaves
@@ -170,14 +214,16 @@ impl ChipService {
         Ok(())
     }
 
-    /// Charge a bartender drink (floor-guarded) and record the buzz in one
-    /// transaction, so a crash can't charge without pouring. Returns None
+    /// Charge a drink poured at `bar` (floor-guarded) and record the buzz in
+    /// one transaction, so a crash can't charge without pouring. Returns None
     /// when the user can't cover the drink and keep the chip floor.
     pub async fn buy_drink(
         &self,
         user_id: Uuid,
+        bar: Bar,
         price: i64,
         drink: &str,
+        intoxicating: bool,
     ) -> anyhow::Result<Option<DrinkPurchase>> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
@@ -186,7 +232,7 @@ impl ChipService {
         else {
             return Ok(None);
         };
-        let drinks = UserDrinks::record_purchase(&tx, user_id, price).await?;
+        let drinks = UserDrinks::record_purchase(&tx, user_id, bar, price, intoxicating).await?;
         tx.commit().await?;
         Ok(Some(DrinkPurchase {
             balance: chips.balance,
@@ -255,7 +301,8 @@ impl ChipService {
                 total,
             }));
         };
-        let drinks = UserDrinks::record_comped_pour(&tx, buyer_id, bar.drink_points()).await?;
+        let drinks =
+            UserDrinks::record_comped_pour(&tx, buyer_id, bar, bar.drink_points(), true).await?;
         tx.commit().await.context("committing the round")?;
 
         Ok(RoundPurchase {
@@ -265,6 +312,56 @@ impl ChipService {
             balance: chips.balance,
             drunk_points: drinks.drunk_points,
             last_drink_at: drinks.last_drink_at,
+        })
+    }
+
+    /// Leave one drink for a named patron, online or not. The same grant lock,
+    /// three-credit cap, expiry and pour as a house round apply, priced at
+    /// [`GIFT_DRINK_PRICE`] rather than a head of a round and written as
+    /// [`ChipMove::DrinkGift`] so the ledger can name the recipient. Only the
+    /// recipient may drink: buying a gift does not pour the buyer one.
+    ///
+    /// The recipient is a human other than the buyer: the bartender resolves
+    /// the name and refuses self-gifts and bots before asking, so this takes
+    /// the pair it is given and does not re-check it.
+    pub async fn buy_drink_for(
+        &self,
+        buyer_id: Uuid,
+        recipient_id: Uuid,
+    ) -> Result<GiftDrinkPurchase, GiftError> {
+        let mut client = self.db.get().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the gift drink transaction")?;
+        let grant = DrinkRound::open(
+            &tx,
+            buyer_id,
+            GIFT_DRINK_PRICE,
+            Bar::Tavern,
+            &[recipient_id],
+            ROUND_CREDIT_TTL_HOURS,
+            MAX_OPEN_CREDITS,
+        )
+        .await?;
+        if grant.patron_count() == 0 {
+            return Err(GiftError::Refused(GiftRefusal::AllHolding));
+        }
+        let Some(chips) = UserChips::apply(
+            &*tx,
+            buyer_id,
+            ChipMove::DrinkGift,
+            grant.total_chips(),
+            &grant.round.id.to_string(),
+        )
+        .await?
+        else {
+            return Err(GiftError::Refused(GiftRefusal::InsufficientChips));
+        };
+        tx.commit().await.context("committing the gift drink")?;
+        Ok(GiftDrinkPurchase {
+            round_id: grant.round.id,
+            balance: chips.balance,
         })
     }
 
@@ -288,15 +385,28 @@ impl ChipService {
     /// record the buzz the bar that bought it pours ([`Bar::drink_points`]),
     /// with no chip debit anywhere. One transaction, so the credit cannot be
     /// spent without the drink landing. `None` means there was nothing to
-    /// spend, and the caller charges for the pour as usual.
-    pub async fn cash_round_drink(&self, user_id: Uuid) -> anyhow::Result<Option<CompedDrink>> {
+    /// spend, and the caller charges for the pour as usual. `bar` is where
+    /// the patron is drinking it, which may not be the bar that sold it.
+    /// Non-intoxicating pours consume the credit without changing buzz.
+    pub async fn cash_round_drink(
+        &self,
+        user_id: Uuid,
+        bar: Bar,
+        intoxicating: bool,
+    ) -> anyhow::Result<Option<CompedDrink>> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
         let Some(credit) = DrinkCredit::cash(&tx, user_id).await? else {
             return Ok(None);
         };
-        let drinks =
-            UserDrinks::record_comped_pour(&tx, user_id, credit.bar.drink_points()).await?;
+        let drinks = UserDrinks::record_comped_pour(
+            &tx,
+            user_id,
+            bar,
+            credit.bar.drink_points(),
+            intoxicating,
+        )
+        .await?;
         tx.commit().await?;
         Ok(Some(CompedDrink {
             round_id: credit.round_id,

@@ -14,9 +14,10 @@ use super::svc::{
 use crate::app::ai::svc::AiService;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, new_test_db, render_plain,
-    test_app_flags_rx, wait_for_render_contains, wait_for_render_not_contains,
+    wait_for_render_contains, wait_for_render_not_contains,
 };
 use late_core::models::paper::PaperEdition;
+use late_core::models::user::User;
 
 #[test]
 fn an_edition_covers_the_whole_utc_day_before_it() {
@@ -111,6 +112,16 @@ async fn seed_lounge_page_for(
 /// One `#announcements` post by `author`, stamped inside today's edition
 /// window (yesterday, UTC), as the operator would have written it.
 async fn post_announcement(db: &late_core::db::Db, author: uuid::Uuid, body: &str) {
+    post_announcement_for(db, author, edition_for(Utc::now()), body).await
+}
+
+/// The same post, stamped inside `edition`'s window instead.
+async fn post_announcement_for(
+    db: &late_core::db::Db,
+    author: uuid::Uuid,
+    edition: chrono::NaiveDate,
+    body: &str,
+) {
     let client = db.get().await.expect("db client");
     let room = ChatRoom::find_non_dm_by_slug(&client, "announcements")
         .await
@@ -126,7 +137,7 @@ async fn post_announcement(db: &late_core::db::Db, author: uuid::Uuid, body: &st
     )
     .await
     .expect("announcement");
-    let (floor, _) = edition_window(edition_for(Utc::now()));
+    let (floor, _) = edition_window(edition);
     client
         .execute(
             "UPDATE chat_messages SET created = $2 WHERE id = $1",
@@ -137,41 +148,19 @@ async fn post_announcement(db: &late_core::db::Db, author: uuid::Uuid, body: &st
 }
 
 #[tokio::test]
-async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_pop_once() {
+async fn the_newsstand_answers_empty_and_ready_and_claims_the_login_pop_once() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "paper-reader").await;
 
-    // Presses stopped: the paper is unavailable whatever the rows say.
-    let (_stopped_tx, stopped_rx) =
-        tokio::sync::watch::channel(Some(late_core::models::app_flag::AppFlags {
-            haunt_enabled: true,
-            haunt_live: false,
-            paper_enabled: false,
-            paper_outside_enabled: false,
-            artboard_gallery_enabled: true,
-            jobs_enabled: true,
-        }));
-    let dark = PaperService::new(test_db.db.clone(), AiService::new(false, None), stopped_rx);
-    let mut dark_rx = dark.subscribe();
-    dark.request(user.id, PaperTrigger::Command);
+    // Nothing printed: empty, and no login claim spent. Reading needs no
+    // AI: the rows are the paper. Printing does.
+    let service = PaperService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut rx = service.subscribe();
+    service.request_print(user.id, PrintJob::Today);
     assert!(matches!(
-        wait_open(&mut dark_rx).await.2,
-        PaperOutcome::Unavailable
-    ));
-    dark.request_print(user.id, PrintJob::Today);
-    assert!(matches!(
-        wait_press(&mut dark_rx).await,
+        wait_press(&mut rx).await,
         PressOutcome::Unavailable
     ));
-
-    // Presses running but nothing printed: empty, and no login claim
-    // spent. Reading needs no AI: the rows are the paper.
-    let service = PaperService::new(
-        test_db.db.clone(),
-        AiService::new(false, None),
-        test_app_flags_rx(),
-    );
-    let mut rx = service.subscribe();
     service.request(user.id, PaperTrigger::Login);
     let (_, trigger, outcome) = wait_open(&mut rx).await;
     assert_eq!(trigger, PaperTrigger::Login);
@@ -327,6 +316,182 @@ async fn the_newsstand_answers_unavailable_empty_and_ready_and_claims_the_login_
 }
 
 #[tokio::test]
+async fn a_dated_request_reads_only_what_the_press_already_printed() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "paper-archivist").await;
+    let operator = create_test_user(&test_db.db, "paper-operator").await;
+    let service = PaperService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut rx = service.subscribe();
+    let today = edition_for(Utc::now());
+
+    // Tomorrow's paper does not exist yet.
+    let tomorrow = today + chrono::Duration::days(1);
+    service.request_edition(user.id, tomorrow);
+    let (_, trigger, outcome) = wait_open(&mut rx).await;
+    assert_eq!(trigger, PaperTrigger::Command);
+    assert!(
+        matches!(outcome, PaperOutcome::NotPrinted(day) if day == tomorrow),
+        "a future edition is not printed, got {outcome:?}"
+    );
+
+    // The operator posted that day but the sweeper never reached it: an
+    // announcement alone is not a back issue.
+    let unswept = today - chrono::Duration::days(5);
+    post_announcement_for(&test_db.db, operator.id, unswept, "posted, never swept").await;
+    service.request_edition(user.id, unswept);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    assert!(
+        matches!(outcome, PaperOutcome::NotPrinted(day) if day == unswept),
+        "an unswept day must not open on an announcement alone, got {outcome:?}"
+    );
+
+    // Swept, every page quiet, and nothing from the operator: no paper.
+    let quiet = today - chrono::Duration::days(7);
+    {
+        let client = test_db.db.get().await.expect("db client");
+        assert!(
+            PaperSectionRow::claim_printing(
+                &client,
+                quiet,
+                PaperSectionKind::Reading,
+                Utc::now(),
+                PAPER_MAX_ATTEMPTS
+            )
+            .await
+            .expect("claim reading")
+        );
+        PaperSectionRow::finish(&client, quiet, PaperSectionKind::Reading, None)
+            .await
+            .expect("settle reading quiet");
+    }
+    service.request_edition(user.id, quiet);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    assert!(
+        matches!(outcome, PaperOutcome::NotPrinted(day) if day == quiet),
+        "a swept day with no print and no announcement is not a paper, got {outcome:?}"
+    );
+
+    // A printed back issue opens with that day's column and announcement.
+    // NEW WORK stays off it (the shelf only knows what is open today), and
+    // reading it spends no login stamp.
+    let printed = today - chrono::Duration::days(3);
+    let lounge = seed_lounge_page_for(&test_db.db, printed, "- three days ago").await;
+    post_announcement_for(&test_db.db, operator.id, printed, "back issue notice").await;
+    service.request_edition(user.id, printed);
+    let (user_id, _, outcome) = wait_open(&mut rx).await;
+    assert_eq!(user_id, user.id);
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected the printed back issue, got {outcome:?}");
+    };
+    assert_eq!(issue.edition.edition, printed);
+    assert_eq!(
+        issue
+            .edition
+            .rooms
+            .iter()
+            .map(|room| (room.room_id, room.text.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![(lounge.id, Some("- three days ago"))]
+    );
+    assert_eq!(
+        issue
+            .announcements
+            .iter()
+            .map(|post| (post.author.as_str(), post.body.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("paper-operator", "back issue notice")]
+    );
+    assert!(
+        issue.work.is_none(),
+        "a back issue carries no NEW WORK, got {:?}",
+        issue.work
+    );
+    let client = test_db.db.get().await.expect("db client");
+    let reader = User::get(&client, user.id)
+        .await
+        .expect("load reader")
+        .expect("reader");
+    assert_eq!(reader.settings.get("paper_shown_on"), None);
+}
+
+#[tokio::test]
+async fn an_issue_names_the_nearest_printed_editions_on_either_side() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "paper-leafer").await;
+    let service = PaperService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut rx = service.subscribe();
+    let today = edition_for(Utc::now());
+    let older = today - chrono::Duration::days(4);
+    seed_lounge_page(&test_db.db, "- today's column").await;
+    seed_lounge_page_for(&test_db.db, older, "- four days back").await;
+
+    // The days between were never printed, so the neighbour is four back.
+    service.request(user.id, PaperTrigger::Command);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected today's edition, got {outcome:?}");
+    };
+    assert_eq!((issue.earlier, issue.later), (Some(older), None));
+
+    // Leafing back is its own trigger and reads the back issue as dated.
+    service.request_browse(user.id, older);
+    let (user_id, trigger, outcome) = wait_open(&mut rx).await;
+    assert_eq!((user_id, trigger), (user.id, PaperTrigger::Browse));
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected the older edition, got {outcome:?}");
+    };
+    assert_eq!(issue.edition.edition, older);
+    assert_eq!((issue.earlier, issue.later), (None, Some(today)));
+    assert!(issue.work.is_none(), "a back issue carries no NEW WORK");
+}
+
+#[tokio::test]
+async fn arrows_in_the_paper_leaf_through_the_printed_editions() {
+    let (test_db, mut app) = chat_compose_app("paper-arrows").await;
+    let today = edition_for(Utc::now());
+    let older = today - chrono::Duration::days(2);
+    seed_lounge_page(&test_db.db, "- the lounge talked about lunch").await;
+    seed_lounge_page_for(&test_db.db, older, "- the lounge talked about dinner").await;
+    let title = |day: chrono::NaiveDate| format!("The Late Edition · {}", day.format("%a %b %-d"));
+
+    app.handle_input(b"/paper\r");
+    wait_for_render_contains(&mut app, "the lounge talked about lunch").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(&format!("← {}", older.format("%b %-d"))),
+        "{frame}"
+    );
+    assert!(
+        !frame.contains(" →"),
+        "nothing is newer than today: {frame}"
+    );
+
+    app.handle_input(b"\x1b[D");
+    wait_for_render_contains(&mut app, "the lounge talked about dinner").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains(&title(older)), "{frame}");
+    assert!(
+        frame.contains(&format!("{} →", today.format("%b %-d"))),
+        "{frame}"
+    );
+    assert!(!frame.contains("← "), "nothing is older: {frame}");
+
+    // At the first edition, a step back has nowhere to go.
+    app.handle_input(b"h");
+    assert_render_not_contains_for(&mut app, &title(today), Duration::from_millis(300)).await;
+    assert!(render_plain(&mut app).contains(&title(older)));
+
+    app.handle_input(b"l");
+    wait_for_render_contains(&mut app, "the lounge talked about lunch").await;
+    assert!(render_plain(&mut app).contains(&title(today)));
+
+    // A step still in flight when the paper closes is dropped.
+    app.handle_input(b"\x1b[D");
+    app.handle_input(b"q");
+    assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(400)).await;
+}
+
+#[tokio::test]
 async fn the_login_pop_opens_once_after_the_splash_and_esc_closes_it() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "paper-login").await;
@@ -383,7 +548,7 @@ async fn the_login_pop_opens_once_after_the_splash_and_esc_closes_it() {
 }
 
 #[tokio::test]
-async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_stop_the_presses() {
+async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_run_the_press() {
     let (test_db, mut app) = chat_compose_app("paper-cmd").await;
     seed_lounge_page(&test_db.db, "- the lounge talked about lunch").await;
 
@@ -393,7 +558,7 @@ async fn slash_paper_reopens_the_edition_and_a_non_admin_cannot_stop_the_presses
     wait_for_render_not_contains(&mut app, "The Late Edition").await;
 
     app.handle_input(b"i");
-    app.handle_input(b"/paper off\r");
+    app.handle_input(b"/paper print\r");
     wait_for_render_contains(&mut app, "Only admins can touch the presses").await;
 }
 
@@ -422,27 +587,24 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     app.clubhouse.tutorial = Tutorial::Pending;
     app.paper.login_pop_pending = true;
     assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
-    app.clubhouse.enter_screen();
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // Nothing pops while the tour holds the keys, however long it takes.
-    for bytes in [
-        &b"1"[..],
-        b"\r",
-        b"2",
-        b"\r",
-        b"3",
-        b"4",
-        b"5",
-        b"6",
-        b"\x06",
-    ] {
-        app.handle_input(bytes);
+    // Enter is the only key the route takes, stop after stop (it skips the
+    // hidden Artboard without showing it).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while app.clubhouse.tutorial != Tutorial::Homecoming {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tour did not reach Homecoming: {:?}",
+            app.clubhouse.tutorial
+        );
+        app.handle_input(b"\r");
         let frame = render_plain(&mut app);
         assert!(!frame.contains("The Late Edition"), "{frame}");
     }
-    app.handle_input(b"0");
-    assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
     assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(300)).await;
 
     // Settling in is the last step of the opening; the paper is next.

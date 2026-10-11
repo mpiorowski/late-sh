@@ -27,7 +27,7 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
-    username_effect::{CROWN_GLYPH, ResolvedName},
+    username_effect::{CROWN_GLYPH, CROWN_LAUREATE_GLYPH, ResolvedName},
 };
 use crate::app::deadchannel::runner::state::PORTRAIT_WIDTH;
 use crate::app::files::{
@@ -40,15 +40,31 @@ use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
 use super::state::{
-    MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
+    MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
     SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
     dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
     is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
     visual_order_for_rooms,
 };
-use super::ui_text::{AuthorTint, Gutter, reaction_label, wrap_chat_entry_to_lines};
+use super::ui_text::{
+    AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
+    without_nerd_font_glyphs, wrap_chat_entry_to_lines,
+};
 
-const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// The picker's choices in paint order: the key to press and the reaction
+/// kind it toggles.
+const REACTION_PICKER_CHOICES: [(&str, i16); 10] = [
+    ("1", 1),
+    ("2", 2),
+    ("3", 3),
+    ("4", 4),
+    ("5", 5),
+    ("6", 6),
+    ("7", 7),
+    ("8", 8),
+    ("9", 9),
+    ("w", WAVE_REACTION_KIND),
+];
 /// The gap between messages and composer: a blank breather row on top so the
 /// ticker doesn't read as one more chat line, then the ticker row itself
 /// hugging the composer. Two rows, always present, so the chrome never moves.
@@ -119,7 +135,6 @@ pub struct DashboardChatView<'a> {
     pub show_flag_fallback: bool,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
@@ -136,12 +151,13 @@ pub struct DashboardChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Every runner's look (`app/deadchannel/runner`), for the portrait
-    /// gutter beside messages; consulted only when `room` is #deadchannel.
-    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
-    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// Every standing runner's look and level (`app/deadchannel/runner`),
+    /// for the portrait gutter and the level badge beside messages;
+    /// consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>,
+    /// Away users (`common/away.rs`, resolved once a second in `tick.rs`);
     /// painted as the trailing presence badge.
-    pub peer_statuses: &'a HashMap<Uuid, String>,
+    pub away_user_ids: &'a HashSet<Uuid>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -150,6 +166,16 @@ pub struct DashboardChatView<'a> {
     pub translation_hidden: &'a HashSet<Uuid>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
+    /// The #lounge live strip (`app/live/`): one thing that just happened
+    /// in the house, drawn above the poll strip. `None` when nothing is
+    /// live; the card then looks as it always has.
+    pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
+    /// Receives the strip's rect and source for the click that opens it.
+    pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+    /// The board's all-day posts for today (`calendar::live::day_text`),
+    /// which take the #lounge topic row for the day. `None` elsewhere and
+    /// on any other day.
+    pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -184,7 +210,6 @@ pub(crate) struct ComposerBlockView<'a> {
     pub composing: bool,
     pub selected_message: bool,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub reply_author: Option<&'a str>,
     pub is_editing: bool,
@@ -194,10 +219,24 @@ pub(crate) struct ComposerBlockView<'a> {
     /// When true, Enter sends without closing the composer and Alt+S is a
     /// no-op. Drives the title-hint tier swap.
     pub keep_composer_focused: bool,
-    /// A composer that takes no keys: a Zen chat tile that is not the
-    /// focused one keeps its strip so the rows never jump, but `i`, `j`,
-    /// and `k` act on the focused tile, so it must not advertise them.
-    pub inert: bool,
+    /// Whether the composer takes keys, and if not, what focuses it.
+    pub inert: ComposerInert,
+}
+
+/// A composer that takes no keys keeps its strip so the rows never jump,
+/// and its title and placeholder say what focuses it instead of naming keys
+/// that act elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerInert {
+    /// The composer takes keys (or is the screen's one composer).
+    No,
+    /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
+    /// the focused tile.
+    ZenTile,
+    /// The pane beside a player's own running roguelike: every key is the
+    /// game's until F2 or a click on the pane opens the composer
+    /// (`door/spectate`).
+    OwnWatchChat,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -239,8 +278,18 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
 }
 
 fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> String {
-    if view.inert {
-        return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+    match view.inert {
+        ComposerInert::ZenTile => {
+            return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+        }
+        ComposerInert::OwnWatchChat => {
+            return pick_title_that_fits(
+                block_width,
+                &[" Compose (F2 or click) ", " (F2 or click) ", " F2 ", ""],
+            )
+            .to_string();
+        }
+        ComposerInert::No => {}
     }
     if !view.composing {
         return pick_title_that_fits(
@@ -365,23 +414,28 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     .to_string()
 }
 
-fn reaction_picker_choice_width(key: i16) -> usize {
-    1 + 1 + reaction_label(key).width()
+fn reaction_picker_choice_width(key: &str, kind: i16) -> usize {
+    Span::raw(key).width() + 1 + Span::raw(reaction_label(kind)).width()
 }
 
 fn reaction_picker_custom_width() -> usize {
-    "0 icon".width()
+    Span::raw("0 icon").width()
 }
 
-fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
+fn push_reaction_picker_choice(
+    reaction_spans: &mut Vec<Span<'static>>,
+    dim: Style,
+    key: &'static str,
+    kind: i16,
+) {
     reaction_spans.push(Span::styled(
-        key.to_string(),
+        key,
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ));
     reaction_spans.push(Span::styled(" ", dim));
-    reaction_spans.push(Span::styled(reaction_label(key), dim));
+    reaction_spans.push(Span::styled(reaction_label(kind), dim));
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
@@ -390,9 +444,9 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
     let mut current_spans = Vec::new();
     let mut current_width = 0usize;
 
-    for key in REACTION_PICKER_KEYS {
+    for (key, kind) in REACTION_PICKER_CHOICES {
         let separator_width = usize::from(!current_spans.is_empty()) * 2;
-        let choice_width = reaction_picker_choice_width(key);
+        let choice_width = reaction_picker_choice_width(key, kind);
         if !current_spans.is_empty()
             && current_width + separator_width + choice_width > available_width
         {
@@ -403,7 +457,7 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
             current_spans.push(Span::styled("  ", dim));
             current_width += 2;
         }
-        push_reaction_picker_choice(&mut current_spans, dim, key);
+        push_reaction_picker_choice(&mut current_spans, dim, key, kind);
         current_width += choice_width;
     }
 
@@ -448,11 +502,21 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
-    if view.inert {
-        return Paragraph::new(Line::from(Span::styled(
-            "Tab or a click focuses this tile · i writes",
-            dim,
-        )));
+    match view.inert {
+        ComposerInert::ZenTile => {
+            return Paragraph::new(Line::from(Span::styled(
+                "Tab or a click focuses this tile · i writes",
+                dim,
+            )));
+        }
+        ComposerInert::OwnWatchChat => {
+            return Paragraph::new(Line::from(Span::styled(
+                // Fits the 40-column pane: 38 cells of text.
+                "F2 or click: write to your watchers",
+                dim,
+            )));
+        }
+        ComposerInert::No => {}
     }
 
     if view.composing {
@@ -467,11 +531,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     } else if view.selected_image_message {
         vec![Line::from(Span::styled(
             "f react · r reply · e edit · d delete · p profile · c copy · Enter view image",
-            dim,
-        ))]
-    } else if view.selected_news_message {
-        vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter view/copy link",
             dim,
         ))]
     } else if view.selected_message {
@@ -1140,7 +1199,6 @@ pub fn draw_dashboard_chat_card(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -1148,7 +1206,7 @@ pub fn draw_dashboard_chat_card(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
-                inert: false,
+                inert: ComposerInert::No,
             },
             composer_text_width,
         ));
@@ -1183,10 +1241,35 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             voice,
-            topic: view.room.and_then(room_topic),
-            has_rules: view.room.is_some_and(room_has_rules),
+            // The live strip stands in for the topic row while it is up:
+            // the board is the room's news, and the topic is a key away in
+            // `/rules`. On a day the board has an all-day post, that post
+            // takes the row. Voice and stream rows carry live state, so
+            // they stay.
+            row: match (
+                &view.live_strip,
+                view.board_day.as_deref(),
+                view.room.and_then(room_topic),
+            ) {
+                (Some(_), _, _) => None,
+                (None, Some(day), _) => Some(TopicRow::BoardDay(day)),
+                (None, None, Some(text)) => Some(TopicRow::Topic {
+                    text,
+                    has_rules: view.room.is_some_and(room_has_rules),
+                }),
+                (None, None, None) => None,
+            },
+            closing_rule: view.live_strip.is_none(),
         },
     );
+    // The live strip takes its rows off the top, so the newest messages,
+    // anchored at the bottom, stay where they are when it comes and goes.
+    if let Some(strip) = &view.live_strip
+        && let Some((size, strip_area, rest)) = crate::app::live::ui::fit_live_strip(messages_area)
+    {
+        crate::app::live::ui::draw_live_strip(frame, strip_area, size, strip, view.live_strip_hit);
+        messages_area = rest;
+    }
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
@@ -1222,7 +1305,7 @@ pub fn draw_dashboard_chat_card(
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
-                peer_statuses: view.peer_statuses,
+                away_user_ids: view.away_user_ids,
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
@@ -1278,7 +1361,6 @@ pub fn draw_dashboard_chat_card(
             composing: view.composing,
             selected_message: view.selected_message_id.is_some(),
             selected_image_message: view.selected_image_message,
-            selected_news_message: view.selected_news_message,
             reaction_picker_active: view.reaction_picker_active,
             reply_author: view.reply_author,
             is_editing: view.is_editing,
@@ -1286,7 +1368,7 @@ pub fn draw_dashboard_chat_card(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
-            inert: false,
+            inert: ComposerInert::No,
         },
     );
     record_composer_mouse_target(
@@ -1319,7 +1401,7 @@ struct ChatRowsContext<'a> {
     drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author.
     name_flair: &'a HashMap<Uuid, ResolvedName>,
-    peer_statuses: &'a HashMap<Uuid, String>,
+    away_user_ids: &'a HashSet<Uuid>,
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
@@ -1328,7 +1410,7 @@ struct ChatRowsContext<'a> {
     /// every entry and paints each author's face beside their block
     /// (`app/deadchannel/runner`). The gutter code below is room-agnostic;
     /// `None` leaves the rows exactly what they were.
-    runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>>,
+    runner_looks: Option<&'a HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1653,6 +1735,9 @@ fn ensure_chat_rows_cache(
     let mut prev_was_system = false;
     let mut unread_divider_inserted = false;
     let mut left_app_divider_inserted = false;
+    // A coat the last entry had no row for: a runner's one-liner wears the
+    // head only, and the coat waits for the next entry to seat it.
+    let mut pending_coat: Option<Span<'static>> = None;
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
@@ -1735,27 +1820,32 @@ fn ensure_chat_rows_cache(
             .map(String::as_str)
             .filter(|s| !s.is_empty());
         // Presence badges trail every earned badge: the LIVE stream tag
-        // first (an invitation, the louder of the two), then the author's
-        // `/status`, which carries `away` as one of its variants and so is
+        // first (an invitation, the louder of the two), then the away glyph,
         // the only away marker there is.
         let mut presence_badges: Vec<&str> = Vec::new();
         if ctx.live_user_ids.contains(&msg.user_id) {
             presence_badges.push(LIVE_BADGE);
         }
-        if let Some(badge) = ctx.peer_statuses.get(&msg.user_id) {
-            presence_badges.push(badge);
+        if ctx.away_user_ids.contains(&msg.user_id) {
+            presence_badges.push(crate::app::common::away::AWAY_GLYPH);
         }
         let flair = ctx.name_flair.get(&msg.user_id);
+        // The wire only: a runner's mark and level lead their badge stack,
+        // in the band color of the level (`app/deadchannel/runner/ui.rs`).
+        let runner = ctx.runner_looks.and_then(|looks| looks.get(&msg.user_id));
+        let runner_badge = runner.map(crate::app::deadchannel::runner::ui::badge_text);
         let AuthorPrefix {
             prefix,
             segments,
             author_range,
             crown_range,
             title_range,
+            runner_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
             is_friend,
             author: &author,
             crown: flair.is_some_and(|flair| flair.crown),
+            laureate: flair.is_some_and(|flair| flair.laureate),
             title: flair.and_then(|flair| flair.title.as_deref()),
             milestone: flair.and_then(|flair| flair.milestone.as_deref()),
             special_badges: special_list,
@@ -1763,20 +1853,30 @@ fn ensure_chat_rows_cache(
             bonsai_glyph: bonsai_opt,
             profile_award_badges,
             presence_badges: &presence_badges,
+            runner_badge: runner_badge.as_deref(),
         });
         let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
             late_core::models::drinks::drunk_label_word(*level)
                 .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
         });
         let name_style = flair.and_then(|flair| flair.style);
+        let runner_tint = match (runner, runner_range) {
+            (Some(entry), Some(range)) => Some((
+                range,
+                crate::app::deadchannel::runner::ui::level_color(entry.level),
+            )),
+            (None, _) | (_, None) => None,
+        };
         let author_tint = (drunk_word.is_some()
             || name_style.is_some()
             || crown_range.is_some()
-            || title_range.is_some())
+            || title_range.is_some()
+            || runner_tint.is_some())
         .then_some(AuthorTint {
             range: author_range,
             crown_range,
             title_range,
+            runner: runner_tint,
             word: drunk_word,
             name_style,
         });
@@ -1786,6 +1886,39 @@ fn ensure_chat_rows_cache(
             .get(&msg.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        // Plain glyphs (`show_flag_fallback`) also drops Nerd Font icons from
+        // the body and the reaction chips, the only places they arrive. A
+        // chip whose icon was nothing but Nerd Font keeps its count behind a
+        // `?` rather than vanishing.
+        let plain_reactions: Vec<ChatMessageReactionSummary>;
+        let reactions = if ctx.show_flag_fallback
+            && reactions
+                .iter()
+                .any(|reaction| reaction.icon.chars().any(is_nerd_font_glyph))
+        {
+            plain_reactions = reactions
+                .iter()
+                .map(|reaction| {
+                    let icon = without_nerd_font_glyphs(&reaction.icon);
+                    ChatMessageReactionSummary {
+                        icon: if icon.trim().is_empty() {
+                            "?".to_string()
+                        } else {
+                            icon.into_owned()
+                        },
+                        count: reaction.count,
+                    }
+                })
+                .collect();
+            plain_reactions.as_slice()
+        } else {
+            reactions
+        };
+        let body = if ctx.show_flag_fallback {
+            without_nerd_font_glyphs(&msg.body)
+        } else {
+            Cow::Borrowed(msg.body.as_str())
+        };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
         // A reply is checked before a mention because the composer prepends a
@@ -1809,7 +1942,7 @@ fn ensure_chat_rows_cache(
         // render as one authorless row; consecutive ones stack with no
         // blank row between them, however far apart in time.
         let system_text = is_system_author(raw_author)
-            .then(|| super::ui_text::parse_system_line(&msg.body))
+            .then(|| super::ui_text::parse_system_line(&body))
             .flatten();
         let is_system = system_text.is_some();
 
@@ -1846,6 +1979,11 @@ fn ensure_chat_rows_cache(
         }
         left_app_divider_inserted |= left_app_here.is_some();
         unread_divider_inserted |= afk_here;
+        // The waiting coat seats only on a continuation that sits right
+        // under the one-liner: a divider between them splits the block.
+        let carried_coat = pending_coat
+            .take()
+            .filter(|_| is_continuation && left_app_here.is_none() && !afk_here);
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
@@ -1864,14 +2002,14 @@ fn ensure_chat_rows_cache(
             (!is_continuation && !is_system)
                 .then(|| looks.get(&msg.user_id))
                 .flatten()
-                .map(crate::app::deadchannel::runner::ui::portrait_spans)
+                .map(|entry| crate::app::deadchannel::runner::ui::portrait_spans(&entry.look))
         });
         let text_width = match ctx.runner_looks {
             Some(_) => width.saturating_sub(PORTRAIT_GUTTER).max(1),
             None => width,
         };
         let mut wrapped = wrap_chat_entry_to_lines(
-            &msg.body,
+            &body,
             &stamp,
             &prefix,
             text_width,
@@ -1886,17 +2024,23 @@ fn ensure_chat_rows_cache(
             gild,
             translation,
         );
-        if let Some([hood, eyes, coat]) = portrait {
-            // The face starts level with the header and wears as much as
-            // the entry has rows for: a one-liner (the header and one body
-            // row) shows the head only, anything taller the coat too, so
-            // no message grows a row for its face. The blank separator
-            // above the block stays blank on purpose: with the hood seated
-            // there, faces down the wire read as one stuck column.
-            match wrapped.lines.len() {
-                0..=2 => attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width),
+        // The face starts level with the header and wears as much as the
+        // block has rows for: a one-liner (the header and one body row)
+        // shows the head only and hands the coat to the continuation right
+        // under it, anything taller wears the coat itself, so no message
+        // grows a row for its face. The blank separator above the block
+        // stays blank on purpose: with the hood seated there, faces down
+        // the wire read as one stuck column.
+        match (portrait, carried_coat) {
+            (Some([hood, eyes, coat]), _) => match wrapped.lines.len() {
+                0..=2 => {
+                    attach_portrait(&mut wrapped.lines, vec![hood, eyes], text_width);
+                    pending_coat = Some(coat);
+                }
                 _ => attach_portrait(&mut wrapped.lines, vec![hood, eyes, coat], text_width),
-            }
+            },
+            (None, Some(coat)) => attach_portrait(&mut wrapped.lines, vec![coat], text_width),
+            (None, None) => {}
         }
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -1925,8 +2069,8 @@ fn ensure_chat_rows_cache(
         }
 
         // Skip the author header (when there is one) so selection paints
-        // body rows only. Headerless entries — system lines, news cards,
-        // /me actions, continuations — select from their first row;
+        // body rows only. Headerless entries (system lines, report cards,
+        // /me actions, continuations) select from their first row;
         // deriving this from `is_continuation` alone left the first system
         // line after a normal message with an empty selection range.
         let body_start = if wrapped.header_line_index == Some(0) {
@@ -2589,6 +2733,7 @@ fn build_author_prefix_and_segments(
         is_friend,
         author,
         crown: false,
+        laureate: false,
         title: None,
         milestone: None,
         special_badges,
@@ -2596,6 +2741,7 @@ fn build_author_prefix_and_segments(
         bonsai_glyph,
         profile_award_badges,
         presence_badges,
+        runner_badge: None,
     });
     (built.prefix, built.segments)
 }
@@ -2608,6 +2754,8 @@ struct AuthorPrefixInput<'a> {
     author: &'a str,
     /// Whether this author currently wears the crown.
     crown: bool,
+    /// Whether this author wore the crown when last month ended.
+    laureate: bool,
     title: Option<&'a str>,
     /// The dearest burn milestone this author owns. A badge, not a mark on
     /// the name, so it joins the badge stack rather than trailing the
@@ -2618,19 +2766,26 @@ struct AuthorPrefixInput<'a> {
     bonsai_glyph: Option<&'a str>,
     profile_award_badges: Option<&'a str>,
     presence_badges: &'a [&'a str],
+    /// The runner's level badge (`app/deadchannel/runner/ui.rs`), only on
+    /// the wire: the first badge of the stack, so it sits right after the
+    /// name and its decorations and the painter can tint it in its band.
+    runner_badge: Option<&'a str>,
 }
 
 /// The built author header prefix: the string, the clickable column
-/// segments, the bare username's byte range, and the byte ranges of the two
-/// decorations that trail it. The crown follows the username directly and
-/// the title follows the crown, so all three runs are adjacent and the
-/// painter can walk them in order.
+/// segments, the bare username's byte range, and the byte ranges of the
+/// decorations that trail it. The crown follows the username directly, the
+/// title follows the crown, and the runner badge opens the badge stack
+/// after the title, so all four runs are adjacent and the painter can
+/// walk them in order.
 struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
     crown_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
+    /// The ` ▚7` run: the space that opens the badge stack and the badge.
+    runner_range: Option<(usize, usize)>,
 }
 
 /// Builds the author header prefix.
@@ -2639,6 +2794,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         is_friend,
         author,
         crown,
+        laureate,
         title,
         milestone,
         special_badges,
@@ -2646,6 +2802,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         bonsai_glyph,
         profile_award_badges,
         presence_badges,
+        runner_badge,
     } = input;
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
@@ -2667,6 +2824,16 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         col += glyph_w;
         prefix.push(' ');
         col += 1;
+    }
+
+    // Last month's crown leads the name: a title held for the whole month,
+    // so it stands apart from the live holder's glyph that trails the name.
+    // Painted in the author style (an emoji keeps its own colors), and the
+    // name beside it opens the profile, so it carries no segment.
+    if laureate {
+        prefix.push_str(CROWN_LAUREATE_GLYPH);
+        prefix.push(' ');
+        col += UnicodeWidthStr::width(CROWN_LAUREATE_GLYPH) as u16 + 1;
     }
 
     let author_w = UnicodeWidthStr::width(author) as u16;
@@ -2714,13 +2881,20 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         });
 
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
-        special_badges.len()
+        runner_badge.is_some() as usize
+            + special_badges.len()
             + chat_badges.len()
             + milestone.is_some() as usize
             + bonsai_glyph.is_some() as usize
             + profile_award_badges.is_some() as usize
             + presence_badges.len(),
     );
+    // The runner badge leads the stack: what the wire knows about a person
+    // comes before what they bought upstairs, and the painter needs it
+    // adjacent to the name's decorations to tint it.
+    if let Some(s) = runner_badge.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
     let award_group = profile_award_badges
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -2746,7 +2920,9 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     for s in presence_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
+    let mut runner_range = None;
     if !typed_badges.is_empty() {
+        let stack_start = prefix.len();
         prefix.push(' ');
         col += 1;
         let sep_w = UnicodeWidthStr::width(AUTHOR_BADGE_SEPARATOR) as u16;
@@ -2765,6 +2941,9 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
             }
             prefix.push_str(text);
             col += w;
+            if i == 0 && runner_badge.is_some_and(|badge| !badge.is_empty()) {
+                runner_range = Some((stack_start, prefix.len()));
+            }
         }
     }
 
@@ -2774,6 +2953,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         author_range,
         crown_range,
         title_range,
+        runner_range,
     }
 }
 
@@ -2869,18 +3049,27 @@ pub(crate) fn draw_mention_autocomplete(
         .take(8)
         .map(|(i, m)| {
             let is_selected = i == selected;
-            let style = match (is_selected, m.online) {
+            let style = match (is_selected, m.presence) {
                 (true, _) => Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
-                (false, true) => Style::default().fg(theme::TEXT()),
-                (false, false) => Style::default().fg(theme::TEXT_FAINT()),
+                (false, MatchPresence::Here | MatchPresence::Away) => {
+                    Style::default().fg(theme::TEXT())
+                }
+                (false, MatchPresence::Offline) => Style::default().fg(theme::TEXT_FAINT()),
             };
             let prefix = if is_selected { " > " } else { "   " };
             let mut spans = vec![Span::styled(
                 format!("{prefix}{}{}", m.prefix, m.name),
                 style,
             )];
+            // An away user reads before you ping them.
+            if m.presence == MatchPresence::Away {
+                spans.push(Span::raw(format!(
+                    " {}",
+                    crate::app::common::away::AWAY_GLYPH
+                )));
+            }
             if let Some(description) = m.description {
                 let name_width = m.prefix.len() + m.name.len();
                 let pad = " ".repeat(16usize.saturating_sub(name_width).max(2));
@@ -2958,9 +3147,10 @@ pub struct ChatRenderInput<'a> {
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
+    /// `ChatState::rail_scroll_nudge`: rows the rail sits off the selection.
+    pub rail_scroll_nudge: isize,
     pub selected_message_id: Option<Uuid>,
     pub selected_image_message: bool,
-    pub selected_news_message: bool,
     pub reaction_picker_active: bool,
     pub highlighted_message_id: Option<Uuid>,
     pub composer: &'a TextArea<'static>,
@@ -2986,12 +3176,13 @@ pub struct ChatRenderInput<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Every runner's look (`app/deadchannel/runner`), for the portrait
-    /// gutter beside messages; consulted only when `room` is #deadchannel.
-    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::state::Look>,
-    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// Every standing runner's look and level (`app/deadchannel/runner`),
+    /// for the portrait gutter and the level badge beside messages;
+    /// consulted only when `room` is #deadchannel.
+    pub runner_looks: &'a HashMap<Uuid, crate::app::deadchannel::runner::svc::RunnerEntry>,
+    /// Away users (`common/away.rs`, resolved once a second in `tick.rs`);
     /// painted as the trailing presence badge.
-    pub peer_statuses: &'a HashMap<Uuid, String>,
+    pub away_user_ids: &'a HashSet<Uuid>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -3057,6 +3248,9 @@ type RoomEntry = (ChatRoom, Vec<ChatMessage>);
 
 pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [RoomEntry],
+    /// Away users (`common/away.rs`): a DM row whose peer is away carries
+    /// the away glyph.
+    pub away_user_ids: &'a HashSet<Uuid>,
     /// Registered "watch me" streams driving the rail's `stream` section.
     pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub usernames: &'a UsernameLookup<'a>,
@@ -3068,6 +3262,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub selected_room_id: Option<Uuid>,
     pub room_jump_active: bool,
     pub room_section_prefix_armed: bool,
+    /// `ChatState::rail_scroll_nudge`: rows the rail sits off the selection.
+    pub rail_scroll_nudge: isize,
     pub current_user_id: Uuid,
     pub ignored_user_ids: &'a HashSet<Uuid>,
     pub sticky_unread_dm: Option<Uuid>,
@@ -3138,10 +3334,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
-    /// The composer strip is drawn but takes no keys: a Zen chat tile that
-    /// is not the focused one. It keeps its strip so the rows never jump
-    /// and says so instead of naming keys that act on the focused tile.
-    pub composer_inert: bool,
+    /// Whether the composer strip takes keys, and if not, what focuses it
+    /// (the strip stays either way, so the rows never jump).
+    pub composer_inert: ComposerInert,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3155,9 +3350,9 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_flair: &'a HashMap<Uuid, ResolvedName>,
-    /// Per-peer `/status` badges (resolved once a second in `tick.rs`);
+    /// Away users (`common/away.rs`, resolved once a second in `tick.rs`);
     /// painted as the trailing presence badge.
-    pub peer_statuses: &'a HashMap<Uuid, String>,
+    pub away_user_ids: &'a HashSet<Uuid>,
     /// Stage-2 name-flicker hit this frame (first contact,
     /// `app/deadchannel/haunt`): the message whose author label is
     /// corrupted, plus its burst seed.
@@ -3220,12 +3415,15 @@ pub(crate) fn embedded_chat_layout(
     }
 }
 
+/// An embedded room chat: messages above, the composer block at the bottom.
+/// Returns the composer block's rect, for a surface that joins its own rules
+/// into the block's borders.
 pub fn draw_embedded_room_chat(
     frame: &mut Frame,
     area: Rect,
-    view: EmbeddedRoomChatView<'_>,
+    mut view: EmbeddedRoomChatView<'_>,
     terminal_images: &mut TerminalImageFrame,
-) {
+) -> Rect {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
         .max(composer_placeholder_lines(
@@ -3234,7 +3432,6 @@ pub fn draw_embedded_room_chat(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: false,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -3248,6 +3445,61 @@ pub fn draw_embedded_room_chat(
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    draw_embedded_messages(frame, messages_area, &mut view, terminal_images);
+
+    draw_composer_block(
+        frame,
+        composer_area,
+        &ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
+            inert: view.composer_inert,
+        },
+    );
+    record_composer_mouse_target(
+        view.composer,
+        composer_area,
+        view.composer_rect_slot,
+        view.composer_viewport_top_slot,
+    );
+    composer_area
+}
+
+/// An embedded room drawn to be read and nothing else: its messages fill
+/// `area`, and there is no composer, selection, overlay or click target.
+/// The door watch chat as the player being watched sees it
+/// (`app/door/spectate`): every key they press belongs to their game.
+pub fn draw_embedded_room_messages(
+    frame: &mut Frame,
+    area: Rect,
+    mut view: EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    view.overlay = None;
+    view.image_modal = None;
+    view.chat_hit_slot = None;
+    view.selected_message_id = None;
+    view.highlighted_message_id = None;
+    draw_embedded_messages(frame, area, &mut view, terminal_images);
+}
+
+/// The message half of an embedded room chat: the voice strip when the room
+/// has one, then the message rows, the overlay and the image modal.
+fn draw_embedded_messages(
+    frame: &mut Frame,
+    messages_area: Rect,
+    view: &mut EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let layout = embedded_chat_layout(
         messages_area,
         view.messages_inset,
@@ -3294,7 +3546,7 @@ pub fn draw_embedded_room_chat(
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
-            peer_statuses: view.peer_statuses,
+            away_user_ids: view.away_user_ids,
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
@@ -3339,32 +3591,6 @@ pub fn draw_embedded_room_chat(
     if let Some(image_modal) = view.image_modal {
         draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
     }
-
-    draw_composer_block(
-        frame,
-        composer_area,
-        &ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            selected_news_message: false,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-            inert: view.composer_inert,
-        },
-    );
-    record_composer_mouse_target(
-        view.composer,
-        composer_area,
-        view.composer_rect_slot,
-        view.composer_viewport_top_slot,
-    );
 }
 
 struct RoomListRows {
@@ -3453,7 +3679,6 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         composing: view.composing,
                         selected_message: view.selected_message_id.is_some(),
                         selected_image_message: view.selected_image_message,
-                        selected_news_message: view.selected_news_message,
                         reaction_picker_active: view.reaction_picker_active,
                         reply_author: view.reply_author,
                         is_editing: view.is_editing,
@@ -3461,7 +3686,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
-                        inert: false,
+                        inert: ComposerInert::No,
                     },
                     composer_text_width,
                 ),
@@ -3494,6 +3719,7 @@ pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> R
 fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
     ChatRoomListView {
         chat_rooms: view.chat_rooms,
+        away_user_ids: view.away_user_ids,
         live_streams: view.live_streams,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
@@ -3504,6 +3730,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         selected_room_id: view.selected_room_id,
         room_jump_active: view.room_jump_active,
         room_section_prefix_armed: view.room_section_prefix_armed,
+        rail_scroll_nudge: view.rail_scroll_nudge,
         current_user_id: view.current_user_id,
         ignored_user_ids: view.ignored_user_ids,
         sticky_unread_dm: view.sticky_unread_dm,
@@ -3583,6 +3810,7 @@ pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String
         room,
         view.usernames,
         view.current_user_id,
+        view.away_user_ids,
     ))
 }
 
@@ -3659,7 +3887,12 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             push_row(
                 room_line(
                     room,
-                    room_display_label(room, view.usernames, view.current_user_id),
+                    room_display_label(
+                        room,
+                        view.usernames,
+                        view.current_user_id,
+                        view.away_user_ids,
+                    ),
                     is_selected,
                     view.room_jump_active.then(|| jump_keys.next()).flatten(),
                 ),
@@ -3678,7 +3911,12 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         push_row(
             room_line(
                 room,
-                room_display_label(room, view.usernames, view.current_user_id),
+                room_display_label(
+                    room,
+                    view.usernames,
+                    view.current_user_id,
+                    view.away_user_ids,
+                ),
                 is_selected,
                 view.room_jump_active.then(|| jump_keys.next()).flatten(),
             ),
@@ -3773,7 +4011,12 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         push_row(
             room_line(
                 room,
-                room_display_label(room, view.usernames, view.current_user_id),
+                room_display_label(
+                    room,
+                    view.usernames,
+                    view.current_user_id,
+                    view.away_user_ids,
+                ),
                 is_selected,
                 view.room_jump_active.then(|| jump_keys.next()).flatten(),
             ),
@@ -3894,7 +4137,12 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             push_row(
                 room_line(
                     room,
-                    room_display_label(room, view.usernames, view.current_user_id),
+                    room_display_label(
+                        room,
+                        view.usernames,
+                        view.current_user_id,
+                        view.away_user_ids,
+                    ),
                     is_selected,
                     view.room_jump_active.then(|| jump_keys.next()).flatten(),
                 ),
@@ -3919,7 +4167,12 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             push_row(
                 room_line(
                     room,
-                    room_display_label(room, view.usernames, view.current_user_id),
+                    room_display_label(
+                        room,
+                        view.usernames,
+                        view.current_user_id,
+                        view.away_user_ids,
+                    ),
                     is_selected,
                     view.room_jump_active.then(|| jump_keys.next()).flatten(),
                 ),
@@ -3948,7 +4201,12 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             push_row(
                 room_line(
                     room,
-                    dm_display_label(room, view.usernames, view.current_user_id),
+                    dm_display_label(
+                        room,
+                        view.usernames,
+                        view.current_user_id,
+                        view.away_user_ids,
+                    ),
                     is_selected,
                     view.room_jump_active.then(|| jump_keys.next()).flatten(),
                 ),
@@ -3997,23 +4255,16 @@ pub(crate) fn room_list_hit_test(
         return None;
     }
 
-    let inner = room_rail_inner_area(rooms_area);
-    let hint_rows = build_rail_nav_hint_lines().len() as u16;
-    let footer_reserve = hint_rows + 2;
-    let list_area = if inner.height > footer_reserve + 2 {
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
-    } else {
-        inner
-    };
+    let (list_area, _) = room_rail_split(rooms_area);
     if x < list_area.x || x >= list_area.right() || y < list_area.y || y >= list_area.bottom() {
         return None;
     }
 
     let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
-    let scroll = rooms_scroll_for_selection(
-        room_rows.lines.len(),
+    let scroll = room_rail_scroll(
+        &room_rows,
         list_area.height as usize,
-        room_rows.selected_row_index,
+        view.rail_scroll_nudge,
     );
     let row_index = scroll + (y - list_area.y) as usize;
     if let Some(slot) = room_rows.hit_slots.get(row_index).copied().flatten() {
@@ -4063,23 +4314,16 @@ pub(crate) fn room_list_section_hit_test(
         return None;
     }
 
-    let inner = room_rail_inner_area(rooms_area);
-    let hint_rows = build_rail_nav_hint_lines().len() as u16;
-    let footer_reserve = hint_rows + 2;
-    let list_area = if inner.height > footer_reserve + 2 {
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)]).split(inner)[0]
-    } else {
-        inner
-    };
+    let (list_area, _) = room_rail_split(rooms_area);
     if x < list_area.x || x >= list_area.right() || y < list_area.y || y >= list_area.bottom() {
         return None;
     }
 
     let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
-    let scroll = rooms_scroll_for_selection(
-        room_rows.lines.len(),
+    let scroll = room_rail_scroll(
+        &room_rows,
         list_area.height as usize,
-        room_rows.selected_row_index,
+        view.rail_scroll_nudge,
     );
     let row_index = scroll + (y - list_area.y) as usize;
     // Header rows carry no slot; strip display affordances back to the section
@@ -4122,27 +4366,13 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
     let room_list_view = room_list_view_from_render_input(view);
     let room_rows = build_cozy_room_rail_rows(&room_list_view, area.width.saturating_sub(2));
 
-    // Content lives inside: 2 cols left padding, 2 cols right (separator + 1).
-    // Bottom slice is reserved for the pinned nav-hint footer.
-    let inner = room_rail_inner_area(area);
-
     let hint_lines = build_rail_nav_hint_lines();
-    let hint_rows = hint_lines.len() as u16;
-    // Reserve: top border + hint rows + bottom border. If the rail is too
-    // short, skip hints.
-    let footer_reserve = hint_rows + 2;
-    let (list_area, hint_area) = if inner.height > footer_reserve + 2 {
-        let split = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)])
-            .split(inner);
-        (split[0], Some(split[1]))
-    } else {
-        (inner, None)
-    };
+    let (list_area, hint_area) = room_rail_split(area);
 
-    let scroll = rooms_scroll_for_selection(
-        room_rows.lines.len(),
+    let scroll = room_rail_scroll(
+        &room_rows,
         list_area.height as usize,
-        room_rows.selected_row_index,
+        room_list_view.rail_scroll_nudge,
     );
     let visible_height = list_area.height as usize;
 
@@ -4212,6 +4442,49 @@ pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput
         };
         frame.render_widget(Paragraph::new(hint_lines), hint_render_area);
     }
+}
+
+/// The rail's room list and, when the rail is tall enough, its pinned
+/// nav-hint footer. Content lives inside: 2 cols left padding, 2 cols right
+/// (separator + 1). The footer reserves a top border, the hint rows and a
+/// bottom border; a rail too short for that gets no hints.
+fn room_rail_split(area: Rect) -> (Rect, Option<Rect>) {
+    let inner = room_rail_inner_area(area);
+    let footer_reserve = build_rail_nav_hint_lines().len() as u16 + 2;
+    if inner.height > footer_reserve + 2 {
+        let split = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_reserve)])
+            .split(inner);
+        (split[0], Some(split[1]))
+    } else {
+        (inner, None)
+    }
+}
+
+/// First visible rail row: the selection-centred position moved by the
+/// user's scroll nudge, clamped to the rows there are.
+fn room_rail_scroll(room_rows: &RoomListRows, visible_height: usize, nudge: isize) -> usize {
+    let (base, max_scroll) = room_rail_scroll_base(room_rows, visible_height);
+    base.saturating_add_signed(nudge).min(max_scroll)
+}
+
+fn room_rail_scroll_base(room_rows: &RoomListRows, visible_height: usize) -> (usize, usize) {
+    let total = room_rows.lines.len();
+    (
+        rooms_scroll_for_selection(total, visible_height, room_rows.selected_row_index),
+        total.saturating_sub(visible_height),
+    )
+}
+
+/// `(selection-centred scroll, max scroll)` for the rail drawn in
+/// `rooms_area`, so input can keep the nudge inside the rows there are
+/// instead of letting it run past either end.
+pub(crate) fn room_rail_scroll_bounds(
+    rooms_area: Rect,
+    view: &ChatRoomListView<'_>,
+) -> (usize, usize) {
+    let (list_area, _) = room_rail_split(rooms_area);
+    let room_rows = build_cozy_room_rail_rows(view, rooms_area.width.saturating_sub(2));
+    room_rail_scroll_base(&room_rows, list_area.height as usize)
 }
 
 fn room_rail_inner_area(area: Rect) -> Rect {
@@ -4660,7 +4933,12 @@ fn room_slot_label_and_unread(
             else {
                 return ("room".to_string(), 0);
             };
-            let label = room_display_label(room, view.usernames, view.current_user_id);
+            let label = room_display_label(
+                room,
+                view.usernames,
+                view.current_user_id,
+                view.away_user_ids,
+            );
             let unread = view.unread_counts.get(&room.id).copied().unwrap_or(0);
             (label, unread)
         }
@@ -4780,9 +5058,10 @@ fn room_display_label(
     room: &ChatRoom,
     usernames: &UsernameLookup<'_>,
     current_user_id: Uuid,
+    away_user_ids: &HashSet<Uuid>,
 ) -> String {
     if room.kind == "dm" {
-        return dm_display_label(room, usernames, current_user_id);
+        return dm_display_label(room, usernames, current_user_id, away_user_ids);
     }
     let base_label = room
         .slug
@@ -4810,11 +5089,12 @@ fn build_rail_nav_hint_lines() -> Vec<Line<'static>> {
     let hint = |s: &str| -> Span<'static> {
         Span::styled(s.to_string(), Style::default().fg(theme::TEXT_FAINT()))
     };
+    // Three rows, 20 columns: keys that share a verb share a row, and the
+    // hint column lines up at column 10 on every row.
     vec![
-        Line::from(vec![key("h l space"), hint(" jump room")]),
-        Line::from(vec![key("f"), hint("         favorite")]),
+        Line::from(vec![key("h l sp ^/"), hint(" jump room")]),
+        Line::from(vec![key("^h ^l f"), hint("   scroll/fav")]),
         Line::from(vec![key("[ ]/z"), hint("     sort/fold")]),
-        Line::from(vec![key("ctrl+/"), hint("    picker")]),
     ]
 }
 
@@ -4837,10 +5117,12 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
     )
 }
 
+/// `@ name`, with the away glyph after it while the peer is away.
 fn dm_display_label(
     room: &ChatRoom,
     usernames: &UsernameLookup<'_>,
     current_user_id: Uuid,
+    away_user_ids: &HashSet<Uuid>,
 ) -> String {
     let other = if room.dm_user_a == Some(current_user_id) {
         room.dm_user_b
@@ -4850,7 +5132,17 @@ fn dm_display_label(
     let name = other
         .and_then(|id| usernames.get(&id).cloned())
         .unwrap_or_else(|| "?".to_string());
-    format!("@ {}", name)
+    match other.is_some_and(|id| away_user_ids.contains(&id)) {
+        true => format!("@ {name} {}", crate::app::common::away::AWAY_GLYPH),
+        false => format!("@ {name}"),
+    }
+}
+
+/// What the header's last row says: the room's topic, or on #lounge on a
+/// day the board has an all-day post, the board's day in the topic's place.
+enum TopicRow<'a> {
+    Topic { text: &'a str, has_rules: bool },
+    BoardDay(&'a str),
 }
 
 /// The header block above a room's messages: the voice row (when the room has a
@@ -4863,22 +5155,24 @@ struct RoomHeader<'a> {
     /// the room is otherwise missing the show).
     stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
-    topic: Option<&'a str>,
-    has_rules: bool,
+    row: Option<TopicRow<'a>>,
+    /// Whether the block ends in a rule. False when the daily live strip
+    /// follows: the strip brings its own rule under the board.
+    closing_rule: bool,
 }
 
 impl RoomHeader<'_> {
     /// Rows this header wants: one per present row (stream, voice, topic),
-    /// a divider between each adjacent pair, and a closing rule that
-    /// separates the whole block from the messages.
+    /// a divider between each adjacent pair, and the closing rule that
+    /// separates the whole block from the messages when it has one.
     fn height(&self) -> u16 {
         let rows = u16::from(self.stream.is_some())
             + u16::from(self.voice.is_some())
-            + u16::from(self.topic.is_some());
+            + u16::from(self.row.is_some());
         if rows == 0 {
             return 0;
         }
-        rows + (rows - 1) + 1
+        rows + (rows - 1) + u16::from(self.closing_rule)
     }
 }
 
@@ -4985,7 +5279,7 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if let Some(stream) = header.stream {
         lines.push(padded(stream_header_line(stream, width)));
     }
-    if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
+    if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
     }
     if let Some(voice) = &header.voice {
@@ -4993,32 +5287,58 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
             voice, width,
         )));
     }
-    if header.voice.is_some() && header.topic.is_some() {
+    if header.voice.is_some() && header.row.is_some() {
         lines.push(rule());
     }
-    if let Some(topic) = header.topic {
-        let hint = if header.has_rules {
-            vec![Span::styled(
-                "/rules",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )]
-        } else {
-            Vec::new()
-        };
-        // The topic is clipped to whatever the hint leaves, so a long topic
-        // never pushes `/rules` off the row.
-        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
-        lines.push(padded(row_with_hint(
-            vec![Span::styled(
-                truncate_cells(topic, room_for_topic),
-                Style::default().fg(theme::TEXT_DIM()),
-            )],
-            hint,
-            width,
-        )));
+    match header.row {
+        Some(TopicRow::Topic { text, has_rules }) => {
+            let hint = if has_rules {
+                vec![Span::styled(
+                    "/rules",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                )]
+            } else {
+                Vec::new()
+            };
+            // The topic is clipped to whatever the hint leaves, so a long
+            // topic never pushes `/rules` off the row.
+            let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
+            lines.push(padded(row_with_hint(
+                vec![Span::styled(
+                    truncate_cells(text, room_for_topic),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )],
+                hint,
+                width,
+            )));
+        }
+        // The board's day reads in amber, the board's colour, with the
+        // board's key where `/rules` would be, in the strip's key style.
+        Some(TopicRow::BoardDay(text)) => {
+            let hint = crate::app::live::ui::key_hint_spans(
+                width,
+                &[
+                    crate::app::live::ui::HintPart::Key("7"),
+                    crate::app::live::ui::HintPart::Text(" for the board"),
+                ],
+            );
+            lines.push(padded(row_with_hint(
+                vec![Span::styled(
+                    truncate_cells(text, width.saturating_sub(17)),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )],
+                hint,
+                width,
+            )));
+        }
+        None => {}
     }
     // Closes the block off from the conversation below it.
-    lines.push(rule());
+    if header.closing_rule {
+        lines.push(rule());
+    }
 
     frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
     Rect {
@@ -5144,8 +5464,11 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     voice,
-                    topic: room_topic(room),
-                    has_rules: room_has_rules(room),
+                    row: room_topic(room).map(|text| TopicRow::Topic {
+                        text,
+                        has_rules: room_has_rules(room),
+                    }),
+                    closing_rule: true,
                 },
             )
         } else {
@@ -5200,7 +5523,7 @@ fn draw_selected_content(
                     },
                     drunk_levels: view.drunk_levels,
                     name_flair: view.name_flair,
-                    peer_statuses: view.peer_statuses,
+                    away_user_ids: view.away_user_ids,
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
@@ -5435,7 +5758,7 @@ fn draw_selected_content(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy link · i paste URL · / filter mine",
+                " j/k navigate · Enter copy link · r reply in #lounge · i paste URL · / filter mine",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);
@@ -5450,7 +5773,6 @@ fn draw_selected_content(
                 composing: view.composing,
                 selected_message: view.selected_message_id.is_some(),
                 selected_image_message: view.selected_image_message,
-                selected_news_message: view.selected_news_message,
                 reaction_picker_active: view.reaction_picker_active,
                 reply_author: view.reply_author,
                 is_editing: view.is_editing,
@@ -5458,7 +5780,7 @@ fn draw_selected_content(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
-                inert: false,
+                inert: ComposerInert::No,
             },
         );
         record_composer_mouse_target(

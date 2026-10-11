@@ -2,6 +2,7 @@ name "rugbert"
 title "a large round fish"
 description "body that looks a bit like a rugby ball; a big softy"
 sauce author=mevanlc date=20260508 license=CCBYSA4.0
+mini left="o))" right="((o"
 
 left ###"""
  .-"""-.

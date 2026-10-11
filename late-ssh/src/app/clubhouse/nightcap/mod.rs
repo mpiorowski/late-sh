@@ -3,8 +3,8 @@
 //! deliberately much smaller than the Clubhouse itself.
 
 pub mod input;
-pub mod lobby;
 pub mod state;
+pub mod stools;
 pub mod svc;
 pub mod ui;
 pub mod wall;

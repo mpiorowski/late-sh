@@ -2,7 +2,9 @@ use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::{PaperEdition, PaperRoomEdition, PaperSectionKind, PaperSectionRow, PaperStatus};
+use super::{
+    EditionStep, PaperEdition, PaperRoomEdition, PaperSectionKind, PaperSectionRow, PaperStatus,
+};
 use crate::db::Db;
 use crate::models::chat_message::{ChatMessage, ChatMessageParams};
 use crate::models::chat_room::ChatRoom;
@@ -605,4 +607,100 @@ async fn recent_ready_sections_come_back_newest_first_and_only_from_earlier_edit
         .await
         .expect("recent");
     assert_eq!(capped, vec![(day(-1), "- yesterday".to_string())]);
+}
+
+#[tokio::test]
+async fn the_nearest_printed_edition_skips_quiet_days_and_rooms_gone_private() {
+    let test_db = test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let stale_before = Utc::now() - Duration::minutes(15);
+    let day = |offset: i64| EDITION + Duration::days(offset);
+
+    // A room column four days back, an Outside page today.
+    let busy = ChatRoom::get_or_create_public_room(&client, "busy")
+        .await
+        .expect("room");
+    assert!(
+        PaperRoomEdition::claim_printing(
+            &client,
+            busy.id,
+            day(-4),
+            12,
+            3,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    PaperRoomEdition::finish(&client, busy.id, day(-4), Some("- four days ago"))
+        .await
+        .expect("finish");
+    assert!(
+        PaperSectionRow::claim_printing(
+            &client,
+            day(0),
+            PaperSectionKind::Outside,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    PaperSectionRow::finish(&client, day(0), PaperSectionKind::Outside, Some("- today"))
+        .await
+        .expect("finish");
+    // Swept but quiet: no page a reader would get.
+    assert!(
+        PaperSectionRow::claim_printing(
+            &client,
+            day(-2),
+            PaperSectionKind::Reading,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    PaperSectionRow::finish(&client, day(-2), PaperSectionKind::Reading, None)
+        .await
+        .expect("finish quiet");
+    // Printed, then the room went private: the reader lost it.
+    let owner = create_test_user(&db, "owner").await;
+    let private = ChatRoom::create_private_room(&client, "secret", owner.id)
+        .await
+        .expect("private room");
+    assert!(
+        PaperRoomEdition::claim_printing(
+            &client,
+            private.id,
+            day(-1),
+            9,
+            2,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    PaperRoomEdition::finish(&client, private.id, day(-1), Some("- hush"))
+        .await
+        .expect("finish");
+
+    let nearest = |from: NaiveDate, step: EditionStep| {
+        let client = &client;
+        async move {
+            PaperEdition::nearest_printed(client, from, step)
+                .await
+                .expect("nearest")
+        }
+    };
+    assert_eq!(nearest(day(0), EditionStep::Earlier).await, Some(day(-4)));
+    assert_eq!(nearest(day(-4), EditionStep::Later).await, Some(day(0)));
+    assert_eq!(nearest(day(-4), EditionStep::Earlier).await, None);
+    assert_eq!(nearest(day(0), EditionStep::Later).await, None);
+    // From a day with no paper of its own, the neighbours still resolve.
+    assert_eq!(nearest(day(-2), EditionStep::Earlier).await, Some(day(-4)));
+    assert_eq!(nearest(day(-2), EditionStep::Later).await, Some(day(0)));
 }

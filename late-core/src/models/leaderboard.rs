@@ -12,6 +12,9 @@ use super::door_run::DoorRunResult;
 /// timestamptz twin is `chips::MONTH_TS_FILTER`, shared with the profile's
 /// "earned this month" figure.
 const MONTH_DATE_FILTER: &str = "date_trunc('month', now() AT TIME ZONE 'UTC')::date";
+/// Start of the current UTC calendar year, the timestamptz twin of
+/// `chips::MONTH_TS_FILTER` for the boards with a yearly window.
+const YEAR_TS_FILTER: &str = "date_trunc('year', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
 /// Rows kept per board. Deep enough that the page can show an around-you
 /// tail for almost everyone; RANK ties can push slightly past it.
 const BOARD_DEPTH: i64 = 500;
@@ -246,6 +249,14 @@ pub struct BoardWindows {
     pub all_time: Vec<RankedEntry>,
 }
 
+/// The current UTC month and the current UTC year of one board (Top
+/// Drinkers), for a race that resets rather than one kept forever.
+#[derive(Clone, Default)]
+pub struct MonthYearWindows {
+    pub monthly: Vec<RankedEntry>,
+    pub yearly: Vec<RankedEntry>,
+}
+
 /// One UTC-month slice of a connected-time checkpoint. A batch can carry more
 /// than one month when it checkpoints sessions spanning a month boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,15 +291,21 @@ pub struct LeaderboardData {
     pub monthly_chip_earners: Vec<RankedEntry>,
     pub arcade_champions: Vec<RankedEntry>,
     pub online_time: BoardWindows,
+    /// Buzz points from every drink taken (`drink_pours`), whatever bar
+    /// poured it and whoever paid.
+    pub top_drinkers: MonthYearWindows,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
     pub door_boards: HashMap<DoorGame, DoorBoards>,
     /// Living Lateania characters by level (ties broken by experience), the
-    /// character's class carried in `note`. Snapshot of current characters,
-    /// not history: a reset character leaves the board.
+    /// character's class carried in `note`. Past the level cap the value keeps
+    /// climbing in paragon levels (see `LATEANIA_XP_PER_PARAGON_LEVEL`).
+    /// Snapshot of current characters, not history: a reset character leaves
+    /// the board.
     pub lateania_adventurers: Vec<RankedEntry>,
-    /// Deepest Frontier zone each living Lateania character has walked into.
-    pub lateania_frontier: Vec<RankedEntry>,
+    /// Lifetime rivals each living Lateania character has slain in the
+    /// Wildbound Waste's pvp rooms.
+    pub lateania_pvp: Vec<RankedEntry>,
 }
 
 impl LeaderboardData {
@@ -315,12 +332,13 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_chip_earners,
         arcade_champions,
         online_time,
+        top_drinkers,
         daily_monthly,
         daily_all_time,
         score_monthly,
         score_all_time,
         lateania_adventurers,
-        lateania_frontier,
+        lateania_pvp,
         door_monthly,
         door_all_time,
     ) = tokio::try_join!(
@@ -330,12 +348,13 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_monthly_chip_earners(client, BOARD_DEPTH),
         fetch_arcade_champions(client, BOARD_DEPTH),
         fetch_online_time(client, BOARD_DEPTH),
+        fetch_top_drinkers(client, BOARD_DEPTH),
         fetch_daily_win_boards(client, DailyWindow::Monthly),
         fetch_daily_win_boards(client, DailyWindow::AllTime),
         fetch_score_boards(client, ScoreWindow::Monthly),
         fetch_score_boards(client, ScoreWindow::AllTime),
         fetch_lateania_adventurers(client, BOARD_DEPTH),
-        fetch_lateania_frontier(client, BOARD_DEPTH),
+        fetch_lateania_pvp(client, BOARD_DEPTH),
         fetch_door_boards(client, DoorWindow::Monthly),
         fetch_door_boards(client, DoorWindow::AllTime),
     )?;
@@ -394,11 +413,12 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_chip_earners,
         arcade_champions,
         online_time,
+        top_drinkers,
         daily_boards,
         score_boards,
         door_boards,
         lateania_adventurers,
-        lateania_frontier,
+        lateania_pvp,
     })
 }
 
@@ -603,43 +623,62 @@ async fn fetch_door_boards(
     Ok(boards)
 }
 
-/// Lateania's Frontier room layout, mirrored from
-/// `late-ssh/src/app/door/lateania/world.rs` (`extend_frontier`): 20 zones of
-/// 50 rooms each, room ids 2000..=2999. late-core cannot depend on the game
-/// crate, so the numbers are restated here; a Frontier reshape must update
-/// both places.
-const LATEANIA_FRONTIER_FIRST_ROOM: i32 = 2000;
-const LATEANIA_FRONTIER_LAST_ROOM: i32 = 2999;
-const LATEANIA_FRONTIER_ZONE_ROOMS: i32 = 50;
+/// Lateania's level curve at the cap, mirrored from
+/// `late-ssh/src/app/door/lateania/classes.rs` (`Class::MAX_LEVEL`,
+/// `xp_for_level`, `XP_PER_SUMMIT_LEVEL`). late-core cannot depend on the game
+/// crate, so the numbers are restated here; `classes_test.rs` pins them to the
+/// game's curve, so a rebalance that forgets this file fails there.
+pub const LATEANIA_LEVEL_CAP: i64 = 100;
+/// Total xp to reach `LATEANIA_LEVEL_CAP`.
+pub const LATEANIA_XP_AT_LEVEL_CAP: i64 = 4_967_282;
+/// Xp per board level past the cap. Experience keeps accruing at the cap, so
+/// the Adventurers board keeps counting "paragon" levels at the summit's own
+/// flat per-level price instead of parking every veteran at 100.
+pub const LATEANIA_XP_PER_PARAGON_LEVEL: i64 = 75_000;
 
 /// Living Lateania characters ranked by level, experience as the tiebreak.
-/// The character blob is game-owned JSON (`mud_characters.data`); rows
+/// At the cap the value becomes the cap plus the paragon levels earned past
+/// it. The character blob is game-owned JSON (`mud_characters.data`); rows
 /// without a chosen class are pre-class-select shells and stay off the board.
 async fn fetch_lateania_adventurers(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
     let rows = client
         .query(
-            "WITH chars AS (
-                SELECT c.user_id,
-                       (c.data->>'level')::bigint AS level,
-                       COALESCE((c.data->>'xp')::bigint, 0) AS xp,
-                       initcap(c.data->>'class') AS class
-                FROM mud_characters c
-                WHERE c.data->>'class' IS NOT NULL
-                  AND c.data->>'level' IS NOT NULL
+            &format!(
+                "WITH chars AS (
+                    SELECT c.user_id,
+                           (c.data->>'level')::bigint AS level,
+                           COALESCE((c.data->>'xp')::bigint, 0) AS xp,
+                           initcap(c.data->>'class') AS class
+                    FROM mud_characters c
+                    WHERE c.data->>'class' IS NOT NULL
+                      AND c.data->>'level' IS NOT NULL
+                ),
+                boarded AS (
+                    SELECT user_id, xp, class,
+                           CASE
+                               WHEN level >= {cap}
+                               THEN {cap} + GREATEST(xp - {xp_at_cap}, 0) / {per_level}
+                               ELSE level
+                           END AS level
+                    FROM chars
+                ),
+                ranked AS (
+                    SELECT u.username,
+                           b.user_id,
+                           b.level,
+                           b.class,
+                           RANK() OVER (ORDER BY b.level DESC, b.xp DESC) AS rank
+                    FROM boarded b
+                    JOIN users u ON u.id = b.user_id
+                )
+                SELECT username, user_id, class, level AS value, rank
+                FROM ranked
+                ORDER BY rank ASC, username ASC
+                LIMIT $1",
+                cap = LATEANIA_LEVEL_CAP,
+                xp_at_cap = LATEANIA_XP_AT_LEVEL_CAP,
+                per_level = LATEANIA_XP_PER_PARAGON_LEVEL,
             ),
-            ranked AS (
-                SELECT u.username,
-                       ch.user_id,
-                       ch.level,
-                       ch.class,
-                       RANK() OVER (ORDER BY ch.level DESC, ch.xp DESC) AS rank
-                FROM chars ch
-                JOIN users u ON u.id = ch.user_id
-            )
-            SELECT username, user_id, class, level AS value, rank
-            FROM ranked
-            ORDER BY rank ASC, username ASC
-            LIMIT $1",
             &[&limit],
         )
         .await?;
@@ -655,44 +694,30 @@ async fn fetch_lateania_adventurers(client: &Client, limit: i64) -> Result<Vec<R
         .collect())
 }
 
-/// Deepest Frontier zone per living Lateania character, from the visited-room
-/// list in the character blob. This unnests each character's visited array,
-/// which is the most per-row work in the leaderboard pass; it stays cheap
-/// because `mud_characters` holds one row per player who ever rolled a
-/// character, a small table by construction, and the pass itself is
-/// subscriber-gated on a 5 minute cadence (`app/leaderboard/svc.rs`).
-async fn fetch_lateania_frontier(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+/// Lifetime Wildbound Waste kills per living Lateania character, read from
+/// the `pvp_kills` counter in the character blob. Characters with no chosen
+/// class or no kills stay off the board.
+async fn fetch_lateania_pvp(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
     let rows = client
         .query(
-            &format!(
-                "WITH depths AS (
-                    SELECT c.user_id,
-                           (MAX((room.value)::int) - {first}) / {zone_rooms} + 1 AS zone
-                    FROM (
-                        SELECT user_id, data->'visited' AS visited
-                        FROM mud_characters
-                        WHERE jsonb_typeof(data->'visited') = 'array'
-                    ) c
-                    CROSS JOIN LATERAL jsonb_array_elements_text(c.visited) AS room(value)
-                    WHERE (room.value)::int BETWEEN {first} AND {last}
-                    GROUP BY c.user_id
-                ),
-                ranked AS (
-                    SELECT u.username,
-                           d.user_id,
-                           d.zone::bigint AS zone,
-                           RANK() OVER (ORDER BY d.zone DESC) AS rank
-                    FROM depths d
-                    JOIN users u ON u.id = d.user_id
-                )
-                SELECT username, user_id, zone AS value, rank
-                FROM ranked
-                ORDER BY rank ASC, username ASC
-                LIMIT $1",
-                first = LATEANIA_FRONTIER_FIRST_ROOM,
-                last = LATEANIA_FRONTIER_LAST_ROOM,
-                zone_rooms = LATEANIA_FRONTIER_ZONE_ROOMS,
+            "WITH kills AS (
+                SELECT c.user_id, (c.data->>'pvp_kills')::bigint AS kills
+                FROM mud_characters c
+                WHERE c.data->>'class' IS NOT NULL
+                  AND (c.data->>'pvp_kills')::bigint > 0
             ),
+            ranked AS (
+                SELECT u.username,
+                       k.user_id,
+                       k.kills,
+                       RANK() OVER (ORDER BY k.kills DESC) AS rank
+                FROM kills k
+                JOIN users u ON u.id = k.user_id
+            )
+            SELECT username, user_id, kills AS value, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
             &[&limit],
         )
         .await?;
@@ -782,6 +807,69 @@ async fn fetch_online_time(client: &Client, limit: i64) -> Result<BoardWindows> 
             "monthly" => windows.monthly.push(entry),
             "all_time" => windows.all_time.push(entry),
             other => unreachable!("online time window {other} not produced by this query"),
+        }
+    }
+    Ok(windows)
+}
+
+/// Top Drinkers: the buzz points of every drink taken this UTC month and
+/// this UTC year. A drink counts what it poured, never what it cost, so a
+/// round's free drink counts like a paid one and paying for others counts
+/// nothing; the welcome pour is never logged.
+async fn fetch_top_drinkers(client: &Client, limit: i64) -> Result<MonthYearWindows> {
+    let rows = client
+        .query(
+            &format!(
+                "WITH totals AS (
+                    SELECT 'monthly'::text AS period,
+                           user_id,
+                           SUM(points)::bigint AS value
+                    FROM drink_pours
+                    WHERE created >= {MONTH_TS_FILTER}
+                    GROUP BY user_id
+                    HAVING SUM(points) > 0
+                    UNION ALL
+                    SELECT 'yearly'::text AS period,
+                           user_id,
+                           SUM(points)::bigint AS value
+                    FROM drink_pours
+                    WHERE created >= {YEAR_TS_FILTER}
+                    GROUP BY user_id
+                    HAVING SUM(points) > 0
+                ),
+                ranked AS (
+                    SELECT totals.period,
+                           u.username,
+                           totals.user_id,
+                           totals.value,
+                           RANK() OVER (
+                               PARTITION BY totals.period ORDER BY totals.value DESC
+                           ) AS rank
+                    FROM totals
+                    JOIN users u ON u.id = totals.user_id
+                )
+                SELECT period, username, user_id, value, rank
+                FROM ranked
+                WHERE rank <= $1
+                ORDER BY period ASC, rank ASC, username ASC"
+            ),
+            &[&limit],
+        )
+        .await?;
+
+    let mut windows = MonthYearWindows::default();
+    for row in rows {
+        let entry = RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("value"),
+            note: None,
+        };
+        match row.get::<_, &str>("period") {
+            "monthly" => windows.monthly.push(entry),
+            "yearly" => windows.yearly.push(entry),
+            other => unreachable!("top drinkers window {other} not produced by this query"),
         }
     }
     Ok(windows)
@@ -958,9 +1046,9 @@ enum ScoreWindow {
 }
 
 /// One query for every score-game board in the window. Monthly unions
-/// `game_score_events` with legacy rows touched this month; all-time reads
-/// only the legacy best-score tables, the tables of record that predate
-/// score events.
+/// `game_score_events` with legacy rows whose best was set this month;
+/// all-time reads only the legacy best-score tables, the tables of record
+/// that predate score events.
 async fn fetch_score_boards(
     client: &Client,
     window: ScoreWindow,

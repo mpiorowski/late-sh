@@ -370,16 +370,16 @@ fn draw_launch_copy(
     ));
     lines.push(landing::stat(
         "Yssgar, Sundering Deep",
-        "20,000 chips, and the LYS badge the first time",
+        "10,000 chips, and the LYS badge the first time",
         24,
     ));
     lines.push(landing::stat(
         "Kaethyr Ascendant",
-        "20,000 chips, and the LKA badge the first time",
+        "10,000 chips, and the LKA badge the first time",
         24,
     ));
     lines.push(Line::from(Span::styled(
-        "  Each crown pays once per character, and at most once every 7 days per account.",
+        "  Each crown pays once per character, and at most once every 30 days per account.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));

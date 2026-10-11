@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::{PaperInk, PaperLine, PaperModal};
+use super::state::{PaperInk, PaperLine, PaperModal, PaperViewport};
 use crate::app::common::theme;
 
 /// The paper takes most of the screen: on a busy day it is many rooms of
@@ -35,7 +35,23 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    let close = if popup.width >= 5 && popup.height > 0 {
+        let close = Rect::new(popup.right() - 4, popup.y, 3, 1);
+        frame.render_widget(
+            Paragraph::new("[x]").style(Style::default().fg(theme::AMBER_GLOW())),
+            close,
+        );
+        close
+    } else {
+        Rect::default()
+    };
+
     if inner.width < 24 || inner.height < 5 {
+        modal.set_viewport(PaperViewport {
+            popup,
+            close,
+            ..PaperViewport::default()
+        });
         return;
     }
 
@@ -50,25 +66,60 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
         horizontal: 2,
         vertical: 0,
     });
-    frame.render_widget(
-        Paragraph::new(modal.lines.iter().map(ink_line).collect::<Vec<_>>())
-            .wrap(Wrap { trim: false })
-            .scroll((modal.scroll_offset, 0)),
-        body_area,
-    );
+    let paragraph = Paragraph::new(modal.lines.iter().map(ink_line).collect::<Vec<_>>())
+        .wrap(Wrap { trim: false });
+    let content_height = u16::try_from(paragraph.line_count(body_area.width)).unwrap_or(u16::MAX);
+    // Use the existing right margin, preserving the paper's wrapping width.
+    let track = if content_height > body_area.height {
+        Rect::new(inner.right() - 1, body_area.y, 1, body_area.height)
+    } else {
+        Rect::default()
+    };
+    modal.set_viewport(PaperViewport {
+        popup,
+        body: body_area,
+        close,
+        track,
+        content_height,
+    });
+    frame.render_widget(paragraph.scroll((modal.scroll_offset(), 0)), body_area);
+    if !track.is_empty() {
+        frame.render_widget(
+            Paragraph::new(vec![Line::from("│"); track.height as usize])
+                .style(Style::default().fg(theme::BORDER_DIM())),
+            track,
+        );
+        let thumb = modal.thumb();
+        frame.render_widget(
+            Paragraph::new(vec![Line::from("█"); thumb.height as usize])
+                .style(Style::default().fg(theme::AMBER_DIM())),
+            thumb,
+        );
+    }
 
-    let footer = Line::from(vec![
-        Span::styled(" j/k", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("/paper", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(
-            " reopens it any time",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+    let key = Style::default().fg(theme::AMBER_DIM());
+    let hint = Style::default().fg(theme::TEXT_DIM());
+    let mut footer = vec![Span::styled(" j/k", key), Span::styled(" scroll  ", hint)];
+    // Each way is offered only when a printed edition lies that way.
+    if let Some(earlier) = modal.neighbors.earlier {
+        footer.push(Span::styled("←", key));
+        footer.push(Span::styled(
+            format!(" {}  ", earlier.format("%b %-d")),
+            hint,
+        ));
+    }
+    if let Some(later) = modal.neighbors.later {
+        footer.push(Span::styled(format!("{} ", later.format("%b %-d")), hint));
+        footer.push(Span::styled("→", key));
+        footer.push(Span::styled("  ", hint));
+    }
+    footer.extend([
+        Span::styled("Esc", key),
+        Span::styled(" close  ", hint),
+        Span::styled("/paper", key),
+        Span::styled(" reopens it", hint),
     ]);
-    frame.render_widget(Paragraph::new(footer).centered(), layout[2]);
+    frame.render_widget(Paragraph::new(Line::from(footer)).centered(), layout[2]);
 }
 
 /// The palette, read here and nowhere earlier: `theme`'s thread local

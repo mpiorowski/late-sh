@@ -10,7 +10,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::app::common::theme;
+use crate::app::common::{theme, username_effect::CROWN_LAUREATE_GLYPH};
 
 pub(crate) fn badge_lines(awards: &[ProfileAward], width: usize) -> Vec<Line<'static>> {
     let badge_style = Style::default()
@@ -63,7 +63,10 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
 
     let mut lines = vec![
         Line::from(Span::styled(
-            "Every code below also shows in your profile's Badges list and in your chat username stack.",
+            format!(
+                "Every code below also shows in your profile's Badges list and in your chat username \
+                 stack, except CRWN: chat paints last month's crown as a {CROWN_LAUREATE_GLYPH} before the name."
+            ),
             dim,
         )),
         Line::from(""),
@@ -106,6 +109,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "Late Time",
             "most time online last month, first place only (Late Time board)",
         ),
+        (
+            "DRNK",
+            "Top Drinkers",
+            "most buzz from drinks taken last month, first place only, no chips (Top Drinkers board)",
+        ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
     }
@@ -122,32 +130,32 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "LMG",
             "Lateania Archdemon",
-            "slay the Archdemon Mal'gareth (10,000 chips per character, 7-day gap)",
+            "slay the Archdemon Mal'gareth (10,000 chips per character, 30-day gap)",
         ),
         (
             "LKN",
             "Lateania Frontier King",
-            "slay the King Who Was Promised Nothing (10,000 chips per character, 7-day gap)",
+            "slay the King Who Was Promised Nothing (10,000 chips per character, 30-day gap)",
         ),
         (
             "LYS",
             "Lateania Sundering Deep",
-            "slay Yssgar, the Sundering Deep (20,000 chips per character, 7-day gap)",
+            "slay Yssgar, the Sundering Deep (10,000 chips per character, 30-day gap)",
         ),
         (
             "LKA",
             "Kaethyr Ascendant",
-            "slay Kaethyr Ascendant in Kaelmyr (20,000 chips per character, 7-day gap)",
+            "slay Kaethyr Ascendant in Kaelmyr (10,000 chips per character, 30-day gap)",
         ),
         (
             "NHA",
             "NetHack Amulet",
-            "pick up the Amulet of Yendor (20,000 chips per run, 7-day gap)",
+            "pick up the Amulet of Yendor (20,000 chips per run, 30-day gap)",
         ),
         (
             "NHY",
             "NetHack Ascension",
-            "ascend to demigodhood (40,000 chips per run, 7-day gap)",
+            "ascend to demigodhood (40,000 chips per run, 30-day gap)",
         ),
         (
             "GDS",
@@ -157,22 +165,22 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "DCO",
             "DCSS Orb of Zot",
-            "pick up the Orb of Zot (20,000 chips per run, 7-day gap)",
+            "pick up the Orb of Zot (20,000 chips per run, 30-day gap)",
         ),
         (
             "DCW",
             "DCSS Escape",
-            "escape the dungeon with the Orb (40,000 chips per run, 7-day gap)",
+            "escape the dungeon with the Orb (40,000 chips per run, 30-day gap)",
         ),
         (
             "BRE",
             "Brogue Escape",
-            "escape the Dungeons of Doom (20,000 chips per run, 7-day gap)",
+            "escape the Dungeons of Doom (20,000 chips per run, 30-day gap)",
         ),
         (
             "BRM",
             "Brogue Mastery",
-            "the Dungeons of Doom's super-victory (40,000 chips per run, 7-day gap)",
+            "the Dungeons of Doom's super-victory (40,000 chips per run, 30-day gap)",
         ),
         (
             "ADE",
@@ -183,6 +191,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "ADB",
             "A Dark Room Homefleet",
             "fly out holding the fleet beacon (20,000 chips, every run)",
+        ),
+        (
+            "SIG",
+            "Old Signal",
+            "put down the Old Signal in deadchannel (40,000 chips per mark, 30-day gap)",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));

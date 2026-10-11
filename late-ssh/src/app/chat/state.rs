@@ -11,7 +11,6 @@ use late_core::models::cyberspace_account::CmailThread;
 use late_core::{
     MutexRecover,
     models::{
-        article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
         chat_message_gild::{ChatMessageGild, ChatMessageGildSummary, GildTier},
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
@@ -36,14 +35,15 @@ use crate::app::ai::summary::{
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::{Overlay, OverlayInk, OverlayLine, OverlaySpan};
 
-use crate::app::common::status::Status;
 use crate::app::common::{
     composer, mentions,
     primitives::{Banner, Screen},
 };
+use crate::app::crown::svc::CrownBid;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
+use crate::metrics::HomeRoom;
 use crate::moderation::{
     command::{RoomModAction, ServerUserAction, parse_optional_duration},
     event::ModerationEvent,
@@ -63,7 +63,7 @@ use super::{
         ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
         ProfileSection, ReportKind, RoomMemberListItem,
     },
-    ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
+    ui_text::{NewsPayload, parse_report_payload},
     work,
 };
 
@@ -144,9 +144,19 @@ impl PendingReadCursorFlush {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MentionMatch {
     pub name: String,
-    pub online: bool,
+    pub presence: MatchPresence,
     pub prefix: &'static str,
     pub description: Option<&'static str>,
+}
+
+/// Whether an autocomplete row's target can answer now. A user is here, away
+/// (`common/away.rs`), or offline; commands and rooms are always `Here`. The
+/// derived order is the ranking order: here, then away, then offline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MatchPresence {
+    Here,
+    Away,
+    Offline,
 }
 
 #[derive(Default)]
@@ -160,9 +170,19 @@ pub(crate) struct MentionAutocomplete {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReplyTarget {
-    pub message_id: Uuid,
+    pub to: ReplyTo,
     pub author: String,
     pub preview: String,
+}
+
+/// What a reply answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplyTo {
+    /// A chat message, stored as the reply's `reply_to_message_id`.
+    Message(Uuid),
+    /// A News article off the #lounge live strip. There is no message to
+    /// point at, so the reply carries only the quoted title.
+    Article,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,6 +253,7 @@ impl ComposerCommands {
             | Screen::Darkroom
             | Screen::Artboard
             | Screen::Profiles
+            | Screen::Calendars
             | Screen::Leaderboard
             | Screen::City
             | Screen::Zen
@@ -282,7 +303,7 @@ pub enum RoomInfoAuthority {
 pub(crate) struct NewsModalState {
     pub payload: NewsPayload,
     pub meta: String,
-    pub article_id: Option<Uuid>,
+    pub article_id: Uuid,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,22 +370,38 @@ pub(crate) enum CrownCommand {
     /// `/crown`: who wears it, for how long, and what taking it costs.
     Status,
     /// `/crown take`: buy it at whatever the ladder says right now.
-    Take,
+    /// `/crown take N`: bid N, which the service checks against the price.
+    Take { bid: CrownBid },
 }
 
-/// `Some(Some(command))` on `/crown` or `/crown take`, `Some(None)` on
-/// anything else after `/crown` (usage banner), `None` when the line is not
-/// a crown command at all.
+/// `Some(Some(command))` on `/crown`, `/crown take` or `/crown take N`,
+/// `Some(None)` on anything else after `/crown` (usage banner), `None` when
+/// the line is not a crown command at all. A bid must be a positive whole
+/// number of chips; whether it beats the price is the service's call, under
+/// the lock, since the price can move between typing and landing.
 fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
     let rest = body.trim().strip_prefix("/crown")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    Some(match rest.trim() {
-        "" => Some(CrownCommand::Status),
-        "take" => Some(CrownCommand::Take),
-        _ => None,
-    })
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(Some(CrownCommand::Status));
+    }
+    if rest == "take" {
+        return Some(Some(CrownCommand::Take {
+            bid: CrownBid::AtPrice,
+        }));
+    }
+    let Some(offer) = rest.strip_prefix("take ") else {
+        return Some(None);
+    };
+    match offer.trim().parse::<i64>() {
+        Ok(offer) if offer > 0 => Some(Some(CrownCommand::Take {
+            bid: CrownBid::Offer(offer),
+        })),
+        Ok(_) | Err(_) => Some(None),
+    }
 }
 
 /// The pot, requested from the composer. `App` owns the pot service, so the
@@ -731,6 +768,20 @@ pub(crate) fn is_chat_list_room(room: &ChatRoom) -> bool {
     room.kind == "dm" || room.permanent || matches!(room.visibility.as_str(), "public" | "private")
 }
 
+/// The kind of room for the Home attention metric, read off `kind` and
+/// `visibility`. A kind this match does not name is `OtherRoom`.
+pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
+    match (room.kind.as_str(), room.visibility.as_str()) {
+        ("lounge", _) => HomeRoom::Lounge,
+        ("language", _) => HomeRoom::Language,
+        ("topic", "public") => HomeRoom::PublicTopic,
+        ("topic", "private") => HomeRoom::PrivateTopic,
+        ("dm", _) => HomeRoom::Dm,
+        (late_core::models::chat_room::DEADCHANNEL_KIND, _) => HomeRoom::Deadchannel,
+        _ => HomeRoom::OtherRoom,
+    }
+}
+
 /// The haunted channel (`app/deadchannel`, GAME.md): joined by invitation
 /// only, and once joined it sits at the bottom of Core, above Discover,
 /// never in Channels. The rail builders in `ui.rs` and
@@ -1021,6 +1072,7 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_usermap: bool,
     requested_shop_modal: bool,
+    requested_onboard: bool,
     requested_lobby_toggle: bool,
     requested_zen_toggle: bool,
     requested_guide: bool,
@@ -1028,7 +1080,8 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_pair: Option<PairRequest>,
-    requested_status: Option<StatusRequest>,
+    /// Set by `/brb`; `App` sends this session away until its next key.
+    requested_brb: bool,
     requested_icon_picker: bool,
     /// Set by `/picker`; `App` opens the Ctrl+/ room picker.
     requested_room_picker: bool,
@@ -1050,7 +1103,7 @@ pub struct ChatState {
     requested_crown: Option<CrownCommand>,
     requested_pot: Option<PotCommand>,
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
-    /// (which owns the whisper and the kill switch).
+    /// (which owns the whisper).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
@@ -1086,14 +1139,19 @@ pub struct ChatState {
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
     requested_poll_room: Option<Uuid>,
-    /// Set when a real (non-command) chat message is sent; used to clear an
-    /// open-ended status.
-    sent_regular_message: bool,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
     /// Room-list sections the user has collapsed. Empty = all expanded
     /// (the default). Session-only — resets on reconnect.
     pub(crate) collapsed_sections: HashSet<RoomSection>,
+
+    /// Rows the Home rail is scrolled away from where the selection would put
+    /// it (Ctrl+H / Ctrl+L, the mouse wheel over the rail), and the slot that
+    /// was selected when it was set. The offset only counts while that slot is
+    /// still selected, so any selection change snaps the rail back to the
+    /// selection without every selection path having to clear it.
+    /// Session-only.
+    rail_scroll: (Option<RoomSlot>, isize),
 
     /// Registered "watch me" streams, copied from the stream registry watch
     /// in `App::tick` (~1/s) so render paths read local memory only. Drives
@@ -1374,6 +1432,7 @@ impl ChatState {
             requested_settings_modal: false,
             requested_usermap: false,
             requested_shop_modal: false,
+            requested_onboard: false,
             requested_lobby_toggle: false,
             requested_zen_toggle: false,
             requested_guide: false,
@@ -1381,7 +1440,7 @@ impl ChatState {
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_pair: None,
-            requested_status: None,
+            requested_brb: false,
             requested_icon_picker: false,
             requested_room_picker: false,
             requested_message_search: None,
@@ -1407,9 +1466,9 @@ impl ChatState {
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
             requested_poll_room: None,
-            sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
+            rail_scroll: (None, 0),
             live_streams: Vec::new(),
             live_user_ids: HashSet::new(),
             image_upload_rx: None,
@@ -1527,6 +1586,16 @@ impl ChatState {
             .iter()
             .find(|(room, _)| is_chat_list_room(room))
             .map(|(room, _)| room.id);
+    }
+
+    /// Unread messages across every DM room, for the status bar's `mentions`
+    /// segment when the user has it counting DMs too.
+    pub fn unread_dm_count(&self) -> i64 {
+        self.rooms
+            .iter()
+            .filter(|(room, _)| room.kind == "dm")
+            .filter_map(|(room, _)| self.unread_counts.get(&room.id))
+            .sum()
     }
 
     pub fn mark_room_read(&mut self, room_id: Uuid) {
@@ -2037,13 +2106,7 @@ impl ChatState {
             return false;
         };
         self.select_news();
-        if let Some(article_id) = modal.article_id {
-            self.news.select_article_by_id(article_id);
-            return true;
-        }
-        if let Some(article_id) = self.news.article_id_by_url(&modal.payload.url) {
-            self.news.select_article_by_id(article_id);
-        }
+        self.news.select_article_by_id(modal.article_id);
         true
     }
 
@@ -2072,6 +2135,10 @@ impl ChatState {
 
     pub fn take_requested_shop_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_shop_modal)
+    }
+
+    pub fn take_requested_onboard(&mut self) -> bool {
+        std::mem::take(&mut self.requested_onboard)
     }
 
     pub fn take_requested_lobby_toggle(&mut self) -> bool {
@@ -2106,8 +2173,8 @@ impl ChatState {
         self.requested_pair.take()
     }
 
-    pub(crate) fn take_requested_status(&mut self) -> Option<StatusRequest> {
-        self.requested_status.take()
+    pub(crate) fn take_requested_brb(&mut self) -> bool {
+        std::mem::take(&mut self.requested_brb)
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -2144,10 +2211,6 @@ impl ChatState {
 
     pub fn take_requested_audio_fallback_url(&mut self) -> Option<String> {
         self.requested_audio_fallback_url.take()
-    }
-
-    pub fn take_sent_regular_message(&mut self) -> bool {
-        std::mem::replace(&mut self.sent_regular_message, false)
     }
 
     pub fn take_requested_audio_skip(&mut self) -> bool {
@@ -2445,7 +2508,7 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(message_user_id));
         self.reply_target = Some(ReplyTarget {
-            message_id: message.id,
+            to: ReplyTo::Message(message.id),
             author,
             preview: reply_preview_text(&message_body),
         });
@@ -2454,6 +2517,41 @@ impl ChatState {
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
         None
+    }
+
+    /// Start a reply in #lounge to a News article, the one the live strip
+    /// features: the composer opens with `> @sharer: 📰 Title` to go on top.
+    /// False when the article left the snapshot or #lounge is not known yet.
+    pub(crate) fn begin_reply_to_article(&mut self, article_id: Uuid) -> bool {
+        self.reaction_leader_active = false;
+        let Some(lounge_id) = self.lounge_room_id() else {
+            return false;
+        };
+        let Some(item) = self
+            .news
+            .all_articles()
+            .iter()
+            .find(|item| item.article.id == article_id)
+            .cloned()
+        else {
+            return false;
+        };
+        let author = match item.author_username.trim() {
+            "" => short_user_id(item.article.user_id),
+            name => name.to_string(),
+        };
+        // The 📰 says what is quoted: with no card in the chat, a bare title
+        // would read as something the sharer said.
+        self.reply_target = Some(ReplyTarget {
+            to: ReplyTo::Article,
+            author,
+            preview: truncate_reply_preview(&format!("📰 {}", item.article.title.trim())),
+        });
+        self.composing = true;
+        self.composer_room_id = Some(lounge_id);
+        self.edited_message_id = None;
+        composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
+        true
     }
 
     /// Try to jump from a selected reply message to the original message in
@@ -2566,12 +2664,6 @@ impl ChatState {
 
     pub fn selected_message_id_in_room(&self, room_id: Uuid) -> Option<Uuid> {
         self.selected_message_in_room(room_id).map(|m| m.id)
-    }
-
-    pub fn selected_message_is_news_in_room(&self, room_id: Uuid) -> bool {
-        self.selected_message_in_room(room_id)
-            .and_then(|m| parse_news_payload(&m.body))
-            .is_some()
     }
 
     pub fn selected_message_has_inline_image_in_room(&self, room_id: Uuid) -> bool {
@@ -2837,35 +2929,32 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    pub fn open_selected_news_modal_in_room(&mut self, room_id: Uuid) -> bool {
+    /// Open the article modal on a News article by id (the live strip, the
+    /// Live panel, a Zen Live tile), marking that article read. False when
+    /// it left the snapshot (deleted).
+    pub(crate) fn open_news_modal_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
-        let Some((chat_payload, user_id, created)) =
-            self.selected_message_in_room(room_id).and_then(|m| {
-                parse_news_payload(&m.body).map(|payload| (payload, m.user_id, m.created))
-            })
+        let Some(item) = self
+            .news
+            .all_articles()
+            .iter()
+            .find(|item| item.article.id == article_id)
+            .cloned()
         else {
             return false;
         };
-
-        let (payload, author, created, article_id) = if let Some((payload, author, created, id)) =
-            news_modal_source_from_articles(self.news.all_articles(), &chat_payload.url)
-        {
-            (payload, author, created, Some(id))
-        } else {
-            let author =
-                modal_author_label(self.usernames.get(&user_id).map(String::as_str), user_id);
-            (chat_payload, author, created, None)
-        };
-        let relative = crate::app::common::primitives::format_relative_time(created);
-        let meta = format!(
-            "{author} - {relative} - {}",
-            created.format("%a %Y-%m-%d %H:%M UTC")
-        );
+        let author = modal_author_label(Some(&item.author_username), item.article.user_id);
         self.news_modal = Some(NewsModalState {
-            payload,
-            meta,
+            payload: NewsPayload {
+                title: item.article.title.clone(),
+                summary: item.article.summary.clone(),
+                url: item.article.url.clone(),
+                ascii_art: item.article.ascii_art.clone(),
+            },
+            meta: news_modal_meta(&author, item.article.created),
             article_id,
         });
+        self.news.mark_article_read(&item);
         true
     }
 
@@ -3030,6 +3119,55 @@ impl ChatState {
     /// The room slot currently selected, if any.
     fn current_slot(&self) -> Option<RoomSlot> {
         current_slot_from_state(self.selected_slot_state())
+    }
+
+    /// What Home shows, for the attention metric. None while nothing is
+    /// selected or the selected room has not loaded.
+    pub(crate) fn home_room(&self) -> Option<HomeRoom> {
+        match self.current_slot() {
+            None => None,
+            Some(RoomSlot::Room(room_id)) => self.room_by_id(room_id).map(home_room_kind),
+            Some(RoomSlot::Feeds) => Some(HomeRoom::Feeds),
+            Some(RoomSlot::News) => Some(HomeRoom::News),
+            Some(
+                RoomSlot::Cyberspace
+                | RoomSlot::CyberspaceNotifications
+                | RoomSlot::CyberspaceMail(_)
+                | RoomSlot::CyberspaceRoom(_),
+            ) => Some(HomeRoom::Cyberspace),
+            Some(RoomSlot::Notifications) => Some(HomeRoom::Notifications),
+            Some(RoomSlot::Discover) => Some(HomeRoom::Discover),
+            Some(RoomSlot::Showcase) => Some(HomeRoom::Showcase),
+            Some(RoomSlot::Work) => Some(HomeRoom::Work),
+        }
+    }
+
+    /// Drop the rail scroll once the selection has left the slot it was
+    /// scrolled on. Without this, coming back to that slot later revives
+    /// the old scroll. Runs after every input event and chat tick, the only
+    /// places the selection changes.
+    pub(crate) fn forget_stale_rail_scroll(&mut self) {
+        if self.rail_scroll.0 != self.current_slot() {
+            self.rail_scroll = (None, 0);
+        }
+    }
+
+    /// Rows the Home rail is scrolled off the selection-centred position.
+    /// Zero once the selection has moved since the rail was scrolled.
+    pub(crate) fn rail_scroll_nudge(&self) -> isize {
+        let (anchor, nudge) = self.rail_scroll;
+        if anchor == self.current_slot() {
+            nudge
+        } else {
+            0
+        }
+    }
+
+    /// Set the rail's offset from the selection-centred position, anchored
+    /// to the current selection. Callers clamp it against the rail geometry
+    /// (`chat::ui::room_rail_scroll_bounds`), which state does not know.
+    pub(crate) fn set_rail_scroll_nudge(&mut self, nudge: isize) {
+        self.rail_scroll = (self.current_slot(), nudge);
     }
 
     /// Whether a synthetic rail entry (rss, news, cyberspace, mentions,
@@ -3350,6 +3488,8 @@ impl ChatState {
             .position(|item| *item == current_item)
             .unwrap_or(0) as isize;
         let next = wrapped_index(current, delta, order.len());
+        // Real navigation re-centres the rail, same as a space jump.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(order[next])
     }
 
@@ -3369,6 +3509,9 @@ impl ChatState {
         };
 
         self.room_jump_active = false;
+        // Real navigation re-centres the rail, even onto the room already
+        // selected: the quick way back from a scrolled rail.
+        self.rail_scroll = (None, 0);
         self.select_room_slot(slot)
     }
 
@@ -3603,7 +3746,13 @@ impl ChatState {
             return None;
         }
 
-        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+L, ?), for
+        if body.trim() == "/onboard" {
+            self.clear_composer_after_submit();
+            self.requested_onboard = true;
+            return None;
+        }
+
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+R, ?), for
         // terminals and multiplexers that swallow those keys. Each one runs
         // exactly what its key runs.
         if body.trim() == "/lobby" {
@@ -3812,19 +3961,21 @@ impl ChatState {
         if let Some(parsed) = parse_crown_command(&body) {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
-                return Some(Banner::error("Usage: /crown, or /crown take"));
+                return Some(Banner::error(
+                    "Usage: /crown, /crown take, or /crown take N",
+                ));
             };
             self.requested_crown = Some(command);
             return None;
         }
 
-        // `/paper` opens The Late Edition for anyone; the switches after it
+        // `/paper` opens The Late Edition for anyone; the press commands after it
         // are admin-only and say so, unlike `/haunt`, which hides.
         if let Some(parsed) = crate::app::paper::state::parse_paper_command(&body) {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /paper, or /paper on|off|outside on|outside off|print|preview|reset",
+                    "Usage: /paper, /paper YYYY-MM-DD, or /paper print|preview|reset",
                 ));
             };
             if command.admin_only() && !self.is_admin {
@@ -3840,7 +3991,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /jobs, /jobs post, or /jobs pull|release|on|off",
+                    "Usage: /jobs, /jobs post, or /jobs pull|release",
                 ));
             };
             if command.admin_only() && !self.is_admin {
@@ -3859,7 +4010,7 @@ impl ChatState {
             self.clear_composer_after_submit();
             let Some(command) = parsed else {
                 return Some(Banner::error(
-                    "Usage: /haunt, or /haunt on|off|live on|live off|glitch|name|replay|invite|reset",
+                    "Usage: /haunt, or /haunt arm|glitch|name|replay|invite|reset|welcome",
                 ));
             };
             self.requested_haunt = Some(command);
@@ -3887,22 +4038,6 @@ impl ChatState {
                 }
                 None => {
                     return Some(Banner::error("Usage: /watch @user"));
-                }
-            }
-        }
-
-        if let Some(parsed) = parse_status_command(&body) {
-            self.clear_composer_after_submit();
-            match parsed {
-                StatusParse::Request(request) => {
-                    self.requested_status = Some(request);
-                    return None;
-                }
-                StatusParse::Invalid => {
-                    return Some(Banner::error(&format!(
-                        "Usage: /status [{}] [minutes], or /status off",
-                        Status::word_list()
-                    )));
                 }
             }
         }
@@ -4098,21 +4233,34 @@ impl ChatState {
         if let Some(rest) = body.trim().strip_prefix("/brb")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
+            let chat_body = match rest.trim() {
+                "" => "🌙 brb".to_string(),
+                reason => format!("🌙 brb: {reason}"),
+            };
+            // Snapshot the composer's room before `clear_composer_after_submit`
+            // wipes it. Only the composer's room, like `/me`: a stale visible
+            // or selected room would post the announcement somewhere unseen.
+            let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
-            // `/brb` is exactly `/status away` with no minutes. It used to take
-            // a message, so trailing text is told why rather than "unknown".
-            match rest.trim() {
-                "" => {
-                    self.requested_status = Some(StatusRequest::Apply(StatusChange::Set {
-                        status: Status::Away,
-                        minutes: None,
-                    }));
-                    return None;
-                }
-                _ => {
-                    return Some(Banner::error("/brb takes no message, it sets /status away"));
-                }
-            }
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Use /brb from inside a room"));
+            };
+            let request_id = Uuid::now_v7();
+            self.service
+                .send_message_with_reply_task(super::svc::SendMessageTask {
+                    user_id: self.user_id,
+                    room_id,
+                    room_slug: self.room_slug(room_id),
+                    body: chat_body,
+                    reply_to_message_id: None,
+                    request_id,
+                    is_admin: self.is_admin,
+                });
+            self.pending_send_notices.push_back(request_id);
+            // `/brb` goes away now instead of after the idle threshold, and
+            // the next key comes back.
+            self.requested_brb = true;
+            return None;
         }
 
         if let Some((kind, text)) = parse_report_command(&body) {
@@ -4584,7 +4732,10 @@ impl ChatState {
             && !body.is_empty()
         {
             let request_id = Uuid::now_v7();
-            let reply_to_message_id = self.reply_target.as_ref().map(|reply| reply.message_id);
+            let reply_to_message_id = match self.reply_target.as_ref().map(|reply| reply.to) {
+                Some(ReplyTo::Message(message_id)) => Some(message_id),
+                Some(ReplyTo::Article) | None => None,
+            };
             // Peek the ghost-bot ladders on the typed body, before the reply
             // quote is prepended, matching what the responders react to
             // (quoted lines never count as mentions on their side either).
@@ -4596,7 +4747,6 @@ impl ChatState {
             } else {
                 body
             };
-            self.sent_regular_message = true;
             if let Some(message_id) = self.edited_message_id {
                 self.service.edit_message_task(
                     self.user_id,
@@ -5168,6 +5318,7 @@ impl ChatState {
 
     pub fn tick(&mut self) -> ChatTick {
         self.sync_refresh_room_id();
+        self.forget_stale_rail_scroll();
         // Peek every event source before draining: anything queued may change
         // render-visible chat state (messages, unread badges, tab lists), so
         // it must count as changed. Over-reporting here only costs a frame;
@@ -5464,7 +5615,7 @@ impl ChatState {
     pub(crate) fn username_mention_matches(&self, query_lower: &str) -> Vec<MentionMatch> {
         let active_users = self.active_users.as_ref();
         rank_mention_matches(self.all_usernames.as_ref(), query_lower, || {
-            online_username_set(active_users)
+            username_presence(active_users)
         })
     }
 
@@ -5666,19 +5817,10 @@ impl ChatState {
         &self.ignored_user_ids
     }
 
-    pub fn active_friend_names(&self) -> Vec<String> {
-        self.active_friends()
-            .into_iter()
-            .map(|friend| friend.username)
-            .collect()
-    }
-
-    /// Connected friends, the most recent login first, then by name.
-    pub fn active_friends(&self) -> Vec<ActiveFriend> {
-        let Some(active_users) = &self.active_users else {
-            return Vec::new();
-        };
-        let active_users = active_users.lock_recover();
+    /// Connected friends: here before away, then the most recent login
+    /// first, then by name. Reads a roster the caller already holds, so the
+    /// 1Hz presence edge (`tick.rs`) takes the lock once for everything.
+    pub fn active_friends(&self, active_users: &HashMap<Uuid, ActiveUser>) -> Vec<ActiveFriend> {
         let mut friends: Vec<ActiveFriend> = self
             .friend_user_ids
             .iter()
@@ -5688,16 +5830,21 @@ impl ChatState {
                     username: user.username.clone(),
                     audio_source: user.audio_source,
                     online_since: user.last_login_at,
+                    away: crate::app::common::away::user_is_away(user),
                 })
             })
             .collect();
+        // Here before away, so the friends who can answer read first.
         friends.sort_by(|left, right| {
-            right.online_since.cmp(&left.online_since).then_with(|| {
-                left.username
-                    .bytes()
-                    .map(|b| b.to_ascii_lowercase())
-                    .cmp(right.username.bytes().map(|b| b.to_ascii_lowercase()))
-            })
+            left.away
+                .cmp(&right.away)
+                .then_with(|| right.online_since.cmp(&left.online_since))
+                .then_with(|| {
+                    left.username
+                        .bytes()
+                        .map(|b| b.to_ascii_lowercase())
+                        .cmp(right.username.bytes().map(|b| b.to_ascii_lowercase()))
+                })
         });
         friends
     }
@@ -6250,12 +6397,6 @@ impl ChatState {
                     if self.user_id == user_id {
                         banner = Some(Banner::success("Message deleted"));
                     }
-                }
-                ChatEvent::MessageRemoved {
-                    room_id,
-                    message_id,
-                } => {
-                    self.remove_message(room_id, message_id);
                 }
                 ChatEvent::MessageEdited {
                     message,
@@ -7108,13 +7249,16 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// A connected friend, as the Zen Friends tile draws them.
+/// A connected friend, as the sidebar friends row and the Zen Friends tile
+/// draw them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveFriend {
     pub user_id: Uuid,
     pub username: String,
     pub audio_source: late_core::models::user::AudioSource,
     pub online_since: Instant,
+    /// Every session of theirs is away (`common/away.rs`).
+    pub away: bool,
 }
 
 /// The ticker queue length: enough to fill the one-row ticker on any sane
@@ -7742,82 +7886,6 @@ fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
     Some(Some(PairRequest::Directed(username.to_string())))
 }
 
-/// Well past any real focus block, and short enough that the HUD badge stays
-/// two-digit minutes.
-const STATUS_MAX_MINUTES: u32 = 180;
-
-/// A `/status` request drained by `handle_post_submit_requests`. The status
-/// itself lives on `App` (not here): `tick.rs` expires it and the status HUD
-/// draws it from every screen, not just chat.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StatusRequest {
-    /// A change to apply directly. Split from `OpenPicker` so the function
-    /// that resolves one cannot be handed a request that sets nothing.
-    Apply(StatusChange),
-    /// `/status` bare: `App` opens the picker.
-    OpenPicker,
-}
-
-/// A `/status` change that resolves to a new status without asking anything
-/// else of the user.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StatusChange {
-    /// `minutes: None` is an open-ended status, cleared by the next message.
-    Set {
-        status: Status,
-        minutes: Option<u32>,
-    },
-    Clear,
-}
-
-/// Outcome of parsing a `/status` line. Same shape as [`PetnameParse`]: a
-/// named variant per outcome instead of a nested `Option`, so a call site
-/// cannot read "malformed" as "absent".
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StatusParse {
-    Request(StatusRequest),
-    /// An unknown status word, an out-of-range duration, or trailing junk.
-    Invalid,
-}
-
-/// `None` when the line isn't `/status` at all.
-///
-/// `/status`, `/status <word>`, `/status <word> <minutes>`, `/status off`.
-/// Nothing else: the word comes from a closed set, and a bad one is a usage
-/// banner rather than a silent fallback to some default.
-fn parse_status_command(input: &str) -> Option<StatusParse> {
-    let rest = input.trim().strip_prefix("/status")?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let mut words = rest.split_whitespace();
-    let Some(word) = words.next() else {
-        return Some(StatusParse::Request(StatusRequest::OpenPicker));
-    };
-    if word.eq_ignore_ascii_case("off") {
-        return Some(match words.next() {
-            None => StatusParse::Request(StatusRequest::Apply(StatusChange::Clear)),
-            Some(_) => StatusParse::Invalid,
-        });
-    }
-    let Some(status) = Status::parse(word) else {
-        return Some(StatusParse::Invalid);
-    };
-    let minutes = match words.next() {
-        None => None,
-        Some(digits) => match digits.parse::<u32>() {
-            Ok(parsed) if (1..=STATUS_MAX_MINUTES).contains(&parsed) => Some(parsed),
-            // Out of range (including a digit run too long for u32) is a
-            // usage banner rather than a silent clamp.
-            _ => return Some(StatusParse::Invalid),
-        },
-    };
-    Some(match words.next() {
-        None => StatusParse::Request(StatusRequest::Apply(StatusChange::Set { status, minutes })),
-        Some(_) => StatusParse::Invalid,
-    })
-}
-
 fn parse_me_command(input: &str) -> Option<Option<String>> {
     let trimmed = input.trim();
     if trimmed == "/me" {
@@ -8133,25 +8201,33 @@ fn unknown_slash_command(input: &str) -> Option<&str> {
     Some(command)
 }
 
-fn online_username_set(active_users: Option<&ActiveUsers>) -> HashSet<String> {
+/// Every connected user by lowercased name, here or away. A name missing
+/// from the map is offline.
+fn username_presence(active_users: Option<&ActiveUsers>) -> HashMap<String, MatchPresence> {
     let Some(active_users) = active_users else {
-        return HashSet::new();
+        return HashMap::new();
     };
     let guard = active_users.lock_recover();
     guard
         .values()
-        .map(|u| u.username.to_ascii_lowercase())
+        .map(|user| {
+            let presence = match crate::app::common::away::user_is_away(user) {
+                true => MatchPresence::Away,
+                false => MatchPresence::Here,
+            };
+            (user.username.to_ascii_lowercase(), presence)
+        })
         .collect()
 }
 
 pub(crate) fn rank_mention_matches(
     all_usernames: &[String],
     query_lower: &str,
-    online_set: impl FnOnce() -> HashSet<String>,
+    presence_by_name: impl FnOnce() -> HashMap<String, MatchPresence>,
 ) -> Vec<MentionMatch> {
     // Lowercase each candidate once and keep it paired with the original
-    // display name; reused for the prefix filter, the online lookup, and the
-    // alphabetical tie-breaker.
+    // display name; reused for the prefix filter, the presence lookup, and
+    // the alphabetical tie-breaker.
     let mut filtered: Vec<(String, String)> = all_usernames
         .iter()
         .filter_map(|name| {
@@ -8165,16 +8241,19 @@ pub(crate) fn rank_mention_matches(
         return Vec::new();
     }
 
-    let online = online_set();
+    let presence_by_name = presence_by_name();
     let mut matches: Vec<(String, MentionMatch)> = filtered
         .drain(..)
         .map(|(lower, name)| {
-            let is_online = online.contains(&lower);
+            let presence = presence_by_name
+                .get(&lower)
+                .copied()
+                .unwrap_or(MatchPresence::Offline);
             (
                 lower,
                 MentionMatch {
                     name,
-                    online: is_online,
+                    presence,
                     prefix: "@",
                     description: None,
                 },
@@ -8182,7 +8261,9 @@ pub(crate) fn rank_mention_matches(
         })
         .collect();
     matches.sort_by(|(a_lower, a), (b_lower, b)| {
-        b.online.cmp(&a.online).then_with(|| a_lower.cmp(b_lower))
+        a.presence
+            .cmp(&b.presence)
+            .then_with(|| a_lower.cmp(b_lower))
     });
     matches.into_iter().map(|(_, m)| m).collect()
 }
@@ -8213,7 +8294,7 @@ pub(crate) fn rank_room_name_matches<'a>(
         .into_iter()
         .map(|(_, name)| MentionMatch {
             name,
-            online: true,
+            presence: MatchPresence::Here,
             prefix: "#",
             description: None,
         })
@@ -8243,13 +8324,17 @@ fn format_active_user_lines(
             } else {
                 "@"
             };
+            let away = match crate::app::common::away::user_is_away(user) {
+                true => format!(" {}", crate::app::common::away::AWAY_GLYPH),
+                false => String::new(),
+            };
             if user.connection_count > 1 {
                 format!(
-                    "{prefix}{} ({} sessions)",
+                    "{prefix}{}{away} ({} sessions)",
                     user.username, user.connection_count
                 )
             } else {
-                format!("{prefix}{}", user.username)
+                format!("{prefix}{}{away}", user.username)
             }
         })
         .collect()
@@ -8290,29 +8375,13 @@ fn adjacent_composer_room(
     Some(rooms[wrapped_index(current, delta, rooms.len())])
 }
 
-fn news_modal_source_from_articles(
-    articles: &[ArticleFeedItem],
-    url: &str,
-) -> Option<(NewsPayload, String, chrono::DateTime<chrono::Utc>, Uuid)> {
-    let url = url.trim();
-    if url.is_empty() {
-        return None;
-    }
-
-    let item = articles
-        .iter()
-        .find(|item| item.article.url.trim() == url)?;
-    Some((
-        NewsPayload {
-            title: item.article.title.clone(),
-            summary: item.article.summary.clone(),
-            url: item.article.url.clone(),
-            ascii_art: item.article.ascii_art.clone(),
-        },
-        modal_author_label(Some(&item.author_username), item.article.user_id),
-        item.article.created,
-        item.article.id,
-    ))
+/// `mat - 2m ago - Tue 2026-09-29 21:00 UTC`, under the article modal's title.
+fn news_modal_meta(author: &str, created: chrono::DateTime<chrono::Utc>) -> String {
+    let relative = crate::app::common::primitives::format_relative_time(created);
+    format!(
+        "{author} - {relative} - {}",
+        created.format("%a %Y-%m-%d %H:%M UTC")
+    )
 }
 
 fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
@@ -8694,10 +8763,6 @@ fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Opt
 }
 
 fn reply_preview_text(body: &str) -> String {
-    if let Some(title) = news_reply_preview_text(body) {
-        return title;
-    }
-
     if let Some((kind, text)) = parse_report_payload(body) {
         let first_line = text.lines().find_map(|line| {
             let trimmed = line.trim();
@@ -8776,23 +8841,6 @@ fn global_char_to_line_col(text: &str, target: usize) -> (usize, usize) {
         }
     }
     (line, col)
-}
-
-fn news_reply_preview_text(body: &str) -> Option<String> {
-    let trimmed = body.trim_start();
-    if !trimmed.starts_with(NEWS_MARKER) {
-        return None;
-    }
-
-    let raw = trimmed[NEWS_MARKER.len()..].trim_start();
-    let title = raw
-        .split(" || ")
-        .next()
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("news update");
-
-    Some(truncate_reply_preview(title))
 }
 
 fn truncate_reply_preview(text: &str) -> String {

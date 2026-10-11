@@ -21,6 +21,7 @@ use late_core::models::{
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
+    statusline::default_statusline_components,
     user::{RightSidebarMode, User, default_right_sidebar_components},
 };
 use std::collections::HashMap;
@@ -113,12 +114,17 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            show_watch_chat: true,
+            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -732,12 +738,17 @@ async fn room_tail_task_loads_favorite_room_history() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            show_watch_chat: true,
+            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -1955,7 +1966,7 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: Some(peer_ip),
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -2039,7 +2050,7 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: Some(peer_ip),
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -2160,7 +2171,7 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -2865,7 +2876,7 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -2942,7 +2953,7 @@ async fn mod_slow_command_creates_row_audits_and_notifies_target_session() {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -3043,7 +3054,7 @@ async fn mod_server_slow_command_creates_server_row_and_notifies_target_session(
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -3135,7 +3146,7 @@ async fn grant_mod_command_updates_active_session_permissions() {
                 token: session_token.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: std::time::Instant::now(),
@@ -3208,7 +3219,7 @@ async fn admin_ultimate_cast_command_broadcasts_to_active_sessions_and_audits() 
                     token: actor_token.clone(),
                     fingerprint: Some(actor.fingerprint.clone()),
                     peer_ip: None,
-                    status: None,
+                    away: false,
                 }],
                 connection_count: 1,
                 last_login_at: std::time::Instant::now(),
@@ -3224,7 +3235,7 @@ async fn admin_ultimate_cast_command_broadcasts_to_active_sessions_and_audits() 
                     token: target_token.clone(),
                     fingerprint: Some(target.fingerprint.clone()),
                     peer_ip: None,
-                    status: None,
+                    away: false,
                 }],
                 connection_count: 1,
                 last_login_at: std::time::Instant::now(),
@@ -5201,12 +5212,34 @@ async fn deadchannel_join_requires_the_invitation() {
             .expect("find runner")
             .expect("runner created by the invited join");
     crate::app::deadchannel::runner::state::Look::parse(&runner.look).expect("stored look parses");
-    service.open_public_room_task(user.id, "deadchannel".to_string());
-    match timeout(Duration::from_secs(2), events.recv())
+
+    // The voice welcomes the new runner on the wire, by mention, and tells
+    // them the way down and the way out.
+    let welcome = wait_for_message_containing(&test_db.db, room_id, "welcome to the wire").await;
+    assert!(welcome.starts_with("@dc-hopeful."), "{welcome}");
+    assert!(
+        welcome.contains("0, then 0 again. the street explains the rest."),
+        "{welcome}"
+    );
+    assert!(welcome.contains("/leave"), "{welcome}");
+    assert!(welcome.contains("/join #deadchannel"), "{welcome}");
+    let voice = service
+        .ensure_first_contact_voice()
         .await
-        .expect("event timeout")
-        .expect("event")
-    {
+        .expect("voice exists after the welcome");
+    let voice_lines = |messages: &[ChatMessage]| {
+        messages
+            .iter()
+            .filter(|message| message.user_id == voice.id)
+            .count()
+    };
+    let messages = ChatMessage::list_recent(&client, room_id, 20)
+        .await
+        .expect("list messages");
+    assert_eq!(voice_lines(&messages), 1);
+
+    service.open_public_room_task(user.id, "deadchannel".to_string());
+    match next_room_event(&mut events).await {
         ChatEvent::RoomJoined { user_id, .. } => assert_eq!(user_id, user.id),
         other => panic!("expected RoomJoined, got {other:?}"),
     }
@@ -5222,28 +5255,22 @@ async fn deadchannel_join_requires_the_invitation() {
     // replica reads, so `App::is_runner` goes false on all of them, and the
     // portrait goes with it.
     service.leave_room_task(user.id, room_id, "deadchannel".to_string());
-    match timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event")
-    {
+    match next_room_event(&mut events).await {
         ChatEvent::RoomLeft { user_id, .. } => assert_eq!(user_id, user.id),
         other => panic!("expected RoomLeft, got {other:?}"),
     }
     assert!(
-        late_core::models::deadchannel_runner::DeadchannelRunner::list_looks(&client)
+        late_core::models::deadchannel_runner::DeadchannelRunner::list_standing(&client)
             .await
             .expect("list looks")
             .is_empty()
     );
+    // Going dark is news on the wire.
+    wait_for_message_containing(&test_db.db, room_id, "dc-hopeful went dark.").await;
 
     // The character waits: rejoining gets the same face back, not a new one.
     service.open_public_room_task(user.id, "deadchannel".to_string());
-    match timeout(Duration::from_secs(2), events.recv())
-        .await
-        .expect("event timeout")
-        .expect("event")
-    {
+    match next_room_event(&mut events).await {
         ChatEvent::RoomJoined { user_id, .. } => assert_eq!(user_id, user.id),
         other => panic!("expected RoomJoined, got {other:?}"),
     }
@@ -5255,6 +5282,30 @@ async fn deadchannel_join_requires_the_invitation() {
     assert_eq!(returned.id, runner.id);
     assert_eq!(returned.look, runner.look);
     assert!(returned.left_at.is_none());
+    // And so is coming back.
+    wait_for_message_containing(&test_db.db, room_id, "dc-hopeful is back on the wire.").await;
+
+    // Neither the duplicate join nor the return is a first time: the
+    // welcome was posted once; with the leave and the return the voice has
+    // said exactly three things.
+    let messages = ChatMessage::list_recent(&client, room_id, 20)
+        .await
+        .expect("list messages after the rejoins");
+    assert_eq!(voice_lines(&messages), 3);
+}
+
+/// The next chat event that is not a message landing: the voice's welcome
+/// rides the same broadcast as the room events these tests wait on.
+async fn next_room_event(events: &mut tokio::sync::broadcast::Receiver<ChatEvent>) -> ChatEvent {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        if !matches!(event, ChatEvent::MessageCreated { .. }) {
+            return event;
+        }
+    }
 }
 
 #[tokio::test]

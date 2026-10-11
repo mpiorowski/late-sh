@@ -2,6 +2,7 @@ name "boxfish"
 title "a smaller fish"
 description "a boxy body, larger eye, visible pectoral fin, beaky mouth, and curved tail"
 sauce author=mevanlc date=20260504 license=CCBYSA4.0
+mini left="<o(" right=")o>"
 
 count 2
 

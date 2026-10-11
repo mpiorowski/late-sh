@@ -1,11 +1,34 @@
-//! Keys while The Late Edition is up: scroll, close. Everything else is
-//! swallowed, so the paper reads like a modal and not a transparency.
+//! Keys while The Late Edition is up: scroll, leaf to the next printed
+//! edition, close. Everything else is swallowed, so the paper reads like a
+//! modal and not a transparency.
 
-use crate::app::input::ParsedInput;
+use late_core::models::paper::EditionStep;
+use ratatui::layout::Position;
+
+use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 use crate::app::state::App;
+
+use super::state::PaperModal;
+use super::svc::browse;
 
 pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
     match event {
+        ParsedInput::Mouse(mouse) => {
+            if app.interaction_mode.mouse_enabled()
+                && app
+                    .paper
+                    .modal
+                    .as_ref()
+                    .is_some_and(|modal| handle_mouse(modal, *mouse))
+            {
+                app.paper.close_modal();
+            }
+        }
+        ParsedInput::FocusLost => {
+            if let Some(modal) = &app.paper.modal {
+                modal.cancel_drag();
+            }
+        }
         ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             app.paper.close_modal();
         }
@@ -23,6 +46,12 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
                 modal.scroll(-1);
             }
         }
+        ParsedInput::Byte(b'h' | b'H')
+        | ParsedInput::Char('h' | 'H')
+        | ParsedInput::Arrow(b'D') => browse(app, EditionStep::Earlier),
+        ParsedInput::Byte(b'l' | b'L')
+        | ParsedInput::Char('l' | 'L')
+        | ParsedInput::Arrow(b'C') => browse(app, EditionStep::Later),
         ParsedInput::PageDown => {
             if let Some(modal) = app.paper.modal.as_mut() {
                 modal.scroll(10);
@@ -35,9 +64,46 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         }
         ParsedInput::Home => {
             if let Some(modal) = app.paper.modal.as_mut() {
-                modal.scroll_offset = 0;
+                modal.scroll_to_top();
             }
         }
         _ => {}
     }
 }
+
+/// Returns true only for the close control; the App owns request cancellation.
+fn handle_mouse(modal: &PaperModal, mouse: MouseEvent) -> bool {
+    if mouse.kind == MouseEventKind::Up {
+        modal.cancel_drag();
+        return false;
+    }
+    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
+        return false;
+    };
+    let point = Position::new(x, y);
+    let viewport = modal.viewport();
+    match mouse.kind {
+        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+            modal.cancel_drag();
+            if viewport.close.contains(point) {
+                return true;
+            }
+            let thumb = modal.thumb();
+            if thumb.contains(point) {
+                modal.begin_drag(y);
+            } else if viewport.track.contains(point) {
+                let page = viewport.body.height.min(i16::MAX as u16) as i16;
+                modal.scroll(if y < thumb.y { -page } else { page });
+            }
+        }
+        MouseEventKind::Drag if mouse.button == Some(MouseButton::Left) => modal.drag_to(y),
+        MouseEventKind::ScrollUp if viewport.popup.contains(point) => modal.scroll(-3),
+        MouseEventKind::ScrollDown if viewport.popup.contains(point) => modal.scroll(3),
+        _ => {}
+    }
+    false
+}
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

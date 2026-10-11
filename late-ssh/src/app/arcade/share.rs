@@ -103,6 +103,8 @@ pub enum ShareCardKind {
     RubiksCube,
     SlidingPuzzle,
     Day,
+    /// The undercity's road (`deadchannel/fight/share.rs`).
+    Road,
 }
 
 /// Render a card as the text the player pastes.

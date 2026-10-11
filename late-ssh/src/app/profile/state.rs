@@ -18,6 +18,8 @@ pub struct ProfileState {
     profile_service: ProfileService,
     user_id: Uuid,
     pub(crate) profile: Profile,
+    /// A dismissal before the initial profile arrives must not save a blank draft.
+    pending_artboard_disclaimer_dismissal: bool,
     snapshot_rx: watch::Receiver<ProfileSnapshot>,
     event_rx: broadcast::Receiver<ProfileEvent>,
 }
@@ -42,6 +44,7 @@ impl ProfileState {
             profile_service,
             user_id,
             profile,
+            pending_artboard_disclaimer_dismissal: false,
             snapshot_rx,
             event_rx,
         }
@@ -77,6 +80,23 @@ impl ProfileState {
         };
         self.save_profile();
         added
+    }
+
+    /// Flip whether this player sees their watchers' chat under a running
+    /// door game. Returns the new value.
+    pub fn toggle_show_watch_chat(&mut self) -> bool {
+        self.profile.show_watch_chat ^= true;
+        self.save_profile();
+        self.profile.show_watch_chat
+    }
+
+    pub(crate) fn dismiss_artboard_disclaimer(&mut self) {
+        self.profile.artboard_disclaimer = false;
+        if self.profile.username.is_empty() {
+            self.pending_artboard_disclaimer_dismissal = true;
+        } else {
+            self.save_profile();
+        }
     }
 
     pub fn move_favorite_room(&mut self, room_id: Uuid, delta: isize) -> bool {
@@ -125,6 +145,10 @@ impl ProfileState {
         // state, so it counts as changed.
         let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
+        if self.pending_artboard_disclaimer_dismissal && !self.profile.username.is_empty() {
+            self.pending_artboard_disclaimer_dismissal = false;
+            self.dismiss_artboard_disclaimer();
+        }
         ProfileTick {
             banner: self.drain_events(),
             changed,
@@ -204,12 +228,17 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_right_sidebar: profile.show_right_sidebar,
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
+        statusline_components: profile.statusline_components.clone(),
         show_room_list_sidebar: profile.show_room_list_sidebar,
         room_list_mode: profile.room_list_mode,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
         landing_page: profile.landing_page,
         paper_at_login: profile.paper_at_login,
+        screensaver: profile.screensaver,
+        show_watch_chat: profile.show_watch_chat,
+        art_splash_mode: profile.art_splash_mode,
+        artboard_disclaimer: profile.artboard_disclaimer,
         terminal_images: profile.terminal_images,
         hidden_award_categories: profile.hidden_award_categories.clone(),
         show_flag_fallback: profile.show_flag_fallback,

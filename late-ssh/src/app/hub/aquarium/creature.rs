@@ -148,6 +148,8 @@ pub(crate) const FRY_CREATURE: &str = "fry";
 /// The bud that comes up on the floor every two weeks; cut or rooted, it
 /// is never sold.
 pub(crate) const SPROUT_CREATURE: &str = "sprout";
+/// Widest a `mini` glyph may be, in cells: the sidebar tank is 21 wide.
+pub(crate) const MINI_MAX_WIDTH: usize = 3;
 pub(crate) const IDLE_ACTION_INTERVAL: u64 = 4;
 pub(crate) const DEFAULT_IDLE_MOVE_CHANCE: f64 = 0.30;
 pub(crate) const DEFAULT_IDLE_TURN_CHANCE: f64 = 0.05;
@@ -156,6 +158,8 @@ pub(crate) const IDLE_CHANCE_STEP: f64 = 0.05;
 #[derive(Debug, Clone)]
 pub(crate) struct CreatureDef {
     pub name: String,
+    /// The one-to-three-cell stand-in the sidebar tank draws.
+    pub mini: MiniGlyph,
     pub kindom: Kindom,
     pub constraints: CreatureConstraints,
     pub preferences: CreaturePreferences,
@@ -169,6 +173,15 @@ pub(crate) struct CreatureDef {
     pub colors: Vec<Color>,
     default_movement: bool,
     school_rearrange_chance: Option<f64>,
+}
+
+/// A creature at sidebar size: `mini left="<'" right="'>"` in its `.kdl`,
+/// the glyph for each way it swims. Required on every creature; a plant
+/// gives the same glyph twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MiniGlyph {
+    pub left: String,
+    pub right: String,
 }
 
 impl CreatureDef {
@@ -1049,6 +1062,7 @@ fn build_creature_from_doc(
     if variants.is_empty() {
         return Err(anyhow!("{} has no drawable pose nodes", path.display()));
     }
+    let mini = parse_mini(&doc, path)?;
     let four_way_swimmer = has_pose(&variants, "left")
         && has_pose(&variants, "right")
         && has_pose(&variants, "face")
@@ -1056,6 +1070,7 @@ fn build_creature_from_doc(
 
     Ok(CreatureDef {
         name,
+        mini,
         kindom: template.kindom,
         constraints: template.constraints,
         preferences: template.preferences,
@@ -1162,6 +1177,29 @@ fn doc_int_arg(doc: &KdlDocument, node_name: &str) -> Option<i128> {
     doc.get(node_name)
         .and_then(|node| node.get(0))
         .and_then(KdlValue::as_integer)
+}
+
+fn parse_mini(doc: &KdlDocument, path: &Path) -> Result<MiniGlyph> {
+    let Some(node) = doc.get("mini") else {
+        return Err(anyhow!("{} has no `mini` glyph", path.display()));
+    };
+    let side = |key: &str| -> Result<String> {
+        let Some(glyph) = node.get(key).and_then(KdlValue::as_string) else {
+            return Err(anyhow!("{} `mini` needs a `{key}` string", path.display()));
+        };
+        let width = unicode_width::UnicodeWidthStr::width(glyph);
+        if width == 0 || width > MINI_MAX_WIDTH || glyph.contains('\n') {
+            return Err(anyhow!(
+                "{} `mini {key}` must be one row of 1 to {MINI_MAX_WIDTH} cells",
+                path.display()
+            ));
+        }
+        Ok(glyph.to_string())
+    };
+    Ok(MiniGlyph {
+        left: side("left")?,
+        right: side("right")?,
+    })
 }
 
 fn parse_colors(doc: &KdlDocument, path: &Path) -> Result<Vec<Color>> {

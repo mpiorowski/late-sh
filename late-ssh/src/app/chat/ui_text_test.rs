@@ -16,22 +16,6 @@ fn lines_to_strings(lines: &[Line]) -> Vec<String> {
 }
 
 #[test]
-fn parse_news_payload_splits_marker_payload() {
-    let body = "---NEWS--- Title || Summary line || https://example.com || .:-\\n+*#";
-    let payload = parse_news_payload(body).expect("payload");
-    assert_eq!(payload.title, "Title");
-    assert_eq!(payload.summary, "Summary line");
-    assert_eq!(payload.url, "https://example.com");
-    assert_eq!(payload.ascii_art, ".:-\n+*#");
-}
-
-#[test]
-fn parse_news_payload_requires_marker_at_start() {
-    assert!(parse_news_payload("hello ---NEWS--- Fake || summary || url || ascii").is_none());
-    assert!(parse_news_payload("  ---NEWS--- Title || Summary || url || ascii").is_some());
-}
-
-#[test]
 fn parse_report_payload_requires_marker_at_start() {
     assert_eq!(
         parse_report_payload("---BUG--- the door ate my hat"),
@@ -116,82 +100,6 @@ fn format_news_ascii_art_for_display_allows_short_or_empty_art() {
     );
     assert!(format_news_ascii_art_for_display("\n  \n", 6).is_empty());
     assert!(format_news_ascii_art_for_display("one", 0).is_empty());
-}
-
-#[test]
-fn wrap_news_to_lines_renders_rules_with_ascii_left() {
-    let lines = wrap_news_to_lines(
-        "[1m]",
-        "mat: ",
-        120,
-        Style::default(),
-        NewsPayload {
-            title: "Title".to_string(),
-            summary: "• first bullet".to_string(),
-            url: "https://example.com".to_string(),
-            ascii_art: ".:-\n+*#".to_string(),
-        },
-    );
-    assert!(lines.len() >= 4);
-    let rendered = lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    for row in lines_to_strings(&lines) {
-        assert!(
-            row.starts_with(' '),
-            "custom card row lost left padding: {row:?}"
-        );
-    }
-    assert!(rendered.contains("shared news"));
-    assert!(!rendered.contains("┌"));
-    assert!(!rendered.contains("┐"));
-    assert!(!rendered.contains("└"));
-    assert!(!rendered.contains("┘"));
-    assert!(rendered.contains("──"));
-    assert!(
-        rendered
-            .lines()
-            .filter(|line| line.trim().chars().all(|ch| ch == '─'))
-            .count()
-            >= 2
-    );
-    assert!(rendered.contains(".:-"));
-    assert!(rendered.contains(" │ "));
-    assert!(rendered.contains("Title"));
-    assert!(rendered.contains("first bullet"));
-    assert!(rendered.contains("https://example.com"));
-}
-
-#[test]
-fn wrap_news_to_lines_respects_terminal_cell_width() {
-    let width = 58;
-    let lines = wrap_news_to_lines(
-        "[4 mins ago]",
-        "@artboard",
-        width,
-        Style::default(),
-        NewsPayload {
-            title: "Nobody understands the point of hybrid cars".to_string(),
-            summary: "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
-                .to_string(),
-            url: "https://www.youtube.com/watch?v=KnUFH5GX_fI".to_string(),
-            ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .".to_string(),
-        },
-    );
-
-    for rendered in lines_to_strings(&lines) {
-        assert!(
-            UnicodeWidthStr::width(rendered.as_str()) <= width,
-            "line overflowed {width} cells: {rendered:?}"
-        );
-    }
 }
 
 #[test]
@@ -411,6 +319,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
         crown_range: None,
         range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
         title_range: None,
+        runner: None,
         word: None,
         name_style: None,
     };
@@ -450,6 +359,7 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
         crown_range: None,
         range: (0, 99),
         title_range: None,
+        runner: None,
         word: None,
         name_style: None,
     };
@@ -473,6 +383,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
         crown_range: None,
         range: (0, 5),
         title_range: None,
+        runner: None,
         word: None,
         name_style: Some(NameStyle::Solid(Color::Rgb(255, 200, 80))),
     };
@@ -511,6 +422,7 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
         crown_range: None,
         range: (0, 5),
         title_range: None,
+        runner: None,
         word: Some(("wasted", Color::Rgb(120, 40, 35))),
         name_style: None,
     };
@@ -547,6 +459,7 @@ fn wrap_message_omits_drunk_word_when_absent() {
         crown_range: None,
         range: (0, 5),
         title_range: None,
+        runner: None,
         word: None,
         name_style: None,
     };
@@ -571,4 +484,16 @@ fn composer_rows_soft_wrap_words() {
     let rows = build_composer_rows("hello wide world", 8);
     let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
     assert_eq!(texts, vec!["hello", "wide", "world"]);
+}
+
+#[test]
+fn nerd_font_glyphs_are_dropped_and_everything_else_kept() {
+    // BMP PUA (nf-dev-rust), supplementary PUA (nf-md), then emoji, box
+    // drawing and a flag that must all survive.
+    let text = "ship it \u{e7a8} now \u{f0001}! 🚀 ─ 🇵🇱";
+    assert_eq!(without_nerd_font_glyphs(text), "ship it  now ! 🚀 ─ 🇵🇱");
+    assert!(matches!(
+        without_nerd_font_glyphs("plain 🚀"),
+        std::borrow::Cow::Borrowed(_)
+    ));
 }

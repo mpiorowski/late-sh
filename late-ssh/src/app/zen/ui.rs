@@ -3,7 +3,6 @@
 //! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ratatui::{
@@ -14,23 +13,21 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use uuid::Uuid;
 
 use super::{
     bigclock,
-    layout::{self, BONSAI_STATUS_ROWS, FLOOR_ROWS},
+    layout::{self, FLOOR_ROWS},
     rows::{Headline, InboxRow},
     state::{BorderKind, TileKind, ZenState},
 };
 use late_core::models::aquarium_care::CARE_DAYS;
-use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::models::user::{AudioSource, RadioStation};
 
 use crate::app::{
-    audio::stations::{icecast_stream_display_name, radio_station_display_name},
     audio::viz::{Dance, EqState, dance_lines, render_eq},
     bonsai::{
-        render::{PREVIEW_WIDTH, apply_sway, canvas_lines, center_lines, render_preview_lines},
-        state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
+        render::{apply_sway, canvas_lines, center_lines},
+        state::{BonsaiState, CANVAS_WIDTH},
     },
     chat::state::{ActiveFriend, ActivityTickerEntry},
     chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat},
@@ -40,8 +37,10 @@ use crate::app::{
     },
     files::terminal_image::TerminalImageFrame,
     hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
+    live::panel::LivePanelProps,
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
-    pet::ui::{Neighbours, PetPose, PetView, WatchTarget, draw_pet_box},
+    pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
+    statusline::bar::ZenStatusRow,
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -77,6 +76,9 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
 /// Everything the Zen page reads, assembled once per frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
+    /// The bottom row: the user's status line and the page's keys. `None`
+    /// only on a page too small to draw.
+    pub status_row: Option<ZenStatusRow>,
     pub bonsai: &'a BonsaiState,
     /// The reef is drawn for everyone; `aquarium_owned` says whether the
     /// account has fish in it or gets the shop caption instead.
@@ -104,15 +106,19 @@ pub(crate) struct ZenView<'a> {
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
     pub activity: &'a [ActivityTickerEntry],
     pub active_friends: &'a [ActiveFriend],
-    /// Per-peer `/status` badges, for the Friends tile.
-    pub peer_statuses: &'a HashMap<Uuid, String>,
     /// The viewer's chips and today's care, for the Pulse tile.
     pub chip_balance: i64,
     pub care: Care,
     /// Built only while an Inbox or Headlines tile is on the page.
     pub inbox: Vec<InboxRow>,
     pub headlines: Vec<Headline>,
+    /// The Live panel's rows, the sidebar's, for the Live tile: it draws
+    /// them the same way and records the same click and key targets.
+    pub live_panel: LivePanelProps<'a>,
     pub wall_tick: usize,
+    /// The shared clock the ascii tiles are drawn at
+    /// (`ascii::piece::clock_now`).
+    pub ascii_clock: u64,
 }
 
 pub(crate) fn draw_rice(
@@ -121,11 +127,18 @@ pub(crate) fn draw_rice(
     mut view: ZenView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    if area.width < 40 || area.height < 12 {
-        crate::app::common::primitives::draw_too_small(frame, area, "Rice", 40, 12);
+    if !layout::rice_fits(area) {
+        crate::app::common::primitives::draw_too_small(
+            frame,
+            area,
+            "Rice",
+            layout::RICE_MIN_COLS,
+            layout::RICE_MIN_ROWS,
+        );
         return;
     }
-    let (tiles_area, hint_area) = layout::rice_areas(area);
+    let status_row = view.status_row.take();
+    let (tiles_area, row_area) = layout::rice_areas(area, status_row.is_some());
     // One frame per chat tile in layout order. Zoomed, the one tile drawn
     // is the focused one, so it takes the active chat's frame, not the
     // first.
@@ -148,6 +161,8 @@ pub(crate) fn draw_rice(
         } else {
             idx == zen.focus
         };
+        // Zoomed, the one rect drawn is the focused tile's.
+        let ordinal = zoomed.unwrap_or(idx);
         // Each chat tile takes the next frame in layout order and names
         // its room in the title, so `[` `]` walking the rooms shows where
         // you landed without reading the messages.
@@ -162,6 +177,7 @@ pub(crate) fn draw_rice(
             }
             TileKind::Bonsai
             | TileKind::Aquarium
+            | TileKind::Ascii
             | TileKind::Pet
             | TileKind::Music
             | TileKind::Clock
@@ -172,6 +188,7 @@ pub(crate) fn draw_rice(
             | TileKind::Pulse
             | TileKind::Inbox
             | TileKind::Headlines
+            | TileKind::Live
             | TileKind::Blank => None,
         };
         let title = match (kind, &chat_tile) {
@@ -179,6 +196,12 @@ pub(crate) fn draw_rice(
                 chat_tile_title(&tile.label, tile.stream_badge.as_deref(), rect.width)
             }
             (TileKind::Chat, None) => kind.label().to_string(),
+            // The tile names the piece it plays, so `[` `]` shows where
+            // you landed.
+            (TileKind::Ascii, _) => match zen.rice.root.piece_at(ordinal) {
+                Some(piece) => format!("{} · {}", kind.label(), piece.label()),
+                None => kind.label().to_string(),
+            },
             (
                 TileKind::Bonsai
                 | TileKind::Aquarium
@@ -192,6 +215,7 @@ pub(crate) fn draw_rice(
                 | TileKind::Pulse
                 | TileKind::Inbox
                 | TileKind::Headlines
+                | TileKind::Live
                 | TileKind::Blank,
                 _,
             ) => kind.label().to_string(),
@@ -203,6 +227,7 @@ pub(crate) fn draw_rice(
                 Some(care_bar_spans(view.aquarium_care.bar()))
             }
             TileKind::Aquarium
+            | TileKind::Ascii
             | TileKind::Chat
             | TileKind::Bonsai
             | TileKind::Pet
@@ -215,18 +240,24 @@ pub(crate) fn draw_rice(
             | TileKind::Pulse
             | TileKind::Inbox
             | TileKind::Headlines
+            | TileKind::Live
             | TileKind::Blank => None,
         };
         let keys = tile_keys(*kind, &view);
-        let inner = draw_tile_chrome(
-            frame,
-            *rect,
-            &title,
-            title_tail,
-            keys,
-            focused,
-            &zen.rice.look,
-        );
+        // Zoomed, the tile is the page: no border, no title, no keys, the
+        // way the screensaver draws a piece.
+        let inner = match zoomed {
+            Some(_) => *rect,
+            None => draw_tile_chrome(
+                frame,
+                *rect,
+                &title,
+                title_tail,
+                keys,
+                focused,
+                &zen.rice.look,
+            ),
+        };
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -236,6 +267,11 @@ pub(crate) fn draw_rice(
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
             TileKind::Aquarium => {
                 draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
+            }
+            TileKind::Ascii => {
+                if let Some(piece) = zen.rice.root.piece_at(ordinal) {
+                    crate::app::ascii::ui::draw_piece(frame, inner, piece, view.ascii_clock);
+                }
             }
             TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), neighbours),
             TileKind::Chat => draw_chat_tile(frame, inner, chat_tile, terminal_images),
@@ -255,9 +291,7 @@ pub(crate) fn draw_rice(
             TileKind::Activity => {
                 draw_activity_tile(frame, padded, view.activity, view.active_friends)
             }
-            TileKind::Friends => {
-                draw_friends_tile(frame, padded, view.active_friends, view.peer_statuses)
-            }
+            TileKind::Friends => draw_friends_tile(frame, padded, view.active_friends),
             TileKind::Pulse => draw_pulse_tile(
                 frame,
                 padded,
@@ -283,10 +317,15 @@ pub(crate) fn draw_rice(
                 zen.headlines_selected,
                 focused,
             ),
+            TileKind::Live => {
+                crate::app::live::panel::draw_live_inline(frame, pad_sides(inner), &view.live_panel)
+            }
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
-    draw_rice_hint(frame, hint_area, zen);
+    if let (Some(row), Some(row_area)) = (status_row, row_area) {
+        draw_status_row(frame, row_area, row);
+    }
     draw_kind_picker(frame, area, zen);
 }
 
@@ -377,10 +416,11 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
 
 /// The keys a tile answers to, named on the right of its title so the
 /// page explains itself in one place per tile; `t` hides the titles and
-/// the keys with them. The layout keys are the footer's.
+/// the keys with them. The layout keys are the guide's (`?`).
 fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'static str)] {
     match kind {
         TileKind::Bonsai => &[("w", "tend")],
+        TileKind::Ascii => &[("[ ]", "piece"), ("Enter", "pick"), ("z", "full")],
         TileKind::Aquarium if view.aquarium_owned => &[("a", "feed")],
         TileKind::Aquarium => &[],
         TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
@@ -395,6 +435,7 @@ fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'s
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
         TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
         TileKind::Headlines => &[("jk", "pick"), ("enter", "copy")],
+        TileKind::Live => &[("s1-4", "open")],
         TileKind::Clock
         | TileKind::Visualizer
         | TileKind::Activity
@@ -513,45 +554,15 @@ pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
     ]
 }
 
-fn draw_rice_hint(frame: &mut Frame, area: Rect, zen: &ZenState) {
-    if area.height == 0 {
-        return;
+/// The user's status line on the left, the layout keys on the right (the
+/// rest are in the guide, `?`); each tile names its own in its title.
+fn draw_status_row(frame: &mut Frame, area: Rect, row: ZenStatusRow) {
+    if let Some(bar) = row.bar {
+        frame.render_widget(Paragraph::new(bar), area);
     }
-    let focus = zen.focused_kind().map(TileKind::label).unwrap_or("nothing");
-    let mut spans = vec![
-        Span::styled(" ▌ ", Style::default().fg(theme::AMBER())),
-        Span::styled(
-            focus.to_string(),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            if zen.zoomed { " zoomed" } else { "" },
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ];
-    // The layout keys, the way out and the guide first, then by how often
-    // they are used; the tail is dropped hint by hint on a narrow terminal
-    // so nothing is cut in half. The tiles name their own keys.
-    let head_width: usize = spans.iter().map(Span::width).sum();
-    let hints = hint_line_fitting(
-        &[
-            ("Ctrl+F", "back"),
-            ("?", "keys"),
-            ("Tab ←→", "focus"),
-            ("space", "kind"),
-            ("S", "split"),
-            ("X", "close"),
-            ("z", "zoom"),
-            ("<>{}", "resize"),
-            ("r", "flip"),
-            ("R", "reset"),
-        ],
-        (area.width as usize).saturating_sub(head_width),
-    );
-    spans.extend(hints.spans);
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    if let Some(keys) = row.keys {
+        frame.render_widget(Paragraph::new(keys).right_aligned(), area);
+    }
 }
 
 /// `hint_line` with as many leading hints as fit in `width` cells.
@@ -563,79 +574,25 @@ fn hint_line_fitting(hints: &[(&str, &str)], width: usize) -> Line<'static> {
     hint_line(&hints[..keep])
 }
 
-/// The tree at its true size when the tile has the room, the preview
-/// otherwise; pot on the floor, status row under it.
+/// The care modal's canvas at its true size, never the preview, pot on the
+/// floor. No status row: the numbers live in the care modal (`w`), so the
+/// tile gives every row to the tree. A tile smaller than the canvas cuts it:
+/// the top rows go first, and the sides go evenly so the trunk stays centered.
 fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
-    if area.height < 4 || area.width < PREVIEW_WIDTH as u16 {
-        return;
-    }
-    let tree_area = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(BONSAI_STATUS_ROWS),
-    );
-    let full = tree_area.width >= CANVAS_WIDTH as u16 && tree_area.height >= CANVAS_HEIGHT as u16;
-    let (mut lines, block_width) = if full {
-        (canvas_lines(state, true), CANVAS_WIDTH)
-    } else {
-        (render_preview_lines(state), PREVIEW_WIDTH)
-    };
+    let mut lines = canvas_lines(state, true);
     apply_sway(&mut lines, wall_tick);
-    center_lines(&mut lines, tree_area.width as usize, block_width);
-    let visible = lines.len().min(tree_area.height as usize);
+    center_lines(&mut lines, area.width as usize, CANVAS_WIDTH);
+    let cut_left = CANVAS_WIDTH.saturating_sub(area.width as usize) / 2;
+    let visible = lines.len().min(area.height as usize);
     let dropped = lines.len() - visible;
     let mut lines: Vec<Line<'static>> = lines.into_iter().skip(dropped).collect();
-    let top_pad = (tree_area.height as usize).saturating_sub(lines.len());
+    let top_pad = (area.height as usize).saturating_sub(lines.len());
     let mut padded = Vec::with_capacity(top_pad + lines.len());
     for _ in 0..top_pad {
         padded.push(Line::from(""));
     }
     padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded), tree_area);
-
-    let status_area = Rect::new(area.x, tree_area.bottom(), area.width, BONSAI_STATUS_ROWS);
-    frame.render_widget(
-        Paragraph::new(bonsai_status_line(state)).centered(),
-        status_area,
-    );
-}
-
-fn bonsai_status_line(state: &BonsaiState) -> Line<'static> {
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let dot = || Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
-    let (label, color) = if !state.is_alive {
-        ("rip", theme::ERROR())
-    } else if state.water_stress >= 60 {
-        ("dry", theme::ERROR())
-    } else if state.water_stress >= 25 {
-        ("watch", theme::AMBER())
-    } else {
-        ("alive", theme::SUCCESS())
-    };
-    let mut spans = vec![
-        Span::styled(format!("day {}", state.age_days), dim),
-        dot(),
-        Span::styled(
-            format!("vigor {}", state.vigor),
-            Style::default().fg(theme::SUCCESS()),
-        ),
-        dot(),
-        Span::styled(
-            format!("stress {}", state.water_stress),
-            Style::default().fg(color),
-        ),
-        dot(),
-        Span::styled(label, Style::default().fg(color)),
-    ];
-    if let Some(message) = state.message.as_deref() {
-        spans.push(dot());
-        spans.push(Span::styled(
-            message.to_string(),
-            Style::default().fg(theme::AMBER()),
-        ));
-    }
-    Line::from(spans)
+    frame.render_widget(Paragraph::new(padded).scroll((0, cut_left as u16)), area);
 }
 
 /// The tank. Without the shop unlock the tile reads like the pet's, a
@@ -672,39 +629,8 @@ fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neigh
         return;
     }
     let box_area = if area.height >= FLOOR_ROWS + 2 {
-        let state = view.state;
-        let dim = Style::default().fg(theme::TEXT_DIM());
-        let name = state
-            .name
-            .clone()
-            .unwrap_or_else(|| state.species.as_str().to_string());
-        let pose = PetPose::for_frame(
-            state.mood(),
-            neighbours,
-            state.perch(),
-            state.animation_ticks(),
-        );
-        let line = Line::from(vec![
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(theme::AMBER_GLOW())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" · {}", state.mood().as_str()), dim),
-            Span::styled(
-                match pose {
-                    PetPose::Watch(WatchTarget::Tank, _) => " · watching the fish",
-                    PetPose::Watch(WatchTarget::Bonsai, _) => " · watching the tree",
-                    PetPose::At(_) => " · at your cursor",
-                    PetPose::Stroll | PetPose::Sulk | PetPose::Sleep => "",
-                },
-                dim,
-            ),
-        ])
-        .centered();
         frame.render_widget(
-            Paragraph::new(line),
+            Paragraph::new(status_line(view.state, neighbours).centered()),
             Rect::new(area.x, area.y, area.width, 1),
         );
         Rect::new(area.x, area.y + 1, area.width, area.height - 1)
@@ -781,14 +707,9 @@ fn draw_music_tile(
 
 /// The player's second row: the source, then the station or stream it is
 /// tuned to. YouTube has no station, so it stays one word.
-pub(crate) fn station_text(
-    source: AudioSource,
-    station: RadioStation,
-    stream: IcecastStream,
-) -> String {
+pub(crate) fn station_text(source: AudioSource, station: RadioStation) -> String {
     match source {
-        AudioSource::Radio => format!("radio · {}", radio_station_display_name(station)),
-        AudioSource::Icecast => format!("icecast · {}", icecast_stream_display_name(stream)),
+        AudioSource::Radio => format!("radio · {}", station.label()),
         AudioSource::Youtube => "youtube".to_string(),
     }
 }
@@ -908,14 +829,10 @@ fn names_actor(text: &str, username: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(' '))
 }
 
-/// Connected friends, the most recent login first: the name, their
-/// `/status` when set, their audio source, and how long they have been on.
-fn draw_friends_tile(
-    frame: &mut Frame,
-    area: Rect,
-    friends: &[ActiveFriend],
-    peer_statuses: &HashMap<Uuid, String>,
-) {
+/// Connected friends, here before away, then the most recent login: the
+/// name, the away glyph when away, their audio source, and how long they
+/// have been on.
+fn draw_friends_tile(frame: &mut Frame, area: Rect, friends: &[ActiveFriend]) {
     if friends.is_empty() {
         draw_centered_note(frame, area, &["no friends online"]);
         return;
@@ -934,11 +851,11 @@ fn draw_friends_tile(
                     Style::default().fg(theme::TEXT_BRIGHT()),
                 ),
             ];
-            if let Some(badge) = peer_statuses.get(&friend.user_id) {
-                spans.push(Span::styled(
-                    format!("  {badge}"),
-                    Style::default().fg(theme::AMBER()),
-                ));
+            if friend.away {
+                spans.push(Span::raw(format!(
+                    " {}",
+                    crate::app::common::away::AWAY_GLYPH
+                )));
             }
             spans.push(Span::styled(
                 format!("  ♪ {}", audio_source_word(friend.audio_source)),
@@ -958,7 +875,6 @@ fn audio_source_word(source: AudioSource) -> &'static str {
     match source {
         AudioSource::Youtube => "youtube",
         AudioSource::Radio => "radio",
-        AudioSource::Icecast => "icecast",
     }
 }
 
@@ -982,6 +898,16 @@ pub(crate) struct PulseView {
     pub mentions: i64,
     pub friends: usize,
     pub care: Care,
+}
+
+impl Care {
+    /// How many owned companions still wait on today's care.
+    pub(crate) fn due_count(&self) -> usize {
+        [self.bonsai, self.tank, self.pet]
+            .into_iter()
+            .filter(|chore| *chore == Chore::Due)
+            .count()
+    }
 }
 
 /// Today's care for one companion: tended, still due, or not owned.

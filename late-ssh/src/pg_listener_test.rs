@@ -13,7 +13,7 @@ use crate::test_helpers::new_test_db;
 async fn a_failed_re_read_is_retried_until_it_succeeds() {
     let attempts = Cell::new(0);
 
-    read_until_ok(Refresh::AppFlags, || {
+    read_until_ok(Refresh::Pot, || {
         attempts.set(attempts.get() + 1);
         let attempt = attempts.get();
         async move {

@@ -153,6 +153,7 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
         style: None,
         title: Some("the night clerk".to_string()),
         crown: true,
+        laureate: false,
         milestone: None,
     };
     let dim = Style::default().fg(ratatui::style::Color::DarkGray);
@@ -171,7 +172,7 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
     let text: String = row.iter().map(|(ch, _)| *ch).collect();
     let crown_at = text
         .chars()
-        .position(|ch| ch == '\u{1F451}')
+        .position(|ch| ch == '\u{1F48E}')
         .unwrap_or_else(|| panic!("no crown on the floor label: {text:?}"));
     assert_eq!(row[crown_at - 2].0, 'b');
     assert_eq!(
@@ -191,4 +192,246 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
     assert_eq!(row[crown_at + 1].0, WIDE_TAIL);
     assert_eq!(row[crown_at + 2].0, ',');
     assert_eq!(row[crown_at + 2].1, dim, "the title after it stays dim");
+}
+
+fn header_rows(header: &TourHeader, width: u16) -> Vec<String> {
+    let height = header.rows();
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| header.draw(frame, Rect::new(0, 0, width, height)))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+/// The stops that live inside a real surface: the music stop counts the
+/// catalogue live, the lobby stop leads to the practice table, and each one's
+/// breaker names its keys at the width a default terminal leaves a modal.
+#[test]
+fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
+    let music = header_rows(
+        &tour_header(Tutorial::VisitMusic, TableStop::Racked, false).unwrap(),
+        72,
+    );
+    let total = RadioStation::enabled().count();
+    assert!(
+        music[1].contains(&format!("{total} stations")),
+        "{music:#?}"
+    );
+    assert!(
+        music
+            .last()
+            .unwrap()
+            .contains("[Enter] next: the arcade ──"),
+        "{music:#?}"
+    );
+
+    let lobby = header_rows(
+        &tour_header(Tutorial::VisitLobby, TableStop::Racked, false).unwrap(),
+        72,
+    );
+    assert!(
+        lobby
+            .last()
+            .unwrap()
+            .contains("[Enter] next: one shot of pool ──"),
+        "{lobby:#?}"
+    );
+
+    // The table asks for the break, then for Enter onward once it is struck.
+    let table = header_rows(
+        &tour_header(Tutorial::VisitTable, TableStop::Racked, false).unwrap(),
+        72,
+    );
+    assert!(
+        table.last().unwrap().contains("[Enter] break ──"),
+        "{table:#?}"
+    );
+    let struck = header_rows(
+        &tour_header(Tutorial::VisitTable, TableStop::Played, false).unwrap(),
+        72,
+    );
+    assert!(
+        struck
+            .last()
+            .unwrap()
+            .contains("[Enter] next: the games ──"),
+        "{struck:#?}"
+    );
+
+    // A terminal the table does not fit: the stop says so and moves on.
+    let small = header_rows(
+        &tour_header(Tutorial::VisitTable, TableStop::TooSmall, false).unwrap(),
+        72,
+    );
+    assert!(small[1].contains("needs a bigger window"), "{small:#?}");
+    assert!(
+        small.last().unwrap().contains("[Enter] next: the games ──"),
+        "{small:#?}"
+    );
+
+    assert!(tour_header(Tutorial::VisitGames, TableStop::Racked, false).is_none());
+}
+
+/// Every page stop moves on with Enter and says so on a default terminal.
+#[test]
+fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitGames,
+                Screen::Games,
+                false,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("the tour · [3] the games")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[Enter] next: a taste of the dungeon")),
+        "{rows:#?}"
+    );
+}
+
+/// The Artboard stop lands behind the content disclaimer: it offers to show
+/// the art or skip ahead, and only reads as a normal stop once shown.
+#[test]
+fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
+    for (hidden, breaker) in [
+        (true, "[S] show · [Enter] skip: the profiles"),
+        (false, "[Enter] next: the profiles"),
+    ] {
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_tour_overlay(
+                    frame,
+                    Rect::new(1, 1, 78, 22),
+                    Tutorial::VisitArtboard,
+                    Screen::Artboard,
+                    hidden,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..24)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("the tour · [4] the artboard")),
+            "hidden={hidden} {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains(breaker)),
+            "hidden={hidden} {rows:#?}"
+        );
+        assert_eq!(
+            rows.iter().any(|row| row.contains("NSFW")),
+            hidden,
+            "hidden={hidden} {rows:#?}"
+        );
+    }
+}
+
+/// Boxed or hosted, a stop reads the same: the keys close the breaker flush
+/// right, two columns in from the frame.
+#[test]
+fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_tour_overlay(
+                frame,
+                Rect::new(1, 1, 78, 22),
+                Tutorial::VisitGames,
+                Screen::Games,
+                false,
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..24)
+        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let breaker = rows
+        .iter()
+        .find(|row| row.contains("[Enter]"))
+        .expect("the stop names its key");
+    assert!(
+        breaker
+            .trim_end()
+            .ends_with("[Enter] next: a taste of the dungeon ──  │"),
+        "{rows:#?}"
+    );
+    assert!(breaker.trim_start().starts_with("│  ──"), "{rows:#?}");
+}
+
+/// The dungeon stop takes the page over the way the practice table does:
+/// the header across the top, the crawl screen filling the rest, whole on a
+/// default terminal. Its breaker asks for blows until the win.
+#[test]
+fn the_dungeon_stop_fills_the_page_under_its_header() {
+    use crate::app::clubhouse::fight::{self, Fight};
+    let draw = |fight: &Fight| {
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let header =
+                    tour_header(Tutorial::VisitDungeon, TableStop::Racked, fight.won()).unwrap();
+                let page = header.draw_above(frame, Rect::new(1, 1, 78, 22));
+                fight::draw(frame, page, fight, "mat");
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..24)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect::<Vec<String>>()
+    };
+    let at = |rows: &[String], needle: &str| rows.iter().position(|row| row.contains(needle));
+
+    let mut fight = Fight::new();
+    let rows = draw(&fight);
+    let breaker = at(&rows, "[Enter] fight ──").expect("the breaker asks for the fight");
+    let hero = at(&rows, "mat the Slayer").expect("the panel is drawn");
+    let monster = at(&rows, " fire dragon   ").expect("the monster list is drawn");
+    let log = at(&rows, "A fire dragon comes into view.").expect("the log is drawn");
+    assert!(
+        breaker < hero && hero < monster && monster < log,
+        "{rows:#?}"
+    );
+    // The panel takes the right of the page, the view of the level the left.
+    assert_eq!(rows[hero].find("mat the Slayer"), Some(41), "{rows:#?}");
+    assert!(rows[log].starts_with(" A fire dragon"), "{rows:#?}");
+
+    while !fight.won() {
+        fight.strike();
+    }
+    let rows = draw(&fight);
+    assert!(
+        at(&rows, "[Enter] next: the artboard ──").is_some(),
+        "{rows:#?}"
+    );
+    assert!(
+        at(&rows, "You kill the fire dragon!").is_some(),
+        "{rows:#?}"
+    );
 }

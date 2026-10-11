@@ -5,10 +5,10 @@
 //! Chips repeat, badges do not (migration 158). A win is the same 20+ hours
 //! the second time, so it pays the full amount again, gated two ways at once
 //! by `credit_run_cooldown_reward_template`: once per ingested log line, and
-//! at most once per the template's 7-day window per account. The line key is
+//! at most once per the template's 30-day window per account. The line key is
 //! what makes a replay safe (the ingest grants on every sighting, fresh or
 //! replayed, precisely so a crash between insert and grant heals), and the
-//! window is what stops a lucky week paying four times.
+//! window is what stops a lucky month paying four times.
 //! The profile badge stays once per account for life: the `NOT EXISTS` insert
 //! runs on every sighting, credited or not, so a badge lost to a crash heals
 //! on the next one.
@@ -19,7 +19,7 @@
 //! never back-grants the Orb or Amulet pickup "in case the milestone stream
 //! missed it". A pickup that never landed is an ingest bug and shows up as a
 //! missing badge; paying it off the win line would hide the bug and, once the
-//! pickup's 7-day window had passed, pay the pickup a second time.
+//! pickup's 30-day window had passed, pay the pickup a second time.
 //!
 //! This sink only moves chips and badges. Feed events stay with the ingest
 //! service, which gates them on insert freshness and recency instead.
@@ -152,7 +152,7 @@ impl DoorAwards {
             };
             // The badge insert runs on every sighting, credited or not: it is
             // NOT EXISTS-idempotent on its own, and gating it on the chip
-            // claim being fresh would lose the badge forever when the 7-day
+            // claim being fresh would lose the badge forever when the 30-day
             // window (or a replayed line) suppresses the chips.
             let code = award_badge(badge.award_category(), 1);
             match db.get().await {

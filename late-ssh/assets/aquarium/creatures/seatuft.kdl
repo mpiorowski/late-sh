@@ -3,6 +3,7 @@ kindom plant
 title "a seafloor tuft"
 description "a tuft of seagrass on the floor, its blades swaying between two poses"
 sauce author=late.sh date=20260911 license=CCBYSA4.0
+mini left="\\|/" right="\\|/"
 
 count 8
 

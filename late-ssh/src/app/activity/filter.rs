@@ -145,9 +145,12 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // The pot's draw: once a week. The size itself rides the status HUD
         // all week; the only nudge before the draw is the one last call below.
         ActivityKind::PotDrawn { .. } => true,
-        // The other pot line: half an hour before the draw, once per pot,
+        // The other pot line: an hour before the draw, once per pot,
         // so anyone who meant to buy in still can.
         ActivityKind::PotClosing { .. } => true,
+        // A friend who stuck around: once per invitee forever, and the line
+        // is the feature's whole advertisement.
+        ActivityKind::ReferralRewarded { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").
@@ -160,6 +163,11 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // and only in-app viewers exist here, so this cannot become a
         // per-heartbeat drip.
         ActivityKind::WatchingStream { .. } => true,
+        // The board: a post is an invitation (capped at five a day per
+        // account), and the start is the moment to walk in. Both are the
+        // whole reason the board is in the house.
+        ActivityKind::EventPosted { .. } => true,
+        ActivityKind::EventStarting { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the
@@ -235,6 +243,18 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 thousands(*total_tickets)
             ))
         }
+        // Both people are named so both get a notification: the inviter for
+        // the payout, the friend for the welcome bonus and the welcome.
+        ActivityKind::ReferralRewarded {
+            invitee,
+            inviter_chips,
+            invitee_chips,
+        } => Some(format!(
+            "\u{1F91D} @{} earned {} chips for inviting @{invitee}, who is a regular now. @{invitee} gets a {} chip welcome bonus.",
+            event.username,
+            thousands(*inviter_chips),
+            thousands(*invitee_chips)
+        )),
         // The last call, worded like `/pot` itself so the command to buy in
         // is right there. No `@`: nobody is being told anything personally.
         ActivityKind::PotClosing {
@@ -247,7 +267,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             "\u{1F3B0} Pot {} on {} tickets, draws in {}. /pot buy N at {} each.",
             thousands(*size),
             thousands(*total_tickets),
-            crate::app::pot::state::short_duration(*draws_in_secs),
+            crate::app::pot::state::lead_time(*draws_in_secs),
             thousands(*ticket_price)
         )),
         // A stream on air is an invitation that outlives the ticker: who,
@@ -258,6 +278,18 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             "\u{1F4FA} @{} {}.\n{watch_url}",
             event.username, event.action
         )),
+        // The start is the one board line that outlives the ticker: whoever
+        // meant to come and was away reads it in #lounge history. The
+        // ticker already said who posted it; the headline is about now. No
+        // `@`: nobody is being told anything personally.
+        ActivityKind::EventStarting { title, going, .. } => Some(match going {
+            0 => format!("\u{1F4C5} {title} is on now. Press 7 for the board."),
+            1 => format!("\u{1F4C5} {title} is on now, 1 in. Press 7 for the board."),
+            n => format!("\u{1F4C5} {title} is on now, {n} in. Press 7 for the board."),
+        }),
+        // A post is the ticker's: a headline for every post would be five
+        // a day from one account, and the start will headline anyway.
+        ActivityKind::EventPosted { .. } => None,
         // No headline: @bartender already says it out loud in the room where
         // it was bought, and everyone it reached is online by definition, so a
         // #lounge row would be the third telling of one drink.

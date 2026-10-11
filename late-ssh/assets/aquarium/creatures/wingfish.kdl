@@ -2,6 +2,7 @@ name "wingfish"
 title "a winged fish"
 description "sleek body with prominent wing-like fins above and below and a curly midsection"
 sauce author=mevanlc date=20260506 license=CCBYSA4.0
+mini left="<o{" right="}o>"
 
 left ###"""
    /)

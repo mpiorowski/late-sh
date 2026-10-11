@@ -9,7 +9,11 @@ use super::state::{EditorState, Field, Page};
 use super::ui::{EditorView, draw};
 
 fn render(state: &EditorState) -> Vec<String> {
-    let backend = TestBackend::new(100, 30);
+    render_at(state, 100, 30)
+}
+
+fn render_at(state: &EditorState, width: u16, height: u16) -> Vec<String> {
+    let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
         .draw(|frame| {
@@ -62,4 +66,47 @@ fn an_empty_row_being_typed_puts_the_cursor_on_the_hints_first_letter() {
         "the hint must not shift right when typing starts:\n{}",
         typing.join("\n")
     );
+}
+
+#[test]
+fn short_editor_scrolls_full_fields_under_the_wheel() {
+    use super::state::MouseTarget;
+    let mut editor = EditorState::default();
+    editor.open_own(Uuid::now_v7(), None, &Profile::default(), Page::Card);
+    render_at(&editor, 50, 16);
+    editor.mouse.scroll(10, 8, 100, (50, 16));
+    let lines = render_at(&editor, 50, 16);
+    let (rect, _) = editor
+        .mouse
+        .hits()
+        .into_iter()
+        .find(|(_, target)| *target == MouseTarget::Field(Field::Summary))
+        .expect("summary revealed by wheel");
+    assert!(lines[usize::from(rect.y)].contains("summary"));
+    assert!(rect.bottom() <= 16);
+    assert_eq!(editor.row(), 0, "wheel did not move keyboard selection");
+}
+
+#[test]
+fn an_idle_row_shows_the_start_of_a_long_value() {
+    let mut editor = EditorState::default();
+    editor.open_own(Uuid::now_v7(), None, &Profile::default(), Page::About);
+    editor.set_row(1);
+    assert_eq!(editor.active_field(), Some(Field::Ide));
+    editor.start_editing();
+    editor
+        .field_mut(Field::Ide)
+        .insert_str(format!("start-{}-end", "x".repeat(150)));
+    editor.stop_editing();
+
+    let idle = render(&editor);
+    let row = idle
+        .iter()
+        .find(|line| line.contains("ide "))
+        .expect("ide row");
+    assert!(
+        row.contains("start-"),
+        "an idle row begins at its start:\n{row}"
+    );
+    assert!(!row.contains("-end"), "not at its end:\n{row}");
 }

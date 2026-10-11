@@ -26,7 +26,7 @@ use super::{
         CraftView, InvView, LeaderboardEntry, LogKind, MobView, PetView, PlayerView, QuestKind,
         QuestView, SectionRow, ShopView,
     },
-    world::{Dir, MapCell, MiniMap, RoomId},
+    world::{Dir, RoomId},
 };
 
 const SIDE_WIDE: u16 = 34;
@@ -135,6 +135,24 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         return;
     }
 
+    // Narrow terminals (a phone) get the live field as the whole centre of the
+    // screen with a short event feed under it. The map never folds into a side
+    // rail: on a phone the rail is the one place it cannot be read.
+    if state.panel() == Panel::Room && view.rpg_mode && area.width < 96 && area.height >= 8 {
+        for (rect, action) in draw_narrow_field(frame, area, &view, usernames) {
+            state.record_combat_hit(rect, action);
+        }
+        return;
+    }
+
+    // The room rail full screen (`=`): the phone layout's way to the whole
+    // room summary it has no rail for. Mid-fight it is the battle frame, as
+    // the rail is beside the field.
+    if state.panel() == Panel::Rail {
+        draw_room_side(frame, area, state, &view, usernames, true);
+        return;
+    }
+
     if area.width < 50 || area.height < 9 {
         draw_compact(frame, area, &view);
         return;
@@ -214,9 +232,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Wide terminals get the live field with the message log as a full-width
     // strip along the bottom, the way terminal roguelikes have always laid it:
     // log lines are sentences, and sentences want width, not a narrow rail.
-    // Below this width the field folds away and the classic log + side view
-    // stands in (the minimap still rides in the side panel there).
-    if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
+    // Below this width `draw_narrow_field` stacks field and feed instead.
+    if state.panel() == Panel::Room && view.rpg_mode {
         // A tall terminal spends rows on the full-width strip; a short one
         // gives them back to the field and pushes the events into the rail.
         let strip = match events_in_rail(area.height) {
@@ -237,14 +254,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         draw_field(frame, cols[0], &view);
         match strip {
             Some((_, log_area)) => {
-                draw_room_side(frame, cols[1], state, &view, usernames, false);
+                draw_room_side(frame, cols[1], state, &view, usernames, true);
                 draw_log_strip(frame, log_area, &view);
             }
             None => {
                 let log_h = rail_log_height(cols[1].height);
                 let rail = Layout::vertical([Constraint::Min(4), Constraint::Length(log_h)])
                     .split(cols[1]);
-                draw_room_side(frame, rail[0], state, &view, usernames, false);
+                draw_room_side(frame, rail[0], state, &view, usernames, true);
                 draw_log_strip(frame, rail[1], &view);
             }
         }
@@ -362,9 +379,9 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
-            // Foe/adventurer rows carry these, never the action bar; kept for
-            // exhaustiveness.
-            ClickAction::AttackMob(_) | ClickAction::AttackPlayer(_) => {
+            // Foe/adventurer rows and the narrow status bar carry these, never
+            // the action bar; kept for exhaustiveness.
+            ClickAction::AttackMob(_) | ClickAction::AttackPlayer(_) | ClickAction::ToggleRail => {
                 Style::default().fg(theme::TEXT_DIM())
             }
         };
@@ -828,7 +845,6 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let rows = Layout::vertical([
         Constraint::Length(1), // where-am-i header
         Constraint::Min(1),    // the field itself
-        Constraint::Length(1), // colour key
     ])
     .split(area);
 
@@ -1049,36 +1065,6 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), body);
-
-    // Colour key, so every marker on the field reads at a glance.
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("@", player_style),
-            Span::styled(" you ", dim),
-            Span::styled("\u{2500}\u{2502}", path_style),
-            Span::styled(" path ", dim),
-            Span::styled("\u{21d3}\u{21d1}", stair_style()),
-            Span::styled(" stair ", dim),
-            Span::styled("\u{2020}", foe_style),
-            Span::styled(" foe ", dim),
-            Span::styled("\u{263a}", player_near_style),
-            Span::styled(" player ", dim),
-            Span::styled("\u{2605}", boss_style),
-            Span::styled(" boss ", dim),
-            Span::styled("\u{2665}", tame_style),
-            Span::styled(" tame ", dim),
-            Span::styled("\u{2302}", service_style),
-            Span::styled(" town ", dim),
-            Span::styled("\u{2666}", node_style),
-            Span::styled(" node ", dim),
-            Span::styled("\u{2500}", exit_style),
-            Span::styled(" way out ", dim),
-            Span::styled("\u{2500}", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(" unexplored", dim),
-        ])),
-        rows[2],
-    );
 }
 
 /// The land map: an atlas of the whole realm, every country drawn where it
@@ -2566,6 +2552,296 @@ fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
     Paragraph::new(lines).wrap(Wrap { trim: false })
 }
 
+/// Rows the narrow layout's event feed gets under the field, separator rule
+/// included: a small tail, so the map keeps the screen.
+fn narrow_log_height(total_height: u16) -> u16 {
+    (total_height / 4).clamp(3, 7)
+}
+
+/// The chip at the right end of the narrow status bar that opens the room
+/// rail full screen, the same as `=`.
+const NARROW_RAIL_CHIP: &str = "= more";
+
+/// Whether a fight is on: a locked foe, or a locked rival in a duel.
+fn in_fight(view: &PlayerView) -> bool {
+    view.mobs.iter().any(|m| m.targeted) || view.occupants.iter().any(|o| o.targeted)
+}
+
+/// Full-width click rects for a block's clickable rows, drawn from the top of
+/// `area` one pre-wrapped line per row. Rows past the bottom are not on
+/// screen, so they get no rect.
+fn row_hits(area: Rect, hits: Vec<(usize, ClickAction)>) -> Vec<(Rect, ClickAction)> {
+    hits.into_iter()
+        .filter(|(idx, _)| (*idx as u16) < area.height)
+        .map(|(idx, action)| {
+            let rect = Rect {
+                x: area.x,
+                y: area.y + idx as u16,
+                width: area.width,
+                height: 1,
+            };
+            (rect, action)
+        })
+        .collect()
+}
+
+/// The narrow layout's one-line status bar: your vitals and where you are.
+/// The side rail that carried these is gone on a phone, and your HP must not
+/// be something you open a panel to find. Mid-fight the battle frame replaces
+/// it (see `draw_narrow_field`).
+fn narrow_status_line(view: &PlayerView, width: usize) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            format!("{}/{}hp", view.hp, view.max_hp),
+            Style::default()
+                .fg(hp_color(view.hp, view.max_hp))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " {}/{}{}",
+                view.resource,
+                view.max_resource,
+                short_res(&view.resource_name)
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    let room = width.saturating_sub(used + 2);
+    if room >= 4 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            truncate_chars(&view.room_name, room),
+            Style::default().fg(theme::AMBER()),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// A foe's tap target on the narrow foe row: its column, width, and action.
+type FoeCell = (u16, u16, ClickAction);
+
+/// The narrow layout's foe row: every foe in the room with its level and HP,
+/// each one a tap target that locks onto it (the rail's roster rows do the
+/// same). Foes that do not fit are counted in a `+N` tail. Returns the line
+/// and each foe's `(column, width, action)` within it; `None` in a room with
+/// no foes.
+fn narrow_foes_line(view: &PlayerView, width: usize) -> Option<(Line<'static>, Vec<FoeCell>)> {
+    const SEP: &str = " \u{00b7} ";
+    if view.mobs.is_empty() {
+        return None;
+    }
+    let head = "\u{2020} ";
+    let mut spans = vec![Span::styled(head, Style::default().fg(theme::ERROR()))];
+    let mut used = head.width();
+    let mut cells: Vec<FoeCell> = Vec::new();
+    for (i, mob) in view.mobs.iter().enumerate() {
+        let sep = if i == 0 { "" } else { SEP };
+        let rest = view.mobs.len() - i;
+        let tail = format!(" +{rest}");
+        let name = truncate_chars(&format!("Lv{} {}", mob.level, mob.name), 18);
+        let hp = format!(" {}/{}", mob.hp, mob.max_hp);
+        let need = sep.width() + name.width() + hp.width();
+        // Keep room for a `+N` tail unless this is the last foe.
+        let reserve = if rest > 1 { tail.width() } else { 0 };
+        if used + need + reserve > width {
+            if i == 0 {
+                return None;
+            }
+            spans.push(Span::styled(tail, Style::default().fg(theme::TEXT_DIM())));
+            break;
+        }
+        spans.push(Span::styled(sep, Style::default().fg(theme::TEXT_FAINT())));
+        let col = used + sep.width();
+        cells.push((
+            col as u16,
+            (name.width() + hp.width()) as u16,
+            ClickAction::AttackMob(mob.id),
+        ));
+        spans.push(Span::styled(
+            name,
+            Style::default().fg(rarity_color(&mob.rank)),
+        ));
+        spans.push(Span::styled(
+            hp,
+            Style::default().fg(hp_color(mob.hp, mob.max_hp)),
+        ));
+        used += need;
+    }
+    Some((Line::from(spans), cells))
+}
+
+/// The narrow layout's `you can` rows: the rail's room-specific keys
+/// (`room_action_entries`) packed as `key label` chips into at most
+/// `max_rows` lines. Whatever does not fit is one `=` away in the full rail.
+fn narrow_action_lines(view: &PlayerView, width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    const LEAD: &str = "you can ";
+    const GAP: &str = "  ";
+    let entries = room_action_entries(view);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if entries.is_empty() || max_rows == 0 {
+        return lines;
+    }
+    let mut spans = vec![Span::styled(LEAD, Style::default().fg(theme::TEXT_DIM()))];
+    let mut used = LEAD.width();
+    let mut on_row = 0;
+    for (key, label) in entries {
+        let chip_w = key.width() + 1 + label.width();
+        let gap = if on_row == 0 { 0 } else { GAP.width() };
+        if used + gap + chip_w > width {
+            if on_row == 0 {
+                // Wider than a whole row: it and the rest wait in the rail.
+                break;
+            }
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            (used, on_row) = (0, 0);
+            if lines.len() == max_rows || chip_w > width {
+                return lines;
+            }
+        } else if gap > 0 {
+            spans.push(Span::raw(GAP));
+            used += gap;
+        }
+        spans.push(Span::styled(
+            key,
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+        used += chip_w;
+        on_row += 1;
+    }
+    if on_row > 0 && lines.len() < max_rows {
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+/// The narrow (phone) room layout. No side rail; `=` opens it full screen.
+///
+/// Out of a fight: status bar, the live field across the full width, the
+/// room's foes and what you can do here, then a small event feed. Mid-fight
+/// the field gives way to the battle frame (the same blocks the wide rail
+/// shows), since a phone has no rail to put it in: two columns when the
+/// terminal is wide enough (a phone held sideways), stacked otherwise.
+///
+/// Returns the click rects for the caller to record, so it draws without a
+/// `State`.
+fn draw_narrow_field(
+    frame: &mut Frame,
+    area: Rect,
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+) -> Vec<(Rect, ClickAction)> {
+    let log_h = narrow_log_height(area.height);
+    if in_fight(view) {
+        let rows = Layout::vertical([Constraint::Min(4), Constraint::Length(log_h)]).split(area);
+        let hits = draw_narrow_battle(frame, rows[0], view, usernames);
+        draw_log_strip(frame, rows[1], view);
+        return hits;
+    }
+
+    let width = area.width as usize;
+    let foes = narrow_foes_line(view, width);
+    // The field keeps at least this many rows; the here-rows only take what
+    // is left above that.
+    const FIELD_FLOOR: u16 = 6;
+    let spare = area.height.saturating_sub(1 + log_h + FIELD_FLOOR) as usize;
+    let foe_rows = usize::from(foes.is_some()).min(spare);
+    let actions = narrow_action_lines(view, width, (spare - foe_rows).min(2));
+    let here_h = (foe_rows + actions.len()) as u16;
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(4),
+        Constraint::Length(here_h),
+        Constraint::Length(log_h),
+    ])
+    .split(area);
+
+    let status = Layout::horizontal([
+        Constraint::Min(1),
+        Constraint::Length(NARROW_RAIL_CHIP.width() as u16),
+    ])
+    .split(rows[0]);
+    frame.render_widget(
+        Paragraph::new(narrow_status_line(view, status[0].width as usize)),
+        status[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            NARROW_RAIL_CHIP,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
+        status[1],
+    );
+    let mut hits: Vec<(Rect, ClickAction)> = vec![(status[1], ClickAction::ToggleRail)];
+    draw_field(frame, rows[1], view);
+
+    let mut here: Vec<Line<'static>> = Vec::new();
+    if let Some((line, cells)) = foes.filter(|_| foe_rows == 1) {
+        for (col, w, action) in cells {
+            let rect = Rect {
+                x: rows[2].x + col,
+                y: rows[2].y,
+                width: w,
+                height: 1,
+            };
+            hits.push((rect, action));
+        }
+        here.push(line);
+    }
+    here.extend(actions);
+    frame.render_widget(Paragraph::new(here), rows[2]);
+    draw_log_strip(frame, rows[3], view);
+    hits
+}
+
+/// The battle frame across the narrow layout's centre. Side by side (frame
+/// and other foes left, abilities and keys right) once each column gets a
+/// rail's width; stacked like the wide rail below that.
+fn draw_narrow_battle(
+    frame: &mut Frame,
+    area: Rect,
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+) -> Vec<(Rect, ClickAction)> {
+    const TWO_COLUMNS: u16 = 60;
+    if area.width < TWO_COLUMNS {
+        let (lines, hits) = battle_side_panel(view, usernames, area.width as usize);
+        frame.render_widget(Paragraph::new(lines), area);
+        return row_hits(area, hits);
+    }
+    let cols = Layout::horizontal([
+        Constraint::Percentage(50),
+        Constraint::Length(2),
+        Constraint::Min(1),
+    ])
+    .split(area);
+    let (left, right) = (cols[0], cols[2]);
+    let mut left_block = battle_frame_block(view, usernames, left.width as usize);
+    append_block(
+        &mut left_block,
+        battle_others_block(view, left.width as usize),
+    );
+    let mut right_block = battle_abilities_block(view, right.width as usize);
+    match right_block.0.is_empty() {
+        true => right_block = battle_keys_block(),
+        false => append_block(&mut right_block, battle_keys_block()),
+    }
+    frame.render_widget(Paragraph::new(left_block.0), left);
+    frame.render_widget(Paragraph::new(right_block.0), right);
+    let mut hits = row_hits(left, left_block.1);
+    hits.extend(row_hits(right, right_block.1));
+    hits
+}
+
 fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let mut lines = vec![Line::from(vec![
         Span::styled(
@@ -2653,14 +2929,14 @@ fn draw_side(
     usernames: &UsernameLookup<'_>,
 ) {
     if state.panel() == Panel::Room {
-        draw_room_side(frame, area, state, view, usernames, true);
+        draw_room_side(frame, area, state, view, usernames, false);
         return;
     }
 
     // List panels return the line index of the highlighted row so the view can
     // scroll to keep the selection visible; text panels return `None`.
     let (lines, selected) = match state.panel() {
-        Panel::Room => unreachable!("room panel is rendered by draw_room_side"),
+        Panel::Room | Panel::Rail => unreachable!("room panel is rendered by draw_room_side"),
         Panel::Character => (character_panel(view), None),
         Panel::Abilities => abilities_panel(view, state.cursor(), state.ability_swap_source()),
         Panel::Inventory => inventory_panel(&state.inv_rows(), view, state.cursor()),
@@ -2813,44 +3089,18 @@ fn draw_room_side(
     state: &State,
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
-    with_minimap: bool,
+    field_layout: bool,
 ) {
-    let map = if with_minimap {
-        minimap_lines(&view.minimap)
-    } else {
-        // The live field column already shows the surroundings; the little
-        // minimap would just be a redundant echo beside it.
-        Vec::new()
-    };
-    let panel_area = if map.is_empty() {
-        area
-    } else {
-        let map_h = map.len().min(area.height as usize) as u16;
-        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
-        frame.render_widget(Paragraph::new(map), rows[1]);
-        rows[0]
-    };
+    let panel_area = area;
 
     // Mid-fight the field layout's side panel becomes the battle frame - the
     // classic layout keeps the room summary here, since its main column
     // already swaps to `battle_context`. Its rows carry their own click
     // actions (foes to switch the lock, ability rows to cast).
-    let fighting =
-        view.mobs.iter().any(|m| m.targeted) || view.occupants.iter().any(|o| o.targeted);
-    if !with_minimap && fighting {
+    if field_layout && in_fight(view) {
         let (lines, hits) = battle_side_panel(view, usernames, panel_area.width as usize);
-        for (idx, action) in hits {
-            if (idx as u16) < panel_area.height {
-                state.record_combat_hit(
-                    Rect {
-                        x: panel_area.x,
-                        y: panel_area.y + idx as u16,
-                        width: panel_area.width,
-                        height: 1,
-                    },
-                    action,
-                );
-            }
+        for (rect, action) in row_hits(panel_area, hits) {
+            state.record_combat_hit(rect, action);
         }
         frame.render_widget(Paragraph::new(lines), panel_area);
         return;
@@ -3940,6 +4190,18 @@ fn craft_status_cell(e: &super::svc::CraftEntryView) -> (String, Color) {
     (format!("{held}/{}", e.ingredients.len()), theme::AMBER())
 }
 
+/// The list's tag cell for a recipe. A stock good (a draught, an oil, a meal)
+/// has no rival on your body, so the cell says how many are already in the
+/// pack: the stock a maker is topping up. Everything else keeps the shop's
+/// upgrade tag, which is empty for materials.
+fn craft_tag_cell(e: &super::svc::CraftEntryView) -> (String, Color) {
+    match e.held {
+        Some(0) => ("\u{00d7}0".to_string(), theme::TEXT_DIM()),
+        Some(n) => (format!("\u{00d7}{n}"), theme::TEXT_BRIGHT()),
+        None => upgrade_tag(e.compare_pct),
+    }
+}
+
 /// The ingredient checklist of the detail pane: every line of the recipe with
 /// what is in the pack against what it costs. The sidebar panel collapses this
 /// to one "need materials" string, which names neither the material nor the
@@ -4084,7 +4346,7 @@ fn draw_craft_screen(
                     &e.rarity,
                     selected,
                     craft_status_cell(e),
-                    upgrade_tag(e.compare_pct),
+                    craft_tag_cell(e),
                     list_w,
                 ));
             }
@@ -4124,6 +4386,16 @@ fn draw_craft_screen(
                 },
                 detail_w,
             );
+            if let Some(n) = e.held {
+                detail.push(Line::from(Span::styled(
+                    format!("  {n} in your pack"),
+                    Style::default().fg(match n {
+                        0 => theme::TEXT_DIM(),
+                        _ => theme::TEXT_BRIGHT(),
+                    }),
+                )));
+                detail.push(Line::raw(""));
+            }
             detail.extend(craft_material_lines(e));
             detail.push(Line::raw(""));
             detail.push(craft_skill_line(e));
@@ -4857,6 +5129,34 @@ fn battle_side_panel(
     usernames: &UsernameLookup<'_>,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<(usize, ClickAction)>) {
+    let mut panel = battle_frame_block(view, usernames, width);
+    append_block(&mut panel, battle_abilities_block(view, width));
+    append_block(&mut panel, battle_others_block(view, width));
+    append_block(&mut panel, battle_keys_block());
+    panel
+}
+
+/// One block of rows and the clickable ones among them, indexed into its own
+/// lines.
+type RowBlock = (Vec<Line<'static>>, Vec<(usize, ClickAction)>);
+
+/// Append `block` under `into`, a blank row between, shifting its click
+/// indices to where its lines land. An empty block adds nothing.
+fn append_block(into: &mut RowBlock, block: RowBlock) {
+    let (lines, hits) = block;
+    if lines.is_empty() {
+        return;
+    }
+    into.0.push(Line::raw(""));
+    let base = into.0.len();
+    into.1
+        .extend(hits.into_iter().map(|(idx, action)| (base + idx, action)));
+    into.0.extend(lines);
+}
+
+/// The head of the battle frame: your vitals, the locked foe (name, meter,
+/// nature, afflictions), your battle effects, and your companion.
+fn battle_frame_block(view: &PlayerView, usernames: &UsernameLookup<'_>, width: usize) -> RowBlock {
     let mut hits: Vec<(usize, ClickAction)> = Vec::new();
     let mut lines = vitals(view, VitalStyle::Meters(width));
     lines.push(Line::raw(""));
@@ -4984,10 +5284,15 @@ fn battle_side_panel(
             ));
         }
     }
-    // The ability roster, with live costs and readiness - what the bottom
-    // action bar has no room to say. Each row casts on click, like its key.
+    (lines, hits)
+}
+
+/// The ability roster, with live costs and readiness - what the bottom action
+/// bar has no room to say. Each row casts on click, like its key.
+fn battle_abilities_block(view: &PlayerView, width: usize) -> RowBlock {
+    let mut hits: Vec<(usize, ClickAction)> = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
     if !view.abilities.is_empty() {
-        lines.push(Line::raw(""));
         lines.push(section("Abilities"));
         for a in &view.abilities {
             // Slot 10 is cast with `0`, matching the keybind; show that digit.
@@ -5019,10 +5324,16 @@ fn battle_side_panel(
             ]));
         }
     }
-    // The room's other foes, so a click can switch the lock mid-fight.
+    (lines, hits)
+}
+
+/// The room's other foes, so a click can switch the lock mid-fight.
+fn battle_others_block(view: &PlayerView, width: usize) -> RowBlock {
+    let mut hits: Vec<(usize, ClickAction)> = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let wrap_w = width.saturating_sub(4).max(6);
     let others: Vec<&MobView> = view.mobs.iter().filter(|m| !m.targeted).collect();
     if !others.is_empty() {
-        lines.push(Line::raw(""));
         lines.push(section("Also here"));
         for mob in others {
             let marker = if mob.boss { "\u{2021} " } else { "  " };
@@ -5050,67 +5361,17 @@ fn battle_side_panel(
         }
         lines.push(hint("click", "switch target"));
     }
-    lines.push(Line::raw(""));
-    lines.push(hint("space/x", "strike  z flee"));
-    lines.push(hint("Q", "quaff a potion"));
-    lines.push(hint("C", "coat your weapon"));
     (lines, hits)
 }
 
-/// The overhead minimap section: a small map of the explored neighbourhood,
-/// painted in the bottom corner of the Room panel.
-fn minimap_lines(map: &MiniMap) -> Vec<Line<'static>> {
-    if map.grid.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = vec![section("Map")];
-    for row in &map.grid {
-        let mut spans = vec![Span::raw("  ")];
-        spans.extend(row.iter().map(|cell| map_cell_span(*cell)));
-        lines.push(Line::from(spans));
-    }
-    // Vertical exits can't sit on a flat map; note them in words instead.
-    let mut stairs = Vec::new();
-    if map.up {
-        stairs.push("up");
-    }
-    if map.down {
-        stairs.push("down");
-    }
-    let stairs_text = if stairs.is_empty() {
-        String::new()
-    } else {
-        format!("stairs: {}", stairs.join(", "))
-    };
-    lines.push(Line::from(Span::styled(
-        format!("  {stairs_text:<18}"),
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    lines.push(Line::from(Span::styled(
-        "  @=you *=last o=seen .=new",
-        Style::default().fg(theme::TEXT_FAINT()),
-    )));
-    lines
-}
-
-/// One char-cell of the minimap, styled by what it represents.
-fn map_cell_span(cell: MapCell) -> Span<'static> {
-    let (glyph, color) = match cell {
-        MapCell::Empty => (' ', theme::TEXT_FAINT()),
-        MapCell::Current => ('@', theme::AMBER_GLOW()),
-        MapCell::Previous => ('*', theme::AMBER()),
-        MapCell::Visited => ('o', theme::AMBER_DIM()),
-        MapCell::Frontier => ('.', theme::TEXT_FAINT()),
-        MapCell::ConnH => ('-', theme::BORDER()),
-        MapCell::ConnV => ('|', theme::BORDER()),
-        MapCell::TrailH => ('-', theme::AMBER_GLOW()),
-        MapCell::TrailV => ('|', theme::AMBER_GLOW()),
-    };
-    let mut style = Style::default().fg(color);
-    if matches!(cell, MapCell::Current | MapCell::Previous) {
-        style = style.add_modifier(Modifier::BOLD);
-    }
-    Span::styled(glyph.to_string(), style)
+/// The combat keys that close the battle frame.
+fn battle_keys_block() -> RowBlock {
+    let lines = vec![
+        hint("space/x", "strike  z flee"),
+        hint("Q", "quaff a potion"),
+        hint("C", "coat your weapon"),
+    ];
+    (lines, Vec::new())
 }
 
 // ---- The character sheet -------------------------------------------------
@@ -6252,8 +6513,15 @@ fn crafting_panel(
                 } else {
                     Style::default().fg(theme::TEXT_DIM())
                 };
-                // Name row, with a gated reason when it can't be made.
+                // Name row: how many are already held (made goods only), and
+                // a gated reason when it can't be made.
                 let mut name_spans = vec![Span::styled(format!("{marker} {}", e.name), name_style)];
+                if let Some(n) = e.held {
+                    name_spans.push(Span::styled(
+                        format!("  \u{00d7}{n}"),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ));
+                }
                 if !e.craftable && !e.reason.is_empty() {
                     name_spans.push(Span::styled(
                         format!("  ({})", e.reason),

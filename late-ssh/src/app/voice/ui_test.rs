@@ -76,7 +76,7 @@ fn global_voice_badge_uses_current_room_and_status() {
     };
 
     let badge = global_voice_badge(&snapshot, user_id, |_| Some("#lounge".to_string()));
-    assert_eq!(badge.as_deref(), Some(" mic #lounge [muted] "));
+    assert_eq!(badge.as_deref(), Some("#lounge [muted]"));
 }
 
 #[test]

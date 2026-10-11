@@ -1,65 +1,100 @@
-use super::*;
+use std::sync::Arc;
 
-fn occupant(n: u128, name: &str) -> Occupant {
-    Occupant {
+use late_core::models::presence::{ClubhouseStand, PresenceRecord, Spot};
+
+use super::*;
+use crate::app::clubhouse::crowd::Placement;
+
+const NOW: i64 = 1_000_000;
+const ME: u128 = 1;
+
+fn other(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
+    PresenceRecord {
+        session_id: Uuid::from_u128(1_000 + n),
         user_id: Uuid::from_u128(n),
-        username: name.to_string(),
+        username: format!("user{n:03}"),
+        clubhouse: ClubhouseStand {
+            spot,
+            since_ms,
+            emote: None,
+            petted_dog_at_ms: None,
+        },
+        nightcap: None,
+        street: None,
     }
 }
 
-fn state_with_lobby(tutorial: bool) -> State {
+/// A session logging in as `ME` while `records` are already on the wire.
+fn session(records: Vec<PresenceRecord>, tutorial: bool) -> State {
     State::new(
-        Some(SharedLobby::with_seed(7)),
-        Uuid::from_u128(1),
+        Uuid::from_u128(1_000 + ME),
+        Uuid::from_u128(ME),
         "me".to_string(),
         tutorial,
+        Arc::new(records),
+        DrunkMap::new(),
+        NOW,
     )
 }
 
-#[test]
-fn refresh_seats_the_crowd_and_mirrors_own_position() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
-    state.refresh_snapshot();
-    assert_eq!(state.headcount(), 2);
-    // Own cell mirrors the assigned seat, not the spawn mat.
-    let own = state.snapshot.find(Uuid::from_u128(1)).unwrap();
-    assert_eq!(own.placement.position(), (state.player_x, state.player_y));
+fn state_with_lobby(tutorial: bool) -> State {
+    session(Vec::new(), tutorial)
+}
+
+fn placement(state: &State, n: u128) -> Option<Placement> {
+    state.crowd.find(Uuid::from_u128(n)).map(|p| p.placement)
 }
 
 #[test]
-fn first_refresh_does_not_announce_the_whole_room() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
+fn a_session_sits_down_the_moment_it_logs_in() {
+    let state = session(vec![other(2, Spot::Walking { x: 30, y: 12 }, 0)], false);
+    assert_eq!(state.headcount(), 2);
+    assert!(
+        matches!(placement(&state, ME), Some(Placement::Seated(_))),
+        "a returning user spawns seated, not at the door"
+    );
+    // Own cell mirrors the picked seat, not the spawn mat.
+    let own = placement(&state, ME).unwrap();
+    assert_eq!(own.position(), (state.player_x, state.player_y));
+    assert!(matches!(state.stand().spot, Spot::Seat { .. }));
+}
+
+#[test]
+fn the_room_at_login_is_not_announced_and_later_arrivals_are() {
+    let alice = other(2, Spot::Seat { index: 3 }, 0);
+    let mut state = session(vec![alice.clone()], false);
     assert!(state.door_events.is_empty());
 
-    state.refresh_roster(vec![
-        occupant(1, "me"),
-        occupant(2, "alice"),
-        occupant(3, "bob"),
-    ]);
+    // Bob arrives while this session is on another page; the door says so
+    // when it comes back.
+    let bob = other(3, Spot::Seat { index: 5 }, 0);
+    state.set_records(Arc::new(vec![alice, bob]), NOW);
+    assert!(
+        state.door_events.is_empty(),
+        "nothing reads the room while away"
+    );
+    state.enter_screen(NOW);
     assert_eq!(state.door_events.len(), 1);
     assert!(state.door_events[0].arrived);
-    assert_eq!(state.door_events[0].username, "bob");
+    assert_eq!(state.door_events[0].username, "user003");
     assert!(state.door_glow());
 }
 
 #[test]
 fn departures_use_the_last_known_name() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
-    state.refresh_snapshot();
-    state.refresh_roster(vec![occupant(1, "me")]);
+    let mut state = session(vec![other(2, Spot::Seat { index: 3 }, 0)], false);
+    state.set_records(Arc::new(Vec::new()), NOW);
+    state.refresh_crowd(NOW);
     assert_eq!(state.door_events.len(), 1);
     assert!(!state.door_events[0].arrived);
-    assert_eq!(state.door_events[0].username, "alice");
+    assert_eq!(state.door_events[0].username, "user002");
 }
 
 #[test]
 fn door_events_expire_with_the_clock() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me")]);
-    state.refresh_roster(vec![occupant(1, "me"), occupant(2, "alice")]);
+    let mut state = session(Vec::new(), false);
+    state.set_records(Arc::new(vec![other(2, Spot::Seat { index: 3 }, 0)]), NOW);
+    state.refresh_crowd(NOW);
     assert_eq!(state.door_events.len(), 1);
     // The clock is wall-driven: a sparse tick jumps straight to the wall
     // tick it is given, and expiry follows wall time, not call count.
@@ -71,16 +106,101 @@ fn door_events_expire_with_the_clock() {
 
 #[test]
 fn walking_moves_and_respects_walls() {
-    let mut state = state_with_lobby(false);
-    state.refresh_roster(vec![occupant(1, "me")]);
-    state.refresh_snapshot();
+    let mut state = session(Vec::new(), true);
+    state.enter_screen(NOW);
+    assert_eq!((state.player_x, state.player_y), map::SPAWN);
     for _ in 0..80 {
-        state.walk(0, 1);
+        state.walk(0, -1, NOW);
     }
-    assert_eq!(state.player_y, map::MAP_H - 2);
-    let before = (state.player_x, state.player_y);
-    state.walk(0, 1);
-    assert_eq!((state.player_x, state.player_y), before);
+    let blocked = (state.player_x, state.player_y);
+    assert!(blocked.1 < map::SPAWN.1, "never moved off the mat");
+    assert!(!map::walkable(blocked.0, blocked.1 - 1));
+    state.walk(0, -1, NOW);
+    assert_eq!((state.player_x, state.player_y), blocked);
+    assert_eq!(
+        state.stand().spot,
+        Spot::Walking {
+            x: blocked.0,
+            y: blocked.1
+        },
+        "the room sees the walker where they stopped"
+    );
+}
+
+#[test]
+fn a_rename_reaches_your_own_label() {
+    let mut state = session(Vec::new(), false);
+    state.set_username("me-renamed");
+    state.refresh_crowd(NOW);
+
+    assert_eq!(
+        state
+            .crowd
+            .find(Uuid::from_u128(ME))
+            .map(|p| p.username.as_str()),
+        Some("me-renamed")
+    );
+}
+
+#[test]
+fn a_seat_lost_to_an_earlier_claim_is_picked_again() {
+    let mut state = session(Vec::new(), false);
+    let Spot::Seat { index } = state.stand().spot else {
+        panic!("seated at login");
+    };
+    // Someone on another replica took the same seat a moment earlier.
+    let alice = other(2, Spot::Seat { index }, NOW - 1);
+
+    state.set_records(Arc::new(vec![alice]), NOW + 10);
+    state.refresh_crowd(NOW + 10);
+
+    assert_eq!(
+        placement(&state, 2),
+        Some(Placement::Seated(usize::from(index)))
+    );
+    assert!(
+        matches!(state.stand().spot, Spot::Seat { index: mine } if mine != index),
+        "picked another seat: {:?}",
+        state.stand().spot
+    );
+    assert!(matches!(placement(&state, ME), Some(Placement::Seated(_))));
+}
+
+#[test]
+fn a_full_house_waits_at_the_door_and_takes_the_first_seat_that_frees() {
+    let mut full: Vec<PresenceRecord> = (0..map::SEATS.len())
+        .map(|i| other(10 + i as u128, Spot::Seat { index: i as u16 }, 0))
+        .chain(
+            (0..map::STANDING_SPOTS.len())
+                .map(|i| other(100 + i as u128, Spot::Standing { index: i as u16 }, 0)),
+        )
+        .collect();
+    let mut state = session(full.clone(), false);
+    assert_eq!(state.stand().spot, Spot::Door);
+    assert!(matches!(placement(&state, ME), Some(Placement::Door(_))));
+
+    let freed = full.remove(4).clubhouse.spot;
+    state.set_records(Arc::new(full), NOW + 10);
+    state.refresh_crowd(NOW + 10);
+
+    assert_eq!(state.stand().spot, freed);
+    assert_eq!(placement(&state, ME), Some(Placement::Seated(4)));
+}
+
+#[test]
+fn a_second_device_joins_the_first_and_follows_its_moves() {
+    let mut laptop = other(ME, Spot::Seat { index: 7 }, NOW - 5_000);
+    laptop.session_id = Uuid::from_u128(77);
+    let mut phone = session(vec![laptop.clone()], false);
+    assert_eq!(phone.stand().spot, Spot::Seat { index: 7 });
+
+    laptop.clubhouse.spot = Spot::Walking { x: 30, y: 12 };
+    laptop.clubhouse.since_ms = NOW + 100;
+    phone.set_records(Arc::new(vec![laptop]), NOW + 200);
+    phone.refresh_crowd(NOW + 200);
+
+    assert_eq!(phone.stand().spot, Spot::Walking { x: 30, y: 12 });
+    assert_eq!((phone.player_x, phone.player_y), (30, 12));
 }
 
 #[test]
@@ -88,92 +208,100 @@ fn tutorial_tours_every_page_then_comes_home() {
     let mut state = state_with_lobby(true);
     assert_eq!(state.tutorial, Tutorial::Pending);
     assert_eq!(state.tutorial_forced_step(), None);
-    state.enter_screen();
+    state.enter_screen(NOW);
     assert_eq!(state.tutorial, Tutorial::Welcome);
     assert_eq!((state.player_x, state.player_y), map::SPAWN);
 
-    // Every stop forces exactly one input: a page digit whose screen
-    // advances the route, Enter on the two mid-route interlude boxes (the
-    // music on Home, the lobby on The Arcade), or the Ctrl+F chord into Zen.
-    for (step, next_stage) in [
-        (TourStep::Page(b'1', Screen::Dashboard), Tutorial::VisitChat),
-        (TourStep::Enter, Tutorial::VisitMusic),
-        (TourStep::Page(b'2', Screen::Arcade), Tutorial::VisitArcade),
-        (TourStep::Enter, Tutorial::VisitLobby),
-        (TourStep::Page(b'3', Screen::Games), Tutorial::VisitGames),
+    // Enter moves every stop on, and says where the next one lives.
+    for (went, next_stage, modal) in [
         (
-            TourStep::Page(b'4', Screen::Artboard),
+            TourMove::Page(Screen::Dashboard),
+            Tutorial::VisitChat,
+            TourModal::None,
+        ),
+        (TourMove::Stay, Tutorial::VisitMusic, TourModal::Stations),
+        (
+            TourMove::Page(Screen::Arcade),
+            Tutorial::VisitArcade,
+            TourModal::None,
+        ),
+        (TourMove::Stay, Tutorial::VisitLobby, TourModal::Lobby),
+        (TourMove::Table, Tutorial::VisitTable, TourModal::None),
+        (
+            TourMove::Page(Screen::Games),
+            Tutorial::VisitGames,
+            TourModal::None,
+        ),
+        (TourMove::Stay, Tutorial::VisitDungeon, TourModal::None),
+        (
+            TourMove::Page(Screen::Artboard),
             Tutorial::VisitArtboard,
+            TourModal::None,
         ),
         (
-            TourStep::Page(b'5', Screen::Profiles),
+            TourMove::Page(Screen::Profiles),
             Tutorial::VisitDirectory,
+            TourModal::None,
         ),
         (
-            TourStep::Page(b'6', Screen::Leaderboard),
+            TourMove::Page(Screen::Leaderboard),
             Tutorial::VisitLeaderboard,
+            TourModal::None,
         ),
-        (TourStep::Zen, Tutorial::VisitZen),
+        (TourMove::Zen, Tutorial::VisitZen, TourModal::None),
         (
-            TourStep::Page(b'0', Screen::Clubhouse),
+            TourMove::Page(Screen::Clubhouse),
             Tutorial::Homecoming,
+            TourModal::None,
         ),
     ] {
-        assert_eq!(state.tutorial_forced_step(), Some(step));
-        match step {
-            TourStep::Page(_, screen) => {
-                // A wrong page never advances a stop; the route waits for
-                // its page.
-                let wrong = if screen == Screen::Games {
-                    Screen::Artboard
-                } else {
-                    Screen::Games
-                };
-                state.tutorial_screen_entered(wrong);
-                state.tutorial_screen_entered(screen);
-            }
-            TourStep::Zen => {
-                // The tavern is not the way into Zen: the stop waits for it.
-                state.tutorial_screen_entered(Screen::Clubhouse);
-                state.tutorial_screen_entered(Screen::Zen);
-            }
-            // The interludes advance without finishing the tour.
-            TourStep::Enter => assert!(!state.tutorial_advance()),
-        }
+        assert!(state.tutorial_forced_step().is_some());
+        assert_eq!(state.tutorial_advance(), went);
         assert_eq!(state.tutorial, next_stage);
+        assert_eq!(state.tour_modal(), modal);
     }
 
-    // The homecoming box forces Enter, and it finishes the tour.
-    assert_eq!(state.tutorial_forced_step(), Some(TourStep::Enter));
-    assert!(state.tutorial_advance());
+    // The homecoming Enter finishes the tour.
+    assert_eq!(state.tutorial_advance(), TourMove::Finished);
     assert_eq!(state.tutorial, Tutorial::Done);
     assert_eq!(state.tutorial_forced_step(), None);
+    assert_eq!(state.tutorial_advance(), TourMove::Stay);
+}
+
+/// The practice table and the fight are the stops Enter alone does not
+/// pass: the gate reads these steps to make the shot and the win come first.
+#[test]
+fn the_table_and_the_fight_are_their_own_steps() {
+    let mut state = state_with_lobby(true);
+    state.enter_screen(NOW);
+    let mut steps = Vec::new();
+    while let Some(step) = state.tutorial_forced_step() {
+        if step != TourStep::Enter {
+            steps.push((state.tutorial, step));
+        }
+        state.tutorial_advance();
+    }
+    assert_eq!(
+        steps,
+        [
+            (Tutorial::VisitTable, TourStep::Table),
+            (Tutorial::VisitDungeon, TourStep::Fight),
+        ]
+    );
 }
 
 #[test]
 fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
     let mut state = state_with_lobby(true);
-    state.enter_screen();
+    state.enter_screen(NOW);
     // Mid-tour: nothing pours at a distance, and the bar does not glow yet.
     assert!(!state.welcome_pour_due());
     assert!(!state.bar_glow());
-    state.tutorial_screen_entered(Screen::Dashboard);
-    assert!(!state.tutorial_advance()); // the music interlude
-    state.tutorial_screen_entered(Screen::Arcade);
-    assert!(!state.tutorial_advance()); // the lobby interlude
-    for screen in [
-        Screen::Games,
-        Screen::Artboard,
-        Screen::Profiles,
-        Screen::Leaderboard,
-        Screen::Zen,
-        Screen::Clubhouse,
-    ] {
-        state.tutorial_screen_entered(screen);
+    while state.tutorial != Tutorial::Homecoming {
+        state.tutorial_advance();
     }
-    assert_eq!(state.tutorial, Tutorial::Homecoming);
     assert!(state.bar_glow());
-    assert!(state.tutorial_advance());
+    assert_eq!(state.tutorial_advance(), TourMove::Finished);
     // Done, pour unclaimed: the glow keeps pointing at the treasure.
     assert!(state.bar_glow());
 
@@ -190,12 +318,28 @@ fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
 #[test]
 fn returning_users_never_pour_or_glow() {
     let mut state = state_with_lobby(false);
-    state.enter_screen();
+    state.enter_screen(NOW);
     assert_eq!(state.tutorial, Tutorial::Off);
     state.player_x = 28;
     state.player_y = 12;
     assert!(!state.welcome_pour_due());
     assert!(!state.bar_glow());
+}
+
+/// `/onboard` reruns the tour for a regular: the pour was only ever for a
+/// first visit, so the bar neither glows nor greets them at the end.
+#[test]
+fn a_tour_rerun_never_pours_or_glows_for_a_returning_user() {
+    let mut state = state_with_lobby(false);
+    state.enter_screen(NOW);
+    state.begin_tutorial(NOW, TourStart::Rerun);
+    while state.tutorial != Tutorial::Done {
+        state.tutorial_advance();
+    }
+    state.player_x = 28;
+    state.player_y = 15;
+    assert!(!state.bar_glow());
+    assert!(!state.welcome_pour_due());
 }
 
 const BARTENDER: u128 = 9;
@@ -346,14 +490,16 @@ fn tutorial_welcome_takes_the_banner_ahead_of_a_queued_answer() {
 }
 
 #[test]
-fn returning_user_spawns_seated_not_at_the_door() {
-    let mut state = state_with_lobby(false);
-    state.enter_screen();
-    state.refresh_roster(vec![occupant(1, "me")]);
-    state.refresh_snapshot();
-    let own = state.snapshot.find(Uuid::from_u128(1)).unwrap();
-    assert!(matches!(
-        own.placement,
-        super::super::lobby::Placement::Seated(_)
-    ));
+fn heading_out_back_puts_the_avatar_at_the_back_door_for_everyone() {
+    let mut state = session(vec![other(2, Spot::Seat { index: 3 }, 0)], false);
+    assert_ne!(state.nearby(), Some(map::Interactive::BackDoor));
+
+    state.step_to_back_door(NOW);
+
+    assert_eq!((state.player_x, state.player_y), map::BACK_DOOR_MAT);
+    assert_eq!(state.nearby(), Some(map::Interactive::BackDoor));
+    // The room sees it too: the stand this session publishes is at the
+    // back door.
+    let (x, y) = map::BACK_DOOR_MAT;
+    assert_eq!(state.stand().spot, Spot::Walking { x, y });
 }

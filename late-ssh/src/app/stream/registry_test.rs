@@ -111,6 +111,25 @@ fn first_media_report_goes_live_exactly_once() {
     assert_eq!(snapshot.streams[0].title, "show");
 }
 
+/// The live strip queues a stream by when its media first flowed: no stamp
+/// while pending, and a stop and resume through grace keeps the first one,
+/// so a page refresh is not a second start.
+#[test]
+fn the_went_live_stamp_is_set_once_on_the_first_media_report() {
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = begin_ok(&registry, user, "mat", "show", room, channel);
+    assert_eq!(registry.snapshot().streams[0].went_live_at, None);
+
+    registry.report_publisher(&handles.publish_token, true, None);
+    let stamped = registry.snapshot().streams[0].went_live_at;
+    assert!(stamped.is_some());
+
+    registry.report_publisher(&handles.publish_token, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
+    assert_eq!(registry.snapshot().streams[0].went_live_at, stamped);
+}
+
 #[test]
 fn unknown_publish_token_reports_gone() {
     let registry = StreamRegistry::new();

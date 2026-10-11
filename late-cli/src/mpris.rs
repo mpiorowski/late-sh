@@ -246,8 +246,11 @@ impl DesktopMedia {
 
     pub(super) fn update_icecast(&mut self, mounts: HashMap<String, IcecastTrack>) {
         self.icecast_tracks = mounts;
-        if self.source == Some(MediaSource::Icecast) {
-            self.publish();
+        match self.source {
+            // A house station under `radio` takes its track length from
+            // this map (see `radio_track`).
+            Some(MediaSource::Icecast) | Some(MediaSource::Radio) => self.publish(),
+            Some(MediaSource::Youtube) | None => {}
         }
     }
 
@@ -348,10 +351,19 @@ impl DesktopMedia {
         let title = details
             .and_then(|track| nonblank(Some(&track.title)))
             .unwrap_or(station);
+        // No artist fallback: radio is a catalogue of providers, and the
+        // CLI does not know which one runs a station.
         let artist = details
             .and_then(|track| nonblank(Some(&track.artist)))
-            .map(str::to_string)
-            .or_else(|| Some("Nightride FM".to_string()));
+            .map(str::to_string);
+        // The house mounts are radio stations too. Their track rides the
+        // radio map like any other; only the mount map knows its length.
+        let duration_ms = self
+            .icecast_tracks
+            .get(station)
+            .and_then(|track| track.duration_seconds)
+            .and_then(|seconds| i64::try_from(seconds).ok())
+            .and_then(|seconds| seconds.checked_mul(1000));
         TrackMetadata {
             identity: format!(
                 "radio:{station}:{}:{}",
@@ -361,7 +373,7 @@ impl DesktopMedia {
             title: title.to_string(),
             artist,
             album: Some(format!("late.sh · {station}")),
-            duration_ms: None,
+            duration_ms,
             started_at_ms: None,
             art_url: None,
             url: self.stream_url.clone(),

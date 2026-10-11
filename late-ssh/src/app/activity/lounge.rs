@@ -188,6 +188,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // throttling each other.
         ActivityKind::PotDrawn { pot_id, .. } => format!("pot-drawn:{pot_id}"),
         ActivityKind::PotClosing { pot_id, .. } => format!("pot-closing:{pot_id}"),
+        // Keyed on the invitee: the referral pays once per invitee, so the
+        // key only has to keep two invites paid in one sweep from throttling
+        // each other.
+        ActivityKind::ReferralRewarded { invitee, .. } => format!("referral:{invitee}"),
         // Keyed on the title so two distinct entries inside the window both
         // announce, while a retried publish of the same entry collapses.
         ActivityKind::CyberspacePosted { title } => {
@@ -201,6 +205,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // the window, so room-hopping between two live streams announces
         // both while re-opening the same room stays quiet.
         ActivityKind::WatchingStream { streamer } => format!("watching:{streamer}"),
+        // Keyed on the event: two posts in one sitting both announce, a
+        // re-emit of one collapses, and the start is once per row anyway.
+        ActivityKind::EventPosted { event_id, .. } => format!("event-posted:{event_id}"),
+        ActivityKind::EventStarting { event_id, .. } => format!("event-starting:{event_id}"),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),

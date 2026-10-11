@@ -493,15 +493,28 @@ fn a_snooker_colour_always_wears_what_it_scores() {
                 .any(|x| c.get(x, y) == colour)
         })
     };
-    let ink = [16, 16, 18];
-    assert!(!has(&balls[0], ink), "a red wears no number");
+    // The colours are not legal to hit first here, so they are dimmed — and
+    // the ink dims with them.
+    let dimmed = table_ui::BallLook {
+        dimmed: true,
+        ..table_ui::BallLook::default()
+    };
     assert!(
-        has(&balls[1], ink),
+        !has(&balls[0], table_ui::ink_for(RED_FIRST, dimmed)),
+        "a red wears no number"
+    );
+    assert!(
+        has(&balls[1], table_ui::ink_for(GREEN, dimmed)),
         "the green wears its 3 while reds are on"
     );
     assert!(
-        has(&balls[2], table_ui::WHITE),
+        has(&balls[2], table_ui::ink_for(BLACK, dimmed)),
         "the black wears its 7 in white ink"
+    );
+    assert_eq!(
+        table_ui::label_ink(BLACK),
+        table_ui::WHITE,
+        "white ink on the black, undimmed"
     );
 }
 
@@ -1099,4 +1112,217 @@ fn render(canvas: &Canvas) -> Vec<(String, Option<Color>, Option<Color>)> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+#[test]
+fn the_ring_says_whether_the_shot_as_aimed_is_a_foul() {
+    // The ring round the ball the aim is on is the fastest answer on the
+    // board to "may I hit this?", and it was giving the same answer either
+    // way. White is the shot; red is a foul waiting to happen.
+    use crate::app::games::pool_core::{aim, table_ui::BallSet};
+
+    let cue = [SPEC.length * 0.25, SPEC.width * 0.5];
+    let ringed = |id: u8, legal: &[u8]| {
+        let mut c = Canvas::new(220, 60, CLOTH);
+        let view = View::fit(&SPEC, &c);
+        let balls = vec![
+            BallFrame {
+                id: CUE,
+                pos: cue,
+                potted: false,
+            },
+            BallFrame {
+                id,
+                pos: [SPEC.length * 0.7, SPEC.width * 0.5],
+                potted: false,
+            },
+        ];
+        let line = aim::shot_line(&SPEC, &SPEC.geometry(), &balls, cue, 0.0, 0.0);
+        assert_eq!(line.first_ball(), Some(id), "the aim is straight at it");
+        let marks = Overlay {
+            line: Some(line),
+            legal: BallSet::from_ids(legal),
+            called_pocket: None,
+        };
+        table_ui::draw(&mut c, &SPEC, &SPEC.geometry(), &view, &balls, &marks);
+        let (bx, by) = view.to_px(balls[1].pos);
+        // The band round the ball, straight above it: the one part of it the
+        // aim line — drawn in the same white, straight along the shot — cannot
+        // be sitting on.
+        let r = view.ball_px();
+        let width = (r * 0.25).max(1.0);
+        let seen = |colour: [u8; 3]| {
+            ((by.floor() as i32 - (r + width).ceil() as i32)
+                ..=(by.floor() as i32 - r.ceil() as i32))
+                .any(|y| {
+                    ((bx.floor() as i32 - 1)..=(bx.floor() as i32 + 1))
+                        .any(|x| c.get(x, y) == colour)
+                })
+        };
+        (seen(table_ui::GUIDE), seen(table_ui::FAULT))
+    };
+
+    assert_eq!(ringed(3, &[3]), (true, false), "a ball you may hit: white");
+    assert_eq!(ringed(3, &[4]), (false, true), "one you may not: red");
+    assert_eq!(
+        ringed(3, &[]),
+        (true, false),
+        "nobody at the table, so nothing is a foul"
+    );
+}
+
+#[test]
+fn the_highlight_ring_sits_flush_against_the_ball() {
+    // And the same contract where it is actually drawn, so `paint_ball` cannot
+    // quietly go back to asking for a ring a fraction of a pixel out.
+    use crate::app::games::pool_core::{aim, table_ui::BallSet};
+
+    let cue = [SPEC.length * 0.25, SPEC.width * 0.5];
+    let at = [SPEC.length * 0.5, SPEC.width * 0.25];
+    let mut c = Canvas::new(300, 90, CLOTH);
+    let view = View::fit(&SPEC, &c);
+    let balls = vec![
+        BallFrame {
+            id: CUE,
+            pos: cue,
+            potted: false,
+        },
+        BallFrame {
+            id: 3,
+            pos: at,
+            potted: false,
+        },
+    ];
+    // Aim dead at it, so the ring is drawn.
+    let line = aim::shot_line(
+        &SPEC,
+        &SPEC.geometry(),
+        &balls,
+        cue,
+        (at[1] - cue[1]).atan2(at[0] - cue[0]),
+        0.0,
+    );
+    assert_eq!(line.target(), Some(3), "the aim is on it");
+    let marks = Overlay {
+        line: Some(line),
+        legal: BallSet::from_ids(&[3]),
+        called_pocket: None,
+    };
+    table_ui::draw(&mut c, &SPEC, &SPEC.geometry(), &view, &balls, &marks);
+
+    let (bx, by) = view.to_px(at);
+    let r = view.ball_px();
+    let width = (r * 0.25).max(1.0);
+    // Straight up from the centre: the ball, then the band round it, and no
+    // cloth anywhere between the two.
+    let mut rim = false;
+    for y in (by.floor() as i32 - (r + width).ceil() as i32)..=(by.floor() as i32) {
+        let (dx, dy) = (bx.floor() + 0.5 - bx, y as f64 + 0.5 - by);
+        if dx.hypot(dy) > r + width {
+            continue;
+        }
+        let px = c.get(bx.floor() as i32, y);
+        assert_ne!(
+            px,
+            CLOTH,
+            "cloth showing through {:.3} from the centre of a ball of {r:.3}",
+            dx.hypot(dy)
+        );
+        rim |= px == table_ui::GUIDE;
+    }
+    assert!(
+        rim,
+        "the highlighted ball wears its rim in the guide colour"
+    );
+}
+
+#[test]
+fn a_ring_outside_a_disc_leaves_no_gap_between_them() {
+    // The bug that keeps coming back: a ring that does not line up with the
+    // disc it goes round. The parametric version was half a pixel off inside
+    // the rim; the highlight drawn as `ring` at `radius + 1.2` filled from
+    // `radius + 0.2` outward and left the band between belonging to neither,
+    // which reads as background specks in the gap. `ring_outside` starts at
+    // exactly `d > radius` against the disc's `d <= radius`.
+    let ball = [200, 100, 50];
+    let mark = [10, 220, 240];
+    let bg = [0, 0, 0];
+    // A spread of radii and sub-pixel centres, because whether the gap catches
+    // a pixel centre at all depends on both.
+    for tenths in 0..10 {
+        let r = 3.0 + tenths as f64 * 0.7;
+        for offset in [0.0, 0.25, 0.5, 0.75] {
+            let mut c = Canvas::new(40, 40, bg);
+            let (cx, cy) = (20.0 + offset, 20.0 + offset);
+            let width = (r * 0.25).max(1.0);
+            c.disc(cx, cy, r, ball);
+            table_ui::ring_outside(&mut c, cx, cy, r, width, mark);
+            for y in 0..c.height() as i32 {
+                for x in 0..c.cols() as i32 {
+                    let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                    let d = dx.hypot(dy);
+                    if d > r + width {
+                        continue;
+                    }
+                    assert_ne!(
+                        c.get(x, y),
+                        bg,
+                        "gap at ({x}, {y}), r {r}, offset {offset}: {d:.3} from the centre"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn every_ball_with_a_number_wears_it_whoever_is_on() {
+    // Nine-ball is the case that forced it: exactly one ball is ever a legal
+    // target, so numbering only the striker's left a rack of anonymous
+    // coloured dots and the one thing the game is about — which ball comes
+    // next — unreadable. The cue ball and the fifteen identical reds still
+    // wear nothing, because there is nothing to tell apart.
+    use crate::app::games::pool_core::table_ui::{BallLook, BallSet, ink_for};
+
+    let mut c = Canvas::new(220, 60, CLOTH);
+    let view = View::fit(&SPEC, &c);
+    let balls: Vec<BallFrame> = [1u8, 9, 14]
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| BallFrame {
+            id,
+            pos: [SPEC.length * (0.25 + index as f64 * 0.2), SPEC.width * 0.5],
+            potted: false,
+        })
+        .collect();
+    // Nine-ball: only the 1 is on.
+    let marks = Overlay {
+        line: None,
+        legal: BallSet::from_ids(&[1]),
+        called_pocket: None,
+    };
+    table_ui::draw(&mut c, &SPEC, &SPEC.geometry(), &view, &balls, &marks);
+
+    let has = |ball: &BallFrame, colour: [u8; 3]| {
+        let (bx, by) = view.to_px(ball.pos);
+        let reach = view.ball_px().ceil() as i32;
+        ((by.floor() as i32 - reach)..=(by.floor() as i32 + reach)).any(|y| {
+            ((bx.floor() as i32 - reach)..=(bx.floor() as i32 + reach))
+                .any(|x| c.get(x, y) == colour)
+        })
+    };
+    let plain = BallLook::default();
+    let dimmed = BallLook {
+        dimmed: true,
+        ..BallLook::default()
+    };
+    assert!(has(&balls[0], ink_for(1, plain)), "the ball on wears its 1");
+    assert!(
+        has(&balls[1], ink_for(9, dimmed)),
+        "and so does a ball nobody may hit yet"
+    );
+    assert!(has(&balls[2], ink_for(14, dimmed)));
+    // The ink dims with the ball, so the striker's still reads first.
+    assert_ne!(ink_for(9, plain), ink_for(9, dimmed));
+    assert!(!has(&balls[1], ink_for(9, plain)), "dimmed, not bright");
 }

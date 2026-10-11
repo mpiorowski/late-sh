@@ -107,15 +107,8 @@ fn copy_link(app: &mut App) {
     }
 }
 
-/// `n` on the shelf, or `/jobs post`: the post form, unless the press is
-/// stopped, in which case the shelf is empty and says so already.
+/// `n` on the shelf, or `/jobs post`: the post form.
 pub(crate) fn open_post_form(app: &mut App) {
-    if !app.jobs.enabled() {
-        app.banner = Some(Banner::error(
-            "The job press is stopped; nothing can be posted until it is back on.",
-        ));
-        return;
-    }
     app.jobs.post.open();
 }
 

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{Row, Transaction};
@@ -75,6 +75,14 @@ pub fn crown_month(now: DateTime<Utc>) -> NaiveDate {
     now.date_naive()
         .with_day(1)
         .expect("every valid date has a first day of its month")
+}
+
+/// The first of the UTC month before the one `now` falls in: the month
+/// whose last holder wears the laureate's crown all of this one.
+pub fn previous_crown_month(now: DateTime<Utc>) -> NaiveDate {
+    crown_month(now)
+        .checked_sub_months(Months::new(1))
+        .expect("the month before a valid month is valid")
 }
 
 /// One reign: who held the crown, what they paid for it, and when it started
@@ -143,6 +151,25 @@ impl CrownReign {
             .collect())
     }
 
+    /// The last reign of each of the two newest months anyone took the
+    /// crown in, newest month first. The last reign of a month is who wore
+    /// the crown when that month ended, the same rule the `CRWN` award's
+    /// `crown_holder` CTE applies (`profile_award.rs`). Two months rather
+    /// than one so the current month's last reign is already in hand when
+    /// the rollover turns it into last month's, with no refresh at midnight.
+    pub async fn last_of_recent_months(client: &impl GenericClient) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT DISTINCT ON (month) *
+                 FROM crown_reigns
+                 ORDER BY month DESC, taken_at DESC
+                 LIMIT 2",
+                &[],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
     /// Whether this reign still counts. An open reign from a previous UTC
     /// month is stale: the crown reads as vacant at the minimum price from
     /// the rollover onwards, and the next take closes the row. This is how
@@ -172,7 +199,12 @@ impl CrownReign {
     /// with a raw constraint violation instead of paying the next rung. The
     /// `FOR UPDATE` then keeps the read-then-write on an existing reign
     /// exact for anything that reaches the row outside this path.
-    pub async fn lock_open(tx: &Transaction<'_>) -> Result<Option<Self>> {
+    ///
+    /// Return the reign and one database timestamp sampled after both locks.
+    /// Use that timestamp for the month check and both reign writes:
+    /// `current_timestamp` is fixed at transaction start, whose order can
+    /// differ from lock acquisition order and predate the reign being closed.
+    pub async fn lock_open(tx: &Transaction<'_>) -> Result<(Option<Self>, DateTime<Utc>)> {
         tx.query_one(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
             &[&CROWN_CHANGED_CHANNEL],
@@ -184,47 +216,53 @@ impl CrownReign {
                 &[],
             )
             .await?;
-        Ok(row.map(Self::from))
+        let taken_at = tx.query_one("SELECT clock_timestamp()", &[]).await?.get(0);
+        Ok((row.map(Self::from), taken_at))
     }
 
     /// Close the open reign, if there is one. Called under
     /// [`Self::lock_open`] for both the takeover case and the stale
     /// month-rollover row, so the partial unique index has room for the
-    /// insert that follows.
-    pub async fn close_in_tx(tx: &Transaction<'_>, reign_id: Uuid) -> Result<()> {
+    /// insert that follows. `taken_at` is the timestamp returned by that lock
+    /// call, also passed to [`Self::open_in_tx`] for the incoming reign.
+    pub async fn close_in_tx(
+        tx: &Transaction<'_>,
+        reign_id: Uuid,
+        taken_at: DateTime<Utc>,
+    ) -> Result<()> {
         tx.execute(
             "UPDATE crown_reigns
-             SET ended_at = current_timestamp
+             SET ended_at = $2
              WHERE id = $1 AND ended_at IS NULL",
-            &[&reign_id],
+            &[&reign_id, &taken_at],
         )
         .await?;
         Ok(())
     }
 
     /// Open a reign for `holder_user_id` at the price they paid. The month
-    /// is derived in SQL from the same `current_timestamp` that stamps
-    /// `taken_at`: computing it on the app clock before the pool checkout
-    /// and the advisory-lock wait could stamp a take that crossed midnight
-    /// on the last of the month with a month that is already over, and a
-    /// reign born stale burns the chips for nothing. The caller closes the
-    /// previous reign first; the unique index is what catches it if they
-    /// forget.
+    /// is derived in SQL from `taken_at`, the timestamp returned by
+    /// [`Self::lock_open`] after any lock wait. Using it for both fields
+    /// keeps a take that waited across a month boundary in the new month.
+    /// The caller closes the previous reign with that same timestamp first;
+    /// the unique index is what catches it if they forget.
     pub async fn open_in_tx(
         tx: &Transaction<'_>,
         holder_user_id: Uuid,
         paid_chips: i64,
+        taken_at: DateTime<Utc>,
     ) -> Result<Self> {
         let row = tx
             .query_one(
-                "INSERT INTO crown_reigns (month, holder_user_id, paid_chips)
+                "INSERT INTO crown_reigns (month, holder_user_id, paid_chips, taken_at)
                  VALUES (
-                    date_trunc('month', current_timestamp AT TIME ZONE 'UTC')::date,
+                    date_trunc('month', $3::timestamptz AT TIME ZONE 'UTC')::date,
                     $1,
-                    $2
+                    $2,
+                    $3
                  )
                  RETURNING *",
-                &[&holder_user_id, &paid_chips],
+                &[&holder_user_id, &paid_chips, &taken_at],
             )
             .await?;
         Ok(Self::from(row))

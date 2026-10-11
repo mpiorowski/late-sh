@@ -29,6 +29,10 @@ fn channel_names_follow_room_kinds() {
     );
     assert_eq!(
         channel_name(&room("topic", "private", Some("sekrit"))).as_deref(),
+        Some("##sekrit")
+    );
+    assert_eq!(
+        channel_name(&room("topic", "public", Some("sekrit"))).as_deref(),
         Some("#sekrit")
     );
     assert_eq!(channel_name(&room("game", "public", Some("poker-1"))), None);
@@ -57,9 +61,12 @@ fn ctcp_action_round_trip() {
 
 #[test]
 fn channel_lookup_helpers() {
-    assert_eq!(slug_for_channel("#lounge"), Some("lounge"));
-    assert_eq!(slug_for_channel("lounge"), None);
-    assert_eq!(slug_for_channel("#"), None);
+    assert_eq!(channel_parts("#lounge"), Some(("public", "lounge")));
+    assert_eq!(channel_parts("##compel"), Some(("private", "compel")));
+    assert_eq!(channel_parts("lounge"), None);
+    assert_eq!(channel_parts("#"), None);
+    assert_eq!(channel_parts("##"), None);
+    assert_eq!(channel_parts("###compel"), None);
     assert_eq!(normalize_channel("#LOUNGE"), "#lounge");
 }
 

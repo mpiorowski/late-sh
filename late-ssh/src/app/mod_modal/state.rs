@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use ratatui_textarea::{Input, TextArea, WrapMode};
 use uuid::Uuid;
@@ -17,6 +17,7 @@ pub(crate) struct ModModalState {
     screen_start: usize,
     mention_ac: MentionAutocomplete,
     has_opened: bool,
+    pending_help: HashSet<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub(crate) enum ModLogKind {
     Input,
     Separator,
     Info,
+    Help,
     Success,
     Error,
 }
@@ -43,17 +45,20 @@ impl ModModalState {
             screen_start: 0,
             mention_ac: MentionAutocomplete::default(),
             has_opened: false,
+            pending_help: HashSet::new(),
         }
     }
 
-    pub(crate) fn open(&mut self, can_moderate: bool) {
+    pub(crate) fn open(&mut self, can_moderate: bool, help_topic: Option<&str>) {
         composer::set_themed_textarea_cursor_visible(&mut self.command_input, true);
-        if self.has_opened {
+        if help_topic.is_some() {
+            self.clear_screen();
+        } else if self.has_opened {
             return;
         }
         self.has_opened = true;
         if can_moderate {
-            self.append_help();
+            self.append_help(help_topic);
         } else {
             self.append_error("access denied: moderator or admin only");
         }
@@ -67,12 +72,13 @@ impl ModModalState {
         &self.log
     }
 
-    pub(crate) fn viewport_start(&self, height: usize) -> usize {
-        let len = self.log.len();
+    pub(crate) fn viewport_start(&self, height: usize, line_heights: &[usize]) -> usize {
+        let len = line_heights.iter().sum::<usize>();
         if height == 0 {
             return len;
         }
-        let screen_bottom_start = self.screen_start.min(len).max(len.saturating_sub(height));
+        let screen_start = line_heights.iter().take(self.screen_start).sum::<usize>();
+        let screen_bottom_start = screen_start.max(len.saturating_sub(height));
         screen_bottom_start.saturating_sub(self.scroll)
     }
 
@@ -185,7 +191,10 @@ impl ModModalState {
         self.push_log(format!("> {command}"), ModLogKind::Input);
     }
 
-    pub(crate) fn append_pending(&mut self, request_id: Uuid) {
+    pub(crate) fn append_pending(&mut self, request_id: Uuid, is_help: bool) {
+        if is_help {
+            self.pending_help.insert(request_id);
+        }
         self.push_log(format!("running... {request_id}"), ModLogKind::Info);
     }
 
@@ -197,14 +206,17 @@ impl ModModalState {
         self.push_log(line.into(), ModLogKind::Error);
     }
 
-    fn append_help(&mut self) {
-        for line in mod_help_lines(None) {
-            self.append_info(line);
+    fn append_help(&mut self, topic: Option<&str>) {
+        for line in mod_help_lines(topic) {
+            self.push_log(line, ModLogKind::Help);
         }
     }
 
-    pub(crate) fn append_result(&mut self, success: bool, lines: Vec<String>) {
-        let kind = if success {
+    pub(crate) fn append_result(&mut self, request_id: Uuid, success: bool, lines: Vec<String>) {
+        let is_help = self.pending_help.remove(&request_id);
+        let kind = if success && is_help {
+            ModLogKind::Help
+        } else if success {
             ModLogKind::Success
         } else {
             ModLogKind::Error

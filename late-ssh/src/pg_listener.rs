@@ -20,16 +20,17 @@ use std::time::Duration;
 use anyhow::Result;
 use late_core::db::DbConfig;
 use late_core::models::{
-    app_flag::APP_FLAG_CHANGED_CHANNEL,
     article::ARTICLES_CHANGED_CHANNEL,
     bonsai::BONSAI_CHANGED_CHANNEL,
     chat_message_gild::CHAT_MESSAGE_GILDED_CHANNEL,
     chips::CHIP_USER_CHANGED_CHANNEL,
     crown::CROWN_CHANGED_CHANNEL,
+    daily_match::DAILY_MATCH_CHANGED_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
     pot::POT_CHANGED_CHANNEL,
+    presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
 };
 use tokio::sync::mpsc;
@@ -46,26 +47,28 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// here before it can retry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refresh {
-    AppFlags,
     RunnerLooks,
     CrownHolder,
+    DailyMatches,
     Pot,
     Articles,
     ActiveQuestBoards,
     ShopFlairDirectory,
+    CalendarNotices,
 }
 
 impl Refresh {
     /// The log line's name for the read.
     fn what(self) -> &'static str {
         match self {
-            Refresh::AppFlags => "app flags",
             Refresh::RunnerLooks => "runner looks",
             Refresh::CrownHolder => "crown holder",
+            Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active quest boards",
             Refresh::ShopFlairDirectory => "shop flair directory",
+            Refresh::CalendarNotices => "calendar server notices",
         }
     }
 }
@@ -105,15 +108,17 @@ where
 /// breaks the build here until it has a name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
-    AppFlagChanged,
+    CalendarChanged,
     ArticlesChanged,
     BonsaiChanged,
     ChatMessageGilded,
     ChipUserChanged,
     CrownChanged,
+    DailyMatchChanged,
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
     PotChanged,
+    Presence,
     QuestAssignmentsChanged,
     QuestUserChanged,
     ShopCatalogChanged,
@@ -121,16 +126,18 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 13] = [
-        Channel::AppFlagChanged,
+    pub const ALL: [Channel; 15] = [
+        Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
         Channel::ChatMessageGilded,
         Channel::ChipUserChanged,
         Channel::CrownChanged,
+        Channel::DailyMatchChanged,
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
         Channel::PotChanged,
+        Channel::Presence,
         Channel::QuestAssignmentsChanged,
         Channel::QuestUserChanged,
         Channel::ShopCatalogChanged,
@@ -140,15 +147,17 @@ impl Channel {
     /// The Postgres channel name, owned by the model that sends it.
     pub fn name(self) -> &'static str {
         match self {
-            Channel::AppFlagChanged => APP_FLAG_CHANGED_CHANNEL,
+            Channel::CalendarChanged => late_core::models::calendar::CALENDAR_CHANGED_CHANNEL,
             Channel::ArticlesChanged => ARTICLES_CHANGED_CHANNEL,
             Channel::BonsaiChanged => BONSAI_CHANGED_CHANNEL,
             Channel::ChatMessageGilded => CHAT_MESSAGE_GILDED_CHANNEL,
             Channel::ChipUserChanged => CHIP_USER_CHANGED_CHANNEL,
             Channel::CrownChanged => CROWN_CHANGED_CHANNEL,
+            Channel::DailyMatchChanged => DAILY_MATCH_CHANGED_CHANNEL,
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
+            Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
             Channel::QuestUserChanged => QUEST_USER_CHANGED_CHANNEL,
             Channel::ShopCatalogChanged => SHOP_CATALOG_CHANGED_CHANNEL,

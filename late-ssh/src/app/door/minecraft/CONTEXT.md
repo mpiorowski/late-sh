@@ -4,7 +4,6 @@
 - Scope: the Minecraft card in the Games hub (`late-ssh/src/app/door/minecraft`) and the server it describes (`infra/minecraft.tf`, `scripts/minecraft_whitelist_add.sh`).
 - Upstream: Paper (Minecraft Java Edition server) via the `itzg/minecraft-server` image, plus the GriefPrevention plugin from Modrinth.
 - Status: Active. Server live since 2026-09-13.
-- Last updated: 2026-09-15.
 - Parent context: `../../../../../CONTEXT.md`.
 
 ## Summary
@@ -13,7 +12,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 
 ## Card
 
-- `HubGame::Minecraft` sits in the House group right after Lateania (`hub/state.rs`). `ui.rs` is the landing: connect, get whitelisted, claim land, share a claim, griefing, world.
+- `HubGame::Minecraft` is the one game in the `Servers` group (`servers` in the sidebar, after the remakes, before the doors; `hub/state.rs`): servers we host and you play from a game client. `ui.rs` is the landing: connect, get whitelisted, claim land, share a claim, griefing, world.
 - Enter does nothing on this card (`launch_games_hub_selection` has an empty arm) and the hub footer drops its Enter hint for it. It is never "live": `live_screen` returns `None`.
 - The landing scrolls with the rest of the hub (Ctrl+J/K, Ctrl+arrows) because it is long enough to be cut on short terminals. Claiming comes before the rules on purpose, so the most useful part stays near the top.
 - `ADDRESS`, `VERSION`, `DIFFICULTY`, and `WORLD_BORDER` are constants. `ui_test.rs::quoted_settings_match_the_terraform` reads `infra/minecraft.tf` and `infra/defaults.tf` at test time and fails when the card and the server drift (version, port 25565, difficulty, online mode, whitelist, GriefPrevention, world border, and no `mob_griefing` override). The build never reads `infra/`.

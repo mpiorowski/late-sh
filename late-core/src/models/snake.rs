@@ -54,6 +54,9 @@ impl Game {
 }
 
 impl HighScore {
+    /// `updated` is when the best was set, not when the player last played:
+    /// the monthly board and the award snapshot window this table by it, so
+    /// a submit that does not beat the best must leave it alone.
     pub async fn update_score_if_higher(
         client: &Client,
         user_id: Uuid,
@@ -63,7 +66,12 @@ impl HighScore {
             .query_one(
                 "INSERT INTO snake_high_scores (user_id, score)
                  VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET score = GREATEST(snake_high_scores.score, $2), updated = current_timestamp
+                 ON CONFLICT (user_id) DO UPDATE SET
+                    score = GREATEST(snake_high_scores.score, $2),
+                    updated = CASE
+                        WHEN $2 > snake_high_scores.score THEN current_timestamp
+                        ELSE snake_high_scores.updated
+                    END
                  RETURNING *",
                 &[&user_id, &new_score],
             )

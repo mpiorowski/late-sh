@@ -138,17 +138,6 @@ impl Notification {
             body: format!("@{buyer} gilded your message (+{chips} chips)"),
         }
     }
-
-    /// Reuses `GameEvents` rather than adding a dedicated `Kind`/settings row:
-    /// this is the same "something you started needs your attention" bucket
-    /// as the daily/house your-turn alerts.
-    pub(crate) fn status_done(word: &str) -> Self {
-        Self {
-            kind: Kind::GameEvents,
-            title: format!("{word} done"),
-            body: "your /status countdown finished".to_string(),
-        }
-    }
 }
 
 /// Create the session's notification channel. Clone the [`Notifier`] into any

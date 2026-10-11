@@ -51,10 +51,10 @@ pub struct ActiveSession {
     pub token: String,
     pub fingerprint: Option<String>,
     pub peer_ip: Option<IpAddr>,
-    /// This session's `/status`, `None` when unset. The status directory's
-    /// per-user entry is rebuilt from these (`status::publish_for_user`), so
-    /// one session clearing or leaving cannot erase another session's badge.
-    pub status: Option<crate::app::common::status::SessionStatus>,
+    /// Whether this session is away (`app/common/away.rs`): quiet for the
+    /// away threshold or sent away by hand. A user reads as away only when
+    /// every one of their sessions is.
+    pub away: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -72,9 +72,8 @@ pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
 /// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
 /// register with no fingerprint and are excluded, matching the clubhouse
 /// headcount.
-pub fn online_human_count(active_users: &ActiveUsers) -> usize {
+pub fn online_human_count(active_users: &HashMap<Uuid, ActiveUser>) -> usize {
     active_users
-        .lock_recover()
         .values()
         .filter(|user| user.fingerprint.is_some())
         .count()
@@ -113,6 +112,7 @@ pub struct State {
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub calendar_service: crate::app::calendar::svc::CalendarService,
     pub feed_service: FeedService,
     pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: ShowcaseService,
@@ -138,6 +138,7 @@ pub struct State {
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     pub door_rc_service: crate::app::door::rc::DoorRcService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub realm_service: crate::app::lobby::realm::svc::RealmService,
@@ -156,10 +157,9 @@ pub struct State {
     /// so pair-socket floods and SSH connections cap independently.
     pub pair_ws_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub active_users: ActiveUsers,
-    /// Process-global clubhouse presence: who sits where, who is walking.
-    pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
-    /// Process-global Nightcap seats.
-    pub nightcap_lobby: crate::app::clubhouse::nightcap::lobby::SharedSeats,
+    /// The process's drunk map: a mirror of `user_drinks`, seeded by the
+    /// ghost task and bumped on every pour here (`clubhouse/drunk.rs`).
+    pub drunk_map: crate::app::clubhouse::drunk::DrunkMap,
     pub nightcap_house: crate::app::clubhouse::nightcap::svc::NightcapHouse,
     /// Process-global ghost-bot mention cooldown ladders: ghost responder
     /// loops step them, sessions peek for the composer cooldown banner.
@@ -170,12 +170,9 @@ pub struct State {
     /// Live 24h username effects (snapshot-swap; seeded and written by
     /// `ShopService`, resolved per session in the tick loop).
     pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
-    /// Live `/status` presence (snapshot-swap; written by the sessions that
-    /// own them, resolved per session in the tick loop). In-memory only: a
-    /// status dies with its session, so there is nothing to persist.
-    pub status_directory: crate::app::common::status::StatusDirectory,
     pub crown_service: crate::app::crown::svc::CrownService,
     pub pot_service: crate::app::pot::svc::PotService,
+    pub referral_service: crate::app::referral::svc::ReferralService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:
@@ -186,12 +183,12 @@ pub struct State {
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
-    /// Process-wide switches (`app_flags` rows: the first-contact kill
-    /// switch and fuse), served to every replica over Postgres. See
-    /// `app/flags` and the multi-replica rule in the root CONTEXT.md.
-    pub app_flags: crate::app::flags::svc::AppFlagService,
     /// Every runner's look (`deadchannel_runners` rows), served to every
     /// replica over Postgres so the #deadchannel portraits agree everywhere.
     /// See `app/deadchannel/runner`.
     pub runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService,
+    /// Presence (`app/presence`): who is where in the tavern, on the
+    /// Nightcap stools and on the night city street, this replica's
+    /// sessions and every other replica's, over Postgres.
+    pub presence: crate::app::presence::svc::PresenceService,
 }

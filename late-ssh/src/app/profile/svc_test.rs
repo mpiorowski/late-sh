@@ -28,6 +28,7 @@ use late_core::models::{
     room_ban::RoomBan,
     server_ban::{ServerBan, ServerBanActivation},
     showcase::{Showcase, ShowcaseParams},
+    statusline::default_statusline_components,
     user::{RightSidebarMode, User, UserParams, default_right_sidebar_components},
 };
 use late_core::test_utils::create_test_user;
@@ -102,6 +103,64 @@ async fn find_profile_publishes_stored_chip_balance() {
 
     assert_eq!(snapshot.user_id, Some(user.id));
     assert_eq!(snapshot.chip_balance, Some(chips.balance));
+}
+
+/// The runner section reads the sheet as it would stand today, not as the
+/// row last left it: the lazy day roll is applied to the view, so a runner
+/// who dropped yesterday and has not touched the row since is not shown
+/// with a dead signal after midnight. Nothing is written.
+#[tokio::test]
+async fn find_profile_settles_the_runners_sheet_for_the_view() {
+    use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
+    use crate::app::deadchannel::fight::state::Sheet;
+    use crate::app::deadchannel::fight::svc::FightService;
+    use crate::app::deadchannel::runner::state::Look;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "profile-runner-roll").await;
+    let look = Look::random(1, &mut rand::thread_rng());
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
+        .await
+        .expect("a runner");
+    let row = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find runner")
+        .expect("runner row");
+    let mut yesterday = Sheet::from_row(&row).expect("sheet parses");
+    yesterday.day = FightService::today()
+        .pred_opt()
+        .expect("a day before today");
+    yesterday.signal = 0;
+    yesterday.rations_left = 0;
+    yesterday.kills_today = 3;
+    DeadchannelRunner::store_sheet(&**client, yesterday.to_write())
+        .await
+        .expect("store yesterday's sheet");
+
+    let service = ProfileService::new(test_db.db.clone(), default_active_users());
+    let mut snapshot_rx = service.subscribe_snapshot(user.id);
+    service.find_profile(user.id);
+    timeout(Duration::from_secs(2), snapshot_rx.changed())
+        .await
+        .expect("snapshot timeout")
+        .expect("watch changed");
+    let snapshot = snapshot_rx.borrow_and_update().clone();
+    let runner = snapshot.runner.expect("runner in snapshot");
+    assert_eq!(runner.look, look);
+    assert_eq!(runner.sheet.day, FightService::today());
+    assert_eq!(runner.sheet.signal, runner.sheet.max_signal());
+    assert_eq!(runner.sheet.rations_left, RATIONS_PER_DAY);
+    assert_eq!(runner.sheet.kills_today, 0);
+
+    // The view rolled; the row did not.
+    let stored = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find runner again")
+        .expect("runner row again");
+    assert_eq!(stored.signal, 0);
+    assert_eq!(stored.rations_left, 0);
 }
 
 /// The profile modal shows the viewed user's showcases from this snapshot,
@@ -333,7 +392,8 @@ async fn find_profile_resolves_the_house_rows() {
     tx.commit().await.expect("commit");
 
     let tx = client.transaction().await.expect("tx");
-    let first_reign = CrownReign::open_in_tx(&tx, loser.id, CROWN_MIN_PRICE)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    let first_reign = CrownReign::open_in_tx(&tx, loser.id, CROWN_MIN_PRICE, taken_at)
         .await
         .expect("first reign");
     UserChips::apply(
@@ -348,11 +408,12 @@ async fn find_profile_resolves_the_house_rows() {
     .expect("loser can afford the crown");
     tx.commit().await.expect("commit");
     let tx = client.transaction().await.expect("tx");
-    CrownReign::close_in_tx(&tx, first_reign.id)
+    let (_, taken_at) = CrownReign::lock_open(&tx).await.expect("lock");
+    CrownReign::close_in_tx(&tx, first_reign.id, taken_at)
         .await
         .expect("close");
     let price = next_price(Some(CROWN_MIN_PRICE));
-    let reign = CrownReign::open_in_tx(&tx, user.id, price)
+    let reign = CrownReign::open_in_tx(&tx, user.id, price, taken_at)
         .await
         .expect("reign");
     UserChips::apply(
@@ -416,6 +477,9 @@ async fn find_profile_resolves_the_house_rows() {
 
 #[tokio::test]
 async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
+    use late_core::models::statusline::{LabelMode, StatusComponent};
+    use late_core::models::user::{ArtSplashMode, LandingPage, TerminalImagesMode};
+
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "profile-edit-user").await;
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
@@ -432,6 +496,15 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .profile
         .clone()
         .expect("initial profile");
+
+    let mut components = default_statusline_components();
+    let voice = components
+        .iter_mut()
+        .find(|setting| setting.component == StatusComponent::Voice)
+        .expect("voice component");
+    voice.enabled = true;
+    voice.label = LabelMode::Icon;
+    let hidden_awards = vec!["late_time".to_string()];
 
     service.edit_profile(
         user.id,
@@ -454,14 +527,19 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: components.clone(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
-            landing_page: late_core::models::user::LandingPage::Clubhouse,
+            landing_page: LandingPage::Zen,
             paper_at_login: true,
-            terminal_images: late_core::models::user::TerminalImagesMode::Auto,
-            hidden_award_categories: Vec::new(),
+            screensaver: late_core::models::user::Screensaver::Off,
+            show_watch_chat: true,
+            art_splash_mode: ArtSplashMode::Never,
+            artboard_disclaimer: false,
+            terminal_images: TerminalImagesMode::Off,
+            hidden_award_categories: hidden_awards.clone(),
             show_flag_fallback: false,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
@@ -491,6 +569,24 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         .expect("updated profile");
 
     assert_eq!(updated.username, "night-owl");
+    assert_eq!(updated.statusline_components, components);
+    assert_eq!(updated.landing_page, LandingPage::Zen);
+    assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
+    assert_eq!(updated.hidden_award_categories, hidden_awards);
+    assert_eq!(updated.art_splash_mode, ArtSplashMode::Never);
+    assert!(!updated.artboard_disclaimer);
+    assert_eq!(
+        updated.screensaver,
+        late_core::models::user::Screensaver::Off
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let saved = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(
+        saved.settings["artboard_disclaimer"],
+        serde_json::json!(false)
+    );
+    assert_eq!(saved.settings["screensaver"], serde_json::json!("off"));
 }
 
 #[tokio::test]
@@ -532,12 +628,17 @@ async fn edit_profile_normalizes_username_before_persisting() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            show_watch_chat: true,
+            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -605,12 +706,17 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            show_watch_chat: true,
+            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -813,7 +919,7 @@ async fn delete_account_terminates_active_sessions() {
                 token,
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: None,
-                status: None,
+                away: false,
             }],
             connection_count: 1,
             last_login_at: Instant::now(),
@@ -889,12 +995,17 @@ async fn edit_profile_snapshots_stay_per_user() {
             show_right_sidebar: true,
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
+            statusline_components: default_statusline_components(),
             show_room_list_sidebar: true,
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            show_watch_chat: true,
+            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,

@@ -66,6 +66,10 @@ pub const GHOST: Rgb = [196, 220, 206];
 /// the rail. Dimmer than the aim itself: consequences, not the choice.
 pub const TANGENT: Rgb = [168, 184, 174];
 pub const REBOUND: Rgb = [128, 156, 140];
+/// The ring round a ball the aim is on that the striker may **not** hit
+/// first. White says "this is the shot"; this says "this is a foul", in the
+/// one place the player is already looking.
+pub const FAULT: Rgb = [236, 80, 66];
 /// How far a ball the striker may not hit is pulled toward the cloth.
 const DIM_MIX: f64 = 0.45;
 
@@ -158,6 +162,42 @@ pub fn printed_label(id: u8) -> Option<String> {
         id if rules_snooker::is_colour(id) => Some(rules_snooker::value(id).to_string()),
         _ => None,
     }
+}
+
+/// The ink a ball's number is actually printed in: `label_ink`, pulled toward
+/// the cloth with the ball when the striker may not hit it.
+///
+/// Every ball wears its number now, so the dimming has to reach the ink too —
+/// a rack of dimmed balls with fifteen bright numbers still shouting off it
+/// tells the striker nothing about which ones are theirs.
+pub(super) fn ink_for(id: u8, look: BallLook) -> Rgb {
+    if look.dimmed {
+        mix(label_ink(id), CLOTH, DIM_MIX)
+    } else {
+        label_ink(id)
+    }
+}
+
+/// A ball's own hue, as **text on a terminal background**.
+///
+/// Not the same thing as the hue it is painted with: the 8 and the snooker
+/// black are near-black by design, which reads as a ball on green cloth and as
+/// nothing at all as a character on a dark terminal. Anything too dark to read
+/// is lifted toward white until it is, and everything else is left exactly as
+/// the ball is drawn, so the list on the panel and the balls on the table are
+/// unmistakably the same colours.
+pub fn text_colour(id: u8) -> Rgb {
+    /// Luma a hue is lifted to before it counts as readable text on a dark
+    /// terminal. Low enough that most of the set is left untouched and the
+    /// ones that are not stay recognisably themselves: the maroon 7 lightens,
+    /// the 8 comes up to a grey rather than going white.
+    const FLOOR: f64 = 110.0;
+    let colour = ball_colour(id);
+    let luma = 0.299 * colour[0] as f64 + 0.587 * colour[1] as f64 + 0.114 * colour[2] as f64;
+    if luma >= FLOOR {
+        return colour;
+    }
+    mix(colour, [255, 255, 255], (FLOOR - luma) / (255.0 - luma))
 }
 
 /// The ink a label is printed in: white on the two black balls, dark on
@@ -332,10 +372,12 @@ impl BallSet {
 pub struct BallLook {
     /// The ball the aim is on: ringed.
     pub highlighted: bool,
+    /// The ring is a warning rather than a confirmation: the cue ball's first
+    /// contact will be this ball, and this ball is not one the striker may
+    /// hit. Only ever set with `highlighted`.
+    pub fault: bool,
     /// A ball the striker may not hit first: pulled toward the cloth.
     pub dimmed: bool,
-    /// Wears its number.
-    pub numbered: bool,
 }
 
 /// What to draw on top of the balls this frame.
@@ -358,10 +400,15 @@ impl Overlay {
         let legal = self.legal.contains(id);
         BallLook {
             highlighted,
+            // Judged off the ball that will actually be *touched*, not the one
+            // the line is sighted on: an aim that runs past a ball into the
+            // rail contacts nothing, and calling that a foul on the ball it
+            // went past would be crying wolf. An empty legal set means nobody
+            // is at the table, and then nothing is a foul.
+            fault: !self.legal.is_empty()
+                && !legal
+                && self.line.and_then(|line| line.first_ball()) == Some(id),
             dimmed: id != CUE && !self.legal.is_empty() && !legal,
-            // A snooker colour always shows what it scores: the player plans
-            // the next colour while still on a red.
-            numbered: highlighted || legal || rules_snooker::is_colour(id),
         }
     }
 }
@@ -601,11 +648,30 @@ pub(super) fn paint_ball(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8, lo
         }
     }
 
-    if look.numbered {
-        write_number(canvas, x, y, r, id);
-    }
+    // **Every ball that has a number wears it, all the time.** Only the
+    // striker's used to, on the grounds that fifteen bold numbers were the
+    // busiest thing on the table — and in nine-ball, where exactly one ball is
+    // ever legal, that left a rack of anonymous coloured dots and the one
+    // thing the game is about (which ball comes next) unreadable.
+    // `printed_label` already keeps the cue ball and the fifteen identical
+    // reds bare, so this adds a number only where there is something to tell
+    // apart, and the ink dims with the ball so the striker's still read first.
+    write_number(canvas, x, y, r, id, look);
+    // The ball the aim is on gets a band **round** it rather than its own rim
+    // recoloured: the rim is a shaded edge of the ball's own hue and is what
+    // keeps a cluster reading as separate balls, so spending it on the
+    // highlight costs the picture more than the highlight is worth. Drawn
+    // flush against the ball (see `ring_outside`), and thickening with it so
+    // the mark still reads on a table drawn across a wall-sized terminal.
     if look.highlighted {
-        ring(canvas, x, y, r + 1.2, GUIDE);
+        ring_outside(
+            canvas,
+            x,
+            y,
+            r,
+            (r * 0.25).max(1.0),
+            if look.fault { FAULT } else { GUIDE },
+        );
     }
 }
 
@@ -622,15 +688,16 @@ pub(super) fn paint_ball(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8, lo
 /// Two-digit balls used to be skipped entirely, which meant the stripes — the
 /// balls whose identity is hardest to read from hue alone — were the ones
 /// wearing no number at all.
-fn write_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8) {
+fn write_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8, look: BallLook) {
     let Some(text) = printed_label(id) else {
         return;
     };
+    let ink = ink_for(id, look);
     // Big enough to paint the number out of pixels instead of borrowing the
     // terminal's font: a glyph is drawn at the cell's size whatever the ball
     // is, so on a large table the number stops growing with the ball it is on
     // and turns into a speck. Painted digits scale with the disc.
-    if paint_number(canvas, x, y, r, &text, id) {
+    if paint_number(canvas, x, y, r, &text, ink) {
         return;
     }
     let digits = text.len() as f64;
@@ -639,7 +706,6 @@ fn write_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8) {
     if r < DIGIT_BALL_PX.max(digits * 1.4) {
         return;
     }
-    let fg = label_ink(id);
     let rows: &[f64] = if r >= REPEAT_BALL_PX {
         &[-2.0, 2.0]
     } else {
@@ -652,7 +718,7 @@ fn write_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, id: u8) {
                 (start + i as f64).round() as i32,
                 (y + row).round() as i32,
                 ch,
-                fg,
+                ink,
             );
         }
     }
@@ -711,7 +777,10 @@ const PAINT_BALL_PX: f64 = 3.5;
 /// terminal glyphs is two different alphabets on the same rack. Since every
 /// ball on a table is drawn at the same size, the choice is all or nothing,
 /// and it should be made once for the rack rather than per ball.
-fn paint_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, text: &str, id: u8) -> bool {
+/// A painted digit lands on the ball's own colour, so the caller hands in the
+/// ink it needs for contrast — dark on everything but the black balls, and
+/// pulled toward the cloth with the ball when the striker may not hit it.
+fn paint_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, text: &str, ink: Rgb) -> bool {
     let digits = text.len() as i32;
     // Per scale: three columns a digit, one column of space between them, and
     // one of margin all round.
@@ -731,9 +800,7 @@ fn paint_number(canvas: &mut Canvas, x: f64, y: f64, r: f64, text: &str, id: u8)
     }
     let scale = (1..=MAX_DIGIT_SCALE).rev().find(|k| fits(*k)).unwrap_or(1);
 
-    // A painted digit lands on the ball's own colour, so it needs the contrast
-    // the rim gets: dark ink on everything but the black balls.
-    let fg = label_ink(id);
+    let fg = ink;
     let (w, h) = block(scale);
     let left = x - w / 2.0;
     let top = y - h / 2.0;
@@ -779,6 +846,46 @@ pub(super) fn ring(canvas: &mut Canvas, cx: f64, cy: f64, radius: f64, colour: R
             let ddy = y as f64 + 0.5 - cy;
             let d2 = ddx * ddx + ddy * ddy;
             if d2 <= r2 && d2 > inner2 {
+                canvas.set(x, y, colour);
+            }
+        }
+    }
+}
+
+/// A band `width` pixels thick drawn immediately **outside** a disc of
+/// `radius`: the layer that goes on top of the ball's own shaded rim.
+///
+/// **The inner edge is exactly the disc's outer edge.** This fills `d > radius`
+/// against the disc's `d <= radius`, tested at the same pixel centres, so the
+/// two tile with no seam. Asking `ring` for `radius + 1.2` instead — which is
+/// what the highlight used to do — leaves every pixel between `radius` and
+/// `radius + 0.2` belonging to neither, and that is the ring of background
+/// specks that keeps appearing between a ball and the ring round it. Take the
+/// radius the ball is actually drawn at and say how thick you want the band;
+/// never add a fraction to a radius and hope.
+pub(super) fn ring_outside(
+    canvas: &mut Canvas,
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    width: f64,
+    colour: Rgb,
+) {
+    annulus(canvas, cx, cy, radius, radius + width.max(1.0), colour);
+}
+
+/// Pixels whose centres fall in `(inner, outer]`. The one annulus test, shared
+/// so a shell and the band outside it cannot disagree about where an edge is.
+fn annulus(canvas: &mut Canvas, cx: f64, cy: f64, inner: f64, outer: f64, colour: Rgb) {
+    let (outer2, inner2) = (outer * outer, inner * inner);
+    let span = outer.ceil() as i32;
+    for dy in -span..=span {
+        for dx in -span..=span {
+            let (x, y) = (cx.floor() as i32 + dx, cy.floor() as i32 + dy);
+            let ddx = x as f64 + 0.5 - cx;
+            let ddy = y as f64 + 0.5 - cy;
+            let d2 = ddx * ddx + ddy * ddy;
+            if d2 <= outer2 && d2 > inner2 {
                 canvas.set(x, y, colour);
             }
         }

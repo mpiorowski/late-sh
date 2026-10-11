@@ -2,7 +2,7 @@
 //! @bartender) plus their init, mention responders, and the clubhouse
 //! tutorial's scripted @bartender welcome. Each bot registers with
 //! `fingerprint: None`
-//! so it stays out of the human headcount (`active_users` / clubhouse lobby).
+//! so it stays out of the human headcount (it has no session, so no presence).
 //!
 //! ## AI call policy: grounded vs cheap
 //!
@@ -45,8 +45,10 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
-        drink_round::{Bar, ROUND_PRICE_PER_PATRON, contains_round_request},
-        drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
+        drink_round::{Bar, BarOrder, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, bar_order},
+        drinks::{
+            DRINK_PRICE_MAX, DRINK_PRICE_MIN, SOFT_DRINK_PRICE, UserDrinks, drunk_level_word,
+        },
         user::{User, UserParams},
     },
 };
@@ -61,9 +63,11 @@ use crate::{
     app::ai::ladder::{Decision, LadderBot, MentionLadders},
     app::ai::svc::AiService,
     app::chat::svc::{ChatEvent, ChatService},
-    app::clubhouse::lobby::SharedLobby,
+    app::clubhouse::drunk::DrunkMap,
     app::common::primitives::thousands,
-    app::games::chips::svc::{ChipService, RoundError, RoundRefusal},
+    app::games::chips::svc::{
+        ChipService, GiftDrinkRefusal, GiftError, GiftRefusal, RoundError, RoundRefusal,
+    },
     app::help_modal::data::{bartender_app_context, bot_app_context},
     metrics,
     state::{ActiveUser, ActiveUsers, online_human_ids_excluding},
@@ -78,7 +82,7 @@ pub struct GhostService {
     activity_tx: broadcast::Sender<ActivityEvent>,
     username_directory: crate::usernames::UsernameDirectory,
     chip_service: ChipService,
-    clubhouse_lobby: SharedLobby,
+    drunk_map: DrunkMap,
     mention_ladders: MentionLadders,
     /// The bar out back (`app/clubhouse/nightcap`). No AI is allowed in
     /// it: every listener here drops a message from this room before any
@@ -160,7 +164,7 @@ const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// balance that was spent before the debit landed. No charge happens.
 const BARTENDER_TAB_BOUNCED_LINE: &str =
     "easy now, your tab just bounced. come back when your chips catch up to your thirst.";
-/// How often the DB-backed drunk levels are re-seeded into the shared lobby.
+/// How often the DB-backed drunk levels are re-seeded into the drunk map.
 const DRUNK_SEED_INTERVAL: Duration = Duration::from_secs(60);
 /// The bartender's own words for a round that settled, one picked per buy.
 ///
@@ -215,11 +219,12 @@ const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Loun
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
     a Segfault Sour, warm milk for the juniors, decaf for anyone shipping on a Friday). \
-    The welcome pour for a brand-new face is on the house, but after that drinks go on the tab and cost Late Chips: \
-    a plain ale runs about 100 chips, the good stuff climbs from there, and the top shelf runs up near a thousand. \
+    The welcome pour for a brand-new face is on the house, but after that drinks go on the tab and cost Late Chips, at the prices the tab rules below set. \
     You invent the drink and set the price yourself, always a round number that fits the pour. \
     You never pour what a patron cannot afford; you slide them something in their range instead, kindly. \
-    You keep the good stuff coming while a patron can still hold it; only once someone is truly wasted, barely upright, do you switch them to water and a gentle word instead of anything stronger. \
+    You keep the good stuff coming while a patron can still hold it. \
+    If someone is truly wasted, barely upright, you cut them off and switch them to water instead of anything stronger. \
+    If a patron explicitly asks for a non-alcoholic drink (e.g. \"NA\", Shirley Temple) or orders an obviously non-intoxicating beverage (water, coffee, orange juice, milk, etc.), or if you cut them off, set `intoxicating: false`. Otherwise, default to `true`. \
     You know the house well enough to point at the right door: which screen, which key, which page. \
     When someone asks how something works, answer only from the basic navigation in your app context, phrased like a bartender giving directions. \
     You are not the help desk — for anything deeper (commands, game rules, settings, IRC, accounts), don't guess: tell them to go ask @bot, he knows all of that. \
@@ -240,7 +245,7 @@ impl GhostService {
         activity_tx: broadcast::Sender<ActivityEvent>,
         username_directory: crate::usernames::UsernameDirectory,
         chip_service: ChipService,
-        clubhouse_lobby: SharedLobby,
+        drunk_map: DrunkMap,
         mention_ladders: MentionLadders,
         nightcap_room_id: Uuid,
     ) -> Self {
@@ -252,7 +257,7 @@ impl GhostService {
             activity_tx,
             username_directory,
             chip_service,
-            clubhouse_lobby,
+            drunk_map,
             mention_ladders,
             nightcap_room_id,
         }
@@ -270,7 +275,7 @@ impl GhostService {
             }
         };
 
-        // Mirror drunk levels from DB into the shared lobby, AI or not.
+        // Mirror drunk levels from DB into the drunk map, AI or not.
         {
             let svc = self.clone();
             let glow_shutdown = shutdown.clone();
@@ -353,7 +358,7 @@ impl GhostService {
             ActiveUser {
                 username: bot.username.clone(),
                 fingerprint: None,
-                audio_source: late_core::models::user::AudioSource::Icecast,
+                audio_source: late_core::models::user::AudioSource::Radio,
                 sessions: Vec::new(),
                 connection_count: 1,
                 last_login_at: Instant::now(),
@@ -757,10 +762,16 @@ impl GhostService {
                             // Read-only pre-filter, same reasoning as @bot's:
                             // throttled mentions never reach the DB, and rooms
                             // he is not in hold no state for this to read. A
-                            // round skips the filter because it skips the
-                            // ladder entirely; dropping one here would lose a
-                            // purchase without a word.
-                            if !contains_round_request(text_for_mention_detection(&message.body))
+                            // gift or a round skips the filter because it
+                            // skips the ladder entirely; dropping one here
+                            // would lose a purchase without a word.
+                            let request = text_for_mention_detection(&message.body);
+                            let rides_the_ladder = match bar_order(request, &bartender.username) {
+                                BarOrder::Gift(_) => false,
+                                BarOrder::Round => false,
+                                BarOrder::Talk => true,
+                            };
+                            if rides_the_ladder
                                 && self
                                     .mention_ladders
                                     .remaining(
@@ -812,14 +823,25 @@ impl GhostService {
             }
         }
 
-        // A round answers ahead of the ladder and never reaches the model. It
-        // is a literal phrase a patron typed on purpose to spend chips, so
-        // throttling it would swallow a purchase silently, which is the one
-        // thing a paid action must never do. Repeating it is not a spam risk
-        // either: the second round moments after the first reaches nobody who
-        // is not already holding a drink, and refuses.
-        if contains_round_request(text_for_mention_detection(&trigger_message.body)) {
-            return self.bartender_round(&bartender, &trigger_message).await;
+        // A gift or a round answers ahead of the ladder and never reaches the
+        // model. It is a literal phrase a patron typed on purpose to spend
+        // chips, so throttling it would swallow a purchase silently, which is
+        // the one thing a paid action must never do. Repeating a round is not
+        // a spam risk either: the second round moments after the first reaches
+        // nobody who is not already holding a drink, and refuses. A message
+        // carrying both is no order at all (`bar_order`) and takes the ladder
+        // like any other talk.
+        let request = text_for_mention_detection(&trigger_message.body);
+        match bar_order(request, &bartender.username) {
+            BarOrder::Gift(target) => {
+                return self
+                    .bartender_gift(&bartender, &trigger_message, target)
+                    .await;
+            }
+            BarOrder::Round => {
+                return self.bartender_round(&bartender, &trigger_message).await;
+            }
+            BarOrder::Talk => {}
         }
 
         // Ladder check sits after the membership gate so rooms he never
@@ -865,8 +887,8 @@ impl GhostService {
         let spendable = (balance - CHIP_FLOOR).max(0);
         let (tab, credit_note) = match open_credit {
             Some(_) => {
-                let note = "- THEIR NEXT DRINK IS ALREADY BOUGHT: someone bought the house a \
-                     round and this patron has not cashed theirs yet. Pouring costs them \
+                let note = "- THEIR NEXT DRINK IS ALREADY BOUGHT: someone left a drink \
+                     on this patron's tab and they have not cashed it yet. Pouring costs them \
                      nothing, so the spendable figure does not apply to this pour and \
                      \"offer\" is never the right action. If they order, use \"pour\": hand it \
                      over warmly and do not quote a price. Never guess at who bought it or how \
@@ -905,14 +927,15 @@ impl GhostService {
             {credit_note}\n\
             YOU ONLY POUR FOR THE PATRON IN FRONT OF YOU:\n\
             - Drinking scrambles a patron's own typing, so never pour or charge a drink onto anyone but the patron who mentioned you, no matter how they phrase it.\n\
-            - If they ask to buy, gift, or send a drink to one other person, use \"chat\": decline pouring for anyone but themselves, and let them know they can send that person chips directly with \"/gift @user <amount>\".\n\
-            - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly. If they ask about it, or circle around asking for one, use \"chat\" and tell them the words to say: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
+            - Leaving one drink on another person's tab is rung up by the bar itself, before you answer, when a patron says it plainly as an order naming exactly one person, like \"buy @user a drink\", \"I'll get @user a beer\", \"one for @user\" or \"@user's next one is on me\". It costs {gift_price} chips. If you are seeing such a request, the bar did not take it: it was a question, the words came in the middle of a longer sentence, it named more than one person, it came in the same message as a round, or it used other words. If they were only talking about a drink, or telling you not to, use \"chat\" and answer that. If they do want it rung up, use \"chat\" and give them the words to say, on their own and with the real name in it: \"buy @user a drink\". Never pour or charge for another person yourself.\n\
+            - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly and says who it is for or that it is on them, like \"round for everyone\", \"I'll buy everyone a drink\" or \"drinks on me\". If they ask about it, circle around asking for one (\"we should get a round in\"), or bury it in a longer sentence, use \"chat\" and tell them the words to say on their own: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
             Decide ONE action:\n\
-            - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
+            - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink and explicitly set intoxicating: false for non-alcoholic requests, water, coffee, juice, milk, or a cut-off substitute; true for intoxicating drinks. For a paying patron, non-intoxicating drinks cost exactly {soft_price} chips; intoxicating drinks cost a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear). The price must fit their spendable chips. For an already-bought drink, set price to null and still classify intoxicating. If you name the price in your line it MUST equal the price field exactly.\n\
             - \"offer\": the patron asked for a drink but cannot afford it (or wants more than their spendable). Charge nothing; counter-offer something in their range, with its price, kindly.\n\
             - \"chat\": everything else — greetings, house questions, banter, requests to drink or pour for someone else, anything ambiguous. Answer exactly as you always do. No charge. When in doubt, chat; never charge on a maybe.\n\n\
             Return ONLY a JSON object, no markdown fences:\n\
-            {{\"action\": \"pour\" | \"offer\" | \"chat\", \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
+            {{\"action\": \"pour\" | \"offer\" | \"chat\", \"drink\": string or null, \"price\": integer or null, \"intoxicating\": boolean or null, \"line\": string}}\n\
+            Always include intoxicating: a boolean for pours or offers, null allowed for chat.\n\
             \"line\" is your chat message: 1-3 short lines, no markdown, no emoji, never prefixed with your own username, never SKIP.",
             username = bartender.username,
             persona = BARTENDER_PERSONA,
@@ -920,7 +943,9 @@ impl GhostService {
             floor = CHIP_FLOOR,
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
+            soft_price = SOFT_DRINK_PRICE,
             round_price = ROUND_PRICE_PER_PATRON,
+            gift_price = GIFT_DRINK_PRICE,
         );
 
         let history_with_prompt = format!(
@@ -964,14 +989,18 @@ impl GhostService {
             // neither is drunk twice. `None` means the tab emptied between
             // the read above and now: nothing is poured and nothing is
             // charged, because the line in hand still says it was free.
-            BartenderDecision::PourComped { drink, line } => {
+            BartenderDecision::PourComped {
+                drink,
+                intoxicating,
+                line,
+            } => {
                 match self
                     .chip_service
-                    .cash_round_drink(trigger_message.user_id)
+                    .cash_round_drink(trigger_message.user_id, Bar::Tavern, intoxicating)
                     .await?
                 {
                     Some(comped) => {
-                        self.clubhouse_lobby.record_drink(
+                        self.drunk_map.record_drink(
                             trigger_message.user_id,
                             comped.drunk_points,
                             comped.last_drink_at,
@@ -1009,14 +1038,25 @@ impl GhostService {
                     None => format!("{patron} {ROUND_CREDIT_GONE_LINE}"),
                 }
             }
-            BartenderDecision::Pour { drink, price, line } => {
+            BartenderDecision::Pour {
+                drink,
+                price,
+                intoxicating,
+                line,
+            } => {
                 match self
                     .chip_service
-                    .buy_drink(trigger_message.user_id, price, &drink)
+                    .buy_drink(
+                        trigger_message.user_id,
+                        Bar::Tavern,
+                        price,
+                        &drink,
+                        intoxicating,
+                    )
                     .await?
                 {
                     Some(purchase) => {
-                        self.clubhouse_lobby.record_drink(
+                        self.drunk_map.record_drink(
                             trigger_message.user_id,
                             purchase.drunk_points,
                             purchase.last_drink_at,
@@ -1046,6 +1086,115 @@ impl GhostService {
             Some(trigger_message.user_id),
         );
 
+        Ok(())
+    }
+
+    /// One named patron gets a credit to cash on their next order. Refusals
+    /// step the mention ladder, but a settled purchase always gets its receipt.
+    async fn bartender_gift(
+        &self,
+        bartender: &BotUser,
+        trigger_message: &ChatMessage,
+        target: &str,
+    ) -> Result<()> {
+        let buyer_id = trigger_message.user_id;
+        let client = self.db.get().await?;
+        let recipient = User::find_by_username(&client, target).await?;
+        drop(client);
+
+        // Every outcome is listed once, here: what the bar says, and whether
+        // it charged. Refusals are counted by reason so an operator can see
+        // why gifts fail without reading chat.
+        let (body, refused) = match recipient {
+            None => (
+                format!("can't find @{target} on the books. no chips taken."),
+                Some(GiftDrinkRefusal::UnknownRecipient),
+            ),
+            Some(recipient) if recipient.id == buyer_id => (
+                "that one's already on your own tab. no chips taken.".to_string(),
+                Some(GiftDrinkRefusal::SelfGift),
+            ),
+            Some(recipient) if recipient.is_bot() => (
+                "the staff don't drink on the clock. no chips taken.".to_string(),
+                Some(GiftDrinkRefusal::BotRecipient),
+            ),
+            Some(recipient) => {
+                let who = mention_target_for_user(Some(&recipient.username), recipient.id);
+                match self
+                    .chip_service
+                    .buy_drink_for(buyer_id, recipient.id)
+                    .await
+                {
+                    Ok(purchase) => {
+                        metrics::record_gift_drink_bought(GIFT_DRINK_PRICE);
+                        tracing::info!(
+                            user_id = %buyer_id,
+                            recipient_id = %recipient.id,
+                            round_id = %purchase.round_id,
+                            chips = GIFT_DRINK_PRICE,
+                            new_balance = purchase.balance,
+                            "bartender left a drink on a patron's tab"
+                        );
+                        (
+                            format!(
+                                "one drink waiting for {who}, on your tab. {} chips. they can order it whenever they're ready.",
+                                GIFT_DRINK_PRICE
+                            ),
+                            None,
+                        )
+                    }
+                    Err(GiftError::Refused(GiftRefusal::AllHolding)) => (
+                        format!(
+                            "{who} already has all the drinks I can keep on a tab. no chips taken."
+                        ),
+                        Some(GiftDrinkRefusal::AllHolding),
+                    ),
+                    Err(GiftError::Refused(GiftRefusal::InsufficientChips)) => (
+                        format!(
+                            "one for {who} runs {} chips, but I won't take your last ones. no chips taken.",
+                            GIFT_DRINK_PRICE
+                        ),
+                        Some(GiftDrinkRefusal::InsufficientChips),
+                    ),
+                    Err(GiftError::Failed(error)) => {
+                        return Err(error.context("buying a gift drink"));
+                    }
+                }
+            }
+        };
+
+        let Some(refusal) = refused else {
+            self.chat_service.send_bot_reply_task(
+                bartender.id,
+                trigger_message.room_id,
+                body,
+                Some(buyer_id),
+            );
+            return Ok(());
+        };
+        metrics::record_gift_drink_refused(refusal);
+        tracing::info!(
+            user_id = %buyer_id,
+            target,
+            refusal = ?refusal,
+            "bartender refused a gift drink"
+        );
+        if matches!(
+            self.mention_ladders.check_and_step(
+                LadderBot::Bartender,
+                buyer_id,
+                trigger_message.room_id,
+            ),
+            Decision::Throttled { .. }
+        ) {
+            return Ok(());
+        }
+        self.chat_service.send_bot_reply_task(
+            bartender.id,
+            trigger_message.room_id,
+            body,
+            Some(buyer_id),
+        );
         Ok(())
     }
 
@@ -1084,7 +1233,7 @@ impl GhostService {
         {
             Ok(purchase) => {
                 let buyer = self.username_for(buyer_id).await;
-                self.clubhouse_lobby.record_drink(
+                self.drunk_map.record_drink(
                     buyer_id,
                     purchase.drunk_points,
                     purchase.last_drink_at,
@@ -1161,7 +1310,7 @@ impl GhostService {
         mention_handle_for_user(names.get(&user_id).map(String::as_str), user_id)
     }
 
-    /// Periodically mirror DB drunk state into the shared lobby so every
+    /// Periodically mirror DB drunk state into the drunk map so every
     /// session's clubhouse labels and chat author tints agree. Runs even
     /// without AI: drinks are DB rows, not model output.
     async fn run_drunk_glow_task(self, shutdown: late_core::shutdown::CancellationToken) {
@@ -1185,7 +1334,7 @@ impl GhostService {
     async fn seed_drunk_levels(&self) -> Result<()> {
         let client = self.db.get().await?;
         let rows = UserDrinks::all_active(&client).await?;
-        self.clubhouse_lobby.set_drunk_states(
+        self.drunk_map.set_drunk_states(
             rows.into_iter()
                 .map(|drinks| (drinks.user_id, drinks.drunk_points, drinks.last_drink_at))
                 .collect(),
@@ -1314,11 +1463,16 @@ enum BartenderDecision {
     Pour {
         drink: String,
         price: i64,
+        intoxicating: bool,
         line: String,
     },
     /// Spend the patron's round credit and post `line`. No price: the drink
     /// was paid for by whoever bought the round.
-    PourComped { drink: String, line: String },
+    PourComped {
+        drink: String,
+        intoxicating: bool,
+        line: String,
+    },
     /// Post `line`, charge nothing (chat, counter-offer, or a downgraded
     /// pour the server refused to price).
     Say { line: String },
@@ -1331,6 +1485,7 @@ struct BartenderOrderRaw {
     action: Option<String>,
     drink: Option<String>,
     price: Option<i64>,
+    intoxicating: Option<bool>,
     line: Option<String>,
 }
 
@@ -1345,10 +1500,11 @@ fn bartender_order_schema() -> serde_json::Value {
             "action": { "type": "string", "enum": ["pour", "offer", "chat"] },
             "drink": { "type": "string", "nullable": true },
             "price": { "type": "integer", "nullable": true },
+            "intoxicating": { "type": "boolean", "nullable": true },
             "line": { "type": "string" }
         },
-        "required": ["action", "line"],
-        "propertyOrdering": ["action", "drink", "price", "line"]
+        "required": ["action", "intoxicating", "line"],
+        "propertyOrdering": ["action", "drink", "price", "intoxicating", "line"]
     })
 }
 
@@ -1412,6 +1568,21 @@ fn extract_json_int_field(raw: &str, field: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+/// Pull one `"field": <boolean>` out of loose JSON. Returns None if absent,
+/// `null`, or non-boolean.
+fn extract_json_bool_field(raw: &str, field: &str) -> Option<bool> {
+    let key = format!("\"{field}\"");
+    let after_key = &raw[raw.find(&key)? + key.len()..];
+    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
+    if after_colon.starts_with("true") {
+        Some(true)
+    } else if after_colon.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Last-ditch recovery when strict parsing rejects the model's JSON: rebuild
 /// the order field by field. `line` is required (no line, nothing to say);
 /// the rest are best-effort.
@@ -1420,6 +1591,7 @@ fn recover_bartender_order(raw: &str) -> Option<BartenderOrderRaw> {
         action: extract_json_string_field(raw, "action"),
         drink: extract_json_string_field(raw, "drink"),
         price: extract_json_int_field(raw, "price"),
+        intoxicating: extract_json_bool_field(raw, "intoxicating"),
         line: Some(extract_json_string_field(raw, "line")?),
     })
 }
@@ -1479,9 +1651,15 @@ fn parse_bartender_order(raw: &str, tab: BartenderTab, bot_username: &str) -> Ba
         .filter(|drink| !drink.is_empty())
         .unwrap_or_else(|| "house pour".to_string());
 
+    let intoxicating = order.intoxicating.unwrap_or(true);
+
     match tab {
         BartenderTab::Comped => match action {
-            Some("pour") | Some("offer") => BartenderDecision::PourComped { drink, line },
+            Some("pour") | Some("offer") => BartenderDecision::PourComped {
+                drink,
+                intoxicating,
+                line,
+            },
             Some(_) | None => BartenderDecision::Say { line },
         },
         BartenderTab::Paying { spendable } => {
@@ -1491,17 +1669,27 @@ fn parse_bartender_order(raw: &str, tab: BartenderTab, bot_username: &str) -> Ba
             // The line quotes a price, so we never silently clamp a different
             // number underneath the receipt. A missing or out-of-range price
             // is a model slip: serve the line uncharged rather than debit an
-            // amount the patron never saw.
-            let Some(price) = order
-                .price
-                .filter(|p| (DRINK_PRICE_MIN..=DRINK_PRICE_MAX).contains(p))
-            else {
+            // amount the patron never saw. A non-intoxicating pour has one
+            // price, so anything else on it is the same slip.
+            let valid_price = if intoxicating {
+                order
+                    .price
+                    .filter(|p| (DRINK_PRICE_MIN..=DRINK_PRICE_MAX).contains(p))
+            } else {
+                order.price.filter(|p| *p == SOFT_DRINK_PRICE)
+            };
+            let Some(price) = valid_price else {
                 return BartenderDecision::Say { line };
             };
             if price > spendable {
                 return BartenderDecision::Say { line };
             }
-            BartenderDecision::Pour { drink, price, line }
+            BartenderDecision::Pour {
+                drink,
+                price,
+                intoxicating,
+                line,
+            }
         }
     }
 }

@@ -2,16 +2,25 @@ use askama::Template;
 use axum::{
     Router,
     extract::State,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect},
     routing::get,
 };
 
 use crate::{AppState, error::AppError, metrics, pages::shared::now_playing};
 
+#[cfg(test)]
+mod home_test;
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(root_handler))
         .route("/status", get(status_handler))
+        .route("/thanks", get(thanks_handler))
+}
+
+async fn thanks_handler() -> Redirect {
+    metrics::record_page_view("thanks", false);
+    Redirect::temporary("https://ko-fi.com/mateuszpiorowski")
 }
 
 #[derive(Template)]

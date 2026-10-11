@@ -12,6 +12,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{DateTime, Utc};
 use late_core::MutexRecover;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -94,7 +95,9 @@ struct StreamEntry {
     created_at: Instant,
     last_publisher_report: Instant,
     grace_since: Option<Instant>,
-    announced: bool,
+    /// When the `Pending -> Live` edge fired, `None` until it has. Set once:
+    /// a refresh through grace is the same broadcast, not a second start.
+    went_live_at: Option<DateTime<Utc>>,
     /// Claim-once lock on the publish token. `None` until the first grant
     /// fetch; that fetch mints a secret the console keeps as a cookie, and
     /// every later grant fetch or state report must present it. A leaked
@@ -133,7 +136,7 @@ fn new_entry(
         created_at: now,
         last_publisher_report: now,
         grace_since: None,
-        announced: false,
+        went_live_at: None,
         publisher_claim: None,
         watchers: HashMap::new(),
         viewers: HashSet::new(),
@@ -159,6 +162,7 @@ impl StreamEntry {
             voice_channel_id: self.voice_channel_id,
             stream_id: self.stream_id.clone(),
             live: self.phase != StreamPhase::Pending,
+            went_live_at: self.went_live_at,
             watching: self.watchers.len(),
             watch_url: String::new(),
         }
@@ -175,7 +179,7 @@ impl StreamEntry {
             },
             reason,
             phase: self.phase,
-            announced: self.announced,
+            announced: self.went_live_at.is_some(),
             watching: self.watchers.len(),
             since_publisher_report: now.duration_since(self.last_publisher_report),
         }
@@ -194,6 +198,9 @@ pub struct LiveStreamView {
     pub voice_channel_id: Uuid,
     pub stream_id: String,
     pub live: bool,
+    /// When media first flowed, `None` while pending. The stamp the live
+    /// strip queues the stream by (`stream/live.rs`).
+    pub went_live_at: Option<DateTime<Utc>>,
     pub watching: usize,
     /// Public watch-page URL. The registry does not know the web base URL,
     /// so it leaves this empty; `App::tick_stream` fills it from
@@ -525,8 +532,10 @@ impl StreamRegistry {
             };
             entry.last_publisher_report = Instant::now();
             if publishing {
-                let went_live = !entry.announced;
-                entry.announced = true;
+                let went_live = entry.went_live_at.is_none();
+                if went_live {
+                    entry.went_live_at = Some(Utc::now());
+                }
                 entry.phase = StreamPhase::Live;
                 entry.grace_since = None;
                 PublisherReport::Live { went_live }
@@ -634,8 +643,10 @@ impl StreamRegistry {
             }
             entry.last_publisher_report = Instant::now();
             if publishing {
-                let went_live = !entry.announced;
-                entry.announced = true;
+                let went_live = entry.went_live_at.is_none();
+                if went_live {
+                    entry.went_live_at = Some(Utc::now());
+                }
                 entry.phase = StreamPhase::Live;
                 entry.grace_since = None;
                 PublisherReport::Live { went_live }

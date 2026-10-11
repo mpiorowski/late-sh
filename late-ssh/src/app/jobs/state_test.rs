@@ -131,11 +131,6 @@ fn the_jobs_command_parses_its_words_and_gates_the_press() {
         parse_jobs_command("/jobs release"),
         Some(Some(JobsCommand::Release))
     );
-    assert_eq!(parse_jobs_command("/jobs on"), Some(Some(JobsCommand::On)));
-    assert_eq!(
-        parse_jobs_command("/jobs off"),
-        Some(Some(JobsCommand::Off))
-    );
     assert_eq!(
         parse_jobs_command("/jobs post"),
         Some(Some(JobsCommand::Post))
@@ -145,12 +140,7 @@ fn the_jobs_command_parses_its_words_and_gates_the_press() {
     assert_eq!(parse_jobs_command("/jobsboard"), None);
     assert_eq!(parse_jobs_command("hello /jobs"), None);
     assert!(!JobsCommand::Open.admin_only());
-    for command in [
-        JobsCommand::Pull,
-        JobsCommand::Release,
-        JobsCommand::On,
-        JobsCommand::Off,
-    ] {
+    for command in [JobsCommand::Pull, JobsCommand::Release] {
         assert!(command.admin_only(), "{command:?}");
     }
 }

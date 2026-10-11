@@ -117,6 +117,8 @@ fn voice_control_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
     )]
 }
 
+/// The body of the frame status bar's voice segment, `channel [status]`. The
+/// bar adds the `mic` label and the padding itself (`app/statusline/bar.rs`).
 pub fn global_voice_badge<F>(
     snapshot: &VoiceSnapshot,
     current_user_id: Uuid,
@@ -132,7 +134,7 @@ where
     let participant = snapshot.participant(room_id, current_user_id)?;
     let label = channel_label(room_id).unwrap_or_else(|| short_voice_room_id(room_id));
     let status = Presence::of(participant).label();
-    Some(format!(" mic {label} [{status}] "))
+    Some(format!("{label} [{status}]"))
 }
 
 fn voice_controls_text(view: &VoiceRoomView<'_>) -> String {
