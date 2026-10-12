@@ -567,9 +567,16 @@ impl Cobra {
         false
     }
 
+    /// Whether the head stepping onto `pos` runs into the body, checked
+    /// before the step moves the tail. Three parts are never in the way: the
+    /// head itself and the neck behind it (`set_direction` refuses the
+    /// reversal), and the tail (`body[0]`). The head reaches the tail's cell
+    /// only on a step that eats nothing, since food never lies under the
+    /// cobra, and on such a step the tail moves off the cell as the head
+    /// moves on.
     fn head_collide(&self, pos: &Position) -> bool {
         let mut collides = false;
-        for body_part in &self.body[..(self.body.len() - 2)] {
+        for body_part in &self.body[1..(self.body.len() - 2)] {
             if pos.x == body_part.x && pos.y == body_part.y {
                 collides = true;
                 break;

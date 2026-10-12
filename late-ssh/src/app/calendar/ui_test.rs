@@ -290,6 +290,53 @@ async fn the_list_groups_the_month_by_day() {
     assert!(action_area(&s, Action::Event(post.id)).is_some());
 }
 
+/// The terminal owns the page's background: "Sync terminal background"
+/// paints it to the theme's canvas through OSC 11, and with the setting off
+/// it stays the user's own. A cell painted with the theme's canvas ignores
+/// that choice, so no view may lay the canvas down itself. Today's tint is a
+/// fill of its own and stays.
+#[tokio::test]
+async fn the_page_leaves_the_background_to_the_terminal() {
+    let _restore = RestoreTheme::new();
+    theme::set_current_by_id("late");
+    let canvas = theme::BG_CANVAS();
+    let today_tint = theme::blend_toward(canvas, theme::BORDER_ACTIVE(), 0.16);
+    let mut s = state();
+    s.selected = s.today();
+    let post = event(1, 21, true, 2);
+    s.events.push(post.clone());
+
+    let mut screens = Vec::new();
+    for view in [CalendarView::Month, CalendarView::List] {
+        s.view = view;
+        screens.push((format!("{view:?}"), render(&s, 120, 40)));
+    }
+    s.push_modal(Modal::Details(post));
+    screens.push(("details".to_string(), render(&s, 120, 40)));
+
+    for (screen, buffer) in &screens {
+        let painted: Vec<(u16, u16)> = buffer
+            .area()
+            .positions()
+            .filter(|position| buffer[*position].bg == canvas)
+            .map(|position| (position.x, position.y))
+            .collect();
+        assert_eq!(
+            painted,
+            Vec::new(),
+            "{screen}: cells painted with the canvas"
+        );
+    }
+    let month = &screens[0].1;
+    assert!(
+        month
+            .area()
+            .positions()
+            .any(|position| month[position].bg == today_tint),
+        "today keeps its tint"
+    );
+}
+
 #[tokio::test]
 async fn all_palettes_have_visible_legible_selection() {
     let _restore = RestoreTheme::new();

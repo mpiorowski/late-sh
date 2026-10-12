@@ -349,8 +349,14 @@ frame.render_widget(block, popup);
 ```
 
 The canvas fill is appropriate when the popup is meant to use the theme canvas.
-Other treatments can be intentional. Body scrolling, focus visibility, footer
-space, and minimum usable geometry remain the component's responsibility.
+Other treatments can be intentional. Page surfaces (a screen's body, a game
+board, a keyboard strip) never paint `BG_CANVAS`: they leave the background
+`Color::Reset`, which "Sync terminal background" sets to the theme's canvas
+through OSC 11, and which stays the user's own background with the setting off.
+A canvas fill ignores that setting, so it belongs only on a popup that should
+read as a theme-colored panel either way. Body scrolling, focus visibility,
+footer space, and minimum usable geometry remain the component's
+responsibility.
 Reference: [Room Info framing](late-ssh/src/app/room_info_modal/ui.rs).
 
 ### 6.2 Form rows — observed reference, with suggested budgeting

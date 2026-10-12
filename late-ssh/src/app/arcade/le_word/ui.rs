@@ -75,11 +75,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     frame.render_widget(
         Paragraph::new(board_lines(state))
             .alignment(Alignment::Center)
-            .style(
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .bg(theme::BG_CANVAS()),
-            ),
+            .style(Style::default().fg(theme::TEXT_BRIGHT()).bg(Color::Reset)),
         layout.board,
     );
     if let Some(keyboard_rect) = layout.keyboard {
@@ -127,16 +123,16 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from("Each guess must be a valid word."),
         Line::from(""),
         Line::from(vec![
-            Span::styled("GREEN", score_style(LetterScore::Correct)),
+            score_tile('A', LetterScore::Correct),
             Span::raw("  correct letter, correct spot"),
         ]),
         Line::from(vec![
-            Span::styled("YELLOW", score_style(LetterScore::Present)),
-            Span::raw(" correct letter, wrong spot"),
+            score_tile('A', LetterScore::Present),
+            Span::raw("  correct letter, wrong spot"),
         ]),
         Line::from(vec![
-            Span::styled("GRAY", score_style(LetterScore::Absent)),
-            Span::raw("   letter not in the word"),
+            score_tile('A', LetterScore::Absent),
+            Span::raw("  letter not in the word"),
         ]),
         Line::from(""),
         Line::from("A new daily answer appears once per day."),
@@ -146,18 +142,12 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "! / q / Esc closes",
-            Style::default()
-                .fg(theme::TEXT_DIM())
-                .bg(theme::BG_CANVAS()),
+            Style::default().fg(theme::TEXT_DIM()),
         )),
     ])
     .alignment(Alignment::Center)
     .wrap(Wrap { trim: true })
-    .style(
-        Style::default()
-            .fg(theme::TEXT_DIM())
-            .bg(theme::BG_CANVAS()),
-    )
+    .style(Style::default().fg(theme::TEXT_DIM()).bg(Color::Reset))
     .block(
         Block::default()
             .borders(Borders::ALL)
@@ -282,15 +272,11 @@ fn le_word_layout(area: Rect) -> LeWordLayout {
 
 fn draw_keyboard(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme::BG_CANVAS())),
+        Block::default().style(Style::default().bg(Color::Reset)),
         area,
     );
     for key_rect in keyboard_key_rects(area) {
-        let label = key_label(key_rect.key);
-        let key = Paragraph::new(label)
-            .alignment(Alignment::Center)
-            .style(key_style(state, key_rect.key));
-        frame.render_widget(key, key_rect.rect);
+        frame.render_widget(key_paragraph(state, key_rect.key), key_rect.rect);
     }
 }
 
@@ -389,29 +375,22 @@ fn key_width(key: KeyboardKey) -> u16 {
     }
 }
 
-fn key_label(key: KeyboardKey) -> String {
-    match key {
-        KeyboardKey::Letter(ch) => ch.to_ascii_uppercase().to_string(),
-        KeyboardKey::Backspace => "BKSP".to_string(),
-        KeyboardKey::Enter => "ENTER".to_string(),
-    }
-}
-
-fn key_style(state: &State, key: KeyboardKey) -> Style {
-    let Some(score) = keyboard_key_score(state, key) else {
-        return Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_HIGHLIGHT())
-            .add_modifier(Modifier::BOLD);
+/// A scored letter key is the same tile as on the board; an unscored key and
+/// the two action keys are a plain raised cap.
+fn key_paragraph(state: &State, key: KeyboardKey) -> Paragraph<'static> {
+    let cap = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .bg(theme::BG_HIGHLIGHT())
+        .add_modifier(Modifier::BOLD);
+    let paragraph = match key {
+        KeyboardKey::Letter(ch) => match state.score_for_keyboard_letter(ch) {
+            Some(score) => Paragraph::new(score_tile(ch.to_ascii_uppercase(), score)),
+            None => Paragraph::new(ch.to_ascii_uppercase().to_string()).style(cap),
+        },
+        KeyboardKey::Backspace => Paragraph::new("BKSP").style(cap),
+        KeyboardKey::Enter => Paragraph::new("ENTER").style(cap),
     };
-    score_style(score).add_modifier(Modifier::BOLD)
-}
-
-fn keyboard_key_score(state: &State, key: KeyboardKey) -> Option<LetterScore> {
-    match key {
-        KeyboardKey::Letter(ch) => state.score_for_keyboard_letter(ch),
-        KeyboardKey::Backspace | KeyboardKey::Enter => None,
-    }
+    paragraph.alignment(Alignment::Center)
 }
 
 fn contains(rect: Rect, x: u16, y: u16) -> bool {
@@ -449,51 +428,46 @@ fn cell_span(
     current: Option<&String>,
     col: usize,
 ) -> Span<'static> {
-    let (ch, style) = if let Some(guess) = guess {
-        let ch = guess
-            .as_bytes()
+    let letter_at = |word: &str| {
+        word.as_bytes()
             .get(col)
             .copied()
             .map(char::from)
             .unwrap_or(' ')
-            .to_ascii_uppercase();
-        let scores = state.scores_for_guess(guess);
-        (ch, score_style(scores[col]))
-    } else if let Some(current) = current {
-        let ch = current
-            .as_bytes()
-            .get(col)
-            .copied()
-            .map(char::from)
-            .unwrap_or(' ')
-            .to_ascii_uppercase();
-        (
-            ch,
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION()),
-        )
-    } else {
-        (
-            ' ',
-            Style::default()
-                .fg(theme::TEXT_DIM())
-                .bg(theme::BG_SELECTION()),
-        )
+            .to_ascii_uppercase()
     };
-
-    Span::styled(format!(" {ch} "), style.add_modifier(Modifier::BOLD))
+    match (guess, current) {
+        (Some(guess), _) => score_tile(letter_at(guess), state.scores_for_guess(guess)[col]),
+        (None, Some(current)) => open_tile(letter_at(current), theme::TEXT_BRIGHT()),
+        (None, None) => open_tile(' ', theme::TEXT_DIM()),
+    }
 }
 
-/// Scored tiles are the theme's accents with the letter punched through, so
-/// the board follows the palette (terminal palette included) instead of
-/// carrying its own greens and yellows.
-fn score_style(score: LetterScore) -> Style {
-    match score {
-        LetterScore::Correct => theme::punch_through(theme::SUCCESS()),
-        LetterScore::Present => theme::punch_through(theme::AMBER()),
-        LetterScore::Absent => theme::punch_through(theme::TEXT_FAINT()),
-    }
+/// A tile on a row not yet guessed: the one being typed, or one still ahead.
+fn open_tile(ch: char, fg: Color) -> Span<'static> {
+    Span::styled(
+        format!(" {ch} "),
+        Style::default()
+            .fg(fg)
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+/// One scored letter, three cells wide, on the board or the keyboard. The
+/// colors are the theme's accents with the letter punched through, so the
+/// board follows the palette (terminal palette included), but each score
+/// also has its own shape: several themes give `SUCCESS`, `AMBER`, and
+/// `TEXT_FAINT` one value, and a score told apart by color alone vanishes
+/// there. Correct is a solid tile, present a solid tile in brackets, absent
+/// the bare letter with no tile at all.
+fn score_tile(ch: char, score: LetterScore) -> Span<'static> {
+    let (text, style) = match score {
+        LetterScore::Correct => (format!(" {ch} "), theme::punch_through(theme::SUCCESS())),
+        LetterScore::Present => (format!("[{ch}]"), theme::punch_through(theme::AMBER())),
+        LetterScore::Absent => (format!(" {ch} "), Style::default().fg(theme::TEXT_DIM())),
+    };
+    Span::styled(text, style.add_modifier(Modifier::BOLD))
 }
 
 #[cfg(test)]
