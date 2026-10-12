@@ -3883,7 +3883,6 @@ dependencies = [
  "dartboard-editor",
  "dartboard-local",
  "dartboard-tui",
- "deadpool-postgres",
  "emojis",
  "futures-util",
  "getrandom 0.4.3",
