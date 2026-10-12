@@ -3,9 +3,11 @@
 # =============================================================================
 # The RKE2/Canal hostPort path creates IPv4 DNAT rules only because the cluster
 # pod and service CIDRs are IPv4-only. This host-network HAProxy binds only the
-# node's public IPv6 address and forwards traffic into the existing IPv4 path.
-# It does not bind IPv4, so the current ingress-nginx hostPort setup remains
-# responsible for 46.62.210.86:80/443/22.
+# node's public IPv6 address and forwards HTTP(S) into the existing IPv4 path.
+# It does not bind IPv4, so the ingress-nginx hostPort setup remains
+# responsible for 46.62.210.86:80/443. SSH and IRC are not here: ssh-edge
+# (ssh-tcp.tf) binds both families for those, so a change to this file never
+# drops an SSH session.
 # =============================================================================
 
 locals {
@@ -35,15 +37,6 @@ locals {
 
     backend ingress_https_ipv4
       server ingress_https 127.0.0.1:443 check inter 5s fall 2 rise 2
-
-    frontend ssh_ipv6
-      bind [${var.IPV6_PROXY_ADDRESS}]:22 v6only
-      default_backend service_ssh_ipv4
-
-    backend service_ssh_ipv4
-      server service_ssh service-ssh-sv.default.svc.cluster.local:2222 send-proxy
-
-    ${local.irc_enabled_bool ? format("frontend irc_ipv6\n  bind [%s]:%d v6only\n  default_backend irc_ipv4\n\nbackend irc_ipv4\n  server irc service-ssh-sv.default.svc.cluster.local:%d check inter 5s fall 2 rise 2%s", var.IPV6_PROXY_ADDRESS, local.irc_port, local.irc_port, local.irc_proxy_emit_bool ? " send-proxy check-send-proxy" : "") : ""}
   EOT
 }
 
@@ -153,4 +146,7 @@ resource "kubernetes_daemon_set_v1" "ipv6_proxy" {
       }
     }
   }
+
+  # IPv6 :22 and :6697 belong to ssh-edge; it is up before this rolls.
+  depends_on = [kubernetes_daemon_set_v1.ssh_edge]
 }

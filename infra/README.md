@@ -64,7 +64,8 @@ late.sh      → <server-ip>
 
 For IPv6, configure matching AAAA records to the node IPv6 address. The
 Terraform-managed `ipv6-proxy` DaemonSet binds only that IPv6 address and
-forwards traffic into the existing IPv4 ingress path.
+forwards HTTP(S) into the existing IPv4 ingress path; SSH and IRC bind both
+address families on `ssh-edge` (see below).
 
 This enables:
 
@@ -142,11 +143,13 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | PostgreSQL | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
 
-SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod
-port 2222. IRC traffic follows the same TCP passthrough pattern when enabled.
-Both NGINX for IPv4 and the host-network HAProxy for IPv6 send PROXY v1 metadata
-before the application's in-process TLS handshake; late-ssh accepts it only from
-the CIDRs configured by `SSH_PROXY_TRUSTED_CIDRS`. LiveKit signaling is routed
+SSH on port 22 and IRC on port 6697, IPv4 and IPv6, reach the late-ssh pod
+through `ssh-edge`, a host-network HAProxy DaemonSet (`ssh-tcp.tf`), never
+through NGINX: every NGINX reload (each cert-manager renewal is one) kills the
+connections its old workers hold 240 s later. HAProxy sends PROXY v1 metadata
+(for IRC, only when `IRC_PROXY_EMIT` is on) before the application's in-process
+TLS handshake; late-ssh accepts it only from the trusted CIDRs in its prod
+profile (`late-ssh/src/config.rs`). LiveKit signaling is routed
 through NGINX ingress on `rtc.<domain>`, while LiveKit media ports are bound
 directly on the node by the `livekit` pod. On a fresh cluster, the `livekit` pod
 may wait for cert-manager to create the `livekit-tls` secret used by embedded
@@ -157,7 +160,7 @@ treating the rollout as failed.
 
 | Node       | RKE2 role                    | Placement                                   | Runs                                                                                                                                                   |
 | ---------- | ---------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, LiveKit, Postgres                                                                                |
+| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, Postgres                                                                      |
 | `agent-1`  | agent                        | label and `NoSchedule` taint `role=support` | service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft, second CoreDNS replica |
 
 A workload lands on `agent-1` only when it carries both the `role=support` node
@@ -265,13 +268,13 @@ secrets/variables for CI/CD).
 
 The IRC edge is always provisioned: Terraform requests a Let's Encrypt
 certificate for `irc.late.sh` with cert-manager, mounts the generated Kubernetes
-TLS secret into `service-ssh`, and exposes port 6697 through ingress. The
+TLS secret into `service-ssh`, and exposes port 6697 through `ssh-edge`. The
 listener itself (ports, limits, TLS paths, trusted proxy CIDRs) is part of the
 late-ssh prod profile.
 
-| Variable         | Description                                                             |
-| ---------------- | ----------------------------------------------------------------------- |
-| `IRC_PROXY_EMIT` | Make ingress-nginx and IPv6 HAProxy emit PROXY headers, defaults to `0` |
+| Variable         | Description                                                         |
+| ---------------- | ------------------------------------------------------------------- |
+| `IRC_PROXY_EMIT` | Make the `ssh-edge` IRC backend emit PROXY headers, defaults to `0` |
 
 `IRC_PROXY_EMIT` stays a variable because flipping edge emission is a
 deploy-time rollout step: deploy a parser-capable image first, then set the

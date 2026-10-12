@@ -423,8 +423,9 @@ impl Config {
             frame_drop_log_every: 100,
             ssh_max_attempts_per_ip: 30,
             ssh_rate_limit_window_secs: 60,
-            // ingress-nginx terminates the edge and prepends PROXY v1; trust
-            // only the pod network and the node itself.
+            // The ssh-edge HAProxy (infra/ssh-tcp.tf) prepends PROXY v1 and
+            // reaches the pod from the node address; trust only the node
+            // itself and the pod network.
             ssh_proxy_protocol: true,
             ssh_proxy_trusted_cidrs: parse_cidrs(
                 "prod ssh proxy trusted cidrs",
