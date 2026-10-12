@@ -478,7 +478,7 @@ async fn find_profile_resolves_the_house_rows() {
 #[tokio::test]
 async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
     use late_core::models::statusline::{LabelMode, StatusComponent};
-    use late_core::models::user::{ArtSplashMode, LandingPage, TerminalImagesMode};
+    use late_core::models::user::{LandingPage, TerminalImagesMode};
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "profile-edit-user").await;
@@ -536,7 +536,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             paper_at_login: true,
             screensaver: late_core::models::user::Screensaver::Off,
             show_watch_chat: true,
-            art_splash_mode: ArtSplashMode::Never,
             artboard_disclaimer: false,
             terminal_images: TerminalImagesMode::Off,
             hidden_award_categories: hidden_awards.clone(),
@@ -573,7 +572,6 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
     assert_eq!(updated.landing_page, LandingPage::Zen);
     assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
     assert_eq!(updated.hidden_award_categories, hidden_awards);
-    assert_eq!(updated.art_splash_mode, ArtSplashMode::Never);
     assert!(!updated.artboard_disclaimer);
     assert_eq!(
         updated.screensaver,
@@ -637,7 +635,6 @@ async fn edit_profile_normalizes_username_before_persisting() {
             paper_at_login: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
-            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
@@ -715,7 +712,6 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             paper_at_login: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
-            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
@@ -1004,7 +1000,6 @@ async fn edit_profile_snapshots_stay_per_user() {
             paper_at_login: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
-            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),

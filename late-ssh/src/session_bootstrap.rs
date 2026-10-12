@@ -394,10 +394,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
-    // The door: the day's wall piece, or the cup.
+    // The door: the day's wall piece for those who chose Always View on the
+    // Artboard content disclaimer, else the cup.
     let splash_piece = state
         .gallery_service
-        .splash_piece_for_mode(late_core::models::user::extract_art_splash_mode(
+        .splash_piece_for_login(late_core::models::user::extract_artboard_disclaimer(
             &user.settings,
         ))
         .await;

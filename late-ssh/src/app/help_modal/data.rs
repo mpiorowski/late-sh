@@ -1346,6 +1346,7 @@ fn overview_lines() -> Vec<String> {
         "Artboard may contain NSFW content: V views this visit, A always views,",
         "and B returns to chat (1). Settings > Tweaks > Artboard",
         "content disclaimer turns this default-on prompt off or back on.",
+        "With it off, the login splash shows the day's gallery piece instead of the coffee cup.",
         "During the tour, S shows the art for that visit and Enter skips to Profiles;",
         "the tour never changes disclaimer preferences.",
         "There is also a dedicated Architecture slide if you need system-level context.",
@@ -1714,8 +1715,6 @@ fn settings_help_lines() -> Vec<String> {
         "  Startup".to_string(),
         "    Land on                       where a session starts: Clubhouse (default), Home, or Zen; first sessions always start in the Clubhouse"
             .to_string(),
-        "    Show Gallery Art on Splash    SFW (default) / Always / Never; Never uses the coffee cup".to_string(),
-        "                                  SFW hides art determined NSFW; unmarked art is allowed".to_string(),
         "    Daily paper at login          show or skip the daily paper pop after login".to_string(),
         "".to_string(),
         "Statusline tab".to_string(),

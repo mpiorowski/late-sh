@@ -47,36 +47,37 @@ async fn emits_ssh_banner_when_client_connects_over_tcp() {
 struct TestClient;
 
 #[tokio::test]
-async fn ssh_bootstrap_applies_saved_splash_mode_after_authentication() {
-    use late_core::models::user::{ArtSplashMode, User, UserParams};
+async fn ssh_bootstrap_shows_gallery_splash_only_after_always_view() {
+    use late_core::models::user::{User, UserParams};
     let test_db = new_test_db().await;
     let state = test_app_state(test_db.db.clone(), test_config(test_db.db.config().clone()));
-    let piece = crate::test_helpers::publish_test_splash(&state).await;
+    crate::test_helpers::publish_test_splash(&state).await;
     let db_client = test_db.db.get().await.unwrap();
-    db_client
-        .execute(
-            "UPDATE artboard_pieces SET owner_marked_nsfw = true WHERE id = $1",
-            &[&piece],
-        )
-        .await
-        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let _ = run_with_listener(listener, state, None).await;
     });
-    for (mode, expect_art) in [
-        (ArtSplashMode::Sfw, false),
-        (ArtSplashMode::Always, true),
-        (ArtSplashMode::Never, false),
+    for (label, settings, expect_art) in [
+        ("newcomer", serde_json::json!({}), false),
+        (
+            "disclaimer",
+            serde_json::json!({"artboard_disclaimer": true}),
+            false,
+        ),
+        (
+            "always",
+            serde_json::json!({"artboard_disclaimer": false}),
+            true,
+        ),
     ] {
         let key = new_client_key();
         User::create(
             &db_client,
             UserParams {
                 fingerprint: key.public_key().fingerprint(HashAlg::Sha256).to_string(),
-                username: format!("splash-{}", mode.as_str()),
-                settings: serde_json::json!({"art_splash_mode": mode.as_str()}),
+                username: format!("splash-{label}"),
+                settings,
             },
         )
         .await
@@ -108,7 +109,7 @@ async fn ssh_bootstrap_applies_saved_splash_mode_after_authentication() {
         assert_eq!(
             String::from_utf8_lossy(&received).contains("login splash fixture"),
             expect_art,
-            "{mode:?}"
+            "{label}"
         );
         connection
             .disconnect(russh::Disconnect::ByApplication, "", "en")

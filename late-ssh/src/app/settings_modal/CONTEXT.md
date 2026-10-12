@@ -33,7 +33,7 @@ a row position.
 
 Settings/Tweaks clicks reuse keyboard actions, including per-device rail and
 interaction-mode updates. Cooldown, notification format, both sidebar modes,
-Terminal images, Land on, Gallery Art on Splash, Screensaver, and Text Brightness share bold
+Terminal images, Land on, Screensaver, and Text Brightness share bold
 amber arrows. Only the arrows choose direction; other row/value clicks cycle
 forward. Every cycle reserves its longest option width. Ratatui measures both
 rendered spans and clipped hitboxes, and labels shorten at grapheme boundaries
@@ -43,7 +43,9 @@ button open its panel editor, including when Off.
 The Artboard group contains the default-on Artboard content disclaimer toggle.
 It persists `artboard_disclaimer` in account settings; re-enabling it closes
 editing and hides the current Artboard visit until consent. `A` (Always View) in the Artboard
-prompt turns the same tweak off and allows that visit. The tour never shows
+prompt turns the same tweak off and allows that visit. The same tweak gates
+the login splash: only with it off does the day's hung gallery piece replace
+the coffee cup. The tour never shows
 the dialog; its Artboard stop's `S` grants one-visit consent and does not
 touch the tweak.
 

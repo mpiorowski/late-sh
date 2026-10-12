@@ -65,7 +65,7 @@ PAPER_PARAGRAPHS ?= 100
 seed-paper:
 	scripts/seed_paper_test_data.sh "$(PAPER_PARAGRAPHS)"
 
-# Artboard voting, owner/staff rating precedence, and the on-connect splash.
+# Artboard gallery fixtures: accounts, pieces, applause, and the on-connect splash.
 ART_SPLASH_PIECE ?= 1
 .PHONY: seed-artboard
 seed-artboard:

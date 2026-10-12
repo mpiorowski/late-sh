@@ -4,32 +4,6 @@ use serde_json::json;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
-#[test]
-fn art_splash_defaults_to_sfw_and_cycles_both_directions() {
-    use super::user::{ArtSplashMode, extract_art_splash_mode};
-    for settings in [
-        json!({}),
-        json!({"art_splash_mode": null}),
-        json!({"art_splash_mode": "invalid"}),
-    ] {
-        assert_eq!(extract_art_splash_mode(&settings), ArtSplashMode::Sfw);
-    }
-    for mode in [
-        ArtSplashMode::Sfw,
-        ArtSplashMode::Always,
-        ArtSplashMode::Never,
-    ] {
-        assert_eq!(
-            extract_art_splash_mode(&json!({"art_splash_mode": mode.as_str()})),
-            mode
-        );
-        assert_eq!(mode.cycle(true).cycle(false), mode);
-    }
-    assert_eq!(ArtSplashMode::Sfw.cycle(true), ArtSplashMode::Always);
-    assert_eq!(ArtSplashMode::Always.cycle(true), ArtSplashMode::Never);
-    assert_eq!(ArtSplashMode::Never.cycle(true), ArtSplashMode::Sfw);
-}
-
 async fn setup_db() -> (deadpool_postgres::Client, TestDb) {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("failed to get connection");

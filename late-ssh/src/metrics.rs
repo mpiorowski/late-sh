@@ -172,22 +172,6 @@ pub enum GalleryApplauseResult {
     Failed,
 }
 
-/// How a content-rating request on a gallery piece ended: the dialog's read,
-/// a community vote, or the hanger's NSFW flag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GalleryContentRatingResult {
-    Viewed,
-    Voted,
-    VoteWithdrawn,
-    Flagged,
-    Unflagged,
-    OwnPiece,
-    NotYours,
-    NotFound,
-    Closed,
-    Failed,
-}
-
 /// How a hanger's own take-down resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GalleryTakeDownResult {
@@ -550,15 +534,15 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
-        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryContentRatingResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands,
+        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
+        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -2798,43 +2782,6 @@ mod inner {
         );
     }
 
-    fn gallery_content_rating_result_label(result: GalleryContentRatingResult) -> &'static str {
-        match result {
-            GalleryContentRatingResult::Viewed => "viewed",
-            GalleryContentRatingResult::Voted => "voted",
-            GalleryContentRatingResult::VoteWithdrawn => "vote_withdrawn",
-            GalleryContentRatingResult::Flagged => "flagged",
-            GalleryContentRatingResult::Unflagged => "unflagged",
-            GalleryContentRatingResult::OwnPiece => "own_piece",
-            GalleryContentRatingResult::NotYours => "not_yours",
-            GalleryContentRatingResult::NotFound => "not_found",
-            GalleryContentRatingResult::Closed => "closed",
-            GalleryContentRatingResult::Failed => "failed",
-        }
-    }
-
-    fn gallery_content_ratings_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_artboard_gallery_content_ratings_total")
-                .with_description(
-                    "Artboard gallery content-rating reads, votes and owner flags by result",
-                )
-                .build()
-        })
-    }
-
-    pub fn record_gallery_content_rating(result: GalleryContentRatingResult) {
-        gallery_content_ratings_total().add(
-            1,
-            &[KeyValue::new(
-                "result",
-                gallery_content_rating_result_label(result),
-            )],
-        );
-    }
-
     fn door_ingest_lines_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -3078,15 +3025,15 @@ mod inner {
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
-        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryContentRatingResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands,
+        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
+        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -3192,7 +3139,6 @@ mod inner {
     pub fn record_gallery_hang(_result: GalleryHangResult) {}
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
-    pub fn record_gallery_content_rating(_result: GalleryContentRatingResult) {}
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}

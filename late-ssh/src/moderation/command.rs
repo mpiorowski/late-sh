@@ -1,5 +1,4 @@
 use anyhow::Result;
-use late_core::models::artboard_piece_rating::ArtContentRating;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModCommand {
@@ -89,20 +88,6 @@ pub(crate) enum ModCommand {
     ArtboardFeaturePiece {
         id_prefix: String,
     },
-    ArtboardMark {
-        id_prefix: String,
-        admin: bool,
-        rating: Option<ArtContentRating>,
-        reason: String,
-    },
-    ArtboardUnmarkBy {
-        id_prefix: String,
-        actor: String,
-        reason: String,
-    },
-    ArtboardSafetyView {
-        target: ArtboardSafetyViewTarget,
-    },
     Audio {
         action: AudioAction,
         username: String,
@@ -133,13 +118,6 @@ pub(crate) enum ModCommand {
     AdminUltimateCast {
         ultimate_id: String,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ArtboardSafetyViewTarget {
-    Summary,
-    User { username: String },
-    Piece { id_prefix: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -854,7 +832,7 @@ fn required_slow_scope(value: &str, usage: &str) -> Result<SlowScope> {
 }
 
 fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: artboard <restore|curate|remove|feature|safety> ...";
+    const USAGE: &str = "usage: artboard <restore|curate|remove|feature> ...";
     let Some(first) = parts.first().copied() else {
         anyhow::bail!(USAGE);
     };
@@ -863,57 +841,8 @@ fn parse_artboard_mod_command(parts: &[&str]) -> Result<ModCommand> {
         "curate" => parse_artboard_curate_mod_command(&parts[1..]),
         "remove" => parse_artboard_remove_mod_command(&parts[1..]),
         "feature" => parse_artboard_feature_mod_command(&parts[1..]),
-        "safety" => parse_artboard_safety_mod_command(&parts[1..]),
         _ => anyhow::bail!(USAGE),
     }
-}
-
-fn parse_artboard_safety_mod_command(parts: &[&str]) -> Result<ModCommand> {
-    const USAGE: &str = "usage: artboard safety view [@user|piece-id-prefix] | artboard safety [admin] <nsfw|sfw|none> <piece-id-prefix> [by <@user|user-id>] [reason...]";
-    if parts == ["help"] {
-        return Ok(ModCommand::Help {
-            topic: Some("artboard safety".into()),
-        });
-    }
-    if parts.first().copied() == Some("view") {
-        let target = match &parts[1..] {
-            [] => ArtboardSafetyViewTarget::Summary,
-            [user] if user.starts_with('@') => ArtboardSafetyViewTarget::User {
-                username: required_username(Some(user), USAGE)?,
-            },
-            [id] => ArtboardSafetyViewTarget::Piece {
-                id_prefix: piece_id_prefix(Some(id), USAGE)?,
-            },
-            _ => anyhow::bail!(USAGE),
-        };
-        return Ok(ModCommand::ArtboardSafetyView { target });
-    }
-    let (admin, parts) = match parts.split_first() {
-        Some((&"admin", rest)) => (true, rest),
-        _ => (false, parts),
-    };
-    let rating = match parts.first().copied() {
-        Some("nsfw") => Some(ArtContentRating::Nsfw),
-        Some("sfw") => Some(ArtContentRating::Sfw),
-        Some("none") => None,
-        _ => anyhow::bail!(USAGE),
-    };
-    let id_prefix = piece_id_prefix(parts.get(1).copied(), USAGE)?;
-    if parts.get(2).copied() == Some("by") {
-        anyhow::ensure!(rating.is_none(), "by is only supported with safety none");
-        let actor = parts.get(3).ok_or_else(|| anyhow::anyhow!(USAGE))?;
-        return Ok(ModCommand::ArtboardUnmarkBy {
-            id_prefix,
-            actor: actor.to_string(),
-            reason: parts.get(4..).unwrap_or_default().join(" "),
-        });
-    }
-    Ok(ModCommand::ArtboardMark {
-        id_prefix,
-        admin,
-        rating,
-        reason: parts.get(2..).unwrap_or_default().join(" "),
-    })
 }
 
 fn parse_artboard_remove_mod_command(parts: &[&str]) -> Result<ModCommand> {
@@ -1190,7 +1119,6 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard restore [YYYY-MM-DD] [reason...]",
             "artboard remove  <piece-id-prefix> [reason...]",
             "artboard feature <piece-id-prefix>",
-            "artboard safety help          - view help for art nsfw/sfw commands",
             "======== Bans, kicks, etc. =========================================",
             "kick   <server|voice|stream|#room> @name [reason...]",
             "ban    <server|#room|art|audio|calendar|stream> @name [duration] [reason...]",
@@ -1406,28 +1334,11 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard restore [YYYY-MM-DD] [reason...]",
             "artboard remove <piece-id-prefix> [reason...]",
             "artboard feature <piece-id-prefix>",
-            "artboard safety help          - view help for art nsfw/sfw commands",
             "Curates live or daily Artboard snapshots, restores live Artboard from daily snapshots,",
-            "takes a gallery piece down (copied work, etc.), pins a piece as today's Sliding Puzzle",
-            "art, or classifies gallery art with safety.",
+            "takes a gallery piece down (copied work, etc.), or pins a piece as today's Sliding",
+            "Puzzle art.",
             "Subtopics: help artboard curate, help artboard restore, help artboard remove,",
-            "help artboard feature, artboard safety help.",
-        ],
-        "artboard safety" => &[
-            "artboard safety view [@user|piece-id-prefix]",
-            "artboard safety [admin] <nsfw|sfw|none> <piece-id-prefix> [reason...]",
-            "artboard safety none <piece-id-prefix> by <@user|user-id> [reason...]",
-            "view alone shows hanging-piece counts, today's splash and up to 20 review candidates.",
-            "Candidates have staff disagreement or owner/community NSFW signals with no staff mark.",
-            "view @user lists their newest 20 hanging pieces, ratings, owner flags and vote counts.",
-            "view <id> shows one piece's rating, counts, who voted, staff marks and reasons.",
-            "Without admin, staff (including admins) mark as moderators. admin selects the admin tier.",
-            "Each account has one mark per piece; a new mark replaces its previous mark and tier.",
-            "SFW is an explicit override. none removes your mark only at the selected tier.",
-            "Admins outrank moderators: any admin NSFW wins; moderator ties are NSFW.",
-            "Staff may classify their own art. Community votes remain open under overrides.",
-            "none ... by is admin-only and removes that actor's mark at either tier, another admin's included.",
-            "A user UUID also identifies marks whose author's account was deleted.",
+            "help artboard feature.",
         ],
         "artboard feature" => &[
             "artboard feature <piece-id-prefix>",

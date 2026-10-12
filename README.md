@@ -167,16 +167,15 @@ range: 1–1000). Close and reopen `/paper` after reseeding; no restart is neede
 
 To test the Artboard gallery, run `make seed-artboard` after the current stack
 has applied its migrations. It creates 11 test accounts and 12 distinguishable,
-numbered ASCII pieces with applause and community/owner/moderator/admin rating
-scenarios, and enables the gallery. The first three have enough applause for
+numbered ASCII pieces with applause. The first three have enough applause for
 monthly awards. Pieces 01–11 predate today UTC and qualify for the daily splash
-queue. Piece 01 is selected for today, unless a non-fixture piece owns the day.
-Use `make seed-artboard ART_SPLASH_PIECE=3` for an NSFW-rated splash (the drawing
-itself is harmless), or choose any piece 1–11. Restart the SSH service with
-`docker compose restart service-ssh` and reconnect to refresh its splash cache.
+queue. Piece 01 is selected for today, unless a non-fixture piece owns the day;
+choose any piece 1–11 with `make seed-artboard ART_SPLASH_PIECE=3`. Restart the
+SSH service with `docker compose restart service-ssh` and reconnect to refresh
+its splash cache.
 
-Open Artboard (`4`), choose **Newest** in the gallery rail, and press `n` on a
-piece to vote. Fixture SSH identities are retained in the gitignored
+Open Artboard (`4`), choose **Newest** in the gallery rail, and press `v` on a
+piece to applaud. Fixture SSH identities are retained in the gitignored
 `tmp/artboard-seed-keys/` directory. For example:
 
 ```bash
@@ -187,6 +186,8 @@ Artboard opens behind a content disclaimer because the art may be NSFW.
 Press `V` (**View**) for this visit, `A` (**Always View**) to turn off future
 reminders, or `B` (**Back to Chat**) to return to Home (screen `1`). The default-on **Artboard
 content disclaimer** toggle in Settings → Tweaks can turn reminders off or on.
+The same toggle gates the login splash: only with it off does the day's
+gallery piece replace the coffee cup, so newcomers always see the cup.
 During the newcomer tour the dialog does not appear: the tour box at the
 Artboard stop offers `S` to show the art for that visit or Enter to skip to
 Profiles, and neither changes the preference.
@@ -197,36 +198,12 @@ Their tutorial is already marked completed, including when reseeding existing
 fixture accounts.
 They join the normal public auto-join rooms, including `#lounge`. From Home,
 select `#lounge` and enter `/mod` in its composer to open the staff console.
-Moderators and admins can also press `m` in a gallery list or full-piece view
-to open the console with art safety help and that piece's safety record.
-Rerunning restores these fixture pieces, applause, votes, marks, and staff
-roles; it preserves account preferences and all other users and art. Changes
-made while testing these pieces are reset by the next seed. Existing
-leaderboard seeding is separate, so art seeding does not rewrite game scores.
+Rerunning restores these fixture pieces, applause, and staff roles; it
+preserves account preferences and all other users and art. Changes made while
+testing these pieces are reset by the next seed. Existing leaderboard seeding
+is separate, so art seeding does not rewrite game scores.
 The dev profile grants admin privileges to every session; set `force_admin`
 to `false` in `late-ssh/src/config.rs` when testing role-based permissions.
-Plain safety commands write moderator marks even for admin accounts; the
-`admin` keyword explicitly selects the admin tier.
-
-Inside the `/mod` console:
-
-```text
-artboard safety help
-artboard safety view
-artboard safety view @art_artist1
-artboard safety view 0e77a39a
-artboard safety nsfw 0e77a39a
-artboard safety admin sfw 0e77a39a reviewed
-artboard safety admin none 0e77a39a
-artboard safety none 0e77a39a by @art_mod1
-```
-
-`view` shows a summary and review candidates; `@user` lists their hanging art,
-and an ID shows one piece's full safety record. `none` clears your mark at the
-selected tier. The per-piece record prints the full UUID on an `Art id:` line
-for copying into commands. Removing another account's mark, at either tier, with `by`
-is admin-only. Each account has one staff mark per piece; marking again
-replaces its mark and tier.
 
 ## Verification
 

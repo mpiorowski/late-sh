@@ -162,14 +162,13 @@ pub(crate) enum TweakRow {
     ChatBadges,
     LandingPage,
     PaperAtLogin,
-    ArtSplash,
     ArtboardDisclaimer,
     // Away group.
     Screensaver,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 14] = [
+    pub(crate) const ALL: [TweakRow; 13] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -181,7 +180,6 @@ impl TweakRow {
         TweakRow::ChatBadges,
         TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
-        TweakRow::ArtSplash,
         TweakRow::ArtboardDisclaimer,
         TweakRow::Screensaver,
     ];
@@ -1173,9 +1171,6 @@ impl SettingsModalState {
             TweakRow::LandingPage => {
                 self.draft.landing_page = self.draft.landing_page.cycle(true);
             }
-            TweakRow::ArtSplash => {
-                self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(true);
-            }
             TweakRow::Screensaver => {
                 // A list, not a value: Enter opens the picker instead.
                 self.open_picker(PickerKind::Screensaver);
@@ -1203,10 +1198,6 @@ impl SettingsModalState {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
             TweakRow::LandingPage => {
                 self.draft.landing_page = self.draft.landing_page.cycle(forward);
-                self.save();
-            }
-            TweakRow::ArtSplash => {
-                self.draft.art_splash_mode = self.draft.art_splash_mode.cycle(forward);
                 self.save();
             }
             TweakRow::Screensaver => {
@@ -2760,7 +2751,6 @@ impl SettingsModalState {
             paper_at_login: draft.paper_at_login,
             screensaver: draft.screensaver,
             show_watch_chat: draft.show_watch_chat,
-            art_splash_mode: draft.art_splash_mode,
             artboard_disclaimer: draft.artboard_disclaimer,
             terminal_images: draft.terminal_images,
             hidden_award_categories: draft.hidden_award_categories.clone(),

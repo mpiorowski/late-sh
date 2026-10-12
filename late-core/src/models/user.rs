@@ -482,58 +482,6 @@ impl Screensaver {
     }
 }
 
-/// Which hung pieces may appear over the login splash. Unmarked art is SFW.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ArtSplashMode {
-    #[default]
-    Sfw,
-    Always,
-    Never,
-}
-
-impl ArtSplashMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sfw => "sfw",
-            Self::Always => "always",
-            Self::Never => "never",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Sfw => "SFW",
-            Self::Always => "Always",
-            Self::Never => "Never",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "sfw" => Some(Self::Sfw),
-            "always" => Some(Self::Always),
-            "never" => Some(Self::Never),
-            _ => None,
-        }
-    }
-
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::Sfw, true) | (Self::Never, false) => Self::Always,
-            (Self::Always, true) | (Self::Sfw, false) => Self::Never,
-            (Self::Never, true) | (Self::Always, false) => Self::Sfw,
-        }
-    }
-}
-
-pub fn extract_art_splash_mode(settings: &Value) -> ArtSplashMode {
-    settings
-        .get("art_splash_mode")
-        .and_then(Value::as_str)
-        .and_then(ArtSplashMode::from_key)
-        .unwrap_or_default()
-}
-
 /// Inline terminal image previews (Settings, Tweaks, Display). `Auto` trusts
 /// what the terminal reports. The other two override it for terminals that
 /// report wrong: tmux can pass on sixel support its host terminal lacks, and
