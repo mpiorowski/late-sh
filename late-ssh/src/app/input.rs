@@ -2485,6 +2485,12 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
+    // Esc on the Zork menus backs out one level, the edition list to the
+    // hub; the door decides.
+    if ctx.screen == Screen::Zork {
+        crate::app::door::zork::input::handle_escape(app);
+        return;
+    }
     // Esc in the city backs out one step at a time: the guide first, then
     // the fight picker, then the fight scene (a run while the fight is on,
     // `fight/input.rs`), then an open shop panel or the ledge; on the bare

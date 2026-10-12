@@ -30,6 +30,11 @@ open. `RESTOREfoo` goes to the story parser (V3 dictionaries can independently
 truncate it to RESTORE); the story's restore opcode also uses the menu, never
 a filename chooser.
 
+Inside a game every key is the story's, Esc included. The frame title leads
+with the ways out (`` ` `` step out, `QUIT`), then `RESTORE` and `SAVE`, so an
+80-column title still shows them. On the menus a lone Esc backs out one level,
+from the edition list to the Games hub.
+
 Backtick steps out without killing the child; the workspace has one live stop
 for the trilogy. Games-card entry opens the menus while retaining that child.
 Changing editions or choosing manual/new waits for the old child's successful

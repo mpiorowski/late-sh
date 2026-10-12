@@ -43,6 +43,19 @@ pub fn handle_raw(app: &mut App, data: &[u8]) -> bool {
     }
 }
 
+/// A lone Esc on the menus, from `input::dispatch_escape` (a lone Esc never
+/// reaches the parsed-key path): one level back, and off to the Games hub
+/// from the edition list. A visible game never gets here; its Esc is the
+/// story's, forwarded raw by [`handle_raw`].
+pub fn handle_escape(app: &mut App) {
+    let Some(state) = app.zork_state.as_mut() else {
+        return;
+    };
+    if !state.in_exit_grace() && state.back() {
+        app.set_screen(Screen::Games);
+    }
+}
+
 /// One parsed key on the edition and save menus. Returns whether it was
 /// consumed; the rest (digits, Tab, global chords) falls through to the app,
 /// except under a confirmation, which owns every key until it is answered.
@@ -62,7 +75,7 @@ pub fn handle_menu_event(app: &mut App, event: &ParsedInput) -> bool {
             state.step(true);
             true
         }
-        ParsedInput::Byte(0x1b | b'q') | ParsedInput::Char('q') => {
+        ParsedInput::Byte(b'q') | ParsedInput::Char('q') => {
             if state.back() {
                 app.set_screen(Screen::Games);
             }

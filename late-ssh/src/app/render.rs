@@ -3193,8 +3193,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.game_visible())
     {
+        // The ways out lead: every key belongs to the story, and an 80
+        // column title cuts the tail.
         spans.push(Span::styled(
-            "· SAVE manual save · RESTORE menu · ` step out ",
+            "· ` step out · QUIT quit · RESTORE menu · SAVE manual save ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }

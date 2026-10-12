@@ -86,6 +86,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -
         Line::raw("SAVE replaces that edition's manual save; its description is optional."),
         Line::raw("RESTORE returns to the edition menu after confirmation."),
         Line::raw("` steps out while the game stays open. Autosave resumes at the last prompt."),
+        Line::raw("QUIT ends the game and returns to the edition menu."),
     ]);
     crate::app::door::landing::render_scrolled(
         frame,
