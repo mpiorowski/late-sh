@@ -24,6 +24,34 @@ impl Edition {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|edition| edition.key() == value)
     }
+
+    /// The edition's name in the watch roster's status.
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Self::Zork1 => "Zork I",
+            Self::Zork2 => "Zork II",
+            Self::Zork3 => "Zork III",
+        }
+    }
+}
+
+/// Arcade handle bounds (`late_core::models::arcade_handle`), duplicated
+/// here because the host shares no library with late-ssh.
+const PLAYNAME_MIN_LEN: usize = 3;
+const PLAYNAME_MAX_LEN: usize = 20;
+
+/// A player's arcade handle as it travels with `play` and a watch request:
+/// a letter, then letters, digits, or underscores, within the handle bounds.
+/// It names the game in the watch roster and nothing else.
+pub(crate) fn parse_playname(value: &str) -> Option<String> {
+    if !(PLAYNAME_MIN_LEN..=PLAYNAME_MAX_LEN).contains(&value.len()) {
+        return None;
+    }
+    let mut bytes = value.bytes();
+    let first = bytes.next()?;
+    let valid =
+        first.is_ascii_alphabetic() && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    valid.then(|| value.to_string())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,7 +74,9 @@ impl Action {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Request {
     List,
-    Play(Edition, Action),
+    /// The edition, what to load, and the player's arcade handle, which
+    /// lists the game in the watch roster.
+    Play(Edition, Action, String),
 }
 
 pub(crate) fn parse_request(data: &[u8]) -> Option<Request> {
@@ -59,7 +89,7 @@ pub(crate) fn parse_request(data: &[u8]) -> Option<Request> {
         .collect();
     match parts.as_slice() {
         ["list"] => Some(Request::List),
-        ["play", edition, action] => {
+        ["play", edition, action, playname] => {
             let edition = Edition::parse(edition)?;
             let action = match *action {
                 "auto" => Action::Auto,
@@ -67,7 +97,7 @@ pub(crate) fn parse_request(data: &[u8]) -> Option<Request> {
                 "new" => Action::New,
                 _ => return None,
             };
-            Some(Request::Play(edition, action))
+            Some(Request::Play(edition, action, parse_playname(playname)?))
         }
         _ => None,
     }

@@ -21,7 +21,7 @@
 //! (`sim::odds`): it is the floor, and a hand played well beats the word.
 
 use super::cards::{Board, Card, Effect};
-use super::data::{Intent, NOISE_CARDS, Rules};
+use super::data::{Intent, Rules};
 use super::state::{Fight, Powers, Sheet};
 
 /// Everything a policy reads to play one turn.
@@ -201,13 +201,14 @@ impl Turn {
     }
 
     /// Guards up against `incoming` until it is covered, the energy runs
-    /// out, or `most` cards have gone up: the bulwark first, then the
-    /// wipe ahead of the blocks while there is static for it to take and
-    /// behind them when there is none.
+    /// out, or `most` cards have gone up: the brace first (it is free),
+    /// then the bulwark, then the wipe ahead of the blocks while there is
+    /// static for it to take and behind them when there is none.
     fn guard(&mut self, table: &Table, incoming: i32, most: usize) {
         let wipes = self.slots_of(Card::Wipe);
         let blocks = self.slots_of(Card::Block);
-        let mut guards = self.slots_of(Card::Bulwark);
+        let mut guards = self.slots_of(Card::Brace);
+        guards.extend(self.slots_of(Card::Bulwark));
         match self.statics_in_hand() > 0 {
             true => guards.extend(wipes.iter().chain(&blocks)),
             false => guards.extend(blocks.iter().chain(&wipes)),
@@ -300,7 +301,7 @@ fn score(turn: &Turn, table: &Table) -> f64 {
     let left = (turn.block - incoming).max(0);
     let noise = match (turn.muted, table.now, taken > 0) {
         (true, _, _) => 0.0,
-        (false, Intent::Noise, _) => NOISE_CARDS as f64,
+        (false, Intent::Noise, _) => table.powers.noise as f64,
         (false, Intent::Hit | Intent::Heavy | Intent::Charge, true) => 1.0,
         (false, Intent::Hit | Intent::Heavy | Intent::Charge, false) => 0.0,
     };

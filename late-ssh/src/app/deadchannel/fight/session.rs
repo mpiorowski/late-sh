@@ -487,6 +487,7 @@ impl FightSession {
             | Applied::Reset
             | Applied::Drank { .. }
             | Applied::Carted { .. }
+            | Applied::Inked { .. }
             | Applied::Cleared { .. }
             | Applied::Cached { .. } => scene.lines.extend(lines),
         }

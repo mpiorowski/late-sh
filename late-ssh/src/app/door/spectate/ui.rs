@@ -248,6 +248,9 @@ pub fn draw(
                 SpectateGame::Brogue => {
                     crate::app::door::brogue::render::clear_canvas_black(buf, body);
                 }
+                SpectateGame::Zork => {
+                    crate::app::door::zork::render::inherit_theme_text(buf, body);
+                }
                 SpectateGame::Dcss | SpectateGame::Nethack => {}
             }
         }
@@ -308,6 +311,14 @@ fn draw_header(
             "widen the terminal to chat \u{b7} ` hop out \u{b7} Esc back "
         }
     };
+    // A Zork player can take a command from the chat (`door/zork/suggest.rs`),
+    // so where there is a chat to write it in, the header says how.
+    let suggests = match (view.state.game(), dock) {
+        (SpectateGame::Zork, ChatDock::Right | ChatDock::Below) => "\">cmd\" suggests \u{b7} ",
+        (SpectateGame::Zork, ChatDock::Hidden)
+        | (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, _) => "",
+    };
+    let keys = format!("{suggests}{keys}");
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(keys, faint))).alignment(Alignment::Right),
         area,
@@ -396,21 +407,61 @@ pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
 
 /// Draw what `own_game_split` made room for beside a player's own running
 /// game: the pane, or the read-only row underneath.
+///
+/// `suggestion` is a command a watcher suggested for a Zork game
+/// (`door/zork/suggest.rs`), which F3 types: it rides its own row under the
+/// pane's header, and takes the one-row form over the newest message, since
+/// it is the line the player can act on.
 pub fn draw_own_chat(
     frame: &mut Frame,
     own_chat: OwnChat,
     chat: Option<EmbeddedRoomChatView<'_>>,
     line: Option<&WatchLine>,
+    suggestion: Option<&str>,
     watchers: usize,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    match own_chat {
-        OwnChat::Pane { rule, pane } => {
-            draw_own_chat_pane(frame, rule, pane, chat, watchers, terminal_images);
+    match (own_chat, suggestion) {
+        (OwnChat::Pane { rule, pane }, _) => {
+            draw_own_chat_pane(
+                frame,
+                rule,
+                pane,
+                chat,
+                suggestion,
+                watchers,
+                terminal_images,
+            );
         }
-        OwnChat::Line(row) => draw_watch_line(frame, row, line, watchers),
-        OwnChat::Hidden => {}
+        (OwnChat::Line(row), Some(command)) => draw_suggestion(frame, row, command),
+        (OwnChat::Line(row), None) => draw_watch_line(frame, row, line, watchers),
+        (OwnChat::Hidden, _) => {}
     }
+}
+
+/// A watcher's suggested command on one row: the command as F3 would type
+/// it, then the key.
+fn draw_suggestion(frame: &mut Frame, area: Rect, command: &str) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" > ", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(
+                command.to_string(),
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "  F3 types it ",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )))
+        .alignment(Alignment::Right),
+        area,
+    );
 }
 
 /// The pane beside a player's own running game: their watchers' chat. One
@@ -424,17 +475,26 @@ fn draw_own_chat_pane(
     rule: Rect,
     pane: Rect,
     chat: Option<EmbeddedRoomChatView<'_>>,
+    suggestion: Option<&str>,
     watchers: usize,
     terminal_images: &mut TerminalImageFrame,
 ) {
     draw_rule(frame, rule);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(pane);
     draw_chat_header(frame, rows[0], watchers);
+    let body = match suggestion {
+        Some(command) => {
+            let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(rows[1]);
+            draw_suggestion(frame, rows[0], command);
+            rows[1]
+        }
+        None => rows[1],
+    };
     // No room yet (it is still resolving, or the join has not landed): the
     // pane stays reserved and empty rather than resizing the game later, and
     // without the strip, since F2 has nowhere to write until then.
     if let Some(chat) = chat {
-        let _composer = draw_embedded_room_chat(frame, rows[1], chat, terminal_images);
+        let _composer = draw_embedded_room_chat(frame, body, chat, terminal_images);
     }
 }
 

@@ -434,7 +434,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     assert_eq!(session.draft(), None);
     assert_eq!(
         session.till.as_deref(),
-        Some("siphon is in your deck now, in place of a strike."),
+        Some("brace is in your deck now, in place of a strike."),
         "the pick is the road's word"
     );
     assert!(!session.take_card(0), "nothing is owed: the key is free");
@@ -444,7 +444,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
         .await
         .expect("the row")
         .expect("a standing runner");
-    assert_eq!(row.cards, Some(serde_json::json!(["siphon"])));
+    assert_eq!(row.cards, Some(serde_json::json!(["brace"])));
     session.enter();
     assert!(session.scene_open());
     answered(&mut session).await;

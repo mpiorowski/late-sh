@@ -243,6 +243,8 @@ struct DrawContext<'a> {
     /// of it.
     show_watch_chat: bool,
     own_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
+    /// The watcher suggestion waiting beside this player's own Zork game.
+    own_suggestion: Option<String>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -705,6 +707,19 @@ impl App {
                     chrono::Utc::now(),
                 )
             });
+        // The command a watcher suggested for this player's own Zork game,
+        // which F3 types (`door/zork/suggest.rs`).
+        let own_suggestion = match own_screen_game {
+            Some(crate::app::door::spectate::state::SpectateGame::Zork) => {
+                crate::app::door::zork::suggest::waiting(self).map(|suggestion| suggestion.command)
+            }
+            Some(
+                crate::app::door::spectate::state::SpectateGame::Dcss
+                | crate::app::door::spectate::state::SpectateGame::Nethack
+                | crate::app::door::spectate::state::SpectateGame::Brogue,
+            )
+            | None => None,
+        };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
@@ -1614,6 +1629,7 @@ impl App {
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         own_watch_line,
+                        own_suggestion,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -2269,6 +2285,7 @@ impl App {
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
+                        None,
                         ctx.own_watchers,
                         terminal_images,
                     );
@@ -2290,6 +2307,7 @@ impl App {
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
+                        None,
                         ctx.own_watchers,
                         terminal_images,
                     );
@@ -2311,6 +2329,7 @@ impl App {
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
+                        None,
                         ctx.own_watchers,
                         terminal_images,
                     );
@@ -2338,9 +2357,26 @@ impl App {
                 }
             }
             Screen::Zork => {
-                if let Some(state) = ctx.zork_state {
-                    state.set_viewport(content_area);
-                    crate::app::door::zork::render::draw_page(frame, content_area, state);
+                if let Some(state) = ctx.zork_state.as_deref_mut() {
+                    // The game on screen makes room for its watchers; the
+                    // menus keep the whole area.
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Zork,
+                        ctx.show_watch_chat && state.game_visible(),
+                        content_area,
+                    );
+                    state.set_viewport(game_area);
+                    crate::app::door::zork::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_suggestion.as_deref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Codekeep => {
@@ -2758,6 +2794,17 @@ impl App {
         }
         if screen == Screen::Bashquest
             && let Some(state) = ctx.bashquest_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
+        if screen == Screen::Zork
+            && let Some(state) = ctx.zork_state.as_deref()
             && state.name_modal_visible()
         {
             crate::app::door::landing::draw_name_modal(

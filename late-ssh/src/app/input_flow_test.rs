@@ -4713,15 +4713,15 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::spectate::state::SpectateGame;
     use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room::WatchDoor;
     use late_core::models::chat_room_member::ChatRoomMember;
-    use late_core::models::leaderboard::DoorGame;
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "own-chat-f2").await;
     // The player's watch-chat room, joined ahead of the session the way a
     // returning player's is, so the room list the app loads carries it.
     let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::get_or_create_watch_room(&client, DoorGame::Nethack, "tester")
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "tester")
         .await
         .expect("the player's watch room");
     ChatRoomMember::join(&client, room.id, user.id)
@@ -4824,6 +4824,73 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
         !app.chat.is_composing(),
         "F2 stays with the game without a pane"
     );
+}
+
+/// Zork's player writes to their watchers the same way: F2 opens the
+/// composer in their own room, typing and Enter are the composer's, and Esc
+/// hands the keys back to the story.
+#[tokio::test]
+async fn a_zork_player_writes_to_their_watchers_with_f2() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::SpectateGame;
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zork-own-chat-f2").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Zork, "tester")
+        .await
+        .expect("the player's watch room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zork-own-chat-f2-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Zork, "tester", room.id);
+
+    // A running game under a claimed handle. Nothing awaits from here on, as
+    // in the roguelike flow above: the fabricated proxy would end the game.
+    app.zork_enabled = true;
+    app.set_screen(Screen::Zork);
+    app.zork_state
+        .as_mut()
+        .expect("zork state")
+        .force_running_for_test();
+    app.tick();
+    let room_id = app
+        .own_watch_chat_room_id(SpectateGame::Zork)
+        .expect("the player's own room");
+    let plain = render_plain(&mut app);
+    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
+
+    app.handle_input(b"\x1bOQ");
+    assert!(app.chat.is_composing(), "F2 opens the composer");
+    assert_eq!(app.chat.composer_room_id(), Some(room_id));
+    app.handle_input(b"hi all");
+    assert_eq!(
+        app.chat.composer().lines().join("\n"),
+        "hi all",
+        "typed keys are the composer's, not the story's"
+    );
+    app.handle_input(b"\r");
+    assert!(
+        !app.chat.is_composing(),
+        "Enter sends and hands the keys back"
+    );
+
+    app.handle_input(b"\x1bOQ");
+    app.handle_input(b"draft");
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.chat.is_composing(), "Esc closes the composer");
+    assert_eq!(app.screen, Screen::Zork);
 }
 
 #[tokio::test]
@@ -6355,7 +6422,8 @@ async fn enter_on_a_spent_runners_road_lands_back_on_the_street() {
 /// each slot key buys onto the row. A letter the open panel does not own
 /// stays with it instead of reaching a global: `w` (the cart's key, Bonsai
 /// Care everywhere else) at the bar, `m` (the paired client's mute) at
-/// both, as over the picker and the scene.
+/// both, as over the picker and the scene. `q` and the page digits are
+/// the globals' over both.
 #[tokio::test]
 async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     use crate::app::deadchannel::city::map::Landmark;
@@ -6385,6 +6453,12 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     assert!(!app.show_bonsai_modal, "`w` at the bar is not Bonsai Care");
     assert!(app.banner.is_none(), "`m` at the bar is not the mute");
     assert_eq!(app.city.panel(), Some(Landmark::Bar), "the bar stays open");
+
+    // `q` asks to quit, and pours nothing: the glass below is the day's one.
+    app.handle_input(b"q");
+    assert!(app.show_quit_confirm, "`q` at the bar is the quit");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.show_quit_confirm, "quit confirm").await;
 
     app.handle_input(b"s");
     wait_for_render_contains(&mut app, "static on ice. it goes down like a short circuit").await;
@@ -6426,6 +6500,72 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     // The page digits still reach the globals from over a panel.
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
+}
+
+/// At INK a page digit is the page switch, as over every panel: `2` goes
+/// to the Arcade, and no draft is inked for it.
+#[tokio::test]
+async fn the_needle_leaves_the_page_digits_to_the_globals() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::deadchannel::city::map::Landmark;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-needle-digits-it", 100, 30, |sheet| {
+            sheet.crystals = 20
+        })
+        .await;
+
+    app.city.open_panel(Landmark::Ink);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"2");
+    assert_eq!(
+        app.screen,
+        Screen::Arcade,
+        "`2` at the needle is the Arcade"
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(row.inks, None, "nothing inked");
+    assert_eq!(row.crystals, 20, "no crystals spent");
+}
+
+/// At INK the down key walks the cursor to the next draft and `i` inks
+/// that one onto the row, for its crystals.
+#[tokio::test]
+async fn the_needle_inks_the_picked_draft() {
+    use crate::app::deadchannel::city::map::Landmark;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-needle-ink-it", 100, 30, |sheet| {
+            sheet.crystals = 20
+        })
+        .await;
+
+    app.city.open_panel(Landmark::Ink);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"j");
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "the needle goes in.").await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        row.inks,
+        Some(serde_json::json!([6])),
+        "the level 6 draft, under the cursor"
+    );
+    assert_eq!(row.crystals, 10, "ten crystals for the needle");
 }
 
 /// The road and the scene both fit a classic 80 by 24 terminal under the

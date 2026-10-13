@@ -210,6 +210,9 @@ pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleMod
         Span::styled("N", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" open in News", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("  ", Style::default().fg(theme::BORDER())),
+        Span::styled("r", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" reply in #lounge", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("  ", Style::default().fg(theme::BORDER())),
         Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
     ]);

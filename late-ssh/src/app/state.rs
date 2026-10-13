@@ -1216,6 +1216,9 @@ impl App {
             Screen::Brogue => {
                 self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Brogue)
             }
+            Screen::Zork => {
+                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Zork)
+            }
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
             _ => None,
@@ -2172,6 +2175,11 @@ impl App {
                 port: self.brogue_port,
                 key: crate::app::door::brogue::identity::derive_client_key(&self.brogue_secret),
             },
+            SpectateGame::Zork => WatchTarget {
+                host: self.zork_host.clone(),
+                port: self.zork_port,
+                key: crate::app::door::zork::identity::derive_client_key(&self.zork_secret),
+            },
         };
         self.spectate_state = Some(State::new(key, target, self.repaint_signal.clone()));
     }
@@ -2383,6 +2391,7 @@ impl App {
                     term: self.zork_term.clone(),
                     enabled: self.zork_enabled,
                     repaint: self.repaint_signal.clone(),
+                    handle_svc: Some(self.arcade_handle_service.clone()),
                 },
             ));
         }

@@ -8,6 +8,7 @@
 
 use super::data::COST_LADDER;
 use super::map::{self, Landmark};
+use crate::app::deadchannel::fight::cards::{DRAFTS, Draft};
 
 /// How long a street line (a vendor's remark) stays pinned, in
 /// `marquee_tick` units (~15 per second; the clock is sampled on every
@@ -48,15 +49,15 @@ impl Landmark {
             | Landmark::Repairs
             | Landmark::Board
             | Landmark::Bits
-            | Landmark::Blades => Enter::Panel(self),
+            | Landmark::Blades
+            | Landmark::Ink => Enter::Panel(self),
             Landmark::Screen => Enter::Fight,
             Landmark::Noodles | Landmark::Umbrellas | Landmark::Reader | Landmark::Stairs => {
                 Enter::Line(self)
             }
             // Not open yet: the door says so. Opening a shop moves it up
             // to `Enter::Panel`.
-            Landmark::Ink
-            | Landmark::Baths
+            Landmark::Baths
             | Landmark::Sleep
             | Landmark::Shrine
             | Landmark::Market
@@ -79,6 +80,9 @@ pub struct State {
     /// The row under the cursor on the armorer's wall (tier index, 0 is
     /// tier 1). Kept across visits.
     pick: usize,
+    /// The row under the cursor at INK (draft index, 0 is the level 3
+    /// draft). Kept across visits.
+    draft_pick: usize,
     /// Looking over the ledge: the lower city instead of the street.
     ledge: bool,
     /// Leaning out over the ledge: the next `r` steps off (`Command::Reset`).
@@ -101,6 +105,7 @@ impl State {
             anim_tick: 0,
             panel: None,
             pick: 0,
+            draft_pick: 0,
             ledge: false,
             reset_armed: false,
             line: None,
@@ -178,6 +183,21 @@ impl State {
 
     pub fn pick_down(&mut self) {
         self.pick = (self.pick + 1).min(TIERS - 1);
+    }
+
+    /// The draft under the cursor at INK.
+    pub fn picked_draft(&self) -> &'static Draft {
+        &DRAFTS[self.draft_pick]
+    }
+
+    /// Move the cursor at INK up the drafts (toward level 3) or down them;
+    /// the ends hold.
+    pub fn pick_draft_up(&mut self) {
+        self.draft_pick = self.draft_pick.saturating_sub(1);
+    }
+
+    pub fn pick_draft_down(&mut self) {
+        self.draft_pick = (self.draft_pick + 1).min(DRAFTS.len() - 1);
     }
 
     /// Whether the runner is looking over the ledge.

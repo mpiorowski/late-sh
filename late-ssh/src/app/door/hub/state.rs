@@ -160,13 +160,15 @@ impl HubGame {
     }
 
     /// The watchable door behind this card, for the doors whose hosts serve
-    /// watch sessions (the hub's `s` key).
+    /// watch sessions (the hub's `t` key, which flips the player's watcher
+    /// chat).
     pub fn spectate_game(self) -> Option<crate::app::door::spectate::state::SpectateGame> {
         use crate::app::door::spectate::state::SpectateGame;
         match self {
             HubGame::Dcss => Some(SpectateGame::Dcss),
             HubGame::Nethack => Some(SpectateGame::Nethack),
             HubGame::Brogue => Some(SpectateGame::Brogue),
+            HubGame::Zork => Some(SpectateGame::Zork),
             HubGame::NightCity
             | HubGame::Lateania
             | HubGame::Minecraft
@@ -175,7 +177,6 @@ impl HubGame {
             | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
-            | HubGame::Zork
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }

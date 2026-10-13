@@ -174,7 +174,7 @@ async fn client_terminal_names_do_not_reach_the_embedded_interpreter() {
     let (client, accepted) = fixture.client(ACCOUNT, "test-secret").await;
     assert!(accepted);
     for term in ["xterm-kitty", "xterm-ghostty", "../../etc/passwd", ""] {
-        let mut game = request_with_term(&client, "play zork1 new", term).await;
+        let mut game = request_with_term(&client, "play zork1 new alice", term).await;
         let output = until(&mut game, "TERM xterm-256color\r\n").await;
         assert!(output.contains("TERM xterm-256color\r\n"), "{output}");
         game.data(&b"quit\n"[..]).await.unwrap();
@@ -195,7 +195,7 @@ async fn account_lease_spans_editions_and_metadata_does_not_stop_game() {
     let fixture = Fixture::new().await;
     let (client, accepted) = fixture.client(ACCOUNT, "test-secret").await;
     assert!(accepted);
-    let mut game = request(&client, "play zork1 new").await;
+    let mut game = request(&client, "play zork1 new alice").await;
     let ready = until(&mut game, "READY").await;
     assert!(ready.contains("/zork1 new secret=\r\n"), "{ready}");
     let mut list = request(&client, "list").await;
@@ -204,14 +204,14 @@ async fn account_lease_spans_editions_and_metadata_does_not_stop_game() {
     let catalogue: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(catalogue["active"], "zork1");
     assert_eq!(catalogue["editions"].as_array().unwrap().len(), 3);
-    let mut busy = request(&client, "play zork2 new").await;
+    let mut busy = request(&client, "play zork2 new alice").await;
     assert_eq!(exit(&mut busy).await.0, 75);
     game.data(&b"look\n"[..]).await.unwrap();
     until(&mut game, "REPLY look").await;
     game.signal(Sig::USR1).await.unwrap();
     assert_eq!(exit(&mut game).await.0, 20);
     assert_eq!(fixture.active(), 0);
-    let mut second = request(&client, "play zork2 auto").await;
+    let mut second = request(&client, "play zork2 auto alice").await;
     until(&mut second, "READY").await;
     second.data(&b"quit\n"[..]).await.unwrap();
     assert_eq!(exit(&mut second).await.0, 0);
@@ -223,8 +223,8 @@ async fn separate_accounts_run_together_and_disconnect_flushes_before_unlock() {
     let fixture = Fixture::new().await;
     let (first, _) = fixture.client(ACCOUNT, "test-secret").await;
     let (second, _) = fixture.client(OTHER, "test-secret").await;
-    let mut one = request(&first, "play zork1 new").await;
-    let mut two = request(&second, "play zork3 new").await;
+    let mut one = request(&first, "play zork1 new alice").await;
+    let mut two = request(&second, "play zork3 new bob").await;
     until(&mut one, "READY").await;
     until(&mut two, "READY").await;
     assert_eq!(fixture.active(), 2);
@@ -262,10 +262,91 @@ async fn invalid_requests_and_spawn_failure_release_account() {
     let (client, _) = fixture.client(ACCOUNT, "test-secret").await;
     let mut invalid = request(&client, "play ../../escape new").await;
     assert_eq!(exit(&mut invalid).await.0, 64);
+    // Every game is played under a handle; a launch without one is refused.
+    let mut nameless = request(&client, "play zork1 new").await;
+    assert_eq!(exit(&mut nameless).await.0, 64);
     std::fs::remove_file(fixture.root.path().join("interpreter")).unwrap();
-    let mut failed = request(&client, "play zork1 new").await;
+    let mut failed = request(&client, "play zork1 new alice").await;
     let (code, message) = exit(&mut failed).await;
     assert_eq!(code, 1);
     assert!(message.contains("Unable to start Zork"));
     assert_eq!(fixture.active(), 0);
+}
+
+/// The newest roster block in what a read returned (one read can carry
+/// several).
+fn last_block(output: &str) -> String {
+    output
+        .trim_end_matches("end\n")
+        .rsplit("end\n")
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Open a watch session's stream: the env request, then the shell.
+async fn watch(client: &client::Handle<Client>, request: &str) -> Channel<client::Msg> {
+    let channel = client.channel_open_session().await.unwrap();
+    channel
+        .set_env(false, watch::WATCH_ENV_VAR, request)
+        .await
+        .unwrap();
+    channel.request_shell(true).await.unwrap();
+    channel
+}
+
+#[tokio::test]
+async fn every_game_is_watchable_and_the_watch_identity_cannot_play() {
+    let fixture = Fixture::new().await;
+    let (player, _) = fixture.client(ACCOUNT, "test-secret").await;
+    let (other, _) = fixture.client(OTHER, "test-secret").await;
+    let mut listed = request(&player, "play zork1 new alice").await;
+    let mut other_game = request(&other, "play zork2 new bob").await;
+    until(&mut listed, "READY").await;
+    until(&mut other_game, "READY").await;
+
+    let (watcher, accepted) = fixture.client(watch::WATCH_USERNAME, "test-secret").await;
+    assert!(accepted);
+    let mut roster = watch(&watcher, "list").await;
+    let block = last_block(&until(&mut roster, "end\n").await);
+    let games: Vec<_> = block
+        .lines()
+        .filter(|line| line.starts_with("game\t"))
+        .collect();
+    assert_eq!(games.len(), 2, "{block}");
+    // Each game under its handle, with its edition until the story draws
+    // its status bar.
+    let line = |name: &str| {
+        games
+            .iter()
+            .find(|line| line.starts_with(&format!("game\t{name}\t")))
+            .unwrap_or_else(|| panic!("{name} listed: {block}"))
+            .to_string()
+    };
+    assert!(line("alice").ends_with("\tZork I"), "{block}");
+    assert!(line("bob").ends_with("\tZork II"), "{block}");
+
+    // Each stream on its own connection, as late-ssh opens them: the host
+    // keeps one watch stream per connection.
+    let (screen_watcher, _) = fixture.client(watch::WATCH_USERNAME, "test-secret").await;
+    let mut screen = watch(&screen_watcher, "game:alice").await;
+    until(&mut screen, "READY").await;
+    listed.data(&b"look\n"[..]).await.unwrap();
+    until(&mut screen, "REPLY look").await;
+
+    // The watch identity streams and nothing else: no game, no catalogue.
+    let mut play = request(&watcher, "play zork3 new carol").await;
+    assert_eq!(exit(&mut play).await.0, 64);
+
+    listed.data(&b"quit\n"[..]).await.unwrap();
+    assert_eq!(exit(&mut listed).await.0, 0);
+    // Blocks in between may still list the game (the watcher coming and
+    // going changes its count); the game ending drops it.
+    timeout(Duration::from_secs(5), async {
+        while last_block(&until(&mut roster, "end\n").await).contains("game\talice") {}
+    })
+    .await
+    .expect("the ended game leaves the roster");
+    other_game.data(&b"quit\n"[..]).await.unwrap();
+    assert_eq!(exit(&mut other_game).await.0, 0);
 }

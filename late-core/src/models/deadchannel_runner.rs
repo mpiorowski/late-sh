@@ -34,8 +34,10 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // the day's run on the road, JSON the app parses, `None` before the first
 // step and after the day roll. `cards` (migration 226) is the cards drafted
 // on the way up, a JSON list of card names the app parses, `None` before
-// the first draft and after a mark or the ledge. A stored `fight` always
-// has `piles` (the check of migration 228).
+// the first draft and after a mark or the ledge. `inks` (migration 238)
+// is the drafts inked at INK, a JSON list of draft levels the app parses,
+// `None` with none bought; a mark and the ledge leave it, the nuke clears
+// it. A stored `fight` always has `piles` (the check of migration 228).
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -64,7 +66,8 @@ crate::model! {
         pub drink: Option<String>,
         pub reset_generation: i32,
         pub road: Option<serde_json::Value>,
-        pub cards: Option<serde_json::Value>;
+        pub cards: Option<serde_json::Value>,
+        pub inks: Option<serde_json::Value>;
 
         @data
         pub user_id: Uuid,
@@ -99,6 +102,7 @@ pub struct SheetWrite {
     pub drink: Option<String>,
     pub road: Option<serde_json::Value>,
     pub cards: Option<serde_json::Value>,
+    pub inks: Option<serde_json::Value>,
 }
 
 /// What the directory serves per standing runner: the look as stored, the
@@ -269,7 +273,7 @@ impl DeadchannelRunner {
                      fight = $10, kills = $11, kills_today = $12, runs_today = $13,
                      peak_level = $14, marks = $15, unpaid_mark = $16,
                      stash = $17, debt = $18, crystals = $19, drink = $20,
-                     road = $21, cards = $22, updated = current_timestamp
+                     road = $21, cards = $22, inks = $23, updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -295,6 +299,7 @@ impl DeadchannelRunner {
                     &write.drink,
                     &write.road,
                     &write.cards,
+                    &write.inks,
                 ],
             )
             .await

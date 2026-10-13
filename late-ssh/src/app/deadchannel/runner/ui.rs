@@ -43,7 +43,7 @@ pub fn badge_text(entry: &RunnerEntry) -> String {
 /// the tailor, so a badge never shows a color the portrait beside it
 /// cannot wear. Grey to three (amber opens with it, the badge starts
 /// grey), then phosphor, cyan, magenta, red every three levels, white at
-/// the top of the ladder (fifteen, `fight::state::exp_to_advance` returns
+/// the top of the ladder (fifteen, `fight::data::exp_to_advance` returns
 /// nothing past it).
 pub fn level_color(level: i32) -> Color {
     let tint = match level {

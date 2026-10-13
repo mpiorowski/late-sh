@@ -119,6 +119,10 @@ pub(crate) fn own_running_handle(app: &App, game: SpectateGame) -> Option<String
             let state = app.brogue_state.as_ref()?;
             (state.is_running(), state.handle_status())
         }
+        SpectateGame::Zork => {
+            let state = app.zork_state.as_ref()?;
+            (state.is_running(), state.handle_status())
+        }
     };
     match (running, handle) {
         (true, HandleStatus::Claimed(handle)) => Some(handle),

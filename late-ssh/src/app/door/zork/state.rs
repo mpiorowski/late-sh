@@ -3,8 +3,10 @@ use super::protocol::{
     Edition, EditionSlots,
 };
 use super::proxy::{self, Connection, Ending, Process, ProxyStatus};
+use super::suggest::Suggestion;
+use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult, HandleStatus};
 use crate::app::door::keys;
-use crate::metrics::{self, ZorkCatalogueRead, ZorkSessionEnd, ZorkSwitchResult};
+use crate::metrics::{self, ZorkCatalogueRead, ZorkSessionEnd, ZorkSuggestion, ZorkSwitchResult};
 use crate::render_signal::RenderSignal;
 use futures_util::FutureExt;
 use ratatui::layout::Rect;
@@ -29,9 +31,23 @@ pub struct StateConfig {
     pub term: String,
     pub enabled: bool,
     pub repaint: Option<Arc<RenderSignal>>,
+    /// Accessor for the account's arcade handle. `None` on headless/test
+    /// paths.
+    pub handle_svc: Option<ArcadeHandleService>,
 }
 pub struct State {
     connection: Connection,
+    /// The shared arcade-handle flow (lookup, the one-time claim prompt,
+    /// launch intent), as on the roguelikes: every game is played, and
+    /// listed for watchers, under the claimed handle.
+    handle: HandleFlow,
+    /// The edition and action that opened the claim prompt, launched once
+    /// the claim lands so the player's one Enter still starts the game. The
+    /// edition is the one it was chosen on: the player may browse another
+    /// meanwhile, and a New confirmed for one must not start on the other.
+    after_claim: Option<(Edition, Action)>,
+    /// The watcher suggestion F3 last typed, so it is not offered again.
+    typed_suggestion: Option<uuid::Uuid>,
     term: String,
     enabled: bool,
     viewport: Rect,
@@ -59,6 +75,14 @@ impl Drop for State {
 impl State {
     pub fn new(cfg: StateConfig) -> Self {
         Self {
+            // A disabled door never looks the handle up.
+            handle: HandleFlow::new(
+                cfg.user_id,
+                if cfg.enabled { cfg.handle_svc } else { None },
+                cfg.repaint.clone(),
+            ),
+            after_claim: None,
+            typed_suggestion: None,
             connection: Connection {
                 host: cfg.host,
                 port: cfg.port,
@@ -126,6 +150,40 @@ impl State {
     pub fn live(&self) -> Option<Edition> {
         self.live
     }
+    /// Snapshot of the arcade-handle lifecycle, for the claim modal and the
+    /// player's own watch chat (`spectate::chat`).
+    pub fn handle_status(&self) -> HandleStatus {
+        self.handle.status()
+    }
+    /// The claim prompt's compose buffer, for rendering.
+    pub fn entry_input(&self) -> &str {
+        self.handle.entry_input()
+    }
+    /// Whether the one-time arcade-name claim modal is over the menus: the
+    /// account has no handle yet, as on the roguelikes' launchers.
+    pub fn name_modal_visible(&self) -> bool {
+        self.enabled && !self.game_visible() && self.handle.modal_visible()
+    }
+    /// Close the claim modal (Esc); choosing a game reopens it.
+    pub fn dismiss_name_modal(&mut self) {
+        self.handle.dismiss_modal();
+    }
+    /// A key byte for the claim modal. Returns whether it was consumed.
+    pub fn name_key(&mut self, byte: u8) -> bool {
+        match self.handle.key(byte) {
+            HandleKeyResult::Launch | HandleKeyResult::Consumed => true,
+            HandleKeyResult::Ignored => false,
+        }
+    }
+    /// Stand the handle on a claimed name without a lookup, for tests that
+    /// launch a game.
+    #[cfg(test)]
+    pub fn force_handle_for_test(&mut self, handle: &str) {
+        self.handle.force_claimed_for_test(handle);
+    }
+    pub fn typed_suggestion(&self) -> Option<uuid::Uuid> {
+        self.typed_suggestion
+    }
     pub fn slots(&self, edition: Edition) -> Option<&EditionSlots> {
         self.catalogue
             .as_ref()?
@@ -167,6 +225,16 @@ impl State {
             self.send_game_input(bytes);
         }
         self.exit_grace = self.exit_grace.saturating_sub(1);
+        // The handle lookup or claim landed on a launch the player asked for
+        // while it was in flight: start the action they chose, on the
+        // edition they chose it on.
+        if self.handle.take_ready_launch() {
+            changed = true;
+            if let Some((edition, action)) = self.after_claim.take() {
+                self.edition = edition;
+                self.launch(action);
+            }
+        }
         if self.lookup.as_ref().is_some_and(|task| task.is_finished()) {
             changed = true;
             match self
@@ -273,6 +341,17 @@ impl State {
             self.mode = Mode::Running;
             return;
         }
+        // Every game runs under the claimed handle. Without one this opens
+        // the claim prompt, and the claim landing launches the same action
+        // (`tick`).
+        if self.handle.claimed().is_none() {
+            self.after_claim = Some((self.edition, action));
+            self.handle.request_launch();
+            // A confirmation already answered stays answered: the menu
+            // under the prompt is the action list again.
+            self.mode = Mode::Actions;
+            return;
+        }
         if let Some(proxy) = &self.proxy {
             self.pending = Some((self.edition, action, Instant::now()));
             proxy.return_to_menu();
@@ -284,10 +363,15 @@ impl State {
     }
     fn start(&mut self, edition: Edition, action: Action) {
         metrics::record_zork_launch(edition, action);
+        let playname = self
+            .handle
+            .claimed()
+            .expect("a game only starts under a claimed handle");
         self.proxy = Some(Process::spawn(
             self.connection.clone(),
             edition,
             action,
+            &playname,
             self.viewport.width,
             self.viewport.height,
             self.term.clone(),
@@ -370,11 +454,32 @@ impl State {
         let bytes = self.input.feed(data);
         self.send_game_input(bytes);
     }
+    /// F3: type the waiting watcher suggestion onto the story's prompt,
+    /// without Enter, so the player still reads and sends it. Only at an
+    /// empty prompt (`suggest::at_empty_prompt`); anywhere else nothing is
+    /// typed.
+    pub fn type_suggestion(&mut self, suggestion: Option<Suggestion>) {
+        let at_prompt = self
+            .proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.with_screen(super::suggest::at_empty_prompt));
+        let result = match (suggestion, at_prompt) {
+            (None, _) => ZorkSuggestion::NoneWaiting,
+            (Some(_), false) => ZorkSuggestion::NotAtPrompt,
+            (Some(suggestion), true) => {
+                self.typed_suggestion = Some(suggestion.message_id);
+                self.send_game_input(suggestion.command.into_bytes());
+                ZorkSuggestion::Typed
+            }
+        };
+        metrics::record_zork_suggestion(result);
+    }
     /// Test-only: fabricate a live game around a proxy pointed at a dead
     /// address, so detach and reap paths can be exercised without a host.
     /// Needs a Tokio runtime (the proxy spawns its bridge task).
     #[cfg(test)]
     pub fn force_running_for_test(&mut self) {
+        self.handle.force_claimed_for_test("tester");
         self.start(Edition::Zork1, Action::New);
     }
     fn send_game_input(&mut self, bytes: Vec<u8>) {

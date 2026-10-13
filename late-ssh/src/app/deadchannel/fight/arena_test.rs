@@ -6,65 +6,37 @@ use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
 const SWEEP: &[(&str, Rules)] = &[
     ("live", RULES),
     (
-        "boss 280",
+        "riposte 125",
         Rules {
-            old_signal: boss(280, 39),
+            riposte_percent: 125,
             ..RULES
         },
     ),
     (
-        "boss 300",
+        "riposte 150",
         Rules {
-            old_signal: boss(300, 39),
+            riposte_percent: 150,
             ..RULES
         },
     ),
     (
-        "hits 175%",
+        "siphon 65",
         Rules {
-            hit_percent: 175,
+            siphon_mend_percent: 65,
             ..RULES
         },
     ),
     (
-        "hits 195%",
+        "siphon 85",
         Rules {
-            hit_percent: 195,
+            siphon_mend_percent: 85,
             ..RULES
         },
     ),
     (
-        "blocks 55%",
+        "boss 35",
         Rules {
-            block_percent: 55,
-            ..RULES
-        },
-    ),
-    (
-        "blocks 65%",
-        Rules {
-            block_percent: 65,
-            ..RULES
-        },
-    ),
-    (
-        "bright 135%",
-        Rules {
-            bright_signal_percent: 135,
-            ..RULES
-        },
-    ),
-    (
-        "jab 50%",
-        Rules {
-            jab_percent: 50,
-            ..RULES
-        },
-    ),
-    (
-        "sever 200%",
-        Rules {
-            sever_percent: 200,
+            old_signal: boss(290, 35),
             ..RULES
         },
     ),

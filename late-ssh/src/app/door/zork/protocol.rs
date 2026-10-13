@@ -43,6 +43,14 @@ impl Action {
     }
 }
 
+/// The `play` exec request: `play <edition> <action> <handle>`. The arcade
+/// handle names the game in the host's watch roster (`door/spectate`) and
+/// nothing else; the host keys the account, its lease and its saves by the
+/// account label.
+pub fn play_request(edition: Edition, action: Action, playname: &str) -> String {
+    format!("play {} {} {playname}", edition.key(), action.mode())
+}
+
 /// Exit statuses a `play` request ends with: the host's and the Frotz door
 /// build's contract (`door/zork/CONTEXT.md`).
 pub const EXIT_QUIT: u32 = 0;

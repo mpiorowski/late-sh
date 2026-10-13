@@ -273,7 +273,7 @@ async fn kill_the_old_signal(
     sheet.level = MAX_LEVEL;
     sheet.peak_level = MAX_LEVEL;
     sheet.draft_up();
-    sheet.exp = exp_to_seek(sheet.marks);
+    sheet.exp = exp_to_seek();
     sheet.weapon_tier = MAX_TIER;
     sheet.armor_tier = MAX_TIER;
     sheet.signal = sheet.max_signal();
