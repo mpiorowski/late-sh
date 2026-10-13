@@ -31,40 +31,34 @@ pub const TRADE_IN_PERCENT: i64 = 75;
 pub const NEAR_MISS_SIGNAL: i32 = 3;
 
 /// Exp needed to advance from level `i + 1` (`lib/experience.php`, the
-/// base curve; `scaled` adds the marks, GAME.md "The stat block"). The
-/// last entry is not a level: it is the exp at the top that makes the Old
-/// Signal hear you ([`exp_to_seek`]).
+/// base curve). The last entry is not a level: it is the exp at the top
+/// that makes the Old Signal hear you ([`exp_to_seek`]). LoGD scaled every
+/// threshold by the dragon kills; the climb here does not (GAME.md "Marks:
+/// the reset"): five fights a day pay a fixed exp, so a stronger runner
+/// climbs no faster, and a tax on the marks was a slower climb for the
+/// reader with nothing to pay it back.
 pub const EXP_TO_ADVANCE: [i64; 15] = [
     100, 400, 1002, 1912, 3140, 4707, 6641, 8985, 11795, 15143, 19121, 23840, 29437, 36071, 43930,
 ];
 
-/// The attack and defense a mark adds, capped: the second climb is a bit
-/// faster, and a veteran never outgrows the room (GAME.md, "Marks: the
+/// The attack and defense a mark adds, capped: the second climb drops
+/// less, and a veteran never outgrows the room (GAME.md, "Marks: the
 /// reset").
 pub const MARK_BONUS_CAP: i32 = 5;
 
-/// Exp needed to leave `level` with `marks`. Past the top there is no next
-/// level; the Old Signal is the way up.
-pub fn exp_to_advance(level: i32, marks: i32) -> Option<i64> {
+/// Exp needed to leave `level`. Past the top there is no next level; the
+/// Old Signal is the way up.
+pub fn exp_to_advance(level: i32) -> Option<i64> {
     if !(1..MAX_LEVEL).contains(&level) {
         return None;
     }
-    Some(scaled(level, marks))
+    Some(EXP_TO_ADVANCE[(level - 1) as usize])
 }
 
 /// Exp at the top of the ladder that brings the Old Signal to the screen
-/// instead of a glyph, with `marks`.
-pub fn exp_to_seek(marks: i32) -> i64 {
-    scaled(MAX_LEVEL, marks)
-}
-
-/// LoGD's dragon-kill scaling, transcribed (`lib/experience.php`, the same
-/// formula as the door's `exp_to_advance`): every threshold climbs by a
-/// quarter of the level times a hundred per mark, rounded.
-fn scaled(level: i32, marks: i32) -> i64 {
-    let base = EXP_TO_ADVANCE[(level - 1) as usize] as f64;
-    let scale = (f64::from(marks) / 4.0) * f64::from(level) * 100.0;
-    (base + scale).round() as i64
+/// instead of a glyph.
+pub fn exp_to_seek() -> i64 {
+    EXP_TO_ADVANCE[(MAX_LEVEL - 1) as usize]
 }
 
 /// A glyph's stat block: LoGD's per-level creature seeds, every creature

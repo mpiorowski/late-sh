@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 use uuid::Uuid;
 
 use super::{
@@ -9,9 +9,9 @@ use super::{
 };
 use crate::app::deadchannel::fight::cards::{Card, DECK, DRAFTS, ENERGY, HAND, STATIC_CAP};
 use crate::app::deadchannel::fight::data::{
-    BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE, FOES, FoeTier, HEARD_LINE, Intent, MARK_BONUS_CAP,
-    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, START_BITS, STATIC_LINE,
-    exp_to_advance, exp_to_seek, title,
+    exp_to_advance, exp_to_seek, title, FoeTier, Intent, BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE,
+    FOES, HEARD_LINE, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY,
+    RULES, START_BITS, STATIC_LINE,
 };
 use crate::app::deadchannel::fight::road::{Mark, Node, RoadRun, Trace};
 use crate::app::deadchannel::fight::state::MAX_TIER;
@@ -192,13 +192,11 @@ fn winning_past_the_threshold_levels_up() {
     assert_eq!(sheet.exp, 104);
     assert_eq!(sheet.max_signal(), 20);
     assert_eq!(sheet.signal, 20, "the new level's signal comes with it");
-    assert!(
-        outcome
-            .lines
-            .last()
-            .expect("a line")
-            .starts_with("you are level 2.")
-    );
+    assert!(outcome
+        .lines
+        .last()
+        .expect("a line")
+        .starts_with("you are level 2."));
 }
 
 /// No dice in a run: what the glyph meant to do this turn lands on the
@@ -1310,7 +1308,7 @@ fn at_the_top(marks: i32) -> Sheet {
     sheet.peak_level = MAX_LEVEL;
     sheet.draft_up();
     sheet.marks = marks;
-    sheet.exp = exp_to_seek(marks);
+    sheet.exp = exp_to_seek();
     sheet.weapon_tier = MAX_TIER;
     sheet.armor_tier = MAX_TIER;
     sheet.signal = sheet.max_signal();
@@ -1375,10 +1373,12 @@ fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
     assert_eq!(fight.foe().name, "Old Signal");
     assert_eq!(outcome.lines, vec![OLD_SIGNAL.arrives.to_string()]);
 
-    // Marks scale the exp it takes: last time's threshold is not enough.
-    let mut again = at_the_top(1);
-    again.exp = exp_to_seek(0);
-    assert!(!again.signal_hears());
+    // The ladder is the same on every climb: a mark asks no more exp.
+    let again = at_the_top(5);
+    assert!(again.signal_hears());
+    let mut short_again = at_the_top(5);
+    short_again.exp -= 1;
+    assert!(!short_again.signal_hears());
 }
 
 /// Whole state: the kill leaves a mark and a fresh runner's sheet with an
@@ -1464,11 +1464,10 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
 }
 
 #[test]
-fn marks_scale_the_ladder_and_the_peak_only_climbs() {
-    assert_eq!(exp_to_advance(1, 0), Some(100));
-    assert_eq!(exp_to_advance(1, 4), Some(200));
-    assert_eq!(exp_to_advance(MAX_LEVEL, 4), None);
-    assert_eq!(exp_to_seek(4), 43930 + 1500);
+fn the_ladder_is_the_same_for_every_mark_and_the_peak_only_climbs() {
+    assert_eq!(exp_to_advance(1), Some(100));
+    assert_eq!(exp_to_advance(MAX_LEVEL), None);
+    assert_eq!(exp_to_seek(), 43930);
     assert_eq!(title(0), None);
     assert_eq!(title(1), Some("heard"));
     assert_eq!(title(99), Some("old voice"));
@@ -1476,7 +1475,7 @@ fn marks_scale_the_ladder_and_the_peak_only_climbs() {
     let mut sheet = fresh();
     sheet.peak_level = 9;
     sheet.marks = 1;
-    sheet.exp = exp_to_advance(1, 1).expect("a threshold") - 1;
+    sheet.exp = exp_to_advance(1).expect("a threshold") - 1;
     sheet.apply(STEP_IN, &mut StdRng::seed_from_u64(2));
     sheet.fight.as_mut().expect("a fight").foe_signal = 1;
     let outcome = win_out(&mut sheet, &mut StdRng::seed_from_u64(2));
@@ -1505,7 +1504,7 @@ fn harmless_glyph_at_the_top() -> Fight {
 #[test]
 fn the_kill_that_crosses_the_seek_threshold_says_so_once() {
     let mut sheet = at_the_top(0);
-    sheet.exp = exp_to_seek(0) - 1;
+    sheet.exp = exp_to_seek() - 1;
     sheet.weapon_tier = 50;
     assert!(!sheet.signal_hears());
     let mut rng = StdRng::seed_from_u64(4);
@@ -1516,7 +1515,7 @@ fn the_kill_that_crosses_the_seek_threshold_says_so_once() {
         matches!(crossing.applied, Applied::Won { leveled: None, .. }),
         "{crossing:?}"
     );
-    assert_eq!(sheet.exp, exp_to_seek(0));
+    assert_eq!(sheet.exp, exp_to_seek());
     assert!(sheet.signal_hears());
     assert_eq!(
         crossing
@@ -2189,7 +2188,7 @@ fn a_level_that_owes_a_card_holds_the_road_until_one_is_taken() {
     let mut sheet = fresh();
     sheet.level = 2;
     sheet.signal = 20;
-    sheet.exp = exp_to_advance(2, 0).expect("a level under the top") - 1;
+    sheet.exp = exp_to_advance(2).expect("a level under the top") - 1;
     a_sure_kill(&mut sheet, 10);
     sheet.weapon_tier = 0;
     sheet.level = 2;

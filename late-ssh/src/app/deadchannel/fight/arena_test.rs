@@ -1,5 +1,5 @@
-use super::{Reading, publish, report, runs, sweep};
-use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
+use super::{publish, report, runs, sweep, Reading};
+use crate::app::deadchannel::fight::data::{FoeTier, Rules, RULES};
 
 /// The candidates `make deadchannel-sweep` reads side by side. Edit this
 /// list for the question at hand; the first row is always the live game.

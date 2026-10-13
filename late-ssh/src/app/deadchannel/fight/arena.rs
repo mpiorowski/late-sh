@@ -30,14 +30,14 @@
 //! (`make deadchannel-sweep`, the candidates in `arena_test.rs::SWEEP`).
 
 use chrono::NaiveDate;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 use uuid::Uuid;
 
 use super::cards::{Card, DRAFTS};
-use super::data::{self, Intent, MAX_LEVEL, Rules};
-use super::road::{FIGHT_STEPS, LANES, Node, STEPS};
+use super::data::{self, Intent, Rules, MAX_LEVEL};
+use super::road::{Node, FIGHT_STEPS, LANES, STEPS};
 use super::sim::{self, Bench, Build, Climb, Day, Event, Hand, Journal, Player, Snapshot, Start};
-use super::state::{Applied, Drink, MAX_TIER, Pick, Sheet, Slot, gear_name};
+use super::state::{gear_name, Applied, Drink, Pick, Sheet, Slot, MAX_TIER};
 
 /// What the runner carries into a matchup, both slots alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,7 +249,7 @@ fn old_signal(
         inks: inks.to_vec(),
     }
     .sheet();
-    recipe.exp = data::exp_to_seek(marks);
+    recipe.exp = data::exp_to_seek();
     let mut rng = StdRng::seed_from_u64(MATCHUP_SEED);
     let (mut wins, mut turns) = (0u32, 0u64);
     for _ in 0..MATCHUP_FIGHTS {
@@ -295,9 +295,9 @@ fn level_economy(rules: &Rules, level: i32) -> LevelEconomy {
     let (_, _, foe) = rules.foe(level);
     let from = match level {
         1 => 0,
-        level => data::exp_to_advance(level - 1, 0).expect("a level under the top"),
+        level => data::exp_to_advance(level - 1).expect("a level under the top"),
     };
-    let to = data::exp_to_advance(level, 0).unwrap_or_else(|| data::exp_to_seek(0));
+    let to = data::exp_to_advance(level).unwrap_or_else(data::exp_to_seek);
     let kills = (to - from + foe.exp - 1) / foe.exp;
     let next = (level + 1).min(MAX_TIER);
     LevelEconomy {
@@ -780,9 +780,9 @@ impl Reading {
                 ),
             ),
             (
-                (self.second_day.saturating_sub(3)..=self.second_day).contains(&self.inked_day),
+                (self.second_day.saturating_sub(4)..=self.second_day).contains(&self.inked_day),
                 format!(
-                    "the second climb on the key with every draft inked marks on day {} against the plain second's {}, want 0 to 3 days sooner",
+                    "the second climb on the key with every draft inked marks on day {} against the plain second's {}, want 0 to 4 days sooner",
                     self.inked_day, self.second_day
                 ),
             ),

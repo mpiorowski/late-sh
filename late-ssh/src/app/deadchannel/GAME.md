@@ -634,7 +634,7 @@ to allocate, and nothing on it another player cannot see.
 
 | On screen | What it is | Number | LoGD source |
 |---|---|---|---|
-| level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, scaled by marks | `lib/experience.php` |
+| level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, the same on every climb | `lib/experience.php` |
 | a glyph's pay | bits and exp per kill | LoGD's creature table at 400% bits and 540% exp (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`): LoGD paced a season of ten fights a day, this ladder is two to three weeks of five; paying more per kill keeps prices and thresholds LoGD's | creature seeds |
 | a drop | exp kept | 65% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
 | crystals | the rare currency | one kill in twelve leaves one, a bright glyph always; a drop never takes them, a mark and the ledge do | forest gems |
@@ -1072,16 +1072,21 @@ never does.
   inks (INK below: the one purchase made for the climbs after this one).
 - **What it gives:** a mark. Marks are the paragon number, shown behind
   the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
-  defense up to a cap of five (the second climb is quicker, a veteran
-  never outgrows the room), scales every exp threshold (LoGD's formula,
-  a quarter of level times a hundred per mark), and climbs the title
-  ladder (placeholder copy: heard, tuned, carrier, broadcast, old
+  defense up to a cap of five (the second climb drops less, a veteran
+  never outgrows the room) and climbs the title ladder (placeholder copy: heard, tuned, carrier, broadcast, old
   voice). The first kill grants the rankless `SIG` profile badge. A kill
   pays 40,000 chips, at most once every 30 days: the one milestone payout
   (see "Economy rules"), and the only place bits ever turn into chips. A
   second mark inside the month is kept all the same, unpaid. The payout is
   a debt on the row until the house answers: a grant that fails is retried
   on the next step or connect, never lost with the mark.
+- **A mark never taxes the ladder.** LoGD scaled every exp threshold by
+  the dragon kills (a quarter of level times a hundred per kill), a brake
+  on stats that bought more forest fights a day. Here five fights a day
+  pay a fixed exp, so the mark bonus buys no pace, only fewer drops, and
+  the scaling was a day's tax on a veteran reader with nothing paying it
+  back (`fight/BALANCE.md`, "The second climb is a day quicker"). The
+  ladder is the same on every climb.
 - **A mark empties the stash** (decided with the money pass below): a
   full locker waiting at level 1 would make the second climb a shopping
   trip.

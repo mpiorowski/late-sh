@@ -1102,7 +1102,7 @@ impl Sheet {
     /// At the top with the exp to leave it: the next glyph's node meets
     /// the Old Signal.
     pub fn signal_hears(&self) -> bool {
-        self.level == MAX_LEVEL && self.exp >= data::exp_to_seek(self.marks)
+        self.level == MAX_LEVEL && self.exp >= data::exp_to_seek()
     }
 
     /// Off the wire: the signal dropped and the day has not rolled.
@@ -2198,7 +2198,7 @@ impl Sheet {
             lines.push(CRYSTAL_LINE.to_string());
         }
         let mut leveled = None;
-        while let Some(need) = data::exp_to_advance(self.level, self.marks) {
+        while let Some(need) = data::exp_to_advance(self.level) {
             if self.exp < need {
                 break;
             }

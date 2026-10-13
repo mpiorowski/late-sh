@@ -22,7 +22,6 @@ use late_core::models::chat_message_gild::{GildCounts, GildTier};
 use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
 use ratatui::{
-    Frame,
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style},
@@ -30,6 +29,7 @@ use ratatui::{
     widgets::{
         Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget,
     },
+    Frame,
 };
 
 use crate::app::{
@@ -563,9 +563,9 @@ fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
         false => Span::styled(format!(" {}/{}", sheet.signal, sheet.max_signal()), text),
     };
     // Past the top of the ladder the exp climbs toward the Old Signal.
-    let exp_goal = match fight_data::exp_to_advance(sheet.level, sheet.marks) {
+    let exp_goal = match fight_data::exp_to_advance(sheet.level) {
         Some(need) => need,
-        None => fight_data::exp_to_seek(sheet.marks),
+        None => fight_data::exp_to_seek(),
     };
     let glyphs = match sheet.kills {
         1 => "1 down".to_string(),

@@ -37,7 +37,7 @@ ground, sever). The last two rows of the table hold every other deck.
 | Inker (keen, the crystals to the needle first) | within 4 days of careful, either way | an ink is bought for the climbs after this one, and this one is not the price |
 | The second climb on the key (one mark on the row) | 0 to 4 days sooner than the first | a mark is quicker on the way back up, and pays in the days a drop costs: the pace is set by the road (five fights a day pay a fixed exp), so only the runner who drops can be quicker, and that is the key |
 | The sixth climb on the key (five marks, the bonus capped) | no slower than the second, at most 6 days sooner than the first | a veteran never outgrows the room, and the marks keep paying until the cap |
-| The second climb on the key with every draft inked | 0 to 3 days sooner than the plain second | the needle pays on the climbs after, on the key, and never a tax; four inks are worth about as much as four more marks |
+| The second climb on the key with every draft inked | 0 to 4 days sooner than the plain second | the needle pays on the climbs after, on the key, and never a tax; four inks are worth about as much as four more marks |
 | A pour against the bright glyph on the key | never more than 8 points under dry, any pour, levels 4 to 15 | a card poured into the deck is never a trap for the floor; 8 points is what two 400-fight odds differ by on their own |
 | Old Signal on the key with every draft inked | at most 25 points over dry | the needle helps at the gate without handing it over |
 | Kit lead over the level fought at | -0.5 to +1.0 tiers, levels 3 to 15; the keen runner +2.5 at most | the kit tracks the climb: never the level 15 kit at level 8, never a tier short of a fair fight; the bright glyph's double bits and the crystals buy a tier or two, never the wall |
@@ -283,7 +283,7 @@ The live reading (house build), under one patch a day:
 
 | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | inker | second climb on the key: mark 1 / mark 5 / mark 1 inked | lv after day 1 / 7 | kit lead | top kit at | keen lead, top kit | gear | patch, careful / ambient | careful patch days | dropped | idle | fair low | turns | signal left, key / sharp | bright on the key (signal left) | bright sharp | pour low | boss key / sharp / key with a glass / key inked | crystals a day | builds: ambient day, boss on the key |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| day 16 / 17 | day 17 | day 21 (2) | day 24 (3) | day 17 | day 17 | day 20 / 17 / 17 | 3 / 9 | -0.5 to +0.5 | lv 15 | +0.5, lv 15 | 77% | 5% / 6% | 59% | 0% | 18% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
+| day 16 / 17 | day 17 | day 21 (2) | day 24 (3) | day 17 | day 17 | day 20 / 16 / 16 | 3 / 9 | -0.5 to +0.5 | lv 15 | +0.5, lv 15 | 77% | 5% / 6% | 59% | 0% | 18% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
 
 The curve (median level at the end of the day):
 
@@ -364,19 +364,23 @@ What the tables say:
   57% on the key, 90% read sharp, near sure with any glass. The ramp
   reaches it too, which is why its attack came down from 39 and why ten
   signal was the finer knob to finish on.
-- **The second climb is quicker only where drops are.** The pace is the
-  road's: five fights a day pay a fixed exp, so the careful reader marks
-  on day 17 fresh, at one mark, at five, and with every draft inked
-  alike (the mark bonus buys it nothing it did not already have, and the
-  per-mark exp scaling takes back the little it would). On the key the
-  marks pay: day 21 fresh, 20 at one mark, 17 at five. That is the
-  paragon promise as measured: a veteran on the key climbs like a
-  first-timer reading the hand.
+- **The second climb is a day quicker, and quicker again where drops
+  are.** The pace is the road's: five fights a day pay a fixed exp, so
+  the careful reader marks on day 17 fresh and on day 16 at one mark, at
+  five, and with every draft inked alike: one mark is worth a day to the
+  reader, and the cap and the needle add nothing past it. The ladder is
+  the same on every climb: LoGD's per-mark exp scaling was dropped here,
+  since with the pace fixed it took that day back, and more at five
+  marks, for nothing. On the key the marks pay in the dropped days: day
+  21 fresh, 20 at one mark, 16 at five. That is the paragon promise as
+  measured: a veteran on the key climbs like a first-timer reading the
+  hand.
 - **The needle pays on the key, and costs nothing this climb.** The
   inker marks with the keen runner (day 17): the ten crystals come out
   of a side game. With every draft inked the second climb on the key
-  marks on day 17, three days under the plain second and four under the
-  first, about what four more marks are worth. At the gate the inks are
+  marks on day 16, four days under the plain second and five under the
+  first, the same day as the sixth climb: four inks are worth about what
+  four more marks are. At the gate the inks are
   worth seven points on the key (57% to 64%) and nothing read sharp
   (already near sure).
 - **A pour is never a trap.** Feedback (a surge) and sign-off (a mute)
@@ -412,10 +416,9 @@ Known, measured, and left for a pass of their own:
   them at half the seeds. A pass that moves a card should read the
   builds table, not only the misses.
 - **The Old Signal with marks.** The report prints the odds by marks,
-  but no climb runs a second season: `exp_to_advance` scaling and the
-  mark bonus are untested as a pace, and with marks the boss is near
-  sure on the key. By decision (2026-10-06) nothing past the first mark
-  is tuned yet.
+  and the second-climb benches run from one and five marks, but no
+  climb runs a second season in one sitting: a veteran's purse, locker
+  habits, and the days between marks are not played.
 - **The step down** is in no player's rule except the neglectful one's
   recovery.
 - **The road's route is read three steps ahead** by the sim. A player

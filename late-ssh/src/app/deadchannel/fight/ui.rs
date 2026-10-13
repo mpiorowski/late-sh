@@ -1488,11 +1488,11 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             let face = runner_rows(sheet, view.look);
             let exp = match (
                 sheet.signal_hears(),
-                data::exp_to_advance(sheet.level, sheet.marks),
+                data::exp_to_advance(sheet.level),
             ) {
                 (true, _) => format!("exp {}  the Old Signal hears you", sheet.exp),
                 (false, Some(need)) => format!("exp {}/{need}", sheet.exp),
-                (false, None) => format!("exp {}/{}", sheet.exp, data::exp_to_seek(sheet.marks)),
+                (false, None) => format!("exp {}/{}", sheet.exp, data::exp_to_seek()),
             };
             let stats: [Vec<Span<'static>>; 3] = [
                 vec![

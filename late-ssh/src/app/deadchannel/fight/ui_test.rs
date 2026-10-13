@@ -242,7 +242,7 @@ fn a_short_terminal_gets_the_hand_as_chips() {
 fn at_the_bottom() -> (Sheet, Scene) {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = MAX_LEVEL;
-    sheet.exp = exp_to_seek(0);
+    sheet.exp = exp_to_seek();
     sheet.signal = 150;
     sheet.engage(&RULES, Pick::Fair, &mut StdRng::seed_from_u64(5));
     assert_eq!(
