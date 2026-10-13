@@ -120,8 +120,12 @@ fn open_settings_modal(app: &mut App) {
     app.show_poll_modal = false;
     app.poll_modal_state.close();
     let device_rails = app.rail_modes();
-    app.settings_modal_state
-        .open_from_profile(app.profile_state.profile(), device_rails);
+    let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
+    app.settings_modal_state.open_from_profile(
+        app.profile_state.profile(),
+        device_rails,
+        device_artboard_disclaimer,
+    );
     app.show_settings = true;
 }
 

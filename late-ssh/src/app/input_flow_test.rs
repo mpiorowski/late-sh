@@ -77,7 +77,7 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
 }
 
 #[tokio::test]
-async fn artboard_disclaimer_dont_remind_persists_and_settings_can_reenable_it() {
+async fn artboard_disclaimer_is_per_device_and_settings_can_reenable_it() {
     use crate::app::{
         common::primitives::Screen,
         settings_modal::{
@@ -86,71 +86,97 @@ async fn artboard_disclaimer_dont_remind_persists_and_settings_can_reenable_it()
         },
     };
     use late_core::models::user::extract_artboard_disclaimer;
+    use late_core::models::user_ssh_key::extract_key_artboard_disclaimer;
 
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "art-dismiss-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "art-dismiss-flow-it");
-    // No tick yet: A must wait for the profile rather than save blank account fields.
-    app.handle_input(b"4A");
-    assert!(!app.artboard_disclaimer_visible());
-    wait_for_render_contains(&mut app, "Mode       view").await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        app.tick();
-        let client = test_db.db.get().await.unwrap();
-        let stored = User::get(&client, user.id).await.unwrap().unwrap();
-        assert_eq!(stored.username, user.username);
-        if !extract_artboard_disclaimer(&stored.settings) {
-            break;
+    let user = create_test_user(&test_db.db, "art-device-it").await;
+    let client = test_db.db.get().await.unwrap();
+    // One account on two machines, as `auth_publickey` would have recorded them.
+    UserSshKey::ensure(&client, user.id, "SHA256:home")
+        .await
+        .unwrap();
+    UserSshKey::ensure(&client, user.id, "SHA256:work")
+        .await
+        .unwrap();
+    let user_id = user.id;
+    let stored_key = |fingerprint: &'static str| {
+        let db = test_db.db.clone();
+        async move {
+            let client = db.get().await.unwrap();
+            let key = UserSshKey::find_by_fingerprint(&client, user_id, fingerprint)
+                .await
+                .unwrap()
+                .unwrap();
+            extract_key_artboard_disclaimer(&key.settings)
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "Always View was not persisted"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    };
 
-    // A visit before the profile lands reads as prompted and takes no seat;
-    // once the saved tweak arrives, the seat follows on its own.
-    let mut landing = make_app(test_db.db.clone(), user.id, "art-dismiss-landing-it");
-    landing.handle_input(b"4");
-    assert!(landing.artboard_disclaimer_visible());
-    assert!(landing.dartboard_state.is_none());
-    wait_for_render_contains(&mut landing, "Mode       view").await;
-    assert!(!landing.artboard_disclaimer_visible());
-    assert!(landing.dartboard_state.is_some());
+    // Always View at home, before the profile has even arrived: it lands on
+    // the home key and nowhere else.
+    let mut home = with_session_key(
+        make_app(test_db.db.clone(), user.id, "art-device-home-it"),
+        "SHA256:home",
+    );
+    home.handle_input(b"4A");
+    assert!(!home.artboard_disclaimer_visible());
+    wait_for_render_contains(&mut home, "Mode       view").await;
+    wait_until(
+        || {
+            let stored = stored_key("SHA256:home");
+            async move { stored.await == Some(false) }
+        },
+        "Always View to reach the home key",
+    )
+    .await;
+    assert_eq!(stored_key("SHA256:work").await, None);
+    let stored = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(stored.username, user.username);
+    assert!(
+        extract_artboard_disclaimer(&stored.settings),
+        "the account default stays on for every other device"
+    );
 
-    let mut reloaded = make_app(test_db.db.clone(), user.id, "art-dismiss-reload-it");
-    reloaded.handle_input(b"\x0f");
-    wait_for_render_contains(&mut reloaded, &user.username).await;
-    reloaded.settings_modal_state.select_tab(Tab::Tweaks);
-    reloaded
-        .settings_modal_state
+    // Work inherits the account default and still asks.
+    let mut work = with_session_key(
+        make_app(test_db.db.clone(), user.id, "art-device-work-it"),
+        "SHA256:work",
+    );
+    work.handle_input(b"4");
+    assert!(work.artboard_disclaimer_visible());
+    assert!(work.dartboard_state.is_none());
+    work.handle_input(b"B");
+    assert_eq!(work.screen, Screen::Dashboard);
+
+    // The home Tweaks row shows this device's choice, not the account's, and
+    // re-enabling it hides the current visit again.
+    home.handle_input(b"\x0f");
+    wait_for_render_contains(&mut home, &user.username).await;
+    home.settings_modal_state.select_tab(Tab::Tweaks);
+    home.settings_modal_state
         .select_mouse_target(Target::Tweak(TweakRow::ArtboardDisclaimer));
     assert_eq!(
-        reloaded.settings_modal_state.selected_tweak_row(),
+        home.settings_modal_state.selected_tweak_row(),
         TweakRow::ArtboardDisclaimer
     );
-    assert!(!reloaded.settings_modal_state.draft().artboard_disclaimer);
-    reloaded.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut reloaded, |app| !app.show_settings, "settings").await;
-    reloaded.handle_input(b"4");
-    assert!(!reloaded.artboard_disclaimer_visible());
-
-    reloaded.handle_input(b"\x0f");
-    reloaded.settings_modal_state.select_tab(Tab::Tweaks);
-    reloaded
-        .settings_modal_state
-        .select_mouse_target(Target::Tweak(TweakRow::ArtboardDisclaimer));
-    wait_for_render_contains(&mut reloaded, "Artboard content disclaimer").await;
-    reloaded.handle_input(b"\r");
-    assert!(reloaded.settings_modal_state.draft().artboard_disclaimer);
-    assert!(reloaded.artboard_disclaimer_visible());
-    reloaded.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut reloaded, |app| !app.show_settings, "settings").await;
-    assert!(!render_plain(&mut reloaded).contains("GALLERY"));
-    reloaded.handle_input(b"B");
-    assert_eq!(reloaded.screen, Screen::Dashboard);
+    assert!(!home.settings_modal_state.device_artboard_disclaimer());
+    assert!(home.settings_modal_state.draft().artboard_disclaimer);
+    wait_for_render_contains(&mut home, "Artboard content disclaimer").await;
+    home.handle_input(b"\r");
+    assert!(home.settings_modal_state.device_artboard_disclaimer());
+    assert!(home.artboard_disclaimer_visible());
+    home.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut home, |app| !app.show_settings, "settings").await;
+    assert!(!render_plain(&mut home).contains("GALLERY"));
+    wait_until(
+        || {
+            let stored = stored_key("SHA256:home");
+            async move { stored.await == Some(true) }
+        },
+        "the re-enabled disclaimer to reach the home key",
+    )
+    .await;
+    home.handle_input(b"B");
+    assert_eq!(home.screen, Screen::Dashboard);
 }
 
 #[tokio::test]
@@ -233,7 +259,11 @@ async fn artboard_disclaimer_mouse_choices_respect_keyboard_only_mode() {
             }
         );
         if index == 1 {
-            assert!(!app.profile_state.profile().artboard_disclaimer);
+            assert!(!app.artboard_disclaimer_enabled());
+            assert!(
+                app.profile_state.profile().artboard_disclaimer,
+                "Always View is per device: the account default stays on"
+            );
         }
         app.set_screen(Screen::Dashboard);
     }

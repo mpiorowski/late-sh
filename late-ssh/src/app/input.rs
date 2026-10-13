@@ -3620,8 +3620,12 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     let device_rails = app.rail_modes();
-    app.settings_modal_state
-        .open_from_profile(app.profile_state.profile(), device_rails);
+    let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
+    app.settings_modal_state.open_from_profile(
+        app.profile_state.profile(),
+        device_rails,
+        device_artboard_disclaimer,
+    );
     app.settings_modal_state
         .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;

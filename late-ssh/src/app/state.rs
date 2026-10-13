@@ -411,6 +411,9 @@ pub struct SessionConfig {
     /// This device's stored home rail layout, or `None` when the key has never
     /// been configured and should follow the account default.
     pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
+    /// This device's Artboard content disclaimer, or `None` when the key has
+    /// never set one and should follow the account's `artboard_disclaimer`.
+    pub key_artboard_disclaimer: Option<bool>,
     /// When you last left the app on this device (the moment the keyboard
     /// went quiet before the previous session on this key ended), or `None`
     /// for a keyless session or a device with no mark yet. The bare
@@ -762,7 +765,11 @@ pub struct App {
     /// desktop on one linked account stop overwriting each other. Read through
     /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
     pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// The key `device_rails` persists to; `None` for keyless sessions.
+    /// Artboard content disclaimer for *this device*, stored on the same key
+    /// as `device_rails`, or `None` to follow the account's
+    /// `artboard_disclaimer`. Read through [`App::artboard_disclaimer_enabled`].
+    pub(crate) device_artboard_disclaimer: Option<bool>,
+    /// The key the device settings persist to; `None` for keyless sessions.
     pub(crate) key_fingerprint: Option<String>,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
     pub(crate) settings_modal_state: settings_modal::state::SettingsModalState,
@@ -1519,9 +1526,11 @@ impl App {
             config.user_id,
         );
         let device_rails = config.key_layout;
+        let device_artboard_disclaimer = config.key_artboard_disclaimer;
         settings_modal_state.open_from_profile(
             &initial_profile,
             device_rails_or_profile(device_rails, &initial_profile),
+            device_artboard_disclaimer.unwrap_or(initial_profile.artboard_disclaimer),
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
@@ -1773,6 +1782,7 @@ impl App {
                 config.initial_theme_id,
             ),
             device_rails,
+            device_artboard_disclaimer,
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),

@@ -696,6 +696,7 @@ fn make_app_with_chat_service_and_permissions(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
         flair_directory: None,
@@ -960,6 +961,7 @@ pub fn make_app_with_paired_client(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
         flair_directory: None,

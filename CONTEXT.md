@@ -724,6 +724,16 @@ overwrite its own layout on every reconnect.
 - **Bool mirrors:** `users.settings.show_right_sidebar` /
   `show_room_list_sidebar` bools are written alongside their `*_mode`
   strings, so a rollback to a binary that reads only the bools keeps working.
+- **Artboard content disclaimer:** per device on the same shape, so one account
+  can keep the NSFW prompt at work and skip it at home. Stored as
+  `artboard_disclaimer` on the key (`UserSshKey::set_artboard_disclaimer`);
+  `App::artboard_disclaimer_enabled` resolves key, else account. The Tweaks row
+  edits `settings_modal_state.device_artboard_disclaimer()`, kept out of the
+  draft, and `A` (Always View) writes the key; neither writes the account,
+  whose `artboard_disclaimer` (default on) is only the seed a new device
+  inherits. The login splash reads the same resolution
+  (`DeviceState::shows_artboard_disclaimer`). See
+  `late-ssh/src/app/artboard/CONTEXT.md`.
 
 ### 4.3 Data model and key enums
 

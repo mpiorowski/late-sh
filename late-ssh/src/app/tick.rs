@@ -357,8 +357,12 @@ impl App {
             && !self.profile_state.profile().username.is_empty()
         {
             let device_rails = self.rail_modes();
-            self.settings_modal_state
-                .open_from_profile(self.profile_state.profile(), device_rails);
+            let device_artboard_disclaimer = self.artboard_disclaimer_enabled();
+            self.settings_modal_state.open_from_profile(
+                self.profile_state.profile(),
+                device_rails,
+                device_artboard_disclaimer,
+            );
         }
 
         for msg in messages {
