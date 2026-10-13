@@ -24,6 +24,9 @@ fn leader_reaction_emoji(byte: u8) -> Option<&'static str> {
         b'7' => Some(crate::app::chat::ui_text::reaction_label(7)),
         b'8' => Some(crate::app::chat::ui_text::reaction_label(8)),
         b'9' => Some(crate::app::chat::ui_text::reaction_label(9)),
+        b'w' | b'W' => Some(crate::app::chat::ui_text::reaction_label(
+            crate::app::chat::ui_text::WAVE_REACTION_KIND,
+        )),
         _ => None,
     }
 }
@@ -239,7 +242,7 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         }
     }
     if app.chat.take_requested_mod_modal() {
-        crate::app::mod_modal::input::open(app, None);
+        crate::app::mod_modal::input::open(app);
     }
     if let Some(room_id) = app.chat.take_requested_poll_room() {
         open_requested_poll_modal(app, room_id, allow_poll_modal);
@@ -256,7 +259,10 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         }
     }
     if app.chat.take_requested_brb() {
+        // Away now, not on the next 1Hz edge, so the screensaver (when the
+        // Tweak has one) covers the screen on the frame after the Enter.
         app.sent_away = true;
+        app.sync_away();
         app.banner = Some(Banner::success(&format!(
             "{} until your next key",
             crate::app::common::away::AWAY_GLYPH

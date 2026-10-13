@@ -1,0 +1,342 @@
+
+Global val;
+
+[ main;
+
+  print "^This is a collection of the six test programs which came
+    attached to the Z-Spec 0.99 file (spec.tex.) No changes have been
+    made, except for the idiot menu system glued to the front.^";
+  while (1) {
+    new_line;
+    print "1: Fonts; 2: Accents; 3: InputCodes, 4: Colours, 5: Header,
+      6: TimedInput, 0: Exit^";
+    @read_char 1 val;
+    switch (val) {
+   '1':
+      Main1();
+   '2':
+      Main2();
+   '3':
+      Main3();
+   '4':
+      Main4();
+   '5':
+      Main5();
+   '6':
+      Main6();
+   '0':
+      quit;
+    }
+  }
+];
+
+! -------------------------------------------------------------------------
+!  Fonts.inf
+! -------------------------------------------------------------------------
+
+[ Main1;
+  ShowFonts();
+];
+[ ShowFonts x;
+  @erase_window -1; @split_window 10;
+  FontAt(1,0,0); FontAt(2,1,0); FontAt(3,0,1); FontAt(4,1,1);
+  @read_char 1 -> x;
+];
+[ FontAt font bx by i j x y;
+  @set_window 1; y=1+5*by; x=2+34*bx;
+  @set_cursor y x; print "Font ", font;
+  @set_font font j; if (j==0) print " unavailable";
+  for (i=32:i<127:i++)
+  {   y=i/32+1+5*by; x=i%32+2+34*bx; @set_cursor y x;
+      if (j==0) print "."; else @print_char i;
+  }
+  @set_font 1 j; @set_window 0;
+];
+
+
+! -------------------------------------------------------------------------
+!  Accents.inf
+! -------------------------------------------------------------------------
+
+[ Main2;
+  ShowAccents(1);
+  ShowAccents(4);
+];
+[ ShowAccents font x;
+   @set_font font x;
+   if (x==0) print_ret "Font ", font, " unavailable.";
+   @erase_window -1;
+   print "Accented characters test in font ", font, "^^";
+   print "Decimal code:  character     name  plain ASCII equivalent^^";
+   print "155:   @@155     a-umlaut  ae^";
+   print "156:   @@156     o-unlaut  oe^";
+   print "157:   @@157     u-umlaut  ue^";
+   print "158:   @@158     A-umlaut  Ae^";
+   print "159:   @@159     O-umlaut  Oe^";
+   print "160:   @@160     U-umlaut  Ue^";
+   print "161:   @@161     sz-ligature  ss^";
+   print "162:   @@162     quotation mark  >> or ~^";
+   print "163:   @@163     quotation mark  << or ~^";
+   print "164:   @@164     e-umlaut  e^";
+   print "165:   @@165     i-umlaut  i^";
+   print "166:   @@166     y-umlaut  y^";
+   print "167:   @@167     E-umlaut  E^";
+   print "168:   @@168     I-umlaut  I^";
+   print "169:   @@169     a-acute  a^";
+   print "170:   @@170     e-acute  e^";
+   print "171:   @@171     i-acute  i^";
+   print "172:   @@172     o-acute  o^";
+   print "173:   @@173     u-acute  u^";
+   print "174:   @@174     y-acute  y^";
+   print "175:   @@175     A-acute  A^";
+   print "176:   @@176     E-acute  E^";
+   print "177:   @@177     I-acute  I^";
+   print "178:   @@178     O-acute  O^";
+   print "179:   @@179     U-acute  U^";
+   print "180:   @@180     Y-acute  Y^";
+   print "181:   @@181     a-grave  a^";
+   print "182:   @@182     e-grave  e^";
+   print "183:   @@183     i-grave  i^";
+   print "184:   @@184     o-grave  o^";
+   print "185:   @@185     u-grave  u^";
+   print "186:   @@186     A-grave  A^";
+   print "187:   @@187     E-grave  E^";
+   print "188:   @@188     I-grave  I^";
+   print "189:   @@189     O-grave  O^";
+   print "190:   @@190     U-grave  U^";
+   print "191:   @@191     a-circumflex  a^";
+   print "192:   @@192     e-circumflex  e^";
+   print "193:   @@193     i-circumflex  i^";
+   print "194:   @@194     o-circumflex  o^";
+   print "195:   @@195     u-circumflex  u^";
+   print "196:   @@196     A-circumflex  A^";
+   print "197:   @@197     E-circumflex  E^";
+   print "198:   @@198     I-circumflex  I^";
+   print "199:   @@199     O-circumflex  O^";
+   print "200:   @@200     U-circumflex  U^";
+   print "201:   @@201     a-ring  a^";
+   print "202:   @@202     A-ring  A^";
+   print "203:   @@203     o-slash  o^";
+   print "204:   @@204     O-slash  O^";
+   print "205:   @@205     a-tilde  a^";
+   print "206:   @@206     n-tilde  n^";
+   print "207:   @@207     o-tilde  o^";
+   print "208:   @@208     A-tilde  A^";
+   print "209:   @@209     N-tilde  N^";
+   print "210:   @@210     O-tilde  O^";
+   print "211:   @@211     ae-ligature  ae^";
+   print "212:   @@212     AE-ligature  AE^";
+   print "213:   @@213     c-cedilla  c^";
+   print "214:   @@214     C-cedilla  C^";
+   print "215:   @@215     Icelandic thorn  th^";
+   print "216:   @@216     Icelandic eth  th^";
+   print "217:   @@217     Icelandic Thorn  Th^";
+   print "218:   @@218     Icelandic Eth  Th^";
+   print "219:   @@219     pound symbol  L^";
+   print "220:   @@220     oe-ligature oe^";
+   print "221:   @@221     OE-ligature OE^";
+   print "222:   @@222     upside-down !^";
+   print "223:   @@223     upside-down ?^";
+   print "^Please press SPACE.^";
+   @read_char 1 -> x;
+];
+
+
+! -------------------------------------------------------------------------
+!   Inputcodes.inf
+! -------------------------------------------------------------------------
+
+[ Main3;
+  InputCodes();
+];
+[ InputCodes k;
+  print "Keyboard input code testing^";
+  print "(Press keys to see how they respond, and press SPACE to finish.)^^";
+  for (::)
+  {   @read_char 1 -> k;
+      print k, " ";
+      switch(k)
+      {   ' ': return;
+          8:  print "delete";
+          13: print "return";
+          27: print "escape";
+          32 to 126: print "character '", (char) k, "'";
+          129: print "cursor up";
+          130: print "cursor down";
+          131: print "cursor left";
+          132: print "cursor right";
+          133 to 144: print "function key f", k-132;
+          145 to 154: print "keypad ", k-145;
+          155 to 251: print "accented character '", (char) k, "'";
+          252: print "menu click";
+          253: print "mouse double-click";
+          254: print "mouse click (single or double)";
+          default: print "error: code ", k, " should not have been returned";
+      }
+      new_line;
+  }
+];
+
+
+! -------------------------------------------------------------------------
+!   Colours.inf
+! -------------------------------------------------------------------------
+
+[ Main4;
+  Colours();
+];
+[ Colours fg bg;
+  print "Colour display testing^";
+  if ((1->0)&1 == 0) "Fine: the interpreter says colours are unavailable.";
+  print "The interpreter says colours are available.  Let's see...^^";
+  for (fg=2:fg<10:fg++)
+  {   for (bg=2:bg<10:bg++)
+      {   if (fg ~= bg)
+          {   @set_colour fg bg;
+              print (colourname) fg, " on ", (colourname) bg;
+              @set_colour 1 1; new_line;
+          }
+      }
+  }
+  new_line;
+  for (fg=2:fg<10:fg++)
+  {   for (bg=2:bg<10:bg++) { @set_colour fg bg; print "#"; }
+      @set_colour 1 1; new_line;
+  }
+  print "^(Default colours.) Press SPACE to clear.^";
+  @read_char 1 -> fg;
+];
+[ Colourname x;
+  switch(x)
+  {   2: print "black";
+      3: print "red";
+      4: print "green";
+      5: print "yellow";
+      6: print "blue";
+      7: print "magenta";
+      8: print "cyan";
+      9: print "white";
+  }
+];
+
+
+! -------------------------------------------------------------------------
+!   Header.inf
+! -------------------------------------------------------------------------
+
+[ Main5;
+  Header();
+];
+[ Header flag x y f;
+  print "Interpreter declarations:^^";
+  flag=1->0;
+
+  print "(In Flags 1...)^";
+
+  #IFV3;
+       print "Status line unavailable?", (status) flag&16;
+       print "Screen splitting available?", (status) flag&32;
+       print "Default font has variable pitch?", (status) flag&64;
+  #IFNOT;
+       print "Colours available?", (status) flag&1;
+       print "Boldface available?", (status) flag&4;
+       print "Italic available?", (status) flag&8;
+       print "Fixed-pitch font available?", (status) flag&16;
+       print "Timed keyboard input available?", (status) flag&128;
+  #ENDIF;
+
+  #IFV5;
+  print "^(In Flags 2.  The following four questions have meaningful
+         answers only if bits 3, 4, 5 and 7 of Flags 2 were set in
+         advance: to do this, alter the game file by setting byte 16
+         to 184 and then run it again.)^";
+  flag=$10->1;
+       print "Pictures available?", (status) flag&8;
+       print "UNDO available?", (status) flag&16;
+       print "Mouse available?", (status) flag&32;
+       print "Sound effects available?", (status) flag&128;
+  #ENDIF;
+
+  #IFV5;
+  print "^Interpreter (machine) number ", $1e->0,
+        " version ", (char) $1f->0, "^";
+
+  print "^Screen height: ";
+  x = $20->0; if (x==255) print "infinite^"; else print x, " lines^";
+
+  print "Screen width: ";
+  x = $21->0; print x, " fixed-pitch font characters^";
+
+  print "Screen height in units: ", $24-->0, "^";
+  print "Screen width in units: ", $22-->0, "^";
+
+  print "Font height in units: ", $26->0, "^";
+  print "Font width (of a '0') in units: ", $27->0, "^^";
+
+  if ((1->0)&1 ~= 0)
+  {   print "Default background colour: ", (colourname2) $2c->0, "^";
+      print "Default foreground colour: ", (colourname2) $2d->0, "^^";
+  }
+
+  for (f=1:f<5:f++)
+  {   @set_font f x;
+      @set_font 1 y;
+      print "Font ", f, " available?", (status) x;
+  }
+  #ENDIF;
+
+  x=$32-->0;
+  print "^Standard specification claimed by the interpreter: ",
+        x/256, ".", x%256, "^";
+
+  #IFV5;
+  print "^^(Press SPACE to clear.)^";
+  @read_char 1 -> x;
+  #ENDIF;
+];
+[ Status f;
+  if (f==0) "  no"; "  yes";
+];
+[ Colourname2 x;
+  switch(x)
+  {   2: print "black";
+      3: print "red";
+      4: print "green";
+      5: print "yellow";
+      6: print "blue";
+      7: print "magenta";
+      8: print "cyan";
+      9: print "white";
+  }
+];
+
+
+! -------------------------------------------------------------------------
+!   Timedinput.inf
+! -------------------------------------------------------------------------
+
+[ Main6;
+   Timings();
+];
+Global counter;
+[ Timings x;
+   print "Testing timed input^^";
+   print "If you press no keys, five messages should appear, one second \
+          apart.  If you do press a key, the test should finish at once.^^";
+   counter=0;
+   @read_char 1 10 Interrupt x;
+   print "^Test complete.^^";
+   print "Now the same test for 1/10th of a second (though probably not all \
+          interpreters will be fast enough to make the interval quite that \
+          brief).^^";
+   counter=0;
+   @read_char 1 1 Interrupt -> x;
+   print "^Test complete.^^";
+   print "^Please press SPACE.^";
+   @read_char 1 -> x;
+];
+[ Interrupt;
+   print "  message number ", ++counter, "^";
+   if (counter<5) rfalse; rtrue;
+];
+

@@ -42,6 +42,7 @@ use crate::{
     moderation::{
         command::{RoleAction, RoomModAction},
         event::ModerationEvent,
+        service::{RoomModRequest, RoomRef},
     },
     state::{ActiveSession, ActiveUser, State},
     usernames,
@@ -1418,10 +1419,11 @@ impl Session {
     }
 
     async fn handle_join(&mut self, framed: &mut IrcStream, name: &str) -> Result<()> {
-        if self.channels.contains_key(&proj::normalize_channel(name)) {
+        let normalized = proj::normalize_channel(name);
+        if self.channels.contains_key(&normalized) {
             return Ok(()); // already joined; ignore
         }
-        let Some(slug) = proj::slug_for_channel(name) else {
+        let Some((visibility, slug)) = proj::channel_parts(&normalized) else {
             framed
                 .send(replies::numeric(
                     &self.nick,
@@ -1432,7 +1434,9 @@ impl Session {
             return Ok(());
         };
         let client = self.state.db.get().await?;
-        let room = ChatRoom::find_irc_channel_by_slug_for_user(&client, slug, self.user_id).await?;
+        let room =
+            ChatRoom::find_irc_channel_by_slug_for_user(&client, visibility, slug, self.user_id)
+                .await?;
         let Some(room) = room.filter(proj::is_irc_channel_kind) else {
             framed
                 .send(replies::numeric(
@@ -1799,7 +1803,15 @@ impl Session {
                 .send(replies::numeric(
                     &self.nick,
                     Response::RPL_CHANNELMODEIS,
-                    vec![channel.to_string(), "+nt".to_string()],
+                    vec![
+                        channel.to_string(),
+                        if channel.starts_with("##") {
+                            "+inst"
+                        } else {
+                            "+nt"
+                        }
+                        .to_string(),
+                    ],
                 ))
                 .await?;
             return Ok(());
@@ -1812,10 +1824,12 @@ impl Session {
                     self.send_banlist(framed, channel, room_id).await?;
                 }
                 Mode::Plus(ChannelMode::Ban, Some(mask)) => {
-                    self.handle_ban_mode(framed, channel, &mask, true).await?;
+                    self.handle_ban_mode(framed, channel, room_id, &mask, true)
+                        .await?;
                 }
                 Mode::Minus(ChannelMode::Ban, Some(mask)) => {
-                    self.handle_ban_mode(framed, channel, &mask, false).await?;
+                    self.handle_ban_mode(framed, channel, room_id, &mask, false)
+                        .await?;
                 }
                 Mode::Plus(ChannelMode::InviteOnly, _)
                 | Mode::Minus(ChannelMode::InviteOnly, _)
@@ -1860,10 +1874,7 @@ impl Session {
                 .await?;
             return Ok(());
         }
-        if !self
-            .channels
-            .contains_key(&proj::normalize_channel(channel))
-        {
+        let Some((room_id, _)) = self.authorized_joined_channel(channel).await? else {
             framed
                 .send(replies::numeric(
                     &self.nick,
@@ -1872,13 +1883,22 @@ impl Session {
                 ))
                 .await?;
             return Ok(());
-        }
+        };
         let reason = reason.unwrap_or("IRC KICK");
         for nick in users.split(',').filter(|nick| !nick.trim().is_empty()) {
             let username = proj::username_for_nick(nick.trim());
-            let command = format!("kick {channel} @{username} {reason}");
-            self.run_moderation_command(framed, channel, &command)
-                .await?;
+            self.run_room_moderation_command(
+                framed,
+                channel,
+                RoomModRequest {
+                    action: RoomModAction::Kick,
+                    room: RoomRef::Id(room_id),
+                    username,
+                    duration: None,
+                    reason: reason.to_string(),
+                },
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1908,6 +1928,7 @@ impl Session {
         &mut self,
         framed: &mut IrcStream,
         channel: &str,
+        room_id: Uuid,
         mask: &str,
         add: bool,
     ) -> Result<()> {
@@ -1934,12 +1955,22 @@ impl Session {
             return Ok(());
         };
         let username = proj::username_for_nick(nick);
-        let command = if add {
-            format!("ban {channel} @{username} IRC MODE +b")
-        } else {
-            format!("unban {channel} @{username} IRC MODE -b")
-        };
-        self.run_moderation_command(framed, channel, &command).await
+        self.run_room_moderation_command(
+            framed,
+            channel,
+            RoomModRequest {
+                action: if add {
+                    RoomModAction::Ban
+                } else {
+                    RoomModAction::Unban
+                },
+                room: RoomRef::Id(room_id),
+                username,
+                duration: None,
+                reason: if add { "IRC MODE +b" } else { "IRC MODE -b" }.to_string(),
+            },
+        )
+        .await
     }
 
     async fn send_banlist(
@@ -1982,12 +2013,36 @@ impl Session {
         command: &str,
     ) -> Result<()> {
         let permissions = self.reload_permissions().await?;
-        match self
+        let result = self
             .state
             .chat_service
             .run_mod_command(self.user_id, permissions, command)
-            .await
-        {
+            .await;
+        self.send_moderation_result(framed, context, result).await
+    }
+
+    async fn run_room_moderation_command(
+        &mut self,
+        framed: &mut IrcStream,
+        channel: &str,
+        request: RoomModRequest,
+    ) -> Result<()> {
+        let permissions = self.reload_permissions().await?;
+        let result = self
+            .state
+            .chat_service
+            .run_room_mod_command(self.user_id, permissions, request)
+            .await;
+        self.send_moderation_result(framed, channel, result).await
+    }
+
+    async fn send_moderation_result(
+        &self,
+        framed: &mut IrcStream,
+        context: &str,
+        result: Result<Vec<String>>,
+    ) -> Result<()> {
+        match result {
             Ok(lines) => {
                 for line in lines {
                     framed

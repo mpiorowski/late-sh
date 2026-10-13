@@ -34,21 +34,26 @@ Out of scope here (lives elsewhere):
 
 ```text
 late-ssh/src/app/audio/
-├── mod.rs                  # declarations only (booth, client_state, input, now_playing, radio_meta, state, stations, svc, thumbnail, viz, youtube)
+├── mod.rs                  # declarations only (booth, client_state, input, now_playing, radio_meta, state, stations, stations_modal, svc, thumbnail, viz, youtube)
 ├── svc.rs                  # AudioService: queue/history state machine, WS broadcast, resume, fallback debounce, periodic LoadVideo heartbeat, votes/skip-vote
 ├── state.rs                # AudioState: per-session UI shim — proxies submits/votes and turns AudioEvent into Banners
 ├── client_state.rs         # ClientAudioState + ClientKind/SshMode/Platform enums (the client_state WS payload)
 ├── input.rs                # v+* music suffix handling: booth, source cycling, stream/station selection
 ├── stations.rs             # server-side stream/station registry and URL resolution
 ├── viz.rs                  # render_eq + Spectrum: live client spectrum, wall-tick ambient fallback
-├── youtube.rs              # URL parsing + optional YouTube Data API validation client, thumbnail fetch
+├── youtube.rs              # URL parsing + watch_url + optional YouTube Data API validation client, thumbnail fetch
 ├── thumbnail.rs            # pure: a fetched thumbnail shrunk to what the live strip's picture column uses (168x96 pixels)
 ├── booth/
 │   ├── mod.rs
 │   ├── state.rs            # BoothModalState: open flag, submit input, queue/history selections, focus
-│   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip, history focus, Enter requeue)
-│   ├── ui.rs               # ratatui modal: submit row, current track, queue list with duration + score, history list with duration + play count
+│   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip, Ctrl+Y copy, history focus, Enter requeue)
+│   ├── ui.rs               # ratatui modal: submit row, current track + watch link, queue list with duration + score, history list with duration + play count
 │   └── live.rs             # a booth track on the live strip (app/live/): candidates, view, render_picture (chafa), words
+├── stations_modal/
+│   ├── mod.rs
+│   ├── state.rs            # StationsModalState: open flag, selection over the enabled catalogue
+│   ├── input.rs            # modal-open keys: move, Enter listen, 1-5 pin, 0 unpin, Ctrl+Y copy
+│   └── ui.rs               # ratatui modal: pinned row, stations grouped by section with live now-playing, footer
 ├── now_playing/
 │   ├── mod.rs
 │   └── svc.rs              # NowPlayingService: 10s Icecast poll, watch<HashMap<mount, NowPlaying>>
@@ -190,7 +195,8 @@ All transitions go through `svc.rs`:
 - History pruning sorts the same way; rows after rank 200 are deleted. History is therefore a rolling window of the last 200 distinct videos: a track nobody replays eventually falls off no matter how well liked it was.
 - Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. The fresh queue item starts with score 0 and competes normally.
 - Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
-- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode has no voting keys and uses `/` to filter, Enter to requeue, and permission-gated `d` to delete a history row.
+- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode has no voting keys and uses `/` to filter, Enter to requeue, and permission-gated `d` to delete a history row. Ctrl+Y (`^y` in the footer) copies the watch link of the track the focus points at: the playing track from the submit row, the selected row in Queue or History. It is checked before any focus or the History filter, because every printable key in the booth is already submit text, filter text, or an action on the selected row; room search's Ctrl+Y copy is the same idea. Copying only lives in the booth and the Stations modal: there is no global copy key.
+- Under the current track sits its watch link (`youtube::watch_url`, the same `https://www.youtube.com/watch?v=<id>` form the CLI's MPRIS publishes) in plain text, so a terminal whose OSC 52 copy never reaches the clipboard can still select it by hand. The fallback stream gets no row: the snapshot carries no video for it, and Ctrl+Y from the submit row then reports there is nothing to copy.
 - The History list compares each row's `video_id` to `QueueSnapshot.current.video_id`; the matching row renders with a play marker and amber emphasis so users can see which historical track is live now.
 
 ### Timers
@@ -548,6 +554,8 @@ Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, rig
 The expanded source = `paired_source` (`AudioSource::{Radio, Youtube}`). Pure preference-based. Does **not** gate on whether a client is paired. The saved preference (loaded from `users.settings.audio_source` during SSH bootstrap, mirrored on `App`) is the source of truth from the first frame; pairing completing does not change the visual state. Don't add a pairing guard back: waiting for the client read as a startup glitch.
 
 The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
+
+The Stations modal's Ctrl+Y (`^y` in its footer) copies the highlighted station's track through the OSC 52 clipboard path: `Artist - Title` (or bare title), the same `App::station_now_playing` text its row shows. Radio has no per-track link, so text is all there is. A station with no metadata shows a banner and leaves the clipboard untouched.
 
 ### Title-bar source tags
 

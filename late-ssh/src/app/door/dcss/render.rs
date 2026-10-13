@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false, 0);
+        draw_landing(frame, area, false, false, false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -31,12 +31,21 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
         state.entry_input(),
         landing::action(">", "Enter", "descend for the Orb of Zot", theme::SUCCESS()),
     );
-    render_landing(frame, area, launch, 0);
+    render_landing(frame, area, launch, Vec::new(), 0);
 }
 
 /// DCSS landing copy with the classic one-line Launch block, used by the Games
-/// hub when DCSS is selected (the hub has no per-session door state).
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, scroll: u16) -> u16 {
+/// hub when DCSS is selected (the hub has no per-session door state), plus
+/// the player's own `t` switch for seeing watcher chat beside their game.
+/// Who is playing right now is the hub rail's `live` section, not this page.
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    enabled: bool,
+    live: bool,
+    show_watch_chat: bool,
+    scroll: u16,
+) -> u16 {
     let action_line = if live {
         landing::action(
             ">",
@@ -52,11 +61,23 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, sc
             Style::default().fg(theme::ERROR()),
         ))
     };
-    render_landing(frame, area, vec![action_line], scroll)
+    let watch_chat = if enabled {
+        vec![landing::watch_chat_hint(show_watch_chat)]
+    } else {
+        Vec::new()
+    };
+    render_landing(frame, area, vec![action_line], watch_chat, scroll)
 }
 
-/// The landing body around a caller-supplied Launch block.
-fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scroll: u16) -> u16 {
+/// The landing body around a caller-supplied Launch block, closed by any
+/// extra launch-time hints (`launch_hints`).
+fn render_landing(
+    frame: &mut Frame,
+    area: Rect,
+    launch: Vec<Line<'static>>,
+    launch_hints: Vec<Line<'static>>,
+    scroll: u16,
+) -> u16 {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -119,8 +140,9 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>, scr
         landing::heading("Launch"),
     ]);
     lines.extend(launch);
+    lines.push(landing::hint("c", "customize your init.txt (paste box)", 8));
+    lines.extend(launch_hints);
     lines.extend([
-        landing::hint("c", "customize your init.txt (paste box)", 8),
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "crawl's own in-game help menu", 8),

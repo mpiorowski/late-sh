@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use late_core::nonogram::{NonogramPack, NonogramPackIndex, NonogramPuzzle};
+use late_core::nonogram::{Cell, NonogramPack, NonogramPackIndex, NonogramPuzzle, line_fits};
 use rand_core::{OsRng, RngCore};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -741,59 +741,24 @@ fn row_col_statuses(
 fn line_status(satisfied: bool, cells: &[u8], clues: &[u8]) -> LineStatus {
     if satisfied {
         LineStatus::Satisfied
-    } else if line_can_still_match(cells, clues) {
+    } else if line_fits(clues, &line_cells(cells)) {
         LineStatus::Pending
     } else {
         LineStatus::Impossible
     }
 }
 
-fn line_can_still_match(cells: &[u8], clues: &[u8]) -> bool {
-    let mut states = vec![(0usize, 0u8)];
-
-    for &cell in cells {
-        let mut next = Vec::new();
-        for &(clue_idx, run_len) in &states {
-            if cell != CELL_MARKED_EMPTY {
-                push_filled_state(&mut next, clues, clue_idx, run_len);
-            }
-            if cell != CELL_FILLED {
-                push_empty_state(&mut next, clues, clue_idx, run_len);
-            }
-        }
-        next.sort_unstable();
-        next.dedup();
-        states = next;
-        if states.is_empty() {
-            return false;
-        }
-    }
-
-    states
-        .into_iter()
-        .any(|(clue_idx, run_len)| line_end_matches(clues, clue_idx, run_len))
-}
-
-fn push_filled_state(states: &mut Vec<(usize, u8)>, clues: &[u8], clue_idx: usize, run_len: u8) {
-    if clue_idx < clues.len() && run_len < clues[clue_idx] {
-        states.push((clue_idx, run_len + 1));
-    }
-}
-
-fn push_empty_state(states: &mut Vec<(usize, u8)>, clues: &[u8], clue_idx: usize, run_len: u8) {
-    if run_len == 0 {
-        states.push((clue_idx, 0));
-    } else if clue_idx < clues.len() && run_len == clues[clue_idx] {
-        states.push((clue_idx + 1, 0));
-    }
-}
-
-fn line_end_matches(clues: &[u8], clue_idx: usize, run_len: u8) -> bool {
-    if run_len == 0 {
-        clue_idx == clues.len()
-    } else {
-        clue_idx < clues.len() && run_len == clues[clue_idx] && clue_idx + 1 == clues.len()
-    }
+/// A player's marks as line logic reads them: a fill is filled, an X is
+/// empty, and an untouched cell is still open.
+fn line_cells(cells: &[u8]) -> Vec<Cell> {
+    cells
+        .iter()
+        .map(|&cell| match cell {
+            CELL_FILLED => Cell::Filled,
+            CELL_MARKED_EMPTY => Cell::Empty,
+            _ => Cell::Unknown,
+        })
+        .collect()
 }
 
 fn snapshot_from_game(game: &Game, pack: &NonogramPack) -> Option<PuzzleSnapshot> {

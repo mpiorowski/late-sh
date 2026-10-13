@@ -1,5 +1,6 @@
 pub(crate) mod editor;
 pub(crate) mod input;
+pub(crate) mod mouse;
 pub(crate) mod state;
 pub(crate) mod ui;
 

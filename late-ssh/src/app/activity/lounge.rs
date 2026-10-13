@@ -205,6 +205,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // the window, so room-hopping between two live streams announces
         // both while re-opening the same room stays quiet.
         ActivityKind::WatchingStream { streamer } => format!("watching:{streamer}"),
+        // Keyed on the event: two posts in one sitting both announce, a
+        // re-emit of one collapses, and the start is once per row anyway.
+        ActivityKind::EventPosted { event_id, .. } => format!("event-posted:{event_id}"),
+        ActivityKind::EventStarting { event_id, .. } => format!("event-starting:{event_id}"),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),

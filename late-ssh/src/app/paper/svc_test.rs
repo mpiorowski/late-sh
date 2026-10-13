@@ -415,6 +415,83 @@ async fn a_dated_request_reads_only_what_the_press_already_printed() {
 }
 
 #[tokio::test]
+async fn an_issue_names_the_nearest_printed_editions_on_either_side() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "paper-leafer").await;
+    let service = PaperService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut rx = service.subscribe();
+    let today = edition_for(Utc::now());
+    let older = today - chrono::Duration::days(4);
+    seed_lounge_page(&test_db.db, "- today's column").await;
+    seed_lounge_page_for(&test_db.db, older, "- four days back").await;
+
+    // The days between were never printed, so the neighbour is four back.
+    service.request(user.id, PaperTrigger::Command);
+    let (_, _, outcome) = wait_open(&mut rx).await;
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected today's edition, got {outcome:?}");
+    };
+    assert_eq!((issue.earlier, issue.later), (Some(older), None));
+
+    // Leafing back is its own trigger and reads the back issue as dated.
+    service.request_browse(user.id, older);
+    let (user_id, trigger, outcome) = wait_open(&mut rx).await;
+    assert_eq!((user_id, trigger), (user.id, PaperTrigger::Browse));
+    let PaperOutcome::Ready(issue) = outcome else {
+        panic!("expected the older edition, got {outcome:?}");
+    };
+    assert_eq!(issue.edition.edition, older);
+    assert_eq!((issue.earlier, issue.later), (None, Some(today)));
+    assert!(issue.work.is_none(), "a back issue carries no NEW WORK");
+}
+
+#[tokio::test]
+async fn arrows_in_the_paper_leaf_through_the_printed_editions() {
+    let (test_db, mut app) = chat_compose_app("paper-arrows").await;
+    let today = edition_for(Utc::now());
+    let older = today - chrono::Duration::days(2);
+    seed_lounge_page(&test_db.db, "- the lounge talked about lunch").await;
+    seed_lounge_page_for(&test_db.db, older, "- the lounge talked about dinner").await;
+    let title = |day: chrono::NaiveDate| format!("The Late Edition · {}", day.format("%a %b %-d"));
+
+    app.handle_input(b"/paper\r");
+    wait_for_render_contains(&mut app, "the lounge talked about lunch").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(&format!("← {}", older.format("%b %-d"))),
+        "{frame}"
+    );
+    assert!(
+        !frame.contains(" →"),
+        "nothing is newer than today: {frame}"
+    );
+
+    app.handle_input(b"\x1b[D");
+    wait_for_render_contains(&mut app, "the lounge talked about dinner").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains(&title(older)), "{frame}");
+    assert!(
+        frame.contains(&format!("{} →", today.format("%b %-d"))),
+        "{frame}"
+    );
+    assert!(!frame.contains("← "), "nothing is older: {frame}");
+
+    // At the first edition, a step back has nowhere to go.
+    app.handle_input(b"h");
+    assert_render_not_contains_for(&mut app, &title(today), Duration::from_millis(300)).await;
+    assert!(render_plain(&mut app).contains(&title(older)));
+
+    app.handle_input(b"l");
+    wait_for_render_contains(&mut app, "the lounge talked about lunch").await;
+    assert!(render_plain(&mut app).contains(&title(today)));
+
+    // A step still in flight when the paper closes is dropped.
+    app.handle_input(b"\x1b[D");
+    app.handle_input(b"q");
+    assert_render_not_contains_for(&mut app, "The Late Edition", Duration::from_millis(400)).await;
+}
+
+#[tokio::test]
 async fn the_login_pop_opens_once_after_the_splash_and_esc_closes_it() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "paper-login").await;
@@ -515,8 +592,15 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // Nothing pops while the tour holds the keys, however long it takes.
-    // Enter is the only key the route takes, stop after stop.
+    // Enter is the only key the route takes, stop after stop (it skips the
+    // hidden Artboard without showing it).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while app.clubhouse.tutorial != Tutorial::Homecoming {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tour did not reach Homecoming: {:?}",
+            app.clubhouse.tutorial
+        );
         app.handle_input(b"\r");
         let frame = render_plain(&mut app);
         assert!(!frame.contains("The Late Edition"), "{frame}");

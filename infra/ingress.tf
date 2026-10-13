@@ -113,3 +113,59 @@ resource "kubernetes_ingress_v1" "icecast" {
     }
   }
 }
+
+# =============================================================================
+# RKE2 ingress-nginx controller: HTTP(S) only
+# =============================================================================
+# No TCP services: public SSH and IRC go through ssh-edge (ssh-tcp.tf), so an
+# nginx reload never touches them. depends_on hands port 22 over in order: the
+# chart drops nginx's hostPort DNAT only once ssh-edge is up to take it.
+
+moved {
+  from = kubernetes_manifest.nginx_tcp_config
+  to   = kubernetes_manifest.ingress_nginx_config
+}
+
+resource "kubernetes_manifest" "ingress_nginx_config" {
+  manifest = {
+    apiVersion = "helm.cattle.io/v1"
+    kind       = "HelmChartConfig"
+    metadata = {
+      name      = "rke2-ingress-nginx"
+      namespace = "kube-system"
+    }
+    spec = {
+      valuesContent = yamlencode({
+        controller = {
+          # 2026-09-03: a port-22 connection flood pushed nginx to ~5 cores,
+          # the controller's healthz could not answer inside the chart's 1 s
+          # probe timeout, kubelet killed it, and the 300 s graceful drain
+          # closed every public port for four minutes. A spike has to hold
+          # for a full minute before that happens now (6 x 10 s, 5 s each),
+          # and nginx is capped so it cannot take the whole 8-core node with
+          # it. Legit ingress load is ~0.04 cores; the cap only bites in a
+          # flood. See CONTEXT.md, incident log.
+          livenessProbe = {
+            timeoutSeconds   = 5
+            failureThreshold = 6
+          }
+          readinessProbe = {
+            timeoutSeconds   = 5
+            failureThreshold = 6
+          }
+          resources = {
+            requests = {
+              cpu    = "250m"
+              memory = "256Mi"
+            }
+            limits = {
+              cpu = "3"
+            }
+          }
+        }
+      })
+    }
+  }
+
+  depends_on = [kubernetes_daemon_set_v1.ssh_edge]
+}

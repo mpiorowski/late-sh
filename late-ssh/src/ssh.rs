@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
-    article_feed_read::ArticleFeedRead,
+    article_read::ArticleRead,
     server_ban::ServerBan,
     user::{User, UserParams},
 };
@@ -1536,11 +1536,13 @@ pub(crate) async fn ensure_user(state: &State, fingerprint: &str) -> Result<(Use
                     );
                 }
             }
-            if let Err(e) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+            // A first login never shows the back catalog as unread: the new
+            // user has read the feed as it stands.
+            if let Err(e) = ArticleRead::mark_feed_read(&client, user.id).await {
                 tracing::warn!(
                     user_id = %user.id,
                     error = ?e,
-                    "failed to seed news read cursor for newly created user"
+                    "failed to seed news reads for newly created user"
                 );
             }
             (user, true)

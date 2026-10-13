@@ -1,4 +1,6 @@
 use crate::app::{
+    audio::youtube::watch_url,
+    common::primitives::Banner,
     input::{ParsedInput, sanitize_paste_markers},
     state::App,
 };
@@ -13,8 +15,18 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         .filtered_history_len(&snapshot.history);
     app.booth_modal_state.clamp(queue_len, history_len);
 
-    // While the History `/` filter is capturing, it owns every key (including
-    // Esc and Tab, which cancel the filter rather than close the booth).
+    // Ctrl+Y copies the focused track's link from any focus, the filter
+    // included: every printable key is already somebody's (submit text,
+    // filter text, or an action on the selected row), so the copy rides a
+    // control byte, the way room search's Ctrl+Y does.
+    if let ParsedInput::Byte(0x19) = event {
+        copy_focused_track(app);
+        return;
+    }
+
+    // While the History `/` filter is capturing, it owns every other key
+    // (including Esc and Tab, which cancel the filter rather than close the
+    // booth).
     if app.booth_modal_state.history_filter_active() {
         handle_history_filter_input(app, event);
         reclamp(app);
@@ -173,6 +185,31 @@ fn handle_history_input(app: &mut App, event: ParsedInput, history_len: usize) {
     }
 }
 
+/// Ctrl+Y: the watch link of the track the focus points at. The submit row
+/// has no track of its own, so it copies the one playing; the lists copy
+/// their selected row. Nothing to point at (the fallback stream, an empty
+/// list) leaves the clipboard alone.
+fn copy_focused_track(app: &mut App) {
+    let snapshot = app.audio.queue_snapshot();
+    let state = &app.booth_modal_state;
+    let video_id = match state.focus() {
+        BoothFocus::Submit => snapshot.current.as_ref().map(|item| &item.video_id),
+        BoothFocus::Queue => state
+            .selected_item(&snapshot.queue)
+            .map(|item| &item.video_id),
+        BoothFocus::History => state
+            .selected_history_item(&snapshot.history)
+            .map(|item| &item.video_id),
+    };
+    match video_id {
+        Some(video_id) => {
+            app.pending_clipboard = Some(watch_url(video_id));
+            app.banner = Some(Banner::success("Track link copied to clipboard!"));
+        }
+        None => app.banner = Some(Banner::error("No track to copy")),
+    }
+}
+
 fn cast_selected_vote(app: &mut App, value: i16) {
     let snapshot = app.audio.queue_snapshot();
     let Some(item_id) = app.booth_modal_state.selected_item_id(&snapshot.queue) else {
@@ -226,3 +263,7 @@ fn delete_selected_history(app: &mut App) {
     };
     app.audio.booth_history_delete(item_id);
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

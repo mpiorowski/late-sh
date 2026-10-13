@@ -50,21 +50,18 @@ fn one_press_moves_a_row_split_by_exactly_one_column_at_every_width() {
 fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
     let area = Rect::new(0, 0, 160, 44);
     let mut root = RiceLayout::default().root;
-    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium. Music sits in
-    // a column inside a column inside the rail; only the split directly
-    // above it moves, so the clock above and the left column stay put.
+    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
+    // Live sits in a column inside a column inside the rail; only the
+    // split directly above it moves, so the tiles above it and the left
+    // column stay put, and music alone gives up the row.
     let before = heights(&root, area, 1);
-    assert!(root.resize_leaf(3, Dir::Column, 1, area, 1));
+    assert!(root.resize_leaf(6, Dir::Column, 1, area, 1));
     let after = heights(&root, area, 1);
-    assert_eq!(after[3], before[3] + 1, "music gains one row");
-    assert_eq!(after[0], before[0], "the bonsai column is untouched");
-    assert_eq!(after[1], before[1]);
-    assert_eq!(after[2], before[2], "the clock is untouched");
-    assert_eq!(
-        after[4] + after[5] + after[6] + 1,
-        before[4] + before[5] + before[6],
-        "lobby, pet, and the reef give up one row between them"
-    );
+    assert_eq!(after[6], before[6] + 1, "live gains one row");
+    for leaf in 0..6 {
+        assert_eq!(after[leaf], before[leaf], "leaf {leaf} is untouched");
+    }
+    assert_eq!(after[7] + 1, before[7], "music gives up the row");
 
     let mut row_only = Node::split(
         Dir::Row,
@@ -264,7 +261,7 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
 
 #[test]
 fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_the_focused_one() {
-    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium.
+    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
     let mut zen = ZenState::new(RiceLayout::default());
     assert!(zen.shows_equalizer(), "the default page has a music tile");
 
@@ -274,7 +271,7 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
         !zen.shows_equalizer(),
         "zoomed on the bonsai hides the music tile"
     );
-    zen.focus = 3;
+    zen.focus = 7;
     assert!(
         zen.shows_equalizer(),
         "zoomed on the music tile keeps its eq"
@@ -300,7 +297,7 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
 
 #[test]
 fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
-    // Leaves run bonsai, chat, clock, music, lobby, pet, aquarium.
+    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
     let mut zen = ZenState::new(RiceLayout::default());
     let lobby = zen.first_tile_of(TileKind::Lobby).expect("a lobby tile");
     assert!(zen.shows(TileKind::Lobby));
@@ -316,4 +313,268 @@ fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
     zen.focus = lobby;
     assert!(zen.draws(TileKind::Lobby), "zoomed on it, it draws");
     assert!(!zen.draws(TileKind::Bonsai), "and the bonsai does not");
+}
+
+/// An ascii tile plays the screensaver's piece, the slow earthrise,
+/// until `[` `]` pick another; the piece is stored with the layout, rides
+/// along when the tile is split, and is forgotten when the tile becomes
+/// something else, as a chat tile's room is.
+#[test]
+fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::Instant;
+    let now = Instant::now();
+    let mut rng = StdRng::seed_from_u64(3);
+    let earthrise = AsciiPiece {
+        scene: Scene::Earthrise,
+        style: SceneStyle::Dots,
+    };
+    let dawn = AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    };
+    let mut zen = ZenState::new(RiceLayout {
+        root: Node::leaf(TileKind::Ascii),
+        look: Look::default(),
+    });
+    assert_eq!(zen.focused_piece(), Some(earthrise));
+    assert_eq!(
+        Screensaver::DEFAULT,
+        Screensaver::On(AsciiSelection::Piece(earthrise)),
+        "the tile and the screensaver default to one piece"
+    );
+    assert!(zen.cycle_focused_piece(true, now, &mut rng));
+    assert_eq!(
+        zen.focused_piece(),
+        Some(AsciiPiece {
+            scene: Scene::Earthrise,
+            style: SceneStyle::Pixels
+        })
+    );
+    // Back past earthrise and the random modes, off the front of the list
+    // onto its end.
+    for _ in 0..4 {
+        assert!(zen.cycle_focused_piece(false, now, &mut rng));
+    }
+    assert_eq!(zen.focused_piece(), Some(dawn), "it wraps");
+
+    let stored = serde_json::to_string(&zen.rice).expect("serialize");
+    assert!(
+        stored.contains("\"piece\":\"alpine_dawn_pixels\""),
+        "stored by key: {stored}"
+    );
+    let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
+    assert_eq!(
+        restored.root.selection_at(0),
+        Some(AsciiSelection::Piece(dawn))
+    );
+
+    let aurora = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
+    };
+    assert!(zen.set_focused_selection(AsciiSelection::Piece(aurora), now, &mut rng));
+    assert_eq!(zen.focused_piece(), Some(aurora));
+    assert!(zen.set_focused_selection(AsciiSelection::Piece(dawn), now, &mut rng));
+
+    assert!(zen.split_focused(true));
+    assert_eq!(
+        zen.rice.root.selection_at(0),
+        Some(AsciiSelection::Piece(dawn))
+    );
+    assert_eq!(zen.rice.root.selection_at(1), None, "the new tile is blank");
+    assert!(
+        !zen.cycle_focused_piece(true, now, &mut rng),
+        "`[ ]` on a blank tile is nothing"
+    );
+
+    assert!(zen.rice.root.set_kind(0, TileKind::Clock));
+    assert!(zen.rice.root.set_kind(0, TileKind::Ascii));
+    assert_eq!(
+        zen.rice.root.selection_at(0),
+        Some(AsciiSelection::Piece(earthrise)),
+        "coming back plays the default"
+    );
+}
+
+/// Layouts stored before the ascii tile existed carry no `piece` key, and
+/// read back unchanged.
+#[test]
+fn a_layout_without_pieces_reads_back_unchanged() {
+    let stored = serde_json::to_string(&RiceLayout::default()).expect("serialize");
+    assert!(!stored.contains("piece"));
+    let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
+    assert_eq!(restored, RiceLayout::default());
+}
+
+/// A piece key this build does not know (one dropped, like the donut, or a
+/// deploy rolled back past it) costs that tile its pick, not the user the
+/// whole layout: the tile plays the default and every other leaf reads as
+/// stored.
+#[test]
+fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle};
+    let room = Uuid::from_u128(7);
+    let stored = serde_json::json!({
+        "root": {
+            "node": "split",
+            "dir": "row",
+            "share": 500,
+            "first": { "node": "leaf", "kind": "ascii", "piece": "donut" },
+            "second": {
+                "node": "split",
+                "dir": "column",
+                "share": 400,
+                "first": { "node": "leaf", "kind": "chat", "room": room },
+                "second": { "node": "leaf", "kind": "ascii", "piece": "alpine_dawn_pixels" }
+            }
+        },
+        "look": Look::default()
+    });
+    let restored = RiceLayout::from_json(Some(&stored));
+    assert_ne!(restored, RiceLayout::default(), "the layout survives");
+    assert_eq!(restored.root.selection_at(0), Some(AsciiSelection::DEFAULT));
+    assert_eq!(restored.root.kind_at(1), Some(TileKind::Chat));
+    assert_eq!(restored.root.leaf_rooms()[1], Some(room));
+    assert_eq!(
+        restored.root.selection_at(2),
+        Some(AsciiSelection::Piece(AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels
+        }))
+    );
+}
+
+fn random_tiles() -> ZenState {
+    use late_core::models::user::AsciiSelection;
+    let mut root = Node::split(
+        Dir::Row,
+        500,
+        Node::leaf(TileKind::Ascii),
+        Node::leaf(TileKind::Ascii),
+    );
+    root.set_selection(0, AsciiSelection::Random);
+    root.set_selection(1, AsciiSelection::Randomer);
+    ZenState::new(RiceLayout {
+        root,
+        look: Look::default(),
+    })
+}
+
+#[test]
+fn random_tiles_keep_runtime_separate_from_the_saved_layout() {
+    use late_core::models::user::AsciiSelection;
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::{Duration, Instant};
+    let mut zen = random_tiles();
+    let saved = zen.rice.to_json();
+    assert_eq!(saved["root"]["first"]["piece"], "random");
+    assert_eq!(saved["root"]["second"]["piece"], "randomer");
+    assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
+    let now = Instant::now();
+    let mut rng = StdRng::seed_from_u64(17);
+    zen.enter(now, &mut rng);
+    let initial = zen.playback.clone();
+    assert!(zen.piece_label(0).unwrap().starts_with("random · "));
+    assert!(zen.piece_label(1).unwrap().starts_with("randomer · "));
+    zen.toggle_zoom();
+    zen.cycle_border();
+    zen.cycle_gap();
+    zen.flip_focused();
+    zen.resize_focused(Dir::Column, 1, Rect::new(0, 0, 100, 40));
+    // The focused Random tile holds; the hidden Randomer tile still rotates.
+    assert!(!zen.sync_playback(now + Duration::from_secs(300), &mut rng));
+    assert_eq!(zen.playback[0], initial[0]);
+    assert_ne!(
+        zen.piece_at(1).unwrap().scene,
+        initial[1].unwrap().piece().scene
+    );
+    assert_eq!(zen.drawn_pieces(), vec![zen.piece_at(0).unwrap()]);
+    let rotated = zen.playback.clone();
+    zen.focus = 1;
+    assert!(!zen.set_focused_selection(
+        AsciiSelection::Randomer,
+        now + Duration::from_secs(300),
+        &mut rng
+    ));
+    assert_eq!(zen.playback, rotated, "reselecting preserves playback");
+    assert_eq!(
+        zen.rice.root.selection_at(1),
+        Some(AsciiSelection::Randomer)
+    );
+    // Runtime cannot leak into JSON, including when the layout is edited.
+    let stored = zen.rice.to_json();
+    assert_eq!(
+        stored["root"]["first"]["piece"],
+        saved["root"]["first"]["piece"]
+    );
+    assert_eq!(
+        stored["root"]["second"]["piece"],
+        saved["root"]["second"]["piece"]
+    );
+    assert_eq!(stored["root"]["second"].as_object().unwrap().len(), 3);
+}
+
+#[test]
+fn random_tile_instances_follow_surviving_leaves_through_layout_edits() {
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::Instant;
+    let mut zen = random_tiles();
+    zen.enter(Instant::now(), &mut StdRng::seed_from_u64(21));
+    let original = zen.playback.clone();
+    assert!(zen.split_focused(true));
+    assert_eq!(zen.playback[0], original[0]);
+    assert_eq!(zen.playback[2], original[1]);
+    assert_eq!(zen.playback[1], None, "the new tile is blank");
+    assert!(zen.close_focused());
+    assert_eq!(zen.playback, original);
+    zen.focus = 0;
+    assert!(zen.close_focused());
+    assert_eq!(zen.playback, vec![original[1]]);
+    zen.open_kind_picker();
+    zen.kind_picker = TileKind::ALL
+        .iter()
+        .position(|kind| *kind == TileKind::Clock);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.playback, vec![None]);
+    zen.open_kind_picker();
+    zen.kind_picker = TileKind::ALL
+        .iter()
+        .position(|kind| *kind == TileKind::Ascii);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(
+        zen.focused_piece(),
+        Some(late_core::models::user::AsciiPiece::DEFAULT)
+    );
+    zen.reset();
+    assert!(zen.playback.iter().all(Option::is_none));
+}
+
+#[test]
+fn leaving_zen_ends_random_instances_and_returning_resolves_them_again() {
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use std::time::{Duration, Instant};
+    let mut zen = random_tiles();
+    let now = Instant::now();
+    let mut rng = StdRng::seed_from_u64(22);
+    zen.enter(now, &mut rng);
+    let saved = zen.rice.to_json();
+    zen.leave();
+    assert!(zen.playback.iter().all(Option::is_none));
+    let later = now + Duration::from_secs(3600);
+    let mut idle_rng = rng.clone();
+    assert!(!zen.sync_playback(later, &mut rng));
+    assert_eq!(rng.next_u64(), idle_rng.next_u64());
+    let mut idle_rng = rng.clone();
+    zen.enter(later, &mut rng);
+    assert_ne!(
+        rng.next_u64(),
+        idle_rng.next_u64(),
+        "each tile draws afresh"
+    );
+    assert!(zen.playback.iter().all(Option::is_some));
+    assert!(!zen.sync_playback(later + Duration::from_secs(299), &mut rng));
+    assert!(zen.sync_playback(later + Duration::from_secs(300), &mut rng));
+    assert_eq!(zen.rice.to_json(), saved);
 }

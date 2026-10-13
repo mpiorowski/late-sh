@@ -204,7 +204,12 @@ pub fn channel_name(room: &ChatRoom) -> Option<String> {
     if !is_irc_channel_kind(room) {
         return None;
     }
-    room.slug.as_deref().map(|slug| format!("#{slug}"))
+    let prefix = if room.visibility == "private" {
+        "##"
+    } else {
+        "#"
+    };
+    room.slug.as_deref().map(|slug| format!("{prefix}{slug}"))
 }
 
 /// Whether a room kind/visibility combination is exposed as an IRC channel.
@@ -226,9 +231,15 @@ pub fn normalize_channel(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
-/// Slug for a client-supplied channel name (`#foo` → `foo`).
-pub fn slug_for_channel(name: &str) -> Option<&str> {
-    name.strip_prefix('#').filter(|slug| !slug.is_empty())
+/// Visibility and slug for a client-supplied channel name.
+/// `#foo` addresses the public room; `##foo` addresses the private room.
+pub fn channel_parts(name: &str) -> Option<(&'static str, &str)> {
+    let rest = name.strip_prefix('#')?;
+    let (visibility, slug) = match rest.strip_prefix('#') {
+        Some(slug) => ("private", slug),
+        None => ("public", rest),
+    };
+    (!slug.is_empty() && !slug.contains('#')).then_some((visibility, slug))
 }
 
 /// Split a message body into IRC-sized lines: hard line breaks first, then

@@ -50,9 +50,8 @@ fn command_help_explains_ban_arguments() {
     let lines = mod_help_lines(Some("ban"));
 
     assert!(
-        lines
-            .iter()
-            .any(|line| line == "ban <server|#room|art|audio|stream> @name [duration] [reason...]")
+        lines.iter().any(|line| line
+            == "ban <server|#room|art|audio|calendar|stream> @name [duration] [reason...]")
     );
     assert!(
         lines.iter().any(|line| line.contains("s/m/h/d")),
@@ -91,10 +90,8 @@ fn command_help_uses_limited_grouped_surface() {
         "top-level help should show rename-user command: {lines:?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line
-                == "ban    <server|#room|art|audio|stream> @name [duration] [reason...]"),
+        lines.iter().any(|line| line
+            == "ban    <server|#room|art|audio|calendar|stream> @name [duration] [reason...]"),
         "top-level help should show verb-primary ban form: {lines:?}"
     );
 }
@@ -657,6 +654,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ServerUser { username, .. }
         | ModCommand::Artboard { username, .. }
         | ModCommand::Audio { username, .. }
+        | ModCommand::Calendar { username, .. }
         | ModCommand::Voice { username, .. }
         | ModCommand::Stream { username, .. }
         | ModCommand::Role { username, .. } => username,
@@ -672,105 +670,8 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::ArtboardRestore { .. }
         | ModCommand::ArtboardCurate { .. }
         | ModCommand::ArtboardRemovePiece { .. }
-        | ModCommand::ArtboardFeaturePiece { .. }
-        | ModCommand::ArtboardMark { .. }
-        | ModCommand::ArtboardUnmarkBy { .. }
-        | ModCommand::ArtboardSafetyView { .. } => {
+        | ModCommand::ArtboardFeaturePiece { .. } => {
             panic!("command does not have a primary username: {command:?}")
         }
     }
-}
-
-#[test]
-fn parses_art_safety_tiers_clear_and_inspection() {
-    for command in ["artboard safety help", "help artboard safety"] {
-        assert_eq!(
-            parse_mod_command(command).unwrap(),
-            ModCommand::Help {
-                topic: Some("artboard safety".into()),
-            }
-        );
-    }
-    for admin in [false, true] {
-        for (word, rating) in [
-            ("sfw", Some(ArtContentRating::Sfw)),
-            ("nsfw", Some(ArtContentRating::Nsfw)),
-            ("none", None),
-        ] {
-            let tier = if admin { "admin " } else { "" };
-            assert_eq!(
-                parse_mod_command(&format!(
-                    "artboard safety {tier}{word} 1234abcd review reason"
-                ))
-                .unwrap(),
-                ModCommand::ArtboardMark {
-                    id_prefix: "1234abcd".into(),
-                    admin,
-                    rating,
-                    reason: "review reason".into()
-                }
-            );
-        }
-    }
-    assert_eq!(
-        parse_mod_command("artboard safety none 1234abcd by @reviewer mistaken").unwrap(),
-        ModCommand::ArtboardUnmarkBy {
-            id_prefix: "1234abcd".into(),
-            actor: "@reviewer".into(),
-            reason: "mistaken".into()
-        }
-    );
-    assert_eq!(
-        parse_mod_command("artboard safety view").unwrap(),
-        ModCommand::ArtboardSafetyView {
-            target: ArtboardSafetyViewTarget::Summary,
-        }
-    );
-    assert_eq!(
-        parse_mod_command("artboard safety view @artist").unwrap(),
-        ModCommand::ArtboardSafetyView {
-            target: ArtboardSafetyViewTarget::User {
-                username: "artist".into(),
-            },
-        }
-    );
-    assert_eq!(
-        parse_mod_command("artboard safety view 1234abcd").unwrap(),
-        ModCommand::ArtboardSafetyView {
-            target: ArtboardSafetyViewTarget::Piece {
-                id_prefix: "1234abcd".into(),
-            },
-        }
-    );
-    for command in [
-        "artboard safety",
-        "artboard safety nsfw",
-        "artboard safety admin",
-        "artboard safety admin sfw",
-        "artboard safety maybe 1234abcd",
-        "artboard safety sfw short",
-        "artboard safety none 1234abcd by",
-        "artboard safety sfw 1234abcd by @reviewer",
-        "artboard safety view @",
-        "artboard safety view short",
-        "artboard safety view 1234abcd extra",
-    ] {
-        assert!(parse_mod_command(command).is_err(), "{command}");
-    }
-    assert!(
-        mod_help_lines(Some("artboard safety"))
-            .iter()
-            .any(|line| line.starts_with("artboard safety"))
-    );
-    let help_shortcut = "artboard safety help          - view help for art nsfw/sfw commands";
-    assert!(
-        mod_help_lines(None)
-            .iter()
-            .any(|line| line == help_shortcut)
-    );
-    assert!(
-        mod_help_lines(Some("artboard"))
-            .iter()
-            .any(|line| line == help_shortcut)
-    );
 }

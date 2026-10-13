@@ -1,12 +1,15 @@
-//! Keys while The Late Edition is up: scroll, close. Everything else is
-//! swallowed, so the paper reads like a modal and not a transparency.
+//! Keys while The Late Edition is up: scroll, leaf to the next printed
+//! edition, close. Everything else is swallowed, so the paper reads like a
+//! modal and not a transparency.
 
+use late_core::models::paper::EditionStep;
 use ratatui::layout::Position;
 
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
 use super::state::PaperModal;
+use super::svc::browse;
 
 pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
     match event {
@@ -43,6 +46,12 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
                 modal.scroll(-1);
             }
         }
+        ParsedInput::Byte(b'h' | b'H')
+        | ParsedInput::Char('h' | 'H')
+        | ParsedInput::Arrow(b'D') => browse(app, EditionStep::Earlier),
+        ParsedInput::Byte(b'l' | b'L')
+        | ParsedInput::Char('l' | 'L')
+        | ParsedInput::Arrow(b'C') => browse(app, EditionStep::Later),
         ParsedInput::PageDown => {
             if let Some(modal) = app.paper.modal.as_mut() {
                 modal.scroll(10);

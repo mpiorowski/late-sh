@@ -9,7 +9,8 @@
 //! What goes in the frame is the source's own: a daily match paints its
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
 //! (`audio/booth/live.rs`), a News article its ASCII art
-//! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`).
+//! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`), a
+//! door game its own door's dungeon in ASCII (`door/spectate/live.rs`).
 
 use std::cell::Cell;
 
@@ -23,8 +24,10 @@ use ratatui::{
 
 use crate::app::{
     audio::booth::live as booth_live,
+    calendar::live as event_live,
     chat::news::live as news_live,
     common::theme,
+    door::spectate::live as door_live,
     games::pool_core::canvas::Rgb,
     lobby::daily::{live_board::canvas_background, live_strip as match_strip},
     statusline::data::TITLE_COLS,
@@ -54,16 +57,6 @@ const MIN_COMPACT_HEIGHT: u16 = LIVE_STRIP_COMPACT_HEIGHT + 4;
 pub(crate) const GAP: u16 = 2;
 /// The words row the key hint sits on, under what the source says.
 const HINT_ROW: usize = 6;
-
-/// Where the strip is drawn. The #lounge card names its keys in the hint
-/// row and parts the strip from the chat with the rule; a Zen tile has a
-/// border and a title for both, and its title names the tile's keys, as
-/// every Zen tile's does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StripHost {
-    LoungeCard,
-    ZenTile,
-}
 
 /// Which form the card fitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,57 +113,10 @@ pub(crate) fn draw_live_strip(
         hit.set(Some((area, source)));
     }
     let lines = match size {
-        StripSize::Full => live_strip_lines(
-            area.width,
-            strip,
-            canvas_background(),
-            StripHost::LoungeCard,
-        ),
+        StripSize::Full => live_strip_lines(area.width, strip, canvas_background()),
         StripSize::Compact => vec![live_strip_compact_line(area.width, strip)],
     };
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// The form a Zen tile's inner area fits: the picture rows when it has
-/// `PICTURE_ROWS` and the card's width, else the one row. A tile always
-/// spares a row (`zen::layout::MIN_TILE_CELLS`).
-pub(crate) fn fit_live_tile(area: Rect) -> StripSize {
-    if area.width >= MIN_FULL_WIDTH && area.height >= PICTURE_ROWS {
-        StripSize::Full
-    } else {
-        StripSize::Compact
-    }
-}
-
-/// The strip in a Zen tile's inner area, centred top to bottom: the
-/// picture rows with no hint and no rule, or the one row without its rule
-/// label, since the tile's title already says what it is.
-pub(crate) fn draw_live_tile(
-    frame: &mut Frame,
-    area: Rect,
-    strip: &LiveStripView<'_>,
-    hit: &Cell<Option<(Rect, LiveSource)>>,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let lines = match fit_live_tile(area) {
-        StripSize::Full => {
-            live_strip_lines(area.width, strip, canvas_background(), StripHost::ZenTile)
-        }
-        StripSize::Compact => vec![Line::from(compact_body_spans(area.width, strip))],
-    };
-    let height = (lines.len() as u16).min(area.height);
-    let drawn = Rect::new(
-        area.x,
-        area.y + (area.height - height) / 2,
-        area.width,
-        height,
-    );
-    if let Some(source) = strip.opens() {
-        hit.set(Some((drawn, source)));
-    }
-    frame.render_widget(Paragraph::new(lines), drawn);
 }
 
 /// The picture in its column with the words beside it. On the #lounge card
@@ -182,7 +128,6 @@ pub(crate) fn live_strip_lines(
     width: u16,
     strip: &LiveStripView<'_>,
     background: Rgb,
-    host: StripHost,
 ) -> Vec<Line<'static>> {
     let budget = usize::from(width.saturating_sub(PICTURE_COLS + GAP));
     let body = match strip {
@@ -190,14 +135,15 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Track(track) => booth_live::body(budget, track),
         LiveStripView::Article(article) => news_live::body(budget, article),
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
+        LiveStripView::DoorGame(game) => door_live::body(budget, game),
+        LiveStripView::Event(event) => event_live::body(budget, event),
     };
-    frame_lines(width, body, host)
+    frame_lines(width, body)
 }
 
 /// A source's body in the frame: the picture centred in its column, the
-/// words beside it, and on the #lounge card the hint among them and the
-/// rule under both.
-fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static>> {
+/// words beside it, the hint among them and the rule under both.
+fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
     let StripBody {
         mut picture,
         mut words,
@@ -205,10 +151,7 @@ fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static
         glow,
     } = body;
     let mut lines = Vec::with_capacity(LIVE_STRIP_HEIGHT as usize);
-    match host {
-        StripHost::LoungeCard => words[HINT_ROW] = hint,
-        StripHost::ZenTile => {}
-    }
+    words[HINT_ROW] = hint;
 
     picture.truncate(PICTURE_ROWS as usize);
     // Centre whatever the source drew in the fixed band.
@@ -227,10 +170,7 @@ fn frame_lines(width: u16, body: StripBody, host: StripHost) -> Vec<Line<'static
         spans.extend(words);
         lines.push(Line::from(spans));
     }
-    match host {
-        StripHost::LoungeCard => lines.push(rule_line(width, glow)),
-        StripHost::ZenTile => {}
-    }
+    lines.push(rule_line(width, glow));
     lines
 }
 
@@ -260,7 +200,9 @@ fn clip_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// `── live ────`, the label lit while the source says so.
+/// `── now ────`, the label lit while the source says so. The strip is
+/// named `now` on screen: what just happened, beside the Live panel,
+/// which is what is on.
 fn rule_line(width: u16, glow: bool) -> Line<'static> {
     let label_style = if glow {
         Style::default()
@@ -271,7 +213,7 @@ fn rule_line(width: u16, glow: bool) -> Line<'static> {
             .fg(theme::AMBER_DIM())
             .add_modifier(Modifier::ITALIC)
     };
-    let label = "live";
+    let label = "now";
     let used = 3 + label.chars().count() + 1;
     let trail = usize::from(width).saturating_sub(used).max(1);
     Line::from(vec![
@@ -290,6 +232,8 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
         // A shared link is never happening right now (`news_live::body`).
         LiveStripView::Article(_) => false,
         LiveStripView::Stream(_) => stream_live::glow(),
+        LiveStripView::DoorGame(_) => door_live::glow(),
+        LiveStripView::Event(event) => event_live::glow(event),
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -307,6 +251,8 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
         LiveStripView::Article(article) => news_live::compact_spans(rest, article),
         LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
+        LiveStripView::DoorGame(game) => door_live::compact_spans(rest, game),
+        LiveStripView::Event(event) => event_live::compact_spans(rest, event),
     }
 }
 

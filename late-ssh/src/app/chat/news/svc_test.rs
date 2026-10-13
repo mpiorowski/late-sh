@@ -30,7 +30,7 @@ async fn recv_article_event(
     timeout(Duration::from_secs(2), async {
         loop {
             match events.recv().await.expect("article event") {
-                ArticleEvent::ReadCursorLoaded { .. } => continue,
+                ArticleEvent::ReadsLoaded { .. } => continue,
                 event => return event,
             }
         }
@@ -297,4 +297,55 @@ async fn a_listening_replica_picks_up_shares_and_deletes_from_the_notify() {
     })
     .await
     .expect("the listening replica drops the deleted article");
+}
+
+async fn recv_reads(events: &mut tokio::sync::broadcast::Receiver<ArticleEvent>) -> Vec<Uuid> {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if let ArticleEvent::ReadsLoaded {
+                read_article_ids, ..
+            } = events.recv().await.expect("article event")
+            {
+                return read_article_ids;
+            }
+        }
+    })
+    .await
+    .expect("reads timeout")
+}
+
+/// Opening one article publishes it among the reader's reads and no other;
+/// a visit to the News room publishes every snapshot article read.
+#[tokio::test]
+async fn an_open_reads_one_article_and_a_room_visit_reads_the_feed() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "reads-sharer").await;
+    let reader = create_test_user(&test_db.db, "reads-reader").await;
+    let older = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        article_params(sharer.id, "https://example.com/reads-1", "Older"),
+    )
+    .await
+    .expect("create older article");
+    let newer = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        article_params(sharer.id, "https://example.com/reads-2", "Newer"),
+    )
+    .await
+    .expect("create newer article");
+    let service = make_article_service(test_db.db.clone());
+    let mut events = service.subscribe_events();
+
+    service.mark_article_read_task(reader.id, newer.id);
+    assert_eq!(recv_reads(&mut events).await, vec![newer.id]);
+
+    service.mark_read_task(reader.id);
+    let mut read_article_ids = recv_reads(&mut events).await;
+    read_article_ids.sort();
+    let mut both = vec![older.id, newer.id];
+    both.sort();
+    assert_eq!(read_article_ids, both);
 }

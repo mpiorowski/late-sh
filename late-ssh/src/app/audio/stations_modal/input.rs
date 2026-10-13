@@ -15,6 +15,7 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::PageUp => app.stations_modal_state.move_selection(-8),
         ParsedInput::PageDown => app.stations_modal_state.move_selection(8),
         ParsedInput::Byte(b'\r') => listen_to_selected(app),
+        ParsedInput::Byte(0x19) => copy_selected_track(app),
         ParsedInput::Char('0') => unpin_selected(app),
         ParsedInput::Char(digit @ '1'..='9') => {
             let index = digit as usize - '1' as usize;
@@ -43,6 +44,26 @@ fn listen_to_selected(app: &mut App) {
         "Station: {}",
         sentence_case(station.label())
     )));
+}
+
+/// Ctrl+Y: copy the highlighted station's track (`Artist - Title`, the text
+/// its row shows). A station with no metadata leaves the clipboard alone.
+fn copy_selected_track(app: &mut App) {
+    let Some(station) = app.stations_modal_state.selected_station() else {
+        return;
+    };
+    match app.station_now_playing(station) {
+        Some(track) => {
+            app.pending_clipboard = Some(track);
+            app.banner = Some(Banner::success("Track copied to clipboard!"));
+        }
+        None => {
+            app.banner = Some(Banner::error(&format!(
+                "No track info for {}",
+                sentence_case(station.label())
+            )));
+        }
+    }
 }
 
 fn pin_selected(app: &mut App, index: usize) {
@@ -81,3 +102,7 @@ pub(crate) fn sentence_case(name: &str) -> String {
         None => String::new(),
     }
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

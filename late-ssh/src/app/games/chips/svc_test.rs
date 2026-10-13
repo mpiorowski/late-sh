@@ -335,9 +335,15 @@ async fn welcome_pour_never_comps_a_prior_drinker() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "welcome-pour-veteran").await;
     let client = test_db.db.get().await.expect("db client");
-    late_core::models::drinks::UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 200)
-        .await
-        .expect("paid drink");
+    late_core::models::drinks::UserDrinks::record_purchase(
+        &client,
+        user.id,
+        Bar::Tavern,
+        200,
+        true,
+    )
+    .await
+    .expect("paid drink");
     drop(client);
 
     let chips = ChipService::new(test_db.db.clone());
@@ -677,7 +683,7 @@ async fn a_cashed_round_drink_costs_the_drinker_nothing() {
         .expect("the round settles");
 
     let comped = chips
-        .cash_round_drink(patron.id, Bar::Tavern)
+        .cash_round_drink(patron.id, Bar::Tavern, true)
         .await
         .expect("cashing works")
         .expect("a drink was waiting");
@@ -704,11 +710,76 @@ async fn a_cashed_round_drink_costs_the_drinker_nothing() {
     );
     assert!(
         chips
-            .cash_round_drink(patron.id, Bar::Tavern)
+            .cash_round_drink(patron.id, Bar::Tavern, true)
             .await
             .expect("second cash")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn non_intoxicating_drinks_charge_or_consume_credit_without_buzz() {
+    let test_db = new_test_db().await;
+    let buyer = create_test_user(&test_db.db, "sober-credit-buyer").await;
+    let patron = create_test_user(&test_db.db, "sober-credit-patron").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(buyer.id).await.unwrap();
+    chips.ensure_chips(patron.id).await.unwrap();
+
+    let paid = chips
+        .buy_drink(patron.id, Bar::Tavern, 50, "coffee", false)
+        .await
+        .unwrap()
+        .expect("paid coffee");
+    assert_eq!(paid.balance, INITIAL_CHIP_BALANCE - 50);
+    assert_eq!(paid.drunk_points, 0);
+    chips
+        .buy_drink_for(buyer.id, patron.id)
+        .await
+        .expect("gift");
+    let comped = chips
+        .cash_round_drink(patron.id, Bar::Nightcap, false)
+        .await
+        .unwrap()
+        .expect("comped water");
+    assert_eq!(comped.drunk_points, 0);
+    assert_eq!(comped.last_drink_at, paid.last_drink_at);
+    assert_eq!(comped.remaining, 0);
+    assert_eq!(chips.open_round_credits(patron.id).await.unwrap(), 0);
+    assert_eq!(balance(&test_db.db, patron.id).await, paid.balance);
+    assert!(
+        chips
+            .cash_round_drink(patron.id, Bar::Nightcap, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let client = test_db.db.get().await.unwrap();
+    let drinks = UserDrinks::find(&client, patron.id).await.unwrap().unwrap();
+    assert_eq!(drinks.drink_count, 2);
+    assert_eq!(drinks.lifetime_spent, 50);
+    let pours = client
+        .query(
+            "SELECT bar, points FROM drink_pours WHERE user_id = $1 ORDER BY bar",
+            &[&patron.id],
+        )
+        .await
+        .expect("paid and comped non-intoxicating pours are logged");
+    let pours: Vec<(&str, i64)> = pours
+        .iter()
+        .map(|row| (row.get("bar"), row.get("points")))
+        .collect();
+    assert_eq!(pours, vec![("nightcap", 0), ("tavern", 0)]);
+    let ledger = client
+        .query_one(
+            "SELECT delta, source_ref FROM chip_ledger WHERE user_id = $1 AND reason = $2",
+            &[&patron.id, &ChipMove::DrinkPurchase.reason()],
+        )
+        .await
+        .expect("coffee receipt");
+    assert_eq!(ledger.get::<_, i64>("delta"), -50);
+    assert_eq!(ledger.get::<_, String>("source_ref"), "coffee");
 }
 
 /// A patron who was away for two rounds is owed both, and the bartender is
@@ -736,7 +807,7 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
     }
 
     let first = chips
-        .cash_round_drink(patron.id, Bar::Tavern)
+        .cash_round_drink(patron.id, Bar::Tavern, true)
         .await
         .expect("cashing works")
         .expect("a drink was waiting");
@@ -745,7 +816,7 @@ async fn a_banked_round_is_drunk_one_at_a_time_with_the_rest_reported() {
     assert_eq!(first.drunk_points, ROUND_DRINK_POINTS);
 
     let second = chips
-        .cash_round_drink(patron.id, Bar::Tavern)
+        .cash_round_drink(patron.id, Bar::Tavern, true)
         .await
         .expect("cashing works")
         .expect("the second drink was waiting");
@@ -800,7 +871,7 @@ async fn a_personal_gift_only_pours_when_the_recipient_orders() {
     );
 
     let poured = chips
-        .cash_round_drink(recipient.id, Bar::Tavern)
+        .cash_round_drink(recipient.id, Bar::Tavern, true)
         .await
         .unwrap()
         .expect("recipient redeems");
@@ -834,7 +905,10 @@ async fn personal_gifts_refuse_without_charging_at_the_cap_or_chip_floor() {
     let other = create_test_user(&test_db.db, "gift-floor-recipient").await;
     // A gift may land exactly on the 100-chip floor, never below it.
     chips.buy_drink_for(buyer.id, other.id).await.unwrap();
-    chips.cash_round_drink(other.id, Bar::Tavern).await.unwrap();
+    chips
+        .cash_round_drink(other.id, Bar::Tavern, true)
+        .await
+        .unwrap();
     assert_eq!(balance(&test_db.db, buyer.id).await, 200);
     chips.grant_chips(buyer.id, 100).await.unwrap();
     chips.buy_drink_for(buyer.id, other.id).await.unwrap();

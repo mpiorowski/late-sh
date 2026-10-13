@@ -1,0 +1,94 @@
+# This is a sample Unix Frotz configuration file which contains examples
+# of all supported options.
+
+# If this is actually $HOME/.frotzrc instead of the systemwide
+# configuration file, $HOME/.frotzrc will override.  These options are
+# explained in more detail in the Unix Frotz README file and the manpage.
+
+
+############################################################
+# These options control some basic characteristics of Frotz.
+
+# Use color text 		(default "yes" if supported)
+color		yes
+
+# Set foreground color		(default "white" if in color mode)
+foreground	white
+
+# Set background color		(default "blue" if in color mode)
+background	blue
+
+# Set error-reporting mode	(default "once")
+errormode	once
+
+# Set path to search for game files (no default)
+zcode_path	/usr/local/games/zcode
+
+# Use plain ASCII only		(default "no")
+ascii		no
+
+# Turn sound on or off		(default "on")
+sound		on
+
+
+############################################
+# These are some less-commonly used options.
+
+# Set random number seed	(default comes from the Unix epoch)
+randseed	1234
+
+# Set number of undo slots	(default 500)
+undo_slots	500
+
+# Set Tandy bit			(default "no")
+tandy		no
+
+# Alter piracy opcode		(default "no")
+piracy		no
+
+# Expand abbreviations		(default "no")
+expand_abb	no
+
+
+#########################################################################
+# These options are useful for weird terminals or if you want to force a
+# certain mode.
+
+# Force color mode		(default "no")
+# Useful for use with supposedly current flavors of Unix that still don't
+# understand what the "xterm-color" terminal type is.
+force_color	no
+
+# Set screen height		(default is detected height)
+screen_height	24
+
+# Set screen width		(default is detected screen width)
+screen_width	80
+
+# Set script width		(default is screen width)
+script_width	80
+
+# Set context lines		(default "0")
+context_lines	0
+
+# Set left margin		(default "0")
+left_margin	0
+
+# Set right margin		(default "0")
+right_margin	0
+
+
+#############################################################
+# These options are mainly useful for debugging and cheating.
+
+# Watch attribute setting	(default "no")
+attrib_set	no
+
+# Watch attribute testing	(default "no")
+attrib_test	no
+
+# Watch object movement		(default "no")
+obj_move	no
+
+# Watch object locating		(default "no")
+obj_loc		no

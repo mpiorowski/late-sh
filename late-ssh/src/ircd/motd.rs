@@ -11,6 +11,7 @@ pub fn motd_lines(web_url: &str) -> Vec<String> {
         "Your nick is derived from your late.sh username; dots appear as ^.".to_string(),
         "Manage your IRC token: ssh late.sh → Settings → Account.".to_string(),
         "Everyone is joined to #lounge; it cannot be left.".to_string(),
+        "Public rooms: #name. Private rooms: ##name (existing members only).".to_string(),
         String::new(),
         format!("Web: {web_url}"),
     ]

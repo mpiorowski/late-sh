@@ -61,15 +61,15 @@ fn a_tile_across_the_page_or_on_a_diagonal_is_not_a_neighbour() {
 }
 
 #[test]
-fn the_default_page_puts_the_tank_below_the_pet_and_the_bonsai_to_its_left() {
+fn the_default_page_puts_the_tank_to_the_pets_left_and_the_bonsai_out_of_reach() {
     let rice = RiceLayout::default();
     for area in [Rect::new(0, 0, 200, 50), Rect::new(0, 0, 120, 30)] {
         let rects = tile_rects(&rice.root, area, rice.look.gap as u16, None);
         assert_eq!(
             pet_neighbours(&rects, rice.look.gap as u16),
             Neighbours {
-                tank: Some(WatchSide::Below),
-                bonsai: Some(WatchSide::Left),
+                tank: Some(WatchSide::Left),
+                bonsai: None,
             },
             "on a {}x{} page",
             area.width,

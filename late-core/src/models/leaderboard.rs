@@ -827,6 +827,7 @@ async fn fetch_top_drinkers(client: &Client, limit: i64) -> Result<MonthYearWind
                     FROM drink_pours
                     WHERE created >= {MONTH_TS_FILTER}
                     GROUP BY user_id
+                    HAVING SUM(points) > 0
                     UNION ALL
                     SELECT 'yearly'::text AS period,
                            user_id,
@@ -834,6 +835,7 @@ async fn fetch_top_drinkers(client: &Client, limit: i64) -> Result<MonthYearWind
                     FROM drink_pours
                     WHERE created >= {YEAR_TS_FILTER}
                     GROUP BY user_id
+                    HAVING SUM(points) > 0
                 ),
                 ranked AS (
                     SELECT totals.period,

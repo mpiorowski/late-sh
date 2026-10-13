@@ -1,0 +1,28 @@
+-a   watch attribute setting
+-A   watch attribute testing
+-b # background colour
+-B # reverse background colour
+-c # context lines
+-d # display mode (see below)
+-e # emphasis colour [mode 1]
+-f # foreground colour
+-F # reverse foreground colour
+-g # font [mode 5] (see below)
+-h # screen height
+-i   ignore runtime errors
+-l # left margin
+-o   watch object movement
+-O   watch object locating
+-p   alter piracy opcode
+-q   quiet (disable sound effects)
+-r # right margin
+-R <path> restricted read/write
+-s # random number seed value
+-S # transcript width
+-t   set Tandy bit
+-T   bold typing [modes 2+4+5]
+-u # slots for multiple undo
+-v   show version information
+-w # screen width
+-x   expand abbreviations g/x/z
+-Z # error checking (see below)

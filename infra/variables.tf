@@ -210,7 +210,7 @@ variable "LIVEKIT_TURN_TLS_PORT" {
 # =============================================================================
 
 variable "IRC_PROXY_EMIT" {
-  description = "Make the IRC ingress proxies emit PROXY protocol headers. Enable only after the parser-capable image is deployed."
+  description = "Make the ssh-edge IRC backend emit PROXY protocol headers. Enable only after the parser-capable image is deployed."
   type        = string
   default     = ""
 

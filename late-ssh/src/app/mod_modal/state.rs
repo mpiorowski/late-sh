@@ -49,16 +49,14 @@ impl ModModalState {
         }
     }
 
-    pub(crate) fn open(&mut self, can_moderate: bool, help_topic: Option<&str>) {
+    pub(crate) fn open(&mut self, can_moderate: bool) {
         composer::set_themed_textarea_cursor_visible(&mut self.command_input, true);
-        if help_topic.is_some() {
-            self.clear_screen();
-        } else if self.has_opened {
+        if self.has_opened {
             return;
         }
         self.has_opened = true;
         if can_moderate {
-            self.append_help(help_topic);
+            self.append_help();
         } else {
             self.append_error("access denied: moderator or admin only");
         }
@@ -206,8 +204,8 @@ impl ModModalState {
         self.push_log(line.into(), ModLogKind::Error);
     }
 
-    fn append_help(&mut self, topic: Option<&str>) {
-        for line in mod_help_lines(topic) {
+    fn append_help(&mut self) {
+        for line in mod_help_lines(None) {
             self.push_log(line, ModLogKind::Help);
         }
     }

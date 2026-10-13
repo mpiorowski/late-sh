@@ -1,0 +1,123 @@
+! Unicode Test v1.0
+!
+! David Kinder, 2002.
+!
+
+Switches xv5;
+Release 1;
+
+Zcharacter table + '@{a9}' '@{2122}' '@{20ac}';
+
+[ main;
+
+  print "^Unicode Test v1.0, by David Kinder^";
+  new_line;
+
+  print "Testing the Unicode table. This sentence should end with Euro, copyright and trademark symbols @{20ac} @{a9} @{2122}^";
+  new_line;
+
+  print "Now, testing print_unicode()...^";
+  charsets();
+  new_line;
+
+  print "Now, testing input (ESC to quit)...^";
+  input_unicode();
+];
+
+[ input_unicode key;
+
+  print "Try inputing a character. Since the Euro symbol is declared in this file's Zcharacter table, ";
+  print "it can be input even though it is not part of ISO Latin-1.^";
+  while (1)
+  {
+    @read_char 1 -> key;
+
+    if (key == $1b)
+      quit;
+
+    font off;
+    print "ZSCII $", (hex) key, " = ";
+    font on;
+
+    switch (key)
+    {
+      8: print "delete";
+     13: print "return";
+    129: print "cursor up";
+    130: print "cursor down";
+    131: print "cursor left";
+    132: print "cursor right";
+    133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144: print "function key ", key-132;
+    145, 146, 147, 148, 149, 150, 151, 152, 153, 154: print "keypad key ", key-145;
+    252: print "menu click";
+    253: print "mouse double-click";
+    254: print "mouse single-click";
+    default: print (char) key;
+    }
+    new_line;
+  }
+];
+
+[ charsets;
+
+  charset("Basic Latin",$0020,3);
+  charset("Latin-1 Supplement",$00a0,3);
+  charset("Latin Extended-A",$0100,4);
+  charset("Greek and Coptic",$0360,5);
+  charset("Cyrillic",$0400,8);
+  charset("Arabic",$0600,8);
+];
+
+[ charset title start lines i;
+
+  font off;
+  new_line;
+  print (string) title;
+  new_line;
+
+  for (i = 0: i < lines: i++)
+    charrow(start+(i*32));
+  font on;
+];
+
+[ charrow start i;
+
+  print (hex) start, " : ";
+  for (i = 0: i < 32: i++)
+    charout(start+i);
+  new_line;
+];
+
+[ charout c exist;
+
+  @"EXT:12S" c -> exist;
+  if (exist & 1)
+    @"EXT:11" c;
+  else
+    print (char) ' ';
+];
+
+[ hex x y;
+
+  y = (x & $7f00) / $100;
+  if (x < 0)
+    y = y + $80;
+  x = x & $ff;
+  print (hexdigit) y/$10, (hexdigit) y, (hexdigit) x/$10, (hexdigit) x;
+];
+
+[ hexdigit x;
+
+  x = x % $10;
+  switch (x)
+  {
+    0 to 9: print x;
+    10: print "a";
+    11: print "b";
+    12: print "c";
+    13: print "d";
+    14: print "e";
+    15: print "f";
+  }
+];
+

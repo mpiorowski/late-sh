@@ -47,11 +47,24 @@ use super::state::{
     visual_order_for_rooms,
 };
 use super::ui_text::{
-    AuthorTint, Gutter, is_nerd_font_glyph, reaction_label, without_nerd_font_glyphs,
-    wrap_chat_entry_to_lines,
+    AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
+    without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
 
-const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// The picker's choices in paint order: the key to press and the reaction
+/// kind it toggles.
+const REACTION_PICKER_CHOICES: [(&str, i16); 10] = [
+    ("1", 1),
+    ("2", 2),
+    ("3", 3),
+    ("4", 4),
+    ("5", 5),
+    ("6", 6),
+    ("7", 7),
+    ("8", 8),
+    ("9", 9),
+    ("w", WAVE_REACTION_KIND),
+];
 /// The gap between messages and composer: a blank breather row on top so the
 /// ticker doesn't read as one more chat line, then the ticker row itself
 /// hugging the composer. Two rows, always present, so the chrome never moves.
@@ -159,6 +172,10 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+    /// The board's all-day posts for today (`calendar::live::day_text`),
+    /// which take the #lounge topic row for the day. `None` elsewhere and
+    /// on any other day.
+    pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
@@ -202,10 +219,24 @@ pub(crate) struct ComposerBlockView<'a> {
     /// When true, Enter sends without closing the composer and Alt+S is a
     /// no-op. Drives the title-hint tier swap.
     pub keep_composer_focused: bool,
-    /// A composer that takes no keys: a Zen chat tile that is not the
-    /// focused one keeps its strip so the rows never jump, but `i`, `j`,
-    /// and `k` act on the focused tile, so it must not advertise them.
-    pub inert: bool,
+    /// Whether the composer takes keys, and if not, what focuses it.
+    pub inert: ComposerInert,
+}
+
+/// A composer that takes no keys keeps its strip so the rows never jump,
+/// and its title and placeholder say what focuses it instead of naming keys
+/// that act elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerInert {
+    /// The composer takes keys (or is the screen's one composer).
+    No,
+    /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
+    /// the focused tile.
+    ZenTile,
+    /// The pane beside a player's own running roguelike: every key is the
+    /// game's until F2 or a click on the pane opens the composer
+    /// (`door/spectate`).
+    OwnWatchChat,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -247,8 +278,18 @@ fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
 }
 
 fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> String {
-    if view.inert {
-        return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+    match view.inert {
+        ComposerInert::ZenTile => {
+            return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
+        }
+        ComposerInert::OwnWatchChat => {
+            return pick_title_that_fits(
+                block_width,
+                &[" Compose (F2 or click) ", " (F2 or click) ", " F2 ", ""],
+            )
+            .to_string();
+        }
+        ComposerInert::No => {}
     }
     if !view.composing {
         return pick_title_that_fits(
@@ -373,23 +414,28 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     .to_string()
 }
 
-fn reaction_picker_choice_width(key: i16) -> usize {
-    1 + 1 + reaction_label(key).width()
+fn reaction_picker_choice_width(key: &str, kind: i16) -> usize {
+    Span::raw(key).width() + 1 + Span::raw(reaction_label(kind)).width()
 }
 
 fn reaction_picker_custom_width() -> usize {
-    "0 icon".width()
+    Span::raw("0 icon").width()
 }
 
-fn push_reaction_picker_choice(reaction_spans: &mut Vec<Span<'static>>, dim: Style, key: i16) {
+fn push_reaction_picker_choice(
+    reaction_spans: &mut Vec<Span<'static>>,
+    dim: Style,
+    key: &'static str,
+    kind: i16,
+) {
     reaction_spans.push(Span::styled(
-        key.to_string(),
+        key,
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ));
     reaction_spans.push(Span::styled(" ", dim));
-    reaction_spans.push(Span::styled(reaction_label(key), dim));
+    reaction_spans.push(Span::styled(reaction_label(kind), dim));
 }
 
 fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'static>> {
@@ -398,9 +444,9 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
     let mut current_spans = Vec::new();
     let mut current_width = 0usize;
 
-    for key in REACTION_PICKER_KEYS {
+    for (key, kind) in REACTION_PICKER_CHOICES {
         let separator_width = usize::from(!current_spans.is_empty()) * 2;
-        let choice_width = reaction_picker_choice_width(key);
+        let choice_width = reaction_picker_choice_width(key, kind);
         if !current_spans.is_empty()
             && current_width + separator_width + choice_width > available_width
         {
@@ -411,7 +457,7 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
             current_spans.push(Span::styled("  ", dim));
             current_width += 2;
         }
-        push_reaction_picker_choice(&mut current_spans, dim, key);
+        push_reaction_picker_choice(&mut current_spans, dim, key, kind);
         current_width += choice_width;
     }
 
@@ -456,11 +502,21 @@ fn reaction_picker_placeholder_lines(dim: Style, width: usize) -> Vec<Line<'stat
 fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Paragraph<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
 
-    if view.inert {
-        return Paragraph::new(Line::from(Span::styled(
-            "Tab or a click focuses this tile · i writes",
-            dim,
-        )));
+    match view.inert {
+        ComposerInert::ZenTile => {
+            return Paragraph::new(Line::from(Span::styled(
+                "Tab or a click focuses this tile · i writes",
+                dim,
+            )));
+        }
+        ComposerInert::OwnWatchChat => {
+            return Paragraph::new(Line::from(Span::styled(
+                // Fits the 40-column pane: 38 cells of text.
+                "F2 or click: write to your watchers",
+                dim,
+            )));
+        }
+        ComposerInert::No => {}
     }
 
     if view.composing {
@@ -1150,7 +1206,7 @@ pub fn draw_dashboard_chat_card(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
-                inert: false,
+                inert: ComposerInert::No,
             },
             composer_text_width,
         ));
@@ -1185,14 +1241,24 @@ pub fn draw_dashboard_chat_card(
                     .find(|stream| stream.room_id == room.id)
             }),
             voice,
-            // The live strip stands in for the topic while it is up: the
-            // board is the room's news, and the topic is a key away in
-            // `/rules`. Voice and stream rows carry live state, so they stay.
-            topic: view
-                .room
-                .and_then(room_topic)
-                .filter(|_| view.live_strip.is_none()),
-            has_rules: view.room.is_some_and(room_has_rules) && view.live_strip.is_none(),
+            // The live strip stands in for the topic row while it is up:
+            // the board is the room's news, and the topic is a key away in
+            // `/rules`. On a day the board has an all-day post, that post
+            // takes the row. Voice and stream rows carry live state, so
+            // they stay.
+            row: match (
+                &view.live_strip,
+                view.board_day.as_deref(),
+                view.room.and_then(room_topic),
+            ) {
+                (Some(_), _, _) => None,
+                (None, Some(day), _) => Some(TopicRow::BoardDay(day)),
+                (None, None, Some(text)) => Some(TopicRow::Topic {
+                    text,
+                    has_rules: view.room.is_some_and(room_has_rules),
+                }),
+                (None, None, None) => None,
+            },
             closing_rule: view.live_strip.is_none(),
         },
     );
@@ -1302,7 +1368,7 @@ pub fn draw_dashboard_chat_card(
             mention_matches: view.mention_matches,
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
-            inert: false,
+            inert: ComposerInert::No,
         },
     );
     record_composer_mouse_target(
@@ -3268,10 +3334,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub highlighted_message_id: Option<Uuid>,
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
-    /// The composer strip is drawn but takes no keys: a Zen chat tile that
-    /// is not the focused one. It keeps its strip so the rows never jump
-    /// and says so instead of naming keys that act on the focused tile.
-    pub composer_inert: bool,
+    /// Whether the composer strip takes keys, and if not, what focuses it
+    /// (the strip stays either way, so the rows never jump).
+    pub composer_inert: ComposerInert,
     pub composing: bool,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
@@ -3350,12 +3415,15 @@ pub(crate) fn embedded_chat_layout(
     }
 }
 
+/// An embedded room chat: messages above, the composer block at the bottom.
+/// Returns the composer block's rect, for a surface that joins its own rules
+/// into the block's borders.
 pub fn draw_embedded_room_chat(
     frame: &mut Frame,
     area: Rect,
-    view: EmbeddedRoomChatView<'_>,
+    mut view: EmbeddedRoomChatView<'_>,
     terminal_images: &mut TerminalImageFrame,
-) {
+) -> Rect {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     let total_composer_lines = chat_composer_lines_for_height(view.composer, composer_text_width)
         .max(composer_placeholder_lines(
@@ -3377,6 +3445,61 @@ pub fn draw_embedded_room_chat(
         ));
     let composer_height = total_composer_lines.min(4) as u16 + 2;
     let (messages_area, composer_area) = split_chat_and_composer(area, composer_height);
+    draw_embedded_messages(frame, messages_area, &mut view, terminal_images);
+
+    draw_composer_block(
+        frame,
+        composer_area,
+        &ComposerBlockView {
+            composer: view.composer,
+            composing: view.composing,
+            selected_message: view.selected_message_id.is_some(),
+            selected_image_message: view.selected_image_message,
+            reaction_picker_active: view.reaction_picker_active,
+            reply_author: view.reply_author,
+            is_editing: view.is_editing,
+            mention_active: view.mention_active,
+            mention_matches: view.mention_matches,
+            mention_selected: view.mention_selected,
+            keep_composer_focused: view.keep_composer_focused,
+            inert: view.composer_inert,
+        },
+    );
+    record_composer_mouse_target(
+        view.composer,
+        composer_area,
+        view.composer_rect_slot,
+        view.composer_viewport_top_slot,
+    );
+    composer_area
+}
+
+/// An embedded room drawn to be read and nothing else: its messages fill
+/// `area`, and there is no composer, selection, overlay or click target.
+/// The door watch chat as the player being watched sees it
+/// (`app/door/spectate`): every key they press belongs to their game.
+pub fn draw_embedded_room_messages(
+    frame: &mut Frame,
+    area: Rect,
+    mut view: EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
+    view.overlay = None;
+    view.image_modal = None;
+    view.chat_hit_slot = None;
+    view.selected_message_id = None;
+    view.highlighted_message_id = None;
+    draw_embedded_messages(frame, area, &mut view, terminal_images);
+}
+
+/// The message half of an embedded room chat: the voice strip when the room
+/// has one, then the message rows, the overlay and the image modal.
+fn draw_embedded_messages(
+    frame: &mut Frame,
+    messages_area: Rect,
+    view: &mut EmbeddedRoomChatView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let layout = embedded_chat_layout(
         messages_area,
         view.messages_inset,
@@ -3468,31 +3591,6 @@ pub fn draw_embedded_room_chat(
     if let Some(image_modal) = view.image_modal {
         draw_image_modal(frame, messages_text_area, image_modal, terminal_images);
     }
-
-    draw_composer_block(
-        frame,
-        composer_area,
-        &ComposerBlockView {
-            composer: view.composer,
-            composing: view.composing,
-            selected_message: view.selected_message_id.is_some(),
-            selected_image_message: view.selected_image_message,
-            reaction_picker_active: view.reaction_picker_active,
-            reply_author: view.reply_author,
-            is_editing: view.is_editing,
-            mention_active: view.mention_active,
-            mention_matches: view.mention_matches,
-            mention_selected: view.mention_selected,
-            keep_composer_focused: view.keep_composer_focused,
-            inert: view.composer_inert,
-        },
-    );
-    record_composer_mouse_target(
-        view.composer,
-        composer_area,
-        view.composer_rect_slot,
-        view.composer_viewport_top_slot,
-    );
 }
 
 struct RoomListRows {
@@ -3588,7 +3686,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_matches: view.mention_matches,
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
-                        inert: false,
+                        inert: ComposerInert::No,
                     },
                     composer_text_width,
                 ),
@@ -5040,6 +5138,13 @@ fn dm_display_label(
     }
 }
 
+/// What the header's last row says: the room's topic, or on #lounge on a
+/// day the board has an all-day post, the board's day in the topic's place.
+enum TopicRow<'a> {
+    Topic { text: &'a str, has_rules: bool },
+    BoardDay(&'a str),
+}
+
 /// The header block above a room's messages: the voice row (when the room has a
 /// voice channel), a divider, then the topic row. Each row pairs live state on
 /// the left with the keys or commands that act on it flushed to the right edge,
@@ -5050,8 +5155,7 @@ struct RoomHeader<'a> {
     /// the room is otherwise missing the show).
     stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
-    topic: Option<&'a str>,
-    has_rules: bool,
+    row: Option<TopicRow<'a>>,
     /// Whether the block ends in a rule. False when the daily live strip
     /// follows: the strip brings its own rule under the board.
     closing_rule: bool,
@@ -5064,7 +5168,7 @@ impl RoomHeader<'_> {
     fn height(&self) -> u16 {
         let rows = u16::from(self.stream.is_some())
             + u16::from(self.voice.is_some())
-            + u16::from(self.topic.is_some());
+            + u16::from(self.row.is_some());
         if rows == 0 {
             return 0;
         }
@@ -5175,7 +5279,7 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if let Some(stream) = header.stream {
         lines.push(padded(stream_header_line(stream, width)));
     }
-    if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
+    if header.stream.is_some() && (header.voice.is_some() || header.row.is_some()) {
         lines.push(rule());
     }
     if let Some(voice) = &header.voice {
@@ -5183,29 +5287,53 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
             voice, width,
         )));
     }
-    if header.voice.is_some() && header.topic.is_some() {
+    if header.voice.is_some() && header.row.is_some() {
         lines.push(rule());
     }
-    if let Some(topic) = header.topic {
-        let hint = if header.has_rules {
-            vec![Span::styled(
-                "/rules",
-                Style::default().fg(theme::TEXT_FAINT()),
-            )]
-        } else {
-            Vec::new()
-        };
-        // The topic is clipped to whatever the hint leaves, so a long topic
-        // never pushes `/rules` off the row.
-        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
-        lines.push(padded(row_with_hint(
-            vec![Span::styled(
-                truncate_cells(topic, room_for_topic),
-                Style::default().fg(theme::TEXT_DIM()),
-            )],
-            hint,
-            width,
-        )));
+    match header.row {
+        Some(TopicRow::Topic { text, has_rules }) => {
+            let hint = if has_rules {
+                vec![Span::styled(
+                    "/rules",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                )]
+            } else {
+                Vec::new()
+            };
+            // The topic is clipped to whatever the hint leaves, so a long
+            // topic never pushes `/rules` off the row.
+            let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
+            lines.push(padded(row_with_hint(
+                vec![Span::styled(
+                    truncate_cells(text, room_for_topic),
+                    Style::default().fg(theme::TEXT_DIM()),
+                )],
+                hint,
+                width,
+            )));
+        }
+        // The board's day reads in amber, the board's colour, with the
+        // board's key where `/rules` would be, in the strip's key style.
+        Some(TopicRow::BoardDay(text)) => {
+            let hint = crate::app::live::ui::key_hint_spans(
+                width,
+                &[
+                    crate::app::live::ui::HintPart::Key("7"),
+                    crate::app::live::ui::HintPart::Text(" for the board"),
+                ],
+            );
+            lines.push(padded(row_with_hint(
+                vec![Span::styled(
+                    truncate_cells(text, width.saturating_sub(17)),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )],
+                hint,
+                width,
+            )));
+        }
+        None => {}
     }
     // Closes the block off from the conversation below it.
     if header.closing_rule {
@@ -5336,8 +5464,10 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     voice,
-                    topic: room_topic(room),
-                    has_rules: room_has_rules(room),
+                    row: room_topic(room).map(|text| TopicRow::Topic {
+                        text,
+                        has_rules: room_has_rules(room),
+                    }),
                     closing_rule: true,
                 },
             )
@@ -5650,7 +5780,7 @@ fn draw_selected_content(
                 mention_matches: view.mention_matches,
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
-                inert: false,
+                inert: ComposerInert::No,
             },
         );
         record_composer_mouse_target(

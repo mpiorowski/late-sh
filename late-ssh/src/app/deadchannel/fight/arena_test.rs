@@ -1,46 +1,68 @@
-use super::{Reading, publish, report, sweep};
-use crate::app::deadchannel::fight::data::{RULES, Rules};
+use super::{Reading, publish, report, runs, sweep};
+use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
 
 /// The candidates `make deadchannel-sweep` reads side by side. Edit this
 /// list for the question at hand; the first row is always the live game.
 const SWEEP: &[(&str, Rules)] = &[
     ("live", RULES),
     (
-        "prices 200%",
+        "riposte 125",
         Rules {
-            price_percent: 200,
+            riposte_percent: 125,
             ..RULES
         },
     ),
     (
-        "prices 250%",
+        "riposte 150",
         Rules {
-            price_percent: 250,
+            riposte_percent: 150,
             ..RULES
         },
     ),
     (
-        "patch 100%",
+        "siphon 65",
         Rules {
-            patch_percent: 100,
+            siphon_mend_percent: 65,
             ..RULES
         },
     ),
     (
-        "the old game: prices 100%, patch 100%",
+        "siphon 85",
         Rules {
-            price_percent: 100,
-            patch_percent: 100,
+            siphon_mend_percent: 85,
+            ..RULES
+        },
+    ),
+    (
+        "boss 35",
+        Rules {
+            old_signal: boss(290, 35),
             ..RULES
         },
     ),
 ];
+
+/// The Old Signal with `signal` and `attack`, its defense the live one.
+const fn boss(signal: i32, attack: u32) -> FoeTier {
+    FoeTier {
+        signal,
+        attack,
+        ..RULES.old_signal
+    }
+}
 
 /// Every table for the live rules. `make deadchannel-arena`.
 #[test]
 #[ignore = "the report: run it with make deadchannel-arena"]
 fn arena_report() {
     publish("deadchannel-arena.md", &report(RULES));
+}
+
+/// Whole runs, start to finish, for the live rules. `make deadchannel-run`.
+#[test]
+#[ignore = "the printed runs: run it with make deadchannel-run"]
+fn arena_run() {
+    publish("deadchannel-run.md", &runs(RULES));
 }
 
 /// One reading per candidate in [`SWEEP`]. `make deadchannel-sweep`.

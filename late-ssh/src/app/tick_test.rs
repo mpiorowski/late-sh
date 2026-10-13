@@ -284,6 +284,65 @@ async fn zen_equalizer_tiles_hold_the_half_rate_tier() {
     );
 }
 
+/// The default screensaver is the slow piece: it rides the idle floor and
+/// its 1Hz edge, so an away session under it wakes no faster than an idle
+/// one, and a pointer move over it opens no hot window.
+#[tokio::test]
+async fn the_default_screensaver_rides_the_idle_floor() {
+    use crate::app::common::away::AWAY_AFTER;
+    let (_test_db, mut app) = chat_compose_app("tick-slow-saver").await;
+    app.set_screen(Screen::Dashboard);
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert!(app.screensaver().is_some(), "the default is on");
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.wake_hint(), IDLE_TICK);
+    app.last_one_hz_index = None;
+    assert!(app.tick(), "a 1Hz edge is a new frame of the piece");
+}
+
+/// A lively screensaver plays on the half edge and holds that tier however
+/// much else would wake faster: the hot window a pointer move over the
+/// screensaver opens.
+#[tokio::test]
+async fn the_screensaver_holds_the_half_tier() {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
+    let (_test_db, mut app) = chat_compose_app("tick-saver").await;
+    app.set_screen(Screen::Dashboard);
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Piece(AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Dots,
+    }));
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    assert!(app.screensaver().is_some(), "the chosen piece is up");
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.wake_hint(), ANIM_HALF_TICK);
+    set_marquee_transition(&mut app, 400, 402);
+    assert!(app.tick(), "a half edge is a new frame of the piece");
+}
+
+/// The same lively scene in pixels is several times the bytes a frame, so
+/// it plays on the quarter edge and holds that tier instead.
+#[tokio::test]
+async fn a_pixel_screensaver_holds_the_quarter_tier() {
+    use crate::app::common::away::AWAY_AFTER;
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
+    let (_test_db, mut app) = chat_compose_app("tick-pixel-saver").await;
+    app.set_screen(Screen::Dashboard);
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Piece(AsciiPiece {
+        scene: Scene::AlpineDawn,
+        style: SceneStyle::Pixels,
+    }));
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    app.handle_input(b"\x1b[<35;20;5M");
+    assert_eq!(app.wake_hint(), ANIM_QUARTER_TICK);
+    set_marquee_transition(&mut app, 403, 404);
+    assert!(app.tick(), "a quarter edge is a new frame of the piece");
+}
+
 /// Make the next `tick` observe an exact wall-clock frame transition. Both
 /// values remain forward of the app's natural startup phase; the small offset
 /// leaves enough room that the call cannot cross into the following frame.
@@ -335,7 +394,7 @@ async fn going_away_and_coming_back_ride_the_one_hz_edge() {
     assert!(app.away_user_ids.is_empty(), "a fresh session is here");
     let epoch = app.chat_ctx_epoch;
 
-    app.last_input_at = Instant::now() - AWAY_AFTER;
+    app.last_active_at = Instant::now() - AWAY_AFTER;
     app.last_one_hz_index = None;
     assert!(app.tick(), "going away repaints the badge");
     assert!(roster_says_away(), "the edge writes the flag to the roster");
@@ -353,7 +412,7 @@ async fn going_away_and_coming_back_ride_the_one_hz_edge() {
         "an unchanged away set must not invalidate chat rows every second"
     );
 
-    app.last_input_at = Instant::now();
+    app.last_active_at = Instant::now();
     app.last_one_hz_index = None;
     app.tick();
     assert!(!roster_says_away(), "input brings the session back");
@@ -388,4 +447,60 @@ async fn attention_follows_the_profiles_shelf() {
 
     app.set_screen(Screen::Arcade);
     assert_eq!(app.attention_place(), Place::Whole, "the lobby is no board");
+}
+
+#[tokio::test]
+async fn randomer_screensaver_rotation_updates_the_wake_tier_without_input() {
+    use crate::app::ascii::{
+        piece::{Cadence, cadence},
+        playback::Playback,
+    };
+    use late_core::models::user::{AsciiSelection, Screensaver};
+    use rand::{SeedableRng, rngs::StdRng};
+    let (_db, mut app) = chat_compose_app("randomer-cadence").await;
+    app.set_screen(Screen::Dashboard);
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Randomer);
+    app.sent_away = true;
+    app.sync_away();
+    let mut rng = StdRng::seed_from_u64(15);
+    // Make one rotation due on the next tick without sleeping five minutes.
+    app.screensaver_playback = None;
+    Playback::sync(
+        &mut app.screensaver_playback,
+        Some(AsciiSelection::Randomer),
+        Instant::now() - Duration::from_secs(301),
+        &mut rng,
+    );
+    let previous = app.screensaver().unwrap();
+    app.last_one_hz_index = None;
+    assert!(app.tick());
+    let piece = app.screensaver().unwrap();
+    assert_ne!(piece.scene, previous.scene);
+    let tier = match cadence(piece) {
+        Cadence::Half => ANIM_HALF_TICK,
+        Cadence::Quarter => ANIM_QUARTER_TICK,
+        Cadence::Slow { .. } => IDLE_TICK,
+    };
+    assert_eq!(app.wake_hint(), tier);
+    assert!(!app.zen_layout_dirty);
+    assert_eq!(
+        app.profile_state.profile.screensaver,
+        Screensaver::On(AsciiSelection::Randomer)
+    );
+}
+
+#[tokio::test]
+async fn attention_follows_the_calendar_screen() {
+    use crate::metrics::Place;
+
+    let (_test_db, mut app) = chat_compose_app("tick-calendar-place").await;
+    app.set_screen(Screen::Calendars);
+    app.last_one_hz_index = None;
+    app.tick();
+    assert_eq!(app.attention_spot, Some((Screen::Calendars, Place::Whole)));
+
+    app.set_screen(Screen::Arcade);
+    app.last_one_hz_index = None;
+    app.tick();
+    assert_eq!(app.attention_spot, Some((Screen::Arcade, Place::Whole)));
 }

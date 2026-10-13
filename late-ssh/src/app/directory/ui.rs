@@ -1,12 +1,16 @@
+use super::{
+    input::FocusedItem,
+    mouse::{Pane, Target},
+};
+use crate::app::common::mouse_ui::{self, Surface};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
     chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem},
@@ -71,10 +75,25 @@ pub(crate) struct DirectoryPageView<'a> {
     pub(crate) work_marker: Option<DateTime<Utc>>,
     pub(crate) showcase_marker: Option<DateTime<Utc>>,
     pub(crate) current_user_id: uuid::Uuid,
+    pub(crate) can_moderate: bool,
+    pub(crate) can_retract_jobs: bool,
     pub(crate) profile_base_url: &'a str,
 }
 
 pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
+    let size = frame.area();
+    view.directory.mouse.begin((size.width, size.height));
+    view.jobs.mouse.begin((size.width, size.height));
+    draw_page(
+        &mut Surface {
+            buffer: frame.buffer_mut(),
+        },
+        area,
+        view,
+    );
+}
+
+fn draw_page(frame: &mut Surface<'_>, area: Rect, view: DirectoryPageView<'_>) {
     let narrow = area.width < STACK_BELOW_WIDTH;
     view.directory.set_narrow(narrow);
     view.jobs.set_narrow(narrow);
@@ -82,8 +101,23 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
     let own_tags = own_viewer_tags(&view);
 
     let search_height = if view.directory.search_mode() { 3 } else { 0 };
-    let [strip, search, body, footer] = Layout::vertical([
+    let mut actions = vec![
+        ("[Your profile]", Target::Key(b'w')),
+        ("[Add project]", Target::Key(b'i')),
+    ];
+    match view.directory.shelf() {
+        Shelf::People => actions.extend([
+            ("[Search]", Target::Key(b's')),
+            ("[Mine]", Target::Key(b'/')),
+        ]),
+        Shelf::Jobs => actions.extend([
+            ("[For me]", Target::Key(b'/')),
+            ("[Post job]", Target::Key(b'n')),
+        ]),
+    }
+    let [strip, controls, search, body, footer] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(mouse_ui::buttons_height(area.width, &actions)),
         Constraint::Length(search_height),
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -103,6 +137,7 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
         .min(entries.len().saturating_sub(1));
 
     draw_shelf_strip(frame, strip, &view, entries.len(), &own_tags);
+    mouse_ui::buttons(frame, controls, &view.directory.mouse, &actions);
     if view.directory.search_mode() {
         draw_search_box(frame, search, view.directory.search_query());
     }
@@ -114,6 +149,8 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
                 viewer_tags: &own_tags,
                 narrow,
                 short,
+                can_moderate: view.can_retract_jobs,
+                current_user_id: view.current_user_id,
             };
             draw_jobs_shelf(frame, body, &shelf);
             let line = row_with_hint(
@@ -151,6 +188,8 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
             frame.render_widget(Paragraph::new(line), footer);
         }
     }
+    view.directory.mouse.finish();
+    view.jobs.mouse.finish();
 }
 
 /// The viewer's match tags: their own card's normalized skills plus their
@@ -167,7 +206,7 @@ fn own_viewer_tags(view: &DirectoryPageView<'_>) -> Vec<String> {
 /// `people 12 · jobs 31`, the active shelf bright, with the search named
 /// on the right while it is open.
 fn draw_shelf_strip(
-    frame: &mut Frame,
+    frame: &mut Surface<'_>,
     area: Rect,
     view: &DirectoryPageView<'_>,
     people: usize,
@@ -213,14 +252,42 @@ fn draw_shelf_strip(
     } else {
         Vec::new()
     };
+    let people_width = Span::raw(format!("people {people}")).width() as u16;
+    view.directory.mouse.hit(
+        Rect::new(
+            area.x + 1,
+            area.y,
+            people_width.min(area.width.saturating_sub(1)),
+            area.height.min(1),
+        ),
+        Target::Shelf(Shelf::People),
+    );
+    let jobs_x = area.x.saturating_add(1 + people_width + 5);
+    if jobs_x < area.right() {
+        view.directory.mouse.hit(
+            Rect::new(
+                jobs_x,
+                area.y,
+                (Span::raw(format!(
+                    "jobs{}",
+                    shelf_count(view.jobs, own_tags)
+                        .map_or(String::new(), |count| format!(" {count}"))
+                ))
+                .width() as u16)
+                    .min(area.right() - jobs_x),
+                area.height.min(1),
+            ),
+            Target::Shelf(Shelf::Jobs),
+        );
+    }
     frame.render_widget(
         Paragraph::new(row_with_hint(spans, right, area.width as usize)),
         area,
     );
 }
 
-fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
-    if area.height == 0 {
+fn draw_search_box(frame: &mut Surface<'_>, area: Rect, query: &str) {
+    if area.is_empty() {
         return;
     }
     let block = Block::default()
@@ -239,7 +306,7 @@ fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
 }
 
 fn draw_people_list(
-    frame: &mut Frame,
+    frame: &mut Surface<'_>,
     area: Rect,
     view: &DirectoryPageView<'_>,
     entries: &[PersonEntry<'_>],
@@ -272,37 +339,52 @@ fn draw_people_list(
         return;
     }
 
-    // Three content lines plus the rule under each row; two when short.
     let item_height: u16 = if short { 3 } else { 4 };
-    let visible_items = ((area.height / item_height).max(1)) as usize;
-    let start_index = selected.saturating_sub(visible_items.saturating_sub(1));
-    let end_index = (start_index + visible_items).min(entries.len());
-    let visible_len = end_index.saturating_sub(start_index);
-
-    let constraints =
-        std::iter::repeat_n(Constraint::Length(item_height), visible_len).collect::<Vec<_>>();
-    let rows = Layout::vertical(constraints).split(area);
-
-    for (row, row_area) in rows.iter().copied().enumerate() {
-        let entry_idx = start_index + row;
-        let entry = &entries[entry_idx];
-        let is_selected = entry_idx == selected;
-        let block = Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(theme::BORDER_DIM()))
-            .style(theme::row_style(is_selected));
-        let content = block.inner(row_area);
-        frame.render_widget(block, row_area);
-
-        let person = person_row(
-            entry,
-            view.current_user_id,
-            view.work_marker,
-            view.showcase_marker,
-        );
-        let lines = person_row_lines(&person, is_selected, short, content.width as usize);
-        frame.render_widget(Paragraph::new(lines), content);
-    }
+    let focus = selected * usize::from(item_height);
+    mouse_ui::scroll(
+        frame,
+        area,
+        &view.directory.mouse,
+        Pane::PeopleList,
+        entries.len() * usize::from(item_height),
+        focus..focus + usize::from(item_height),
+        |frame, content, window| {
+            for (index, entry) in entries.iter().enumerate() {
+                let y = (index * usize::from(item_height)) as u16;
+                if y >= window.bottom() {
+                    break;
+                }
+                let row_area = Rect::new(0, y, content.width, item_height.min(content.height - y));
+                if row_area.bottom() <= window.y {
+                    continue;
+                }
+                let block = Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::default().fg(theme::BORDER_DIM()))
+                    .style(theme::row_style(index == selected));
+                let content = block.inner(row_area);
+                frame.render_widget(block, row_area);
+                let person = person_row(
+                    entry,
+                    view.current_user_id,
+                    view.work_marker,
+                    view.showcase_marker,
+                );
+                frame.render_widget(
+                    Paragraph::new(person_row_lines(
+                        &person,
+                        index == selected,
+                        short,
+                        content.width as usize,
+                    )),
+                    content,
+                );
+                view.directory
+                    .mouse
+                    .hit(content, Target::Person(entry.user_id));
+            }
+        },
+    );
 }
 
 /// Line 1: name, status (or project count without a card), age at the
@@ -372,7 +454,7 @@ fn person_row_lines(
         Span::styled(
             truncate_to_width(
                 &person.second,
-                width.saturating_sub(1 + second_prefix.width()),
+                width.saturating_sub(1 + Span::raw(second_prefix).width()),
             ),
             second_style,
         ),
@@ -388,7 +470,7 @@ fn person_row_lines(
             Vec::new()
         };
         // The count keeps its place: the tags give way to it.
-        let right_width: usize = right.iter().map(|span| span.content.width()).sum();
+        let right_width: usize = right.iter().map(|span| span.width()).sum();
         // `row_with_hint` wants two cells of air before the right side.
         let tags_budget = if right_width > 0 {
             width.saturating_sub(1 + right_width + 2)
@@ -418,7 +500,7 @@ fn project_count_label(count: usize) -> String {
 /// late.fetch last. The `h`/`l` focus cursor paints a `▸`
 /// on the focused section; Enter/e/d act on it.
 fn draw_person_detail(
-    frame: &mut Frame,
+    frame: &mut Surface<'_>,
     area: Rect,
     view: &DirectoryPageView<'_>,
     entry: Option<&PersonEntry<'_>>,
@@ -443,7 +525,7 @@ fn draw_person_detail(
         return;
     };
 
-    let width = inner.width as usize;
+    let width = inner.width.saturating_sub(1) as usize;
     let focus = view
         .directory
         .focus()
@@ -458,6 +540,8 @@ fn draw_person_detail(
     let body = Style::default().fg(theme::TEXT());
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut targets = Vec::new();
+    let mut focus_line = 0;
 
     // Header: who, how open, what kind, where; how fresh at the right.
     let mut header: Vec<Span<'static>> = vec![Span::styled(
@@ -487,11 +571,20 @@ fn draw_person_detail(
         format!("active {}", format_relative_time(entry.latest_activity())),
         faint,
     )];
+    targets.push((
+        lines.len(),
+        Target::Profile(entry.user_id, entry.username.to_string()),
+    ));
     lines.push(row_with_hint(header, age, width));
     lines.push(Line::from(""));
 
     if let Some(item) = entry.work {
         let p = &item.profile;
+        let item = FocusedItem::Card(p.id);
+        targets.push((lines.len(), Target::Item(item, 0)));
+        if card_focused {
+            focus_line = lines.len();
+        }
         lines.push(section_heading("card", card_focused));
         lines.push(Line::from(Span::styled(
             p.headline.clone(),
@@ -518,6 +611,7 @@ fn draw_person_detail(
         }
         for (idx, link) in p.links.iter().enumerate() {
             let label = if idx == 0 { "links    " } else { "         " };
+            targets.push((lines.len(), Target::Copy(link.clone())));
             lines.push(Line::from(vec![
                 Span::styled(label, faint),
                 Span::styled(display_link(link), Style::default().fg(theme::AMBER_DIM())),
@@ -529,6 +623,13 @@ fn draw_person_detail(
                 Span::styled(p.contact.trim().to_string(), body),
             ]));
         }
+        targets.push((
+            lines.len(),
+            Target::Copy(super::super::chat::work::state::profile_url(
+                view.profile_base_url,
+                &p.slug,
+            )),
+        ));
         lines.push(Line::from(vec![
             Span::styled("page     ", faint),
             Span::styled(
@@ -559,7 +660,16 @@ fn draw_person_detail(
         lines.push(section_heading("projects", false));
         for item in &entry.projects {
             let focused = focused_project == Some(item.showcase.id);
-            lines.extend(project_lines(item, focused));
+            if focused {
+                focus_line = lines.len();
+            }
+            targets.push((
+                lines.len(),
+                Target::Item(FocusedItem::Project(item.showcase.id), 0),
+            ));
+            let project = project_lines(item, focused);
+            targets.push((lines.len() + 1, Target::Copy(item.showcase.url.clone())));
+            lines.extend(project);
         }
         lines.push(Line::from(""));
     }
@@ -573,6 +683,9 @@ fn draw_person_detail(
     {
         let found = matches(&view.jobs.items, own_tags, FOR_YOU_LIMIT);
         lines.push(section_heading("for you", false));
+        for (index, job) in found.iter().enumerate() {
+            targets.push((lines.len() + index, Target::Job(job.id)));
+        }
         lines.extend(for_you_lines(&found, width));
         lines.push(Line::from(""));
     }
@@ -581,7 +694,65 @@ fn draw_person_detail(
         lines.extend(late_fetch_lines(author_profile, width));
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    let selection = entry.focus_target(focus).map(|item| match item {
+        PersonFocus::Card(item) => FocusedItem::Card(item.profile.id),
+        PersonFocus::Project(item) => FocusedItem::Project(item.showcase.id),
+    });
+    let mut actions = vec![(
+        "[Profile]",
+        Target::Profile(entry.user_id, entry.username.to_string()),
+    )];
+    if view.directory.narrow() {
+        actions.insert(0, ("[Back]", Target::Back));
+    }
+    if let Some(item) = selection {
+        actions.push(("[Copy]", Target::Item(item, b'c')));
+        if entry.user_id == view.current_user_id || view.can_moderate {
+            actions.extend([
+                ("[Edit]", Target::Item(item, b'e')),
+                ("[Delete]", Target::Item(item, b'd')),
+            ]);
+        }
+    }
+    let [controls, viewport] = Layout::vertical([
+        Constraint::Length(mouse_ui::buttons_height(inner.width, &actions)),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+    mouse_ui::buttons(frame, controls, &view.directory.mouse, &actions);
+    let lines: Vec<_> = lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            (
+                line,
+                targets
+                    .iter()
+                    .find(|(i, _)| *i == index)
+                    .map(|(_, target)| target.clone()),
+            )
+        })
+        .collect();
+    let row_of = |index: usize| {
+        lines
+            .iter()
+            .take(index)
+            .map(|(line, _)| mouse_ui::line_height(line, viewport.width.saturating_sub(1)))
+            .sum::<usize>()
+    };
+    let rows = row_of(lines.len());
+    let focus = row_of(focus_line);
+    mouse_ui::scroll(
+        frame,
+        viewport,
+        &view.directory.mouse,
+        Pane::PeopleDetail,
+        rows,
+        focus..focus + 1,
+        |frame, content, window| {
+            mouse_ui::lines(frame, content, window, &view.directory.mouse, &lines)
+        },
+    );
 }
 
 /// One project: `▸ title  age`, tags, and the description (whole when
@@ -605,14 +776,14 @@ fn project_lines(item: &ShowcaseFeedItem, focused: bool) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  {}", display_link(&s.url)),
-            Style::default().fg(theme::AMBER_DIM()),
-        ),
-        Span::styled(
             format!("  {}", format_relative_time(s.created)),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])];
+    lines.push(Line::from(Span::styled(
+        format!("  {}", display_link(&s.url)),
+        Style::default().fg(theme::AMBER_DIM()),
+    )));
     let paragraphs: Vec<&str> = s
         .description
         .lines()
@@ -758,7 +929,7 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
-    if UnicodeWidthStr::width(text) <= width {
+    if Span::raw(text).width() <= width {
         return text.to_string();
     }
     if width == 1 {
@@ -768,7 +939,7 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut used = 0usize;
     for ch in text.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        let cw = Span::raw(ch.to_string()).width();
         if used + cw > budget {
             break;
         }

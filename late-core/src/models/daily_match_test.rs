@@ -92,3 +92,42 @@ async fn only_a_write_that_changes_a_row_notifies() {
         .expect("post a challenge");
     assert_eq!(next_channel().await, DAILY_MATCH_CHANGED_CHANNEL);
 }
+
+/// The lobby lists what just went up at the top: newest challenge first.
+#[tokio::test]
+async fn open_challenges_list_newest_first() {
+    use crate::models::daily_match::DailyMatch;
+    use crate::test_utils::{create_test_user, test_db};
+
+    let test_db = test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-open-order").await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut posted = Vec::new();
+    for game in ["chess", "gin", "8ball"] {
+        posted.push(
+            DailyMatch::create_challenge(&client, game, challenger.id)
+                .await
+                .expect("create challenge"),
+        );
+    }
+    // Stamp them an hour apart, oldest first, so the order does not hang on
+    // statement timing.
+    for (hours_ago, challenge) in [(3i32, &posted[0]), (2, &posted[1]), (1, &posted[2])] {
+        client
+            .execute(
+                "UPDATE daily_matches SET created = now() - make_interval(hours => $1) WHERE id = $2",
+                &[&hours_ago, &challenge.id],
+            )
+            .await
+            .expect("stamp created");
+    }
+
+    let listed: Vec<_> = DailyMatch::list_open(&client)
+        .await
+        .expect("list open")
+        .into_iter()
+        .map(|challenge| challenge.id)
+        .collect();
+    assert_eq!(listed, vec![posted[2].id, posted[1].id, posted[0].id]);
+}

@@ -135,10 +135,15 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `t` at the bar) run an ungrounded, schema-enforced JSON decision in `ai/ghost.rs`
   (`pour`/`offer`/`chat`): the prompt carries the patron's live balance and
   spendable amount (balance minus the 100-chip floor), the model prices the
-  drink 100-1000 chips, and the server refuses any out-of-range or unaffordable
+  intoxicating drink 100-1000 chips and non-intoxicating drinks at 50 chips.
+  The response explicitly classifies `intoxicating`; non-intoxicating paid
+  and comped pours increment the drink count without changing stored buzz or
+  its decay timestamp. The server pins a non-intoxicating pour to
+  `SOFT_DRINK_PRICE` and refuses any out-of-range or unaffordable
   price (served uncharged, so the debit always matches the quoted line),
   floor-guards, and debits via
-  `ChipService::buy_drink` (atomic with the `user_drinks` buzz upsert;
+  `ChipService::buy_drink` (atomic with the `user_drinks` upsert and the
+  `drink_pours` history row; non-intoxicating drinks log zero buzz points;
   ledger reason `drink_purchase`, source_ref = drink name). Unaffordable or
   chatty mentions charge nothing. A gift phrase naming one person
   (`@bartender buy @user a drink`, `one for @user`, `@user's next one is on
@@ -159,6 +164,10 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `VisitMusic` (still on Home) -> `VisitArcade` -> `VisitLobby` (still on
   The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitDungeon` (still on Games) -> `VisitArtboard` -> `VisitDirectory` ->
   `VisitLeaderboard` -> `VisitZen` -> `Homecoming` (back in the tavern).
+- At `VisitArtboard`, the stop lands behind the content disclaimer: the page
+  stays bare and the tour box offers `S` (show the art for this visit) or
+  Enter (skip to Profiles). The standalone disclaimer dialog never draws in
+  the tour, the gate keeps every other key, and no choice saves a preference.
   `State::tutorial_advance` is the only thing that moves the stage; it
   returns a `TourMove` telling the gate where the next stop lives.
   `Homecoming`'s Enter finishes the tour in place and frees input.

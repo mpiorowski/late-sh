@@ -313,8 +313,12 @@ fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) {
     };
     let state = &mut app.settings_modal_state;
     match mouse.kind {
-        MouseEventKind::ScrollUp => state.mouse.scroll(x, y, -3, app.size),
-        MouseEventKind::ScrollDown => state.mouse.scroll(x, y, 3, app.size),
+        MouseEventKind::ScrollUp => {
+            state.mouse.scroll(x, y, -3, app.size);
+        }
+        MouseEventKind::ScrollDown => {
+            state.mouse.scroll(x, y, 3, app.size);
+        }
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             let Some(target) = state.mouse.target(x, y, app.size) else {
                 return;
@@ -863,6 +867,7 @@ fn toggle_tweak(app: &mut App) {
         return;
     }
     app.settings_modal_state.toggle_selected_tweak();
+    sync_artboard_disclaimer(app);
     app.sync_device_rails_from_settings();
 }
 
@@ -879,7 +884,19 @@ fn cycle_tweak(app: &mut App, forward: bool) {
         return;
     }
     app.settings_modal_state.cycle_selected_tweak(forward);
+    sync_artboard_disclaimer(app);
     app.sync_device_rails_from_settings();
+}
+
+fn sync_artboard_disclaimer(app: &mut App) {
+    if app.settings_modal_state.selected_tweak_row() == TweakRow::ArtboardDisclaimer {
+        let enabled = app.settings_modal_state.draft().artboard_disclaimer;
+        app.profile_state.profile.artboard_disclaimer = enabled;
+        if enabled {
+            app.artboard_content_accepted = false;
+            app.deactivate_artboard_interaction();
+        }
+    }
 }
 
 /// If the Input row is selected, cycle the interaction mode on the app (which

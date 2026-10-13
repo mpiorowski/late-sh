@@ -97,18 +97,29 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
         );
     }
 
-    let footer = Line::from(vec![
-        Span::styled(" j/k/wheel", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" scroll  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("Esc/q", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("/paper", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(
-            " reopens it any time",
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+    let key = Style::default().fg(theme::AMBER_DIM());
+    let hint = Style::default().fg(theme::TEXT_DIM());
+    let mut footer = vec![Span::styled(" j/k", key), Span::styled(" scroll  ", hint)];
+    // Each way is offered only when a printed edition lies that way.
+    if let Some(earlier) = modal.neighbors.earlier {
+        footer.push(Span::styled("←", key));
+        footer.push(Span::styled(
+            format!(" {}  ", earlier.format("%b %-d")),
+            hint,
+        ));
+    }
+    if let Some(later) = modal.neighbors.later {
+        footer.push(Span::styled(format!("{} ", later.format("%b %-d")), hint));
+        footer.push(Span::styled("→", key));
+        footer.push(Span::styled("  ", hint));
+    }
+    footer.extend([
+        Span::styled("Esc", key),
+        Span::styled(" close  ", hint),
+        Span::styled("/paper", key),
+        Span::styled(" reopens it", hint),
     ]);
-    frame.render_widget(Paragraph::new(footer).centered(), layout[2]);
+    frame.render_widget(Paragraph::new(Line::from(footer)).centered(), layout[2]);
 }
 
 /// The palette, read here and nowhere earlier: `theme`'s thread local

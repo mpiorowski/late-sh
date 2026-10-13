@@ -28,6 +28,7 @@ pub(crate) struct JobsState {
     pub(crate) loaded: bool,
     /// `/` on the shelf: only postings that match the viewer's tags.
     pub(crate) for_me: bool,
+    pub(crate) mouse: crate::app::directory::mouse::MouseState,
     selected: usize,
     /// Under the stacked layout the detail pane opens over the list.
     detail_open: bool,
@@ -48,10 +49,27 @@ impl JobsState {
             loaded: false,
             for_me: false,
             selected: 0,
+            mouse: Default::default(),
             detail_open: false,
             narrow: Cell::new(false),
             post: PostForm::default(),
         }
+    }
+
+    /// The postings behind the rows moved: what the last frame recorded
+    /// may name rows that are no longer where they were.
+    pub(crate) fn feed_changed(&self) {
+        self.mouse.invalidate();
+    }
+
+    pub(crate) fn select_and_open(&mut self, index: usize) {
+        if self.selected != index {
+            self.mouse
+                .reset_pane(crate::app::directory::mouse::Pane::JobsDetail);
+        }
+        self.selected = index;
+        self.detail_open = true;
+        self.mouse.invalidate();
     }
 
     pub(crate) fn selected(&self) -> usize {
@@ -64,7 +82,13 @@ impl JobsState {
             return;
         }
         let clamped = self.selected.min(len - 1) as isize;
-        self.selected = (clamped + delta).clamp(0, len as isize - 1) as usize;
+        let next = (clamped + delta).clamp(0, len as isize - 1) as usize;
+        if next != self.selected {
+            self.mouse
+                .reset_pane(crate::app::directory::mouse::Pane::JobsDetail);
+        }
+        self.selected = next;
+        self.mouse.reveal_selection();
     }
 
     pub(crate) fn clamp_selection(&mut self, len: usize) {
@@ -76,6 +100,10 @@ impl JobsState {
     }
 
     pub(crate) fn toggle_for_me(&mut self) {
+        self.mouse
+            .reset_pane(crate::app::directory::mouse::Pane::JobsList);
+        self.mouse
+            .reset_pane(crate::app::directory::mouse::Pane::JobsDetail);
         self.for_me = !self.for_me;
         self.selected = 0;
     }
@@ -93,10 +121,12 @@ impl JobsState {
     }
 
     pub(crate) fn open_detail(&mut self) {
+        self.mouse.invalidate();
         self.detail_open = true;
     }
 
     pub(crate) fn close_detail(&mut self) {
+        self.mouse.invalidate();
         self.detail_open = false;
     }
 

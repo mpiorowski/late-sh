@@ -433,6 +433,22 @@ pub async fn roll_high_scores_back_a_month(client: &tokio_postgres::Client, tabl
     assert!(updated > 0, "roll_high_scores_back_a_month matched no rows");
 }
 
+/// Test-only clock control: move every score event back one UTC month, as if
+/// those runs finished last month.
+pub async fn roll_score_events_back_a_month(client: &tokio_postgres::Client) {
+    let updated = client
+        .execute(
+            "UPDATE game_score_events SET created_at = created_at - INTERVAL '1 month'",
+            &[],
+        )
+        .await
+        .expect("roll score events back a month");
+    assert!(
+        updated > 0,
+        "roll_score_events_back_a_month matched no rows"
+    );
+}
+
 /// Test-only clock control: push matching rows' `created` one second past
 /// `now()`, so `created > <cursor taken now>` comparisons are decisive
 /// instead of racing the clock's microsecond resolution. Tests must not

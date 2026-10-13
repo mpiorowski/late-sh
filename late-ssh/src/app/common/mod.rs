@@ -5,6 +5,7 @@ pub mod markdown;
 pub(crate) mod marquee;
 pub(crate) mod mentions;
 pub(crate) mod mouse;
+pub(crate) mod mouse_ui;
 pub mod overlay;
 pub mod primitives;
 pub mod qr;

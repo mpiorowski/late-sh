@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::authz::Permissions;
 use crate::moderation::command::{
-    ArtboardAction, AudioAction, RoleAction, RoomModAction, ServerUserAction,
+    ArtboardAction, AudioAction, CalendarAction, RoleAction, RoomModAction, ServerUserAction,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +79,14 @@ pub enum ModerationEvent {
         actor_user_id: Uuid,
         target_user_id: Uuid,
         action: AudioAction,
+        banned: bool,
+        expires_at: Option<DateTime<Utc>>,
+        reason: String,
+    },
+    CalendarAction {
+        actor_user_id: Uuid,
+        target_user_id: Uuid,
+        action: CalendarAction,
         banned: bool,
         expires_at: Option<DateTime<Utc>>,
         reason: String,

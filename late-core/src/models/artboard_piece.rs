@@ -34,8 +34,6 @@ use serde_json::Value;
 use tokio_postgres::{Row, error::SqlState};
 use uuid::Uuid;
 
-use super::artboard_piece_rating::ContentRatingSummary;
-
 /// Fewest non-blank glyphs a frame may hold. A smiley is not a piece.
 pub const PIECE_MIN_GLYPHS: usize = 40;
 /// Largest frame, in cells. Every piece fits a terminal, which is what makes
@@ -75,7 +73,6 @@ pub struct ArtboardPiece {
     pub period_month: NaiveDate,
     pub applause: i64,
     pub applauded_by_viewer: bool,
-    pub content_rating: ContentRatingSummary,
 }
 
 impl From<Row> for ArtboardPiece {
@@ -95,7 +92,6 @@ impl From<Row> for ArtboardPiece {
             period_month: row.get("period_month"),
             applause: row.get("applause"),
             applauded_by_viewer: row.get("applauded_by_viewer"),
-            content_rating: ContentRatingSummary::from_row(&row),
         }
     }
 }
@@ -232,14 +228,9 @@ const PIECE_VIEW_SQL: &str =
             EXISTS (
                 SELECT 1 FROM artboard_piece_votes v
                 WHERE v.piece_id = p.id AND v.user_id = $1
-            ) AS applauded_by_viewer,
-            r.owner_marked_nsfw, r.sfw_votes, r.nsfw_votes, r.mod_sfw, r.mod_nsfw,
-            r.admin_sfw, r.admin_nsfw,
-            (SELECT nsfw FROM artboard_piece_content_votes
-             WHERE piece_id = p.id AND user_id = $1) AS viewer_content_vote
+            ) AS applauded_by_viewer
      FROM (SELECT * FROM artboard_pieces WHERE removed_at IS NULL) p
-     JOIN users u ON u.id = p.user_id
-     JOIN artboard_piece_content_ratings r ON r.piece_id = p.id";
+     JOIN users u ON u.id = p.user_id";
 
 impl ArtboardPiece {
     /// Hang a piece. The per-month duplicate is the unique index, so two
@@ -459,6 +450,26 @@ impl ArtboardPiece {
             )
             .await?;
         Ok(row.get("depth"))
+    }
+
+    /// Whether `piece_id` is still up and still `day`'s piece. Login checks
+    /// the cached splash against it, so a take-down leaves new logins at
+    /// once rather than at the next hourly refresh.
+    pub async fn still_splash_on(
+        client: &impl GenericClient,
+        piece_id: Uuid,
+        day: NaiveDate,
+    ) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM artboard_pieces
+                    WHERE id = $1 AND removed_at IS NULL AND splash_on = $2
+                 ) AS still",
+                &[&piece_id, &day],
+            )
+            .await?;
+        Ok(row.get("still"))
     }
 
     async fn splash_on(client: &impl GenericClient, day: NaiveDate) -> Result<Option<Self>> {

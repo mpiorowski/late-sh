@@ -152,6 +152,11 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // and only in-app viewers exist here, so this cannot become a
         // per-heartbeat drip.
         ActivityKind::WatchingStream { .. } => true,
+        // The board: a post is an invitation (capped at five a day per
+        // account), and the start is the moment to walk in. Both are the
+        // whole reason the board is in the house.
+        ActivityKind::EventPosted { .. } => true,
+        ActivityKind::EventStarting { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the
@@ -262,6 +267,18 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             "\u{1F4FA} @{} {}.\n{watch_url}",
             event.username, event.action
         )),
+        // The start is the one board line that outlives the ticker: whoever
+        // meant to come and was away reads it in #lounge history. The
+        // ticker already said who posted it; the headline is about now. No
+        // `@`: nobody is being told anything personally.
+        ActivityKind::EventStarting { title, going, .. } => Some(match going {
+            0 => format!("\u{1F4C5} {title} is on now. Press 7 for the board."),
+            1 => format!("\u{1F4C5} {title} is on now, 1 in. Press 7 for the board."),
+            n => format!("\u{1F4C5} {title} is on now, {n} in. Press 7 for the board."),
+        }),
+        // A post is the ticker's: a headline for every post would be five
+        // a day from one account, and the start will headline anyway.
+        ActivityKind::EventPosted { .. } => None,
         // No headline: @bartender already says it out loud in the room where
         // it was bought, and everyone it reached is online by definition, so a
         // #lounge row would be the third telling of one drink.

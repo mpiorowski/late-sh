@@ -147,15 +147,15 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
             "the lights below are somebody else's street.",
             "not yet.",
         ],
-        Landmark::Ink
-        | Landmark::Baths
+        Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market
         | Landmark::Coin
         | Landmark::Vids
         | Landmark::Pawn => CLOSED_LINES,
-        Landmark::Armorer
+        Landmark::Ink
+        | Landmark::Armorer
         | Landmark::Tailor
         | Landmark::Lockers
         | Landmark::Bands
@@ -217,8 +217,10 @@ pub fn pitch(landmark: Landmark) -> &'static str {
         Landmark::Blades => "what the armorer won't sell: the next tier up, for crystals",
         Landmark::Reader => "she reads the static",
         Landmark::Stairs => "the way down is not open",
-        Landmark::Ink
-        | Landmark::Baths
+        Landmark::Ink => {
+            "the needle. a draft inked is both its cards, this climb and every one after. crystals only"
+        }
+        Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine
         | Landmark::Market

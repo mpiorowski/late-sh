@@ -1,0 +1,26 @@
+The dumb interface was mainly intended for those who wanted to play
+Interactive Fiction, but had just a C compiler and that's it.  You get
+no screen control; everything is just printed to the terminal line by
+line.  The terminal handles all the scrolling.  While this can be an
+annoying way to play IF, it might be the best you can do for a
+particular machine, especially when the curses library is inadequate and
+installing ncurses isn't an option.  It's also good for getting Frotz to
+run when you have a C compiler and know nothing else of how to do
+things.  This way you can run Frotz on VMS, MVS, VM/CMS and all those
+other stodgy operating systems.  More on that later.  Maybe you'd like to
+experience what it's like to play Adventure on a teletype.
+
+A much cooler use for compiling Frotz with the dumb interface is that it
+can be wrapped in CGI scripting, PHP, and the like to allow people to
+play games on webpages.  It can also be made into a chat bot.
+
+Games that move the write little windows of text over the main body of
+text are hard to read because with the dumb interface, Frotz doesn't
+know how to produce inverse text.  Games that make use of timed-input
+can be played, but you must manually increment the timer (see the dfrotz
+manpage).  Games that move the cursor around a lot are probably
+unplayable.  These include games like Andrew Plotkin's "Freefall" and
+Torbjorn Andersson's "Robots".
+
+The dumb interface code was created by Alembic Petrofsky
+<alembic@petrofsky.berkeley.ca.us> in 1997 for Frotz 2.32.

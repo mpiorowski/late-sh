@@ -1,12 +1,9 @@
-use std::cell::Cell;
-
 use late_core::models::{
     profile::Profile,
     showcase::ShowcaseParams,
     work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType},
 };
 use late_core::vocab;
-use ratatui::layout::Rect;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use uuid::Uuid;
 
@@ -28,9 +25,6 @@ pub(crate) const DESCRIPTION_MAX: usize = 800;
 /// `skills` and `skills_tags` both cap at 12 (migrations 041 and 192), the
 /// vocabulary's cap.
 pub(crate) const SKILLS_LIMIT: usize = vocab::TAG_LIMIT;
-
-/// The most rows any page draws; the click map is sized to it.
-pub(crate) const MAX_ROWS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Page {
@@ -349,6 +343,17 @@ pub(crate) enum EscapeOutcome {
     Closed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MouseTarget {
+    Page(Page),
+    Field(Field),
+    Choice(Field, bool),
+    Project(Uuid),
+    Add,
+    EditProject,
+    DeleteProject,
+}
+
 pub(crate) struct EditorState {
     open: bool,
     scope: Scope,
@@ -379,9 +384,7 @@ pub(crate) struct EditorState {
     about_baseline: AboutValues,
     // projects
     projects_view: ProjectsView,
-    /// Screen rects of the rows on screen this frame, each with the index it
-    /// stands for, so a click lands on the right row of a scrolled list.
-    row_rects: Cell<[Option<(usize, Rect)>; MAX_ROWS]>,
+    pub(crate) mouse: crate::app::common::mouse::MouseState<MouseTarget, Page>,
 }
 
 fn text_input(field: Field) -> TextArea<'static> {
@@ -519,7 +522,7 @@ impl Default for EditorState {
             langs: Vec::new(),
             about_baseline: AboutValues::default(),
             projects_view: ProjectsView::List { selected: 0 },
-            row_rects: Cell::new([None; MAX_ROWS]),
+            mouse: Default::default(),
         }
     }
 }
@@ -978,16 +981,24 @@ impl EditorState {
         for field in CARD_FIELDS.into_iter().chain(ABOUT_FIELDS) {
             if matches!(field.kind(), FieldKind::Text | FieldKind::Multi) {
                 let visible = active == Some(field);
-                set_themed_textarea_cursor_visible(self.field_mut(field), visible);
+                let input = self.field_mut(field);
+                set_themed_textarea_cursor_visible(input, visible);
+                if !visible {
+                    // The widget scrolls to keep its cursor in view, so an
+                    // idle row parks the cursor at the start to show the
+                    // start of its text.
+                    input.move_cursor(CursorMove::Jump(0, 0));
+                }
             }
         }
         if let ProjectsView::Form(draft) = &mut self.projects_view {
             for field in PROJECT_FIELDS {
                 let visible = active == Some(field);
-                set_themed_textarea_cursor_visible(
-                    draft.field_mut(field).expect("project field"),
-                    visible,
-                );
+                let input = draft.field_mut(field).expect("project field");
+                set_themed_textarea_cursor_visible(input, visible);
+                if !visible {
+                    input.move_cursor(CursorMove::Jump(0, 0));
+                }
             }
         }
     }
@@ -1019,8 +1030,25 @@ impl EditorState {
         }
     }
 
+    /// The showcase feed behind the projects list moved: what the last
+    /// frame recorded may name rows that are no longer where they were.
+    pub(crate) fn feed_changed(&self) {
+        self.mouse.invalidate();
+    }
+
     // Pages
 
+    pub(crate) fn select_page(&mut self, page: Page) {
+        if !self.scope.pages().contains(&page) || page == self.page {
+            return;
+        }
+        self.page = page;
+        self.row = 0;
+        self.editing = false;
+        self.error = None;
+        self.mouse.reveal_selection();
+        self.sync_cursors();
+    }
     pub(crate) fn switch_page(&mut self, forward: bool) {
         let pages = self.scope.pages();
         if pages.len() < 2 {
@@ -1035,6 +1063,7 @@ impl EditorState {
         } else {
             (idx + pages.len() - 1) % pages.len()
         };
+        self.mouse.reset_pane(pages[next]);
         self.page = pages[next];
         self.row = 0;
         self.editing = false;
@@ -1219,33 +1248,9 @@ impl EditorState {
             .iter()
             .position(|candidate| *candidate == field)
             .unwrap_or(0);
+        self.mouse.reveal_selection();
         self.error = Some((field, message.to_string()));
         self.sync_cursors();
-    }
-
-    // Click map
-
-    /// Record that `row` is drawn at `rect`. The map holds one entry per
-    /// row on screen; a ninth is a draw bug and is dropped.
-    pub(crate) fn record_row_rect(&self, row: usize, rect: Rect) {
-        let mut rects = self.row_rects.get();
-        if let Some(slot) = rects.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some((row, rect));
-        }
-        self.row_rects.set(rects);
-    }
-
-    pub(crate) fn clear_row_rects(&self) {
-        self.row_rects.set([None; MAX_ROWS]);
-    }
-
-    pub(crate) fn row_at(&self, x: u16, y: u16) -> Option<usize> {
-        self.row_rects.get().iter().find_map(|slot| match slot {
-            Some((row, r)) if x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height => {
-                Some(*row)
-            }
-            Some(_) | None => None,
-        })
     }
 }
 

@@ -288,6 +288,7 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
                 Rect::new(1, 1, 78, 22),
                 Tutorial::VisitGames,
                 Screen::Games,
+                false,
             )
         })
         .unwrap();
@@ -307,6 +308,48 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
     );
 }
 
+/// The Artboard stop lands behind the content disclaimer: it offers to show
+/// the art or skip ahead, and only reads as a normal stop once shown.
+#[test]
+fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
+    for (hidden, breaker) in [
+        (true, "[S] show · [Enter] skip: the profiles"),
+        (false, "[Enter] next: the profiles"),
+    ] {
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_tour_overlay(
+                    frame,
+                    Rect::new(1, 1, 78, 22),
+                    Tutorial::VisitArtboard,
+                    Screen::Artboard,
+                    hidden,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..24)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("the tour · [4] the artboard")),
+            "hidden={hidden} {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains(breaker)),
+            "hidden={hidden} {rows:#?}"
+        );
+        assert_eq!(
+            rows.iter().any(|row| row.contains("NSFW")),
+            hidden,
+            "hidden={hidden} {rows:#?}"
+        );
+    }
+}
+
 /// Boxed or hosted, a stop reads the same: the keys close the breaker flush
 /// right, two columns in from the frame.
 #[test]
@@ -320,6 +363,7 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
                 Rect::new(1, 1, 78, 22),
                 Tutorial::VisitGames,
                 Screen::Games,
+                false,
             )
         })
         .unwrap();

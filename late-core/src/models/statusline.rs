@@ -117,7 +117,7 @@ impl StatusComponent {
             Self::Quests => "Quests",
             Self::Care => "Care",
             Self::Voice => "Voice",
-            Self::Live => "Live",
+            Self::Live => "Now",
             Self::Date => "Date",
         }
     }
@@ -137,7 +137,7 @@ impl StatusComponent {
             Self::Care => "Daily care still due today: bonsai, tank, and pet.",
             Self::Voice => "Your voice channel: speaking, listening, muted or deafened.",
             Self::Live => {
-                "What the #lounge live strip shows: a stream, a match, a booth track, a shared link."
+                "What the #lounge now strip shows: a stream, a match, a booth track, a shared link."
             }
             Self::Date => "Today's date in your chosen timezone.",
         }
@@ -158,7 +158,7 @@ impl StatusComponent {
             Self::Quests => "quests",
             Self::Care => "care",
             Self::Voice => "mic",
-            Self::Live => "live",
+            Self::Live => "now",
             Self::Date => "",
         }
     }

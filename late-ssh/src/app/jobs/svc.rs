@@ -1113,6 +1113,8 @@ pub(crate) fn tick(app: &mut App) -> bool {
     let mut changed = false;
     if app.jobs.rx.has_changed().unwrap_or(false) {
         let snapshot = app.jobs.rx.borrow_and_update().clone();
+        app.jobs.feed_changed();
+        app.directory_state.feed_changed();
         app.jobs.items = snapshot.items;
         app.jobs.loaded = snapshot.loaded;
         let len = app.jobs.items.len();

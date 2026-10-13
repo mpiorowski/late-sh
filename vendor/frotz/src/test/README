@@ -1,0 +1,34 @@
+These programs are intended to exercise the interpreter that it is
+functioning according to spec.  As far as I can determine, the programs
+are in the public domain or made freely available with no restrictions.
+Copyrights are retained by the original authors where noted.
+
+
+crashme.inf	Self-modifying reproducing Z-code.  Generates random junk
+		to see how the interpreter behaves.  A good interpreter
+		shouldn't die except on fatal errors.
+		Written by Evin Robertson in 1999.
+
+etude/		TerpEtude (etude.z5).  Exercises the Z-machine for proper
+		behavior.  Does not test error-handling.
+		Written by Andrew Plotkin in 1997
+
+gntests.inf	Assorted tests for checking proper handling of fonts,
+		accents, input codes, colors, header, and timed input.
+		Conforms to the Z-Spec 0.99 by Graham Nelson.  Something
+		of a weaker version of TerpEtude (above).
+		Written by Graham Nelson as a collection of sample
+		programs and unified by Andrew Plotkin in 1997.
+
+random.inf	Inform Randomization Test v1.0.
+		Assorted tests for checking the performance of the
+		interpreter's random number generator.
+		Written by David Griffith in 2002.
+
+strictz.inf	Tests an interpreter's error-checking by attempting to
+		cause all possible non-fatal errors.
+		Written by Torbjorn Andersson in 1998.
+
+unicode.inf	Unicode Test v1.0.
+		Creates assorted unicode characters.
+		Written by David Kinder in 2002.

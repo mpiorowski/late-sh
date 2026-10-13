@@ -33,20 +33,32 @@ a row position.
 
 Settings/Tweaks clicks reuse keyboard actions, including per-device rail and
 interaction-mode updates. Cooldown, notification format, both sidebar modes,
-Terminal images, Land on, Gallery Art on Splash, and Text Brightness share bold
+Terminal images, Land on, Screensaver, and Text Brightness share bold
 amber arrows. Only the arrows choose direction; other row/value clicks cycle
 forward. Every cycle reserves its longest option width. Ratatui measures both
 rendered spans and clipped hitboxes, and labels shorten at grapheme boundaries
 before complete controls. Right sidebar's label and always-visible `[Panels]`
 button open its panel editor, including when Off.
 
-Target language and Interaction mode open the shared picker on click or
-Enter/Space; Left/Right keyboard cycling stays available. Opening selects the
+The Artboard group contains the default-on Artboard content disclaimer toggle.
+It persists `artboard_disclaimer` in account settings; re-enabling it closes
+editing and hides the current Artboard visit until consent. `A` (Always View) in the Artboard
+prompt turns the same tweak off and allows that visit. The same tweak gates
+the login splash: only with it off does the day's hung gallery piece replace
+the coffee cup. The tour never shows
+the dialog; its Artboard stop's `S` grants one-visit consent and does not
+touch the tweak.
+
+Target language, Interaction mode and Screensaver open the shared picker on
+click or Enter/Space; Left/Right keyboard cycling stays available. Opening selects the
 current value without applying it. Enter or a result click applies once and
 closes; Esc/[x] cancels. Language filtering matches English/native names and
 stored codes in the existing 17-language order. Interaction mode offers
 Keyboard, Mouse, and Hybrid, explains that Keyboard disables clicks/wheel, and
 uses App's setter for terminal reporting and persistence.
+Screensaver offers Off, the eight fixed scene/style choices, Random, then Randomer.
+Random holds one choice per activation; Randomer changes landscape every five
+minutes. Both store the mode, with transient playback owned by the session.
 Interaction-mode persistence coalesces rapid choices through one writer per
 account, so an older asynchronous write cannot overwrite the final choice.
 Chooser values show `…` two spaces after the current label. Width padding follows
@@ -68,7 +80,9 @@ Remove, and Refresh; selection follows its UUID across asynchronous replacement.
 A click away from an open text editor (username, system field, Bio, feed URL)
 submits it exactly as its keyboard submit does (`submit_text_edit`), then the
 click acts. There is one save path for both inputs: saves are fire-and-forget
-and a failure surfaces as the usual banner. An empty feed URL is dropped
+and a failure surfaces as the usual banner. Each save carries the whole draft,
+so `ProfileService::edit_profile` runs one writer per user that saves drafts in
+order and collapses a burst into its newest draft. An empty feed URL is dropped
 quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
 Closing Settings with `[x]` during a theme search keeps the theme the search
 previewed, as Esc does. The Invites dialog's code field takes the caret on

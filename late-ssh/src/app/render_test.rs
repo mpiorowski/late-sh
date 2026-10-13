@@ -166,17 +166,14 @@ fn sponsor_title_drops_its_thanks_before_its_link() {
     let full = app_frame_sponsor_title(full_width).expect("full sponsor should fit");
     assert_eq!(
         line_text(&full),
-        " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
+        " thanks for hanging out ☕ https://late.sh/thanks "
     );
 
     // The link keeps the blank cell on both sides: the title is drawn over
     // the bottom border, so a URL flush against `─` gets the glyph linkified
     // along with it.
     let link_only = app_frame_sponsor_title(full_width - 1).expect("the link should fit");
-    assert_eq!(
-        line_text(&link_only),
-        " https://ko-fi.com/mateuszpiorowski "
-    );
+    assert_eq!(line_text(&link_only), " https://late.sh/thanks ");
 
     assert!(app_frame_sponsor_title(link_width - 1).is_none());
 }
@@ -208,7 +205,7 @@ fn sponsor_link_keeps_its_place_however_full_the_status_bar_is() {
     let (bar, sponsor) = app_frame_bottom_titles(&everything_on, &data, area);
 
     let sponsor = sponsor.expect("the sponsor link survives a full bar");
-    assert!(line_text(&sponsor).contains("https://ko-fi.com/mateuszpiorowski"));
+    assert!(line_text(&sponsor).contains("https://late.sh/thanks"));
     let bar = bar.expect("the bar keeps what fits beside the sponsor");
     assert!(
         line_width(&bar.line) + line_width(&sponsor) <= usize::from(area.width - 2),
@@ -233,7 +230,7 @@ fn sponsor_line_adds_its_thanks_when_the_status_bar_leaves_room() {
     assert!(bar.is_some());
     assert_eq!(
         line_text(&sponsor.expect("sponsor")),
-        " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
+        " thanks for hanging out ☕ https://late.sh/thanks "
     );
 }
 
@@ -254,7 +251,7 @@ fn keyhints_too_wide_for_the_row_are_dropped_like_any_other_segment() {
 
     assert_eq!(
         line_text(&sponsor.expect("sponsor link")),
-        " https://ko-fi.com/mateuszpiorowski "
+        " https://late.sh/thanks "
     );
     let bar = line_text(&bar.expect("the narrower segments still fit").line);
     assert!(!bar.contains("Settings"), "{bar:?}");

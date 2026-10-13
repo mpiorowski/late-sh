@@ -100,7 +100,7 @@ async fn record_purchase_creates_then_decays_and_accumulates() {
     let client = test_db.db.get().await.expect("client");
     let user = create_test_user(&test_db.db, "drinks-decay").await;
 
-    let first = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 600)
+    let first = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 600, true)
         .await
         .expect("first purchase");
     assert_eq!(first.drunk_points, 600);
@@ -119,7 +119,7 @@ async fn record_purchase_creates_then_decays_and_accumulates() {
         .await
         .expect("backdate");
 
-    let second = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 100)
+    let second = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 100, true)
         .await
         .expect("second purchase");
     assert_eq!(second.drunk_points, 600 - DRUNK_DECAY_PER_HOUR + 100);
@@ -134,7 +134,7 @@ async fn record_purchase_caps_the_buzz() {
     let user = create_test_user(&test_db.db, "drinks-cap").await;
 
     for _ in 0..4 {
-        UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 2_000)
+        UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 2_000, true)
             .await
             .expect("purchase");
     }
@@ -144,6 +144,71 @@ async fn record_purchase_caps_the_buzz() {
         .expect("row exists");
     assert_eq!(drinks.drunk_points, MAX_DRUNK_POINTS);
     assert_eq!(drinks.lifetime_spent, 8_000);
+}
+
+#[tokio::test]
+async fn non_intoxicating_pours_leave_new_drinkers_sober() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    for comped in [false, true] {
+        let user = create_test_user(&test_db.db, &format!("sober-first-{comped}")).await;
+        let drinks = if comped {
+            UserDrinks::record_comped_pour(&client, user.id, Bar::Tavern, 400, false).await
+        } else {
+            UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 50, false).await
+        }
+        .expect("non-intoxicating pour");
+        assert_eq!(drinks.drunk_points, 0);
+        assert_eq!(drinks.level(Utc::now()), 0);
+        assert_eq!(drinks.drink_count, 1);
+        assert_eq!(drinks.lifetime_spent, if comped { 0 } else { 50 });
+        let pour = client
+            .query_one(
+                "SELECT bar, points FROM drink_pours WHERE user_id = $1",
+                &[&user.id],
+            )
+            .await
+            .expect("non-intoxicating pour is logged");
+        assert_eq!(pour.get::<_, &str>("bar"), Bar::Tavern.as_str());
+        assert_eq!(pour.get::<_, i64>("points"), 0);
+        let next = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 100, true)
+            .await
+            .expect("subsequent alcoholic drink");
+        assert_eq!(next.drunk_points, 100);
+    }
+}
+
+#[tokio::test]
+async fn non_intoxicating_pours_preserve_the_existing_decay_window() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    let user = create_test_user(&test_db.db, "sober-decay").await;
+    UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 1000, true)
+        .await
+        .expect("alcoholic drink");
+    client
+        .execute(
+            "UPDATE user_drinks SET last_drink_at = last_drink_at - interval '1 hour' WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("backdate");
+    let before = UserDrinks::find(&client, user.id).await.unwrap().unwrap();
+    let paid = UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 50, false)
+        .await
+        .expect("paid coffee");
+    let comped = UserDrinks::record_comped_pour(&client, user.id, Bar::Tavern, 400, false)
+        .await
+        .expect("comped water");
+    let now = Utc::now();
+    for drinks in [&paid, &comped] {
+        assert_eq!(drinks.drunk_points, before.drunk_points);
+        assert_eq!(drinks.last_drink_at, before.last_drink_at);
+        assert_eq!(drinks.effective_points(now), before.effective_points(now));
+        assert_eq!(drinks.lifetime_spent, 1050);
+    }
+    assert_eq!(paid.drink_count, 2);
+    assert_eq!(comped.drink_count, 3);
 }
 
 #[tokio::test]
@@ -214,7 +279,7 @@ async fn drink_purchase_composes_into_one_transaction() {
     .await
     .expect("debit")
     .expect("poured");
-    let drinks = UserDrinks::record_purchase(&tx, user.id, Bar::Tavern, 400)
+    let drinks = UserDrinks::record_purchase(&tx, user.id, Bar::Tavern, 400, true)
         .await
         .expect("buzz");
     tx.commit().await.expect("commit");
@@ -225,7 +290,8 @@ async fn drink_purchase_composes_into_one_transaction() {
 
 /// The Nightcap's tab board counts drinks, not chips: three house beers
 /// beat one top shelf, a credit cashed there counts like a paid drink, the
-/// tavern's drinks never reach it, and a tie goes to the bigger pours.
+/// tavern's drinks never reach it, non-intoxicating drinks count too, and a
+/// tie goes to the bigger pours.
 #[tokio::test]
 async fn the_tab_board_counts_drinks_taken_at_its_own_bar() {
     let test_db = test_db().await;
@@ -234,34 +300,41 @@ async fn the_tab_board_counts_drinks_taken_at_its_own_bar() {
     let big_spender = create_test_user(&test_db.db, "tab-big-spender").await;
     let tied_cheap = create_test_user(&test_db.db, "tab-tied-cheap").await;
     let tavern_only = create_test_user(&test_db.db, "tab-tavern-only").await;
+    let sober = create_test_user(&test_db.db, "tab-sober").await;
 
     for _ in 0..2 {
-        UserDrinks::record_purchase(&client, regular.id, Bar::Nightcap, 100)
+        UserDrinks::record_purchase(&client, regular.id, Bar::Nightcap, 100, true)
             .await
             .expect("house beer");
     }
-    UserDrinks::record_comped_pour(&client, regular.id, Bar::Nightcap, 400)
+    UserDrinks::record_comped_pour(&client, regular.id, Bar::Nightcap, 400, true)
         .await
         .expect("a tavern round's credit, drunk out back");
-    UserDrinks::record_purchase(&client, big_spender.id, Bar::Nightcap, 1_000)
+    UserDrinks::record_purchase(&client, big_spender.id, Bar::Nightcap, 1_000, true)
         .await
         .expect("top shelf");
-    UserDrinks::record_purchase(&client, tied_cheap.id, Bar::Nightcap, 100)
+    UserDrinks::record_purchase(&client, tied_cheap.id, Bar::Nightcap, 100, true)
         .await
         .expect("house beer");
     for _ in 0..5 {
-        UserDrinks::record_purchase(&client, big_spender.id, Bar::Tavern, 1_000)
+        UserDrinks::record_purchase(&client, big_spender.id, Bar::Tavern, 1_000, true)
             .await
             .expect("tavern pour");
-        UserDrinks::record_purchase(&client, tavern_only.id, Bar::Tavern, 1_000)
+        UserDrinks::record_purchase(&client, tavern_only.id, Bar::Tavern, 1_000, true)
             .await
             .expect("tavern pour");
     }
     UserDrinks::record_welcome_pour(&client, tied_cheap.id, WELCOME_DRINK_POINTS)
         .await
         .expect("welcome");
+    UserDrinks::record_purchase(&client, sober.id, Bar::Nightcap, 50, false)
+        .await
+        .expect("coffee");
+    UserDrinks::record_comped_pour(&client, sober.id, Bar::Nightcap, 400, false)
+        .await
+        .expect("comped water");
 
-    let board = UserDrinks::top_regulars(&client, Bar::Nightcap, 3)
+    let board = UserDrinks::top_regulars(&client, Bar::Nightcap, 4)
         .await
         .expect("board");
     let rows: Vec<(&str, i64)> = board
@@ -272,6 +345,7 @@ async fn the_tab_board_counts_drinks_taken_at_its_own_bar() {
         rows,
         vec![
             (regular.username.as_str(), 3),
+            (sober.username.as_str(), 2),
             (big_spender.username.as_str(), 1),
             (tied_cheap.username.as_str(), 1),
         ]

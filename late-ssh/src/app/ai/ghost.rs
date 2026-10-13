@@ -46,7 +46,9 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chips::{CHIP_FLOOR, UserChips},
         drink_round::{Bar, BarOrder, GIFT_DRINK_PRICE, ROUND_PRICE_PER_PATRON, bar_order},
-        drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, UserDrinks, drunk_level_word},
+        drinks::{
+            DRINK_PRICE_MAX, DRINK_PRICE_MIN, SOFT_DRINK_PRICE, UserDrinks, drunk_level_word,
+        },
         user::{User, UserParams},
     },
 };
@@ -217,11 +219,12 @@ const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Loun
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
     a Segfault Sour, warm milk for the juniors, decaf for anyone shipping on a Friday). \
-    The welcome pour for a brand-new face is on the house, but after that drinks go on the tab and cost Late Chips: \
-    a plain ale runs about 100 chips, the good stuff climbs from there, and the top shelf runs up near a thousand. \
+    The welcome pour for a brand-new face is on the house, but after that drinks go on the tab and cost Late Chips, at the prices the tab rules below set. \
     You invent the drink and set the price yourself, always a round number that fits the pour. \
     You never pour what a patron cannot afford; you slide them something in their range instead, kindly. \
-    You keep the good stuff coming while a patron can still hold it; only once someone is truly wasted, barely upright, do you switch them to water and a gentle word instead of anything stronger. \
+    You keep the good stuff coming while a patron can still hold it. \
+    If someone is truly wasted, barely upright, you cut them off and switch them to water instead of anything stronger. \
+    If a patron explicitly asks for a non-alcoholic drink (e.g. \"NA\", Shirley Temple) or orders an obviously non-intoxicating beverage (water, coffee, orange juice, milk, etc.), or if you cut them off, set `intoxicating: false`. Otherwise, default to `true`. \
     You know the house well enough to point at the right door: which screen, which key, which page. \
     When someone asks how something works, answer only from the basic navigation in your app context, phrased like a bartender giving directions. \
     You are not the help desk — for anything deeper (commands, game rules, settings, IRC, accounts), don't guess: tell them to go ask @bot, he knows all of that. \
@@ -927,11 +930,12 @@ impl GhostService {
             - Leaving one drink on another person's tab is rung up by the bar itself, before you answer, when a patron says it plainly as an order naming exactly one person, like \"buy @user a drink\", \"I'll get @user a beer\", \"one for @user\" or \"@user's next one is on me\". It costs {gift_price} chips. If you are seeing such a request, the bar did not take it: it was a question, the words came in the middle of a longer sentence, it named more than one person, it came in the same message as a round, or it used other words. If they were only talking about a drink, or telling you not to, use \"chat\" and answer that. If they do want it rung up, use \"chat\" and give them the words to say, on their own and with the real name in it: \"buy @user a drink\". Never pour or charge for another person yourself.\n\
             - Buying the whole house a round is the one exception, and it is still not yours to pour: the bar rings that up itself, but only when a patron says it plainly and says who it is for or that it is on them, like \"round for everyone\", \"I'll buy everyone a drink\" or \"drinks on me\". If they ask about it, circle around asking for one (\"we should get a round in\"), or bury it in a longer sentence, use \"chat\" and tell them the words to say on their own: \"round for everyone\". It costs {round_price} chips a head and buys each of them a drink to claim whenever they walk up. Never announce that a round happened and never quote what one cost, you would only be guessing; the bar says so itself when it does.\n\n\
             Decide ONE action:\n\
-            - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
+            - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink and explicitly set intoxicating: false for non-alcoholic requests, water, coffee, juice, milk, or a cut-off substitute; true for intoxicating drinks. For a paying patron, non-intoxicating drinks cost exactly {soft_price} chips; intoxicating drinks cost a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear). The price must fit their spendable chips. For an already-bought drink, set price to null and still classify intoxicating. If you name the price in your line it MUST equal the price field exactly.\n\
             - \"offer\": the patron asked for a drink but cannot afford it (or wants more than their spendable). Charge nothing; counter-offer something in their range, with its price, kindly.\n\
             - \"chat\": everything else — greetings, house questions, banter, requests to drink or pour for someone else, anything ambiguous. Answer exactly as you always do. No charge. When in doubt, chat; never charge on a maybe.\n\n\
             Return ONLY a JSON object, no markdown fences:\n\
-            {{\"action\": \"pour\" | \"offer\" | \"chat\", \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
+            {{\"action\": \"pour\" | \"offer\" | \"chat\", \"drink\": string or null, \"price\": integer or null, \"intoxicating\": boolean or null, \"line\": string}}\n\
+            Always include intoxicating: a boolean for pours or offers, null allowed for chat.\n\
             \"line\" is your chat message: 1-3 short lines, no markdown, no emoji, never prefixed with your own username, never SKIP.",
             username = bartender.username,
             persona = BARTENDER_PERSONA,
@@ -939,6 +943,7 @@ impl GhostService {
             floor = CHIP_FLOOR,
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
+            soft_price = SOFT_DRINK_PRICE,
             round_price = ROUND_PRICE_PER_PATRON,
             gift_price = GIFT_DRINK_PRICE,
         );
@@ -984,10 +989,14 @@ impl GhostService {
             // neither is drunk twice. `None` means the tab emptied between
             // the read above and now: nothing is poured and nothing is
             // charged, because the line in hand still says it was free.
-            BartenderDecision::PourComped { drink, line } => {
+            BartenderDecision::PourComped {
+                drink,
+                intoxicating,
+                line,
+            } => {
                 match self
                     .chip_service
-                    .cash_round_drink(trigger_message.user_id, Bar::Tavern)
+                    .cash_round_drink(trigger_message.user_id, Bar::Tavern, intoxicating)
                     .await?
                 {
                     Some(comped) => {
@@ -1029,10 +1038,21 @@ impl GhostService {
                     None => format!("{patron} {ROUND_CREDIT_GONE_LINE}"),
                 }
             }
-            BartenderDecision::Pour { drink, price, line } => {
+            BartenderDecision::Pour {
+                drink,
+                price,
+                intoxicating,
+                line,
+            } => {
                 match self
                     .chip_service
-                    .buy_drink(trigger_message.user_id, Bar::Tavern, price, &drink)
+                    .buy_drink(
+                        trigger_message.user_id,
+                        Bar::Tavern,
+                        price,
+                        &drink,
+                        intoxicating,
+                    )
                     .await?
                 {
                     Some(purchase) => {
@@ -1443,11 +1463,16 @@ enum BartenderDecision {
     Pour {
         drink: String,
         price: i64,
+        intoxicating: bool,
         line: String,
     },
     /// Spend the patron's round credit and post `line`. No price: the drink
     /// was paid for by whoever bought the round.
-    PourComped { drink: String, line: String },
+    PourComped {
+        drink: String,
+        intoxicating: bool,
+        line: String,
+    },
     /// Post `line`, charge nothing (chat, counter-offer, or a downgraded
     /// pour the server refused to price).
     Say { line: String },
@@ -1460,6 +1485,7 @@ struct BartenderOrderRaw {
     action: Option<String>,
     drink: Option<String>,
     price: Option<i64>,
+    intoxicating: Option<bool>,
     line: Option<String>,
 }
 
@@ -1474,10 +1500,11 @@ fn bartender_order_schema() -> serde_json::Value {
             "action": { "type": "string", "enum": ["pour", "offer", "chat"] },
             "drink": { "type": "string", "nullable": true },
             "price": { "type": "integer", "nullable": true },
+            "intoxicating": { "type": "boolean", "nullable": true },
             "line": { "type": "string" }
         },
-        "required": ["action", "line"],
-        "propertyOrdering": ["action", "drink", "price", "line"]
+        "required": ["action", "intoxicating", "line"],
+        "propertyOrdering": ["action", "drink", "price", "intoxicating", "line"]
     })
 }
 
@@ -1541,6 +1568,21 @@ fn extract_json_int_field(raw: &str, field: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+/// Pull one `"field": <boolean>` out of loose JSON. Returns None if absent,
+/// `null`, or non-boolean.
+fn extract_json_bool_field(raw: &str, field: &str) -> Option<bool> {
+    let key = format!("\"{field}\"");
+    let after_key = &raw[raw.find(&key)? + key.len()..];
+    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
+    if after_colon.starts_with("true") {
+        Some(true)
+    } else if after_colon.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Last-ditch recovery when strict parsing rejects the model's JSON: rebuild
 /// the order field by field. `line` is required (no line, nothing to say);
 /// the rest are best-effort.
@@ -1549,6 +1591,7 @@ fn recover_bartender_order(raw: &str) -> Option<BartenderOrderRaw> {
         action: extract_json_string_field(raw, "action"),
         drink: extract_json_string_field(raw, "drink"),
         price: extract_json_int_field(raw, "price"),
+        intoxicating: extract_json_bool_field(raw, "intoxicating"),
         line: Some(extract_json_string_field(raw, "line")?),
     })
 }
@@ -1608,9 +1651,15 @@ fn parse_bartender_order(raw: &str, tab: BartenderTab, bot_username: &str) -> Ba
         .filter(|drink| !drink.is_empty())
         .unwrap_or_else(|| "house pour".to_string());
 
+    let intoxicating = order.intoxicating.unwrap_or(true);
+
     match tab {
         BartenderTab::Comped => match action {
-            Some("pour") | Some("offer") => BartenderDecision::PourComped { drink, line },
+            Some("pour") | Some("offer") => BartenderDecision::PourComped {
+                drink,
+                intoxicating,
+                line,
+            },
             Some(_) | None => BartenderDecision::Say { line },
         },
         BartenderTab::Paying { spendable } => {
@@ -1620,17 +1669,27 @@ fn parse_bartender_order(raw: &str, tab: BartenderTab, bot_username: &str) -> Ba
             // The line quotes a price, so we never silently clamp a different
             // number underneath the receipt. A missing or out-of-range price
             // is a model slip: serve the line uncharged rather than debit an
-            // amount the patron never saw.
-            let Some(price) = order
-                .price
-                .filter(|p| (DRINK_PRICE_MIN..=DRINK_PRICE_MAX).contains(p))
-            else {
+            // amount the patron never saw. A non-intoxicating pour has one
+            // price, so anything else on it is the same slip.
+            let valid_price = if intoxicating {
+                order
+                    .price
+                    .filter(|p| (DRINK_PRICE_MIN..=DRINK_PRICE_MAX).contains(p))
+            } else {
+                order.price.filter(|p| *p == SOFT_DRINK_PRICE)
+            };
+            let Some(price) = valid_price else {
                 return BartenderDecision::Say { line };
             };
             if price > spendable {
                 return BartenderDecision::Say { line };
             }
-            BartenderDecision::Pour { drink, price, line }
+            BartenderDecision::Pour {
+                drink,
+                price,
+                intoxicating,
+                line,
+            }
         }
     }
 }

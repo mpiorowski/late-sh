@@ -218,6 +218,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
     }
 }
 
@@ -329,6 +333,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paper_service,
         jobs_service,
         article_service,
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -369,6 +374,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             db.clone(),
         ),
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
@@ -520,6 +526,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -630,6 +637,7 @@ fn make_app_with_chat_service_and_permissions(
         nethack_secret: String::new(),
         nethack_activity: None,
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
@@ -657,6 +665,10 @@ fn make_app_with_chat_service_and_permissions(
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -780,6 +792,7 @@ pub fn make_app_with_paired_client(
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -890,6 +903,7 @@ pub fn make_app_with_paired_client(
         nethack_secret: String::new(),
         nethack_activity: None,
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
@@ -917,6 +931,10 @@ pub fn make_app_with_paired_client(
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),

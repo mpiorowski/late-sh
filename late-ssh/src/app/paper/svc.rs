@@ -29,7 +29,7 @@ use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
 use late_core::models::job_posting::JobPosting;
 use late_core::models::paper::{
-    ANNOUNCEMENTS_SLUG, PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage,
+    ANNOUNCEMENTS_SLUG, EditionStep, PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage,
     PaperSection, PaperSectionKind, PaperSectionRow, PaperStatus,
 };
 use late_core::models::user::{User, extract_langs};
@@ -41,7 +41,7 @@ use uuid::Uuid;
 
 use super::state::{
     PAPER_ANNOUNCEMENTS_LIMIT, PaperAnnouncement, PaperCommand, PaperLayout, PaperModal,
-    PaperState, PaperWork,
+    PaperNeighbors, PaperState, PaperWork,
 };
 use crate::app::ai::ghost::GRAYBEARD_PERSONA;
 use crate::app::ai::svc::AiService;
@@ -104,12 +104,14 @@ pub fn edition_window(edition: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
 }
 
 /// Why a session asked for the paper. The login pop is claimed once per
-/// account per edition; `/paper` is free and unlimited, since it only
-/// reads rows.
+/// account per edition; `/paper` and leafing are free and unlimited, since
+/// they only read rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaperTrigger {
     Login,
     Command,
+    /// `←`/`→` in the open paper: the edition next to the one on screen.
+    Browse,
 }
 
 /// What the service answers a session with, delivered to the requesting
@@ -200,6 +202,9 @@ pub struct PaperIssue {
     pub announcements: Vec<PaperAnnouncement>,
     /// NEW WORK for this reader; `None` on a preview and on a back issue.
     pub work: Option<PaperWork>,
+    /// The nearest printed editions on either side, where `←`/`→` lead.
+    pub earlier: Option<NaiveDate>,
+    pub later: Option<NaiveDate>,
 }
 
 #[derive(Clone, Debug)]
@@ -685,6 +690,12 @@ impl PaperService {
         self.spawn_open(user_id, PaperTrigger::Command, Some(edition));
     }
 
+    /// `←`/`→` in the open paper: a neighbour the issue on screen named,
+    /// read exactly like `/paper YYYY-MM-DD`.
+    pub fn request_browse(&self, user_id: Uuid, edition: NaiveDate) {
+        self.spawn_open(user_id, PaperTrigger::Browse, Some(edition));
+    }
+
     fn spawn_open(&self, user_id: Uuid, trigger: PaperTrigger, requested: Option<NaiveDate>) {
         let service = self.clone();
         tokio::spawn(
@@ -811,6 +822,7 @@ impl PaperService {
                 metrics::record_paper_open(match trigger {
                     PaperTrigger::Login => PaperOpenResult::Login,
                     PaperTrigger::Command => PaperOpenResult::Command,
+                    PaperTrigger::Browse => PaperOpenResult::Browse,
                 });
                 Some(PaperOutcome::Ready(issue))
             }
@@ -879,10 +891,14 @@ impl PaperService {
         } else {
             None
         };
+        let earlier = PaperEdition::nearest_printed(&client, day, EditionStep::Earlier).await?;
+        let later = PaperEdition::nearest_printed(&client, day, EditionStep::Later).await?;
         let issue = PaperIssue {
             edition,
             announcements,
             work,
+            earlier,
+            later,
         };
         match trigger {
             PaperTrigger::Login => {
@@ -900,7 +916,7 @@ impl PaperService {
                     Ok(Opened::AlreadyShown)
                 }
             }
-            PaperTrigger::Command => Ok(Opened::Ready(issue)),
+            PaperTrigger::Command | PaperTrigger::Browse => Ok(Opened::Ready(issue)),
         }
     }
 }
@@ -1286,6 +1302,8 @@ fn drain_events(app: &mut App) -> bool {
                                 edition,
                                 announcements,
                                 work: None,
+                                earlier: None,
+                                later: None,
                             },
                         ));
                         Banner::success(&format!("Preview, not printed. {line}"))
@@ -1319,7 +1337,7 @@ fn open_paper(app: &mut App, trigger: PaperTrigger, outcome: PaperOutcome) {
             // Nothing to pop; the account's claim was not spent
             // (`resolve_open` claims only when there is a print).
         }
-        (PaperTrigger::Command, PaperOutcome::Empty) => {
+        (PaperTrigger::Command | PaperTrigger::Browse, PaperOutcome::Empty) => {
             app.paper.modal = None;
             app.banner = Some(Banner::info(
                 "Nothing printed yet today. Graybeard is still at the press.",
@@ -1353,14 +1371,38 @@ fn edition_modal(app: &App, issue: &PaperIssue) -> PaperModal {
     let member_room_ids = app.chat.rooms.iter().map(|(room, _)| room.id).collect();
     let bumped_labels =
         crate::app::chat::ui::bumped_join_room_slugs(app.shop_state.active_room_effects());
-    PaperModal::edition(PaperLayout {
-        edition: &issue.edition,
-        announcements: &issue.announcements,
-        work: issue.work.as_ref(),
-        rail_order: &rail_order,
-        member_room_ids: &member_room_ids,
-        bumped_labels: &bumped_labels,
-    })
+    PaperModal::edition(
+        PaperLayout {
+            edition: &issue.edition,
+            announcements: &issue.announcements,
+            work: issue.work.as_ref(),
+            rail_order: &rail_order,
+            member_room_ids: &member_room_ids,
+            bumped_labels: &bumped_labels,
+        },
+        PaperNeighbors {
+            earlier: issue.earlier,
+            later: issue.later,
+        },
+    )
+}
+
+/// `←`/`→` in the open paper: ask for the neighbour the issue on screen
+/// named, keeping it up until the answer lands. At either end there is no
+/// neighbour and nothing happens.
+pub(super) fn browse(app: &mut App, step: EditionStep) {
+    let Some(modal) = app.paper.modal.as_ref() else {
+        return;
+    };
+    let target = match step {
+        EditionStep::Earlier => modal.neighbors.earlier,
+        EditionStep::Later => modal.neighbors.later,
+    };
+    let Some(edition) = target else {
+        return;
+    };
+    app.paper.awaiting = Some(PaperTrigger::Browse);
+    app.paper.service.request_browse(app.user_id, edition);
 }
 
 /// Drain `/paper` from the composer. The open is for everyone; the

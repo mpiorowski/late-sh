@@ -356,24 +356,24 @@ async fn top_drinkers_first_place_gets_the_badge_and_a_tie_shares_it() {
     let tied = create_test_user(&test_db.db, "drnk-tied").await;
     let runner_up = create_test_user(&test_db.db, "drnk-runner-up").await;
 
-    UserDrinks::record_purchase(&client, first.id, Bar::Tavern, 1_000)
+    UserDrinks::record_purchase(&client, first.id, Bar::Tavern, 1_000, true)
         .await
         .expect("pour");
-    UserDrinks::record_comped_pour(&client, first.id, Bar::Nightcap, 400)
+    UserDrinks::record_comped_pour(&client, first.id, Bar::Nightcap, 400, true)
         .await
         .expect("round credit");
-    UserDrinks::record_purchase(&client, tied.id, Bar::Nightcap, 1_000)
+    UserDrinks::record_purchase(&client, tied.id, Bar::Nightcap, 1_000, true)
         .await
         .expect("pour");
-    UserDrinks::record_comped_pour(&client, tied.id, Bar::Tavern, 400)
+    UserDrinks::record_comped_pour(&client, tied.id, Bar::Tavern, 400, true)
         .await
         .expect("round credit");
-    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 500)
+    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 500, true)
         .await
         .expect("pour");
     roll_drink_pours_back_a_month(&client).await;
     // This month's binge is not last month's standings.
-    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 1_000)
+    UserDrinks::record_purchase(&client, runner_up.id, Bar::Tavern, 1_000, true)
         .await
         .expect("pour this month");
 
@@ -406,6 +406,33 @@ async fn top_drinkers_first_place_gets_the_badge_and_a_tie_shares_it() {
     assert_eq!(
         format_score_value(TOP_DRINKERS_AWARD_CATEGORY, 1_400),
         "1400 buzz"
+    );
+}
+
+#[tokio::test]
+async fn non_intoxicating_pours_cannot_win_the_top_drinkers_badge() {
+    let test_db = test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let sober = create_test_user(&test_db.db, "drnk-sober").await;
+    UserDrinks::record_purchase(&client, sober.id, Bar::Tavern, 50, false)
+        .await
+        .expect("coffee");
+    UserDrinks::record_comped_pour(&client, sober.id, Bar::Nightcap, 400, false)
+        .await
+        .expect("comped water");
+    roll_drink_pours_back_a_month(&client).await;
+
+    snapshot_previous_month_profile_awards(&mut client)
+        .await
+        .expect("snapshot");
+    let awards = list_profile_awards_for_user(&client, sober.id)
+        .await
+        .expect("awards");
+    assert!(
+        awards
+            .iter()
+            .all(|award| award.category != TOP_DRINKERS_AWARD_CATEGORY),
+        "a month with only non-intoxicating pours has no Top Drinkers winner"
     );
 }
 

@@ -1,0 +1,22 @@
+-aa   watch attribute setting
+-at   watch attribute testing
+-bg <colorname> background color
+-c # context lines
+-fg <colorname> foreground color
+-fn <fontname> set font name
+-i   ignore fatal errors
+-lm # left margin
+-ol   watch object movement
+-L  <file> load this save file
+-om   watch object locating
+-P   alter piracy opcode
+-rm # right margin
+-rs # random number seed value
+-sc # transcript width
+-t   set Tandy bit
+-u # slots for multiple undo
+-v   show version information
+-w # text width
+-x   expand abbreviations g/x/z
+-xrm <resources> Set X11 resources
+-zs # error checking (see below)

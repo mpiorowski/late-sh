@@ -1,12 +1,22 @@
 //! Games hub: the dedicated landing screen for the immersive door games
-//! (Lateania, DCSS, NetHack, Green Dragon, ...). It is a selector — a grouped
+//! (Lateania, DCSS, NetHack, Green Dragon, ...). It is a selector, a grouped
 //! sidebar of games on the left with the selected game's full landing page
 //! rendered beside it — not a scroll. Up/down (or j/k, h/l) change the
-//! selection; Enter launches the selected game; Ctrl+J/K (or Ctrl+Down/Up)
-//! scroll a landing too long for the terminal. Adding a future door game is a
+//! selection, wrapping at both ends; Enter launches the selected game;
+//! Ctrl+J/K (or Ctrl+Down/Up) scroll a landing too long for the terminal.
+//! Under the cards the rail pins a `live` section: one row per game someone
+//! is playing right now on a door whose host serves watch sessions. Those
+//! rows are part of the same selection ([`rail_step`]); sitting on one
+//! previews that game in the landing's place, Enter opens the full watch
+//! with its chat (`door::spectate`), and `t` on a watchable card flips
+//! whether the player sees their own watchers' chat.
+//! Adding a future door game is a
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
 //! new top-level screen. Minecraft is the one card with nothing to launch: the
 //! server is played from the game client, so its landing is information only.
+//! Night City heads the sidebar for runners only ([`HubGame::roster`]): its
+//! card is the night city's front door, and Enter takes the same descent as
+//! `0` on the Lounge (`deadchannel/city/input.rs`).
 
 use std::cell::Cell;
 
@@ -15,6 +25,7 @@ use crate::app::state::App;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HubGame {
+    NightCity,
     Lateania,
     Minecraft,
     Rebels,
@@ -26,6 +37,7 @@ pub enum HubGame {
     Dopewars,
     Bashquest,
     Codekeep,
+    Zork,
     Darkroom,
 }
 
@@ -54,18 +66,23 @@ impl HubGroup {
 }
 
 impl HubGame {
-    /// Selector order, top to bottom: the house game first (Lateania, ours
-    /// from the ground up), the roguelikes by stature, the remakes (our own
-    /// build of A Dark Room), the servers we host and you play from a game
-    /// client (Minecraft), then the doors: Green Dragon (our native LORD
-    /// remake, filed with the BBS doors it descends from) and the foreign
-    /// upstream terminal games hosted on a PTY.
-    pub const ALL: [HubGame; 12] = [
+    /// Selector order, top to bottom: the house games first (Night City,
+    /// the runners' own card, sliced off for everyone else by
+    /// [`HubGame::roster`], then Lateania, ours from the ground up), the
+    /// roguelikes by stature, the remakes (our own build of A Dark Room,
+    /// then the Zork Trilogy behind our own edition and save menus), the
+    /// servers we host and you play from a game client (Minecraft), then the
+    /// doors: Green Dragon (our native LORD remake, filed with the BBS doors
+    /// it descends from) and the foreign upstream terminal games hosted on a
+    /// PTY.
+    pub const ALL: [HubGame; 14] = [
+        HubGame::NightCity,
         HubGame::Lateania,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
         HubGame::Darkroom,
+        HubGame::Zork,
         HubGame::Minecraft,
         HubGame::GreenDragon,
         HubGame::Usurper,
@@ -75,8 +92,19 @@ impl HubGame {
         HubGame::Codekeep,
     ];
 
+    /// The sidebar a session sees. Runners (`App::is_runner`) get every
+    /// card with Night City on top; everyone else gets the rest, so the card
+    /// is not there to select, let alone launch.
+    pub fn roster(is_runner: bool) -> &'static [HubGame] {
+        match is_runner {
+            true => &HubGame::ALL,
+            false => &HubGame::ALL[1..],
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
+            HubGame::NightCity => "Night City",
             HubGame::Lateania => "Lateania",
             HubGame::Minecraft => "Minecraft",
             HubGame::Rebels => "Rebels",
@@ -88,15 +116,16 @@ impl HubGame {
             HubGame::Dopewars => "dopewars",
             HubGame::Bashquest => "BashQuest",
             HubGame::Codekeep => "CodeKeep",
+            HubGame::Zork => "Zork Trilogy",
             HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
         }
     }
 
     pub fn group(self) -> HubGroup {
         match self {
-            HubGame::Lateania => HubGroup::House,
+            HubGame::NightCity | HubGame::Lateania => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::Darkroom => HubGroup::Remakes,
+            HubGame::Darkroom | HubGame::Zork => HubGroup::Remakes,
             HubGame::Minecraft => HubGroup::Servers,
             HubGame::GreenDragon
             | HubGame::Usurper
@@ -115,10 +144,35 @@ impl HubGame {
         match self {
             HubGame::Nethack => Some(DoorRcGame::Nethack),
             HubGame::Dcss => Some(DoorRcGame::Dcss),
-            HubGame::Lateania
+            HubGame::NightCity
+            | HubGame::Lateania
             | HubGame::Minecraft
             | HubGame::Rebels
             | HubGame::Brogue
+            | HubGame::Usurper
+            | HubGame::GreenDragon
+            | HubGame::Dopewars
+            | HubGame::Bashquest
+            | HubGame::Zork
+            | HubGame::Codekeep
+            | HubGame::Darkroom => None,
+        }
+    }
+
+    /// The watchable door behind this card, for the doors whose hosts serve
+    /// watch sessions (the hub's `t` key, which flips the player's watcher
+    /// chat).
+    pub fn spectate_game(self) -> Option<crate::app::door::spectate::state::SpectateGame> {
+        use crate::app::door::spectate::state::SpectateGame;
+        match self {
+            HubGame::Dcss => Some(SpectateGame::Dcss),
+            HubGame::Nethack => Some(SpectateGame::Nethack),
+            HubGame::Brogue => Some(SpectateGame::Brogue),
+            HubGame::Zork => Some(SpectateGame::Zork),
+            HubGame::NightCity
+            | HubGame::Lateania
+            | HubGame::Minecraft
+            | HubGame::Rebels
             | HubGame::Usurper
             | HubGame::GreenDragon
             | HubGame::Dopewars
@@ -135,14 +189,17 @@ impl HubGame {
     /// models. Lateania has no detached session, so its test is the recency
     /// window a backtick detach arms (`App::lateania_recently_active`): hop
     /// out and the door stays live for a few minutes, hopping in re-joins the
-    /// saved character. The roguelikes count a running (attached or detached)
-    /// game: a door sitting on its launcher is not live. Dark Room and Green
-    /// Dragon keep their loaded state across a hop, so being loaded is the
-    /// test; `App::tick` saves and drops them once the player has been away
-    /// past [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
+    /// saved character. The roguelikes and the Zork Trilogy count a running
+    /// (attached or detached) game: a door sitting on its launcher or menus
+    /// is not live, and Zork's own `tick` drops a game after twenty minutes
+    /// without input. Dark Room and Green Dragon keep their loaded state
+    /// across a hop, so being loaded is the test; `App::tick` saves and drops
+    /// them once the player has been away past
+    /// [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
     /// The PTY doors (Usurper, dopewars, BashQuest, Rebels, CodeKeep) end
     /// their session on leaving the screen, so they are never live. Minecraft
-    /// has no session here at all.
+    /// has no session here at all, and Night City is not a door: the street
+    /// keeps a runner standing on its own (`deadchannel/street`).
     pub(crate) fn live_screen(self, app: &App) -> Option<Screen> {
         match self {
             HubGame::Lateania => app.lateania_recently_active().then_some(Screen::Lateania),
@@ -161,12 +218,18 @@ impl HubGame {
                 .as_ref()
                 .is_some_and(|state| state.is_running())
                 .then_some(Screen::Brogue),
+            HubGame::Zork => app
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Zork),
             HubGame::Darkroom => app.darkroom_state.is_some().then_some(Screen::Darkroom),
             HubGame::GreenDragon => app
                 .greendragon_state
                 .is_some()
                 .then_some(Screen::GreenDragon),
-            HubGame::Minecraft
+            HubGame::NightCity
+            | HubGame::Minecraft
             | HubGame::Usurper
             | HubGame::Dopewars
             | HubGame::Bashquest
@@ -174,6 +237,20 @@ impl HubGame {
             | HubGame::Codekeep => None,
         }
     }
+}
+
+// `roster` slices Night City off the front for non-runners: it must be the
+// first card, or the slice would hide some other game.
+const _: () = assert!(matches!(HubGame::ALL[0], HubGame::NightCity));
+
+/// Whether the hub paints on the ambience edge: Night City's landing rains
+/// and flickers like the street it opens onto (`tick.rs` drives both).
+pub(crate) fn animates(app: &App) -> bool {
+    app.screen == Screen::Games
+        && app
+            .games_hub_state
+            .selected_game(HubGame::roster(app.is_runner()))
+            == HubGame::NightCity
 }
 
 /// The door games with a live session, by their live-game screens, in sidebar
@@ -185,11 +262,43 @@ pub(crate) fn live_doors(app: &App) -> Vec<Screen> {
         .collect()
 }
 
+/// One selectable row of the rail: a game card (its index in the session's
+/// roster), or a live game (its index among the live rows under the cards).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RailEntry {
+    Card(usize),
+    Live(usize),
+}
+
+/// One step along the rail from `current`: `cards` cards first, then `live`
+/// live rows, wrapping at both ends. Up from the first card lands on the last
+/// live row (the last card when nobody is playing).
+pub fn rail_step(cards: usize, live: usize, current: RailEntry, forward: bool) -> RailEntry {
+    let total = cards + live;
+    let at = match current {
+        RailEntry::Card(index) => index,
+        RailEntry::Live(index) => cards + index,
+    };
+    let next = match forward {
+        true => (at + 1) % total,
+        false => (at + total - 1) % total,
+    };
+    match next.checked_sub(cards) {
+        Some(index) => RailEntry::Live(index),
+        None => RailEntry::Card(next),
+    }
+}
+
 /// Per-session hub state: which game card is selected, and how far its
-/// landing is scrolled.
+/// landing is scrolled. Every selection call takes the session's roster
+/// ([`HubGame::roster`]): it changes when a runner joins or leaves
+/// #deadchannel, and the selection is a game, not a row, so it stays put.
 #[derive(Default)]
 pub struct State {
-    selected: usize,
+    /// The chosen card; `None` until one is chosen, which shows the top of
+    /// the roster. A choice the roster no longer holds (Night City after
+    /// leaving #deadchannel) shows the top too.
+    selected: Option<HubGame>,
     /// Rows the selected landing is scrolled down. Back to the top whenever the
     /// selection changes.
     scroll: u16,
@@ -200,38 +309,32 @@ pub struct State {
 }
 
 impl State {
-    pub fn selected(&self) -> usize {
-        self.selected.min(HubGame::ALL.len() - 1)
+    /// The selected card's row in `roster`.
+    pub fn selected(&self, roster: &[HubGame]) -> usize {
+        match self.selected {
+            Some(game) => roster.iter().position(|g| *g == game).unwrap_or(0),
+            None => 0,
+        }
     }
 
-    pub fn selected_game(&self) -> HubGame {
-        HubGame::ALL[self.selected()]
+    pub fn selected_game(&self, roster: &[HubGame]) -> HubGame {
+        roster[self.selected(roster)]
     }
 
-    /// Move the selection one game down the sidebar, clamped at the last game.
-    pub fn select_next(&mut self) {
-        let last = HubGame::ALL.len() - 1;
-        self.set_selected(self.selected().saturating_add(1).min(last));
-    }
-
-    /// Move the selection one game up the sidebar, clamped at the first game.
-    pub fn select_prev(&mut self) {
-        self.set_selected(self.selected().saturating_sub(1));
-    }
-
-    pub fn select(&mut self, index: usize) {
-        if index < HubGame::ALL.len() {
-            self.set_selected(index);
+    pub fn select(&mut self, roster: &[HubGame], index: usize) {
+        if let Some(game) = roster.get(index) {
+            self.select_game(roster, *game);
         }
     }
 
     /// A different game starts at the top of its landing; re-selecting the
-    /// same one keeps the reader's place.
-    fn set_selected(&mut self, index: usize) {
-        if index != self.selected() {
+    /// one `roster` already shows (the top card too, before any choice was
+    /// made) keeps the reader's place.
+    pub fn select_game(&mut self, roster: &[HubGame], game: HubGame) {
+        if self.selected_game(roster) != game {
             self.scroll = 0;
         }
-        self.selected = index;
+        self.selected = Some(game);
     }
 
     pub fn scroll(&self) -> u16 {

@@ -91,6 +91,13 @@ licenses. These are listed, with their source and attribution, in
 [`NOTICE`](NOTICE). For example, the NetHack door game runs the unmodified
 upstream NetHack under the NetHack General Public License.
 
+The Zork story files in `assets/zork` retain their MIT license. The standalone
+Frotz interpreter and local interpreter modifications in `vendor/frotz` retain
+GPL-2.0-or-later. late.sh communicates with that executable through terminal
+input/output and process controls; it does not link Frotz. Keep the interpreter's
+exact corresponding source, notices, and build scripts with distributed binaries.
+See `vendor/frotz/LATE-ZORK.md` for the pinned base and local changes.
+
 One component is not a bundled program but source we derived from: the A Dark
 Room door is our own port of an MPL-2.0 web game. MPL-2.0 is *file-level*
 copyleft, so the files carrying material derived from upstream

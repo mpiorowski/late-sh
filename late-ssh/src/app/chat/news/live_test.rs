@@ -5,7 +5,7 @@ use super::*;
 use crate::app::{
     live::{
         state::LiveStripView,
-        ui::{StripHost, live_strip_compact_line, live_strip_lines},
+        ui::{live_strip_compact_line, live_strip_lines},
     },
     lobby::daily::live_board::canvas_background,
 };
@@ -61,11 +61,10 @@ fn every_article_in_the_snapshot_is_news_from_when_it_was_shared() {
 fn the_strip_shows_the_art_centred_beside_what_it_is_and_who_shared_it() {
     let articles = vec![article(1, "The terminal renaissance", 0)];
     let strip = LiveStripView::Article(view(&articles, Uuid::from_u128(1)).unwrap());
-    let lines: Vec<String> =
-        live_strip_lines(WIDTH, &strip, canvas_background(), StripHost::LoungeCard)
-            .iter()
-            .map(line_text)
-            .collect();
+    let lines: Vec<String> = live_strip_lines(WIDTH, &strip, canvas_background())
+        .iter()
+        .map(line_text)
+        .collect();
 
     let words = " ".repeat(23);
     let art = |row: &str| format!("    {row}       ");
@@ -80,7 +79,7 @@ fn the_strip_shows_the_art_centred_beside_what_it_is_and_who_shared_it() {
             String::new(),
             format!("{words}o read · r reply"),
             String::new(),
-            format!("── live {}", "─".repeat(72)),
+            format!("── now {}", "─".repeat(73)),
         ]
     );
 }
@@ -91,7 +90,7 @@ fn the_one_row_form_says_who_shared_what() {
     let strip = LiveStripView::Article(view(&articles, Uuid::from_u128(1)).unwrap());
     assert_eq!(
         line_text(&live_strip_compact_line(WIDTH, &strip)),
-        "── live news mat · The terminal renaissance"
+        "── now news mat · The terminal renaissance"
     );
 }
 

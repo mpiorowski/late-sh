@@ -2075,13 +2075,261 @@
     },
     {
       "type": "row",
+      "title": "Zork Trilogy",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 176
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Zork Launches",
+      "description": "Play sessions started over the range, by edition and what they loaded: auto (the autosave; Continue on the game already open resumes it and counts nothing), manual (the manual save), new (a fresh story). A switch from a live game counts once the old one has checkpointed.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (edition, action) (increase(late_ssh_zork_launches_total[$__range]))",
+          "legendFormat": "{{edition}} / {{action}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 177
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Zork Session Ends",
+      "description": "How play sessions ended over the range. quit: the player quit the story. returned: RESTORE, or a switch, checkpointed back to the menus. idle: closed after 20 minutes without game input. busy: the account's game was held by another session, or the host was shutting down. save_rejected: the chosen save was invalid or unavailable. crashed: any other exit, or the channel closed without one. connect_failed: connect, auth, the launch request, or the stream broke.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (end) (increase(late_ssh_zork_session_ends_total[$__range]))",
+          "legendFormat": "{{end}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 177
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Zork Switches, Save Reads & Suggestions",
+      "description": "switch: leaving a live game for another edition, a manual load, or a new game. switched means the old game checkpointed and the next one started; save_failed means it closed without a checkpoint exit; timed_out means no exit within 8s, so the old game stays open. saves: the menus' read of the account's six slots; a failure shows 'Unable to read saves'. suggestion: F3 on a player's own game, typing a watcher's '>' command (typed), refused off an empty prompt (not_at_prompt), or with none waiting (none_waiting).",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_zork_switches_total[$__range]))",
+          "legendFormat": "switch {{result}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (result) (increase(late_ssh_zork_catalogue_reads_total[$__range]))",
+          "legendFormat": "saves {{result}}",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (result) (increase(late_ssh_zork_suggestions_total[$__range]))",
+          "legendFormat": "suggestion {{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 177
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Zork Trouble",
+      "description": "What should stay at zero: sessions that ended crashed, connect_failed, busy, or save_rejected; switches that did not switch; failed save-slot reads. A wall of connect_failed is the late-zork host down or its secret out of step with late-ssh.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (end) (increase(late_ssh_zork_session_ends_total{end=~\"crashed|connect_failed|busy|save_rejected\"}[$__rate_interval]))",
+          "legendFormat": "{{end}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (result) (increase(late_ssh_zork_switches_total{result!=\"switched\"}[$__rate_interval]))",
+          "legendFormat": "switch {{result}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(increase(late_ssh_zork_catalogue_reads_total{result=\"failed\"}[$__rate_interval]))",
+          "legendFormat": "save reads failed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 185
+      }
+    },
+    {
+      "type": "row",
       "title": "Rendering",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 176
+        "y": 193
       },
       "panels": []
     },
@@ -2121,7 +2369,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 177
+        "y": 194
       }
     },
     {
@@ -2157,7 +2405,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 177
+        "y": 194
       }
     },
     {
@@ -2191,7 +2439,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 185
+        "y": 202
       }
     },
     {
@@ -2230,7 +2478,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 185
+        "y": 202
       }
     },
     {
@@ -2246,7 +2494,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 193
+        "y": 210
       }
     },
     {
@@ -2281,7 +2529,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 194
+        "y": 211
       }
     },
     {
@@ -2320,7 +2568,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 194
+        "y": 211
       }
     },
     {
@@ -2370,7 +2618,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 194
+        "y": 211
       }
     },
     {
@@ -2386,7 +2634,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 202
+        "y": 219
       }
     },
     {
@@ -2443,7 +2691,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 203
+        "y": 220
       }
     },
     {
@@ -2530,7 +2778,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 203
+        "y": 220
       }
     },
     {
@@ -2587,7 +2835,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 203
+        "y": 220
       }
     },
     {
@@ -2603,7 +2851,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 211
+        "y": 228
       }
     },
     {
@@ -2660,7 +2908,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 212
+        "y": 229
       }
     },
     {
@@ -2717,7 +2965,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 212
+        "y": 229
       }
     },
     {
@@ -2774,7 +3022,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 212
+        "y": 229
       }
     },
     {
@@ -2827,7 +3075,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 220
+        "y": 237
       }
     },
     {
@@ -2964,7 +3212,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 228
+        "y": 245
       }
     },
     {
@@ -3050,7 +3298,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 237
+        "y": 254
       }
     },
     {
@@ -3082,7 +3330,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 247
+        "y": 264
       }
     },
     {
@@ -3139,7 +3387,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 259
+        "y": 276
       }
     },
     {
@@ -3202,7 +3450,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 259
+        "y": 276
       }
     },
     {
@@ -3259,7 +3507,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 259
+        "y": 276
       }
     }
   ]

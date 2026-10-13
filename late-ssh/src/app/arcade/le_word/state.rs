@@ -357,7 +357,8 @@ fn score_rank(score: LetterScore) -> u8 {
 }
 
 // A child of this module (not a sibling in mod.rs) so the rollover tests can
-// drive the private reload channel and backoff directly.
+// drive the private reload channel and backoff directly. `pub(crate)` so the
+// UI tests share its `state_for` fixture.
 #[cfg(test)]
 #[path = "state_test.rs"]
-mod state_test;
+pub(crate) mod state_test;

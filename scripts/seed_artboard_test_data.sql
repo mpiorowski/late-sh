@@ -74,8 +74,7 @@ CREATE TEMP TABLE seed_art_specs (
     title text NOT NULL,
     artist text NOT NULL,
     created timestamptz NOT NULL,
-    applause integer NOT NULL,
-    owner_marked_nsfw boolean NOT NULL
+    applause integer NOT NULL
 ) ON COMMIT DROP;
 INSERT INTO seed_art_specs
 SELECT idx, md5('seed:artboard:v1:piece:' || idx)::uuid,
@@ -85,8 +84,7 @@ SELECT idx, md5('seed:artboard:v1:piece:' || idx)::uuid,
             ELSE ((current_timestamp AT TIME ZONE 'UTC')::date
                   - CASE WHEN idx <= 3 THEN 2 ELSE 1 END) AT TIME ZONE 'UTC'
                  + (10 + idx)::integer * interval '1 minute' END,
-       CASE WHEN idx <= 3 THEN 7 - idx ELSE idx % 3 END,
-       idx IN (5, 6)
+       CASE WHEN idx <= 3 THEN 7 - idx ELSE idx % 3 END
 FROM (VALUES
     (1, 'Checkerboard'), (2, 'Diagonal'), (3, 'Rings'), (4, 'Bars'),
     (5, 'Steps'), (6, 'Diamond'), (7, 'Target'), (8, 'Waves'),
@@ -142,7 +140,7 @@ END $$;
 
 INSERT INTO artboard_pieces
     (id, created, user_id, title, width, height, canvas, provenance, glyph_count,
-     own_share_percent, content_hash, period_month, owner_marked_nsfw)
+     own_share_percent, content_hash, period_month)
 SELECT s.id, s.created, u.user_id, s.title, 32, 12,
        jsonb_build_object('width', 32, 'height', 12, 'colors', '[]'::jsonb,
            'cells', jsonb_agg(jsonb_build_array(jsonb_build_object('x', g.x, 'y', g.y),
@@ -152,24 +150,21 @@ SELECT s.id, s.created, u.user_id, s.title, 32, 12,
        count(*)::integer, 100,
        encode(sha256(convert_to(E'32x12\n' || string_agg(
            g.x || ',' || g.y || ',' || ascii(g.ch) || E'\n', '' ORDER BY g.x, g.y), 'UTF8')), 'hex'),
-       date_trunc('month', s.created AT TIME ZONE 'UTC')::date, s.owner_marked_nsfw
+       date_trunc('month', s.created AT TIME ZONE 'UTC')::date
 FROM seed_art_specs s
 JOIN seed_art_users u ON u.account = s.artist
 JOIN seed_art_glyphs g USING (idx)
-GROUP BY s.idx, s.id, s.created, u.user_id, u.username, s.title, s.owner_marked_nsfw
+GROUP BY s.idx, s.id, s.created, u.user_id, u.username, s.title
 ON CONFLICT (id) DO UPDATE SET
     created = EXCLUDED.created, updated = current_timestamp,
     title = EXCLUDED.title, width = EXCLUDED.width, height = EXCLUDED.height,
     canvas = EXCLUDED.canvas, provenance = EXCLUDED.provenance,
     glyph_count = EXCLUDED.glyph_count, own_share_percent = EXCLUDED.own_share_percent,
     content_hash = EXCLUDED.content_hash, period_month = EXCLUDED.period_month,
-    owner_marked_nsfw = EXCLUDED.owner_marked_nsfw,
     splash_on = NULL, featured_on = NULL, removed_at = NULL;
 
--- Only fixture pieces are reset, so real accounts' other votes and works stay.
+-- Only fixture pieces are reset, so real accounts' other applause and works stay.
 DELETE FROM artboard_piece_votes v USING seed_art_specs s WHERE v.piece_id = s.id;
-DELETE FROM artboard_piece_content_votes v USING seed_art_specs s WHERE v.piece_id = s.id;
-DELETE FROM artboard_piece_staff_marks m USING seed_art_specs s WHERE m.piece_id = s.id;
 
 INSERT INTO artboard_piece_votes (piece_id, user_id, author_user_id)
 SELECT s.id, voter.user_id, artist.user_id
@@ -179,39 +174,7 @@ JOIN (VALUES ('voter1', 1), ('voter2', 2), ('voter3', 3), ('voter4', 4),
              ('mod1', 5), ('mod2', 6)) AS hands(account, idx) ON hands.idx <= s.applause
 JOIN seed_art_users voter ON voter.account = hands.account;
 
--- 02: single NSFW vote; 03: NSFW majority; 04: community tie -> SFW.
--- 05: owner override despite SFW votes; 06: mod SFW overrides owner.
--- 07: mod tie -> NSFW; 08: admin SFW overrides mod; 09: admin conflict -> NSFW.
--- 10: SFW votes; 01, 11, 12: clean slates for manual voting.
-INSERT INTO artboard_piece_content_votes (piece_id, user_id, author_user_id, nsfw)
-SELECT s.id, voter.user_id, artist.user_id, votes.nsfw
-FROM (VALUES
-    (2, 'voter1', true),
-    (3, 'voter1', true), (3, 'voter2', true), (3, 'voter3', false),
-    (4, 'voter1', true), (4, 'voter2', true), (4, 'voter3', false), (4, 'voter4', false),
-    (5, 'voter1', false), (5, 'voter2', false), (5, 'voter3', false),
-    (6, 'voter1', true), (6, 'voter2', true),
-    (7, 'voter1', false), (7, 'voter2', false),
-    (8, 'voter1', true), (8, 'voter2', true),
-    (9, 'voter1', false), (9, 'voter2', false),
-    (10, 'voter1', false), (10, 'voter2', false), (10, 'voter3', false)
-) AS votes(idx, account, nsfw)
-JOIN seed_art_specs s USING (idx)
-JOIN seed_art_users artist ON artist.account = s.artist
-JOIN seed_art_users voter ON voter.account = votes.account;
-
-INSERT INTO artboard_piece_staff_marks (piece_id, actor_user_id, authority, nsfw, reason)
-SELECT s.id, u.user_id, marks.authority, marks.nsfw, 'Synthetic art rating test'
-FROM (VALUES
-    (6, 'mod1', 'moderator', false),
-    (7, 'mod1', 'moderator', false), (7, 'mod2', 'moderator', true),
-    (8, 'mod1', 'moderator', true), (8, 'admin1', 'admin', false),
-    (9, 'admin1', 'admin', false), (9, 'admin2', 'admin', true)
-) AS marks(idx, account, authority, nsfw)
-JOIN seed_art_specs s USING (idx)
-JOIN seed_art_users u ON u.account = marks.account;
-
--- Fixtures can be selected repeatedly for mode testing. A day owned by any
+-- Fixtures can be selected repeatedly for splash testing. A day owned by any
 -- non-fixture row (including one taken down) is preserved, as in production.
 UPDATE artboard_pieces p
 SET splash_on = (current_timestamp AT TIME ZONE 'UTC')::date
@@ -223,17 +186,12 @@ WHERE p.id = s.id AND s.idx = :'splash_piece'::integer
   );
 
 SELECT s.idx AS piece, left(p.id::text, 8) AS mod_id, p.title, u.username AS artist,
-       s.applause, r.sfw_votes AS sfw, r.nsfw_votes AS nsfw,
-       r.owner_marked_nsfw AS owner_flag,
-       r.mod_sfw || '/' || r.mod_nsfw AS mod_sfw_nsfw,
-       r.admin_sfw || '/' || r.admin_nsfw AS admin_sfw_nsfw,
-       p.splash_on,
+       s.applause, p.splash_on,
        p.created < ((current_timestamp AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')
            AND p.splash_on IS NULL AS queued
 FROM seed_art_specs s
 JOIN artboard_pieces p ON p.id = s.id
 JOIN users u ON u.id = p.user_id
-JOIN artboard_piece_content_ratings r ON r.piece_id = p.id
 ORDER BY s.idx;
 
 SELECT left(id::text, 8) AS mod_id, title AS todays_splash

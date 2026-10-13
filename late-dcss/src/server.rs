@@ -10,6 +10,7 @@ use crate::host::{HostConfig, PtyHost};
 use crate::identity::derive_client_key;
 use crate::playname;
 use crate::stats::{self, StatsHost};
+use crate::watch::{self, LiveRegistry, WatchHost, WatchRequest};
 
 /// Shared, connection-independent server state.
 struct Shared {
@@ -17,6 +18,8 @@ struct Shared {
     data_dir: String,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
+    /// Every live game, mirrored for the watch sessions.
+    live: Arc<LiveRegistry>,
     /// Flips to `true` on host SIGTERM/SIGINT; each live `PtyHost` watches it and
     /// SIGHUP-saves its child so a pod shutdown doesn't lose in-flight games.
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -35,6 +38,7 @@ impl Server {
                 bin: config.bin.clone(),
                 data_dir: config.data_dir.clone(),
                 authorized_key,
+                live: LiveRegistry::new(),
                 shutdown_rx,
             }),
         }
@@ -54,19 +58,25 @@ impl russh::server::Server for Server {
             rows: 24,
             rc: None,
             stats_cursors: None,
+            watch: None,
             host: None,
         }
     }
 }
 
-/// What this SSH session runs: a crawl child on a PTY (a player), or the
+/// What this SSH session runs: a crawl child on a PTY (a player), the
 /// log-streaming stats session (late-ssh's ingestion client, authenticated as
-/// the reserved `late_stats` username).
+/// the reserved `late_stats` username), or a read-only watch session (the
+/// reserved `late_watch` username).
 enum SessionHost {
     Game(PtyHost),
     /// Held only so its drop (client EOF/close) ends the stream task.
     Stats {
         _host: StatsHost,
+    },
+    /// Held only so its drop (client EOF/close) ends the stream task.
+    Watch {
+        _host: WatchHost,
     },
 }
 
@@ -85,7 +95,11 @@ pub(crate) struct ClientHandler {
     rc: Option<String>,
     /// The stats client's per-file byte offsets, raw from its env request.
     stats_cursors: Option<String>,
-    /// The running crawl child or stats stream, once the shell is requested.
+    /// What a watch session asked for, parsed from its env request. `None`
+    /// until a valid request lands; a watch shell without one is refused.
+    watch: Option<WatchRequest>,
+    /// The running crawl child, stats stream, or watch stream, once the shell
+    /// is requested.
     host: Option<SessionHost>,
 }
 
@@ -200,10 +214,15 @@ impl Handler for ClientHandler {
         variable_value: &str,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // The two env vars this host takes: the account's pushed rc, and the
-        // stats client's cursors. Anything else is ignored (the child env is
-        // a hard allowlist regardless).
-        if variable_name == crate::rc::RC_ENV_VAR {
+        // The env vars this host takes: the account's pushed rc, the stats
+        // client's cursors, and the watch request. Anything else is ignored
+        // (the child env is a hard allowlist regardless).
+        if variable_name == watch::WATCH_ENV_VAR {
+            match watch::parse_request(variable_value) {
+                Some(request) => self.watch = Some(request),
+                None => tracing::warn!(value = variable_value, "ignoring malformed watch request"),
+            }
+        } else if variable_name == crate::rc::RC_ENV_VAR {
             match crate::rc::decode_rc(variable_value) {
                 Ok(rc) => self.rc = Some(rc),
                 Err(reason) => tracing::warn!(reason, "ignoring pushed rc"),
@@ -247,6 +266,25 @@ impl Handler for ClientHandler {
             return Ok(());
         }
 
+        // The reserved watch username gets a read-only stream, never a game
+        // child, and never anything without a valid request.
+        if playname == watch::WATCH_USERNAME {
+            let Some(request) = self.watch.take() else {
+                tracing::warn!("watch shell requested without a watch request");
+                return Err(anyhow::anyhow!("watch shell without a request"));
+            };
+            self.host = Some(SessionHost::Watch {
+                _host: WatchHost::spawn(
+                    self.shared.live.clone(),
+                    request,
+                    session.handle(),
+                    channel,
+                    self.shared.shutdown_rx.clone(),
+                ),
+            });
+            return Ok(());
+        }
+
         // crawl's ncursesw aborts on a TERM it has no terminfo for; fall back to
         // a universal one so clients on exotic terminals still play.
         let term = effective_term(&self.term);
@@ -268,6 +306,7 @@ impl Handler for ClientHandler {
                 term,
                 rc: self.rc.take(),
             },
+            self.shared.live.clone(),
             session.handle(),
             channel,
             self.shared.shutdown_rx.clone(),
@@ -283,8 +322,9 @@ impl Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         match &self.host {
             Some(SessionHost::Game(host)) => host.send_input(data.to_vec()),
-            // The stats stream is one-way; client bytes carry nothing.
-            Some(SessionHost::Stats { .. }) | None => {}
+            // The stats and watch streams are one-way; client bytes carry
+            // nothing, and a watcher can never type into a game.
+            Some(SessionHost::Stats { .. }) | Some(SessionHost::Watch { .. }) | None => {}
         }
         Ok(())
     }
@@ -302,7 +342,7 @@ impl Handler for ClientHandler {
             Some(SessionHost::Game(host)) => {
                 host.resize(col_width.max(1) as u16, row_height.max(1) as u16);
             }
-            Some(SessionHost::Stats { .. }) | None => {}
+            Some(SessionHost::Stats { .. }) | Some(SessionHost::Watch { .. }) | None => {}
         }
         Ok(())
     }

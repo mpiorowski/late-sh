@@ -147,6 +147,12 @@ impl YoutubeClient {
     }
 }
 
+/// Canonical watch link for a video id, the same form the CLI's MPRIS
+/// metadata publishes.
+pub fn watch_url(video_id: &str) -> String {
+    format!("https://www.youtube.com/watch?v={video_id}")
+}
+
 fn extract_video_id(raw: &str) -> Result<String> {
     let url = Url::parse(raw.trim()).context("invalid URL")?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();

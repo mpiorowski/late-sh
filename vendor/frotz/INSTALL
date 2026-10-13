@@ -1,0 +1,435 @@
+===========================================================================
+---------------------------------------------------------------------------
+|  READ THIS FILE ALL THE WAY THROUGH BEFORE ATTEMPTING TO INSTALL FROTZ  |
+---------------------------------------------------------------------------
+===========================================================================
+
+Frotz was originally written specifically for MS/PC DOS.  When it was
+ported to Unix, it was done mainly with Linux in mind.  Since then,
+Frotz has been written with an aim to compile and run smoothly on as
+many platforms as possible.
+
+The source is rather generic C code and runs well on pretty much all
+current Unixen.  These are the only three things needed to compile and
+run Frotz:
+  * Some variant of Unix with an ANSI C compiler (gcc works fine)
+  * GNU Make
+  * A reasonably good SYSV derived curses library (ncurses is best)
+
+For Unicode support by way of UTF-8, libncursesw is required.  Unicode
+support can be disabled in the Makefile by commenting out this line:
+  USE_UTF8 ?= yes
+
+For sound support, a few more things are necessary:
+  * libao         (1.1.0 or higher)
+  * libmodplug    (0.8.8.4 or higher)
+  * libsamplerate (0.1.8 or higher)
+  * libsndfile    (1.0.25 or higher)
+  * libvorbis     (1.3.2 or higher)
+Earlier versions of these libraries might work, but are untested.
+
+If you don't want to build Frotz with audio support, simply do "make
+nosound" or comment out the "SOUND" line from the Makefile.
+
+For NetBSD, you must install the libao-sun plugin for libao.
+
+Linux uses ncurses, so you're safe there.  The version of curses that
+comes with NetBSD 1.6.x and later is good too.  Earlier versions lacked
+certain features needed by Frotz.  I don't know about the other *BSD
+curses.  Of the current BSDs, only NetBSD still uses the old BSD curses 
+library.  All the others, including macOS, now use ncurses.
+
+A constant problem with macOS is the built-in ncurses.  Even on the
+latest releases of macOS; ncurses is very old and seems to identify
+itself incorrectly.  For this reason, it is highly recommended that
+ncurses from Homebrew be installed before compiling Frotz.  See
+"Apple-specific installation issues" below.
+
+For older systems, especially ones not Linux or [Net|Free|Open]BSD...
+You can download ncurses from https://www.gnu.org/software/ncurses/ or
+ftp://ftp.gnu/org/gnu/ncurses/ and compile it yourself.  If you must use
+the vendor-supplied curses library, see the platform-specific info
+below.  If your system provides a means to install ncurses, that's
+usually the best approach.
+
+GCC 10 introduced a switch in what is acceptable for declaring global
+variables.  A brief discussion of this is at
+https://gcc.gnu.org/bugzilla/show_bug.cgi?id=85678.  Before GCC 10, the
+default was changed from -fcommon to -fno-common.  CLANG also did this,
+though I'm not clear when the change was made.  This means that commits
+done before version 2.51 will fail unless you add "CFLAGS+=-fcommom" to
+the make command line.  For instance, "make CFLAGS+=-fcommon dumb".
+
+When building Frotz under any form of Unix, GNU Make is required.
+
+
+=======================
+Installing a package ||
+=======================
+
+You have many choices available to you if you don't want to install
+Frotz by compiling it yourself.  All of the commonly-encountered
+distributions of Linux include Frotz in their packaging systems.  The
+BSDs do so including FreeBSD, NetBSD, and OpenBSD.
+
+For Macintosh, I recommend using Brew.  With a single script, this
+packaging system can be installed into a macOS system whereupon it can
+be used to install Frotz.  See https://brew.sh/ for more information.
+
+Frotz can also be installed as a container using Docker.  See
+https://github.com/newtmitch/frotz-docker and
+https://hub.docker.com/r/newtmitch/frotz
+
+
+=============
+Dumb Frotz ||
+=============
+
+Frotz can be compiled without curses, leaving you with a dumb-mode 
+interface with no dependencies whatsoever besides a functioning C 
+library.  This interface is provided for having fun on extremely old 
+computers and for those who find it useful for web-based front-ends, 
+bots, and whatever else you can think up.  Read the DUMB file for more 
+information.
+
+Unless the machine on which you're trying to build Dumb Frotz is missing
+some vital functions, no editing of the Makefile should be necessary.
+See the "Missing functions" section below if there is trouble.
+
+
+============
+SDL Frotz ||
+============
+
+SDL Frotz (aka sfrotz) started off as a port of Frotz 2.32.  After 
+languishing for several years, it is now incorporated into the Unix 
+Frotz codebase as a one of the available interfaces.  With SDL Frotz, 
+full support for V6 games is provided.
+
+Prerequisite packages for sfrotz:
+  Debian nomenclature:
+    libsdl2-dev libsdl2-mixer-dev libfreetype6-dev libpng-dev libjpeg-dev zlib1g-dev
+  macOS Homebrew nomenclature:
+    pkg-config sdl2 sdl2_mixer freetype libpng jpeg zlib
+  NetBSD nomenclature:
+    SDL2 SDL2_mixer freetype png jpeg zlib
+  OpenBSD nomenclature:
+    sdl2 sdl2-mixer freetype png jpeg zlib
+  FreeBSD nomenclature:
+    sdl2 sdl2-mixer freetype2 png ??? ???
+
+
+
+  * libsdl2-dev		(2.0.9 or higher)
+  * libsdl2-mixer-dev	(2.0.4 or higher)
+  * libfreetype6-dev	(2.6.x or higher)
+  * libpng-dev		(1.6.x or higher)
+  * libjpeg-dev		(1.5.x or higher)
+  * zlib1g-dev		(1.2.x or higher)
+Earlier versions of these libraries might work, but are untested.
+
+
+============
+X11 Frotz ||
+============
+
+X11 Frotz (aka xfrotz) was created by Daniel Schepler from around 1998 to
+2000 based in Frotz 2.32.  Like SDL Frotz, it languished for several years.
+It does have rudimentary audio support for playback of Infocom's original
+.snd audio file format and no Blorb support.  It also supports rune
+characters in Beyond Zork through .pcf fonts.  This interface is not yet
+ready.  On startup, the screen has a tendency to be black.  Saves and
+restores also don't work -- doing so causes a segfault.
+
+Prerequisite packages for xfrotz
+  Debian nomenclature):
+    libx11-dev libxt-dev libpng-dev libjpeg-dev zlib1g-dev
+
+
+================
+Prerequisites ||
+================
+
+Prerequisite packages for xfrotz:
+  * libx11		(1.6.7 or higher)
+  * libxt		(1.1.5 or higher)  
+
+Prerequisite packages for sfrotz (macOS Homebrew nomenclature):
+  * pkg-config		(0.29 or higher)
+  * sdl2		(2.0.9 or higher)
+  * sdl2_mixer		(2.0.4 or higher)
+  * freetype		(2.6.x or higher)
+  * libpng		(1.6.x or higher)
+  * jpeg		(1.5.x or higher)
+  * zlib		(1.2.x or higher)
+
+Prerequisite packages for sfrotz (NetBSD nomenclature):
+  * SDL2		(2.0.9 or higher)
+  * SDL2_mixer		(2.0.4 or higher)
+  * freetype		(2.6.x or higher)
+  * png			(1.6.x or higher)
+  * jpeg		(1.5.x or higher)
+  * zlib		(1.2.x or higher)
+
+Prerequisite packages for sfrotz (OpenBSD nomenclature):
+  * sdl2		(2.0.9 or higher)
+  * sdl2-mixer		(2.0.4 or higher)
+  * freetype		(2.6.x or higher)
+  * png			(1.6.x or higher)
+  * jpeg		(1.5.x or higher)
+  * zlib		(1.2.x or higher)
+
+Earlier versions of these libraries might work, but are untested.
+
+
+=======================
+Editing the Makefile ||
+=======================
+
+You should take a look at the Makefile.  Read the comments.  It's pretty 
+self-explanatory.  This is where you define your compiler, where Frotz 
+will be installed, what libraries you're using, if you want sound 
+support, and so on.
+
+If this is too much for you, try using your operating systems's 
+packaging scheme (or Homebrew https://brew.sh/ for macOS) to install
+Frotz for you.  If the latest version of Frotz isn't there, ask the
+package maintainer to update it.
+
+
+=================================
+Compiling and installing Frotz ||
+=================================
+
+After checking over and editing the Makefile, type "make" and Frotz will 
+be compiled.  If this doesn't work, chances are you have an older flavor 
+of Unix.  Check the second section of the Makefile.  That's where you'll 
+find options for older flavors of Unix.  Are you using plain old curses 
+or ncurses.  On modern systems, the regular curses library is actually 
+ncurses except for NetBSD.  For older systems, this isn't always true.
+Figure out where the necessary header files and libraries live and edit
+the Makefile accordingly.
+
+Once the compile is complete, make sure you have the correct permissions 
+to write where you want Frotz installed, then type "make install".  To 
+uninstall Frotz, type "make uninstall".
+
+If you don't have permission to install Frotz, you can just put the
+resulting executable somewhere like $HOME/bin and add that directory to
+your $PATH.
+
+For compiling, installing, and uninstalling Frotz using the dumb or SDL 
+interfaces, type "make dumb" or "make sdl".  You will get an executable 
+file named "dfrotz" for Dumb Frotz and "sfrotz" for SDL Frotz. To 
+install these, type "make install_dumb" or "make install_sdl".  To 
+uninstall these, type "make uninstall_dumb" or "make uninstall_sdl".  
+Substituting "dfrotz" for "dumb" and "sfrotz" for "sdl" will also work.
+
+For compiling, installing, and uninstalling dumb frotz, use "make dumb",
+"make install_dumb", and "make uninstall_dumb".  The process is exactly 
+the same as above except you won't be depending on any external 
+libraries; not even curses.
+
+To build dfrotz, frotz, and sfrotz; you can type "make all" and then
+"make install_all" to install them all.
+
+
+=====================================
+Apple-specific installation issues ||
+=====================================
+
+To start with, you need to make sure development tools are installed.
+Apple provides the "Xcode" package from the Mac App Store.
+
+As of 2022, the version of ncurses that Apple puts in macOS predates
+6.0, which was released in 2015.  Among other things, this version lacks
+support for italic text.  If you want Frotz to be able to produce italic
+text, you should install the latest version of ncurses, preferably
+through Homebrew (https://brew.sh/).
+
+Start with installing its support scripts by typing this command in a
+terminal window:
+
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+This will download and install Homebrew's support software.
+
+Then install ncurses like this:
+
+    brew install ncurses
+
+Now Frotz should compile just fine with this command:
+
+    make nosound
+
+This tells the build process to not bother with sound support.
+
+For sound support, some additional libraries are needed: libao,
+libmodplug, libsamplerate, libsndfile, and libvorbis.  Install these
+like this:
+
+    brew install libao libmodplug libsamplerate libsndfile libvorbis
+
+Now Frotz should compile just fine with this command:
+
+    make
+
+If you want graphics support through SDL, you'll need some more
+libraries, which may or may not already be present on your Mac.  To
+install them from Homebrew, do this:
+
+    brew install sdl2 sdl2-mixer freetype libpng jpeg zlib
+
+Now Frotz you should get SDL Frotz using the command:
+
+    make sdl
+
+If you insist on using Apple's own install of ncurses, you can
+pass CURSES_CONFIG and ITALIC arguments like this.
+
+    make CURSES_CONFIG=ncurses5.4-config ITALIC= nosound
+
+This is because the built-in ncurses doesn't support italic
+text, even though its reported version suggests it does.
+
+
+========================================
+Installing and playing games on Frotz ||
+========================================
+
+If you've unfamiliar with Infocom-style text adventures, you should
+probably stop here and read the file HOW_TO_PLAY.  Then come back and
+continue.
+
+Now that you have Frotz installed, you'll probably want to play some of
+those ultra-nifty text adventures on it.  These games come in files
+which are compiled programs that run on the Z-machine, which
+interpreters like Frotz emulate.  The best-stocked archive of freeware
+games for use on Z-machine interpreters is the Interactive Fiction
+Archive at http://www.ifarchive.org.  There are several mirrors of the
+archive all over the world listed there.
+
+Here are direct URLs to the zcode directories:
+
+http://ifarchive.org/indexes/if-archive/games/zcode/
+ftp://ftp.ifarchive.org/if-archive/games/zcode
+
+
+Here is the scheme I use for organizing my Zcode games:
+
+/usr/local/share/zcode			This contains games written after the
+					demise of Infocom.  Most are freeware.
+
+/home/dave/.zcode			I sometimes put games here too.
+
+/usr/local/share/zcode/infocom		This is where I keep my collection of
+					genuine Infocom games.
+
+/usr/local/share/zcode/infocom/sound	Soundfiles from "Lurking Horror"
+					and "Sherlock" go here.
+
+/usr/local/share/zcode/infocom/graphics	Graphics files from Zork 0,
+					Arthur, Shogun, and Journey go here.
+
+I add this command to my .profile file:
+export ZCODE_PATH="/usr/local/share/zcode: \
+	/usr/local/share/zcode/infocom:$HOME/.zcode
+
+Now, when I want to play Zork I, I will type "frotz zork1.dat" at the
+command prompt.  Then I will then be told I am standing in an open field
+west of a white house which has a boarded front door.
+
+You can also just give a path to the game file.
+
+When you save your game, all save files are put in the current directory
+unless you specify a full path.  Please name your saves intelligently.
+
+If a game uses sound or graphics, they will be packaged into a Blorb
+file.  This file may or may not also contain a zcode game file.  Blorb
+files containing the game file are supposed to follow the name pattern
+of "game.zblorb" or "game.zbl".  For a Blorb file that does not contain
+a game file at all, the usual pattern is "game.blorb" or "game.blb". If
+you tell Frotz to load a .zblorb file, it will look for and load a zcode
+file within and then load whatever other resources it needs from that
+Blorb file.  If the Blorb file is separate from the zcode file, then
+Frotz takes a few extra steps to load.  Suppose we have "game.z5". Frotz
+will look in the same directory as the zcode file for "game.blb" or
+"game.blorb".  If such a file is found, great.  If not, Frotz will
+continue on without.  For graphical games, not loading graphics can
+cause the game to be unplayable.
+
+You'll probably want to make use of Frotz's new config file functionality.
+The options in the config file mirror the command line options and free
+you from having to remember to add something like "-Z0" to get rid of
+complaints about buggy zcode or if you want to always play with white text
+on black at a Linux console (instead of white on blue).  Sample config
+files are included here as "frotz.conf-big" (which lists all possible
+options) and "frotz.conf-small" (a shortened one listing the more
+commonly-used options).  The Makefile defines where Frotz will look for
+the frotz.conf file.  By default, this is /usr/local/etc and can be
+changed at compile time if you like.  This file will be read if Frotz
+notices you don't have a config file of your own in "$HOME/.frotzrc".
+
+
+====================
+Missing functions ||
+====================
+
+Frotz makes use of some functions that might not be available on some
+very old systems.  Frotz has its own versions of these function if
+that's the case.  Currently these are as follows:
+  strrchr()
+  memmove()
+  strdup()
+  strndup()
+  basename()
+Read the Makefile starting at the "Potentially Missing Functions"
+section and edit according to the directions.
+
+
+===========================
+Platform-specific issues ||
+===========================
+
+Unicode character support:
+Currently, only libncursesw is known to fully provide Unicode support by
+way of UTF-8 character encoding.  At the moment, it's not clear if BSD
+curses does the job all the way.
+
+Linux:  No apparent problems.
+
+[Net|Open|Free]BSD:  If you have NetBSD 1.6.x or later, you can use the
+supplied BSD curses.  Otherwise you must have ncurses.
+
+Digital UNIX:  No apparent problems.  Sound is probably not available.
+
+Tru64 Unix:  Rebadged Digital Unix.  Sound is probably not available.
+
+Irix:  The vendor-supplied curses library is broken as well as all
+versions of ncurses supplied on SGI's freeware CDs and in SGI's freeware
+archive.  You MUST compile and install at least ncurses 5.0 from source.
+Versions of ncurses older than 5.0 are also broken on Irix.
+
+macOS 10 and later: Install the "Xcode" package from the Mac App Store.
+The supplied version of ncurses predates 6.0, so italics will not be
+supported.  See "Apple-specific installation issues" above.
+
+Solaris:  Some versions of curses on Solaris have trouble with color
+support.  At least the one in Solaris 2.6 works okay.  If compiled with
+the -02 option on an UltraSPARC using gcc 2.8.1, you may get lots of weird
+segfaults. The problem seems UltraSPARC related and it's not clear if this
+problem crosses flavor boundaries (ie, if UltraLinux or NetBSD on
+UltraSparc have this problem too).  Because version 2.8.x of gcc had lots
+of strange problems, gcc might be to blame.  I don't have sufficient
+access to test this theory, so if you're able to enlighten me on this,
+please do so.
+
+SunOS:  Uncomment the "MEMMOVE_DEF..." line in the Makefile before 
+compiling.  Since I don't have access to a SunOS machine, Frotz on SunOS 
+is untested.
+
+Other flavors of Unix:  Getting Unix Frotz to compile and run seems to
+focus mostly on making sure make(1) can find the proper curses library.
+It's probably a good idea to install ncurses anyway.
+
+Now go on and have fun!

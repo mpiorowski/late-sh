@@ -102,9 +102,10 @@ fn topbar_screen_hit_test_maps_screen_digits() {
     assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
     assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Profiles));
     assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Leaderboard));
+    assert_eq!(topbar_screen_hit_test(26, 0), Some(Screen::Calendars));
     // The door games are no longer top-level tabs; the column past the last
     // digit and the gaps between digits map to nothing.
-    assert_eq!(topbar_screen_hit_test(26, 0), None);
+    assert_eq!(topbar_screen_hit_test(28, 0), None);
     assert_eq!(topbar_screen_hit_test(13, 0), None);
     assert_eq!(topbar_screen_hit_test(12, 1), None);
 }

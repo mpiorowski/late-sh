@@ -1,0 +1,25 @@
+-a   watch attribute setting
+-A   watch attribute testing
+-f <type> type of format codes
+-h # screen height
+-i   ignore fatal errors
+-I # interpreter number
+-o   watch object movement
+-O   watch object locating
+-L <file> load this save file
+-m   turn off MORE prompts
+-n <file> set transcript filename
+-p   plain ASCII output only
+-P   alter piracy opcode
+-q   quiet mode (no startup messages)
+-r <option> Set runtime options
+-R <path> restricted read/write
+-s # random number seed value
+-S # transcript width
+-t   set Tandy bit
+-T   start transcript on startup
+-u # slots for multiple undo
+-v   show version information
+-w # screen width
+-x   expand abbreviations g/x/z
+-Z # error checking (see below)

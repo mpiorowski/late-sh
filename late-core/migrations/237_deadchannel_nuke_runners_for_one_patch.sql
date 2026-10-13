@@ -1,0 +1,16 @@
+-- One patch a day and the retuned climb (GAME.md, "One patch a day", "The
+-- fight scales up", "The blade shop prices the lead") change what every
+-- level and every tier is worth: the patch is a once-a-day decision, the
+-- siphon sits in every deck and the level 3 draft offers a brace in its
+-- place, hits ramp with the level, a bright glyph's edge grows with the
+-- level, and a blade bought above the level costs more. A runner part way
+-- up the old ladder holds a kit bought flat and a stored siphon pick its
+-- draft no longer offers (a card `Sheet::from_row` would refuse), so
+-- every sheet goes back to a fresh one and the climb is tested from the
+-- first step.
+--
+-- The nuke (migration 222, as redefined by 226) keeps the row, the look,
+-- and the leave and guide stamps, clears the day's road and the drafted
+-- cards, bumps `reset_generation` so a mark earned again is paid, and
+-- leaves `unpaid_mark` standing.
+SELECT deadchannel_nuke_runners();

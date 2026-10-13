@@ -14,8 +14,10 @@
 //! day stamps the queue's head with the day (`ArtboardPiece::splash_for_day`,
 //! a row claim on a unique index), the rest read it back, so any number of
 //! replicas may run it (root CONTEXT.md, multi-replica rule). Every login
-//! reads the day's piece off the watch (`splash_piece`) and the door shows
-//! it all day, or the coffee cup when there is none.
+//! reads the day's piece off the watch (`splash_piece_for_login`) and the
+//! door shows it all day, or the coffee cup when there is none. Only users
+//! who chose Always View on the Artboard content disclaimer see the piece;
+//! everyone else, newcomers first, gets the cup.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,18 +30,11 @@ use late_core::models::artboard_piece::{
     ApplauseOutcome, ArtboardPiece, HangOutcome, HangParams, ListingCounts, PieceListing,
     TakeDownOutcome,
 };
-use late_core::models::artboard_piece_rating::{
-    ArtContentRating, ArtboardPieceRating, ContentRatingSummary, OwnerFlagOutcome, VoteOutcome,
-};
-use late_core::models::user::ArtSplashMode;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::ArtboardProvenance;
-use crate::metrics::{
-    self, GalleryApplauseResult, GalleryContentRatingResult, GalleryHangResult,
-    GalleryTakeDownResult,
-};
+use crate::metrics::{self, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult};
 
 use super::frame::{Credit, FramedPiece};
 
@@ -96,7 +91,6 @@ pub struct GalleryPiece {
     pub applauded_by_viewer: bool,
     pub created: DateTime<Utc>,
     pub period_month: NaiveDate,
-    pub content_rating: ContentRatingSummary,
 }
 
 impl GalleryPiece {
@@ -123,7 +117,6 @@ impl GalleryPiece {
             applauded_by_viewer: piece.applauded_by_viewer,
             created: piece.created,
             period_month: piece.period_month,
-            content_rating: piece.content_rating,
         })
     }
 
@@ -168,16 +161,6 @@ impl HangRefusal {
 /// What a spawned gallery task reports back.
 #[derive(Debug)]
 pub enum GalleryResult {
-    ContentRating {
-        piece_id: Uuid,
-        generation: u64,
-        outcome: ContentRatingOutcome,
-    },
-    ContentRatingFailed {
-        piece_id: Uuid,
-        generation: u64,
-        error: String,
-    },
     Counts(ListingCounts),
     CountsFailed(String),
     /// `generation` is the section's request counter at the time this
@@ -221,24 +204,6 @@ pub struct GalleryService {
     splash_rx: watch::Receiver<Option<SplashPiece>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ContentRatingAction {
-    Vote(Option<ArtContentRating>),
-    OwnerFlag(bool),
-}
-
-/// How a content-rating request ended. A refusal is an outcome; only a
-/// database failure is `GalleryResult::ContentRatingFailed`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ContentRatingOutcome {
-    /// The piece's summary as it stands, after the write when there was one.
-    Rated(ContentRatingSummary),
-    OwnPiece,
-    NotYours,
-    NotFound,
-    Closed,
-}
-
 impl GalleryService {
     pub fn new(db: Db) -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
@@ -273,22 +238,24 @@ impl GalleryService {
         self.splash_rx.borrow().clone()
     }
 
-    /// The authenticated login gate. A cache holds the canvas, never the
-    /// authority to show it: committed marks take effect on the next login.
-    pub async fn splash_piece_for_mode(&self, mode: ArtSplashMode) -> Option<SplashPiece> {
-        self.splash_piece_for_day(mode, Utc::now().date_naive())
+    /// The authenticated login gate: `None` (the coffee cup) while the
+    /// user still has the Artboard content disclaimer on, so a hung piece
+    /// greets only those who chose Always View. The canvas comes off the
+    /// watch; whether it is still up is read fresh.
+    pub async fn splash_piece_for_login(&self, artboard_disclaimer: bool) -> Option<SplashPiece> {
+        self.splash_piece_for_day(artboard_disclaimer, Utc::now().date_naive())
             .await
     }
 
     async fn splash_piece_for_day(
         &self,
-        mode: ArtSplashMode,
+        artboard_disclaimer: bool,
         day: NaiveDate,
     ) -> Option<SplashPiece> {
-        if mode == ArtSplashMode::Never {
+        if artboard_disclaimer {
             return None;
         }
-        let mut splash = match self.splash_piece()? {
+        let splash = match self.splash_piece()? {
             splash if splash.shown_on == day => splash,
             // The hourly refresh has not crossed midnight yet, so the cache
             // still holds an earlier day's piece. Assign and publish this
@@ -312,92 +279,17 @@ impl GalleryService {
         let db = self.db.as_ref()?;
         let result = async {
             let client = db.get().await?;
-            ArtboardPieceRating::read_for_day(&client, splash.piece.id, Uuid::nil(), Some(day))
-                .await
+            ArtboardPiece::still_splash_on(&client, splash.piece.id, day).await
         }
         .await;
         match result {
-            Ok(Some(rating)) => {
-                if mode == ArtSplashMode::Sfw && rating.determination().0.is_nsfw() {
-                    return None;
-                }
-                splash.piece.content_rating = rating;
-                Some(splash)
-            }
-            Ok(None) => None,
+            Ok(true) => Some(splash),
+            Ok(false) => None,
             Err(error) => {
-                tracing::warn!(error = ?error, piece_id = %splash.piece.id, "artboard splash classification check failed");
+                tracing::warn!(error = ?error, piece_id = %splash.piece.id, "artboard splash removal check failed");
                 None
             }
         }
-    }
-
-    /// The rating dialog's round trip: read the piece's summary, after the
-    /// vote or owner flag in `action` when there is one.
-    pub fn content_rating_task(
-        &self,
-        piece_id: Uuid,
-        viewer_id: Uuid,
-        generation: u64,
-        action: Option<ContentRatingAction>,
-        tx: mpsc::UnboundedSender<GalleryResult>,
-    ) {
-        let Some(db) = self.db.clone() else {
-            let _ = tx.send(GalleryResult::ContentRating {
-                piece_id,
-                generation,
-                outcome: ContentRatingOutcome::Closed,
-            });
-            return;
-        };
-        tokio::spawn(async move {
-            let msg = match rate_content(&db, piece_id, viewer_id, action).await {
-                Ok(outcome) => {
-                    metrics::record_gallery_content_rating(match outcome {
-                        ContentRatingOutcome::Rated(_) => match action {
-                            None => GalleryContentRatingResult::Viewed,
-                            Some(ContentRatingAction::Vote(Some(_))) => {
-                                GalleryContentRatingResult::Voted
-                            }
-                            Some(ContentRatingAction::Vote(None)) => {
-                                GalleryContentRatingResult::VoteWithdrawn
-                            }
-                            Some(ContentRatingAction::OwnerFlag(true)) => {
-                                GalleryContentRatingResult::Flagged
-                            }
-                            Some(ContentRatingAction::OwnerFlag(false)) => {
-                                GalleryContentRatingResult::Unflagged
-                            }
-                        },
-                        ContentRatingOutcome::OwnPiece => GalleryContentRatingResult::OwnPiece,
-                        ContentRatingOutcome::NotYours => GalleryContentRatingResult::NotYours,
-                        ContentRatingOutcome::NotFound => GalleryContentRatingResult::NotFound,
-                        ContentRatingOutcome::Closed => GalleryContentRatingResult::Closed,
-                    });
-                    GalleryResult::ContentRating {
-                        piece_id,
-                        generation,
-                        outcome,
-                    }
-                }
-                Err(error) => {
-                    metrics::record_gallery_content_rating(GalleryContentRatingResult::Failed);
-                    late_core::error_span!(
-                        "artboard_gallery_content_rating",
-                        error = ?error,
-                        %viewer_id,
-                        %piece_id,
-                        "artboard content rating request failed"
-                    );
-                    GalleryResult::ContentRatingFailed {
-                        piece_id,
-                        generation,
-                        error: "The content rating did not go through. Try again.".to_string(),
-                    }
-                }
-            };
-            let _ = tx.send(msg);
-        });
     }
 
     /// Hourly re-read of the splash wall, assigning the day's piece when
@@ -706,48 +598,6 @@ impl GalleryService {
             };
             let _ = tx.send(msg);
         });
-    }
-}
-
-/// One content-rating round trip in one transaction: the write in `action`
-/// when there is one, then the summary it left.
-async fn rate_content(
-    db: &Db,
-    piece_id: Uuid,
-    viewer_id: Uuid,
-    action: Option<ContentRatingAction>,
-) -> Result<ContentRatingOutcome> {
-    let mut client = db.get().await?;
-    let transaction = client.transaction().await?;
-    match action {
-        None => {}
-        Some(action) => match action {
-            ContentRatingAction::Vote(rating) => {
-                match ArtboardPieceRating::set_vote(&transaction, piece_id, viewer_id, rating)
-                    .await?
-                {
-                    VoteOutcome::Saved => {}
-                    VoteOutcome::OwnPiece => return Ok(ContentRatingOutcome::OwnPiece),
-                    VoteOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
-                }
-            }
-            ContentRatingAction::OwnerFlag(nsfw) => {
-                match ArtboardPieceRating::set_owner_flag(&transaction, piece_id, viewer_id, nsfw)
-                    .await?
-                {
-                    OwnerFlagOutcome::Saved => {}
-                    OwnerFlagOutcome::NotYours => return Ok(ContentRatingOutcome::NotYours),
-                    OwnerFlagOutcome::NotFound => return Ok(ContentRatingOutcome::NotFound),
-                }
-            }
-        },
-    }
-    match ArtboardPieceRating::read(&transaction, piece_id, viewer_id).await? {
-        Some(summary) => {
-            transaction.commit().await?;
-            Ok(ContentRatingOutcome::Rated(summary))
-        }
-        None => Ok(ContentRatingOutcome::NotFound),
     }
 }
 

@@ -6,11 +6,11 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/seed_artboard_test_data.sh [SPLASH_PIECE]
 
-Enable the gallery and seed 11 test accounts and 12 numbered ASCII pieces with
-applause and content ratings. SPLASH_PIECE is 1-11 (default: 1); use 3, 5, 7, or 9
-for an NSFW-rated splash. All drawings are harmless. Today's non-fixture
-splash stays.
-Rerunning restores the fixture pieces and their votes/marks, including test
+Seed 11 test accounts and 12 numbered ASCII pieces with applause.
+SPLASH_PIECE is 1-11 (default: 1). Today's non-fixture splash stays. The
+splash shows the piece only to accounts that chose Always View (A) on the
+Artboard content disclaimer; everyone else sees the coffee cup.
+Rerunning restores the fixture pieces and their applause, including test
 changes made in the TUI. Existing accounts and other pieces are preserved.
 
 Run make start first so the database migrations have been applied. Restart
@@ -51,12 +51,12 @@ PSQL=(docker compose exec -T postgres psql -X
   -v ON_ERROR_STOP=1)
 
 SCHEMA_READY="$("${PSQL[@]}" -At <<'SQL'
-SELECT to_regclass('artboard_piece_content_ratings') IS NOT NULL
+SELECT to_regclass('artboard_pieces') IS NOT NULL
    AND to_regclass('user_ssh_keys') IS NOT NULL;
 SQL
 )"
 if [[ $SCHEMA_READY != t ]]; then
-  echo 'Artboard rating migrations are missing. Run make start with the current code, then retry.' >&2
+  echo 'Artboard gallery migrations are missing. Run make start with the current code, then retry.' >&2
   exit 3
 fi
 
@@ -92,9 +92,10 @@ echo "-> restoring art fixtures; selecting piece $SPLASH_PIECE for today's splas
 } | "${PSQL[@]}" "${PSQL_ARGS[@]}"
 
 cat <<'READY'
-Ready: open Artboard (4), select Newest in the gallery rail, then press n on a
-piece to vote. Log in as art_artist1/2/3 to exercise the owner flag:
+Ready: open Artboard (4), select Newest in the gallery rail, then press v on a
+piece to applaud. Log in as any fixture account:
   ssh -o IdentitiesOnly=yes -i tmp/artboard-seed-keys/art_artist1 -p 2222 localhost
 Voters, moderators, and admins have matching keys in the same directory.
+Press A on the Artboard disclaimer, then reconnect to see the splash piece.
 Refresh the splash cache with: docker compose restart service-ssh
 READY

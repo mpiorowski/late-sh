@@ -131,8 +131,9 @@ Testing guidance:
 
 Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
-- `late-core/src/bin/gen_nonograms.rs` generates JSON packs and validates candidates with `number-loom`.
-- `late-core/src/nonogram.rs` owns the shared JSON schema, clue derivation, pack validation, and deterministic daily selection.
+- `late-core/src/bin/gen_nonograms.rs` generates JSON packs (`cargo run -p late-core --release --bin gen_nonograms` rewrites `late-ssh/assets/nonograms/`). A candidate ships only when line logic alone finishes it (`nonogram::solve_by_lines`): no shipped puzzle needs a guess, and every one has exactly one answer. `arcade/nonogram/state_test.rs::every_shipped_puzzle_solves_by_line_logic` pins the shipped packs.
+- Puzzle ids are `<size>-<digest of the solution>`. Saved games find their puzzle by id, so a regenerated pack never hands an old id to a different picture: a save whose puzzle left the pack does not load, and that slot starts a fresh puzzle. A daily win is keyed by date and difficulty, not puzzle, so it is never paid twice.
+- `late-core/src/nonogram.rs` owns the shared JSON schema, clue derivation, the line-logic solver, pack validation, and deterministic daily selection. The runtime's red "impossible" clue labels come from the same solver (`line_fits`), with the player's marks mapped to its cells in `arcade/nonogram/state.rs`.
 - Assets live in `late-ssh/assets/nonograms/` as `index.json` plus one pack file per size.
 - `arcade/nonogram/state.rs` loads assets at server startup through `include_bytes!`.
 - SSH sessions never generate nonograms on demand.
@@ -141,7 +142,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 ## Rendering
 
 - `arcade/ui.rs` renders the lobby game list and delegates active games to their `ui.rs`.
-- The lobby has no ASCII banner (dropped 2026-08: with the quest strip on top, small terminals had no headroom left) and auto-scrolls the selected entry near the top third of the viewport.
+- The lobby has no ASCII banner (with the quest strip on top, small terminals have no headroom for one) and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
 - Daily puzzle QoL feedback is local to each game UI: Sudoku user-entered values render red only when they duplicate the same number in their row, column, or 3x3 box; Nonogram clue labels render green when the current filled runs satisfy that row/column clue and red when current fills/X marks make that row/column impossible, with the active row/column emphasized through clue text only; Minesweeper flags render green/red after game over based on whether they mark real mines and hidden cells that would open from a currently valid chord are highlighted.
 - Sliding Puzzle draws its art at the piece's size, so **the tile geometry follows the piece, not the terminal**: `ui::board_layout` takes the art's tile size when the grid fits the board area and the numbered 7×3 grid otherwise, and the draw path and mouse hit-testing both go through it (`hit_test` takes `State::art_tile_geometry`) so a click lands on the tile the frame drew. A piece too big for the terminal says so on the tip line and plays numbered. The credit (`title by @painter`) sits on the row under the grid when there is one; the tip line stays the game's own messages. Faint amber tile numbers overlay the art while unsolved, since sparse ASCII tiles look alike. Tests build pieces from `dartboard_core::Canvas` directly, no network.
@@ -159,7 +160,7 @@ Current per-game basics:
 - Nonograms: arrows or `h/j/k/l` move, `Space`/`x` toggle, `0`/Backspace/`c` clear, `d/p` daily/personal, `n` new board, `r` reset, `[`/`]` difficulty.
 - Minesweeper: arrows or `h/j/k/l` move, reveal/flag/chord controls live in the game info panel.
 - Solitaire: card/tableau/foundation controls live in the game info panel; mouse support maps left-click to select/place/draw stock, right-click to auto-move the clicked card, and wheel events over the board to tableau scroll.
-- Le Word: type `a-z`, `Enter` submits, Backspace deletes, and `!` opens rules.
+- Le Word: type `a-z`, `Enter` submits, Backspace deletes, and `!` opens rules. A scored letter reads by shape as well as color (`ui.rs::score_tile`: correct is a solid tile, present a solid tile in brackets, absent the bare letter), because many themes give `SUCCESS`, `AMBER`, and `TEXT_FAINT` the same value; the rules legend draws the same tiles instead of naming colors.
 - Rubik's Cube: everyone gets the same UTC daily scramble; `u/d/l/r/f/b` turns faces clockwise, uppercase turns inverse, `0` resets today's scramble (`s` is the share card, like every daily), `v` rotates the view right, and arrows rotate the view in their own directions.
 - Sliding Puzzle: arrows or `h/j/k/l` slide an adjacent tile in the indicated direction into the gap; left-clicking an adjacent tile moves it directly. `i` toggles the session-only numbered/art view without changing the board or reward contract; on a failed art load, `i` twice asks again at once. `d`/`p` switch daily/personal mode, `n` twice starts a new personal board, `[`/`]` changes difficulty, and `r`/`0` twice restores the active scramble. Personal boards persist but have no reward. Reset is refused on a solved daily (the win is banked), like Rubik's Cube. Sliding Puzzle has no keypress-time rollover: a board left open across UTC midnight finishes under its own date and `refresh_daily_games` rolls it once the player looks away.
 

@@ -118,6 +118,11 @@ async fn main() -> anyhow::Result<()> {
     let _telemetry = late_core::telemetry::init_telemetry("late-ssh")
         .context("failed to initialize telemetry")?;
 
+    // The ascii scenes build their land once per process (alpine dawn
+    // raymarches for about half a second): do it here, off the runtime's
+    // workers, rather than under the first away session's app lock.
+    tokio::task::spawn_blocking(late_ssh::app::ascii::piece::warm);
+
     // Load configuration from environment
     let config = Config::load().context("failed to load configuration")?;
     config.log_startup();
@@ -210,6 +215,12 @@ async fn main() -> anyhow::Result<()> {
         .with_session_registry(session_registry.clone())
         .with_irc_registry(irc_registry.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone());
+    let calendar_service = late_ssh::app::calendar::svc::CalendarService::new(db.clone())
+        .with_activity(activity_publisher.clone());
+    let _calendar_worker = calendar_service.start_notify_worker(
+        pg_listener.subscribe(&[late_ssh::pg_listener::Channel::CalendarChanged]),
+    );
+    let _calendar_sweeper_task = calendar_service.start_sweeper_task();
     let _article_notify_task =
         article_service.start_notify_worker(pg_listener.subscribe(ArticleService::CHANNELS));
     let feed_service = FeedService::new(db.clone());
@@ -268,6 +279,7 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
     );
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
+    let live_games = late_ssh::app::door::spectate::svc::LiveGamesService::new(db.clone());
     let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
@@ -397,8 +409,7 @@ async fn main() -> anyhow::Result<()> {
     let shop_service = late_ssh::app::ShopService::new(db.clone())
         .with_flair_directory(flair_directory.clone())
         .with_activity(activity_publisher.clone())
-        .with_ai_service(ai_service.clone())
-        .with_drunk_map(drunk_map.clone());
+        .with_ai_service(ai_service.clone());
     let _shop_notify_task = shop_service
         .start_notify_worker(pg_listener.subscribe(late_ssh::app::ShopService::CHANNELS));
     // Every notify-driven domain is subscribed by now.
@@ -452,6 +463,7 @@ async fn main() -> anyhow::Result<()> {
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
+        calendar_service,
         feed_service,
         cyberspace_service,
         showcase_service,
@@ -472,6 +484,7 @@ async fn main() -> anyhow::Result<()> {
         greendragon_service,
         darkroom_service,
         arcade_handle_service,
+        live_games,
         door_rc_service,
         daily_service,
         bonsai_service,
@@ -563,6 +576,61 @@ async fn main() -> anyhow::Result<()> {
                 host: state.config.brogue_host.clone(),
                 port: state.config.brogue_port,
                 secret: state.config.brogue_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+
+    // The live-game rosters behind spectating: one roster stream per door
+    // whose host serves watch sessions, gated on that door's client flag.
+    let _dcss_roster_task = state.config.dcss_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Dcss,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.dcss_host.clone(),
+                port: state.config.dcss_port,
+                key: late_ssh::app::door::dcss::identity::derive_client_key(
+                    &state.config.dcss_secret,
+                ),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _nethack_roster_task = state.config.nethack_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Nethack,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.nethack_host.clone(),
+                port: state.config.nethack_port,
+                key: late_ssh::app::door::nethack::identity::derive_client_key(
+                    &state.config.nethack_secret,
+                ),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _brogue_roster_task = state.config.brogue_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Brogue,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.brogue_host.clone(),
+                port: state.config.brogue_port,
+                key: late_ssh::app::door::brogue::identity::derive_client_key(
+                    &state.config.brogue_secret,
+                ),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _zork_roster_task = state.config.zork_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Zork,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.zork_host.clone(),
+                port: state.config.zork_port,
+                key: late_ssh::app::door::zork::identity::derive_client_key(
+                    &state.config.zork_secret,
+                ),
             },
             singleton_shutdown.clone(),
         )

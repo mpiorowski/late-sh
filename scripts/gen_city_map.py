@@ -323,14 +323,16 @@ def layout_tiles():
     tenement(72, 7, 90, 16, door_y=16, windows_y=16, sleepers=2)
     carve(91, 13, 91, 16); grate(91, 14)
 
-    # the ink parlor: chairs, bottles, someone on duty. Not open yet.
+    # the ink parlor: chairs, bottles, the needle on duty. INK: a draft
+    # inked for crystals. Enter in its doorway opens the panel.
     room(92, 10, 108, 16, WHITE, doors=[(105, 16)], windows=[(94, 16), (100, 10)],
-         sign=(95, 16, 'INK'), closed='Ink')
+         sign=(95, 16, 'INK'))
     for bx in (94, 97, 100):
         tile(bx, 12, '▬')
     for gx in (103, 105, 107):
         tile(gx, 11, '!')
     tile(105, 13, '@')
+    reach['Ink'] = zone(105, 16, 105, 16); dist['Ink'] = 1
 
     alley(109, 111, 4, 16)
     tenement(112, 10, 130, 16, door_y=16, windows_y=16)
@@ -1019,9 +1021,10 @@ pub enum Landmark {
     Wire,
     /// The railing over the drop: look over the ledge.
     Ledge,
+    /// INK: the needle. A draft inked for crystals, kept through a mark.
+    Ink,
     // The shops that are not open yet (`DARK_SIGNS`): Enter at the door
     // says so. Opening one gives it a panel in `city/state.rs`.
-    Ink,
     Baths,
     Sleep,
     Shrine,

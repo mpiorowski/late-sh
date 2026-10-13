@@ -1,0 +1,16 @@
+# This is a basic sample Unix Frotz configuration file.  It contains some
+# a few options the average user is likely to want to change.
+
+# If this is actually $HOME/.frotzrc instead of the systemwide
+# configuration file, $HOME/.frotzrc will override.  These options are
+# explained in more detail in the Unix Frotz README file and the manpage.
+
+
+color		yes
+foreground	white
+backgrounnd	black
+zcode_path	/usr/local/games/zcode
+errormode	once
+ascii		no
+sound		on
+

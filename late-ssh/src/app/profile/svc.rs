@@ -46,6 +46,7 @@ pub struct ProfileService {
     db: Db,
     snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileSnapshot>>>>,
     interaction_mode_writes: Arc<Mutex<HashMap<Uuid, watch::Sender<InteractionMode>>>>,
+    profile_edit_writes: Arc<Mutex<HashMap<Uuid, watch::Sender<ProfileParams>>>>,
     evt_tx: broadcast::Sender<ProfileEvent>,
     active_users: ActiveUsers,
     username_directory: Option<UsernameDirectory>,
@@ -177,6 +178,7 @@ impl ProfileService {
             db,
             snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             interaction_mode_writes: Arc::new(Mutex::new(HashMap::new())),
+            profile_edit_writes: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             active_users,
             username_directory: None,
@@ -361,20 +363,41 @@ impl ProfileService {
         Ok(())
     }
 
+    /// Persist the latest profile draft with one background writer per user.
+    /// Every save carries the whole draft, so saves land in order and a burst
+    /// collapses into its newest draft instead of racing an older one.
     pub fn edit_profile(&self, user_id: Uuid, params: ProfileParams) {
+        let mut writers = self.profile_edit_writes.lock_recover();
+        if let Some(writer) = writers.get(&user_id) {
+            writer.send_replace(params);
+            return;
+        }
+        let (writer, mut pending) = watch::channel(params);
+        writers.insert(user_id, writer);
+        drop(writers);
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service.do_edit_profile(user_id, params).await {
-                    late_core::error_span!(
-                        "profile_edit_failed",
-                        error = ?e,
-                        "failed to edit profile"
-                    );
-                    service.publish_event(ProfileEvent::Error {
-                        user_id,
-                        message: profile_error_message(&e).to_string(),
-                    });
+                loop {
+                    let params = pending.borrow_and_update().clone();
+                    if let Err(e) = service.do_edit_profile(user_id, params).await {
+                        late_core::error_span!(
+                            "profile_edit_failed",
+                            error = ?e,
+                            "failed to edit profile"
+                        );
+                        service.publish_event(ProfileEvent::Error {
+                            user_id,
+                            message: profile_error_message(&e).to_string(),
+                        });
+                    }
+                    // Share the enqueue lock so a new draft cannot arrive
+                    // between checking for work and retiring this writer.
+                    let mut writers = service.profile_edit_writes.lock_recover();
+                    if !pending.has_changed().unwrap_or(false) {
+                        writers.remove(&user_id);
+                        break;
+                    }
                 }
             }
             .instrument(info_span!("profile.edit_task", user_id = %user_id)),

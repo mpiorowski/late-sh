@@ -69,6 +69,20 @@ fn the_armorer_cursor_walks_the_wall_and_holds_at_the_ends() {
 }
 
 #[test]
+fn the_needle_cursor_walks_the_drafts_and_holds_at_the_ends() {
+    let mut state = State::new();
+    assert_eq!(state.picked_draft().level, 3);
+    state.pick_draft_up();
+    assert_eq!(state.picked_draft().level, 3, "the top holds");
+    for _ in 0..10 {
+        state.pick_draft_down();
+    }
+    assert_eq!(state.picked_draft().level, 12, "the bottom holds");
+    state.pick_draft_up();
+    assert_eq!(state.picked_draft().level, 9);
+}
+
+#[test]
 fn a_street_line_expires_on_its_own() {
     let mut state = State::new();
     state.tick(100);
@@ -145,7 +159,6 @@ fn leaning_out_only_happens_at_the_ledge_and_never_outlives_it() {
 #[test]
 fn every_closed_shop_answers_enter_with_the_same_line() {
     for landmark in [
-        Landmark::Ink,
         Landmark::Baths,
         Landmark::Sleep,
         Landmark::Shrine,

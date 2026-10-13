@@ -1360,6 +1360,20 @@ impl ChatService {
         )
     }
 
+    /// Awaited reply path for IRC room moderation, preserving the joined
+    /// room's identity instead of resolving its potentially shared slug.
+    pub(crate) async fn run_room_mod_command(
+        &self,
+        user_id: Uuid,
+        permissions: Permissions,
+        request: RoomModRequest,
+    ) -> Result<Vec<String>> {
+        self.moderation_service()
+            .room_command(user_id, permissions, request)
+            .await
+            .map(|done| done.messages)
+    }
+
     /// Rebuild the mention-autocomplete name list.
     ///
     /// This reads the process-wide `UsernameDirectory` rather than the DB. That
@@ -2770,7 +2784,8 @@ impl ChatService {
     /// Post a `/bug` or `/suggest` report card into its report-only room,
     /// regardless of which room the composer was focused on. Joins the room
     /// first so a report never bounces on membership. Success/failure surfaces
-    /// through the usual `SendSucceeded`/`SendFailed` banners.
+    /// through the usual `SendSucceeded`/`SendFailed` events; the submitting
+    /// session banners a success, since the card lands out of sight.
     pub(crate) fn send_report_task(
         &self,
         user_id: Uuid,

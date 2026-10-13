@@ -142,8 +142,8 @@ Room/channel projection lives in `proj.rs`.
 
 Exposed IRC channels:
 - `lounge` and `language` rooms.
-- `topic` rooms with public visibility.
-- `topic` rooms with private visibility, but only for members.
+- `topic` rooms with public visibility as `#slug`.
+- `topic` rooms with private visibility as `##slug`, but only for members.
 
 Not exposed as normal IRC channels:
 - DMs.
@@ -155,9 +155,11 @@ Behavior:
 - The JOIN burst is JOIN, then the topic (`replies::topic`: 332 with `chat_rooms.topic`, 331 when unset), then NAMES. A `TOPIC #room` query answers the same way. `TOPIC #room :text` still refuses with 482: a private room's topic answers to its owner and a public one to the mods, and that authority lives in the chat service, not in the IRC layer.
 - Joining a public channel calls the normal room membership path.
 - Joining a private channel requires existing membership; IRC presents private rooms as invite-only.
+- Single-hash names address public rooms only; double-hash names address private rooms only. JOIN never creates a room or falls back between namespaces. Channel lookup is ASCII case-insensitive.
 - PART detaches the IRC view for normal rooms but does not leave late.sh room membership.
 - PART on `#lounge` is refused and the JOIN/NAMES burst is resent.
 - `/LIST` returns IRC-visible channels plus member counts.
+- LIST keeps same-slug public and private rooms as separate entries. Private rooms remain hidden from non-members (including a 403 on JOIN); `MODE ##room` reports `+inst`.
 - `/NAMES`, `/WHO`, `/WHOIS`, `ISON`, and related compatibility commands should use shared username/presence sources and avoid per-row DB work where possible.
 
 Message send:
@@ -189,7 +191,8 @@ Mappings:
 
 Invariants:
 - Re-check permissions before executing moderation commands. Do not trust permissions cached when the IRC session registered.
-- Use `ChatService::run_mod_command` so audit logs, notifications, session effects, voice revocation, and DB state stay shared with TUI moderation.
+- Use the `ChatService` moderation adapters so audit logs, notifications, session effects, voice revocation, and DB state stay shared with TUI moderation. Server KILL uses `run_mod_command`.
+- Channel KICK and MODE ±b use `ChatService::run_room_mod_command` with the joined room ID. Never resolve these actions by slug: a public room and a private room may share one.
 - Server kick/ban and account deletion must disconnect live IRC sessions through `IrcRegistry`.
 - Room moderation events should be projected to IRC clients in affected joined channels.
 - Moderator grant/revoke events are projected as IRC channel `+o`/`-o` across joined channels, and the target session updates its cached staff flags.

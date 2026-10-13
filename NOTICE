@@ -7,6 +7,29 @@ installs, or runs, together with their licenses and where their source can be
 obtained. It does not change the license of late.sh itself.
 
 
+Zork I, II, III and Frotz
+------------------------
+
+The original Z-machine story files are vendored in assets/zork, under the MIT
+license (Copyright (c) 2025 Microsoft). Their complete permission notice is in
+assets/zork/LICENSE; source commits, story identities, and checksums are recorded
+in assets/zork/PROVENANCE.md and SHA256SUMS.
+
+The independent interpreter is Frotz 2.56pre, vendored from
+https://gitlab.com/DavidGriffith/frotz at commit
+042d7bcadc1e2a8090cf737c841d8b7fc14b6eff. Frotz and our modifications are
+GPL-2.0-or-later; the full license, original copyright headers, source, and build
+machinery are retained in vendor/frotz. See vendor/frotz/LATE-ZORK.md for rebuild
+instructions and the dated local changes: two-slot persistence, input/RNG/screen
+continuations, cosmetic save descriptions, menu returns, and process integration.
+
+late.sh executes Frotz as a separate program over a terminal. It does not link
+the interpreter or incorporate its GPL code into the FSL Rust application.
+Redistributions of the interpreter binary must include its exact modified
+corresponding source, notices, and build/installation scripts. The repository
+license does not replace these component licenses.
+
+
 NetHack
 -------
 

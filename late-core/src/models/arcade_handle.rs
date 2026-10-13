@@ -31,7 +31,10 @@ pub const HANDLE_MAX_LEN: usize = 20;
 /// digits, or underscores, within the length bounds. Deliberately a strict
 /// subset of every consumer's rules: crawl's name charset (alnum plus
 /// `- . _ space`), the door hosts' playname sanitizers (`[A-Za-z0-9_]`), and
-/// what travels safely as an SSH username.
+/// what travels safely as an SSH username. One consumer is an exact copy
+/// rather than a looser rule: `late-zork/src/protocol.rs` `parse_playname`
+/// refuses a `play` whose handle is outside this shape, so a change here
+/// changes it in the same release.
 pub fn handle_shape_valid(handle: &str) -> bool {
     if !(HANDLE_MIN_LEN..=HANDLE_MAX_LEN).contains(&handle.len()) {
         return false;

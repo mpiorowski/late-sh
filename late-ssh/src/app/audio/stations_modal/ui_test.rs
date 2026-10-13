@@ -202,3 +202,9 @@ fn the_tour_header_sits_above_the_dial_and_replaces_the_footer() {
     assert!(title < breaker && breaker < pinned, "{text:#?}");
     assert_eq!(at("Esc close"), None, "{text:#?}");
 }
+
+#[test]
+fn the_footer_names_the_copy_key() {
+    let text = line_text(&footer_line());
+    assert!(text.contains("^y copy"), "{text}");
+}

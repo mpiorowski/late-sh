@@ -248,11 +248,13 @@ impl ComposerCommands {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom
             | Screen::Artboard
             | Screen::Profiles
+            | Screen::Calendars
             | Screen::Leaderboard
             | Screen::City
             | Screen::Zen
@@ -963,6 +965,10 @@ pub struct ChatState {
     /// center, and embedded Rooms chat.
     pub(crate) last_chat_hit_layout: Cell<Option<super::ui::ChatHitLayout>>,
     pending_send_notices: VecDeque<Uuid>,
+    /// `/bug` and `/suggest` sends in flight. A plain send's own echo is its
+    /// confirmation, but a report lands in its own room, usually not the one
+    /// on screen, so its success raises a banner instead.
+    pending_report_notices: Vec<(Uuid, ReportKind)>,
     /// When a message of this user's last landed, in any room or DM: the
     /// pet's "chatty" signal. Commands never count, only sends that
     /// succeeded.
@@ -1367,6 +1373,7 @@ impl ChatState {
             last_composer_click: None,
             last_chat_hit_layout: Cell::new(None),
             pending_send_notices: VecDeque::new(),
+            pending_report_notices: Vec::new(),
             last_own_send_at: None,
             pending_chat_screen_switch: false,
             mention_ac: MentionAutocomplete::default(),
@@ -2524,6 +2531,7 @@ impl ChatState {
             .all_articles()
             .iter()
             .find(|item| item.article.id == article_id)
+            .cloned()
         else {
             return false;
         };
@@ -2920,8 +2928,9 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    /// Open the article modal on a News article by id, the one the live
-    /// strip features. False when it left the snapshot (deleted).
+    /// Open the article modal on a News article by id (the live strip, the
+    /// Live panel, a Zen Live tile), marking that article read. False when
+    /// it left the snapshot (deleted).
     pub(crate) fn open_news_modal_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some(item) = self
@@ -2929,6 +2938,7 @@ impl ChatState {
             .all_articles()
             .iter()
             .find(|item| item.article.id == article_id)
+            .cloned()
         else {
             return false;
         };
@@ -2943,6 +2953,7 @@ impl ChatState {
             meta: news_modal_meta(&author, item.article.created),
             article_id,
         });
+        self.news.mark_article_read(&item);
         true
     }
 
@@ -4252,6 +4263,7 @@ impl ChatState {
             };
             let request_id = Uuid::now_v7();
             self.pending_send_notices.push_back(request_id);
+            self.pending_report_notices.push((request_id, kind));
             self.service
                 .send_report_task(self.user_id, kind, text, request_id);
             return None;
@@ -6147,7 +6159,14 @@ impl ChatState {
                     }
                     self.pending_send_notices.retain(|id| *id != request_id);
                     self.last_own_send_at = Some(std::time::Instant::now());
-                    banner = Some(Banner::success("Message sent"));
+                    if let Some(index) = self
+                        .pending_report_notices
+                        .iter()
+                        .position(|(id, _)| *id == request_id)
+                    {
+                        let (_, kind) = self.pending_report_notices.swap_remove(index);
+                        banner = Some(Banner::success(&format!("Posted to #{}", kind.slug())));
+                    }
                 }
                 ChatEvent::DeltaSynced {
                     user_id,
@@ -6252,6 +6271,8 @@ impl ChatState {
                     message,
                 } if self.user_id == user_id => {
                     self.pending_send_notices.retain(|id| *id != request_id);
+                    self.pending_report_notices
+                        .retain(|(id, _)| *id != request_id);
                     banner = Some(Banner::error(&message));
                 }
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {

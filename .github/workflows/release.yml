@@ -58,7 +58,7 @@ jobs:
         run: |
           suffix="${TAG##*-}"
           case "$suffix" in
-            web|bastion|nethack|dopewars|codekeep|dcss|usurper|brogue|bashquest|cli|infra|full)
+            web|bastion|nethack|dopewars|codekeep|zork|dcss|usurper|brogue|bashquest|cli|infra|full)
               component="$suffix"
               ;;
             *)

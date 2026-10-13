@@ -229,6 +229,54 @@ impl PaperEdition {
     pub fn is_swept(&self) -> bool {
         !self.rooms.is_empty() || !self.sections.is_empty()
     }
+
+    /// The closest edition strictly before or after `from` that a reader
+    /// would get a printed page from: a `ready` section, or a `ready` room
+    /// page still public (the same line `load` draws). Swept days where
+    /// every page was quiet are stepped over.
+    pub async fn nearest_printed(
+        client: &Client,
+        from: NaiveDate,
+        step: EditionStep,
+    ) -> Result<Option<NaiveDate>> {
+        let query = match step {
+            EditionStep::Earlier => {
+                "SELECT MAX(edition) AS edition FROM (
+                    SELECT e.edition
+                    FROM paper_room_editions e
+                    JOIN chat_rooms r ON r.id = e.room_id
+                    WHERE e.status = 'ready' AND e.edition < $1
+                      AND r.visibility = 'public'
+                      AND COALESCE(r.slug, r.language_code) IS NOT NULL
+                    UNION ALL
+                    SELECT edition FROM paper_sections
+                    WHERE status = 'ready' AND edition < $1
+                 ) printed"
+            }
+            EditionStep::Later => {
+                "SELECT MIN(edition) AS edition FROM (
+                    SELECT e.edition
+                    FROM paper_room_editions e
+                    JOIN chat_rooms r ON r.id = e.room_id
+                    WHERE e.status = 'ready' AND e.edition > $1
+                      AND r.visibility = 'public'
+                      AND COALESCE(r.slug, r.language_code) IS NOT NULL
+                    UNION ALL
+                    SELECT edition FROM paper_sections
+                    WHERE status = 'ready' AND edition > $1
+                 ) printed"
+            }
+        };
+        let row = client.query_one(query, &[&from]).await?;
+        Ok(row.get("edition"))
+    }
+}
+
+/// Which way a reader leafs through the back issues.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditionStep {
+    Earlier,
+    Later,
 }
 
 pub struct PaperRoomEdition;

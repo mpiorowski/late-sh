@@ -334,25 +334,6 @@ fn leaving_a_project_form_returns_to_the_row_it_came_from() {
     assert_eq!(editor.project_selected(), 0);
 }
 
-#[test]
-fn click_rects_follow_a_scrolled_list() {
-    let editor = EditorState::default();
-    let rect = |y: u16| ratatui::layout::Rect {
-        x: 0,
-        y,
-        width: 10,
-        height: 1,
-    };
-    // The projects list scrolled past its first eight rows: the on-screen
-    // rows are projects 8 to 15, and a click must land on the right one.
-    for index in 8..16 {
-        editor.record_row_rect(index, rect(index as u16));
-    }
-    assert_eq!(editor.row_at(3, 9), Some(9));
-    assert_eq!(editor.row_at(3, 15), Some(15));
-    assert_eq!(editor.row_at(3, 20), None);
-}
-
 /// A card written before the picker holds typed skills; opening it keeps
 /// what the vocabulary knows, folded, and the save writes only that.
 #[test]

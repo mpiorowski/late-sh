@@ -47,7 +47,7 @@ Release tags ending in `-bastion` use `deploy_service.yml` to roll the bastion i
 ```
 ssh late.sh                                    ssh -p 5222 late.sh
     │                                                │
-    │   NGINX TCP passthrough (PROXY v1)             │   NGINX TCP passthrough (PROXY v1)
+    │   HAProxy TCP passthrough (PROXY v1)           │   HAProxy TCP passthrough (PROXY v1)
     ▼   :22  →  service-ssh-sv:2222                  ▼   :5222  →  service-bastion-sv:5222
     │                                                │
     ▼                                                ▼
@@ -61,13 +61,13 @@ TUI render loop  ◀──── same App::new(SessionConfig) ────▶  l
                                                                             TUI render loop
 ```
 
-Both NGINX entries are a single line each in `infra/ssh-tcp.tf`. Cut `:22` over to `service-bastion-sv:5222` when confident; rollback is one line in TF.
+Both listeners live in the `ssh-edge` HAProxy configuration in `infra/ssh-tcp.tf`, on IPv4 and IPv6. `BASTION_ENABLED=1` enables the dogfood listener. Cut `:22` over by changing its `default_backend` from `service_ssh` to `service_bastion` when confident; rollback restores that value.
 
 **Late-ssh exposes three listeners after this work:**
 
 | Port  | Visibility              | Purpose                                                 |
 | ----- | ----------------------- | ------------------------------------------------------- |
-| 2222  | NGINX `:22` (legacy)    | russh — direct SSH path; eventual ClusterIP-only.       |
+| 2222  | HAProxy `:22` (legacy)  | russh — direct SSH path; eventual ClusterIP-only.       |
 | 4000  | `api.late.sh` ingress   | Public HTTP API — paired clients, etc. Unchanged.       |
 | 4001  | ClusterIP-only (new)    | axum `/tunnel` WebSocket — bastion's only entry point.  |
 
@@ -261,7 +261,7 @@ Future (not v1): signed bastion identity (short-lived JWT) once we have >1 basti
 
 ### Infra delta (`infra/`)
 - **`infra/service-bastion.tf` (new)** — Deployment + Service for `late-bastion`, mirrors `service-ssh.tf`. Modest resources.
-- **`infra/ssh-tcp.tf` (modify)** — Add `"5222": "default/service-bastion-sv:5222::PROXY"` alongside the existing `"22"` entry.
+- **`infra/ssh-tcp.tf` (modify)** — Add the gated HAProxy `:5222` listener and `service_bastion` backend with `send-proxy` alongside the existing `:22` listener.
 - **`infra/service-ssh.tf` (modify)** — Add container port `:4001` and a new `service-ssh-internal-sv` ClusterIP Service exposing only `:4001`.
 - **NetworkPolicy** — allow ingress to `service-ssh-sv:4001` only from pods labeled `app=service-bastion`.
 - **Secrets** — `BASTION_SHARED_SECRET` mounted into both pods; `BASTION_HOST_KEY` for the bastion's russh host key.

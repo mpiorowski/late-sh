@@ -10,13 +10,15 @@ fn screen_next_cycles_top_level_screens() {
     assert_eq!(Screen::Games.next(), Screen::Artboard);
     assert_eq!(Screen::Artboard.next(), Screen::Profiles);
     assert_eq!(Screen::Profiles.next(), Screen::Leaderboard);
-    assert_eq!(Screen::Leaderboard.next(), Screen::Clubhouse);
+    assert_eq!(Screen::Leaderboard.next(), Screen::Calendars);
+    assert_eq!(Screen::Calendars.next(), Screen::Clubhouse);
     assert_eq!(Screen::City.next(), Screen::Clubhouse);
 }
 
 #[test]
 fn screen_prev_cycles_top_level_screens() {
-    assert_eq!(Screen::Clubhouse.prev(), Screen::Leaderboard);
+    assert_eq!(Screen::Clubhouse.prev(), Screen::Calendars);
+    assert_eq!(Screen::Calendars.prev(), Screen::Leaderboard);
     assert_eq!(Screen::City.prev(), Screen::Clubhouse);
     assert_eq!(Screen::Leaderboard.prev(), Screen::Profiles);
     assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
@@ -36,6 +38,7 @@ fn door_games_are_outside_the_tab_cycle_and_fall_back_to_the_hub() {
         Screen::Brogue,
         Screen::Dopewars,
         Screen::Codekeep,
+        Screen::Zork,
         Screen::Usurper,
         Screen::GreenDragon,
     ] {

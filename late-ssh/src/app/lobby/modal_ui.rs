@@ -16,7 +16,7 @@ use crate::app::{
     games::chess_core::types::ChessColor,
     lobby::daily::{
         games::DailyGame,
-        state::{ChallengeDraft, DailyState, format_deadline, result_phrase},
+        state::{ChallengeDraft, DailyState, format_deadline, format_posted, result_phrase},
         svc::{
             DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyFinishedItem, DailyMatchItem,
             DailyOutcome, DailyWinPayout,
@@ -440,7 +440,7 @@ fn challenge_line(
         Style::default().fg(theme::TEXT()),
     ));
     spans.push(Span::styled(
-        col("open challenge", DETAIL_COL),
+        col(&format_posted(challenge.created, Utc::now()), DETAIL_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
     spans.push(Span::styled(

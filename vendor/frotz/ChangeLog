@@ -1,0 +1,471 @@
+Summary of changes between Frotz 2.54 and Frotz 2.56:
+=====================================================
+
+Frotz 2.56 is currently in development.
+
+BUG FIXES
+
+- Fixed a problem that sometimes resulted in a failure to build the SDL
+  interface when doing a parallel build.
+
+
+Summary of changes between Frotz 2.54 and Frotz 2.55:
+=====================================================
+
+Frotz 2.55 was released on Saturday February 1, 2025.
+
+This is a minor release focusing on minor enhancements and bug fixes.
+
+NEW FEATURES
+
+- Updated and cleaned up random.inf, which is now the "Z-machine
+  Randomization Test Suite".
+
+- Updated and cleaned up manual pages.
+
+- Added -L option to xfrotz - supply a Quetzal file to load on command line.
+
+- Added support for the Z-Machine Standard 1.1 save-restore prompt option.
+
+BUG FIXES
+
+- Attempting to write a string that straddles the Z-machine's 64k
+  boundary caused a segfault within Frotz itself.  Frotz now will detect
+  this and throw a fatal error instead.
+
+- Fixed an oversight in which files created by Frotz aren't given appropriate
+  filename extensions.
+
+- Fixed a stray $ that breaks the frotz filename when specifying LDFLAGS.
+
+- Updated the fix for Beyond Zork's rotating mirror bug by now correctly
+  detecting attempts to address an invalid object.
+
+- Fixed brain-dead handling of undo slots.
+
+- Fixed a segfault when xfrotz detects a fatal error.
+
+- Fixed compile failure of the SDL interface for GCC 12 and maybe GCC 11.
+
+- Not a bug in Frotz itself, but the BUGS text file was deleted from the
+  source repository and tarball before the release of Frotz 2.50.
+
+- Fixed faulty handling of text styles in dumb interface.
+
+
+Summary of changes between Frotz 2.53 and Frotz 2.54:
+=====================================================
+
+Frotz 2.54 was released on Wednesday April 13, 2022.
+
+This release's main attractions are official support for TOPS20 and
+cross-compilation to DOS.
+
+NEW FEATURES
+
+- Added changes to allow for compilation on a DEC PDP-10 mainframe
+  running TOPS20.  See INSTALL_PDP10.
+
+- Added a means to cross-compile to DOS by way of Open Watcom C version
+  2 and later.  See INSTALL_DOS.
+
+- Added a quiet mode to dumb interface to quell startup messages.
+
+BUG FIXES
+
+- Fixed several problems with compilation under macOS.
+
+- Fixed wrong glyphs in DOS Frotz's Amiga font mode.  1/2 and 1/4 were
+  there instead of the oe and OE ligatures.
+
+- Fixed a failure of the -q flag to actually silence sound effects.
+
+- Fixed an oversight in SDL Frotz that prevented some sounds from
+  playing in Lurking Horror.
+
+- Made the dumb and curses interfaces read the resolution chunk from
+  Blorb files.  Previously they would assume a resolution of 320x200.
+
+
+Summary of changes between Frotz 2.52 and Frotz 2.53:
+=====================================================
+
+Frotz 2.53 was released on Saturday February 27, 2021.
+
+This is a minor release focusing on minor enhancements and bug fixes.
+
+NEW FEATURES
+
+- -E option to choose how emphasised text is rendered.
+
+- X11 interface has been added as a compile target.
+
+- Added new default TrueType font for sfrotz.
+
+- Automatically select the appropriate interpreter number for V6 games.
+
+- Limited mouse support for curses interface.
+
+BUG FIXES
+
+- Corrected potential trouble with garbage in filenames for SDL
+  interface.
+
+- Corrected a problem wherein @print_table would sometimes print garbage.
+
+- Fixed a segfault problem when input buffers are abused.
+
+- Double-clicks are now recognized in sfrotz and xfrotz.
+
+- Fixed problem with spurious newlines when a space triggers a word wrap.
+
+- Fixed a problem with UTF-8 characters getting corrupted during line
+  editing.
+
+- Fixed some problems with V3 games scribbling on the status line in
+  certain circumstances.
+
+- Removed C99 idioms and C++ comments in curses and core to benefit
+  older compilers.  X11 is still pre-C99 clean.  SDL interface is not
+  pre-C99-clean due to libSDL2 not being pre-C99-clean.
+
+- Fixed a problem with the -x flag not properly expanding commands for
+  some Infocom games.
+
+
+Summary of changes between Frotz 2.51 and Frotz 2.52:
+=====================================================
+
+Frotz 2.52 was released on Sunday May 10, 2020.
+
+This is a minor release focusing on minor enhancements and bug fixes.
+
+NEW FEATURES
+
+- Partial support for new @set_true_colour opcode.  Works for SDL.
+  Doesn't work all the way for curses.  Not in scope for dumb interface.
+
+BUG FIXES
+
+- Reworked Makefiles to better handle library detection, particularly
+  for macOS.
+
+- Fixed rendering of non-paletted PNG images.  Affected only non-Infocom
+  V6 games.
+
+- Rolled back idiosyncrasy fix for Cutthroats and changed over to the
+  quick-and-dirty 24-to-12 conversion used by Infocom as this is how the
+  Imps expected an interpreter to behave.
+
+- Fixed broken handling of game paths set in environmental variables and
+  in config files.
+
+- Fixed slightly broken parsing of .sfrotzrc.
+
+- Fixed behavior of command line processing inconsistent between the
+  different user interfaces.
+
+- Assorted source code formatting fixes.
+
+
+Summary of changes between Frotz 2.50 and Frotz 2.51:
+=====================================================
+
+Frotz 2.51 was released on Wednesday February 12, 2020.
+
+This is a minor release focusing on minor enhancements and bug fixes.
+
+NEW FEATURES
+
+- Added an -f option for Dumb Frotz to mark up the output with color and
+  formatting codes.  Currently "irc", "ansi", and "normal" modes are
+  supported.
+
+BUG FIXES
+
+- Cleanly account for some installations of ncurses which have the
+  library split into ncurses (high level) and tinfo (low level).
+
+- Added an idiosyncrasy fix for Cutthroats, which assumes a
+  quick-and-dirty conversion of 24-hour notation to am/pm notation.
+
+- Fixed where the Makefile used spaces instead of a tab in a rarely-used
+  recipe.
+
+- Fixed a memory allocation problem with restoring a game at the command
+  line using the -L option.
+
+- Fixed an oversight in which curses wasn't being shut down properly
+  when fatal zcode errors were encountered.
+
+
+Summary of changes between Frotz 2.44 and Frotz 2.50:
+=====================================================
+
+Frotz 2.50 was released on Tuesday November 12, 2019.
+
+NEW FEATURES
+
+- Added UTF-8 input and output.  Plain ASCII is still available.
+
+- Added -L option for restoring save file directly from the command line.
+
+- Added -R option for restricted read/write path.
+
+- Sound effects in AIFF, MOD, and OGG formats supported per the Blorb specs.
+
+- Sound driver selection is automated through the use of libao.
+
+- Allow for an alternative Blorb file to be specified on the command line.
+
+BUG FIXES
+
+- Overhauled MacOS compilation.
+
+- Corrected problems with error handling.
+
+- Fixed a lot of unsafe strcpy() and strcat() calls.
+
+- Fixed numerous problems with portability to other flavors of Unix.
+
+- Fixed adaptive palette rendering for SDL.
+
+- Fixed scaling with manually specified window dimensions.
+
+- Fixed problem with unnecessary newlines with input timeouts.
+
+- Allow fontdir in .sfrotzrc to work relative to user's home directory.
+
+- Fixed problem with memory allocation leading to crashes in DOS.
+
+- Fixed problem with DOS Frotz creating non-portable Quetzal files.
+
+
+Summary of changes between Frotz 2.43 and Frotz 2.44:
+=====================================================
+
+Frotz 2.44 was released on Sunday May 17, 2015.
+
+NEW FEATURES
+
+- Blorb support implemented.  No support for audio in Blorb files yet.
+
+- Added an -m option for Dumb Frotz to suppress the [MORE] prompt.
+
+- Makefile and code for compiling for 16-bit DOS.
+
+- DOS Frotz now distributed in the same source file as Unix Frotz.
+
+BUG FIXES
+
+- Fixed a problem with saving and restoring in certain games.
+
+- Added some fflush() calls to make Dumb Frotz more suitable for bot use.
+
+- Removed old-style save support.  It was getting hard to manage.  Only
+  the Quetzal save file format is supported now.
+
+- Fixed assorted minor 64-bitness problems.
+
+- Makefile cleaned up.
+
+
+Summary of changes between Unix Frotz 2.42 and Unix Frotz 2.43:
+===============================================================
+
+Unix Frotz 2.43 was released on Monday October 28, 2002.
+
+NEW FEATURES
+
+- Dumb interface has been added as a compile target.
+  See the DUMB file for commentary.
+
+- Experimental voice input and output.  This code is not yet available
+  to the public.  See the SPEECH file for more info.
+
+- Added David Kinder's Unicode Test 1.0 to the Z-machine Test Suite
+
+- Added Inform Randomization Test 1.0 to the Z-machine Test Suite.
+
+
+ENHANCEMENTS
+
+- Confirmed to work with NetBSD 1.6.x curses library.  Unlike with
+  ncurses, color mode will work when $TERM is "xterm".  See the BUGS
+  file for commentary.
+
+- Consolidated and organized most global variables into a few global
+  structs.
+
+- Added patches from David Kinder to facilitate loading a new game
+  without exiting Frotz entirely.  Files affected: buffer.c, process.c,
+  and sound.c.
+
+- Rewrote most documentation.  Fixed typos in the rest.
+
+- Reorganized source tree to make portability to different platforms
+  easier.  The bugtest/ directory is now src/test/ and is called the
+  "Z-machine Test Suite".
+
+BUG FIXES
+
+- Finally changed all references in documentation and source of
+  ftp.gmd.de to ftp.ifarchive.org.
+
+- Fixed a problem with command-recording which caused "[999]" to be
+  appended to every line in the file.
+
+- Set some defaults to z_sound_effect for those games that for some
+  wacky reason assume them (sound.c).
+
+- Frotz now correctly sets 0x20 (CONFIG_SOUND) in the header to tell V6
+  games that the interpreter supports sound (frotz.h ux_init.c).
+
+- Correctly fixed the Ctrl-Space bug.  The previous fix broke NetBSD's
+  newly-updated curses library.  See the BUGS file for more detail.
+
+- OSS sound is fixed, thanks to Torbjorn Anderson!  Also applied some
+  error-checking from someone whom I forget.
+
+
+
+Summary of changes between Unix Frotz 2.41 and Unix Frotz 2.42:
+===============================================================
+
+Unix Frotz 2.42 was released on Monday March 11, 2002.
+
+NEW FEATURES
+
+- Makefile updated to play nicer with Mac OS X.
+
+
+BUG FIXES
+
+- Al Petrofsky sent a fix to prevent Frotz from aborting when Ctrl-Space
+  is entered (in ux_input.c).  Actually it was sent to Debian's bug list
+  several months ago, but not to me.  He also submitted a patch which
+  prevents picture dimensions from being rounded down to zero (ux_pic.c).
+  Sidebars in Arthur are now visible.
+
+- Steven Frank was mistakenly identified as the submitter of the fix to
+  allow Unix Frotz to display properly on screens narrower than 80
+  columns.  The true submitter was Justin Wesley.  The machine used was
+  an Agenda PDA running Linux.
+
+
+
+Summary of changes between Unix Frotz 2.40 and Unix Frotz 2.41:
+===============================================================
+
+Unix Frotz 2.41 was released on Monday May 21, 2001.
+
+NEW FEATURES
+
+- Now includes several test zcode programs in the bugtest/ subdirectory.
+  These are crashme, TerpEtude, gntests, and strictz.
+
+- Unix Frotz confirmed to compile and run on Mac OS X.  See INSTALL for
+  details.
+  (Confirmation by Steven Frank)
+
+- Status line padding in screen.c changed to allow for screens narrower
+  than 80 columns.
+  (Patch by Steven Frank)
+
+BUG FIXES AND MINOR ENHANCEMENTS
+
+- In BUGS, an idiosyncrasy of "Journey" by Infocom was mistakenly
+  identified as a bug in Frotz.
+  (Reported by someone whom I forget)
+
+- In text.c, static zchar zscii_to_latin1[] was being improperly
+  initialized.  The bug caused Latin1-style quotes <<like this>> to look
+  >>like this<<.
+  (Reported and fixed by Matteo De Luigi)
+
+- In the 2.40 release, I disabled the -i option thinking it wasn't needed.
+  This was probably a mistake.  Even if the -Z option is set to '0' (don't
+  report errors), fatal errors will still be reported.  Some careless
+  programmers have released buggy games which include fatal errors.
+  Proper interpreters should abort upon encountering them, but some don't.
+  The -i option is intended as a kludge to deal with such games and for
+  debugging by ignoring the requirement to abort.  This option should not
+  be used as an excuse to write bad code.  Code in object_address() in
+  object.c was modified to complain about attempts to address illegal
+  objects.  This was motivated by an illegal object access in the game
+  "Enemies" by Andy Phillips.
+  (Reported by Thomas Troeger and David Picton)
+
+
+
+Summary of changes between Unix Frotz 2.32R2 and Unix Frotz 2.40:
+=================================================================
+
+Unix Frotz 2.40 was released on Saturday November 11, 2000.
+
+BUG FIXES
+
+- Tab-completion now works in the middle of a sentence.
+
+- Assorted fixes to make gcc stop complaining when using -Wall and -ansi
+  flags.  These fixes included adding curly braces to avoid
+  ambiguous-looking if-then-elses, adding parens to avoid abiguous-looking
+  ands and ors, initializing variables even though there was no need to.
+
+- Several functions in ux_text.c used functions that wanted
+  *char.  Instead they were being passed *zchar.  Irix's cc
+  complained.  Casts were added to fix this.
+
+- The terminal erase character, as set with stty, now functions as
+  backspace.  On many terminals, this character is DEL.
+
+- Background colors should now work properly.
+
+- timeout() from curses is now used for times input instead of a busy
+  loop.
+
+- ^L and ^R now redraw the screen instead of being passed as input to the
+  Z-machine.
+
+- ISO-Latin-1 characters are now valid input unless in plain ASCII mode.
+  This makes the meta bit unusable for hotkeys.  On terminals with 8-bit
+  character sets, alt usually sends ESC anyway.
+
+- With zstrict error-checking tuning, the -i (for ignore errors) is
+  superfluous and therefore has been removed.
+
+- A supplementary memmove() function has been added for machines that lack
+  it.  As I don't have access to a machine like this, the code is
+  untested.
+
+NEW FEATURES
+
+- Merged changed from Frotz 2.40 for DOS.
+
+- Beginning with 2.40, the reference version of Frotz (the DOS version) is
+ distributed under the GNU Public License rather than the old "no
+ commercial profit" license.
+
+- Unix Frotz 2.40, like the reference version, is now distributed under
+  the GNU Public License.
+
+- V6 games supported by drawing the outlines of pictures.  True display of
+  the graphics are on hold until the X11 with GTK version is complete.
+
+- Classical Infocom sound effects supported through the OSS drivers.  I'm
+  only aware of "Lurking Horror" and "Sherlock: The Riddle of the Crown
+  Jewels" as having such sound effects.  See the INSTALL file for
+  information on where the sound files should go.
+
+- System-wide and per-user config files.
+
+- Quetzal save format is now the default.  Old Zip 2.0 format is still
+  supported by command line option or config file setting.
+
+- $ZCODE_PATH and $INFOCOM_PATH environmental variables searched for game
+  files.
+
+- Faster undo functionality (borrowed from Nitfol).
+
+- History searches have been added.  Type the beginning of a past command
+  and hit the up or down arrow key.

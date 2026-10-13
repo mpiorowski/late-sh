@@ -1,5 +1,6 @@
 pub mod color_picker;
 pub mod data;
+pub(crate) mod disclaimer;
 pub mod gallery;
 pub mod input;
 pub mod page;

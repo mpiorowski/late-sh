@@ -1,0 +1,97 @@
+! Self-modifying reproducing Z-code.
+!
+! Generates random junk and sees how the interpreter behaves.  If it's clever
+! it shouldn't die except for @quit and stack overflow.
+!
+! inform \$MAX_STATIC_DATA=40000 crashme.inf
+!
+! Written by Evin Robertson 1999.  Placed in public domain.
+
+Array randstuff -> 32767;
+Array checkfix  -> 257;
+
+Global replay = 0;
+
+Array filename string "CRASHME.MEM";
+
+#iftrue (#version_number <= 3);
+Constant Granularity = 2;
+Constant FileMult = 2;
+#endif;
+
+#iftrue (#version_number >= 4 && #version_number <= 5);
+Constant Granularity = 4;
+Constant FileMult = 4;
+#endif;
+
+#iftrue (#version_number >= 6 && #version_number <= 7);
+Constant Granularity = 4;
+Constant FileMult = 8;
+#endif;
+
+#iftrue (#version_number == 8);
+Constant Granularity = 8;
+Constant FileMult = 8;
+#endif;
+
+
+[ Main i a g r c l t game_size checksum;
+   game_size = FileMult * (0-->13); ! game size
+
+   r = randstuff % Granularity;
+   if(r)
+      r = Granularity - r;
+
+   a = randstuff + r;
+   c = a / Granularity;
+   l = 32767 - r;
+
+   if(replay) {
+      print "You are running crashme's output. This will repeat the test run which generated this output.^";
+   } else {
+      print "This program generates random Z-code which is run to test the robustness of your Z-machine interpreter. Most likely this will infinite loop. Do not run if you can't kill your interpreter when it is tightly looping.^Will attempt to write CRASHME.MEM which should be a valid Z-machine game which contains the same code that will be run.^";
+   }
+   print "Press 'q' to abort.^";
+   @read_char 1 -> i;
+   if(i == 'Q' or 'q')
+      @quit;
+
+   replay++;
+
+
+   if(replay == 1) {
+      for(i=0: i < l: i++)
+	 a->i = random(256) - 1;
+      for(i=0: i < 13: i++)
+	 a->i = (emptyfunc * Granularity)->i;
+
+      checksum = 0;
+      for(i=0: i < l: i++)
+	 checksum = checksum + a->i;
+      g = 0-->6;  ! globals location
+      for(i=0: i < 480: i++)
+	 checksum = checksum + g->i;
+
+      for(i=0: i < 257: i++) {
+	 if(-255 <= checksum && checksum <= 0) {
+	    checkfix->i = -checksum;
+	    break;
+	 } else {
+	    checkfix->i = 255;
+	    checksum = checksum + 255;
+	 }
+      }
+      #IFV5; @save 0 game_size filename -> t; #ENDIF;
+   }
+
+   ! reduce the chances that it'll attempt to write over the same file
+   for(i=0: i <= 11: i++)
+      filename->i = 0;
+
+   @call_vn c;
+   print "^Done.^";
+];
+
+[ emptyfunc;
+   print "starting...^";
+];

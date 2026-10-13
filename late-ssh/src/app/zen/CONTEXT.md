@@ -24,7 +24,19 @@ and the sides evenly so the trunk stays centered, `draw_bonsai_tile`,
 stress live in the `w` care modal), aquarium (the real reef
 simulation once the account owns it; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's; owned, its title carries the care bar, fourteen boxes green for
-the feeding streak or red for the days unfed, see the hub CONTEXT), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
+the feeding streak or red for the days unfed, see the hub CONTEXT), ascii (an
+animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: earthrise
+in dots, the screensaver's default and a slow piece, until `[` `]` step it through the others or Enter picks one from
+the list (`ascii/picker`, over the page), including random and randomer.
+Random holds one scene/style per visit; randomer changes landscape every five minutes.
+The title names the piece, `ascii · aurora fjord · pixels`, with the random mode
+before it when selected. Each tile keeps independent session-only playback in
+`ZenState`; slots follow surviving leaves through splits/closes. Leaving Zen
+clears playback; zoom, resizing and overlays preserve it and its timer. Only
+the selection is stored on the leaf beside `room`, absent
+for the default, rides along on a split, and is forgotten when the tile
+changes kind, as a chat tile's room is; `z` zooms it over the whole
+screen, the screensaver you keep), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_zen_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the daily games, compact:
 only the running games, starting at the name with no marker column
 (`RowMarker::Bare`; the sidebar panel keeps its `►`), plus one footer row of
@@ -43,21 +55,17 @@ rows. It replaced the presence tile, and a stored `presence` reads as
 newest first; see §3 for its keys), headlines (News articles and the
 viewer's RSS entries merged newest first, two rows each (the title with
 its source and age, then the link), an entry shared to News listed once,
-as the article), live (the #lounge live strip, `../live/CONTEXT.md`: the
-picture rows from 8 rows and 56 columns inside, else its one row, with no
-hint row and no rule since the title names the key, on three fifths of
-the width (56 columns at least) beside the #lounge activity feed on the
-rest, or the whole tile when the feed would get under 30 columns; while
-nothing is up, a faint `nothing live` on 30% of the width beside the
-feed), blank. The look (border style, gap, titles) is
+as the article), live (the Live panel's rows, `../live/CONTEXT.md` §1:
+the same four rows the sidebar's panel draws, each with its `s1`-`s4`
+key, wider so less is cut; `nobody playing` while nothing is on), blank. The look (border style, gap, titles) is
 part of the layout.
 
 The default, which `R` also resets to (rounded borders, no gap, titles on):
-bonsai over the current room's chat on the left (64%), and a rail of
-clock, music, lobby, then the pet over the reef on the right, so the pet
-has the tank below it and the bonsai's edge to its left, and alternates
-between them (pinned by `layout_test.rs`). Without a Pet Companion the tile says
-so and points at `/shop`. Pulse is not in it.
+on the left (72%), the bonsai beside the reef over the current room's
+chat; on the right a rail of clock, pet, lobby, live, then music, so the
+pet has the tank against its left edge and watches it (the bonsai is out
+of its reach; pinned by `layout_test.rs`). Without a Pet Companion or the
+Aquarium the tile says so and points at `/shop`. Pulse is not in it.
 
 The active chat is `App::zen_chat_room_id`: the focused chat tile's
 room, else the first chat tile's, else (no chat tile) the current room,
@@ -104,7 +112,7 @@ never the count (`chat_tile_title`, `ui_test.rs`).
 late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
-|-- layout.rs     # pure rect math: rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + optional status row), tile_rects, tile_inner, neighbour_side, pet_neighbours
+|-- layout.rs     # pure rect math: rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the status row, there whenever the page draws), tile_rects, tile_inner, neighbour_side, pet_neighbours
 |-- rows.rs       # pure row builders for the Inbox and Headlines tiles
 |-- ui.rs         # ZenView, draw_rice, the tile widgets
 |-- input.rs      # feed keys, room walk, focus and layout keys
@@ -115,8 +123,8 @@ Glue: `Screen::Zen` in `common/primitives.rs`; the frame skip, `ZenView`
 assembly, the status row build, and `zen_chat_view` in `render.rs`; the digit `7`, the top-bar
 hit test, the picker staying put in `room_search_modal/input.rs`, and the
 dedicated-input hook in `input.rs`; `App::zen`, `App::zen_chat_rows_cache`,
-`zen_status_row`, `sync_aquarium_bounds`, and `mark_zen_layout_dirty` / `flush_zen_layout` in `state.rs`; the
-aquarium stepping and anim edge in `tick.rs`; `extract_zen_layout` /
+`sync_aquarium_bounds`, and `mark_zen_layout_dirty` / `flush_zen_layout` in `state.rs`; the
+aquarium stepping, the ascii tile's cadence edge (`ascii_edge`), and anim edge in `tick.rs`; `extract_zen_layout` /
 `User::set_zen_layout` in `late-core/src/models/user.rs`.
 
 ## 3. Keys
@@ -126,9 +134,10 @@ title (`tile_keys`, drawn with `hint_line` so the key is amber and the
 word dim), always, so `t` hides them with the titles. `?` opens
 `HelpTopic::Zen`, which lists the layout keys and everything else. The
 page's last row is the user's status line (`../statusline/CONTEXT.md`,
-Zen row), where the default Keyhints already say `Guide ?`; with every
-status line component switched off the row is gone and the tiles take
-the whole page. Nothing
+Zen row), with the layout keys worth knowing by heart (`? S F X Z`,
+`statusline::bar::ZEN_ROW_KEYS`) on its right end; with every status
+line component switched off the row stays, holding only those keys.
+Nothing
 else on the page names a key: the lobby's compact footer lost its key
 pair to the title.
 
@@ -163,10 +172,18 @@ With Headlines focused, `j` `k` walk its items the same way and Enter
 copies the selected link to the clipboard (`pending_clipboard`, the way a
 copied search hit goes).
 With a Live tile on the page (`ZenState::draws`, so not one zoomed away
-from), `o` opens what the strip shows from whichever tile has the focus,
-as on the #lounge card (`live::input::open_from_key`); with Live focused,
-Enter does too, and a click on the strip opens it without focusing the
-tile. There is no reply key here: `r` flips the split.
+from), `s` then a row's number opens that row of the tile from whichever
+tile has the focus, as the sidebar's Live panel does on Home
+(`live::input::open_from_prefix`; lowercase only, `S` is the split; any
+other key after `s` is swallowed), and a click on a row opens it without
+focusing the tile. There is no `o` here: the tile is the panel, not the
+strip, and no reply key: the layout keys are uppercase (`F` flips the
+split), so `r` does nothing on it.
+With an ascii tile focused, `[` `]` step it through the pieces
+(`input::cycle_tile`, saved with the layout) and Enter opens the piece
+picker (`../ascii/picker`, `App::piece_picker`, routed ahead of the page
+in `app/input.rs` and drawn over it in `render.rs`); on any tile that is
+neither a chat nor an ascii tile they do nothing.
 The pet has no key: it is petted with a left click and reads the rest of
 the session itself. The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row
@@ -180,13 +197,27 @@ closes; the picker owns every key and click while it is up, and a refused row
 stays up with a banner), `S` splits it (row when wide, column when tall), `X`
 closes it (the last tile stays), `<` `>` trade one column of width and
 `{` `}` one row of height with the nearest split of that direction (i3's
-rule; a banner says so when there is none), `r` flips the parent, `z` zooms, `b` `g` `t` cycle
+rule; a banner says so when there is none), `F` flips the parent, `z` zooms the
+focused tile over the whole screen (no border, no title, no status row:
+the tile is the page, the way the screensaver draws a piece;
+`layout::rice_row` is where the row goes, so the clicks and the reef's
+bounds follow; `z` again unzooms), `b` `g` `t` cycle
 border, gap, titles, `R` resets to the default layout, focus on its chat tile. `S` is refused at
 `MAX_TILES` (32): each split nests the stored JSON one level deeper and
 serde_json stops reading at 128, so an uncapped held key would write a
 settings row the login path can never parse. Every layout edit marks the
 layout dirty; the write is debounced to tick's one-hertz edge and to
-leaving the page, so a held resize key costs one row update.
+leaving the page, so a held resize key costs one row update. The layout
+keys that change the tree are uppercase (`S` `X` `F` `R`), keeping the
+lowercase letters free for the tiles' own keys; the zoom is the one view
+key pressed often enough to be lowercase, `z`.
+
+The page's bottom row is the user's status line on the left and the
+layout keys worth knowing by heart on the right, `? help  S split  F flip
+X close  z zoom` (`statusline::bar::ZEN_ROW_KEYS`; the rest are in the
+guide). The keys hold their end first and the status line fits into what
+is left, so the row is there whenever the page draws, even with every
+status component off; a row narrower than the keys is all status line.
 
 ## 4. Gotchas
 
@@ -194,10 +225,8 @@ leaving the page, so a held resize key costs one row update.
   re-binds it on every `set_screen`, resize, and layout edit to the
   aquarium tile's inner rect, from the same pure functions the renderer
   uses (`layout.rs`), so the sim and the drawing never disagree on size.
-  The status row comes and goes with a setting, not an edit here (a
-  Settings preview, the profile landing after login), so tick also
-  re-binds when `App::zen_status_row` differs from the row the reef was
-  bound with (`App::zen_row_bound`).
+  The status row is there whenever the page draws (it carries the layout
+  keys), so no setting moves the tiles under the reef.
   It steps on the quarter edge whenever the page is up, owned or not
   (`aquarium_visible` in `tick.rs`), though the tile only draws it
   once the tank is owned; unowned it is the shop note.
@@ -267,8 +296,8 @@ leaving the page, so a held resize key costs one row update.
   (`layout_test.rs`), the care bar, the music tile's rows, and the bonsai
   canvas cut (`ui_test.rs`),
   the resize floor (`state_test.rs`), the Inbox and Headlines rows
-  (`rows_test.rs`), Inbox Enter, Live Enter and `o`, the click the picker
-  swallows, `?` opening the Zen topic, and the status row's all-off
-  removal (`input_flow_test.rs`), the drawn-kinds gate (`state_test.rs`), and
-  the Live tile, empty and sharing a wide tile with the feed (`ui_test.rs`); the rest of the tile drawing is
-  untested.
+  (`rows_test.rs`), Inbox Enter, the Live tile's `s` prefix, the click the
+  picker swallows, `?` opening the Zen topic, and the status row's all-off
+  removal (`input_flow_test.rs`), and the drawn-kinds gate (`state_test.rs`);
+  the Live tile's rows are the panel's (`live/panel_test.rs`); the rest of
+  the tile drawing is untested.

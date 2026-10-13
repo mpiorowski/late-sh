@@ -87,7 +87,7 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 | Built-in lounge room (`kind='lounge'`) | `#lounge` — forced join, cannot leave |
 | Language rooms (`kind='language'`) | `#<slug>` channels, public |
 | Public topic rooms (`kind='topic'`, `visibility='public'`) | `#<slug>` channels, public, listed |
-| Private topic rooms (`kind='topic'`, `visibility='private'`) | `#<slug>` channels, member-only, unlisted to non-members |
+| Private topic rooms (`kind='topic'`, `visibility='private'`) | `##<slug>` channels, member-only, unlisted to non-members |
 | Game-room chat (`kind='game'`) | **Not exposed** in v1 (§13) |
 | DM rooms (`kind='dm'`) | IRC query: `PRIVMSG <nick>` (no channel) |
 | Room topic/banner | Channel `TOPIC` (332); lounge banner also in MOTD |
@@ -100,7 +100,7 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 
 ### 6.2 Channel naming
 
-- C1: Channel name = `#` + room slug. Room slugs must therefore be valid IRC channel names (no spaces, commas, `^G`; sensible length). If any existing slug violates this, define a deterministic sanitization and collision rule at implementation time.
+- C1: Public channel name = `#` + room slug; private topic channel name = `##` + room slug. LIST and JOIN preserve both namespaces, so public and private rooms with the same slug remain separately addressable. Room slugs must therefore be valid IRC channel names (no spaces, commas, `^G`; sensible length).
 - C2: `CASEMAPPING=ascii` (declared in ISUPPORT); channel and nick matching is ASCII case-insensitive.
 
 ### 6.3 Membership & join/part semantics
@@ -108,7 +108,7 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 - J1: On successful registration every IRC session is **auto-joined to `#lounge`** (server-sent `JOIN`, then `332` topic and `353`/`366` names). Clients accept server-initiated JOINs.
 - J2: `PART #lounge` is refused with **sticky join**: numeric error + notice ("you cannot leave the lounge"), no PART echo, **always followed by a server-initiated JOIN burst** (`JOIN` + `332` + `353`/`366`). Rationale: clients diverge on leave gestures — typed `/part` waits for the server echo, but window/tab close sends PART and destroys the UI immediately — so the unconditional JOIN burst converges every client back to a visible, joined lounge regardless of gesture (redundant JOINs are handled gracefully by all target clients).
 - J3: `JOIN` on a public/built-in channel: allowed for any authenticated user; effects mirror TUI room join semantics (the user becomes/remains a member of the late.sh room).
-- J4: `JOIN` on a private channel: allowed **only if the user is already a member** of the private room (membership managed in the TUI). Non-members get `473 ERR_INVITEONLYCHAN` (private channels present as `+i`). Non-members also cannot see the channel in LIST/NAMES/WHO (it behaves `+s` secret to outsiders).
+- J4: `JOIN ##slug` on a private channel: allowed **only if the user is already a member** of the private room (membership managed in the TUI). Non-members get `403 ERR_NOSUCHCHANNEL` and cannot see the channel in LIST/NAMES/WHO. Private channels report `+inst`; `#slug` never falls back to the private room.
 - J5: `JOIN` on a nonexistent channel: `403 ERR_NOSUCHCHANNEL`. IRC cannot create rooms in v1.
 - J6: `PART` of a non-lounge channel **detaches the IRC session's view only** — late.sh room membership is never changed by PART (v1 default). This makes an accidental tab-close non-destructive; membership changes happen in the TUI.
 - J7: `INVITE`: deferred past v1 (reserved for future private-room membership interaction). v1 answers `INVITE` with a polite "not supported yet" notice.

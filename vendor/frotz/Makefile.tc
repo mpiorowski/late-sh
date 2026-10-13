@@ -1,0 +1,48 @@
+# This file is used to build Frotz for DOS using Borland Turbo C++ 3.00.
+# Written with Borland MAKE Version 3.6 in mind.
+# The resulting executable runs as a 16-bit program.
+#
+
+CC = tcc
+CFLAGS = -ml -N -O
+TLIB = tlib
+CP = copy
+RM = del
+RENAME = ren
+
+
+BINNAME = frotz.exe
+LIBRARY = frotz.lib
+
+VERSION = "2.55"
+RELEASE_NOTES = "Official release."
+
+VER = -DVERSION=$(VERSION)
+
+DOS_OBJECTS =   dosinit.o dosinput.o dosmouse.o dospic.o dossample.o dosscrn.o \
+		dostext.o dosblorb.o
+
+CORE_OBJECTS =  buffer.o fastmem.o files.o getopt.o hotkey.o input.o \
+		main.o math.o object.o process.o random.o redirect.o \
+		screen.o sound.o stream.o table.o text.o variable.o \
+		quetzal.o err.o
+
+BLORB_OBJECTS = blorblib.o
+
+.SUFFIXES: .c .o .h
+
+all:	frotz
+
+.c.o:
+	$(CC) $(CFLAGS) $(VER) -c -o$@ $<
+	$(TLIB) $(LIBRARY) +-$@
+
+clean:
+	$(RM) *.o
+	$(RM) *.obj
+	$(RM) *.lib
+	$(RM) *.exe
+	$(RM) *.bak
+
+frotz:	$(DOS_OBJECTS) $(CORE_OBJECTS) $(BLORB_OBJECTS)
+	$(CC) $(CFLAGS) -e$(BINNAME) $(LIBRARY)

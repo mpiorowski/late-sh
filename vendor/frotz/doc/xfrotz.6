@@ -1,0 +1,360 @@
+.TH XFROTZ "6" "2025-02-01" "X11 Frotz v2.55"
+.SH NAME
+xfrotz \- interpreter for Infocom and other Z-Machine games (X11 interface)
+
+.SH SYNOPSIS
+.B xfrotz
+.RI [ options "] " "file " [ blorb_file "]"
+
+.P
+At least one file must be specified on the command line.  This can be
+either a plain Z-code file or a Blorb file.  A Z-code file is a compiled
+executable for the Z-Machine.  A Blorb file contains audio, graphics,
+and other things in addition to the game wrapped up into a single file.
+It can also optionally contain the Z-Machine executable.  If a plain
+Z-code file is supplied, then
+.B Frotz
+will check for a Blorb file with the same base name but an extension of
+.B .blb, .blorb,
+or
+.B .zblorb
+and load it if found.
+.P
+If the file supplied on the command line is a Blorb file, then
+.B Frotz
+will check to see if a Z-code file is contained within.  If not found, then
+.B Frotz
+will complain and exit.
+.P
+An alternatively-named Blorb file can be supplied as the optional second
+parameter to the command line invocation.
+.P
+If you want to play any of the games from Infocom that use sound or
+graphics, you will need to get a corresponding Blorb file from the
+Interactive Fiction Archive.  See
+.B FURTHER INFORMATION
+below.
+
+.SH DESCRIPTION
+The
+.B xfrotz
+program is an Xlib-based interpreter for Z-machine
+code, the byte code used by Infocom games and, more recently, Inform.
+.B xfrotz
+supports versions 1 through 8 of the format.  It uses the standard
+Quetzal format for its saved games.
+
+.B xfrotz
+supports Version 6 graphical games.  It currently supports
+color, graphics (in the
+.B .mg1
+format only) by way of Blorb archives or by parsing Infocom's original
+files.  Sound is supported through OSS.
+
+.SH OPTIONS
+In each of the following options which enables some feature, replacing
+.B \-
+with
+.B \+
+explicitly disables that feature, overriding any X resources.  Also,
+each option has a corresponding X resource, which is listed in
+parentheses after the option name.
+.TP
+.B \-aa
+(class \fBWatchAttribute\fP, name \fBwatchAttrAssign\fP)
+Enables watching of attribute assignment.
+.TP
+.B \-at
+(class \fBWatchAttribute\fP, name \fBwatchAttrTest\fP)
+Enables watching of attribute testing.
+.TP
+.B \-bg <color>
+(class \fBBackground\fP, name \fBbackground\fP)
+Sets the default background color.  In addition to the standard X
+color specification formats,
+.B xfrotz
+supports the format \fBz:\fP\fInum\fP, which refers to a z-machine
+color from 2 to 9.
+.TP
+.B \-c <number>
+(class \fBContextLines\fP, name \fBcontextLines\fP)
+Specifies the number of context lines used.  When scrolling large
+amounts of text,
+.B xfrotz
+pauses after each screenful with a ``[MORE]'' prompt; this option
+specifies how many lines of a previous screen
+.B xfrotz
+will keep at the top of the next screen.
+.TP
+.B \-fg <color>
+(class \fBForeground\fP, name \fBforeground\fP)
+Sets the default foreground color.  See \fB\-bg\fP above.
+.TP
+.B \-fn[\-z|[f][b][i]] <font name>
+(class \fBFont\fP, name \fBfont[Z|[F][B][I]]\fP)
+Sets the fonts to be used for various styles.  For example,
+\fB\-fn\-fbi\fP sets the font for fixed, bold, italic text, and
+\fB\-fn\-z\fP sets the z-machine ``picture font,'' which is used in
+\fIBeyond Zork\fP and \fIJourney\fP.
+.TP
+.B \-i
+(class \fBIgnoreErrors\fP, name \fBignoreErrors\fP)
+Ignore runtime errors.  This can be useful when running
+.B xfrotz
+with buggy story files which cause fatal errors.
+.TP
+.B \-lm <number>
+(class \fBMargin\fP, name \fBleftMargin\fP)
+Sets the left margin.
+.TP
+.B \-L <filename>
+(class \fBLoadThis\fP, name \fBloadthis\fP)
+When the game starts, load this saved game file.
+.TP
+.B \-ol
+(class \fBWatchObject\fP, name \fBwatchObjLocating\fP)
+Enables watching of testing the location of objects.
+.TP
+.B \-om
+(class \fBWatchObject\fP, name \fBWatchObjMovement\fP)
+Enables watching of object movement.
+.TP
+.B \-p
+(class \fBPiracy\fP, name \fBpiracy\fP)
+Enable branching on the
+.I @piracy
+opcode.  This opcode is seldom used.
+.TP
+.B \-R <path>
+(class \fBRestricted\fP, name \fBrestricted\fP)
+Restricted read/write.  Reading and writing files will be restricted
+only to the provided path. Ordinarily
+.B xfrotz
+will write or read its saves, transcripts, and move recordings in
+whatever path or directory the user provides when the
+.B SAVE, SCRIPT,
+or
+.B RECORDING
+commands are given.  This can be undesirable if
+.B xfrotz
+is run in a restricted environment, by a front end, or by a chatbot.
+This option will cause
+.B xfrotz
+to write or read only to the provided path and nowhere else. Then the
+controlling process can then watch that directory for changes and need
+not worry about someone scribbling or snooping who-knows-where.
+.TP
+.B \-rm <number>
+(class \fBMargin\fP, name \fBrightMargin\fP)
+Sets the right margin.
+.TP
+.B \-rs <number>
+(class \fBRandomSeed\fP, name \fBrandomSeed\fP)
+Set the random seed.  By default, the random number generator is
+initialized based on the system clock; this allows you to make the
+random number generator predictable, for use in recorded scripts or
+debugging.
+.TP
+.B \-sc <number>
+(class \fBScriptColumns\fP, name \fBscriptColumns\fP)
+Set the transcript width (default 80).  Set to 0 to disable line
+splitting in transcripts.
+.TP
+.B \-t
+(class \fBTandy\fP, name \fBtandy\fP)
+Set the z-machine's Tandy bit, which affects the behavior of certain
+Infocom games.  For example, \fIZork I\fP pretends not to have
+sequels, and \fIWitness\fP has its language censored.
+.TP
+.B \-u <number>
+(class \fBUndoSlots\fP, name \fBundoSlots\fP)
+Set the number of undo slots available.  The default number is 25.
+Note that many Infocom games do not support an ``undo'' command, and
+most Inform games do not allow more than one ``undo'' at a time.
+Because of this, you may need to use the undo hotkey instead (see
+below).
+.TP
+.B \-x
+(class \fBExpandAbbrevs\fP, name \fBexpandAbbrevs\fP)
+With this option enabled,
+.B xfrotz
+Expand the abbreviations "g", "x", and "z" to "again", "examine", and
+"wait".  This switch is for use with old Infocom games that lack these
+common abbreviations which were introduced in later games.  Use it with
+caution: A few games might use "g", "x" or "z" for different purposes.
+.TP
+.B \-xrm <resources>
+This allows setting resources on the command line.
+.TP
+.B \-zs <level>
+(class \fBZStrict\fP, name \fBzStrict\fP)
+Set the reporting level of ``Vile Zero Error From Hell'' bugs.  The
+possible levels are: 0 to print no error messages, 1 to print just one
+error message and ignore subsequent errors (the default), 2 to print
+all error messages, or 3 to exit with a fatal error.  Symbolic values
+of \fBnever\fP, \fBonce\fP, \fBalways\fP, and \fBfatal\fP,
+respectively, are also accepted.
+.SH RESOURCES
+\fBxfrotz\fP's resource class is ``XFrotz'', and its resource name is
+the base name by which it was invoked, usually ``xfrotz''.  In
+addition to the X resources listed above, there is one more set of
+resources: by setting \fBcolor\fP\fInum\fP (class name
+\fBColor\fP\fInum\fP) to the name of a color, you can change the
+meaning of the z-machine colors.  Note that here the \fBz:\fP\fBnum\fP
+syntax is not accepted.
+
+.SH Z-MACHINE STANDARDS
+.B Frotz
+complies with the Z-Machine Standard 1.1 of May 2006, revised February
+2014.  The authoritative version is found here:
+.br
+http://inform-fiction.org/zmachine/standards/z1point1/index.html
+.P
+As of 1.1, an additional optional parameter
+.B prompt
+is allowed on Version 5 extended save/restore.  This parameter allows
+a game to read or write an auxiliary (aux) file without prompting the
+player.  See section 15 of the Standard for details.
+.B Frotz
+restricts such files to having an ".aux" filename extension.  When the
+.B -R
+(restricted read/write) option is active, reads and writes through this
+mechanism are restricted to the provided path the same as all other file
+accesses.
+
+
+.SH ENVIRONMENT
+.B xfrotz
+supports the
+.B INFOCOM_PATH environment variable.  This is a
+colon-separated list of pathnames in which
+.B xfrotz
+will search for the given story file.  Any additional files required,
+such as graphics files, sounds directory, or blorb files must be in the
+same directory as
+.B xfrotz
+finds the story file.
+
+.SH HOTKEYS
+.B xfrotz
+supports several ``hotkeys,'' which interrupt the currently running
+game to set options or perform certain actions.
+.TP
+.B Mod1\+D
+Sets debugging options by prompting the user.  These options are
+equivalent to specifying \fB\-aa\fP, \fB\-at\fP, \fB\-ol\fP, and
+\fB\-om\fP on the command line.
+.TP
+.B Mod1\+H
+Lists available hotkeys.
+.TP
+.B Mod1\+N
+Starts a new game.  Equivalent to the \fIrestart\fP command supported
+by most games.
+.TP
+.B Mod1\+P
+Starts or stops playback from a recorded script.
+.TP
+.B Mod1\+R
+Starts or stops recording player input into a file.
+.TP
+.B Mod1\+S
+Sets the random number generator seed.
+.TP
+.B Mod1\+U
+Undoes one turn.
+.TP
+.B Mod1\+X
+Exits the currently running game.
+
+.SH FURTHER INFORMATION
+.PP
+The
+.B Frotz
+homepage is at https://661.org/proj/if/frotz/.
+.PP
+A
+.BR git (1)
+repository of all versions of
+.B Unix Frotz
+from 2.32 to the bleeding edge is available for public perusal at
+.br
+.B https://gitlab.com/DavidGriffith/frotz/.
+.PP
+The Interactive Fiction Archive, at
+.BR https://www.ifarchive.org/ ,
+is a good place to find games to play with
+.B Frotz.
+To play Infocom's games that use graphics or sound, you'll need to get
+corresponding Blorb files from there.  Various ports and builds for
+.B Frotz
+may also be found at the IF Archive.
+.PP
+Most distributions of Linux and BSD include
+.B Frotz
+in their package repositories.
+.PP
+It is distributed under the GNU General Public License version 2 or (at
+your option) any later version.
+.br
+.BR https://www.gnu.org/licenses/gpl-2.0.en.html
+.PP
+This software is offered as-is with no warranty or liability.  If you
+find a bug or would like
+.B Frotz
+to do something it doesn't currently do, please visit the above Gitlab
+website and report your concerns.
+
+.SH CAVEATS
+.PP
+This manpage is not intended to tell users HOW to play interactive
+fiction.  Refer to the file HOW_TO_PLAY included in the Unix Frotz
+documentation or visit one of the following sites:
+.br
+http://www.microheaven.com/ifguide/
+.br
+http://www.brasslantern.org/beginners/
+.br
+http://www.musicwords.net/if/how_to_play.htm
+.br
+http://ifarchive.org/
+
+.SH BUGS
+If run on an 8-bit display,
+.B xfrotz
+will most likely leak the entire color palette, especially if
+displaying graphics.
+
+The window size is fixed at 800x600, with pictures scaled to match;
+this scaling is hard coded.  Also,
+.B xfrotz
+depends on backing store instead of saving the screen's state.
+
+If different fonts have different heights, the display might look a
+bit strange, and things might not line up as they should.  This is
+especially apparent in menus.
+
+In order to change the fonts used, you would usually have to specify
+at least 4 fonts (for normal, bold, italic, and bold italic).  This is
+extremely cumbersome.
+
+.SH AUTHORS
+.B Frotz
+was written by Stefan Jokisch in 1995-7.
+.B xfrotz
+is an Xlib port written by Daniel Schepler, based in part on the Unix
+port by Galen Hazelwood and on
+.B WinFrotz
+by Rich Lawrence.
+.br
+The Unix port is currently maintained by David Griffith <dave@661.org>
+
+.SH SEE ALSO
+.BR frotz (6)
+.BR sfrotz (6)
+.BR nitfol (6)
+.BR rezrov (6)
+.BR jzip (6)
+.BR xzip (6)
+.BR inform (1)
+

@@ -14,7 +14,7 @@ use late_core::models::{
     profile::ProfileParams,
     server_ban::{ServerBan, ServerBanActivation},
     statusline::default_statusline_components,
-    user::{RightSidebarMode, default_right_sidebar_components},
+    user::{RightSidebarMode, User, default_right_sidebar_components},
 };
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::{TestDb, create_test_user};
@@ -309,6 +309,200 @@ impl IrcClient {
             }
         }
         lines
+    }
+
+    async fn list_channels(&mut self) -> Vec<String> {
+        self.write_line("LIST").await.expect("send LIST");
+        let mut channels = Vec::new();
+        loop {
+            let line = self.read_line().await.expect("LIST response");
+            if line.contains(" 323 ") {
+                return channels;
+            }
+            if line.contains(" 322 ") {
+                channels.push(line.split_whitespace().nth(3).unwrap().to_string());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn private_channel_namespace_round_trips_without_crossing_public_room() {
+    let server = IrcTestServer::start().await;
+    let member = server.seed_user("compel").await;
+    let outsider = server.seed_user("outside").await;
+    let db = server.state.db.get().await.expect("db client");
+    let private = ChatRoom::create_private_room(&db, "compel", member.id)
+        .await
+        .unwrap();
+    let public = ChatRoom::get_or_create_public_room(&db, "compel")
+        .await
+        .unwrap();
+    ChatRoomMember::join(&db, private.id, member.id)
+        .await
+        .unwrap();
+
+    let mut irc = server.connect(&member.token).await;
+    irc.read_until(" 366 ").await;
+    let channels = irc.list_channels().await;
+    assert!(channels.contains(&"#compel".to_string()));
+    assert!(channels.contains(&"##compel".to_string()));
+    irc.write_line("JOIN #COMPEL,##COMPEL").await.unwrap();
+    irc.read_until(&format!(" 366 {} #compel ", member.username))
+        .await;
+    irc.read_until(&format!(" 366 {} ##compel ", member.username))
+        .await;
+    irc.write_line("MODE ##compel").await.unwrap();
+    assert!(irc.read_until(" 324 ").await.contains("##compel +inst"));
+
+    let mut other = server.connect(&outsider.token).await;
+    other.read_until(" 366 ").await;
+    let channels = other.list_channels().await;
+    assert!(channels.contains(&"#compel".to_string()));
+    assert!(!channels.contains(&"##compel".to_string()));
+    other.write_line("JOIN ##compel").await.unwrap();
+    other.read_until(" 403 ").await;
+    assert!(
+        !ChatRoomMember::is_member(&db, private.id, outsider.id)
+            .await
+            .unwrap()
+    );
+    other.write_line("JOIN #compel").await.unwrap();
+    other.read_until(" 366 ").await;
+
+    for (channel, room) in [("#compel", &public), ("##compel", &private)] {
+        let body = format!("message for {channel}");
+        irc.write_line(&format!("PRIVMSG {channel} :{body}"))
+            .await
+            .unwrap();
+        wait_until(
+            || async {
+                ChatMessage::list_recent(&db, room.id, 5)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|message| message.user_id == member.id && message.body == body)
+            },
+            "IRC message saved in the correct room",
+        )
+        .await;
+        // Exercise the same-account TUI send path, including repeating a body
+        // just sent by IRC: only the IRC connection's original echo is suppressed.
+        server.state.chat_service.send_message_task(
+            member.id,
+            room.id,
+            room.slug.clone(),
+            body.clone(),
+            uuid::Uuid::new_v4(),
+            false,
+        );
+        let line = irc.read_until(&format!("PRIVMSG {channel} :{body}")).await;
+        assert!(line.starts_with(&format!(":{}!", member.username)));
+    }
+
+    for (room, expected) in [
+        (&public, "message for #compel"),
+        (&private, "message for ##compel"),
+    ] {
+        let messages = ChatMessage::list_recent(&db, room.id, 10).await.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message.body == expected));
+    }
+    let lines = other.read_available_for(Duration::from_millis(250)).await;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("PRIVMSG #compel :message for #compel"))
+            .count(),
+        2
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("message for ##compel"))
+    );
+
+    irc.write_line("PART ##compel").await.unwrap();
+    irc.read_until(" PART ##compel").await;
+    assert!(
+        ChatRoomMember::is_member(&db, private.id, member.id)
+            .await
+            .unwrap()
+    );
+    irc.write_line("PRIVMSG #compel :still in public")
+        .await
+        .unwrap();
+    other.read_until("PRIVMSG #compel :still in public").await;
+}
+
+#[tokio::test]
+async fn private_channel_moderation_targets_only_the_joined_room() {
+    let server = IrcTestServer::start().await;
+    let moderator = server.seed_user("room_mod").await;
+    let target = server.seed_user("room_target").await;
+    let db = server.state.db.get().await.expect("db client");
+    User::set_moderator(&db, moderator.id, true).await.unwrap();
+    let private = ChatRoom::create_private_room(&db, "shared", moderator.id)
+        .await
+        .unwrap();
+    let public = ChatRoom::get_or_create_public_room(&db, "shared")
+        .await
+        .unwrap();
+    for room in [&public, &private] {
+        for user in [&moderator, &target] {
+            ChatRoomMember::join(&db, room.id, user.id).await.unwrap();
+        }
+    }
+    let mut irc = server.connect(&moderator.token).await;
+    irc.read_until(" 366 ").await;
+    irc.write_line("JOIN #shared,##shared").await.unwrap();
+    irc.read_until(&format!(" 366 {} #shared ", moderator.username))
+        .await;
+    irc.read_until(&format!(" 366 {} ##shared ", moderator.username))
+        .await;
+    irc.write_line(&format!("KICK ##shared {} :private kick", target.username))
+        .await
+        .unwrap();
+    irc.read_until(&format!(" KICK ##shared {}", target.username))
+        .await;
+    assert!(
+        !ChatRoomMember::is_member(&db, private.id, target.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        ChatRoomMember::is_member(&db, public.id, target.id)
+            .await
+            .unwrap()
+    );
+
+    for (channel, room, other_room) in [
+        ("##shared", &private, &public),
+        ("#shared", &public, &private),
+    ] {
+        irc.write_line(&format!("MODE {channel} +b {}!*@*", target.username))
+            .await
+            .unwrap();
+        irc.read_until(&format!(" MODE {channel} +b ")).await;
+        assert!(
+            ChatRoomMember::is_banned_from_room(&db, room.id, target.id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ChatRoomMember::is_banned_from_room(&db, other_room.id, target.id)
+                .await
+                .unwrap()
+        );
+        irc.write_line(&format!("MODE {channel} -b {}!*@*", target.username))
+            .await
+            .unwrap();
+        irc.read_until(&format!(" MODE {channel} -b ")).await;
+        assert!(
+            !ChatRoomMember::is_banned_from_room(&db, room.id, target.id)
+                .await
+                .unwrap()
+        );
     }
 }
 
@@ -773,7 +967,9 @@ async fn profile_username_change_projects_to_live_irc_session() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
-            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
+            show_watch_chat: true,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,

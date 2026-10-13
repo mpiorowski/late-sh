@@ -44,10 +44,14 @@ impl PaperState {
         self.modal.is_some()
     }
 
-    /// Esc on the modal: closes it, and if it was still at the press,
-    /// forgets the request so the answer is dropped when it lands.
+    /// Esc on the modal: closes it, and if it was still at the press or
+    /// leafing to another edition, forgets the request so the answer is
+    /// dropped when it lands. A login pop still on its way keeps coming.
     pub(crate) fn close_modal(&mut self) {
-        if self.modal.take().is_some_and(|modal| modal.at_the_press) {
+        let Some(modal) = self.modal.take() else {
+            return;
+        };
+        if modal.at_the_press || self.awaiting == Some(PaperTrigger::Browse) {
             self.awaiting = None;
         }
     }
@@ -109,6 +113,15 @@ pub(crate) struct PaperModal {
     drag_grab: Cell<Option<u16>>,
     /// Still waiting for `/paper`'s answer; Esc drops the request.
     pub at_the_press: bool,
+    /// Where `←`/`→` lead from here; none on the spinner and a preview.
+    pub neighbors: PaperNeighbors,
+}
+
+/// The nearest printed editions either side of the one on screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaperNeighbors {
+    pub earlier: Option<NaiveDate>,
+    pub later: Option<NaiveDate>,
 }
 
 /// Geometry and wrapped extent published by the draw, in frame cells.
@@ -140,10 +153,11 @@ impl PaperModal {
             viewport: Cell::new(PaperViewport::default()),
             drag_grab: Cell::new(None),
             at_the_press: true,
+            neighbors: PaperNeighbors::default(),
         }
     }
 
-    pub(crate) fn edition(layout: PaperLayout<'_>) -> Self {
+    pub(crate) fn edition(layout: PaperLayout<'_>, neighbors: PaperNeighbors) -> Self {
         Self {
             title: format!(
                 " The Late Edition · {} ",
@@ -154,6 +168,7 @@ impl PaperModal {
             viewport: Cell::new(PaperViewport::default()),
             drag_grab: Cell::new(None),
             at_the_press: false,
+            neighbors,
         }
     }
 
