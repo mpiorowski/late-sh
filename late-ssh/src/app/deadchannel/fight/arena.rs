@@ -708,8 +708,11 @@ impl Reading {
                     None => false,
                 },
                 match self.keen_top_kit_at {
-                    Some(level) => format!("the keen runner wears the top kit at level {level}, want 13 or later"),
-                    None => "the keen runner never wears the top kit, want it at 13 or later".to_string(),
+                    Some(level) => format!(
+                        "the keen runner wears the top kit at level {level}, want 13 or later"
+                    ),
+                    None => "the keen runner never wears the top kit, want it at 13 or later"
+                        .to_string(),
                 },
             ),
             (
@@ -810,7 +813,8 @@ impl Reading {
                 ),
             ),
             (
-                self.boss_sharp >= self.boss_auto + 0.15 && (0.65..=0.90).contains(&self.boss_sharp),
+                self.boss_sharp >= self.boss_auto + 0.15
+                    && (0.65..=0.90).contains(&self.boss_sharp),
                 format!(
                     "the old signal read sharp is {}% against auto's {}%, want 15 points over and 65 to 90%",
                     pct(self.boss_sharp),

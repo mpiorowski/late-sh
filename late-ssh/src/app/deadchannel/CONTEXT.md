@@ -849,7 +849,10 @@ so (`Undercity · f road · p patch · ? guide`,
   migration 226: `cards` (JSONB, the drafted cards in draft order,
   `["brace", "bulwark"]`, null with none taken), which also handed the
   day back to any runner caught mid-fight (a fight stored before it has
-  no `muted` flag) and redefined the nuke to clear the column.
+  no `muted` flag) and redefined the nuke to clear the column;
+  migration 237 nuked every sheet when the siphon moved into every
+  deck (a stored siphon pick is a card its draft no longer offers) and
+  the one patch a day, the hit ramp, and the priced lead retuned the climb.
   Migration 222 defines `deadchannel_nuke_runners()`,
   which puts every sheet back to a fresh one for a balance test (the
   row, the look, and the leave and guide stamps stay) and calls it; to

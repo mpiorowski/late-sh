@@ -1651,9 +1651,10 @@ every runner new cards to play with and keeps one deck to tune.
   and a deck is still read at a glance. Sixteen decks exist, and the
   arena fights all of them on every pass.
 - **Every question has two right answers.** Level 3, for a strike: a
-  *jab* (free, three quarters of a strike) or a *siphon* (a strike that
-  mends half of itself): tempo or sustain. Level 6, for a block: a
-  *riposte* (hits for a block's worth and all the block standing) or a
+  *jab* (free, three quarters of a strike) or a *brace* (free, a whole
+  block): a free hit or a free guard (the siphon is in every deck since
+  "One patch a day"). Level 6, for a block: a
+  *riposte* (hits for a block and a half and all the block standing) or a
   *bulwark* (two and a half blocks for two energy): armor as a weapon
   or as a wall. Level 9, for a strike: a *burn* (free, two energy, and
   one more for each static card in hand, burned up) or a *ground* (a

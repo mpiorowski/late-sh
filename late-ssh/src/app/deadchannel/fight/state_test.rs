@@ -1712,7 +1712,10 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     // The drift: hits, gathers, comes down for double.
     sheet.fight = Some(a_fight(2, 500, 8, 0, 0));
     let hit = sheet.powers(the_fight(&sheet)).hit;
-    assert_eq!(hit, 13, "187% at level 5 of 8 attack less a quarter of defense 5");
+    assert_eq!(
+        hit, 13,
+        "187% at level 5 of 8 attack less a quarter of defense 5"
+    );
 
     // Block over the hit: it holds, nothing lands, no static, and what
     // is left of it stands.
@@ -2093,10 +2096,7 @@ fn a_level_that_owes_a_card_holds_the_road_until_one_is_taken() {
     let mut deck = sheet.deck();
     deck.sort_by_key(|card| card.name());
     assert_eq!(dealt, deck);
-    assert_eq!(
-        dealt.iter().filter(|card| **card == Card::Brace).count(),
-        1
-    );
+    assert_eq!(dealt.iter().filter(|card| **card == Card::Brace).count(), 1);
 
     // A draft that comes due with a glyph waiting waits for the fight.
     sheet.level = 6;
