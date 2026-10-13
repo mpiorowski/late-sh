@@ -195,6 +195,7 @@ pub struct Light {
 #[rustfmt::skip]
 pub const SIGNS: &[Sign] = &[
     Sign { zone: Zone { x0: 40, y0: 16, x1: 45, y1: 16 }, color: Neon::Magenta },
+    Sign { zone: Zone { x0: 95, y0: 16, x1: 97, y1: 16 }, color: Neon::White },
     Sign { zone: Zone { x0: 151, y0: 18, x1: 158, y1: 18 }, color: Neon::Amber },
     Sign { zone: Zone { x0: 173, y0: 18, x1: 177, y1: 18 }, color: Neon::White },
     Sign { zone: Zone { x0: 222, y0: 18, x1: 227, y1: 18 }, color: Neon::Cyan },
@@ -209,7 +210,6 @@ pub const SIGNS: &[Sign] = &[
 pub const DARK_SIGNS: &[Sign] = &[
     Sign { zone: Zone { x0: 24, y0: 16, x1: 29, y1: 16 }, color: Neon::Green },
     Sign { zone: Zone { x0: 57, y0: 16, x1: 62, y1: 16 }, color: Neon::Amber },
-    Sign { zone: Zone { x0: 95, y0: 16, x1: 97, y1: 16 }, color: Neon::White },
     Sign { zone: Zone { x0: 61, y0: 21, x1: 64, y1: 21 }, color: Neon::Red },
     Sign { zone: Zone { x0: 112, y0: 21, x1: 116, y1: 21 }, color: Neon::Cyan },
     Sign { zone: Zone { x0: 134, y0: 18, x1: 138, y1: 18 }, color: Neon::Green },
@@ -258,7 +258,7 @@ pub const BUILDINGS: &[Building] = &[
     Building { zone: Zone { x0: 38, y0: 8, x1: 52, y1: 16 }, color: Some(Neon::Magenta) },
     Building { zone: Zone { x0: 55, y0: 11, x1: 69, y1: 16 }, color: None },
     Building { zone: Zone { x0: 72, y0: 7, x1: 90, y1: 16 }, color: None },
-    Building { zone: Zone { x0: 92, y0: 10, x1: 108, y1: 16 }, color: None },
+    Building { zone: Zone { x0: 92, y0: 10, x1: 108, y1: 16 }, color: Some(Neon::White) },
     Building { zone: Zone { x0: 112, y0: 10, x1: 130, y1: 16 }, color: None },
     Building { zone: Zone { x0: 2, y0: 21, x1: 28, y1: 32 }, color: None },
     Building { zone: Zone { x0: 32, y0: 21, x1: 58, y1: 32 }, color: None },
@@ -379,6 +379,7 @@ pub const LIGHTS: &[Light] = &[
     Light { x: 224, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
     Light { x: 248, y: 33, kind: LightKind::Lantern, color: Neon::Amber, radius: 3 },
     Light { x: 42, y: 16, kind: LightKind::Sign, color: Neon::Magenta, radius: 7 },
+    Light { x: 96, y: 16, kind: LightKind::Sign, color: Neon::White, radius: 7 },
     Light { x: 154, y: 18, kind: LightKind::Sign, color: Neon::Amber, radius: 7 },
     Light { x: 175, y: 18, kind: LightKind::Sign, color: Neon::White, radius: 7 },
     Light { x: 224, y: 18, kind: LightKind::Sign, color: Neon::Cyan, radius: 7 },
@@ -405,8 +406,9 @@ pub const LIGHTS: &[Light] = &[
     Light { x: 75, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
     Light { x: 81, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
     Light { x: 87, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
-    Light { x: 100, y: 10, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
-    Light { x: 94, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
+    Light { x: 100, y: 10, kind: LightKind::Window, color: Neon::White, radius: 2 },
+    Light { x: 94, y: 16, kind: LightKind::Window, color: Neon::White, radius: 2 },
+    Light { x: 105, y: 16, kind: LightKind::Door, color: Neon::White, radius: 3 },
     Light { x: 115, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
     Light { x: 127, y: 16, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
     Light { x: 5, y: 21, kind: LightKind::Window, color: Neon::Amber, radius: 2 },
@@ -561,9 +563,10 @@ pub enum Landmark {
     Wire,
     /// The railing over the drop: look over the ledge.
     Ledge,
+    /// INK: the needle. A draft inked for crystals, kept through a mark.
+    Ink,
     // The shops that are not open yet (`DARK_SIGNS`): Enter at the door
     // says so. Opening one gives it a panel in `city/state.rs`.
-    Ink,
     Baths,
     Sleep,
     Shrine,

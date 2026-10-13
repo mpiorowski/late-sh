@@ -140,8 +140,11 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
         "the cursor on tier 3\n{screen}"
     );
     assert!(screen.contains("the last broadcast"), "{screen}");
-    assert!(screen.contains("23287"), "{screen}");
-    // Tier 3 weapon: 1316 less 75% of 506 (379). Tier 3 armor off street clothes: 1316.
+    // The top of the wall at level 3: 23287 on the ladder, and half as
+    // much again for each of the twelve tiers it sits above the level.
+    assert!(screen.contains("163009"), "{screen}");
+    // Tier 3 weapon, level with the runner: 1316 less 75% of 506 (379).
+    // Tier 3 armor off street clothes: 1316.
     assert!(screen.contains("[w] tire iron for 937 bits"), "{screen}");
     assert!(
         screen.contains("[a] padded jacket for 1316 bits"),
@@ -350,6 +353,18 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
         screen.contains("[t] test pattern      +16 signal, and filled"),
         "{screen}"
     );
+    assert!(
+        screen.contains("[f] feedback          a surge in tonight's deck"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[u] squelch           a burn in tonight's deck"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[o] sign-off          a mute in tonight's deck"),
+        "{screen}"
+    );
     assert!(screen.contains(till), "the bartender's last word\n{screen}");
 
     sheet.crystals = 0;
@@ -367,6 +382,75 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
         poured.contains("one glass a day. you still have the dead air, neat in you."),
         "{poured}"
     );
+}
+
+/// INK lists every draft with its two cards, says which are inked, prices
+/// the rest, and offers the key for the picked draft, or spells out why
+/// the needle would not take it in the key's row.
+#[test]
+fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Ink);
+    state.pick_draft_down();
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.level = 7;
+    sheet.signal = 70;
+    sheet.crystals = 12;
+    let screen = render_with_sheet(&state, &sheet, None);
+    assert!(screen.contains(" ink "), "{screen}");
+    assert!(
+        screen.contains("crystals 12      marks 0      the needle holds 1 more"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("  level 3   jab · brace        for 10 crystals"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("▸ level 6   riposte · bulwark  for 10 crystals"),
+        "the cursor on the level 6 draft\n{screen}"
+    );
+    assert!(screen.contains("[↑↓] pick a draft"), "{screen}");
+    assert!(
+        screen.contains("[i] ink riposte and bulwark for 10 crystals"),
+        "{screen}"
+    );
+
+    sheet.inks = vec![6];
+    sheet.crystals = 4;
+    let inked = render_with_sheet(&state, &sheet, None);
+    assert!(
+        inked.contains("▸ level 6   riposte · bulwark  inked"),
+        "{inked}"
+    );
+    assert!(inked.contains("the needle holds no more"), "{inked}");
+    assert!(
+        inked.contains("the level 6 draft is already in your skin."),
+        "the refusal in the key's row\n{inked}"
+    );
+    assert!(!inked.contains("[i] ink"), "{inked}");
+
+    state.pick_draft_up();
+    let full = render_with_sheet(&state, &sheet, None);
+    assert!(
+        full.contains("the needle has done what it will for you. bring it a mark."),
+        "{full}"
+    );
+
+    sheet.marks = 1;
+    let short = render_with_sheet(&state, &sheet, None);
+    assert!(
+        short.contains("▸ level 3   jab · brace        for 10 crystals, 6 short"),
+        "{short}"
+    );
+    assert!(
+        short.contains("10 crystals to ink jab and brace. you are 6 short."),
+        "{short}"
+    );
+    assert!(!short.contains("bring it a mark"), "{short}");
 }
 
 /// The blade shop prices the next tier up in each slot in crystals, and
@@ -388,8 +472,10 @@ fn the_blade_cart_prices_the_next_tier_up_in_crystals() {
         screen.contains("crystals 3      weapon tire iron"),
         "{screen}"
     );
+    // Tier 4 for a level 1 runner: three crystals, and two more a tier
+    // past the level.
     assert!(
-        screen.contains("[w] rebar club for 3 crystals   the wall asks"),
+        screen.contains("[w] rebar club for 9 crystals   the wall asks"),
         "{screen}"
     );
     assert!(
@@ -478,6 +564,17 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
         "{screen}"
     );
     assert!(!screen.contains("[p] patch"), "{screen}");
+
+    // Patched today already: the key is not offered again before the roll.
+    sheet.signal = 12;
+    sheet.road.patched = true;
+    let screen = render_with(&state, Some(&sheet));
+    assert!(
+        screen.contains("patched once today already. the roll is the next one."),
+        "{screen}"
+    );
+    assert!(!screen.contains("[p] patch"), "{screen}");
+    sheet.road.patched = false;
 
     sheet.signal = 0;
     let screen = render_with(&state, Some(&sheet));

@@ -6325,7 +6325,8 @@ async fn enter_on_a_spent_runners_road_lands_back_on_the_street() {
 /// each slot key buys onto the row. A letter the open panel does not own
 /// stays with it instead of reaching a global: `w` (the cart's key, Bonsai
 /// Care everywhere else) at the bar, `m` (the paired client's mute) at
-/// both, as over the picker and the scene.
+/// both, as over the picker and the scene. `q` and the page digits are
+/// the globals' over both.
 #[tokio::test]
 async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     use crate::app::deadchannel::city::map::Landmark;
@@ -6355,6 +6356,12 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     assert!(!app.show_bonsai_modal, "`w` at the bar is not Bonsai Care");
     assert!(app.banner.is_none(), "`m` at the bar is not the mute");
     assert_eq!(app.city.panel(), Some(Landmark::Bar), "the bar stays open");
+
+    // `q` asks to quit, and pours nothing: the glass below is the day's one.
+    app.handle_input(b"q");
+    assert!(app.show_quit_confirm, "`q` at the bar is the quit");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.show_quit_confirm, "quit confirm").await;
 
     app.handle_input(b"s");
     wait_for_render_contains(&mut app, "static on ice. it goes down like a short circuit").await;
@@ -6396,6 +6403,72 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     // The page digits still reach the globals from over a panel.
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
+}
+
+/// At INK a page digit is the page switch, as over every panel: `2` goes
+/// to the Arcade, and no draft is inked for it.
+#[tokio::test]
+async fn the_needle_leaves_the_page_digits_to_the_globals() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::deadchannel::city::map::Landmark;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-needle-digits-it", 100, 30, |sheet| {
+            sheet.crystals = 20
+        })
+        .await;
+
+    app.city.open_panel(Landmark::Ink);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"2");
+    assert_eq!(
+        app.screen,
+        Screen::Arcade,
+        "`2` at the needle is the Arcade"
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(row.inks, None, "nothing inked");
+    assert_eq!(row.crystals, 20, "no crystals spent");
+}
+
+/// At INK the down key walks the cursor to the next draft and `i` inks
+/// that one onto the row, for its crystals.
+#[tokio::test]
+async fn the_needle_inks_the_picked_draft() {
+    use crate::app::deadchannel::city::map::Landmark;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-needle-ink-it", 100, 30, |sheet| {
+            sheet.crystals = 20
+        })
+        .await;
+
+    app.city.open_panel(Landmark::Ink);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"j");
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "the needle goes in.").await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        row.inks,
+        Some(serde_json::json!([6])),
+        "the level 6 draft, under the cursor"
+    );
+    assert_eq!(row.crystals, 10, "ten crystals for the needle");
 }
 
 /// The road and the scene both fit a classic 80 by 24 terminal under the

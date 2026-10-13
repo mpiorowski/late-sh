@@ -245,6 +245,8 @@ pub enum FightBeat {
     Drank,
     /// A piece bought off the blade cart.
     Carted,
+    /// A draft inked at INK.
+    Inked,
     Refused,
     Failed,
 }
@@ -1622,6 +1624,7 @@ mod inner {
             FightBeat::Repaid => "repaid",
             FightBeat::Drank => "drank",
             FightBeat::Carted => "carted",
+            FightBeat::Inked => "inked",
             FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",

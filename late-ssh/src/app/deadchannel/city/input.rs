@@ -4,9 +4,10 @@
 //! open patch from anywhere on the street, Enter to close a panel. The
 //! armorer's panel takes the till keys (`fight/state.rs`,
 //! `Command::Outfit`), the lockers `d` and `w`, the bits machine `b` and
-//! `r`, Dead Air `s`, `d`, and `t` (a glass each), the blade shop `w` and
-//! `a`, the ledge `r` twice to step off; the tailor's hands every key to
-//! `tailor/input.rs`.
+//! `r`, Dead Air `s`, `d`, `t`, `f`, `u`, and `o` (a glass or a pour
+//! each), the blade shop `w` and `a`, INK up/down over the drafts and `i`
+//! to ink the picked one, the ledge `r` twice to step off; the tailor's
+//! hands every key to `tailor/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
 //! `?` anywhere on the page opens it (the site guide's key, taken over
 //! down here: the street has its own). While the road or the fight scene
@@ -120,8 +121,9 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 
 /// A panel, or the ledge view, takes Enter to close, and eats the walk
 /// keys. At the armorer the up and down keys walk the wall instead, `w`
-/// buys the picked weapon and `a` the picked armor. Digits, Tab, and `q`
-/// fall through to the globals; any other typed key is eaten.
+/// buys the picked weapon and `a` the picked armor; at INK they walk the
+/// drafts, and `i` inks the picked one. Digits, Tab, and `q` fall through
+/// to the globals, so no panel binds them; any other typed key is eaten.
 fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
     if app.city.panel() == Some(Landmark::Tailor) {
         return crate::app::deadchannel::tailor::input::handle_event(app, event);
@@ -190,11 +192,33 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::Byte(b's') | ParsedInput::Char('s') => Some(Drink::StaticOnIce),
             ParsedInput::Byte(b'd') | ParsedInput::Char('d') => Some(Drink::DeadAirNeat),
             ParsedInput::Byte(b't') | ParsedInput::Char('t') => Some(Drink::TestPattern),
+            ParsedInput::Byte(b'f') | ParsedInput::Char('f') => Some(Drink::Feedback),
+            ParsedInput::Byte(b'u') | ParsedInput::Char('u') => Some(Drink::Squelch),
+            ParsedInput::Byte(b'o') | ParsedInput::Char('o') => Some(Drink::SignOff),
             _ => None,
         };
         if let Some(drink) = drink {
             app.fight.request(Command::Drink { drink });
             return true;
+        }
+    }
+    if app.city.panel() == Some(Landmark::Ink) {
+        match event {
+            ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {
+                app.city.pick_draft_up();
+                return true;
+            }
+            ParsedInput::Arrow(b'B') | ParsedInput::Byte(b'j') | ParsedInput::Char('j') => {
+                app.city.pick_draft_down();
+                return true;
+            }
+            ParsedInput::Byte(b'i') | ParsedInput::Char('i') => {
+                app.fight.request(Command::Ink {
+                    level: app.city.picked_draft().level,
+                });
+                return true;
+            }
+            _ => {}
         }
     }
     if app.city.panel() == Some(Landmark::Blades) {

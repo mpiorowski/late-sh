@@ -456,6 +456,7 @@ fn beat_for(applied: &Applied) -> FightBeat {
         Applied::Reset => FightBeat::Reset,
         Applied::Drank { .. } => FightBeat::Drank,
         Applied::Carted { .. } => FightBeat::Carted,
+        Applied::Inked { .. } => FightBeat::Inked,
     }
 }
 

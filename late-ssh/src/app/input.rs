@@ -712,6 +712,17 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
             app.chat.jump_to_news_modal_article();
             app.set_screen(Screen::Dashboard);
         }
+        // Reply in #lounge quoting the article, as `r` on the live strip or
+        // in the News feed does, and take the user there to write it.
+        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
+            let Some(article_id) = app.chat.news_modal().map(|modal| modal.article_id) else {
+                return;
+            };
+            app.chat.close_news_modal();
+            if chat::news::input::reply_in_lounge(app, article_id) {
+                app.set_screen(Screen::Dashboard);
+            }
+        }
         ParsedInput::Byte(0x1B) => app.chat.close_news_modal(),
         _ => {}
     }
