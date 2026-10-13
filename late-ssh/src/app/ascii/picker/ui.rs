@@ -1,7 +1,7 @@
 //! The picker popup: every piece on its own row, the cursor on one, the
 //! keys.
 
-use late_core::models::user::AsciiPiece;
+use late_core::models::user::AsciiSelection;
 use ratatui::{
     Frame,
     layout::{Constraint, Flex, Layout, Rect},
@@ -21,7 +21,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &PiecePickerState) {
     }
     state.mouse.begin((frame.area().width, frame.area().height));
     // The frame, the list, a blank line, the keys.
-    let height = (AsciiPiece::ALL.len() as u16 + 4).min(area.height);
+    let height = (AsciiSelection::ALL.len() as u16 + 4).min(area.height);
     let popup = centered(area, POPUP_W.min(area.width), height);
     frame.render_widget(Clear, popup);
     let block = Block::default()
@@ -59,10 +59,10 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &PiecePickerState) {
     let width = list_area.width as usize;
     let scroll = state
         .mouse
-        .pane(list_area, (), AsciiPiece::ALL.len(), state.cursor());
-    let end = (scroll + height).min(AsciiPiece::ALL.len());
+        .pane(list_area, (), AsciiSelection::ALL.len(), state.cursor());
+    let end = (scroll + height).min(AsciiSelection::ALL.len());
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (idx, piece) in AsciiPiece::ALL[scroll..end].iter().enumerate() {
+    for (idx, piece) in AsciiSelection::ALL[scroll..end].iter().enumerate() {
         let at = scroll + idx;
         state.mouse.hit(
             Rect::new(list_area.x, list_area.y + idx as u16, list_area.width, 1),

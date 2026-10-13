@@ -3883,7 +3883,6 @@ dependencies = [
  "dartboard-editor",
  "dartboard-local",
  "dartboard-tui",
- "deadpool-postgres",
  "emojis",
  "futures-util",
  "getrandom 0.4.3",
@@ -3987,6 +3986,25 @@ dependencies = [
  "tracing-subscriber",
  "webkit2gtk",
  "wry",
+]
+
+[[package]]
+name = "late-zork"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "futures-util",
+ "getrandom 0.4.3",
+ "nix 0.29.0",
+ "russh",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vt100",
 ]
 
 [[package]]

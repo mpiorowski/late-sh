@@ -237,7 +237,6 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         paper_at_login: profile.paper_at_login,
         screensaver: profile.screensaver,
         show_watch_chat: profile.show_watch_chat,
-        art_splash_mode: profile.art_splash_mode,
         artboard_disclaimer: profile.artboard_disclaimer,
         terminal_images: profile.terminal_images,
         hidden_award_categories: profile.hidden_award_categories.clone(),

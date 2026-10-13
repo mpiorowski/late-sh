@@ -15,8 +15,9 @@ fn clicks_select_games_and_ignore_chrome() {
     // blank under it (y=2). Then "the house" header (y=3), Lateania (y=4),
     // blank (y=5), "roguelikes" header (y=6), DCSS (y=7), NetHack (y=8),
     // Brogue (y=9), blank (y=10), "remakes" header (y=11), A Dark Room
-    // (y=12), blank (y=13), "servers" header (y=14), Minecraft (y=15),
-    // blank (y=16), "doors" header (y=17), Green Dragon (y=18).
+    // (y=12), Zork Trilogy (y=13), blank (y=14), "servers" header (y=15),
+    // Minecraft (y=16), blank (y=17), "doors" header (y=18), Green Dragon
+    // (y=19).
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 1),
         None
@@ -59,7 +60,7 @@ fn clicks_select_games_and_ignore_chrome() {
     );
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 13),
-        None
+        Some(RailEntry::Card(5))
     );
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 14),
@@ -67,24 +68,28 @@ fn clicks_select_games_and_ignore_chrome() {
     );
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 15),
-        Some(RailEntry::Card(5))
-    );
-    assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 17),
         None
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 18),
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 16),
         Some(RailEntry::Card(6))
     );
-    // Last games: Rebels at y=22, CodeKeep at y=23.
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 22),
-        Some(RailEntry::Card(10))
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 18),
+        None
     );
+    assert_eq!(
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 19),
+        Some(RailEntry::Card(7))
+    );
+    // Last games: Rebels at y=23, CodeKeep at y=24.
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 23),
         Some(RailEntry::Card(11))
+    );
+    assert_eq!(
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 24),
+        Some(RailEntry::Card(12))
     );
     // The rule column and the landing pane are not selectable.
     assert_eq!(
@@ -114,23 +119,23 @@ fn clicks_select_games_and_ignore_chrome() {
 /// the hit test follows the same window.
 #[test]
 fn hit_test_follows_the_scroll_window() {
-    // Height 10: 8 sidebar rows visible of 23, selection on the last game
+    // Height 10: 8 sidebar rows visible of 24, selection on the last game
     // slides the window to the bottom of the list.
     let body = Rect::new(0, 0, 80, 10);
-    // Window starts at row 15 (the blank above "doors"), so y=1 is dead
+    // Window starts at row 16 (the blank above "doors"), so y=1 is dead
     // and y=3 lands on Green Dragon...
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 1),
+        sidebar_hit_test(body, HubGame::roster(false), 12, 0, None, 5, 1),
         None
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 3),
-        Some(RailEntry::Card(6))
+        sidebar_hit_test(body, HubGame::roster(false), 12, 0, None, 5, 3),
+        Some(RailEntry::Card(7))
     );
     // ...and the selected CodeKeep row is visible at the window's bottom.
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 8),
-        Some(RailEntry::Card(11))
+        sidebar_hit_test(body, HubGame::roster(false), 12, 0, None, 5, 8),
+        Some(RailEntry::Card(12))
     );
 }
 
@@ -166,30 +171,30 @@ fn runner_sidebar_puts_night_city_first_in_the_house() {
 fn clicks_select_live_games_under_the_cards() {
     let body = Rect::new(0, 0, 80, 34);
     let public = HubGame::roster(false);
-    // The cards end with CodeKeep at y=23. Then the gap (y=24), the rule
-    // (y=25), the header (y=26), the first game's name (y=27) and status
-    // (y=28), the second game's (y=29, y=30).
+    // The cards end with CodeKeep at y=24. Then the gap (y=25), the rule
+    // (y=26), the header (y=27), the first game's name (y=28) and status
+    // (y=29), the second game's (y=30, y=31).
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, None, 5, 23),
-        Some(RailEntry::Card(11))
+        sidebar_hit_test(body, public, 0, 2, None, 5, 24),
+        Some(RailEntry::Card(12))
     );
-    for dead in [24, 25, 26] {
+    for dead in [25, 26, 27] {
         assert_eq!(sidebar_hit_test(body, public, 0, 2, None, 5, dead), None);
     }
-    assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, None, 5, 27),
-        Some(RailEntry::Live(0))
-    );
     assert_eq!(
         sidebar_hit_test(body, public, 0, 2, None, 5, 28),
         Some(RailEntry::Live(0))
     );
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, Some(1), 5, 30),
+        sidebar_hit_test(body, public, 0, 2, None, 5, 29),
+        Some(RailEntry::Live(0))
+    );
+    assert_eq!(
+        sidebar_hit_test(body, public, 0, 2, Some(1), 5, 31),
         Some(RailEntry::Live(1))
     );
     // With nobody playing the section is its header and one dead line.
-    for dead in [24, 25, 26, 27] {
+    for dead in [25, 26, 27, 28] {
         assert_eq!(sidebar_hit_test(body, public, 0, 0, None, 5, dead), None);
     }
 }

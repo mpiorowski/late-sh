@@ -969,7 +969,6 @@ async fn profile_username_change_projects_to_live_irc_session() {
             paper_at_login: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
-            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
             artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),

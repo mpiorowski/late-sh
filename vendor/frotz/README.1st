@@ -1,0 +1,33 @@
+What are all these files for?
+
+AUTHORS		People who've had a hand in making Frotz what it is.
+ChangeLog	Summary of changes from one version to another.
+CONTRIBUTORS	People who've helped fund Frotz development.
+COPYING		Full text of the GNU General Public License.
+DUMB		Description of the dumb-interface version of Frotz.
+HOW_TO_PLAY	How to play Interactive Fiction.
+INSTALL		How to build and install Frotz for Unix machines.
+INSTALL_DOS	How to build and install Frotz for PC/MS DOS.
+INSTALL_PDP10	How to build and install Frotz for PDP-10 mainframes.
+Makefile	The Makefile (the INSTALL file tells you about this).
+Makefile.tc	Makefile for building Frotz for DOS using Turbo C 3.00.
+Makefile.ow	Makefile for building Frotz for DOS using Open Watcom C.
+owbuild.bat	A batch file for building Frotz for PC/MS DOS using Watcom C.
+README		An overview of Frotz.
+README.md	An overview of Frotz formatted in Markdown.
+README.1st	This file.
+tcbuild.bat	A batch file for building Frotz for PC/MS DOS using Turbo C.
+TODO		Stuff to do in no particular order.
+
+doc/		Manpages, DOS documentation, and sample config files.
+public/		The Frotz webpage.
+src/		Source code to Frotz.
+src/blorb	Blorb library.
+src/common	The Frotz core code.
+src/curses	Curses user interface code.
+src/dos		MSDOS user interface code.
+src/dumb	Dumb user interface code.
+src/misc	Scripts and fonts.
+src/sdl		SDL user interface code.
+src/test	Zcode test programs.
+src/x11		X11 user interface code.

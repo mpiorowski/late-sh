@@ -2,7 +2,7 @@
 //! one, and what picked it. Opened over the Zen page from an ascii tile
 //! (the Settings Tweaks row uses the settings modal's own picker).
 
-use late_core::models::user::AsciiPiece;
+use late_core::models::user::AsciiSelection;
 
 use crate::app::common::mouse::MouseState;
 
@@ -22,10 +22,10 @@ pub(crate) struct PiecePickerState {
 
 impl PiecePickerState {
     /// Open with the cursor on `current`, the piece the tile plays now.
-    pub(crate) fn open(&mut self, current: AsciiPiece) {
+    pub(crate) fn open(&mut self, current: AsciiSelection) {
         *self = Self::default();
         self.open = true;
-        self.cursor = AsciiPiece::ALL
+        self.cursor = AsciiSelection::ALL
             .iter()
             .position(|piece| *piece == current)
             .expect("every piece is in ALL");
@@ -45,18 +45,18 @@ impl PiecePickerState {
     }
 
     /// The piece under the cursor.
-    pub(crate) fn selected(&self) -> AsciiPiece {
-        AsciiPiece::ALL[self.cursor]
+    pub(crate) fn selected(&self) -> AsciiSelection {
+        AsciiSelection::ALL[self.cursor]
     }
 
     pub(crate) fn move_cursor(&mut self, delta: isize) {
-        let last = AsciiPiece::ALL.len() as isize - 1;
+        let last = AsciiSelection::ALL.len() as isize - 1;
         self.cursor = (self.cursor as isize + delta).clamp(0, last) as usize;
         self.mouse.reveal_selection();
     }
 
     pub(crate) fn set_cursor(&mut self, index: usize) {
-        self.cursor = index.min(AsciiPiece::ALL.len() - 1);
+        self.cursor = index.min(AsciiSelection::ALL.len() - 1);
     }
 }
 

@@ -197,7 +197,7 @@ async fn a_pointer_over_the_terminal_does_not_hold_off_away() {
 /// quiet minutes in: the aurora covers the screen.
 async fn app_under_the_aurora(name: &str) -> (TestDb, App) {
     use crate::app::common::away::AWAY_AFTER;
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, name).await;
     let mut app = make_app_in_world(test_db.db.clone(), user.id, name, SessionWorld::default());
@@ -206,7 +206,7 @@ async fn app_under_the_aurora(name: &str) -> (TestDb, App) {
         scene: Scene::AuroraFjord,
         style: SceneStyle::Dots,
     };
-    app.profile_state.profile.screensaver = Screensaver::Piece(aurora);
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Piece(aurora));
     assert_eq!(app.screensaver(), None, "a session that is here has none");
     app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
@@ -306,4 +306,77 @@ async fn a_paste_that_wakes_the_screensaver_is_swallowed_whole() {
     assert!(!app.show_quit_confirm, "nor is the rest of the paste");
     assert!(app.is_running());
     assert!(app.show_help, "the key after the close is the page's");
+}
+
+#[tokio::test]
+async fn random_screensavers_end_on_wake_and_restart_on_next_activation() {
+    use crate::app::common::{away::AWAY_AFTER, primitives::Screen};
+    use late_core::models::user::{AsciiSelection, Screensaver};
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::{Duration, Instant};
+    let (_db, mut app) = app_under_the_aurora("random-saver-life").await;
+    app.handle_input(b"x");
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Random);
+    app.last_active_at = Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away());
+    let initial = app.screensaver().unwrap();
+    app.render().unwrap();
+    app.render().unwrap();
+    let mut rng = StdRng::seed_from_u64(9);
+    assert!(!app.sync_screensaver(Instant::now() + Duration::from_secs(3600), &mut rng));
+    assert_eq!(app.screensaver(), Some(initial));
+    app.handle_input(b"?");
+    assert_eq!(app.screensaver(), None);
+    assert!(app.screensaver_playback.is_none());
+    assert!(!app.show_help, "the waking key is swallowed");
+    app.sent_away = true;
+    assert!(app.sync_away());
+    assert!(app.screensaver().is_some());
+    assert_eq!(app.screen, Screen::Dashboard);
+}
+
+#[tokio::test]
+async fn zen_navigation_and_overlays_preserve_only_the_current_visit() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::zen::state::{Node, RiceLayout, TileKind, ZenState};
+    use late_core::models::user::AsciiSelection;
+    let (_db, mut app) = app_under_the_aurora("random-zen-visit").await;
+    app.handle_input(b"x");
+    let mut layout = RiceLayout {
+        root: Node::leaf(TileKind::Ascii),
+        ..RiceLayout::default()
+    };
+    layout.root.set_selection(0, AsciiSelection::Random);
+    app.zen = ZenState::new(layout);
+    app.set_screen(Screen::Zen);
+    let initial = app.zen.focused_piece().expect("resolved before rendering");
+    let saved = app.zen.rice.to_json();
+    app.show_help = true;
+    app.render().unwrap();
+    app.show_help = false;
+    app.zen.toggle_zoom();
+    app.resize(120, 40).unwrap();
+    app.render().unwrap();
+    assert_eq!(app.zen.focused_piece(), Some(initial));
+    assert!(!app.zen_layout_dirty);
+    app.set_screen(Screen::Dashboard);
+    assert_eq!(app.zen.focused_piece(), None, "the visit ended");
+    app.set_screen(Screen::Zen);
+    assert!(app.zen.focused_piece().is_some());
+    assert_eq!(app.zen.rice.to_json(), saved);
+    assert!(!app.zen_layout_dirty);
+    // The picker highlights the configured mode and applies a new one before
+    // the next frame; returning to the same mode leaves the instance alone.
+    app.handle_input(b"\r");
+    assert!(app.piece_picker.is_open());
+    assert_eq!(app.piece_picker.selected(), AsciiSelection::Random);
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(app.zen.focused_selection(), Some(AsciiSelection::Randomer));
+    assert!(app.zen.focused_piece().is_some());
+    assert!(app.zen_layout_dirty);
+    let chosen = app.zen.focused_piece();
+    app.handle_input(b"\r");
+    app.handle_input(b"\r");
+    assert_eq!(app.zen.focused_piece(), chosen);
 }

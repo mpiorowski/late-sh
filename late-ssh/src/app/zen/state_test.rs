@@ -321,7 +321,11 @@ fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
 /// something else, as a chat tile's room is.
 #[test]
 fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::Instant;
+    let now = Instant::now();
+    let mut rng = StdRng::seed_from_u64(3);
     let earthrise = AsciiPiece {
         scene: Scene::Earthrise,
         style: SceneStyle::Dots,
@@ -337,10 +341,10 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
     assert_eq!(zen.focused_piece(), Some(earthrise));
     assert_eq!(
         Screensaver::DEFAULT,
-        Screensaver::Piece(earthrise),
+        Screensaver::On(AsciiSelection::Piece(earthrise)),
         "the tile and the screensaver default to one piece"
     );
-    assert!(zen.cycle_focused_piece(true));
+    assert!(zen.cycle_focused_piece(true, now, &mut rng));
     assert_eq!(
         zen.focused_piece(),
         Some(AsciiPiece {
@@ -348,10 +352,10 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
             style: SceneStyle::Pixels
         })
     );
-    // Back past earthrise's two styles, off the front of the list
+    // Back past earthrise and the random modes, off the front of the list
     // onto its end.
-    for _ in 0..2 {
-        assert!(zen.cycle_focused_piece(false));
+    for _ in 0..4 {
+        assert!(zen.cycle_focused_piece(false, now, &mut rng));
     }
     assert_eq!(zen.focused_piece(), Some(dawn), "it wraps");
 
@@ -361,29 +365,35 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
         "stored by key: {stored}"
     );
     let restored: RiceLayout = serde_json::from_str(&stored).expect("deserialize");
-    assert_eq!(restored.root.piece_at(0), Some(dawn));
+    assert_eq!(
+        restored.root.selection_at(0),
+        Some(AsciiSelection::Piece(dawn))
+    );
 
     let aurora = AsciiPiece {
         scene: Scene::AuroraFjord,
         style: SceneStyle::Dots,
     };
-    assert!(zen.set_focused_piece(aurora));
+    assert!(zen.set_focused_selection(AsciiSelection::Piece(aurora), now, &mut rng));
     assert_eq!(zen.focused_piece(), Some(aurora));
-    assert!(zen.set_focused_piece(dawn));
+    assert!(zen.set_focused_selection(AsciiSelection::Piece(dawn), now, &mut rng));
 
     assert!(zen.split_focused(true));
-    assert_eq!(zen.rice.root.piece_at(0), Some(dawn));
-    assert_eq!(zen.rice.root.piece_at(1), None, "the new tile is blank");
+    assert_eq!(
+        zen.rice.root.selection_at(0),
+        Some(AsciiSelection::Piece(dawn))
+    );
+    assert_eq!(zen.rice.root.selection_at(1), None, "the new tile is blank");
     assert!(
-        !zen.cycle_focused_piece(true),
+        !zen.cycle_focused_piece(true, now, &mut rng),
         "`[ ]` on a blank tile is nothing"
     );
 
     assert!(zen.rice.root.set_kind(0, TileKind::Clock));
     assert!(zen.rice.root.set_kind(0, TileKind::Ascii));
     assert_eq!(
-        zen.rice.root.piece_at(0),
-        Some(earthrise),
+        zen.rice.root.selection_at(0),
+        Some(AsciiSelection::Piece(earthrise)),
         "coming back plays the default"
     );
 }
@@ -404,7 +414,7 @@ fn a_layout_without_pieces_reads_back_unchanged() {
 /// stored.
 #[test]
 fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle};
     let room = Uuid::from_u128(7);
     let stored = serde_json::json!({
         "root": {
@@ -424,14 +434,147 @@ fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
     });
     let restored = RiceLayout::from_json(Some(&stored));
     assert_ne!(restored, RiceLayout::default(), "the layout survives");
-    assert_eq!(restored.root.piece_at(0), Some(AsciiPiece::DEFAULT));
+    assert_eq!(restored.root.selection_at(0), Some(AsciiSelection::DEFAULT));
     assert_eq!(restored.root.kind_at(1), Some(TileKind::Chat));
     assert_eq!(restored.root.leaf_rooms()[1], Some(room));
     assert_eq!(
-        restored.root.piece_at(2),
-        Some(AsciiPiece {
+        restored.root.selection_at(2),
+        Some(AsciiSelection::Piece(AsciiPiece {
             scene: Scene::AlpineDawn,
             style: SceneStyle::Pixels
-        })
+        }))
     );
+}
+
+fn random_tiles() -> ZenState {
+    use late_core::models::user::AsciiSelection;
+    let mut root = Node::split(
+        Dir::Row,
+        500,
+        Node::leaf(TileKind::Ascii),
+        Node::leaf(TileKind::Ascii),
+    );
+    root.set_selection(0, AsciiSelection::Random);
+    root.set_selection(1, AsciiSelection::Randomer);
+    ZenState::new(RiceLayout {
+        root,
+        look: Look::default(),
+    })
+}
+
+#[test]
+fn random_tiles_keep_runtime_separate_from_the_saved_layout() {
+    use late_core::models::user::AsciiSelection;
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::{Duration, Instant};
+    let mut zen = random_tiles();
+    let saved = zen.rice.to_json();
+    assert_eq!(saved["root"]["first"]["piece"], "random");
+    assert_eq!(saved["root"]["second"]["piece"], "randomer");
+    assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
+    let now = Instant::now();
+    let mut rng = StdRng::seed_from_u64(17);
+    zen.enter(now, &mut rng);
+    let initial = zen.playback.clone();
+    assert!(zen.piece_label(0).unwrap().starts_with("random · "));
+    assert!(zen.piece_label(1).unwrap().starts_with("randomer · "));
+    zen.toggle_zoom();
+    zen.cycle_border();
+    zen.cycle_gap();
+    zen.flip_focused();
+    zen.resize_focused(Dir::Column, 1, Rect::new(0, 0, 100, 40));
+    // The focused Random tile holds; the hidden Randomer tile still rotates.
+    assert!(!zen.sync_playback(now + Duration::from_secs(300), &mut rng));
+    assert_eq!(zen.playback[0], initial[0]);
+    assert_ne!(
+        zen.piece_at(1).unwrap().scene,
+        initial[1].unwrap().piece().scene
+    );
+    assert_eq!(zen.drawn_pieces(), vec![zen.piece_at(0).unwrap()]);
+    let rotated = zen.playback.clone();
+    zen.focus = 1;
+    assert!(!zen.set_focused_selection(
+        AsciiSelection::Randomer,
+        now + Duration::from_secs(300),
+        &mut rng
+    ));
+    assert_eq!(zen.playback, rotated, "reselecting preserves playback");
+    assert_eq!(
+        zen.rice.root.selection_at(1),
+        Some(AsciiSelection::Randomer)
+    );
+    // Runtime cannot leak into JSON, including when the layout is edited.
+    let stored = zen.rice.to_json();
+    assert_eq!(
+        stored["root"]["first"]["piece"],
+        saved["root"]["first"]["piece"]
+    );
+    assert_eq!(
+        stored["root"]["second"]["piece"],
+        saved["root"]["second"]["piece"]
+    );
+    assert_eq!(stored["root"]["second"].as_object().unwrap().len(), 3);
+}
+
+#[test]
+fn random_tile_instances_follow_surviving_leaves_through_layout_edits() {
+    use rand::{SeedableRng, rngs::StdRng};
+    use std::time::Instant;
+    let mut zen = random_tiles();
+    zen.enter(Instant::now(), &mut StdRng::seed_from_u64(21));
+    let original = zen.playback.clone();
+    assert!(zen.split_focused(true));
+    assert_eq!(zen.playback[0], original[0]);
+    assert_eq!(zen.playback[2], original[1]);
+    assert_eq!(zen.playback[1], None, "the new tile is blank");
+    assert!(zen.close_focused());
+    assert_eq!(zen.playback, original);
+    zen.focus = 0;
+    assert!(zen.close_focused());
+    assert_eq!(zen.playback, vec![original[1]]);
+    zen.open_kind_picker();
+    zen.kind_picker = TileKind::ALL
+        .iter()
+        .position(|kind| *kind == TileKind::Clock);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(zen.playback, vec![None]);
+    zen.open_kind_picker();
+    zen.kind_picker = TileKind::ALL
+        .iter()
+        .position(|kind| *kind == TileKind::Ascii);
+    assert_eq!(zen.pick_kind(), KindPick::Changed);
+    assert_eq!(
+        zen.focused_piece(),
+        Some(late_core::models::user::AsciiPiece::DEFAULT)
+    );
+    zen.reset();
+    assert!(zen.playback.iter().all(Option::is_none));
+}
+
+#[test]
+fn leaving_zen_ends_random_instances_and_returning_resolves_them_again() {
+    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use std::time::{Duration, Instant};
+    let mut zen = random_tiles();
+    let now = Instant::now();
+    let mut rng = StdRng::seed_from_u64(22);
+    zen.enter(now, &mut rng);
+    let saved = zen.rice.to_json();
+    zen.leave();
+    assert!(zen.playback.iter().all(Option::is_none));
+    let later = now + Duration::from_secs(3600);
+    let mut idle_rng = rng.clone();
+    assert!(!zen.sync_playback(later, &mut rng));
+    assert_eq!(rng.next_u64(), idle_rng.next_u64());
+    let mut idle_rng = rng.clone();
+    zen.enter(later, &mut rng);
+    assert_ne!(
+        rng.next_u64(),
+        idle_rng.next_u64(),
+        "each tile draws afresh"
+    );
+    assert!(zen.playback.iter().all(Option::is_some));
+    assert!(!zen.sync_playback(later + Duration::from_secs(299), &mut rng));
+    assert!(zen.sync_playback(later + Duration::from_secs(300), &mut rng));
+    assert_eq!(zen.rice.to_json(), saved);
 }

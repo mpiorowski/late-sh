@@ -25,7 +25,7 @@ locals {
   # a :bootstrap placeholder (a fresh disaster-recovery apply then needs one
   # release per component to roll real images out).
   image_tags = {
-    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "dcss", "usurper", "brogue", "bashquest"] :
+    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "zork", "dcss", "usurper", "brogue", "bashquest"] :
     component => lookup(var.IMAGE_TAGS, component, "ghcr.io/mpiorowski/late-sh/late-${component}:bootstrap")
   }
 
@@ -49,7 +49,7 @@ locals {
   livekit_whip_subdomain    = "whip"
   livekit_ingress_whip_port = tonumber(trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) != "" ? trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) : "7888")
 
-  # IRC edge (ingress TCP passthrough, IPv6 HAProxy, certificate). The app
+  # IRC edge (ssh-edge HAProxy in ssh-tcp.tf, certificate). The app
   # side is compiled into late-ssh's prod profile and always listens; these
   # gate only what the edge exposes. IRC_PROXY_EMIT stays a variable because
   # flipping edge emission is a deploy-time rollout step.
@@ -79,10 +79,10 @@ locals {
   # (/etc/rancher/rke2/config.yaml on the node, infra/README.md), so a
   # workload lands there only when it carries both the node selector and the
   # toleration. Everything without them stays on server-1: service-ssh, redis,
-  # the doors, ingress-nginx, ipv6-proxy, LiveKit's media hostPorts, and every
-  # workload whose local-path volume is still pinned to server-1 (the Postgres
-  # instances). Moving one of those needs a fresh volume on agent-1, not just
-  # these two fields.
+  # the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit's media hostPorts,
+  # and every workload whose local-path volume is still pinned to server-1
+  # (the Postgres instances). Moving one of those needs a fresh volume on
+  # agent-1, not just these two fields.
   support_node_label_key   = "role"
   support_node_label_value = "support"
 }

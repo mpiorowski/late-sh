@@ -1,0 +1,200 @@
+==========================================================
+----------------------------------------------------------
+||	How To Play Interactive Fiction With Frotz	||
+----------------------------------------------------------
+==========================================================
+
+In the late 1970s, a group of students at the Massachusetts Institute of
+Technology (MIT) formed a company called Infocom to produce a genre of
+computer games called "Interactive Fiction", that is, a game in which
+you're "playing" a novel or short story.
+
+Infocom wrote their games to run on an imaginary computer of their own
+design called the "Z-Machine" and so the games are said to be written in
+"Z-code".  From their first game ("Zork I") to their last ("Shogun"),
+the Z-machine went through six versions.  The most common versions were
+"Standard" (version 3) and "Advanced" (version 5).
+
+Infocom's heyday lasted through the late 1970s and all of the 1980s.  In
+the early to mid 1990s the Z-machine was reverse-engineered and a new
+language called "Inform" was created to allow people to once again write
+programs for the Z-machine.
+
+The Z-code games written nowadays were written using this Inform
+language.  These games are usually in the form of single files.  The
+extensions .z3 and .z5 mean that a file is a "Z-code" game in version 3 or
+version 5.  These files are not compressed, but are ordinary binary files
+and should be downloaded in 'binary' mode.
+
+The canonical repository of freeware games which can be played on Frotz is
+at the Interactive Fiction Archive at http://www.ifarchive.org and its
+mirrors.
+
+
+The following is borrowed from the first few pages of the manual to
+Lost Treasures of Infocom I:
+
+=========================================
+Communicating with Interactive Fiction ||
+=========================================
+
+With Interactive Fiction, you type your commands in plain English each
+time you see the prompt which looks like this:
+
+>
+
+Most of the sentences that the stories understand are imperative
+sentences.  See the examples below.
+
+When you have finished typing your input, press the ENTER (or RETURN) key.
+The story will then respond, telling you whether your request is possible
+at this point in the story, and what happened as a result.
+
+The story recognizes your words by their first six letters, and all
+subsequent letters are ignored.  Therefore, CANDLE, CANDLEs, and
+CANDLEstick would all be treated as the same word.  Most stories don't
+care about capitalization, so you can just type in all-lowercase if you
+like.
+
+To move around, just type the direction you want to go.  Directions can be
+abbreviated:  NORTH to N, SOUTH to S, EAST to E, WEST to W, NORTHEAST to
+NE, NORTHWEST to NW, SOUTHEAST to SE, SOUTHWEST to SW, UP to U, and DOWN
+to D.  IN and OUT will also work in certain places.
+
+There are many differnet kinds of sentences used in Interactive Fiction.
+Here are some examples:
+
+> WALK TO THE NORTH
+> WEST
+> NE
+> DOWN
+> TAKE THE BIRDCAGE
+> READ ABOUT DIMWIT FLATHEAD
+> LOOK UP MEGABOZ IN THE ENCYCLOPEDIA
+> LIE DOWN IN THE PINK SOFA
+> EXAMINE THE SHINY COIN
+> PUT THE RUSTY KEY IN THE CARDBOARD BOX
+> SHOW MY BOW TIE TO THE BOUNCER
+> HIT THE CRAWLING CRAB WITH THE GIANT NUTCRACKER
+> ASK THE COWARDLY KING ABOUT THE CROWN JEWELS
+
+You can use multiple objects with certain verbs if you separate them by
+the word "AND" or by a comma.  Here are some examples:
+
+> TAKE THE BOOK AND THE FROG
+> DROP THE JAR OF PEANUT BUTTER, THE SPOON, AND THE LEMMING FOOD
+> PUT THE EGG AND THE PENCIL IN THE CABINET
+
+You can include several inputs on one line if you separate them by the
+word "THEN" or by a period.  Each input will be handled in order, as
+though you had typed them individually at separate prompts.  For example,
+you could type all of the following at once, before pressing the ENTER (or
+RETURN) key:
+
+> TURN ON THE LIGHT. TAKE THE BOOK THEN READ ABOUT THE JESTER IN THE BOOK
+
+If the story doesn't understand one of the sentences on your input line,
+or if an unusual event occurs, it will ignore the rest of your input line.
+
+The words "IT" and "ALL" can be very useful.  For example:
+
+> EXAMINE THE APPLE.  TAKE IT.  EAT IT
+> CLOSE THE HEAVY METAL DOOR.  LOCK IT
+> PICK UP THE GREEN BOOT.  SMELL IT.  PUT IT ON.
+> TAKE ALL
+> TAKE ALL THE TOOLS
+> DROP ALL THE TOOLS EXCEPT THE WRENCH AND MINIATURE HAMMER
+> TAKE ALL FROM THE CARTON
+> GIVE ALL BUT THE RUBY SLIPPERS TO THE WICKED WITCH
+
+The word "ALL" refers to every visible object except those inside
+something else.  If there were an apple on the ground and an orange inside
+a cabinet, "TAKE ALL" would take the apple but not the orange.
+
+There are three kinds of questions you can ask:  "WHERE IS (something)",
+"WHAT IS (something)", and "WHO IS (someone)".  For example:
+
+> WHO IS LORD DIMWIT?
+> WHAT IS A GRUE?
+> WHERE IS EVERYBODY?
+
+When you meet intelligent creatures, you can talk to them by typing their
+name, then a comma, then whatever you want to say to them.  Here are some
+examples:
+
+> JESTER, HELLO
+> GUSTAR WOOMAX, TELL ME ABOUT THE COCONUT
+> UNCLE OTTO, GIVE ME YOUR WALLET
+> HORSE, WHERE IS YOUR SADDLE?
+> BOY, RUN HOME THEN CALL THE POLICE
+> MIGHTY WIZARD, TAKE THIS POISONED APPLE.  EAT IT
+
+Notice that in the last two examples, you are giving the characters more
+than one command on the same input line.  Keep in mind, however, that many
+creatures don't care for idle chatter; your actions will speak louder than
+your words.
+
+=================
+Basic Commands ||
+=================
+
+BRIEF - This command causes the game to fully describe a location only
+the first time you enter it.  On subsequent visits, only the name of the
+location and any objects present will be described.  Most adventures
+will begin in "BRIEF" mode and remain in "BRIEF" mode unless you use the
+"VERBOSE" or "SUPERBRIEF" commands.
+
+DIAGNOSE - This will give you a report of your physical condition.
+Not all games support this command.
+
+INVENTORY - This will give you a list of what you are carrying and
+wearing.  Usually you can abbreviate "INVENTORY" to "I".
+
+LOOK - This will give you a full description of your location.  You can
+abbreviate "LOOK" to 'L'.
+
+QUIT - This lets you stop Frotz gracefully.  If you want to save your
+position before quitting, you must use the "SAVE" command.
+
+RESTORE - This restores a previously saved position.
+
+RESTART - This stops the game and restarts it from the beginning.
+
+SAVE - This saves a "snapshot" of your current position.  You can return
+to a saved position in the future by using the "RESTORE" command.
+
+SCRIPT - This command tells Frotz to make a transcript of the story and
+save it to a file.  Transcripts can be used to aid your memory, prepare
+maps, prepare walkthroughs, make something to brag about, and so on.
+
+SCORE - This command will show your current score and often a ranking
+based on that score.
+
+SUPERBRIEF - This one causes the game to display only the name of a
+place you enter, even if you've never been there before.  In this mode,
+not even objects present are described.  Of course, you can get a full
+description of your location and the object present by typing "LOOK".
+In "SUPERBRIEF" mode, the blank line between turns is eliminated.  This
+mode is meant for players who are already familiar with the geography.
+
+TIME - This gives your the current time in the story.  Some games don't
+have a concept of time and therefore don't have this command.
+
+UNSCRIPT - Stops Frotz from making a transcript.
+
+VERBOSE - This causes the game to give a complete description of each
+location and the objects in it every time you enter a location, even if
+you've been there before.
+
+VERSION - Shows you the release number and serial number of the story
+file.
+
+WAIT - Causes time in the story to pass.  Since nothing happens until you
+type a sentence and press RETURN, you could leave your machine, take a
+nap, then return to the story to find that nothing has changed.  So, to
+make time pass in the story, you type "WAIT".  For example, if you meet a
+wizard, you might "WAIT" to see if he will say anything.  If you're aboard
+a flying carpet, you might "WAIT" to see where it goes.  There are few
+exceptions, most notable Infocom's "Border Zone", in which the game is
+played in real-time (take too long deciding what to do and Bad Things
+happen).  This command can often be abbreviated to "Z".

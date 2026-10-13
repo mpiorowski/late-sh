@@ -334,18 +334,6 @@ impl AsciiPiece {
     pub fn label(self) -> String {
         format!("{} · {}", self.scene.label(), self.style.label())
     }
-
-    pub fn cycle(self, forward: bool) -> Self {
-        let at = Self::ALL
-            .iter()
-            .position(|piece| *piece == self)
-            .expect("every piece is in ALL");
-        let len = Self::ALL.len();
-        match forward {
-            true => Self::ALL[(at + 1) % len],
-            false => Self::ALL[(at + len - 1) % len],
-        }
-    }
 }
 
 impl Serialize for AsciiPiece {
@@ -371,104 +359,127 @@ impl<'de> Deserialize<'de> for AsciiPiece {
     }
 }
 
-/// Tweak: what covers the screen while the session is away (`/brb`, or 30
-/// quiet minutes). On by default, playing earthrise in dots: a slow piece,
-/// a frame a second that moves a few cells, so an away session costs about
-/// what an idle one did. The lively scenes are a choice.
+/// What an animated view plays. Persist the selection, never its random result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Screensaver {
-    Off,
+pub enum AsciiSelection {
     Piece(AsciiPiece),
+    Random,
+    Randomer,
 }
 
-impl Screensaver {
-    pub const DEFAULT: Screensaver = Screensaver::Piece(AsciiPiece::DEFAULT);
+impl AsciiSelection {
+    pub const DEFAULT: Self = Self::Piece(AsciiPiece::DEFAULT);
+    /// Fixed pieces in their existing order, then the two random modes.
+    pub const ALL: [Self; AsciiPiece::ALL.len() + 2] = {
+        let mut choices = [Self::Random; AsciiPiece::ALL.len() + 2];
+        let mut i = 0;
+        while i < AsciiPiece::ALL.len() {
+            choices[i] = Self::Piece(AsciiPiece::ALL[i]);
+            i += 1;
+        }
+        choices[i + 1] = Self::Randomer;
+        choices
+    };
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Off => "off",
             Self::Piece(piece) => piece.as_str(),
+            Self::Random => "random",
+            Self::Randomer => "randomer",
         }
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
         match key.trim() {
-            "off" => Some(Self::Off),
+            "random" => Some(Self::Random),
+            "randomer" => Some(Self::Randomer),
             other => AsciiPiece::from_key(other).map(Self::Piece),
         }
     }
 
     pub fn label(self) -> String {
         match self {
-            Self::Off => "off".to_string(),
             Self::Piece(piece) => piece.label(),
+            Self::Random => "random".to_string(),
+            Self::Randomer => "randomer".to_string(),
         }
     }
 
-    /// Off, then every piece in order, then Off again.
     pub fn cycle(self, forward: bool) -> Self {
-        let first = AsciiPiece::ALL[0];
-        let last = AsciiPiece::ALL[AsciiPiece::ALL.len() - 1];
-        match (self, forward) {
-            (Self::Off, true) => Self::Piece(first),
-            (Self::Off, false) => Self::Piece(last),
-            (Self::Piece(piece), true) if piece == last => Self::Off,
-            (Self::Piece(piece), false) if piece == first => Self::Off,
-            (Self::Piece(piece), forward) => Self::Piece(piece.cycle(forward)),
-        }
+        let at = Self::ALL
+            .iter()
+            .position(|choice| *choice == self)
+            .expect("every selection is in ALL");
+        let len = Self::ALL.len();
+        Self::ALL[(at + if forward { 1 } else { len - 1 }) % len]
     }
 }
 
-/// Which hung pieces may appear over the login splash. Unmarked art is SFW.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ArtSplashMode {
-    #[default]
-    Sfw,
-    Always,
-    Never,
+impl Serialize for AsciiSelection {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
-impl ArtSplashMode {
+impl<'de> Deserialize<'de> for AsciiSelection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let key = String::deserialize(deserializer)?;
+        Self::from_key(&key)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown ascii selection {key:?}")))
+    }
+}
+
+/// Tweak: what covers the screen while the session is away. Defaults to
+/// earthrise in dots; random selections are resolved separately per activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Screensaver {
+    Off,
+    On(AsciiSelection),
+}
+
+impl Screensaver {
+    pub const DEFAULT: Self = Self::On(AsciiSelection::DEFAULT);
+
+    pub fn selection(self) -> Option<AsciiSelection> {
+        match self {
+            Self::Off => None,
+            Self::On(selection) => Some(selection),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Sfw => "sfw",
-            Self::Always => "always",
-            Self::Never => "never",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Sfw => "SFW",
-            Self::Always => "Always",
-            Self::Never => "Never",
+            Self::Off => "off",
+            Self::On(selection) => selection.as_str(),
         }
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "sfw" => Some(Self::Sfw),
-            "always" => Some(Self::Always),
-            "never" => Some(Self::Never),
-            _ => None,
+        match key.trim() {
+            "off" => Some(Self::Off),
+            other => AsciiSelection::from_key(other).map(Self::On),
         }
     }
 
+    pub fn label(self) -> String {
+        match self {
+            Self::Off => "off".to_string(),
+            Self::On(selection) => selection.label(),
+        }
+    }
+
+    /// Off, then every selection in picker order, then Off again.
     pub fn cycle(self, forward: bool) -> Self {
+        let first = AsciiSelection::ALL[0];
+        let last = AsciiSelection::ALL[AsciiSelection::ALL.len() - 1];
         match (self, forward) {
-            (Self::Sfw, true) | (Self::Never, false) => Self::Always,
-            (Self::Always, true) | (Self::Sfw, false) => Self::Never,
-            (Self::Never, true) | (Self::Always, false) => Self::Sfw,
+            (Self::Off, true) => Self::On(first),
+            (Self::Off, false) => Self::On(last),
+            (Self::On(selection), true) if selection == last => Self::Off,
+            (Self::On(selection), false) if selection == first => Self::Off,
+            (Self::On(selection), forward) => Self::On(selection.cycle(forward)),
         }
     }
-}
-
-pub fn extract_art_splash_mode(settings: &Value) -> ArtSplashMode {
-    settings
-        .get("art_splash_mode")
-        .and_then(Value::as_str)
-        .and_then(ArtSplashMode::from_key)
-        .unwrap_or_default()
 }
 
 /// Inline terminal image previews (Settings, Tweaks, Display). `Auto` trusts

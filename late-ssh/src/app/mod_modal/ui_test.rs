@@ -33,29 +33,29 @@ fn draw_log_keeps_latest_line_above_command_input() {
 }
 
 #[test]
-fn wrapped_safety_help_keeps_the_piece_record_visible_and_history_scrollable() {
+fn wrapped_help_keeps_the_latest_result_visible_and_history_scrollable() {
     let mut terminal = Terminal::new(TestBackend::new(80, 32)).expect("terminal");
     let mut state = ModModalState::new();
     state.append_info("earlier console history");
-    state.open(true, Some("artboard safety"));
+    state.open(true);
     let id = uuid::Uuid::new_v4();
     state.append_result(
         uuid::Uuid::new_v4(),
         true,
-        vec![format!("Art id: {id}"), "NSFW (admin marks)".into()],
+        vec![format!("removed piece {id}"), "audit recorded".into()],
     );
     terminal
         .draw(|frame| draw(frame, frame.area(), &state))
         .expect("draw");
-    text_position(terminal.backend().buffer(), &format!("Art id: {id}"));
-    text_position(terminal.backend().buffer(), "NSFW (admin marks)");
+    text_position(terminal.backend().buffer(), &format!("removed piece {id}"));
+    text_position(terminal.backend().buffer(), "audit recorded");
 
     state.scroll_log(1000);
     terminal
         .draw(|frame| draw(frame, frame.area(), &state))
         .expect("draw");
     text_position(terminal.backend().buffer(), "earlier console history");
-    text_position(terminal.backend().buffer(), "artboard safety view");
+    text_position(terminal.backend().buffer(), "rename-room");
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn help_highlights_commands_arguments_and_section_titles_in_dark_and_light_theme
         theme::set_current_by_id(theme_id);
         let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
         let mut state = ModModalState::new();
-        state.open(true, None);
+        state.open(true);
         terminal
             .draw(|frame| draw(frame, frame.area(), &state))
             .expect("draw");
@@ -189,7 +189,7 @@ fn help_highlights_commands_arguments_and_section_titles_in_dark_and_light_theme
         let (x, y) = text_position(buffer, "artboard curate");
         assert_eq!(buffer[(x + 9, y)].fg, theme::TEXT_MUTED());
 
-        let (x, y) = text_position(buffer, "view help for art nsfw/sfw commands");
+        let (x, y) = text_position(buffer, "get help with any command");
         assert_eq!(buffer[(x, y)].fg, theme::TEXT_DIM());
         assert_eq!(buffer[(x, y)].bg, spacing.bg);
     }
@@ -205,7 +205,7 @@ fn focused_help_keeps_explanations_plain_and_other_results_semantic() {
     state.append_result(
         help_id,
         true,
-        crate::moderation::command::mod_help_lines(Some("artboard safety")),
+        crate::moderation::command::mod_help_lines(Some("artboard")),
     );
     state.append_result(uuid::Uuid::now_v7(), true, vec!["action completed".into()]);
     state.append_error("failed action");
@@ -214,10 +214,10 @@ fn focused_help_keeps_explanations_plain_and_other_results_semantic() {
         .expect("draw");
     let buffer = terminal.backend().buffer();
 
-    let (x, y) = text_position(buffer, "artboard safety view");
+    let (x, y) = text_position(buffer, "artboard curate");
     assert_eq!(buffer[(x, y)].fg, theme::TEXT_BRIGHT());
     let usage_background = buffer[(x, y)].bg;
-    let (x, y) = text_position(buffer, "view @user lists");
+    let (x, y) = text_position(buffer, "Curates live or daily");
     assert_eq!(buffer[(x, y)].fg, theme::TEXT_DIM());
     assert!(!buffer[(x, y)].modifier.contains(Modifier::BOLD));
     assert_ne!(buffer[(x, y)].bg, usage_background);

@@ -38,6 +38,7 @@ pub struct HubView<'a> {
     pub dopewars_enabled: bool,
     pub bashquest_enabled: bool,
     pub codekeep_enabled: bool,
+    pub zork_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
     /// This account's character list, for the landing card's select list.
@@ -51,6 +52,7 @@ pub struct HubView<'a> {
     pub nethack_live: bool,
     pub dcss_live: bool,
     pub brogue_live: bool,
+    pub zork_live: bool,
     /// The native remakes still loaded on this session: hopped away from but
     /// not left, and not yet idled out.
     pub darkroom_live: bool,
@@ -82,6 +84,7 @@ impl HubView<'_> {
             HubGame::Nethack => self.nethack_live,
             HubGame::Dcss => self.dcss_live,
             HubGame::Brogue => self.brogue_live,
+            HubGame::Zork => self.zork_live,
             HubGame::Darkroom => self.darkroom_live,
             HubGame::GreenDragon => self.greendragon_live,
             HubGame::NightCity
@@ -107,7 +110,7 @@ const MIN_HEIGHT: u16 = 6;
 /// One row of the sidebar: a muted group header, a selectable game (index
 /// into the session's roster), a blank separator between groups, or the faint
 /// always-on backtick hint at the top (the games that detach and hop:
-/// Lateania, the roguelikes, and the two native remakes).
+/// Lateania, the roguelikes, the two native remakes, and the Zork Trilogy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarRow {
     Header(&'static str),
@@ -376,6 +379,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.delete_confirm,
             scroll,
         ),
+        HubGame::Zork => {
+            crate::app::door::zork::render::draw_landing(frame, body[1], view.zork_enabled, scroll)
+        }
         HubGame::Codekeep => crate::app::door::codekeep::render::draw_landing(
             frame,
             body[1],
@@ -670,6 +676,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
         | HubGame::GreenDragon
         | HubGame::Dopewars
         | HubGame::Bashquest
+        | HubGame::Zork
         | HubGame::Codekeep
         | HubGame::Darkroom => &[switch, scroll, ("Enter", "play")],
     };

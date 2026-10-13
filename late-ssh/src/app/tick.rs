@@ -713,6 +713,20 @@ impl App {
         if let Some(state) = self.bashquest_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.zork_state.as_mut() {
+            changed |= state.tick();
+        }
+        // Same reap as the roguelikes: a detached Zork game that ended
+        // (quit, crash, idle shutdown) leaves only its menus behind.
+        if self.screen != Screen::Zork
+            && self
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_zork();
+            changed = true;
+        }
         if let Some(state) = self.codekeep_state.as_mut() {
             state.tick();
         }
@@ -1147,6 +1161,15 @@ impl App {
         // clock: a new frame on every edge of a drawn piece's cadence, the
         // half edge for the lively ones in dots, the quarter edge for the
         // lively ones in pixels, and the 1Hz edge for the slow.
+        if one_hz {
+            let now = Instant::now();
+            let mut rng = rand::thread_rng();
+            changed |= self.sync_screensaver(now, &mut rng);
+            if self.screen == Screen::Zen {
+                let zen_changed = self.zen.sync_playback(now, &mut rng);
+                changed |= zen_changed && self.screensaver().is_none();
+            }
+        }
         changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
@@ -1642,6 +1665,7 @@ impl App {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom

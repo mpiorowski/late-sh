@@ -14,7 +14,7 @@
 #     short-lived child per player. replicas MUST stay 1: one RWO volume holds
 #     the shared state, and single-node local-path storage is assumed.
 #   - a cluster-internal service: reached by service-ssh at
-#     late-<name>-sv:<port>, never via ingress or the ssh-tcp LoadBalancer
+#     late-<name>-sv:<port>, never via ingress or the ssh-edge proxy
 #     (dcss's extra crawl publisher port + ingress live in doors.tf).
 #
 # The host pod is always deployed (like service-ssh/web); whether the door

@@ -1,0 +1,609 @@
+.\" -*- nroff -*-
+.TH DFROTZ "6" "2025-02-01" "Dumb Frotz v2.55"
+.SH NAME
+dfrotz \- interpreter for Infocom and other Z-Machine games (dumb interface)
+
+.SH SYNOPSIS
+.B dfrotz
+.RI [ options "] " "file " [ blorb_file "]"
+
+At least one file must be specified on the command line.  This can be
+either a plain Z-code file or a Blorb file.  A Z-code file is a compiled
+executable for the Z-Machine.  A Blorb file contains audio, graphics,
+and other things in addition to the game wrapped up into a single file.
+It can also optionally contain the Z-Machine executable.  If a plain
+Z-code file is supplied, then
+.B Frotz
+will check for a Blorb file with the same base name but an extension of
+.B .blb,
+.B .blorb,
+or
+.B .zblorb
+and load it if found.
+.P
+If the file supplied on the command line is a Blorb file, then
+.B Frotz
+will check to see if a Z-code file is contained within.  If not found, then
+.B Frotz
+will complain and exit.
+.P
+An alternatively-named Blorb file can be supplied as the optional second
+parameter to the command line invocation.
+.P
+If you want to play any of the games from Infocom that use sound or
+graphics, you will need to get a corresponding Blorb file from the
+Interactive Fiction Archive.  See
+.B FURTHER INFORMATION
+below.
+
+.SH DESCRIPTION
+.B Frotz
+is a Z-Machine interpreter.  The Z-machine is a virtual machine designed
+by Infocom to run all of their text adventures.  It went through multiple
+revisions during the lifetime of the company, and two further revisions
+(V7 and V8) were created by Graham Nelson after the company's demise.
+The specification is now quite well documented; this version of
+.B Frotz
+supports version 1.1.  See
+.B Z-MACHINE STANDARDS
+below.
+.P
+This version of
+.B Frotz
+fully supports all these versions of the Z-Machine except for version 6.
+Version 6 is semi-supported by displaying the outlines of V6 graphics
+with the picture number in the bottom-right corner.
+
+.P
+This manpage is for
+.B Frotz
+with the dumb interface.
+.B Dumb Frotz
+does not support sound-effects, graphics, colors, or even
+screen-handling (for instance,
+.BR curses (3)).
+Its purpose is to provide a Z-machine interpreter with the absolute
+minimum system requirements or for applications where those features are
+not needed
+
+.SH OPTIONS
+.TP
+.B \-a
+Watch attribute setting.  Setting and clearing of attributes on objects
+will be noted in debugging messages.
+.TP
+.B \-A
+Watch attribute testing.  Every time the Z-machine tests an attribute
+value, the test and the result will be reported.
+.TP
+.B \-f [irc | ansi | normal]
+Select type of format codes.
+.B Dumb Frotz
+can optionally mark up its output with codes for color, bold, underline,
+and so on.  Currently, formatting codes for
+.B irc
+clients and
+.B ansi
+terminals are supported.  Specifying
+.B normal
+or not using this flag at all will result in
+.B Dumb Frotz's
+normal behavior of not using any sort of markup.
+.TP
+.B \-h N
+Text height.  Every N lines, a MORE prompt will be printed.  Use of
+the
+.B \-m
+option renders this option moot.
+.TP
+.B \-i
+Ignore fatal errors.  If a Z-Machine interpreter encounters a zcode error
+such as division-by-zero or addressing an illegal object, the proper
+response is to abort execution.  This is done because the zcode program
+doesn't have a clear idea of what is going on.  There are some games out
+there that cause fatal errors because the authors were careless and used
+an interpreter that didn't properly check for errors.  This option is
+intended to get around such bugs, but be warned that Strange Things may
+happen if fatal errors are not caught.
+.TP
+.B \-I N
+Set the interpreter number.  Infocom designed the Z-machine such that a
+game could tell on what kind of machine the interpreter was running.
+See INTERPRETER NUMBER below.
+.TP
+.B \-L <filename>
+When the game starts, load this saved game file.
+.TP
+.B \-m
+Turn off MORE prompts.  This can be desirable when using a printing
+terminal.
+.TP
+.B \-n <filename>
+Set transcript filename.  The default is the name of the Z-code file
+with an extension of ".scr".
+.TP
+.B \-o
+Watch object movement.  This option enables debugging messages from the
+interpreter which describe the moving of objects in the object tree.
+.TP
+.B \-O
+Watch object location.  These debugging messages detail the locations of
+objects in the object tree.
+.TP
+.B \-p
+Plain ASCII output only.  This inhibits the output of accented letters
+and other characters from the Latin-1 character set, replacing them with
+reasonable alternatives.  This may be necessary on devices lacking these
+characters.  The OE/oe dipthongs are missing from the Latin-1 set.
+These are handled as well.
+.TP
+.B \-P
+Alter the
+.I @piracy
+opcode.  The
+.I @piracy
+opcode was never used by Infocom. This switch is really only useful for
+those who like to toy around with Z-code.
+.TP
+.B -T
+Start transcript on startup.  Use this to capture the entire game
+session without needing to use the SCRIPT command.
+.TP
+.B \-q
+Quiet mode.  Suppress startup messages such as "Loading zork1.z3".
+.TP
+.B \-r xxx
+Set runtime options.  This option may be used repeatedly.  See
+\.B CONFIGURATION
+below.  There is no need to prepend a backslash.
+.TP
+.B \-R <path>
+Restricted read/write.  Reading and writing files will be restricted
+only to the provided path. Ordinarily
+.B Frotz
+will write or read its saves, transcripts, and move recordings in
+whatever path or directory the user provides when the
+.B SAVE,
+.B SCRIPT,
+or
+.B RECORDING
+commands are given.  This can be undesirable if
+.B Frotz
+is run in a restricted environment, by a front end, or by a chatbot.
+This option will cause
+.B Frotz
+to write or read only to the provided path and nowhere else. Then the
+controlling process can then watch that directory for changes and need
+not worry about someone scribbling or snooping who-knows-where.
+.TP
+.B \-s N
+Set the random number seed value.  The given seed value is used as the
+initial seed value on every restart. By default, the random number
+generator is initialized based on the system clock; this allows you to
+make the random number generator predictable, for use in recorded
+scripts or debugging.  For instance,
+.B Curses
+makes random decisions before the first input (such that the hot key
+Alt\-S does not really help).
+.TP
+.B \-S N
+Set the transcript width.  By default your transcript files are formatted
+to a width of 80 columns per line, regardless of the current text width.
+This switch allows you to change this setting. In particular, use \-S 0
+to deactivate automatic line splitting in transcript files.
+.TP
+.B \-t
+Sets the Z-machine's
+.I Tandy bit,
+which may affect the behavior of certain Infocom games.  For example,
+Zork I pretends not to have sequels, and Witness has its language
+toned down.
+.TP
+.B \-u N
+Sets the number of slots available for
+.B Frotz's
+multiple undo hotkey (see below).  This defaults to twenty, which should
+be sufficient for most purposes.  Setting too high a number here may be
+dangerous on machines with limited memory.
+.TP
+.B \-w N
+Manually sets the text width.  This should not be necessary except in
+special circumstances.
+.TP
+.B \-x
+Expand the abbreviations "g", "x", and "z" to "again", "examine", and
+"wait".  This switch is for use with old Infocom games that lack these
+common abbreviations which were introduced in later games.  Use it with
+caution: A few games might use "g", "x" or "z" for different purposes.
+.TP
+.B \-v
+Show version information and exit.  This will display the version of
+.B Frotz,
+some information about what's enabled and what's not, the commit date of
+the source code, and a
+.BR git (1)
+hash of that commit.
+.TP
+.B \-Z N
+Error checking mode.
+.br
+    0 = don't report errors.
+.br
+    1 = report first instance of an error.
+.br
+    2 = report all errors.
+.br
+    3 = exit after any error.
+.br
+Default is 1 (report first instance of an error).
+
+.SH INTERPRETER NUMBER
+The interpreter number is a setting in the Z-machine header which is
+used to tell the game on what sort of machine the interpreter is
+running.
+.B Frotz
+will automatically choose the most appropriate number for a given
+Infocom-produced game.  Should you want to override the number, the
+.B \-I
+option is available.
+.P
+An interpreter should choose the interpreter number most suitable for
+the machine it will run on.  In Versions up to 5, the main consideration
+is that the behaviour of 'Beyond Zork' depends on the interpreter
+number (in terms of its usage of the character graphics font). In
+Version 6, the decision is more serious, as existing Infocom story files
+depend on interpreter number in many ways: moreover, some story files
+expect to be run only on the interpreters for a particular machine.
+There are, for instance, specifically Amiga versions.  The DECSystem-20
+was Infocom's own in-house mainframe.
+.P
+For Infocom's four V6 games, the interpreter number will be
+automatically chosen based on the title and release number.  Of course,
+this can be overridden at the command line.
+.P
+Infocom used the following interpreter numbers:
+.IP
+.B 1 \ DECSystem\ 20
+.br
+.B 2 \ Apple\ IIe
+.br
+.B 3 \ Macintosh
+.br
+.B 4 \ Amiga
+.br
+.B 5 \ Atari\ ST
+.br
+.B 6 \ IBM\ PC
+.br
+.B 7 \ Commodore 128
+.br
+.B 8 \ Commodore 64
+.br
+.B 9 \ Apple\ IIc
+.br
+.B 10 Apple\ IIgs
+.br
+.B 11 Tandy\ Color
+
+.SH CONFIGURATION
+Unlike it's curses-using or SDL-using siblings,
+.B dfrotz
+does not use configuration files.  All configuration is done on the
+command line or while
+.B dfrotz
+is running.
+.P
+
+.SS General Commands
+.TP
+.B \ehelp
+Show help message.
+.TP
+.B \eset
+Show the current values of runtime settings.
+.TP
+.B \es
+Show the current contents of the whole screen.
+.TP
+.B \ed
+Discard the part of the input before the cursor.
+.TP
+.B \ewN
+Advance clock N/10 seconds, possibly causing the current and subsequent
+inputs to timeout.
+.TP
+.B \ew
+Advance clock by the amount of real time since this input started (times
+the current speed factor).
+.TP
+.B \et
+Advance clock just enough to timeout the current input
+
+.SS Reverse-Video Display Method Settings
+.TP
+.B \ern
+none
+.TP
+.B \erc
+CAPS
+.TP
+.B \erd
+doublestrike
+.TP
+.B \eru
+underline
+
+.SS Output Compression Settings
+.TP
+.B \ecn
+none: show whole screen before every input.
+.TP
+.B \ecm
+max: show only lines that have new nonblank characters.
+.TP
+.B \ecs
+spans: like max, but emit a blank line between each span of screen lines
+shown.
+.TP
+.B \echN
+Hide top N lines (orthogonal to above modes).
+
+.SS Misc Settings
+.TP
+.B \esfX
+Set speed factor to X.  (0 = never timeout automatically).
+.TP
+.B \emp
+Toggle use of MORE prompts
+.TP
+.B \eln
+Toggle display of line numbers.
+.TP
+.B \elt
+Toggle display of the line type identification chars.
+.TP
+.B \evb
+Toggle visual bell.
+.TP
+.B \epb
+Toggle display of picture outline boxes.
+.TP
+(Toggle commands can be followed by a 1 or 0 to set value ON or OFF.)
+
+.SS Character Escapes
+.TP
+.B \e\e
+backslash
+.TP
+.B \e#
+backspace
+.TP
+.B \e[
+escape
+.TP
+.B \e_
+return
+.TP
+.B \e<
+cursor-left
+.TP
+.B \e>
+cursor-right
+.TP
+.B \e^
+cursor-up
+.TP
+.B \e.
+cursor-down
+.TP
+.B \e1..\e0
+f1..f10
+.TP
+.B \eD..\eX
+Standard Frotz hotkeys.
+.TP
+use \eH (help) to see the list of hotkeys.
+
+.SS Line Type Identification Characters
+.SS Input lines (untimed)
+.TP
+.B >
+A regular line-oriented input
+.TP
+.B )
+A single-character input
+.TP
+.B }
+A line input with some input before the cursor.  Use \ed to discard it.
+.SS Input lines (timed)
+.TP
+.B T
+A regular line-oriented input
+.TP
+.B t
+A single-character input
+.TP
+.B D
+A line input with some input before the cursor.  Use \ed to discard it.
+.SS Output lines
+.TP
+.B ]
+Output line that contains the cursor.
+.TP
+.B .
+A blank line emitted as part of span compression.
+.TP
+.B \~
+(blank) Any other output line.
+
+.SH UNICODE
+.B Dumb Frotz
+supports Unicode glyphs by way of UTF-8 if the terminal used supports
+UTF-8.  If you prefer using xterm, start it as uxterm.  This is a
+wrapper script that sets up xterm with UTF-8 locale.  You can also
+manually tell an xterm to switch into UTF-8 mode by holding CTRL and the
+right mouse button to bring up the VT FONTS menu.  Depending on how
+xterm was installed, you may see an option for "UTF-8 Fonts" which will
+allow Unicode to be properly displayed.
+.P
+Getting normal xterm to behave like this all the time can vary from
+system to system.  Other terminal emulators have their own ways of being
+set to use UTF-8 character encoding.
+.P
+If you are using some sort of wrapper around
+.B dfrotz,
+and want to make use of Unicode, it is the responsibility of the wrapper
+to make sense of characters passed back and forth.
+
+.SH NON ASCII CHARACTERS
+Non-ASCII glyphs can be displayed without the use of UTF-8 by way of the
+ISO-8859-1 or ISO-8859-15 (Latin-1 or Latin-9) character sets.
+ISO-8859-15 is more or less identical to ISO-8859-1 except that the
+OE/oe dipthongs are supported, replacing the seldom-used 1/2 and 1/4
+glyphs.  See also
+.BR luit (1)
+.BR charsets (7)
+.BR iso_8859-1 (7)
+and
+.BR iso_8859-15 (7)
+for more information.
+
+.SS LOCALE
+An important means of ensuring the system knows to use UTF-8 is to make
+sure the locale is set appropriately.  This is valid only when
+.B Dumb Frotz
+runs under Unix-ish systems.
+
+Using the command
+.B "locale"
+will tell you what is currently in use.  Using
+.B "locale -a"
+will show you what's available.  Then set your LANG evironmental
+variable to something appropriate by using one of these commands:
+.IP
+    export LANG=C.UTF-8
+    export LANG=en_US.utf8
+.P
+This can be put in your shell configuration file, be it
+.B .profile,
+.B .bash_profile,
+.B .login,
+.B .bashrc,
+or whatever.  It can also be set system-wide in the equivalent files in
+.B /etc.
+
+.SS SEE ALSO
+.BR ash (1)
+.BR bash (1)
+.BR csh (1)
+.BR ksh (1)
+.BR sh (1)
+.BR zsh (1)
+
+.SH Z-MACHINE STANDARDS
+.B Frotz
+complies with the Z-Machine Standard 1.1 of May 2006, revised February
+2014.  The authoritative version is found here:
+.br
+http://inform-fiction.org/zmachine/standards/z1point1/index.html
+.P
+As of 1.1, an additional optional parameter
+.B prompt
+is allowed on Version 5 extended save/restore.  This parameter allows
+a game to read or write an auxiliary (aux) file without prompting the
+player.  See section 15 of the Standard for details.
+.B Frotz
+restricts such files to having an ".aux" filename extension.  When the
+.B -R
+(restricted read/write) option is active, reads and writes through this
+mechanism are restricted to the provided path the same as all other file
+accesses.
+
+.SH ENVIRONMENT
+Unlike it's curses-using or SDL-using siblings,
+.B dfrotz
+does not search any path for game files.
+
+.SH FURTHER INFORMATION
+.PP
+The
+.B Frotz
+homepage is at https://661.org/proj/if/frotz/.
+.PP
+A
+.BR git (1)
+repository of all versions of Unix Frotz from 2.32 to the bleeding edge 
+is available for public perusal at
+.br
+.B https://gitlab.com/DavidGriffith/frotz/.
+.PP
+The Interactive Fiction Archive, at
+.BR https://www.ifarchive.org/ ,
+is a good place to find games to play with
+.B Frotz.
+To play Infocom's games that use graphics or sound, you'll need to get
+corresponding Blorb files from there.  Various ports and builds for
+.B Frotz
+may also be found at the IF Archive.
+.PP
+Most distributions of Linux and BSD include
+.B Frotz
+in their package repositories.
+.PP
+It is distributed under the GNU General Public License version 2 or (at
+your option) any later version.
+.br
+.BR https://www.gnu.org/licenses/gpl-2.0.en.html
+.PP
+This software is offered as-is with no warranty or liability.  If you
+find a bug or would like
+.B Frotz
+to do something it doesn't currently do, please visit the above Gitlab
+website and report your concerns.
+
+.SH CAVEATS
+The Z Machine itself has trouble with the concept of resizing a terminal.
+It assumes that once the text height and width are set, they will never
+change; even across saves.  This made sense when 24x80 terminals were the
+norm and graphical user interfaces were mostly unknown.  I'm fairly sure
+there's a way around this problem, but for now, don't resize an xterm in
+which
+.B Frotz
+is running.  Also, you should try to make sure the terminal on which you
+restore a saved game has the same dimensions as the one on which you
+saved the game.
+.P
+This manpage is not intended to tell users HOW to play interactive
+fiction.  Refer to the file HOW_TO_PLAY included in the
+.B Unix Frotz
+documentation or visit one of the following sites:
+.IP
+http://www.microheaven.com/ifguide/
+.br
+http://www.brasslantern.org/beginners/
+.br
+http://www.musicwords.net/if/how_to_play.htm
+.br
+http://ifarchive.org/
+
+.SH BUGS
+This program has no bugs.  no bugs.  no bugs.  no *WHAP* thank you. If
+you find one, please report it to the Gitlab site referenced above in
+.B FURTHER INFORMATION.
+
+.SH AUTHORS
+.B Frotz
+was written by Stefan Jokisch for MSDOS in 1995-7.
+.br
+The Unix port was done by Galen Hazelwood.
+.br
+The Unix port is currently maintained by David Griffith <dave@661.org>.
+
+.SH SEE ALSO
+.BR frotz (6)
+.BR sfrotz (6)
+.BR nitfol (6)
+.BR rezrov (6)
+.BR jzip (6)
+.BR xzip (6)
+.BR inform (1)

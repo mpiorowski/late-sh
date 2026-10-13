@@ -205,6 +205,16 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           }
 
           env {
+            name = "LATE_ZORK_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["zork"].identity_secret_name
+                key  = "secret"
+              }
+            }
+          }
+
+          env {
             name = "LATE_DCSS_SECRET"
             value_from {
               secret_key_ref {

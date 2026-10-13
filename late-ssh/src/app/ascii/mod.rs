@@ -4,4 +4,5 @@ pub(crate) mod earthrise;
 pub(crate) mod misty_forest;
 pub(crate) mod picker;
 pub mod piece;
+pub(crate) mod playback;
 pub(crate) mod ui;

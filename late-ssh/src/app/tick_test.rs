@@ -307,13 +307,13 @@ async fn the_default_screensaver_rides_the_idle_floor() {
 #[tokio::test]
 async fn the_screensaver_holds_the_half_tier() {
     use crate::app::common::away::AWAY_AFTER;
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
     let (_test_db, mut app) = chat_compose_app("tick-saver").await;
     app.set_screen(Screen::Dashboard);
-    app.profile_state.profile.screensaver = Screensaver::Piece(AsciiPiece {
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Piece(AsciiPiece {
         scene: Scene::AlpineDawn,
         style: SceneStyle::Dots,
-    });
+    }));
     app.last_active_at = Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
     assert!(app.screensaver().is_some(), "the chosen piece is up");
@@ -328,13 +328,13 @@ async fn the_screensaver_holds_the_half_tier() {
 #[tokio::test]
 async fn a_pixel_screensaver_holds_the_quarter_tier() {
     use crate::app::common::away::AWAY_AFTER;
-    use late_core::models::user::{AsciiPiece, Scene, SceneStyle, Screensaver};
+    use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle, Screensaver};
     let (_test_db, mut app) = chat_compose_app("tick-pixel-saver").await;
     app.set_screen(Screen::Dashboard);
-    app.profile_state.profile.screensaver = Screensaver::Piece(AsciiPiece {
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Piece(AsciiPiece {
         scene: Scene::AlpineDawn,
         style: SceneStyle::Pixels,
-    });
+    }));
     app.last_active_at = Instant::now() - AWAY_AFTER;
     assert!(app.sync_away());
     app.handle_input(b"\x1b[<35;20;5M");
@@ -447,6 +447,46 @@ async fn attention_follows_the_profiles_shelf() {
 
     app.set_screen(Screen::Arcade);
     assert_eq!(app.attention_place(), Place::Whole, "the lobby is no board");
+}
+
+#[tokio::test]
+async fn randomer_screensaver_rotation_updates_the_wake_tier_without_input() {
+    use crate::app::ascii::{
+        piece::{Cadence, cadence},
+        playback::Playback,
+    };
+    use late_core::models::user::{AsciiSelection, Screensaver};
+    use rand::{SeedableRng, rngs::StdRng};
+    let (_db, mut app) = chat_compose_app("randomer-cadence").await;
+    app.set_screen(Screen::Dashboard);
+    app.profile_state.profile.screensaver = Screensaver::On(AsciiSelection::Randomer);
+    app.sent_away = true;
+    app.sync_away();
+    let mut rng = StdRng::seed_from_u64(15);
+    // Make one rotation due on the next tick without sleeping five minutes.
+    app.screensaver_playback = None;
+    Playback::sync(
+        &mut app.screensaver_playback,
+        Some(AsciiSelection::Randomer),
+        Instant::now() - Duration::from_secs(301),
+        &mut rng,
+    );
+    let previous = app.screensaver().unwrap();
+    app.last_one_hz_index = None;
+    assert!(app.tick());
+    let piece = app.screensaver().unwrap();
+    assert_ne!(piece.scene, previous.scene);
+    let tier = match cadence(piece) {
+        Cadence::Half => ANIM_HALF_TICK,
+        Cadence::Quarter => ANIM_QUARTER_TICK,
+        Cadence::Slow { .. } => IDLE_TICK,
+    };
+    assert_eq!(app.wake_hint(), tier);
+    assert!(!app.zen_layout_dirty);
+    assert_eq!(
+        app.profile_state.profile.screensaver,
+        Screensaver::On(AsciiSelection::Randomer)
+    );
 }
 
 #[tokio::test]

@@ -190,3 +190,25 @@ fn notification_cycles_keep_order_and_reverse_at_both_ends() {
     assert_eq!(cycle_notify_format(Some("osc777"), false), "both");
     assert_eq!(cycle_notify_format(Some("both"), true), "osc777");
 }
+
+#[tokio::test]
+async fn random_screensavers_can_be_filtered_picked_and_reopened() {
+    let db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&db.db, "random-saver-picker").await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), user.id, "random-saver-picker");
+    let state = &mut app.settings_modal_state;
+    let random = Screensaver::On(AsciiSelection::Random);
+    let randomer = Screensaver::On(AsciiSelection::Randomer);
+    state.open_picker(PickerKind::Screensaver);
+    state.picker.query = "RAND".to_string();
+    assert_eq!(state.filtered_screensavers(), vec![random, randomer]);
+    state.picker.selected_index = 1;
+    state.apply_picker_selection();
+    assert_eq!(state.draft.screensaver, randomer);
+    state.open_picker(PickerKind::Screensaver);
+    assert_eq!(screensaver_choices()[state.picker.selected_index], randomer);
+    assert_eq!(screensaver_label(random), "Random");
+    assert_eq!(screensaver_label(randomer), "Randomer");
+    assert_eq!(random.cycle(true), randomer);
+    assert_eq!(randomer.cycle(true), Screensaver::Off);
+}

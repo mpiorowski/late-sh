@@ -26,3 +26,11 @@ The base (`WorkspaceBase`, held on `App::workspace_base`) is the page you went i
 - The key binding stays with its screens: `dashboard/input.rs` and `zen/input.rs` keep only the binding; `arcade/input.rs` routes backtick out of active daily puzzles; the doors intercept it in their own input paths and re-enter the cycle as a detach.
 - This domain reads other domains through their queries and open/enter functions, never their internals. Each leg's membership test lives with the leg's domain (`my_turn_matches`, `my_seated_tables`, `has_unfinished_daily`, `HubGame::live_screen`); this domain owns only the leg order and the routing.
 - New workspace kinds go through the `GameWorkspace` enum; do not re-add rooms stops.
+
+Zork contributes one `GameWorkspace::Door(Screen::Zork)` stop for the whole trilogy,
+while its proxy is connecting or running. Backtick detaches it without killing the
+interpreter; hopping in calls `resume_live()` to bypass the edition menu. Games
+card entry opens that menu while retaining the same live child. Switching editions
+waits for a successful checkpoint exit before launching another child. Twenty
+minutes without forwarded gameplay input (including time detached) drops the
+proxy and its stop; Continue then loads the last committed autosave.

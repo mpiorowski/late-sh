@@ -37,6 +37,7 @@ pub enum HubGame {
     Dopewars,
     Bashquest,
     Codekeep,
+    Zork,
     Darkroom,
 }
 
@@ -68,18 +69,20 @@ impl HubGame {
     /// Selector order, top to bottom: the house games first (Night City,
     /// the runners' own card, sliced off for everyone else by
     /// [`HubGame::roster`], then Lateania, ours from the ground up), the
-    /// roguelikes by stature, the remakes (our own
-    /// build of A Dark Room), the servers we host and you play from a game
-    /// client (Minecraft), then the doors: Green Dragon (our native LORD
-    /// remake, filed with the BBS doors it descends from) and the foreign
-    /// upstream terminal games hosted on a PTY.
-    pub const ALL: [HubGame; 13] = [
+    /// roguelikes by stature, the remakes (our own build of A Dark Room,
+    /// then the Zork Trilogy behind our own edition and save menus), the
+    /// servers we host and you play from a game client (Minecraft), then the
+    /// doors: Green Dragon (our native LORD remake, filed with the BBS doors
+    /// it descends from) and the foreign upstream terminal games hosted on a
+    /// PTY.
+    pub const ALL: [HubGame; 14] = [
         HubGame::NightCity,
         HubGame::Lateania,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
         HubGame::Darkroom,
+        HubGame::Zork,
         HubGame::Minecraft,
         HubGame::GreenDragon,
         HubGame::Usurper,
@@ -113,6 +116,7 @@ impl HubGame {
             HubGame::Dopewars => "dopewars",
             HubGame::Bashquest => "BashQuest",
             HubGame::Codekeep => "CodeKeep",
+            HubGame::Zork => "Zork Trilogy",
             HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
         }
     }
@@ -121,7 +125,7 @@ impl HubGame {
         match self {
             HubGame::NightCity | HubGame::Lateania => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::Darkroom => HubGroup::Remakes,
+            HubGame::Darkroom | HubGame::Zork => HubGroup::Remakes,
             HubGame::Minecraft => HubGroup::Servers,
             HubGame::GreenDragon
             | HubGame::Usurper
@@ -149,6 +153,7 @@ impl HubGame {
             | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
+            | HubGame::Zork
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }
@@ -170,6 +175,7 @@ impl HubGame {
             | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
+            | HubGame::Zork
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }
@@ -182,11 +188,13 @@ impl HubGame {
     /// models. Lateania has no detached session, so its test is the recency
     /// window a backtick detach arms (`App::lateania_recently_active`): hop
     /// out and the door stays live for a few minutes, hopping in re-joins the
-    /// saved character. The roguelikes count a running (attached or detached)
-    /// game: a door sitting on its launcher is not live. Dark Room and Green
-    /// Dragon keep their loaded state across a hop, so being loaded is the
-    /// test; `App::tick` saves and drops them once the player has been away
-    /// past [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
+    /// saved character. The roguelikes and the Zork Trilogy count a running
+    /// (attached or detached) game: a door sitting on its launcher or menus
+    /// is not live, and Zork's own `tick` drops a game after twenty minutes
+    /// without input. Dark Room and Green Dragon keep their loaded state
+    /// across a hop, so being loaded is the test; `App::tick` saves and drops
+    /// them once the player has been away past
+    /// [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
     /// The PTY doors (Usurper, dopewars, BashQuest, Rebels, CodeKeep) end
     /// their session on leaving the screen, so they are never live. Minecraft
     /// has no session here at all, and Night City is not a door: the street
@@ -209,6 +217,11 @@ impl HubGame {
                 .as_ref()
                 .is_some_and(|state| state.is_running())
                 .then_some(Screen::Brogue),
+            HubGame::Zork => app
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Zork),
             HubGame::Darkroom => app.darkroom_state.is_some().then_some(Screen::Darkroom),
             HubGame::GreenDragon => app
                 .greendragon_state

@@ -20,13 +20,25 @@ Cadence) and **alpine dawn** (first light on snow peaks over a misty
 lake; the lively one), each drawn in one of two styles (`SceneStyle`: **dots**, the
 original's halftone as braille, or **pixels**, solid half-blocks in true
 colour). `late_core::models::user::AsciiPiece` (a `scene` and a `style`)
-is a choice of the eight; `AsciiPiece::ALL` is the picker's order, the
-screensaver's default first. It is stored by key (`as_str`: `earthrise`,
+is a concrete choice of the eight. `AsciiSelection::ALL` lists those pieces,
+the screensaver's default first, then **random** and **randomer**. The selection is stored by key (`as_str`: `earthrise`,
 `misty_forest`, `aurora_fjord_pixels`, ...) in the Zen layout and in
 `users.settings.screensaver`. A key this build does not know (the text
 pieces ascii.rest also has, plasma, lava lamp and donut, were ported once
 and dropped) plays the default, `AsciiPiece::DEFAULT`, earthrise in dots,
 on a Zen tile (the rest of the layout kept) and as the screensaver alike.
+
+`random` chooses uniformly from all eight pieces at activation and holds it.
+`randomer` also chooses at activation, then every five minutes chooses uniformly
+among pieces from other scenes (neither style of the current landscape can repeat).
+A screensaver activation and each visit to Zen start fresh; every tile has its
+own choice and clock. Leaving Zen, removing a tile or changing its selection
+ends that instance. Zoom, focus, resizing, layout splits and overlays preserve it;
+covered tiles keep their timers. Reselecting the same mode changes nothing.
+`playback.rs` owns the session-only resolved piece and monotonic deadline.
+The shared 1Hz tick advances it; a delayed tick switches once and retains the
+original five-minute phase. Only the mode is stored, never the draw or deadline;
+rotations do not write settings or count as new screensaver activations.
 
 Two surfaces draw them, both through `ui::draw_piece`:
 
@@ -40,8 +52,8 @@ Two surfaces draw them, both through `ui::draw_piece`:
   `common::away::AWAY_AFTER` without a person's input), `App::screensaver`
   names the piece from Settings, Tweaks, `Screensaver` (earthrise in dots
   by default: a slow piece, which costs an away session about what idling
-  did; the lively scenes and Off are the choices; Enter on the
-  row opens the settings modal's shared picker over Off and every piece,
+  did; fixed scenes, random, randomer and Off are the choices; Enter on the
+  row opens the settings modal's shared picker over Off and every selection,
   Left/Right cycle them), and
   `render.rs` draws it over the whole frame
   ahead of every page and modal, with no click targets. The one thing a
@@ -56,8 +68,8 @@ Two surfaces draw them, both through `ui::draw_piece`:
   chunk boundary cuts in two is held (`App::presence_held`) and read whole
   with the next chunk. `/brb` syncs away at once, so the screensaver is up
   on the frame after the Enter.
-  `late_ssh_screensavers_total{trigger=idle|brb,piece}` counts each one
-  put up (`App::sync_away`).
+  `late_ssh_screensavers_total{trigger=idle|brb,selection=fixed|random|randomer,piece}`
+  counts each one put up (`App::sync_away`), labelled with the piece drawn.
 
 ## 2. File map
 
@@ -70,6 +82,7 @@ late-ssh/src/app/ascii/
 |-- aurora_fjord.rs     # scene: land built once (OnceLock), sky + water per frame
 |-- alpine_dawn.rs      # scene: the range raymarched once (OnceLock), tinted + mirrored per frame
 |-- ui.rs               # draw_piece: a scene as pixels or braille dots by its style
+|-- playback.rs         # per-view selection, resolved piece and five-minute rotation clock
 |-- picker/             # the piece picker a Zen ascii tile opens: state.rs, input.rs, ui.rs
 |-- fixtures/           # golden frames recorded from the TS originals: <slug>_t1.txt (glyphs) and <slug>_t1.colors (palette bytes), see Porting a piece
 |-- LICENSE-ascii-rest  # the MIT notice the port carries
@@ -154,7 +167,9 @@ late-ssh/src/app/ascii/
   steps flatten both into one dim field. The tone is held to twelve steps
   and every ink rounded to eight steps a channel, so a cell changes only
   when the scene moves it a visible step.
-- **Cadence in the tick.** A drawn Zen ascii tile, or the screensaver,
+- **Cadence in the tick.** Rendering and wake scheduling read the same resolved
+  piece, without generating randomness; rotations request a repaint and adopt
+  the new piece's wake tier on that tick. A drawn Zen ascii tile, or the screensaver,
   repaints on its cadence's edge (`App::ascii_edge`: the half edge for a
   lively piece in dots, the quarter edge for one in pixels, the 1Hz edge
   for a slow one, whose frame cache hands back the same frame until its

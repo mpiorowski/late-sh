@@ -2,12 +2,16 @@
 //! and the focus that edits it. Everything here is pure data; persistence is
 //! the orchestration layer's job (`App::flush_zen_layout`).
 
-use late_core::models::user::AsciiPiece;
+use std::time::Instant;
+
+use late_core::models::user::{AsciiPiece, AsciiSelection};
+use rand::Rng;
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::layout;
+use crate::app::ascii::playback::Playback;
 
 /// What a tile shows. Closed set: a new kind is a new arm in `ui.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,7 +116,7 @@ pub enum Node {
         /// current room, Home's selection or #lounge. Other kinds ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         room: Option<Uuid>,
-        /// The piece an ascii tile plays; `None` (the stored default) is
+        /// The selection an ascii tile plays; `None` (the stored default) is
         /// [`AsciiPiece::DEFAULT`]. Other kinds ignore it. A key this build does
         /// not know (a piece dropped, a rolled-back deploy) reads as `None`
         /// rather than failing the whole layout, which `from_json` would
@@ -122,7 +126,7 @@ pub enum Node {
             deserialize_with = "known_piece",
             skip_serializing_if = "Option::is_none"
         )]
-        piece: Option<AsciiPiece>,
+        piece: Option<AsciiSelection>,
     },
     Split {
         dir: Dir,
@@ -137,9 +141,9 @@ pub enum Node {
 /// the layout reads as stored.
 fn known_piece<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<AsciiPiece>, D::Error> {
+) -> Result<Option<AsciiSelection>, D::Error> {
     let key: Option<String> = Option::deserialize(deserializer)?;
-    Ok(key.as_deref().and_then(AsciiPiece::from_key))
+    Ok(key.as_deref().and_then(AsciiSelection::from_key))
 }
 
 /// Per-mille bounds for a split's first child, so neither side is ever
@@ -225,39 +229,22 @@ impl Node {
         self.leaf_kinds().get(ordinal).copied()
     }
 
-    /// The piece of every ascii leaf, in layout order.
-    pub fn ascii_pieces(&self) -> Vec<AsciiPiece> {
-        match self {
-            Node::Leaf {
-                kind: TileKind::Ascii,
-                piece,
-                ..
-            } => vec![piece.unwrap_or(AsciiPiece::DEFAULT)],
-            Node::Leaf { .. } => Vec::new(),
-            Node::Split { first, second, .. } => {
-                let mut pieces = first.ascii_pieces();
-                pieces.extend(second.ascii_pieces());
-                pieces
-            }
-        }
-    }
-
-    /// The piece the leaf at `ordinal` plays, when it is an ascii tile.
-    pub fn piece_at(&self, ordinal: usize) -> Option<AsciiPiece> {
+    /// The configured selection of the leaf at `ordinal`, when it is an ascii tile.
+    pub fn selection_at(&self, ordinal: usize) -> Option<AsciiSelection> {
         let mut remaining = ordinal;
         match self.leaf_ref(&mut remaining) {
             Some(Node::Leaf {
                 kind: TileKind::Ascii,
                 piece,
                 ..
-            }) => Some(piece.unwrap_or(AsciiPiece::DEFAULT)),
+            }) => Some(piece.unwrap_or(AsciiSelection::DEFAULT)),
             _ => None,
         }
     }
 
-    /// Set the piece the leaf at `ordinal` plays; `false` when it is not an
+    /// Set the selection of the leaf at `ordinal`; `false` when it is not an
     /// ascii tile.
-    pub fn set_piece(&mut self, ordinal: usize, new_piece: AsciiPiece) -> bool {
+    pub fn set_selection(&mut self, ordinal: usize, new_piece: AsciiSelection) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
             Some(Node::Leaf {
@@ -612,6 +599,10 @@ pub enum KindPick {
 /// Session state for the Zen page.
 pub struct ZenState {
     pub rice: RiceLayout,
+    /// Session-only playback slots in leaf order. Structural edits move these
+    /// with their leaves; serialization only ever sees `rice`.
+    playback: Vec<Option<Playback>>,
+    visiting: bool,
     /// Focused tile, as an ordinal into `rice.root.leaf_kinds()`.
     pub focus: usize,
     /// The focused tile takes the whole page while set.
@@ -632,6 +623,8 @@ pub struct ZenState {
 impl ZenState {
     pub fn new(rice: RiceLayout) -> Self {
         Self {
+            playback: vec![None; rice.root.leaf_count()],
+            visiting: false,
             rice,
             focus: 0,
             zoomed: false,
@@ -694,33 +687,91 @@ impl ZenState {
         }
     }
 
-    /// The piece the focused tile plays, when it is an ascii tile.
-    pub fn focused_piece(&self) -> Option<AsciiPiece> {
-        self.rice.root.piece_at(self.focus)
-    }
-
-    /// The pieces the page draws: every ascii tile's, or zoomed, the
-    /// focused tile's when it is one. What the tick paces its edges by.
-    pub fn drawn_pieces(&self) -> Vec<AsciiPiece> {
-        match self.zoomed {
-            true => self.focused_piece().into_iter().collect(),
-            false => self.rice.root.ascii_pieces(),
+    /// Resolve all tiles when a visit begins, before the first frame.
+    pub(crate) fn enter(&mut self, now: Instant, rng: &mut impl Rng) {
+        if !self.visiting {
+            self.visiting = true;
+            self.sync_playback(now, rng);
         }
     }
 
-    /// Give the focused ascii tile a piece; `false` when the focused tile is
-    /// not an ascii tile.
-    pub fn set_focused_piece(&mut self, piece: AsciiPiece) -> bool {
-        self.rice.root.set_piece(self.focus, piece)
+    pub(crate) fn leave(&mut self) {
+        self.visiting = false;
+        self.playback.fill(None);
     }
 
-    /// Step the focused ascii tile to the next (or previous) piece; `false`
-    /// when the focus is not on an ascii tile.
-    pub fn cycle_focused_piece(&mut self, forward: bool) -> bool {
-        let Some(piece) = self.focused_piece() else {
+    /// Covered and zoomed-away tiles still belong to this visit. Advancing
+    /// them costs no rendering or persistence work.
+    pub(crate) fn sync_playback(&mut self, now: Instant, rng: &mut impl Rng) -> bool {
+        if !self.visiting {
+            return false;
+        }
+        self.playback.resize(self.leaf_count(), None);
+        let mut changed = false;
+        for (ordinal, slot) in self.playback.iter_mut().enumerate() {
+            let moved = Playback::sync(slot, self.rice.root.selection_at(ordinal), now, rng);
+            changed |= moved && (!self.zoomed || ordinal == self.focus);
+        }
+        changed
+    }
+
+    pub fn focused_selection(&self) -> Option<AsciiSelection> {
+        self.rice.root.selection_at(self.focus)
+    }
+
+    /// The piece the tile at `ordinal` shows, when it is an ascii tile.
+    pub fn piece_at(&self, ordinal: usize) -> Option<AsciiPiece> {
+        let selection = self.rice.root.selection_at(ordinal)?;
+        Playback::resolve(self.playback.get(ordinal).copied().flatten(), selection)
+    }
+
+    pub fn focused_piece(&self) -> Option<AsciiPiece> {
+        self.piece_at(self.focus)
+    }
+
+    pub fn piece_label(&self, ordinal: usize) -> Option<String> {
+        let selection = self.rice.root.selection_at(ordinal)?;
+        let piece = self.piece_at(ordinal)?;
+        Some(match selection {
+            AsciiSelection::Piece(_) => piece.label(),
+            AsciiSelection::Random | AsciiSelection::Randomer => {
+                format!("{} · {}", selection.label(), piece.label())
+            }
+        })
+    }
+
+    /// Only drawn pieces contribute to the animation wake tier.
+    pub fn drawn_pieces(&self) -> Vec<AsciiPiece> {
+        match self.zoomed {
+            true => self.focused_piece().into_iter().collect(),
+            false => (0..self.leaf_count())
+                .filter_map(|i| self.piece_at(i))
+                .collect(),
+        }
+    }
+
+    /// Give the focused ascii tile `selection`, a random one drawn before the
+    /// next frame; `false` when it already plays it or is not an ascii tile.
+    pub fn set_focused_selection(
+        &mut self,
+        selection: AsciiSelection,
+        now: Instant,
+        rng: &mut impl Rng,
+    ) -> bool {
+        if self.focused_selection() == Some(selection)
+            || !self.rice.root.set_selection(self.focus, selection)
+        {
+            return false;
+        }
+        self.sync_playback(now, rng);
+        true
+    }
+
+    pub fn cycle_focused_piece(&mut self, forward: bool, now: Instant, rng: &mut impl Rng) -> bool {
+        let Some(selection) = self.focused_selection() else {
             return false;
         };
-        self.rice.root.set_piece(self.focus, piece.cycle(forward))
+        self.set_focused_selection(selection.cycle(forward), now, rng)
     }
 
     /// The page opening: the first time this session, the focus moves to
@@ -818,6 +869,7 @@ impl ZenState {
         let dir = if wide { Dir::Row } else { Dir::Column };
         let done = self.rice.root.split_leaf(self.focus, dir, TileKind::Blank);
         if done {
+            self.playback.insert(self.focus + 1, None);
             self.focus += 1;
         }
         done
@@ -825,6 +877,9 @@ impl ZenState {
 
     pub fn close_focused(&mut self) -> bool {
         let done = self.rice.root.close_leaf(self.focus);
+        if done {
+            self.playback.remove(self.focus);
+        }
         self.zoomed = false;
         self.clamp_focus();
         done
@@ -884,6 +939,9 @@ impl ZenState {
             return KindPick::Unchanged;
         }
         if self.rice.root.set_kind(self.focus, kind) {
+            // A tile that becomes ascii plays the fixed default (`set_kind`
+            // forgets the piece), which needs no draw.
+            self.playback[self.focus] = None;
             KindPick::Changed
         } else {
             KindPick::Unchanged
@@ -923,6 +981,8 @@ impl ZenState {
     /// chat keys work at once, as on the first opening.
     pub fn reset(&mut self) {
         self.rice = RiceLayout::default();
+        // Default leaves carry no random selection, so nothing needs a draw.
+        self.playback = vec![None; self.leaf_count()];
         self.zoomed = false;
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
     }

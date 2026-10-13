@@ -2784,7 +2784,8 @@ impl ChatService {
     /// Post a `/bug` or `/suggest` report card into its report-only room,
     /// regardless of which room the composer was focused on. Joins the room
     /// first so a report never bounces on membership. Success/failure surfaces
-    /// through the usual `SendSucceeded`/`SendFailed` banners.
+    /// through the usual `SendSucceeded`/`SendFailed` events; the submitting
+    /// session banners a success, since the card lands out of sight.
     pub(crate) fn send_report_task(
         &self,
         user_id: Uuid,

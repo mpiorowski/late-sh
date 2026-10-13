@@ -394,10 +394,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             None
         }
     };
-    // The door: the day's wall piece, or the cup.
+    // The door: the day's wall piece for those who chose Always View on the
+    // Artboard content disclaimer, else the cup.
     let splash_piece = state
         .gallery_service
-        .splash_piece_for_mode(late_core::models::user::extract_art_splash_mode(
+        .splash_piece_for_login(late_core::models::user::extract_artboard_disclaimer(
             &user.settings,
         ))
         .await;
@@ -549,6 +550,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         codekeep_host: state.config.codekeep_host.clone(),
         codekeep_port: state.config.codekeep_port,
         codekeep_secret: state.config.codekeep_secret.clone(),
+        zork_enabled: state.config.zork_enabled,
+        zork_host: state.config.zork_host.clone(),
+        zork_port: state.config.zork_port,
+        zork_secret: state.config.zork_secret.clone(),
         session_token,
         session_registry: Some(state.session_registry.clone()),
         paired_client_registry: Some(state.paired_client_registry.clone()),

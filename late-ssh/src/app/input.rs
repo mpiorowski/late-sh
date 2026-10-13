@@ -1288,7 +1288,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 /// The key byte a door launcher should see, if the event carries one. The vt
 /// parser emits printables as `Char` and control bytes (Enter, backspace) as
 /// `Byte`; the arcade-name claim prompt needs both.
-fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
+pub(crate) fn launcher_key_byte(event: &ParsedInput) -> Option<u8> {
     match event {
         ParsedInput::Byte(b) => Some(*b),
         ParsedInput::Char(c) if c.is_ascii() => Some(*c as u8),
@@ -1432,7 +1432,8 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Usurper
                     | HubGame::Dopewars
                     | HubGame::Bashquest
-                    | HubGame::Codekeep => {}
+                    | HubGame::Codekeep
+                    | HubGame::Zork => {}
                 }
                 true
             }
@@ -1656,6 +1657,7 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             app.set_screen(Screen::Darkroom);
             app.enter_darkroom();
         }
+        HubGame::Zork => crate::app::door::zork::input::launch(app),
         HubGame::Codekeep => {
             if !app.codekeep_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -1859,6 +1861,11 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::Zork {
+        // Running-mode bytes are intercepted in App::handle_input; this is
+        // the edition and save menus.
+        return crate::app::door::zork::input::handle_menu_event(app, event);
+    }
     if ctx.screen == Screen::Codekeep {
         // Running bytes are intercepted before parsed input, and a non-running
         // CodeKeep screen returns to the Games hub on the same tick (no exit
@@ -2510,6 +2517,12 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
+        return;
+    }
+    // Esc on the Zork menus backs out one level, the edition list to the
+    // hub; the door decides.
+    if ctx.screen == Screen::Zork {
+        crate::app::door::zork::input::handle_escape(app);
         return;
     }
     // Esc in the city backs out one step at a time: the guide first, then
@@ -3420,6 +3433,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Dopewars => false,
         Screen::Bashquest => false,
         Screen::Codekeep => false,
+        Screen::Zork => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
         Screen::Calendars => false,
@@ -3972,6 +3986,7 @@ fn game_owns_ctrl_s(app: &App) -> bool {
         | Screen::Dopewars
         | Screen::Bashquest
         | Screen::Codekeep
+        | Screen::Zork
         | Screen::Usurper
         | Screen::Artboard
         | Screen::Profiles
@@ -4163,6 +4178,7 @@ fn zen_return_screen(app: &App) -> Option<Screen> {
         | Screen::Dopewars
         | Screen::Bashquest
         | Screen::Codekeep
+        | Screen::Zork
         | Screen::Usurper
         | Screen::Artboard
         | Screen::Profiles
@@ -4601,6 +4617,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // are forwarded raw in App::handle_input before reaching this
             // path.
         }
+        Screen::Zork => {}
         Screen::Codekeep => {
             // Running-mode bytes are forwarded raw in App::handle_input; a
             // non-running screen bounces back to Games on the same tick.

@@ -1,0 +1,92 @@
+===========================================================================
+---------------------------------------------------------------------------
+|  READ THIS FILE ALL THE WAY THROUGH BEFORE ATTEMPTING TO INSTALL FROTZ  |
+---------------------------------------------------------------------------
+===========================================================================
+
+
+Because Frotz was originally written specifically for MS/PC DOS and then
+ported to Unix machines.  As such, nothing about it was written with
+36-bit systems in mind.  The initial job of porting to the PDP-10 mostly
+involves taking the differences between 32-bitness and 36-bitness.  This
+was sufficient for porting the dumb interface.  The ongoing job of
+adding full screen handling will involve coming up with an old version
+of curses or writing a cut-down version that supports only VT100/ANSI
+and maybe VT52.
+
+Currently the porting effort is focusing on TOPS20.
+
+The porting effort used Mark Crispin's Panda TOPS20 distribution from
+http://panda.trailing-edge.com/ and the KCC C compiler which is included.
+
+To compile, do "make tops20".  This will copy the needed source files to
+the "snavig/" directory and process them to fit TOPS20's limit of six
+alphanumeric caps-insensitive characters on extern symbols and
+filenames.  This requires the GNU version of sed.  So if you're on
+macOS, *BSD, or something else non-GNU; install GNU sed before
+proceeding.  I was unable to adapt the snavig script to do all the
+processing itself.
+
+The contents of this "snavig/" directory then needs to be uploaded to a
+subdirectory on a PDP10.  Then while in the directory with the source,
+the following command will then compile and link the code to produce an
+executable:
+
+cc -o dfrotz.exe *.c
+
+There will be some complaints of unused parameters for some functions.
+This is to be expected because the usual means of making the compiler to
+keep quiet about these things don't work for KCC.  A considerable amount
+of disk quota is required to complete the linking, but how much is not
+entirely known.
+
+If you get a complaint that you're out of disk space, look at the TOPS20
+manuals for how to add yourself to the WHEEL and OPERATOR groups.  Then
+you can set disk quotas yourself.  You'll want to do something like this:
+
+  enable
+  build <username>
+    permanent infinity
+    working infinity
+  disable
+
+Then for any subdirectories
+
+  enable
+  build <username.frotz>
+    permanent infinity
+    working infinity
+  disable
+  connect <username.frotz>
+
+Now you're in the directory <username.frotz>.  To get source code into
+the machine, FTP is probably your best bet.
+
+  ftp ftp.foobar.com
+    login ftp
+    set no confirmation all
+    cd <wherever the source is>
+    get *
+    quit
+  reset ftp
+
+Now compile.
+
+  cc -o dfrotz.exe *.c
+
+
+There are some irritating characteristics of TOPS20 that need to be
+addressed.  So far, the only serious one deals with the terminal width.
+TOPS20 will automatically insert a newline every N characters where N is
+the terminal width setting.  You can see these by typing INFO TERM.  To
+make TOPS20 not do this, you need to set the width to zero -- like this
+"TERM WIDTH 0".  It's best to do these terminal setup things in your
+LOGIN.CMD file, which is akin to a .profile or .bashrc file on a Unix
+machine.  Add the following lines in the following order to LOGIN.CMD:
+
+TERM VT100
+TERM WIDTH 0
+
+When setting TERM VT100, this implies a width of 80.  Therefore the
+width needs to be set AFTER the terminal type in order for the width
+setting to stick.

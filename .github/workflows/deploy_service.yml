@@ -49,6 +49,7 @@ on:
           - nethack
           - dopewars
           - codekeep
+          - zork
           - dcss
           - usurper
           - brogue

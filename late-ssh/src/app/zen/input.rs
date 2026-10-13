@@ -6,6 +6,8 @@
 //! Anything not owned here returns `false` so the global keys (digits,
 //! `q`, `?`, `w`, the `v` music chords) keep working.
 
+use std::time::Instant;
+
 use uuid::Uuid;
 
 use super::rows::InboxRow;
@@ -123,7 +125,10 @@ fn cycle_tile(app: &mut App, chat_focused: bool, forward: bool) {
     match chat_focused {
         true => cycle_room(app, if forward { 1 } else { -1 }),
         false => {
-            if app.zen.cycle_focused_piece(forward) {
+            if app
+                .zen
+                .cycle_focused_piece(forward, Instant::now(), &mut rand::thread_rng())
+            {
                 app.mark_zen_layout_dirty();
             }
         }

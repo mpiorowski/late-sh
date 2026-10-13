@@ -198,8 +198,8 @@ pub(crate) fn draw_rice(
             (TileKind::Chat, None) => kind.label().to_string(),
             // The tile names the piece it plays, so `[` `]` shows where
             // you landed.
-            (TileKind::Ascii, _) => match zen.rice.root.piece_at(ordinal) {
-                Some(piece) => format!("{} · {}", kind.label(), piece.label()),
+            (TileKind::Ascii, _) => match zen.piece_label(ordinal) {
+                Some(label) => format!("{} · {}", kind.label(), label),
                 None => kind.label().to_string(),
             },
             (
@@ -269,7 +269,7 @@ pub(crate) fn draw_rice(
                 draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
             }
             TileKind::Ascii => {
-                if let Some(piece) = zen.rice.root.piece_at(ordinal) {
+                if let Some(piece) = zen.piece_at(ordinal) {
                     crate::app::ascii::ui::draw_piece(frame, inner, piece, view.ascii_clock);
                 }
             }

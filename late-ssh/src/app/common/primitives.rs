@@ -69,6 +69,7 @@ pub enum Screen {
     Dopewars,
     Bashquest,
     Codekeep,
+    Zork,
     Usurper,
     GreenDragon,
     Darkroom,
@@ -130,6 +131,7 @@ impl Screen {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom => Screen::Games,
@@ -161,6 +163,7 @@ impl Screen {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom => Screen::Games,
@@ -214,6 +217,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dopewars => "dopewars",
         Screen::Bashquest => "BashQuest",
         Screen::Codekeep => "CodeKeep",
+        Screen::Zork => "Zork Trilogy",
         Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
         Screen::Darkroom => crate::app::door::darkroom::data::TITLE,

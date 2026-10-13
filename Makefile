@@ -22,7 +22,7 @@ ENV_TEMPLATE = .env.dev
 #   make start-instance2          # bring up the stack (foreground)
 #   make .env-instance2           # just (re)generate .env without starting
 
-CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
+CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview -p late-zork
 # `env -u MAKEFLAGS -u MFLAGS`: make exports command-line variables (the
 # `ARGS="..."` in `make test-llm ARGS=...`) through MAKEFLAGS, cargo forwards
 # it to build scripts, and tikv-jemalloc-sys's nested make then parses ARGS'
@@ -65,7 +65,7 @@ PAPER_PARAGRAPHS ?= 100
 seed-paper:
 	scripts/seed_paper_test_data.sh "$(PAPER_PARAGRAPHS)"
 
-# Artboard voting, owner/staff rating precedence, and the on-connect splash.
+# Artboard gallery fixtures: accounts, pieces, applause, and the on-connect splash.
 ART_SPLASH_PIECE ?= 1
 .PHONY: seed-artboard
 seed-artboard:

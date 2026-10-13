@@ -81,7 +81,7 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
     use crate::test_helpers::{new_test_db, wait_until};
     use late_core::models::statusline::default_statusline_components;
     use late_core::models::user::{
-        ArtSplashMode, LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode,
+        LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode,
         default_right_sidebar_components,
     };
     use late_core::test_utils::create_test_user;
@@ -114,7 +114,6 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
         paper_at_login: true,
         screensaver: late_core::models::user::Screensaver::DEFAULT,
         show_watch_chat: true,
-        art_splash_mode: ArtSplashMode::Sfw,
         artboard_disclaimer: true,
         terminal_images: TerminalImagesMode::Auto,
         hidden_award_categories: Vec::new(),

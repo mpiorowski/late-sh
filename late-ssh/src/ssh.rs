@@ -901,11 +901,12 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        // The door: the day's wall piece, or the cup.
+        // The door: the day's wall piece for those who chose Always View on
+        // the Artboard content disclaimer, else the cup.
         let splash_piece = self
             .state
             .gallery_service
-            .splash_piece_for_mode(late_core::models::user::extract_art_splash_mode(
+            .splash_piece_for_login(late_core::models::user::extract_artboard_disclaimer(
                 &user.settings,
             ))
             .await;
@@ -1071,6 +1072,10 @@ impl russh::server::Handler for ClientHandler {
             codekeep_host: self.state.config.codekeep_host.clone(),
             codekeep_port: self.state.config.codekeep_port,
             codekeep_secret: self.state.config.codekeep_secret.clone(),
+            zork_enabled: self.state.config.zork_enabled,
+            zork_host: self.state.config.zork_host.clone(),
+            zork_port: self.state.config.zork_port,
+            zork_secret: self.state.config.zork_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
