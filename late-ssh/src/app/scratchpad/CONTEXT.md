@@ -62,6 +62,8 @@ Keep `mod.rs` declaration-only.
 
 Pairing is a **mutual handshake**, and that is the load-bearing decision here. `/pair @b` from a records a one-sided intent and leaves b a banner; b's session is otherwise untouched. The pairing exists only once b answers `/pair @a`. Nothing in this domain can push state onto a session that did not ask for it, which is why there is no accept/decline prompt and nothing that gates global input. Do not reintroduce a one-sided invite: a remote-triggered prompt that owns the keyboard wedges the session it lands on.
 
+Entering the scratchpad clears the session's banner on both handshake paths, so obsolete invite and waiting messages do not cover the partner header or editor.
+
 `SharedScratchpadRegistry` (`registry.rs`) is a single-replica, in-process `Arc<Mutex<..>>`:
 - `intents: HashMap<Uuid, PairIntent>`: one-sided asks keyed by the user who ran `/pair` first, carrying that session's token and the timestamp. A newer ask from the same user overwrites the old one.
 - `notices: HashMap<Uuid, PairNotice>`: undrained "@x wants to pair" banners keyed by the target. Purely informational.
@@ -130,7 +132,7 @@ Unlike `Screen::DailyMatch`/`Screen::HouseTable`, the scratchpad's arm in `handl
 
 - `registry_test.rs`: the handshake (one-sided ask waits, mirror pairs, expired ask does not), notice drain-once, the ping cooldown (re-ask is quiet, alternating targets cannot reopen it, a suppressed ask still pairs, it lapses, one asker cannot mute another, pairing clears it), session-scoped pairings, busy refusals on both sides, leave/teardown including the never-joined partner, and `cycle_language` bumping `revision`.
 - `state_test.rs`: seeding from the shared buffer, publish/sync round-trips, own-publish does not bounce back, yank register survives a remote sync, `partner_left` after Drop, and `cycle_language`/`language()` being visible to the partner without a separate sync step.
-- `pair_test.rs`: `find_active_user_by_username` case-insensitivity and not-found paths, plus full two-session flow tests (`two_sessions`/`run_command` helpers) covering the handshake, a one-sided ask leaving the target's screen alone, content sync, Esc leaving, and `?` typing into the buffer instead of opening the global guide.
+- `pair_test.rs`: `find_active_user_by_username` case-insensitivity and not-found paths, plus full two-session flow tests (`two_sessions`/`run_command` helpers) covering the handshake, clearing obsolete invite/waiting banners on entry, a one-sided ask leaving the target's screen alone, content sync, Esc leaving, and `?` typing into the buffer instead of opening the global guide.
 - `highlight_test.rs`: the language cycle wraps, `Plain` never calls into syntect, a real snippet produces more than one distinct style, and the gutter width matches the digit count of the total line count.
 - `chat/state_internal_test.rs`: `parse_pair_command` accept/reject/ignore cases.
 - `common/textarea_input_test.rs`: `handle_freeform_edit` newline-on-Enter, Cancel-on-Esc, Tab indents, no undo, and the raw-byte fallback for plain punctuation.
