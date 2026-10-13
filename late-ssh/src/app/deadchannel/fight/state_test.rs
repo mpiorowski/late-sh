@@ -10,7 +10,7 @@ use super::{
 use crate::app::deadchannel::fight::cards::{Card, DECK, DRAFTS, ENERGY, HAND, STATIC_CAP};
 use crate::app::deadchannel::fight::data::{
     BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE, FOES, FoeTier, HEARD_LINE, Intent, MARK_BONUS_CAP,
-    MAX_LEVEL, NOISE_CARDS, OLD_SIGNAL, RATIONS_PER_DAY, RULES, START_BITS, STATIC_LINE,
+    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, START_BITS, STATIC_LINE,
     exp_to_advance, exp_to_seek, title,
 };
 use crate::app::deadchannel::fight::road::{Mark, Node, RoadRun, Trace};
@@ -27,7 +27,7 @@ fn fresh() -> Sheet {
 /// What the fixed-dice fight leaves of a fresh runner's ten signal, and
 /// the static it leaves in the deck
 /// (`a_fight_to_the_end_with_fixed_dice_lands_on_one_state`).
-const FIXED_FIGHT_SIGNAL: i32 = 9;
+const FIXED_FIGHT_SIGNAL: i32 = 10;
 const FIXED_FIGHT_STATIC: u8 = 0;
 
 /// The first step of every day's road: a glyph in every lane.
@@ -158,6 +158,7 @@ fn a_fight_to_the_end_with_fixed_dice_lands_on_one_state() {
                     mark: Mark::Won
                 }],
                 static_cards: FIXED_FIGHT_STATIC,
+                patched: false,
             },
             ..fresh()
         }
@@ -225,6 +226,7 @@ fn running_takes_what_the_glyph_meant_to_do_and_gets_away() {
                 mark: Mark::Ran
             }],
             static_cards: 1,
+            patched: false,
         },
         "the hit that landed left its static in the deck"
     );
@@ -308,6 +310,7 @@ fn the_day_roll_refills_everything_and_drops_a_hanging_fight() {
             mark: Mark::Fighting,
         }],
         static_cards: 3,
+        patched: false,
     };
 
     assert!(!sheet.settle(day(24)), "the same day rolls nothing");
@@ -612,8 +615,9 @@ fn the_bright_glyph_is_harder_pays_double_bits_and_leaves_a_crystal() {
     );
     let fight = sheet.fight.clone().expect("a fight on the row");
     assert_eq!(fight.name(), "bright dead pixels");
-    // Over the dead pixels of level 8: half as much signal again, 15% more
-    // attack and defense rounded up, twice the bits, the same exp.
+    // Over the dead pixels of level 8: half as much signal again, half the
+    // level (four) more attack, the same defense, twice the bits, the same
+    // exp.
     let (_, _, plain) = RULES.foe(8);
     assert_eq!((plain.attack, plain.defense), (15, 11));
     assert_eq!(
@@ -624,7 +628,7 @@ fn the_bright_glyph_is_harder_pays_double_bits_and_leaves_a_crystal() {
             fight.foe_bits,
             fight.foe_exp
         ),
-        (plain.signal * 150 / 100, 18, 13, plain.bits * 2, plain.exp)
+        (plain.signal * 150 / 100, 19, 11, plain.bits * 2, plain.exp)
     );
 
     // Put down, it always leaves one, and the wire hears.
@@ -792,27 +796,32 @@ fn the_blade_cart_sells_the_next_tier_up_for_crystals_alone() {
     sheet.bits = 7;
     sheet.crystals = 2;
 
+    // Tier 4 for a level 1 runner is three tiers ahead: three crystals,
+    // and two more a tier.
+    assert_eq!(sheet.cart_price(Slot::Weapon), Some(9));
     let short = sheet.apply(Command::Cart { slot: Slot::Weapon }, &mut rng);
     assert_eq!(
         short.applied,
-        Applied::Refused(Refusal::ShortCrystals { by: 1 })
+        Applied::Refused(Refusal::ShortCrystals { by: 7 })
     );
     assert_eq!((sheet.weapon_tier, sheet.bits, sheet.crystals), (3, 7, 2));
 
     // The next tier up from the one carried, and not a bit changes hands.
-    sheet.crystals = 7;
+    sheet.crystals = 12;
     let sold = sheet.apply(Command::Cart { slot: Slot::Weapon }, &mut rng);
     assert_eq!(
         sold.applied,
         Applied::Carted {
             slot: Slot::Weapon,
             tier: 4,
-            crystals: 3
+            crystals: 9
         }
     );
-    assert_eq!((sheet.weapon_tier, sheet.bits, sheet.crystals), (4, 7, 4));
+    assert_eq!((sheet.weapon_tier, sheet.bits, sheet.crystals), (4, 7, 3));
 
-    // Each slot climbs its own ladder, a tier a visit.
+    // Each slot climbs its own ladder, a tier a visit; a piece at the
+    // level is the base price.
+    assert_eq!(sheet.cart_price(Slot::Armor), Some(3));
     let armor = sheet.apply(Command::Cart { slot: Slot::Armor }, &mut rng);
     assert_eq!(
         armor.applied,
@@ -822,18 +831,20 @@ fn the_blade_cart_sells_the_next_tier_up_for_crystals_alone() {
             crystals: 3
         }
     );
-    assert_eq!((sheet.armor_tier, sheet.crystals), (1, 1));
+    assert_eq!((sheet.armor_tier, sheet.crystals), (1, 0));
 
     // At the top of the ladder there is nothing past the wall.
     let mut top = at_the_top(0);
     top.crystals = 9;
+    assert_eq!(top.cart_price(Slot::Weapon), None);
     let past = top.apply(Command::Cart { slot: Slot::Weapon }, &mut rng);
     assert_eq!(past.applied, Applied::Refused(Refusal::PastTheWall));
 }
 
-/// Patch sells the whole gap at a bit a point times the level, and turns
-/// away a dropped signal (the roll's business), a fight left waiting on
-/// the row, a full signal, and a short purse, changing nothing each time.
+/// Patch sells the whole gap at a bit a point times the level, once a
+/// day, and turns away a dropped signal (the roll's business), a fight
+/// left waiting on the row, a full signal, a second patch, and a short
+/// purse, changing nothing each time.
 #[test]
 fn patch_buys_the_signal_back_and_refuses_down_waiting_full_or_short() {
     let mut rng = StdRng::seed_from_u64(1);
@@ -856,11 +867,28 @@ fn patch_buys_the_signal_back_and_refuses_down_waiting_full_or_short() {
         vec!["patch works fast. +18 signal, back to full. 54 bits.".to_string()]
     );
     assert_eq!((sheet.signal, sheet.bits), (30, 46));
+    assert!(sheet.road.patched, "the day's patch is spent");
     assert!(sheet.news(&patched.applied).is_empty());
 
     let full = sheet.apply(Command::Patch, &mut rng);
     assert_eq!(full.applied, Applied::Refused(Refusal::NothingToPatch));
     assert_eq!((sheet.signal, sheet.bits), (30, 46));
+
+    // Once a day: hurt again, the second patch is refused until the roll,
+    // which wipes the road and the flag with it.
+    sheet.signal = 12;
+    let again = sheet.apply(Command::Patch, &mut rng);
+    assert_eq!(again.applied, Applied::Refused(Refusal::PatchedToday));
+    assert_eq!(again.lines, vec![PATCHED_TODAY_LINE.to_string()]);
+    assert_eq!((sheet.signal, sheet.bits), (12, 46));
+    assert!(sheet.settle(sheet.day.succ_opt().expect("a next day")));
+    assert!(!sheet.road.patched);
+    sheet.signal = 12;
+    sheet.bits = 100;
+    assert!(matches!(
+        sheet.apply(Command::Patch, &mut rng).applied,
+        Applied::Patched { .. }
+    ));
 
     let mut down = fresh();
     down.signal = 0;
@@ -1002,7 +1030,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
             "piles": {"draw": ["strike"], "hand": ["block", null, "static"], "discard": ["surge", "wipe"]}
         })),
         road: Some(serde_json::json!({
-            "path": [{"lane": 2, "mark": "fighting"}], "static_cards": 1
+            "path": [{"lane": 2, "mark": "fighting"}], "static_cards": 1, "patched": false
         })),
         ..row
     };
@@ -1022,6 +1050,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
                 mark: Mark::Fighting
             }],
             static_cards: 1,
+            patched: false,
         }
     );
     assert_eq!(sheet.rations_left, 9);
@@ -1052,11 +1081,11 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
     let drafted = DeadchannelRunner {
         fight: None,
         level: 6,
-        cards: Some(serde_json::json!(["siphon", "bulwark"])),
+        cards: Some(serde_json::json!(["brace", "bulwark"])),
         ..ok.clone()
     };
     let sheet = Sheet::from_row(&drafted).expect("a sheet");
-    assert_eq!(sheet.cards, vec![Card::Siphon, Card::Bulwark]);
+    assert_eq!(sheet.cards, vec![Card::Brace, Card::Bulwark]);
     assert_eq!(sheet.to_write().cards, drafted.cards);
     assert_eq!(fresh().to_write().cards, None, "no picks is no column");
     let never_offered = DeadchannelRunner {
@@ -1243,6 +1272,7 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
                 mark: Mark::Won,
             }],
             static_cards: 0,
+            patched: false,
         },
         // The drafted cards go with the level.
         cards: Vec::new(),
@@ -1547,7 +1577,7 @@ fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
     sheet.rations_left = 4;
     sheet.signal = 12;
     sheet.road.static_cards = 2;
-    sheet.cards = vec![Card::Siphon];
+    sheet.cards = vec![Card::Brace];
     let mut rng = StdRng::seed_from_u64(1);
 
     let outcome = sheet.apply(Command::Reset, &mut rng);
@@ -1579,6 +1609,7 @@ fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
         road: RoadRun {
             path: Vec::new(),
             static_cards: 2,
+            patched: false,
         },
         // The drafted cards go with the level.
         cards: Vec::new(),
@@ -1681,7 +1712,7 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     // The drift: hits, gathers, comes down for double.
     sheet.fight = Some(a_fight(2, 500, 8, 0, 0));
     let hit = sheet.powers(the_fight(&sheet)).hit;
-    assert_eq!(hit, 12, "185% of 8 attack less a quarter of defense 5");
+    assert_eq!(hit, 13, "187% at level 5 of 8 attack less a quarter of defense 5");
 
     // Block over the hit: it holds, nothing lands, no static, and what
     // is left of it stands.
@@ -1690,10 +1721,10 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     assert_eq!(held.applied, Applied::Round);
     assert_eq!(
         held.lines,
-        vec!["it hits you for 12. your block holds.".to_string()]
+        vec!["it hits you for 13. your block holds.".to_string()]
     );
     let fight = the_fight(&sheet);
-    assert_eq!((sheet.signal, fight.block, fight.turn), (50, 3, 1));
+    assert_eq!((sheet.signal, fight.block, fight.turn), (50, 2, 1));
     assert_eq!(fight.piles.static_cards(), 0);
     assert_eq!(
         (fight.energy, fight.piles.hand.iter().flatten().count()),
@@ -1705,9 +1736,9 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     let gathered = sheet.apply(Command::EndTurn, &mut rng);
     assert_eq!(
         gathered.lines,
-        vec!["the drift gathers itself. the next one lands for 24.".to_string()]
+        vec!["the drift gathers itself. the next one lands for 26.".to_string()]
     );
-    assert_eq!((sheet.signal, the_fight(&sheet).block), (50, 3));
+    assert_eq!((sheet.signal, the_fight(&sheet).block), (50, 2));
 
     // The heavy: the block takes its three, the rest lands, static follows.
     let heavy = sheet.apply(Command::EndTurn, &mut rng);
@@ -1739,12 +1770,11 @@ fn static_fills_the_deck_to_the_cap_and_rides_it_to_the_next_fight() {
     let flooded = sheet.apply(Command::EndTurn, &mut rng);
     assert_eq!(
         flooded.lines,
-        vec![format!(
-            "it floods you with noise. {NOISE_CARDS} static cards into your deck."
-        )]
+        vec!["it floods you with noise. 2 static cards into your deck.".to_string()],
+        "one card, and one more at level 5"
     );
     assert_eq!(sheet.signal, 60, "noise is not a hit");
-    assert_eq!(the_fight(&sheet).piles.static_cards(), NOISE_CARDS);
+    assert_eq!(the_fight(&sheet).piles.static_cards(), 2);
 
     // Past the cap there is nowhere left to put it.
     sheet
@@ -2019,21 +2049,21 @@ fn a_level_that_owes_a_card_holds_the_road_until_one_is_taken() {
     }
     assert_eq!(sheet, before);
 
-    let drafted = sheet.apply(Command::Draft { card: Card::Siphon }, &mut rng);
+    let drafted = sheet.apply(Command::Draft { card: Card::Brace }, &mut rng);
     assert_eq!(
         drafted,
         Outcome {
             applied: Applied::Drafted {
-                card: Card::Siphon,
+                card: Card::Brace,
                 replaces: Card::Strike,
             },
-            lines: vec!["siphon is in your deck now, in place of a strike.".to_string()],
+            lines: vec!["brace is in your deck now, in place of a strike.".to_string()],
         }
     );
     assert_eq!(
         sheet,
         Sheet {
-            cards: vec![Card::Siphon],
+            cards: vec![Card::Brace],
             ..before
         },
         "a pick moves the deck and nothing else"
@@ -2064,7 +2094,7 @@ fn a_level_that_owes_a_card_holds_the_road_until_one_is_taken() {
     deck.sort_by_key(|card| card.name());
     assert_eq!(dealt, deck);
     assert_eq!(
-        dealt.iter().filter(|card| **card == Card::Siphon).count(),
+        dealt.iter().filter(|card| **card == Card::Brace).count(),
         1
     );
 
@@ -2100,7 +2130,7 @@ fn the_drafted_cards_do_what_they_print() {
     assert_eq!(
         (powers.strike, powers.block, powers.hit),
         (10, 6, 11),
-        "attack 10, 60% of defense 10, 185% of 8 attack less a quarter of defense"
+        "attack 10, 60% of defense 10, 187% at level 5 of 8 attack less a quarter of defense"
     );
     let play =
         |sheet: &mut Sheet, rng: &mut StdRng, slot: u8| sheet.apply(Command::Play { slot }, rng);
@@ -2127,23 +2157,23 @@ fn the_drafted_cards_do_what_they_print() {
     // Jab: free, three quarters of a strike, rounded up.
     play(&mut sheet, &mut rng, 0);
     assert_eq!(table(&sheet), (492, 0, 5, 30));
-    // Siphon: a strike, and half of it back.
+    // Siphon: a strike, and three quarters of it back, rounded up.
     let siphon = play(&mut sheet, &mut rng, 1);
     assert_eq!(
         siphon.lines,
-        vec!["you siphon 10 out of the drift. +5 signal.".to_string()]
+        vec!["you siphon 10 out of the drift. +8 signal.".to_string()]
     );
-    assert_eq!(table(&sheet), (482, 0, 4, 35));
+    assert_eq!(table(&sheet), (482, 0, 4, 38));
     // Bulwark: two blocks and a half, for two.
     play(&mut sheet, &mut rng, 3);
-    assert_eq!(table(&sheet), (482, 15, 2, 35));
+    assert_eq!(table(&sheet), (482, 15, 2, 38));
     // Riposte: a block's worth and the fifteen standing, which stay.
     play(&mut sheet, &mut rng, 2);
-    assert_eq!(table(&sheet), (461, 15, 1, 35));
+    assert_eq!(table(&sheet), (461, 15, 1, 38));
 
     // The hit for 11 eats eleven of the block; the glyph gathers next.
     sheet.apply(Command::EndTurn, &mut rng);
-    assert_eq!(table(&sheet), (461, 4, ENERGY, 35));
+    assert_eq!(table(&sheet), (461, 4, ENERGY, 38));
     deal(
         &mut sheet,
         [

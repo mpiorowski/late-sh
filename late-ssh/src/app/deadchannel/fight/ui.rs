@@ -37,7 +37,7 @@ use ratatui::{
 };
 
 use super::cards::{Board, Card, Draft, ENERGY, HAND};
-use super::data::{self, FOES, FoeKind, FoeTier, Intent, NOISE_CARDS, OLD_SIGNAL, RATIONS_PER_DAY};
+use super::data::{self, FOES, FoeKind, FoeTier, Intent, OLD_SIGNAL, RATIONS_PER_DAY};
 use super::road::{LANES, Mark, Node, STEPS};
 use super::session::{Picker, Scene};
 use super::sim::Threat;
@@ -455,7 +455,7 @@ fn card_neon(card: Card) -> Option<Neon> {
     match card {
         Card::Strike | Card::Jab | Card::Sever => Some(Neon::Red),
         Card::Surge | Card::Burn => Some(Neon::Amber),
-        Card::Block | Card::Bulwark | Card::Riposte => Some(Neon::Cyan),
+        Card::Block | Card::Brace | Card::Bulwark | Card::Riposte => Some(Neon::Cyan),
         Card::Wipe | Card::Siphon => Some(Neon::Green),
         Card::Ground => Some(Neon::Magenta),
         Card::Mute => Some(Neon::White),
@@ -476,6 +476,7 @@ fn card_text(card: Card, powers: &Powers, board: &Board) -> [String; 2] {
         Card::Block | Card::Bulwark => [hold, "till hit".to_string()],
         Card::Wipe => [hold, "-static".to_string()],
         Card::Jab => [hit, "free".to_string()],
+        Card::Brace => [hold, "free".to_string()],
         Card::Siphon => [hit, format!("mend {}", effect.mend)],
         Card::Riposte => [hit, "+block up".to_string()],
         Card::Burn => [format!("+{} energy", effect.energy), "-static".to_string()],
@@ -497,7 +498,7 @@ fn chip_number(card: Card, powers: &Powers, board: &Board) -> String {
         | Card::Riposte
         | Card::Ground
         | Card::Sever => format!(" {}", effect.damage),
-        Card::Block | Card::Wipe | Card::Bulwark => format!(" {}", effect.block),
+        Card::Block | Card::Brace | Card::Wipe | Card::Bulwark => format!(" {}", effect.block),
         Card::Burn | Card::Mute | Card::Static => String::new(),
     }
 }
@@ -675,7 +676,10 @@ fn intent_spans(fight: &Fight, powers: &Powers, live: bool, tick: u64) -> Vec<Sp
             },
         ),
         Intent::Noise => (
-            format!("▸ noise: {NOISE_CARDS} static cards"),
+            match powers.noise {
+                1 => "▸ noise: 1 static card".to_string(),
+                n => format!("▸ noise: {n} static cards"),
+            },
             glow(Neon::Magenta),
         ),
     };
@@ -986,7 +990,7 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
         ));
         row
     };
-    let hit = data::RULES.hit(offer.tier.attack, sheet.defense());
+    let hit = data::RULES.hit(offer.tier.attack, sheet.defense(), sheet.level);
     let numbers = format!("signal {} · hits for {hit} · it ", offer.tier.signal);
     let moves = truncate(
         &pattern_words(offer.kind),

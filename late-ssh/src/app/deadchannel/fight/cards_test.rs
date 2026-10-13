@@ -26,9 +26,10 @@ fn the_deck_is_ten_cards_and_a_deal_draws_five_of_them() {
             count(&DECK, Card::Block),
             count(&DECK, Card::Surge),
             count(&DECK, Card::Wipe),
+            count(&DECK, Card::Siphon),
             count(&DECK, Card::Static),
         ),
-        (5, 3, 1, 1, 0)
+        (4, 3, 1, 1, 1, 0)
     );
 
     let piles = Piles::deal(DECK.to_vec(), 2, &mut StdRng::seed_from_u64(4));
@@ -115,22 +116,23 @@ fn a_played_card_leaves_a_hole_and_static_leaves_the_deck() {
 fn a_draft_swaps_one_card_and_the_deck_stays_ten() {
     assert_eq!(deck(&[]), DECK.to_vec());
 
-    let drafted = deck(&[Card::Siphon, Card::Riposte, Card::Burn, Card::Mute]);
+    let drafted = deck(&[Card::Brace, Card::Riposte, Card::Burn, Card::Mute]);
     assert_eq!(drafted.len(), DECK.len());
     let held = |card| count(&drafted, card);
     assert_eq!(
         (
             held(Card::Strike),
+            held(Card::Siphon),
             held(Card::Block),
             held(Card::Surge),
             held(Card::Wipe)
         ),
-        (2, 2, 1, 1),
-        "three strikes and a block made way"
+        (1, 1, 2, 1, 1),
+        "three strikes and a block made way; the siphon stays"
     );
     assert_eq!(
         (
-            held(Card::Siphon),
+            held(Card::Brace),
             held(Card::Riposte),
             held(Card::Burn),
             held(Card::Mute)
@@ -138,7 +140,7 @@ fn a_draft_swaps_one_card_and_the_deck_stays_ten() {
         (1, 1, 1, 1)
     );
     // Half a build is half the swaps.
-    assert_eq!(count(&deck(&[Card::Jab]), Card::Strike), 4);
+    assert_eq!(count(&deck(&[Card::Jab]), Card::Strike), 3);
 
     assert_eq!(draft_owed(2, 0), None, "nothing before the first level");
     assert_eq!(draft_owed(3, 0), Some(&DRAFTS[0]));
@@ -166,8 +168,11 @@ fn every_card_does_what_it_says() {
         surge: 25,
         block: 6,
         hit: 9,
+        noise: 2,
         jab: 5,
+        brace: 6,
         mend: 5,
+        riposte: 6,
         bulwark: 18,
         burn: 1,
         ground: 10,
@@ -186,6 +191,7 @@ fn every_card_does_what_it_says() {
         Card::Surge,
         Card::Wipe,
         Card::Jab,
+        Card::Brace,
         Card::Siphon,
         Card::Riposte,
         Card::Bulwark,
@@ -213,6 +219,7 @@ fn every_card_does_what_it_says() {
                 }
             ),
             (Card::Jab, Effect { damage: 5, ..none }),
+            (Card::Brace, Effect { block: 6, ..none }),
             (
                 Card::Siphon,
                 Effect {

@@ -140,8 +140,11 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
         "the cursor on tier 3\n{screen}"
     );
     assert!(screen.contains("the last broadcast"), "{screen}");
-    assert!(screen.contains("23287"), "{screen}");
-    // Tier 3 weapon: 1316 less 75% of 506 (379). Tier 3 armor off street clothes: 1316.
+    // The top of the wall at level 3: 23287 on the ladder, and half as
+    // much again for each of the twelve tiers it sits above the level.
+    assert!(screen.contains("163009"), "{screen}");
+    // Tier 3 weapon, level with the runner: 1316 less 75% of 506 (379).
+    // Tier 3 armor off street clothes: 1316.
     assert!(screen.contains("[w] tire iron for 937 bits"), "{screen}");
     assert!(
         screen.contains("[a] padded jacket for 1316 bits"),
@@ -388,8 +391,10 @@ fn the_blade_cart_prices_the_next_tier_up_in_crystals() {
         screen.contains("crystals 3      weapon tire iron"),
         "{screen}"
     );
+    // Tier 4 for a level 1 runner: three crystals, and two more a tier
+    // past the level.
     assert!(
-        screen.contains("[w] rebar club for 3 crystals   the wall asks"),
+        screen.contains("[w] rebar club for 9 crystals   the wall asks"),
         "{screen}"
     );
     assert!(
@@ -478,6 +483,17 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
         "{screen}"
     );
     assert!(!screen.contains("[p] patch"), "{screen}");
+
+    // Patched today already: the key is not offered again before the roll.
+    sheet.signal = 12;
+    sheet.road.patched = true;
+    let screen = render_with(&state, Some(&sheet));
+    assert!(
+        screen.contains("patched once today already. the roll is the next one."),
+        "{screen}"
+    );
+    assert!(!screen.contains("[p] patch"), "{screen}");
+    sheet.road.patched = false;
 
     sheet.signal = 0;
     let screen = render_with(&state, Some(&sheet));

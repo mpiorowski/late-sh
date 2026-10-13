@@ -184,6 +184,7 @@ fn pinned_keen_climb() -> Climb {
             cached: 36076,
             gear: 81845,
             patched: 9475,
+            patch_days: 0,
             dropped: 0,
             borrowed: 0,
             loan_fees: 0,

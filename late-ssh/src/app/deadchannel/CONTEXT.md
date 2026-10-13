@@ -95,8 +95,8 @@ number of replicas spend one AI call per text.
 | `city/data.rs` | The city's copy and catalogs: the gear ladder (`COST_LADDER`, `WEAPONS`, `ARMOR`: LoGD numbers, GAME.md names), `BANDS` with draft move names, `NOTICES`, `TAILOR_PRICES`, the per-landmark `lines` pools, `title` and `pitch`. |
 | `city/input.rs` | `descend`: the way down (closes whatever was open, reloads the sheet, claims the first-descent guide, puts the runner on the street, `Screen::City`), called by `0` on the clubhouse and by Enter on the hub card; callers hold the runner gate. While the guide is open every key goes to `guide/input.rs`, and `?` anywhere on the page opens it. Arrows/hjkl walk; Enter at a landmark; `f` walks up to the static (the road, `FightSession::step_up`) and `p` opens patch from anywhere (the armorer, the tailor, the lockers, and the bits machine stay a walk away on purpose); Enter closes a panel or the ledge view, Esc too through the root's `dispatch_escape`, which on the bare street goes up to Home with #lounge selected (while one is open every typed key but the digits and `q` is swallowed: the walk keys, and the letters a global would spend). While the road or the scene is open every key goes to `fight/input.rs`. In the armorer's panel up/down walk the wall and `w` / `a` send `Command::Outfit` to `App.fight`; in patch's panel `p` sends `Command::Patch`; at the lockers `d` / `w` send `Deposit` / `Withdraw`; at the bits machine `b` / `r` send `Borrow` / `Repay`; at Dead Air `s` / `d` / `t` send `Command::Drink`; at the blade shop `w` / `a` send `Command::Cart`; over the ledge `r` leans out and a second `r` sends `Reset`, any other key leaning back in first. Returns `false` for globals. |
 | `city/ui.rs` | Renderer: base styling by zone, the ambience pass (rain, puddles reflecting the nearest sign, neon shorts and dropped letters, window flicker, the screen's static and test pattern with rare glyph frames, steam, lamps, the drop's lights, the blimp, the mast, the bits machine, the wire's pulse), the runner as its mark, the popover, the street line, the shop panels (`armorer_lines` is the live till: the wall with the cursor, what you carry lit, the tiers under it dimmed, a row per key priced net of the trade-in; `bar_lines`: the crystals, the glass in you, each glass with what it does at this level, the refusal ahead of the keys; `cart_lines`: the next tier up from what each slot carries, priced in crystals, with what the wall asks in bits beside it; `patch_lines`: the signal, the price of the gap, the refusal spelled out ahead of the key; `locker_lines`: on hand and locked up, the deposit priced net of the cut; `machine_lines`: owed against the cap, the loan and the repayment priced, the terms). Every panel is one size whatever happens at its counter (`draw_panel`): `PANEL_WIDTH` wide, its lines wrapped to that, each panel the same line count in every state (a refusal takes the row of the key it stands in for), and the counter's last word (`till`, or the tailor's) wrapped into `PANEL_WORD_ROWS` kept at the foot through `draw_framed`, which the ledge box uses too; on a screen too short for all of it the blank row over the word goes first, then `panel_lines` is handed the rows it is short by and the armorer's wall narrows to the tiers around the cursor, so the keys and the word stay on the screen; hands the sheet strip, the road, and the fight scene to `fight/ui.rs`, and the ledge (with the lean out and the till line, the box sized for the taller of its two states at the width it has) to `city/ledge.rs`. Its palette helpers (`ink`, `lit`, `glow`, `dim`, `scale`, `neon_rgb`, `tint_rgb`, the `INK_*` greys) are `pub(crate)` for that. |
-| `fight/data.rs` | The numbers: LoGD's, transcribed (`RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_TO_ADVANCE` with LoGD's per-mark scaling in `exp_to_advance(level, marks)` and `exp_to_seek(marks)`, `FOE_TIERS`, `TRADE_IN_PERCENT`, `MARK_BONUS_CAP`); the ones the climb sets, `fight/BALANCE.md` (`PAY_BITS_PERCENT` and `PAY_EXP_PERCENT`, what a glyph pays over the table, `PRICE_PERCENT`, the wall over `COST_LADDER`, `PATCH_PERCENT`, `EXP_KEEP_ON_DEATH`); the round's (`FOE_SIGNAL_PERCENT`, `HIT_PERCENT`, `BLOCK_PERCENT`, `NOISE_CARDS`, and the formulas `Rules::strike`, `surge`, `block`, `hit`); the drafted cards' (`JAB_PERCENT`, `SIPHON_MEND_PERCENT`, `BULWARK_PERCENT`, `BURN_ENERGY`, `GROUND_PERCENT`, `SEVER_PERCENT`, each a share of a strike or a block through `Rules::share`); the road's (`CACHE_PERCENT`, `Rules::cache`); ours, harder than LoGD's (`LOWER_PAY_PERCENT`, `lower_foe_for_level`, `LOCKER_FEE_PERCENT`, `LOAN_PER_LEVEL`, `LOAN_FEE_PERCENT`, `GARNISH_PERCENT`, `percent_up`); and the crystal pass's, `fight/CRYSTALS.md` (`CRYSTAL_DROP_ONE_IN`, `bright_foe_for_level`, `DRINK_CRYSTALS`, `drink_edge`, `CART_CRYSTALS`). All of the tunable ones are gathered into `Rules`, the value the machine runs under (`RULES` is the live game; `Rules::foe`, `price`, `trade_in`). And the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, an arrival line, and a `pattern`, the cycle of `Intent`s (`Hit`, `Charge`, `Heavy`, `Noise`) that is the whole of its mind; `OLD_SIGNAL` and `OLD_SIGNAL_TIER` (290 / 39 / 22, the reason beside it); `title(marks)`; the kill, drop, run, rest, cache, heard, and slain lines. |
-| `fight/cards.rs` | The deck and the hand: `Card` (strike, block, surge, wipe; the eight drafted cards: jab, siphon, riposte, bulwark, burn, ground, sever, mute; static) with `cost`, `name`, `rule` (its one-line text), and `effect(&Powers, &Board) -> Effect` (the one place a card's numbers are worked out: damage, block, mend, energy back, whether it clears the hand's static, whether it mutes the glyph's move), `DECK` (the ten every runner starts with), `DRAFTS` (four `Draft`s: a level, the card replaced, two options), `draft_owed(level, drafted)`, `deck(drafted)` (the ten with each pick over a card its draft replaces), `HAND` (5), `ENERGY` (3), `STATIC_CAP` (5), and `Piles` (draw, hand, discard: the JSON inside the fight on the row): `deal` (a deck plus the day's static, shuffled, a hand drawn), `draw_hand` (the hand discarded, five drawn, the discard pile shuffled back under when the draw pile runs dry), `play` (a played card leaves a hole in its slot; static leaves the deck), `wipe_hand`, `static_cards`, `add_static` (stops at the cap). Pure; the shuffle's dice are handed in. |
+| `fight/data.rs` | The numbers: LoGD's, transcribed (`RATIONS_PER_DAY`, `SIGNAL_PER_LEVEL`, `START_BITS`, `EXP_TO_ADVANCE` with LoGD's per-mark scaling in `exp_to_advance(level, marks)` and `exp_to_seek(marks)`, `FOE_TIERS`, `TRADE_IN_PERCENT`, `MARK_BONUS_CAP`); the ones the climb sets, `fight/BALANCE.md` (`PAY_BITS_PERCENT` and `PAY_EXP_PERCENT`, what a glyph pays over the table, `PRICE_PERCENT`, the wall over `COST_LADDER`, `PATCH_PERCENT`, `EXP_KEEP_ON_DEATH`); the round's (`FOE_SIGNAL_PERCENT`, `HIT_PERCENT` with `HIT_RAMP_PERCENT` a level, `BLOCK_PERCENT`, `NOISE_LEVEL_STEP`, and the formulas `Rules::strike`, `surge`, `block`, `hit` and `hit_percent_at`, `noise_cards`); the cards' (`JAB_PERCENT`, `BRACE_PERCENT`, `SIPHON_MEND_PERCENT`, `BULWARK_PERCENT`, `BURN_ENERGY`, `GROUND_PERCENT`, `SEVER_PERCENT`, each a share of a strike or a block through `Rules::share`); the road's (`CACHE_PERCENT`, `Rules::cache`); ours, harder than LoGD's (`LOWER_PAY_PERCENT`, `lower_foe_for_level`, `LOCKER_FEE_PERCENT`, `LOAN_PER_LEVEL`, `LOAN_FEE_PERCENT`, `GARNISH_PERCENT`, `percent_up`); and the crystal pass's, `fight/CRYSTALS.md` (`CRYSTAL_DROP_ONE_IN`, `bright_foe_for_level` with `Rules::bright_edge`, `DRINK_CRYSTALS`, `drink_edge`, `CART_CRYSTALS` and `CART_LEAD_CRYSTALS` through `Rules::cart_price`). All of the tunable ones are gathered into `Rules`, the value the machine runs under (`RULES` is the live game; `Rules::foe`, `price`, `trade_in`). And the fauna: `FOES`, fifteen glyphs, one per level, each with a name, a five-by-three portrait in the runner's format, an arrival line, and a `pattern`, the cycle of `Intent`s (`Hit`, `Charge`, `Heavy`, `Noise`) that is the whole of its mind; `OLD_SIGNAL` and `OLD_SIGNAL_TIER` (290 / 36 / 22, the reason beside it); `title(marks)`; the kill, drop, run, rest, cache, heard, and slain lines. |
+| `fight/cards.rs` | The deck and the hand: `Card` (strike, block, surge, wipe, siphon; the eight drafted cards: jab, brace, riposte, bulwark, burn, ground, sever, mute; static) with `cost`, `name`, `rule` (its one-line text), and `effect(&Powers, &Board) -> Effect` (the one place a card's numbers are worked out: damage, block, mend, energy back, whether it clears the hand's static, whether it mutes the glyph's move), `DECK` (the ten every runner starts with, a siphon among them), `DRAFTS` (four `Draft`s: a level, the card replaced, two options), `draft_owed(level, drafted)`, `deck(drafted)` (the ten with each pick over a card its draft replaces), `HAND` (5), `ENERGY` (3), `STATIC_CAP` (5), and `Piles` (draw, hand, discard: the JSON inside the fight on the row): `deal` (a deck plus the day's static, shuffled, a hand drawn), `draw_hand` (the hand discarded, five drawn, the discard pile shuffled back under when the draw pile runs dry), `play` (a played card leaves a hole in its slot; static leaves the deck), `wipe_hand`, `static_cards`, `add_static` (stops at the cap). Pure; the shuffle's dice are handed in. |
 | `fight/road.rs` | The road and the run on it. `road_for(day)`: a pure function of the UTC date, ten steps by three lanes of `Node` (`Glyph`, `Bright`, `Rest`, `Cache`), `FIGHT_STEPS` (5) of them a fight in every lane (the first and the last always, never three fights or three quiet steps in a row), `BRIGHT_NODES` (2) bright glyphs on fight steps of their own after the first, every quiet step holding both a rest and a cache. `RoadRun` is one runner's day on it (the `road` column): `path`, a `Trace` (lane and `Mark`: fighting, won, bright won, ran, fell, cleared, cached; a stored `mended` from when rests healed reads as cleared) per step taken, and `static_cards`; `lane`, `reaches` / `open_lanes` (the lane stood in and the ones beside it, every lane before the first step), `settle_fight`. `road_test` pins one day's road whole and asserts the shape over 800 days. |
 | `fight/policy.rs` | How a turn is played without a person choosing: `Table` (one read of the hand, the energy, the block, both signals and their maxes, the `Powers`, and the glyph's move now and next), a private `Turn` that plays cards out through `Card::effect` the way the machine would, `auto` (the game's `Auto` key: a burn first, the kill if the hand holds it, a mute or at most two guards on the turn a heavy lands, everything else hits by the best damage for the energy, leftover energy goes on a guard against whatever is landing and then shakes static out) and `sharp` (every order of every affordable set of cards played out and weighed, signal against signal; for the sim and the arena only, the game plays it for nobody). Pure. |
 | `fight/share.rs` | `road_card(sheet)`: the day's road as an `arcade/share.rs` card once the road is over (`Sheet::road_over`) and at least one step was taken: three lanes by ten steps, the lane walked lit by each step's `Mark`, a stat line under it, the header `late.sh the road #N · walked` or `· fell at S`. Pure; copying is `fight/input.rs`. |
@@ -604,18 +604,22 @@ so (`Undercity · f road · p patch · ? guide`,
   `Refusal::WrongCall`; neither spends anything. At level 15 with the exp
   to leave it, a glyph's node meets the Old Signal instead.
 - **The round.** A fight is a hand of cards (`fight/cards.rs`): ten for
-  every runner (five strikes, three blocks, a surge, a wipe to start
-  with; "The draft" below changes four of them), five drawn a turn,
+  every runner (four strikes, a siphon, three blocks, a surge, a wipe
+  to start with; "The draft" below changes four of them), five drawn a
+  turn,
   three energy. A strike lands for the attack less
   half the glyph's defense; a surge is two and a half strikes for two
   energy; a block holds 60% of the defense and stays up until a hit eats
   it; a wipe is a block that also throws every static card out of the
   hand (`Rules::strike`, `surge`, `block`). The glyph's move is shown a
   turn ahead and comes from its `pattern`, a fixed cycle
-  (`Fight::intent`): it hits (185% of its attack less a quarter of the
-  runner's defense, `Rules::hit`), gathers (nothing this turn, a heavy
-  for double on the next), or throws noise (two static cards, no damage,
-  no block stops it). `Play { slot }` plays one card from its slot (the
+  (`Fight::intent`): it hits (its attack less a quarter of the runner's
+  defense, at 185% at level 1 and 3 points more a level, `Rules::hit`
+  and `hit_percent_at`: the one number in the fight that is not linear
+  in the level, so the top costs a signal and the bottom is a first
+  day), gathers (nothing this turn, a heavy for double on the next), or
+  throws noise (static cards, no damage, no block stops it: one, and one
+  more every `NOISE_LEVEL_STEP` levels, `Rules::noise_cards`). `Play { slot }` plays one card from its slot (the
   slots hold still for the turn: a played card leaves a hole),
   `EndTurn` lets the glyph act and draws a fresh hand, `Auto` is the
   obvious turn played and ended in one command (`policy::auto`), `Run`
@@ -705,9 +709,9 @@ so (`Undercity · f road · p patch · ? guide`,
 - **The balance is a test.** `fight/sim.rs` plays a runner by a rule
   through the real machine, a road a day, and `sim_test.rs` asserts the
   climb to the first mark lands in GAME.md's window: about two weeks for
-  `CAREFUL` (reads the hand, patches under three quarters), about three
-  for `AMBIENT` (the same runner on the `Auto` key), later for
-  `RECKLESS` (the key, patches under a third, spends it all), each never
+  `CAREFUL` (reads the hand, spends the day's patch under half), about
+  three for `AMBIENT` (the same runner on the `Auto` key), later for
+  `RECKLESS` (the key, the patch under a third, spends it all), each never
   faster than the one before; and the lock can not come back:
   `NEGLECTFUL` never visits the armorer or heeds the road's warning until
   its first drop, then plays carefully and steps down from a grim fight,
@@ -787,11 +791,15 @@ so (`Undercity · f road · p patch · ? guide`,
   more, a block holds more), in the hit line ("your tire iron hits the
   howler for 9."), on the strip, under the scene's header, and on the
   sheet. Bits only, no credit, no chips.
-- **Patch.** The heal, same lock, one command (`Command::Patch`): the
-  signal back to full for `Sheet::patch_price`, a bit a point times
-  the level (`(max - signal) * level` at `PATCH_PERCENT`, rounded up),
-  paid in full or nothing moves
-  (`Refusal::Short`). A dropped signal is the roll's, not patch's
+- **Patch.** The heal, same lock, one command (`Command::Patch`), once
+  a day: the signal back to full for `Sheet::patch_price`, a bit a
+  point times the level (`(max - signal) * level` at `PATCH_PERCENT`,
+  rounded up), paid in full or nothing moves (`Refusal::Short`). The
+  day's patch is `RoadRun::patched` on the row's `road`, wiped by the
+  roll like the rest of the day; a second one is `Refusal::PatchedToday`
+  (GAME.md, "One patch a day": the signal is a budget of two bars a
+  day, and the siphon in the deck is the only heal between them). A
+  dropped signal is the roll's, not patch's
   (`Refusal::SignalDown`: the day is the day), a fight waiting on the
   row is finished first (`Refusal::FightWaiting`: leave the page, patch,
   step back in would be a free heal mid-fight), a runner spent for the day is
@@ -835,11 +843,11 @@ so (`Undercity · f road · p patch · ? guide`,
   `{"quarry": {"glyph": n}}`; migration 210: `unpaid_mark`; migration
   214: `stash` (the locker) and `debt` (the bits machine), whole bits,
   `CHECK >= 0`; migration 225: `road` (JSONB, the day's `RoadRun`:
-  `{"path": [{"lane", "mark"}], "static_cards"}`, null before the first
-  step and after the roll), which also dropped every fight stored before
+  `{"path": [{"lane", "mark"}], "static_cards", "patched"}`, null before
+  the first step and after the roll; `patched` defaults when absent), which also dropped every fight stored before
   the round (they had no deck) and handed the day's rations back whole;
   migration 226: `cards` (JSONB, the drafted cards in draft order,
-  `["siphon", "bulwark"]`, null with none taken), which also handed the
+  `["brace", "bulwark"]`, null with none taken), which also handed the
   day back to any runner caught mid-fight (a fight stored before it has
   no `muted` flag) and redefined the nuke to clear the column.
   Migration 222 defines `deadchannel_nuke_runners()`,

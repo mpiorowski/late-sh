@@ -292,7 +292,7 @@ fn level_economy(rules: &Rules, level: i32) -> LevelEconomy {
     LevelEconomy {
         kills,
         pays: kills * foe.bits,
-        next_pair: 2 * (rules.price(next) - rules.trade_in(next - 1)),
+        next_pair: 2 * (rules.price(next, level) - rules.trade_in(next - 1)),
     }
 }
 
@@ -361,6 +361,11 @@ struct Reading {
     lead_high: i64,
     /// The first level the careful runner fought in the whole top kit.
     top_kit_at: Option<i32>,
+    /// The keen runner's kit lead at its highest over levels 3 to 15, and
+    /// the first level it fought in the whole top kit: the crystals buy
+    /// a tier, never the wall.
+    keen_lead_high: i64,
+    keen_top_kit_at: Option<i32>,
     /// Where the careful runner's bits went, as shares of what it earned.
     gear_share: f64,
     patch_share: f64,
@@ -370,6 +375,9 @@ struct Reading {
     /// Patch's share of what the ambient runner earned: the runner on
     /// the key is the one who gets hit.
     ambient_patch_share: f64,
+    /// The days the careful runner spent its one patch, as a share of the
+    /// days it played: a decision most days, a formality on none.
+    careful_patch_days: f64,
     /// The fair fight on auto from a kit level with the runner, at its
     /// hardest over levels 2 to 15.
     fair_low: f64,
@@ -533,6 +541,13 @@ impl Reading {
         let leads: Vec<i64> = (3..=MAX_LEVEL)
             .filter_map(|level| kit_lead(&careful, level))
             .collect();
+        let keen_leads: Vec<i64> = (3..=MAX_LEVEL)
+            .filter_map(|level| kit_lead(&keen, level))
+            .collect();
+        let top_kit_at = |climbs: &[Climb]| {
+            (1..=MAX_LEVEL)
+                .find(|level| kit_lead(climbs, *level) == Some(i64::from(2 * (MAX_TIER - level))))
+        };
         let earned = median_of(&careful, |climb| climb.ledger.earned).max(1) as f64;
         let share = |read: fn(&Climb) -> i64| median_of(&careful, read) as f64 / earned;
         let gear_share = share(|climb| climb.ledger.gear);
@@ -578,15 +593,18 @@ impl Reading {
             day_seven_level: median_of(&careful, |climb| level_after(climb, 7)),
             lead_low: leads.iter().copied().min().unwrap_or(i64::MIN),
             lead_high: leads.iter().copied().max().unwrap_or(i64::MAX),
-            top_kit_at: (1..=MAX_LEVEL).find(|level| {
-                kit_lead(&careful, *level) == Some(i64::from(2 * (MAX_TIER - level)))
-            }),
+            top_kit_at: top_kit_at(&careful),
+            keen_lead_high: keen_leads.iter().copied().max().unwrap_or(i64::MAX),
+            keen_top_kit_at: top_kit_at(&keen),
             gear_share,
             patch_share,
             dropped_share,
             idle_share: 1.0 - gear_share - patch_share - dropped_share,
             ambient_patch_share: median_of(&ambient, |climb| climb.ledger.patched) as f64
                 / median_of(&ambient, |climb| climb.ledger.earned).max(1) as f64,
+            careful_patch_days: median_of(&careful, |climb| i64::from(climb.ledger.patch_days))
+                as f64
+                / median_of(&careful, |climb| climb.days.len() as i64).max(1) as f64,
             fair_low: low(&fair_odds),
             turns_low: low(&turns),
             turns_high: high(&turns),
@@ -652,9 +670,9 @@ impl Reading {
                 format!("reckless drops {} times, want 1 to 8", self.reckless_drops),
             ),
             (
-                self.keen_day <= self.careful_day && self.keen_day + 5 >= self.careful_day,
+                self.keen_day.abs_diff(self.careful_day) <= 4,
                 format!(
-                    "keen marks on day {} against careful's {}, want 0 to 5 days ahead",
+                    "keen marks on day {} against careful's {}, want within 4 days either way",
                     self.keen_day, self.careful_day
                 ),
             ),
@@ -677,6 +695,23 @@ impl Reading {
                 },
             ),
             (
+                self.keen_lead_high <= 5,
+                format!(
+                    "the keen runner's kit lead reaches {:+.1} tiers, want +2.5 at most",
+                    self.keen_lead_high as f64 / 2.0
+                ),
+            ),
+            (
+                match self.keen_top_kit_at {
+                    Some(level) => level >= 13,
+                    None => false,
+                },
+                match self.keen_top_kit_at {
+                    Some(level) => format!("the keen runner wears the top kit at level {level}, want 13 or later"),
+                    None => "the keen runner never wears the top kit, want it at 13 or later".to_string(),
+                },
+            ),
+            (
                 self.gear_share >= 0.45,
                 format!(
                     "gear takes {}% of the bits, want 45% or more",
@@ -690,6 +725,13 @@ impl Reading {
                     "patch takes {}% of the ambient runner's bits and {}% of the careful one's, want 5 to 30% on the key and no more read sharp",
                     pct(self.ambient_patch_share),
                     pct(self.patch_share)
+                ),
+            ),
+            (
+                (0.40..=0.90).contains(&self.careful_patch_days),
+                format!(
+                    "careful spends its patch on {}% of its days, want 40 to 90%",
+                    pct(self.careful_patch_days)
                 ),
             ),
             (
@@ -721,6 +763,14 @@ impl Reading {
                 ),
             ),
             (
+                (0.75..=0.90).contains(&self.left_sharp) && self.left_auto >= 0.60,
+                format!(
+                    "a fair fight leaves {}% of the signal read sharp and {}% on auto, want 75 to 90% sharp and 60% or more on auto",
+                    pct(self.left_sharp),
+                    pct(self.left_auto)
+                ),
+            ),
+            (
                 self.left_sharp - self.left_auto >= 0.08,
                 format!(
                     "reading the hand leaves {}% of the signal against auto's {}%, want 8 points or more",
@@ -729,9 +779,9 @@ impl Reading {
                 ),
             ),
             (
-                self.bright_low >= 0.40,
+                self.bright_low >= 0.30,
                 format!(
-                    "the bright glyph on auto dips to {}%, want 40% or more",
+                    "the bright glyph on auto dips to {}%, want 30% or more",
                     pct(self.bright_low)
                 ),
             ),
@@ -743,9 +793,10 @@ impl Reading {
                 ),
             ),
             (
-                self.bright_sharp_low >= 0.85 && self.bright_sharp_low >= self.bright_low + 0.10,
+                (0.60..=0.90).contains(&self.bright_sharp_low)
+                    && self.bright_sharp_low >= self.bright_low + 0.10,
                 format!(
-                    "the bright glyph read sharp dips to {}% against auto's {}%, want 85% or more and 10 points over",
+                    "the bright glyph read sharp dips to {}% against auto's {}%, want 60 to 90% and 10 points over",
                     pct(self.bright_sharp_low),
                     pct(self.bright_low)
                 ),
@@ -758,9 +809,9 @@ impl Reading {
                 ),
             ),
             (
-                self.boss_sharp >= self.boss_auto + 0.15 && self.boss_sharp <= 0.95,
+                self.boss_sharp >= self.boss_auto + 0.15 && (0.65..=0.90).contains(&self.boss_sharp),
                 format!(
-                    "the old signal read sharp is {}% against auto's {}%, want 15 points over and 95% at most",
+                    "the old signal read sharp is {}% against auto's {}%, want 15 points over and 65 to 90%",
                     pct(self.boss_sharp),
                     pct(self.boss_auto)
                 ),
@@ -805,9 +856,9 @@ impl Reading {
                     ),
                 ),
                 (
-                    reading.bright_low >= 0.40,
+                    reading.bright_low >= 0.30,
                     format!(
-                        "{name}: the bright glyph on auto dips to {}%, want 40% or more",
+                        "{name}: the bright glyph on auto dips to {}%, want 30% or more",
                         pct(reading.bright_low)
                     ),
                 ),
@@ -859,13 +910,13 @@ impl Reading {
             .collect()
     }
 
-    const HEADER: &str = "| rules | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | lv day 1 / 7 | kit lead | top kit | gear | patch, careful / ambient | dropped | idle | fair low | turns | left auto / sharp | bright auto (left) | bright sharp | boss auto / sharp / auto with a glass (turns) | crystals a day | builds: ambient day, boss auto | misses |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    const HEADER: &str = "| rules | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | lv day 1 / 7 | kit lead | top kit | keen lead high, top kit | gear | patch, careful / ambient | careful patch days | dropped | idle | fair low | turns | left auto / sharp | bright auto (left) | bright sharp | boss auto / sharp / auto with a glass (turns) | crystals a day | builds: ambient day, boss auto | misses |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
 
     /// The reading as one row of the sweep's table.
     fn row(&self, name: &str) -> String {
         let half = |lead: i64| format!("{:+.1}", lead as f64 / 2.0);
         format!(
-            "| {name} | {} / {} | {} | {} ({}) | {} ({}) | {} | {} / {} | {} to {} | {} | {:.0}% | {:.0}% / {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} to {:.1} | {:.0}% / {:.0}% | {:.0} to {:.0}% ({:.0}%) | {:.0} to {:.0}% | {:.0}% / {:.0}% / {:.0}% ({:.1}) | {:.1} | {} to {}, {:.0} to {:.0}% | {} |\n",
+            "| {name} | {} / {} | {} | {} ({}) | {} ({}) | {} | {} / {} | {} to {} | {} | {}, {} | {:.0}% | {:.0}% / {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} to {:.1} | {:.0}% / {:.0}% | {:.0} to {:.0}% ({:.0}%) | {:.0} to {:.0}% | {:.0}% / {:.0}% / {:.0}% ({:.1}) | {:.1} | {} to {}, {:.0} to {:.0}% | {} |\n",
             self.careful_gate_day,
             self.ambient_gate_day,
             self.careful_day,
@@ -882,9 +933,15 @@ impl Reading {
                 Some(level) => format!("lv {level}"),
                 None => "never".to_string(),
             },
+            half(self.keen_lead_high),
+            match self.keen_top_kit_at {
+                Some(level) => format!("lv {level}"),
+                None => "never".to_string(),
+            },
             self.gear_share * 100.0,
             self.patch_share * 100.0,
             self.ambient_patch_share * 100.0,
+            self.careful_patch_days * 100.0,
             self.dropped_share * 100.0,
             self.idle_share * 100.0,
             self.fair_low * 100.0,
@@ -997,7 +1054,7 @@ fn hands_table(rules: &Rules) -> String {
             "| {level} | {} | {strike} / {} / {} | {} | {} | {} | {} | {} |\n",
             build_name(&recipe.cards),
             rules.block(sheet.defense()),
-            rules.hit(foe.attack, sheet.defense()),
+            rules.hit(foe.attack, sheet.defense(), level),
             foe.signal,
             cell(Pick::Fair, Hand::Auto),
             cell(Pick::Fair, Hand::Sharp),
@@ -1082,7 +1139,7 @@ fn economy_table(rules: &Rules) -> String {
             economy.next_pair as f64 / economy.pays as f64 * 100.0,
             fight.patch,
             fight.patch / fight.pays.max(1) as f64 * 100.0,
-            rules.price(level),
+            rules.price(level, level),
             rules.cache(level),
         ));
     }

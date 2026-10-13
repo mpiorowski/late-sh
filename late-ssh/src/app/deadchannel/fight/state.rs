@@ -77,8 +77,9 @@ use super::data::{
     self, BRIGHT_LINE, CACHE_LINES, CLEAR_LINE, CRYSTAL_LINE, DRAFT_LINE, DRINK_CRYSTALS,
     DRINK_SIGNAL_PER_LEVEL, DROP_LINES, FOES, FoeKind, FoeTier, GARNISH_PERCENT, HEARD_LINE,
     Intent, KILL_LINES, LOAN_FEE_PERCENT, LOAN_PER_LEVEL, LOCKER_FEE_PERCENT, MARK_BONUS_CAP,
-    MAX_LEVEL, NEAR_MISS_SIGNAL, NOISE_CARDS, OLD_SIGNAL, RATIONS_PER_DAY, RULES, RUN_LINES, Rules,
-    SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE, percent_up,
+    MAX_LEVEL, NEAR_MISS_SIGNAL, OLD_SIGNAL, RATIONS_PER_DAY, RULES, RUN_LINES, Rules,
+    PATCHED_TODAY_LINE, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE,
+    percent_up,
 };
 use super::policy;
 use super::road::{self, Mark, Node, Road, RoadRun, Trace};
@@ -137,12 +138,16 @@ pub struct Powers {
     pub block: i32,
     /// The glyph's hit before your block; a heavy is twice it.
     pub hit: i32,
-    /// The drafted cards': a jab's hit, what a siphon mends, a bulwark's
-    /// hold, a burn's energy before static feeds it, what a ground adds
-    /// for each static card in the hand, and a sever's hit once the
-    /// glyph is at half.
+    /// Static cards its noise puts into the deck.
+    pub noise: usize,
+    /// The other cards': a jab's hit, a brace's hold, what a siphon
+    /// mends, a bulwark's hold, a burn's energy before static feeds it,
+    /// what a ground adds for each static card in the hand, and a sever's
+    /// hit once the glyph is at half.
     pub jab: i32,
+    pub brace: i32,
     pub mend: i32,
+    pub riposte: i32,
     pub bulwark: i32,
     pub burn: u8,
     pub ground: i32,
@@ -407,6 +412,7 @@ pub enum Command {
     /// back what the slot holds.
     Outfit { slot: Slot, tier: i32 },
     /// Buy the signal back to full at patch, for `Sheet::patch_price`.
+    /// Once a day.
     Patch,
     /// Everything on hand into the locker, less its cut.
     Deposit,
@@ -421,7 +427,7 @@ pub enum Command {
     /// A glass at Dead Air, for [`DRINK_CRYSTALS`].
     Drink { drink: Drink },
     /// The blade shop's piece for `slot`: the next tier up from the one
-    /// carried, for `data::CART_CRYSTALS` and no bits.
+    /// carried, for `Sheet::cart_price` crystals and no bits.
     Cart { slot: Slot },
 }
 
@@ -455,6 +461,8 @@ pub enum Refusal {
     },
     /// Patch with the signal already full.
     NothingToPatch,
+    /// A second patch in one day: the roll is the next heal.
+    PatchedToday,
     /// Patch, the locker, the machine, or the ledge with a glyph waiting
     /// on the row: the fight is the fight.
     FightWaiting,
@@ -835,9 +843,12 @@ impl Sheet {
             strike,
             surge: rules.surge(strike),
             block,
-            hit: rules.hit(fight.foe_attack, self.defense()),
+            hit: rules.hit(fight.foe_attack, self.defense(), self.level),
+            noise: rules.noise_cards(self.level),
             jab: rules.share(strike, rules.jab_percent),
+            brace: rules.share(block, rules.brace_percent),
             mend: rules.share(strike, rules.siphon_mend_percent),
+            riposte: rules.share(block, rules.riposte_percent),
             bulwark: rules.share(block, rules.bulwark_percent),
             burn: rules.burn_energy,
             ground: rules.share(strike, rules.ground_percent),
@@ -906,6 +917,14 @@ impl Sheet {
         }
     }
 
+    /// What the blade shop asks for `slot`'s next piece, in crystals
+    /// (`Rules::cart_price`: more for every tier above the level); `None`
+    /// at the top of the wall. The panel shows it, `Cart` charges it.
+    pub fn cart_price(&self, slot: Slot) -> Option<i32> {
+        self.cart_tier(slot)
+            .map(|tier| RULES.cart_price(tier, self.level))
+    }
+
     /// What the marks add to attack and defense: one each, capped.
     pub fn mark_bonus(&self) -> i32 {
         self.marks.min(MARK_BONUS_CAP)
@@ -943,7 +962,7 @@ impl Sheet {
     }
 
     pub fn outfit_price_under(&self, rules: &Rules, slot: Slot, tier: i32) -> i64 {
-        rules.price(tier) - rules.trade_in(self.tier_of(slot))
+        rules.price(tier, self.level) - rules.trade_in(self.tier_of(slot))
     }
 
     /// What patch charges to bring the signal back to full: a bit a
@@ -1276,11 +1295,13 @@ impl Sheet {
         }
     }
 
-    /// Patch. A signal that dropped stays down until the roll (the day
-    /// is the day), a fight waiting on the row is finished first, a
-    /// runner spent for the day is sold nothing (no fight can spend the
-    /// signal before the roll refills it for free), and a full signal
-    /// buys nothing; otherwise the whole gap, paid in full.
+    /// Patch, once a day. A signal that dropped stays down until the roll
+    /// (the day is the day), a fight waiting on the row is finished
+    /// first, a runner spent for the day is sold nothing (no fight can
+    /// spend the signal before the roll refills it for free), a full
+    /// signal buys nothing, and a runner patched today already is turned
+    /// away (GAME.md, "One patch a day"); otherwise the whole gap, paid
+    /// in full, and the day's patch is spent.
     fn patch(&mut self, rules: &Rules) -> Outcome {
         if self.is_down() {
             return Outcome {
@@ -1312,6 +1333,12 @@ impl Sheet {
                 lines: vec!["nothing on you needs patching.".to_string()],
             };
         }
+        if self.road.patched {
+            return Outcome {
+                applied: Applied::Refused(Refusal::PatchedToday),
+                lines: vec![PATCHED_TODAY_LINE.to_string()],
+            };
+        }
         let paid = self.patch_price_under(rules);
         if paid > self.bits {
             let by = paid - self.bits;
@@ -1322,6 +1349,7 @@ impl Sheet {
         }
         self.bits -= paid;
         self.signal = self.max_signal();
+        self.road.patched = true;
         Outcome {
             applied: Applied::Patched { restored, paid },
             lines: vec![format!(
@@ -1386,7 +1414,7 @@ impl Sheet {
             };
         };
         let name = gear_name(slot, tier).expect("a tier on the wall");
-        let crystals = rules.cart_crystals;
+        let crystals = rules.cart_price(tier, self.level);
         if crystals > self.crystals {
             let by = crystals - self.crystals;
             return Outcome {
@@ -1674,6 +1702,7 @@ impl Sheet {
                 ),
             },
             Card::Jab => format!("a quick jab. {damage} into the {name}."),
+            Card::Brace => format!("you brace. block {}.", fight.block),
             Card::Siphon => match mended {
                 0 => format!("you siphon {damage} out of the {name}. your signal is whole."),
                 n => format!("you siphon {damage} out of the {name}. +{n} signal."),
@@ -1735,7 +1764,7 @@ impl Sheet {
             }
             (false, Intent::Hit) => self.struck(&mut fight, powers.hit, false, &mut lines),
             (false, Intent::Heavy) => self.struck(&mut fight, powers.hit * 2, true, &mut lines),
-            (false, Intent::Noise) => lines.push(noise(&mut fight)),
+            (false, Intent::Noise) => lines.push(noise(&mut fight, powers.noise)),
         }
         if self.is_down() {
             return self.lose(rules, fight, rng, lines);
@@ -1824,7 +1853,7 @@ impl Sheet {
             (true, _) | (false, Intent::Charge) => {}
             (false, Intent::Hit) => self.struck(&mut fight, powers.hit, false, &mut lines),
             (false, Intent::Heavy) => self.struck(&mut fight, powers.hit * 2, true, &mut lines),
-            (false, Intent::Noise) => lines.push(noise(&mut fight)),
+            (false, Intent::Noise) => lines.push(noise(&mut fight, powers.noise)),
         }
         if self.is_down() {
             return self.lose(rules, fight, rng, lines);
@@ -2015,9 +2044,10 @@ impl Sheet {
     }
 }
 
-/// A noise turn: static into the deck, as much as it still holds.
-fn noise(fight: &mut Fight) -> String {
-    match fight.piles.add_static(NOISE_CARDS) {
+/// A noise turn: `cards` of static into the deck, as much as it still
+/// holds.
+fn noise(fight: &mut Fight, cards: usize) -> String {
+    match fight.piles.add_static(cards) {
         0 => "it floods you with noise. your deck cannot hold any more.".to_string(),
         1 => "it floods you with noise. 1 static card into your deck.".to_string(),
         n => format!("it floods you with noise. {n} static cards into your deck."),
@@ -2042,6 +2072,7 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::NotAnUpgrade
         | Refusal::Short { .. }
         | Refusal::NothingToPatch
+        | Refusal::PatchedToday
         | Refusal::FightWaiting
         | Refusal::NothingOnHand
         | Refusal::DepositAllCut
@@ -2081,9 +2112,10 @@ pub fn gear_name(slot: Slot, tier: i32) -> Option<&'static str> {
     Some(names[(tier - 1) as usize])
 }
 
-/// The live price on the wall for `tier` (1 to `MAX_TIER`).
-pub fn wall_price(tier: i32) -> i64 {
-    RULES.price(tier)
+/// The live price on the wall for `tier` (1 to `MAX_TIER`) to a runner of
+/// `level`.
+pub fn wall_price(tier: i32, level: i32) -> i64 {
+    RULES.price(tier, level)
 }
 
 fn pick<'a, R: Rng>(rng: &mut R, pool: &[&'a str]) -> &'a str {

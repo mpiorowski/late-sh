@@ -69,8 +69,9 @@ pub struct Player {
     /// Run from a glyph once the signal is under this fraction of the
     /// max. Never from the Old Signal: that fight is always to the end.
     pub run_under: f64,
-    /// Patch, when the bits cover it, once the signal is under this
-    /// fraction of the max. `1.0` patches any missing point.
+    /// Spend the day's one patch, when the bits cover it, the first time
+    /// the signal is under this fraction of the max. `1.0` spends it on
+    /// the first missing point.
     pub patch_under: f64,
     /// Step down to the glyph a level below whenever the glyph of your
     /// level reads this or worse at full signal; `None` never steps down.
@@ -82,6 +83,9 @@ pub struct Player {
     /// whenever it reads this or better at full signal; `None` never
     /// does.
     pub takes_bright: Option<Threat>,
+    /// And only with at least this fraction of the signal standing: with
+    /// one patch a day, a bright glyph at a third of a bar is a drop.
+    pub bright_over: f64,
     /// The glass bought before a step whenever a crystal covers it and
     /// none is poured yet; `None` never drinks.
     pub drinks: Option<Drink>,
@@ -142,14 +146,16 @@ pub enum Heeds {
     AfterFirstDrop,
 }
 
-/// Plays it safe and reads the hand: runs early, patches every point.
-/// The runner the two-week end of the target is set by.
+/// Plays it safe and reads the hand: runs early, spends the day's patch
+/// once two fifths of the signal are gone (under that a heavy is the
+/// end). The runner the two-week end of the target is set by.
 pub const CAREFUL: Player = Player {
     run_under: 0.3,
-    patch_under: 0.75,
+    patch_under: 0.6,
     step_down_at: None,
     heeds: Heeds::Always,
     takes_bright: None,
+    bright_over: 0.6,
     drinks: None,
     carts: Carts::Never,
     purse: Purse::KeepAPatch,
@@ -166,8 +172,8 @@ pub const AMBIENT: Player = Player {
     ..CAREFUL
 };
 
-/// Pushes it: on the `Auto` key, runs late, patches only when half gone.
-/// Drops a few times on the way up.
+/// Pushes it: on the `Auto` key, runs late, spends the patch only when
+/// two thirds are gone. Drops a few times on the way up.
 pub const RECKLESS: Player = Player {
     run_under: 0.1,
     patch_under: 0.35,
@@ -297,8 +303,9 @@ pub struct Ledger {
     pub cached: i64,
     /// Bits paid at the armorer, net of trade-ins.
     pub gear: i64,
-    /// Bits paid at patch.
+    /// Bits paid at patch, and the days the patch was spent on.
     pub patched: i64,
+    pub patch_days: u32,
     /// Bits the street took with a dropped signal.
     pub dropped: i64,
     /// Bits the machine lent, and what its fees and nothing else cost.
@@ -665,6 +672,7 @@ impl Run<'_> {
             && let Applied::Patched { restored, paid } = self.act(Command::Patch)
         {
             self.report.ledger.patched += paid;
+            self.report.ledger.patch_days += 1;
             self.today.patched += paid;
             self.journal.note(|| Event::Patched { restored, paid });
         }
@@ -736,9 +744,9 @@ impl Run<'_> {
     /// first, bought: the wall walked from the top down to the first
     /// piece whose price leaves the purse rule's reserve.
     fn outfit(&mut self) {
-        let reserve = match self.player.purse {
-            Purse::SpendAll => 0,
-            Purse::KeepAPatch => {
+        let reserve = match (self.player.purse, self.sheet.road.patched) {
+            (Purse::SpendAll, _) | (Purse::KeepAPatch, true) => 0,
+            (Purse::KeepAPatch, false) => {
                 i64::from(self.sheet.max_signal())
                     * i64::from(self.sheet.level)
                     * self.rules.patch_percent
@@ -1003,8 +1011,9 @@ const ROUTE_FADE: f64 = 0.6;
 /// walked around by the one who does not; a rest is worth the static in
 /// the deck; a cache is a cache.
 fn route(player: &Player, sheet: &Sheet, road: &Road, bench: &mut Bench) -> (u8, Node) {
+    let standing = f64::from(sheet.signal) >= f64::from(sheet.max_signal()) * player.bright_over;
     let wants_bright = match player.takes_bright {
-        Some(line) => bench.threat(Pick::Bright, sheet) <= line,
+        Some(line) => standing && bench.threat(Pick::Bright, sheet) <= line,
         None => false,
     };
     let worth = |node: Node| match node {

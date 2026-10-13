@@ -196,6 +196,10 @@ pub struct RoadRun {
     pub path: Vec<Trace>,
     /// Static riding the deck between fights.
     pub static_cards: u8,
+    /// The day's one patch, spent (`Command::Patch`). A road stored
+    /// before the flag existed reads as not patched.
+    #[serde(default)]
+    pub patched: bool,
 }
 
 impl RoadRun {

@@ -33,24 +33,26 @@ ground, sever). The last two rows of the table hold every other deck.
 | Careful runner's first mark (reads the hand) | day 14 to 18 | GAME.md's two to three weeks, the near end |
 | Ambient runner's first mark (the key) | day 16 to 21, never ahead of careful, 3 drops at most | the floor finishes inside three weeks |
 | Reckless runner's first mark (the key, careless) | day 18 to 28, never ahead of ambient, with 1 to 8 drops | carelessness costs, and does not lock |
-| Keen runner (plays the crystal pass) | 0 to 5 days ahead of careful | crystals are an edge, not a skip |
-| Kit lead over the level fought at | -0.5 to +1.0 tiers, levels 3 to 15 | the kit tracks the climb: never the level 15 kit at level 8, never a tier short of a fair fight |
-| Top kit first worn | level 14 or 15 | the armorer is a stop on every level, to the end |
+| Keen runner (plays the crystal pass) | within 4 days of careful, either way | crystals are a side game, not a pace: the bright glyph pays the plain exp and its kit is priced like everyone's, so two real fights a day are paid for in signal and bought back in crystals |
+| Kit lead over the level fought at | -0.5 to +1.0 tiers, levels 3 to 15; the keen runner +2.5 at most | the kit tracks the climb: never the level 15 kit at level 8, never a tier short of a fair fight; the bright glyph's double bits and the crystals buy a tier or two, never the wall |
+| Top kit first worn | level 14 or 15; the keen runner 13 or later | the armorer is a stop on every level, to the end |
 | Gear's share of bits earned | 45% or more | the armorer is the main sink |
 | Patch's share of the ambient runner's bits | 5 to 30%, and no more for the careful one | a cost that is felt by the runner who gets hit, not a second landlord; reading the hand is what makes it small |
+| Days the careful runner spends its one patch | 40 to 90% of the days played | the patch is a decision most days and a formality on none (GAME.md, "One patch a day") |
 | Lost to drops (careful) | 15% or less | a careful climb is not a lottery |
 | Idle (earned, never spent or lost) | 30% or less | bits always have somewhere to go |
 | Fair fight on the key, kit level with the runner | 85% or better at every level | the fair fight is the bread, not the gamble |
 | Turns in a fair fight on the key | 2 to 5 | a fight is short: about three turns |
+| Signal a fair fight leaves | 75 to 90% read sharp, 60% or more on the key | a day of five costs half a bar to a bar and a quarter read sharp, and two bars cover the key: the day is the unit of attrition, not the fight |
 | Signal a fair fight leaves, read sharp over the key | 8 points or more | the hand is worth playing |
-| Bright glyph on the key, same kit | 40% or better at every level | a risk, never a wall |
+| Bright glyph on the key, same kit | 30% or better at every level | a risk, never a wall: risky at worst, never grim at a full bar |
 | Signal a bright glyph leaves the key | 45% or less | it costs most of a signal |
-| Bright glyph read sharp | 85% or better, and 10 points over the key's worst | reading it is what makes it safe |
+| Bright glyph read sharp | 60 to 90% at its worst, and 10 points over the key's | reading it is what makes it takeable; what it costs is the signal, and the day has one patch |
 | Old Signal on the key, no marks | 35 to 60% | the gate is a boss, and the floor can pass it |
-| Old Signal read sharp | 15 points over the key, 95% at most | the one fight to read |
+| Old Signal read sharp | 15 points over the key, 65 to 90% | the one fight to read, and one a reader can lose |
 | Old Signal on the key with static on ice | 10 points over dry | a glass is worth saving |
 | Crystals a day (keen) | 0.8 to 2.3 | a glass a day, a cart piece every few |
-| Every build, on its own | careful day 14 to 18; ambient day 15 to 22 with 3 drops at most; fair fight on the key 85% or better; bright glyph on the key 40% or better; Old Signal on the key 30 to 80%, and no worse read sharp | no deck is a trap, and none is the answer |
+| Every build, on its own | careful day 14 to 18; ambient day 15 to 22 with 3 drops at most; fair fight on the key 85% or better; bright glyph on the key 30% or better; Old Signal on the key 30 to 80%, and no worse read sharp | no deck is a trap, and none is the answer |
 | Every draft's two options | within 1.5 days of each other to the mark on the key (the mean, over the builds that carry each), and within 25 points on the Old Signal | a draft is a choice only while neither card is the right one |
 
 A reading plays all sixteen builds (`BuildReading`, 40 seeds each for
@@ -77,20 +79,24 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `pay_bits_percent` | 400 | bits per kill, over LoGD's creature table |
 | `pay_exp_percent` | 540 | exp per kill: the pace of the levels |
 | `price_percent` | 225 | the armorer's wall, over `COST_LADDER` |
+| `price_lead_percent` | 50 | what every tier above the level adds to a piece's price on the wall |
 | `trade_in_percent` | 75 | what the handed-back piece takes off |
 | `patch_percent` | 100 | patch: missing signal times level times this, rounded up |
 | `exp_keep_on_death` | 0.65 | what a drop costs in days |
 | `foe_signal_percent` | 100 | a glyph's signal over the table's: how many turns a fight lasts |
-| `hit_percent` | 185 | a glyph's hit: its attack less a quarter of your defense, times this |
+| `hit_percent`, `hit_ramp_percent` | 175, 3 | a glyph's hit: its attack less a quarter of your defense, times the first at level 1 and the second more for every level past it |
 | `block_percent` | 60 | a block card, as a share of your defense |
 | `cache_percent` | 50 | a cache, as a share of the fair glyph's bits |
-| `old_signal` | 290 / 39 / 22 | the Old Signal's signal, attack, defense |
+| `old_signal` | 290 / 36 / 22 | the Old Signal's signal, attack, defense |
 | `crystal_drop_one_in` | 12 | crystals from plain kills |
-| `bright_signal_percent`, `bright_edge_percent` | 150, 115 | how hard the bright glyph is |
+| `bright_signal_percent`, `bright_edge_level_percent`, `bright_guard_level_percent` | 150, 50, 0 | how hard the bright glyph is: its signal over the plain one's, and the shares of the level added to its attack and to its defense |
+| `noise_level_step` | 5 | a noise turn throws one static card, and one more every this many levels |
 | `bright_bits_times` | 2 | what it pays |
-| `cart_crystals` | 3 | the blade shop's price |
+| `cart_crystals`, `cart_lead_crystals` | 3, 2 | the blade shop's price at or under the level, and what every tier above it adds |
 | `jab_percent` | 75 | a jab, as a share of a strike |
-| `siphon_mend_percent` | 50 | what a siphon mends, as a share of a strike |
+| `brace_percent` | 100 | a brace, as a share of a block |
+| `siphon_mend_percent` | 75 | what a siphon mends, as a share of a strike |
+| `riposte_percent` | 100 | a riposte's own hit, as a share of a block, before the block standing |
 | `bulwark_percent` | 250 | a bulwark, as a share of a block |
 | `burn_energy` | 2 | the energy a burn gives before any static feeds it |
 | `ground_percent` | 100 | what a ground adds for each static card in hand, as a share of a strike |
@@ -145,11 +151,11 @@ nothing about the climb (`sim_test.rs` holds that).
 
 | Player | Plays like |
 |---|---|
-| `CAREFUL` | reads the hand, runs under 30%, patches under 75%, keeps a patch in the purse |
+| `CAREFUL` | reads the hand, runs under 30%, spends the day's patch under 60%, keeps a patch in the purse until it is spent |
 | `AMBIENT` | the same, on the `Auto` key |
-| `RECKLESS` | the key, runs under 10%, patches under 35%, spends it all |
+| `RECKLESS` | the key, runs under 10%, the patch under 35%, spends it all |
 | `NEGLECTFUL` | the key, no armorer and no warning heeded until the first drop, careful after |
-| `KEEN` | careful, plus the bright glyph when it reads even, static on ice, the blade shop |
+| `KEEN` | careful, plus the bright glyph when it reads even and the signal is over 60%, static on ice, the blade shop |
 | `HOARDER` | keen, but no glass and no blade under tier 11: every crystal for the top of the wall |
 | `BORROWER` | ambient, plus the machine's loan whenever it puts the next piece in reach |
 

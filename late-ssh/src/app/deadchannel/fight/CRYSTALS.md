@@ -40,9 +40,16 @@ cursor on it.
   `Refusal::WrongCall` and the ration is kept, as is the bright call
   asked of a plain glyph's node.
 - It is the glyph of the runner's level lifted (`bright_foe_for_level`):
-  `BRIGHT_SIGNAL_PERCENT` (150) of the signal, `BRIGHT_EDGE_PERCENT`
-  (115, rounded up) of the attack and defense, `BRIGHT_BITS_TIMES` (2)
-  the bits, the plain glyph's exp, the same pattern of moves. The exp
+  `BRIGHT_SIGNAL_PERCENT` (150) of the signal, `Rules::bright_edge`
+  (`BRIGHT_EDGE_LEVEL_PERCENT` of the level added to the attack and
+  `BRIGHT_GUARD_LEVEL_PERCENT` of it to the defense, each rounded up),
+  `BRIGHT_BITS_TIMES` (2) the bits, the plain glyph's exp, the same
+  pattern of moves. The edge is a share of the level and not of the
+  glyph's own numbers on purpose: a percentage rounded up doubled the
+  flicker's attack and added a sixth to the level 15 glyph's, so the
+  bright one was a wall on day one and a speed bump at the top. Attack
+  and defense are two knobs because a point of defense at level 4 takes
+  a quarter off a strike that is only five points. The exp
   stays plain on purpose: every road has the same five fights whichever
   lanes are walked, so the climb's pace is the rations', and the bright
   one is for the crystal.
@@ -79,7 +86,12 @@ cursor on it.
 ## The blade shop
 
 `Command::Cart { slot }`: the next tier up from what the slot carries
-(`Sheet::cart_tier`), for `CART_CRYSTALS` (3) crystals and no bits.
+(`Sheet::cart_tier`), for `Sheet::cart_price` crystals and no bits:
+`CART_CRYSTALS` (3) for a piece at or under the level, and
+`CART_LEAD_CRYSTALS` (2) more for every tier it would put the slot above
+the level (`Rules::cart_price`). Priced by the lead because at a flat
+three the keen runner's two crystals a day bought four tiers over the
+level by level 9 and the whole wall at 11 (`BALANCE.md`, section 6).
 
 - The armorer sells the same piece for bits; this is the other
   wallet. The panel prints what the wall asks beside the crystal price,

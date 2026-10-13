@@ -670,7 +670,7 @@ fn a_draft_owed_takes_the_road_panel() {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = 6;
     sheet.signal = 60;
-    sheet.cards = vec![Card::Siphon];
+    sheet.cards = vec![Card::Brace];
     let picker = Picker {
         lane: 1,
         fair: Some(Threat::Easy),
@@ -685,7 +685,7 @@ fn a_draft_owed_takes_the_road_panel() {
             "[1] riposte hits for a block's worth plus all the block you have up",
             "[2] bulwark two energy. holds two blocks and a half",
             "[1] [2] take one",
-            "drafted: siphon",
+            "drafted: brace",
         ] {
             assert!(screen.contains(text), "{text} at {height} rows\n{screen}");
         }
@@ -699,5 +699,5 @@ fn a_draft_owed_takes_the_road_panel() {
     sheet.cards.push(Card::Bulwark);
     let screen = render_road(&sheet, &picker, 24, None);
     assert!(screen.contains("[Enter] fight"), "{screen}");
-    assert!(screen.contains("drafted: siphon · bulwark"), "{screen}");
+    assert!(screen.contains("drafted: brace · bulwark"), "{screen}");
 }

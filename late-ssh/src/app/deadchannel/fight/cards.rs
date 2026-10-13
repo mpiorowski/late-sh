@@ -1,7 +1,8 @@
 //! The deck and the hand (GAME.md, "The round: ten cards, three energy").
-//! Everyone starts with the same ten cards; the weapon and the armor are
-//! what the cards hit and hold for, so the armorer's wall is still the
-//! power curve and the deck is a spreadsheet with two columns.
+//! Everyone starts with the same ten cards, a siphon among them (the one
+//! heal between the day's patch and the roll); the weapon and the armor
+//! are what the cards hit and hold for, so the armorer's wall is still
+//! the power curve and the deck is a spreadsheet with two columns.
 //!
 //! The deck never grows. At the levels in [`DRAFTS`] a runner is owed a
 //! new card: one of two, the same two for everybody at that level, and
@@ -47,7 +48,10 @@ pub enum Card {
     Wipe,
     /// Most of a strike, for nothing.
     Jab,
-    /// A strike that mends you for half of itself.
+    /// A block, for nothing.
+    Brace,
+    /// A strike that mends you for three quarters of itself. In every
+    /// deck from the first step.
     Siphon,
     /// Hits for a block's worth and for every point of block standing;
     /// the block stays.
@@ -79,13 +83,14 @@ pub struct Draft {
 }
 
 /// The drafts, in the order they are owed. Each is a question with no
-/// right answer: tempo or sustain, armor as a weapon or as a wall, static
-/// burned for energy or thrown for damage, the finisher or the cut-out.
+/// right answer: a free hit or a free guard, armor as a weapon or as a
+/// wall, static burned for energy or thrown for damage, the finisher or
+/// the cut-out.
 pub const DRAFTS: [Draft; 4] = [
     Draft {
         level: 3,
         replaces: Card::Strike,
-        options: [Card::Jab, Card::Siphon],
+        options: [Card::Jab, Card::Brace],
     },
     Draft {
         level: 6,
@@ -157,13 +162,14 @@ pub struct Effect {
     pub mutes: bool,
 }
 
-/// The deck every runner carries, before the day puts static in it.
+/// The deck every runner carries, before the day puts static in it: four
+/// strikes, a siphon, three blocks, a surge, a wipe.
 pub const DECK: [Card; 10] = [
     Card::Strike,
     Card::Strike,
     Card::Strike,
     Card::Strike,
-    Card::Strike,
+    Card::Siphon,
     Card::Block,
     Card::Block,
     Card::Block,
@@ -174,7 +180,7 @@ pub const DECK: [Card; 10] = [
 impl Card {
     pub fn cost(self) -> u8 {
         match self {
-            Card::Jab | Card::Burn => 0,
+            Card::Jab | Card::Brace | Card::Burn => 0,
             Card::Strike
             | Card::Block
             | Card::Wipe
@@ -194,6 +200,7 @@ impl Card {
             Card::Surge => "surge",
             Card::Wipe => "wipe",
             Card::Jab => "jab",
+            Card::Brace => "brace",
             Card::Siphon => "siphon",
             Card::Riposte => "riposte",
             Card::Bulwark => "bulwark",
@@ -214,7 +221,8 @@ impl Card {
             Card::Surge => "two energy. hits for two strikes and a half",
             Card::Wipe => "a block, and every static card in your hand thrown out",
             Card::Jab => "free. hits for three quarters of a strike",
-            Card::Siphon => "a strike that mends you for half of what it hits",
+            Card::Brace => "free. holds a block until a hit eats it",
+            Card::Siphon => "a strike that mends you for three quarters of what it hits",
             Card::Riposte => "hits for a block's worth plus all the block you have up",
             Card::Bulwark => "two energy. holds two blocks and a half",
             Card::Burn => "free. +2 energy, and +1 per static card in hand, burned",
@@ -251,13 +259,17 @@ impl Card {
                 damage: powers.jab,
                 ..none
             },
+            Card::Brace => Effect {
+                block: powers.brace,
+                ..none
+            },
             Card::Siphon => Effect {
                 damage: powers.strike,
                 mend: powers.mend,
                 ..none
             },
             Card::Riposte => Effect {
-                damage: powers.block + board.block,
+                damage: powers.riposte + board.block,
                 ..none
             },
             Card::Bulwark => Effect {
@@ -351,6 +363,7 @@ impl Piles {
             | Card::Surge
             | Card::Wipe
             | Card::Jab
+            | Card::Brace
             | Card::Siphon
             | Card::Riposte
             | Card::Bulwark

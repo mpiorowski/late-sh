@@ -37,8 +37,9 @@ use ratatui::{
 };
 
 use crate::app::deadchannel::fight::data::{
-    CART_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT, LOAN_FEE_PERCENT,
-    LOCKER_FEE_PERCENT, TRADE_IN_PERCENT, drink_edge, patch_rate,
+    CART_CRYSTALS, CART_LEAD_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT,
+    LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, PATCHED_TODAY_LINE, TRADE_IN_PERCENT, drink_edge,
+    patch_rate,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{
@@ -1940,6 +1941,8 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             "nothing on you needs patching.",
             text,
         )));
+    } else if sheet.road.patched {
+        lines.push(Line::from(Span::styled(PATCHED_TODAY_LINE, text)));
     } else {
         let style = match price > sheet.bits {
             true => short,
@@ -1953,7 +1956,7 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(Span::styled(
         format!(
-            "{} a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+            "{} a point, times your level, once a day. a dropped signal is the roll's to fix, not patch's.",
             patch_rate()
         ),
         dim_text,
@@ -2169,7 +2172,7 @@ fn armorer_lines(view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
         .min(tiers - shown);
     for index in first..first + shown {
         let tier = index as i32 + 1;
-        let price = wall_price(tier);
+        let price = wall_price(tier, sheet.level);
         let cell = |slot: GearSlot, name: &'static str| {
             let style = match tier.cmp(&sheet.tier_of(slot)) {
                 std::cmp::Ordering::Less => dim_text,
@@ -2349,8 +2352,8 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::default());
     for (label, slot) in [("[w] ", GearSlot::Weapon), ("[a] ", GearSlot::Armor)] {
-        match sheet.cart_tier(slot) {
-            Some(tier) => lines.push(Line::from(vec![
+        match sheet.cart_tier(slot).zip(sheet.cart_price(slot)) {
+            Some((tier, crystals)) => lines.push(Line::from(vec![
                 Span::styled(label, key),
                 Span::styled(
                     format!(
@@ -2360,8 +2363,8 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     text,
                 ),
                 Span::styled(
-                    format!("{CART_CRYSTALS} crystals"),
-                    match CART_CRYSTALS > sheet.crystals {
+                    format!("{crystals} crystals"),
+                    match crystals > sheet.crystals {
                         true => short,
                         false => crystal,
                     },
@@ -2379,7 +2382,9 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
-        "the next tier up from what you carry, for crystals and no bits. no receipts, no names.",
+        format!(
+            "the next tier up from what you carry, for crystals and no bits: {CART_CRYSTALS} up to your level, {CART_LEAD_CRYSTALS} more a tier past it. no receipts, no names."
+        ),
         dim_text,
     )));
     lines

@@ -1057,7 +1057,7 @@ never does.
   Signal instead of a glyph. A dropped signal against it costs what any
   drop costs, and the exp lost usually puts the gate a day or two of
   glyphs away again.
-- **The numbers.** 290 signal, 39 attack, 22 defense, tuned for the
+- **The numbers.** 290 signal, 36 attack (39 until the 2026-10-13 pass: the hit ramp reaches the boss too), 22 defense, tuned for the
   round and the drafted deck, not LoGD's dragon (300 / 45 / 25, numbers
   for an exchange loop). From the top of the wall a first kill lands
   about one try in two on the `Auto` key and nine in ten for a runner
@@ -1328,7 +1328,13 @@ fight, spent on things gold could not buy. Both answers are in:
   careful runner now fights every level in that level's kit and wears
   the top one at 15; gear takes over half the bits earned, patch under
   a quarter. Nothing stops a rich runner buying ahead; a tier ahead is
-  worth two or three points of odds, so nobody needs to.
+  worth two or three points of odds, so nobody needs to. *Amended
+  2026-10-13:* that stopped being true once the bright glyph was a
+  fight: the keen runner's double bits bought three tiers over the
+  level by the median climb, and at three over nothing on the road is
+  a fight. The wall now asks half as much again for every tier a piece
+  would sit above the level (`PRICE_LEAD_PERCENT`); the trade-in is
+  read off the ladder, so the premium does not come back.
 - **Crystals.** One kill in twelve of the glyph of your level leaves
   one. Rare enough to be a moment, common enough that a week holds a
   few. They are the one thing a dropped signal does not take (LoGD's
@@ -1350,7 +1356,43 @@ fight, spent on things gold could not buy. Both answers are in:
   From the wall's kit it is about a coin toss; one thing a crystal buys
   makes it a fight to take. *Amended 2026-10-06:* in the round it is a
   fight to read: near sure for a runner playing the hand, a real risk
-  on the `Auto` key, and most of a signal either way.
+  on the `Auto` key, and most of a signal either way. *Amended
+  2026-10-13:* its edge is a share of the level, not of the glyph's own
+  numbers. A percentage rounded up doubled the flicker and added a
+  sixth at the top, so the bright one was a wall on day one and nothing
+  by level 10; now it is the same step up all the way, and read sharp it
+  is meant to go down about three times in four, never nine in ten.
+- **One patch a day.** The signal is a budget of two bars a day: the one
+  the roll fills and the one patch buys, spent when the runner says so.
+  Before this, patch was a bit a point at any time, and the measured
+  climb showed what that is: a careful runner who patched before every
+  fight, never ran, never dropped, and paid three percent of its bits
+  for it; the day had no attrition and the road's five fights were five
+  separate full-signal fights. A rising price was the other way, and a
+  runner with seventy thousand idle bits buys through any price; a
+  count cannot be bought. It is a wall by the balance manual's rule, and
+  the rule's reason (a wall hides a wrong number) does not hold here:
+  the number was tried. The day keeps the grammar it had: ten rations,
+  one glass, two brights, one patch. The siphon moved into every deck
+  from the first step as the one heal between the patch and the roll,
+  and the level 3 draft asks jab or brace (a free hit or a free guard)
+  instead. The threat word reads the sheet as it stands, so the same
+  bright glyph reads easy at a full bar and grim at a third: the word
+  gets its second life for free.
+- **The fight scales up.** Everything in a round is linear in the level
+  (attack and defense are level plus tier, the table is a line), so the
+  fight at 15 was the fight at 5 with bigger numbers, and the runner
+  alone gained four cards on the way up. Two numbers break the line on
+  purpose: a glyph's hit climbs a few points a level
+  (`HIT_RAMP_PERCENT`), and its noise throws one more static card every
+  few levels (`NOISE_LEVEL_STEP`), so the deck the glyph corrupts keeps
+  pace with the deck the runner builds.
+- **The blade shop prices the lead.** Three crystals for a piece at or
+  under the level, two more a tier past it. At a flat three, the two
+  crystals a day the bright glyphs pay bought four tiers over the level
+  by level 9 and the whole wall at 11, and at four tiers over nothing
+  on the road is a fight. The keen runner's kit is now held to the same
+  band as the careful one's.
 - **Dead Air pours.** A glass for a crystal, one a day, gone at the
   roll: attack, defense, or the signal's bars. The consumable sink, and
   the reason to walk into the bar. The prepared runner's move is to
@@ -1456,7 +1498,8 @@ a season beat once the loop stands.
 
 - **One deck, ten cards, no builds at v0.** Five strikes, three blocks,
   two of the band's moves (the move names already drafted under
-  "Bands"). Everyone starts with the same ten. The weapon tier adds to
+  "Bands"). Everyone starts with the same ten. (Since 2026-10-13 one of
+  the strikes is a siphon: "One patch a day" above.) The weapon tier adds to
   strike numbers, the armor tier to block numbers, so gear still matters
   and the armorer still sells; the deck itself does not change. Balance
   is a spreadsheet with two columns, and the gear ladder, already
