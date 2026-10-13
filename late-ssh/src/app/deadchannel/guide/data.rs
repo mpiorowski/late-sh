@@ -143,7 +143,7 @@ pub const SECTIONS: &[Section] = &[
                 "`p` heals to full from anywhere for a bit a point, times your level, *once a day*. spend it before the fight that needs it, not after a drop: the roll is the next one.",
             ),
             Block::Rule(
-                "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass at dead air, and three buy the next piece up at the blade shop, no bits asked, two more a tier past your level.",
+                "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass or a pour at dead air, three buy the next piece up at the blade shop, no bits asked, two more a tier past your level, and ten ink a draft at ink for good.",
             ),
             Block::Rule(
                 "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *300* signal, *35* attack, *22* defense, and no bits.",
@@ -482,9 +482,24 @@ pub const SECTIONS: &[Section] = &[
                     key: "t",
                     does: "test pattern: more signal, and filled",
                 },
+                Key {
+                    key: "f",
+                    does: "feedback: a surge in tonight's deck",
+                },
+                Key {
+                    key: "q",
+                    does: "squelch: a burn in tonight's deck",
+                },
+                Key {
+                    key: "o",
+                    does: "sign-off: a mute in tonight's deck",
+                },
             ]),
             Block::Rule(
                 "the bar pours for *a crystal a glass*, *one glass a day*, and it wears off at the roll. the first two add a point and one more every four levels; the test pattern adds two signal a level and fills you.",
+            ),
+            Block::Rule(
+                "a *pour* is a card instead: it rides every deck dealt today. look at the road before you order: a surge for the bright glyph, a burn for a day of noise, a mute for a heavy hitter.",
             ),
             Block::Rule(
                 "not while the signal is down, not with a glyph waiting on you, and not once you are spent for the day.",
@@ -511,6 +526,22 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "ink",
+        neon: Neon::White,
+        blocks: &[
+            Block::Keys(&[Key {
+                key: "1 to 4",
+                does: "ink the level 3, 6, 9, or 12 draft",
+            }]),
+            Block::Rule(
+                "a draft inked is *both its cards*: the one you pick and the one you did not, from the draft's level on, in this climb and every one after. *ten crystals*, and nothing takes it back: not a mark, not the ledge.",
+            ),
+            Block::Rule(
+                "the needle takes *one draft for every mark you hold, and one more*. a draft you have not reached yet can be inked ahead; its cards come when its level does.",
+            ),
+        ],
+    },
+    Section {
         title: "the ledge",
         neon: Neon::White,
         blocks: &[
@@ -528,7 +559,7 @@ pub const SECTIONS: &[Section] = &[
                 "a step off starts you over: *level 1*, bare hands, nothing on you, no crystals, and nothing in the locker. any other key leans you back in.",
             ),
             Block::Rule(
-                "your marks, your peak, your kills, your face, today's rations and the static in your deck, and the debt come down with you. not while your signal is down, not with nothing to lose, and the wire hears it.",
+                "your marks, your inks, your peak, your kills, your face, today's rations and the static in your deck, and the debt come down with you. not while your signal is down, not with nothing to lose, and the wire hears it.",
             ),
         ],
     },

@@ -195,6 +195,7 @@ pub struct Light {
 #[rustfmt::skip]
 pub const SIGNS: &[Sign] = &[
     Sign { zone: Zone { x0: 40, y0: 16, x1: 45, y1: 16 }, color: Neon::Magenta },
+    Sign { zone: Zone { x0: 95, y0: 16, x1: 97, y1: 16 }, color: Neon::White },
     Sign { zone: Zone { x0: 151, y0: 18, x1: 158, y1: 18 }, color: Neon::Amber },
     Sign { zone: Zone { x0: 173, y0: 18, x1: 177, y1: 18 }, color: Neon::White },
     Sign { zone: Zone { x0: 222, y0: 18, x1: 227, y1: 18 }, color: Neon::Cyan },
@@ -209,7 +210,6 @@ pub const SIGNS: &[Sign] = &[
 pub const DARK_SIGNS: &[Sign] = &[
     Sign { zone: Zone { x0: 24, y0: 16, x1: 29, y1: 16 }, color: Neon::Green },
     Sign { zone: Zone { x0: 57, y0: 16, x1: 62, y1: 16 }, color: Neon::Amber },
-    Sign { zone: Zone { x0: 95, y0: 16, x1: 97, y1: 16 }, color: Neon::White },
     Sign { zone: Zone { x0: 61, y0: 21, x1: 64, y1: 21 }, color: Neon::Red },
     Sign { zone: Zone { x0: 112, y0: 21, x1: 116, y1: 21 }, color: Neon::Cyan },
     Sign { zone: Zone { x0: 134, y0: 18, x1: 138, y1: 18 }, color: Neon::Green },
@@ -561,9 +561,10 @@ pub enum Landmark {
     Wire,
     /// The railing over the drop: look over the ledge.
     Ledge,
+    /// INK: the needle. A draft inked for crystals, kept through a mark.
+    Ink,
     // The shops that are not open yet (`DARK_SIGNS`): Enter at the door
     // says so. Opening one gives it a panel in `city/state.rs`.
-    Ink,
     Baths,
     Sleep,
     Shrine,

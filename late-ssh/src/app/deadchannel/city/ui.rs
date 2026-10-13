@@ -36,14 +36,15 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use crate::app::deadchannel::fight::cards::DRAFTS;
 use crate::app::deadchannel::fight::data::{
     CART_CRYSTALS, CART_LEAD_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT,
-    LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, PATCHED_TODAY_LINE, TRADE_IN_PERCENT, drink_edge,
+    LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, PATCHED_TODAY_LINE, RULES, TRADE_IN_PERCENT, drink_edge,
     patch_rate,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{
-    Drink, Sheet, Slot as GearSlot, gear_name, wall_price,
+    Drink, Refusal, Sheet, Slot as GearSlot, gear_name, wall_price,
 };
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
@@ -1803,6 +1804,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
             lines.push(Line::from(Span::styled("(not open yet)", muted_text)));
         }
         Landmark::Bar => lines.extend(bar_lines(view)),
+        Landmark::Ink => lines.extend(ink_lines(view)),
         Landmark::Repairs => lines.extend(patch_lines(view)),
         Landmark::Board => {
             lines.push(Line::from(Span::styled("standing orders", head)));
@@ -1828,7 +1830,6 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
         | Landmark::Stairs
         | Landmark::Wire
         | Landmark::Ledge
-        | Landmark::Ink
         | Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine
@@ -2285,6 +2286,9 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     sheet.level * DRINK_SIGNAL_PER_LEVEL
                 ),
             ),
+            Drink::Feedback => ("[f] ", "a surge in tonight's deck".to_string()),
+            Drink::Squelch => ("[q] ", "a burn in tonight's deck".to_string()),
+            Drink::SignOff => ("[o] ", "a mute in tonight's deck".to_string()),
         };
         let lit_row = refusal.is_none();
         lines.push(Line::from(vec![
@@ -2318,7 +2322,99 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         None => Line::default(),
     });
     lines.push(Line::from(Span::styled(
-        format!("a glass is {DRINK_CRYSTALS} crystal. one a day, and it wears off at the roll."),
+        format!("a glass is {DRINK_CRYSTALS} crystal. one a day, and it wears off at the roll. a pour is a card in every deck dealt today."),
+        dim_text,
+    )));
+    lines
+}
+
+/// INK: the crystals on hand, the marks, and the room the needle has
+/// left; a row per draft with its level, its two cards, and whether it
+/// is inked, priced, or short; the refusal that is not one draft's
+/// spelled out ahead of the keys.
+fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = lit(Neon::Cyan);
+    let key = lit(Neon::Amber);
+    let short = dim(Neon::Red);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    lines.push(Line::from(vec![
+        Span::styled("crystals ", dim_text),
+        Span::styled(sheet.crystals.to_string(), number),
+        Span::styled("      marks ", dim_text),
+        Span::styled(sheet.marks.to_string(), number),
+        Span::styled("      the needle holds ", dim_text),
+        Span::styled(
+            match sheet.ink_room() {
+                0 => "no more".to_string(),
+                1 => "1 more".to_string(),
+                n => format!("{n} more"),
+            },
+            text,
+        ),
+    ]));
+    lines.push(Line::default());
+    // The refusal that is nobody's draft in particular: a glyph waiting,
+    // or the needle done until the next mark.
+    let mut general: Option<String> = None;
+    for (at, draft) in DRAFTS.iter().enumerate() {
+        let refusal = sheet.needle_refused(&RULES, draft.level);
+        let [first, second] = draft.options.map(|card| card.name());
+        let price = sheet.ink_price();
+        let (status, style, lit_row) = match &refusal {
+            None => (format!("for {price} crystals"), dim_text, true),
+            Some((Refusal::AlreadyInked, _)) => ("inked".to_string(), lit(Neon::Amber), false),
+            Some((Refusal::ShortCrystals { by }, _)) => {
+                (format!("for {price} crystals, {by} short"), short, false)
+            }
+            Some((Refusal::FightWaiting | Refusal::NeedleWaits, line)) => {
+                general.get_or_insert_with(|| line.clone());
+                (format!("for {price} crystals"), muted_text, false)
+            }
+            Some((other, line)) => {
+                unreachable!("the needle refused a draft on the menu with {other:?}: {line}")
+            }
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("[{}] ", at + 1),
+                match lit_row {
+                    true => key,
+                    false => muted_text,
+                },
+            ),
+            Span::styled(
+                format!("{:<10}", format!("level {}", draft.level)),
+                dim_text,
+            ),
+            Span::styled(
+                format!("{:<19}", format!("{first} · {second}")),
+                match lit_row {
+                    true => text,
+                    false => dim_text,
+                },
+            ),
+            Span::styled(status, style),
+        ]));
+    }
+    lines.push(Line::default());
+    // The refusal's row is there, blank, while the needle would take a draft.
+    lines.push(match general {
+        Some(reason) => Line::from(Span::styled(reason, text)),
+        None => Line::default(),
+    });
+    lines.push(Line::from(Span::styled(
+        "a draft inked is both its cards from its level on, this climb and every one after. one draft a mark, and one more.",
         dim_text,
     )));
     lines

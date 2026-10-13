@@ -1068,7 +1068,8 @@ never does.
   tier 0, bits to the starting 50, the locker emptied, the crystals gone. The climb is a
   real climb again, and nothing saved for it carries over.
 - **What it keeps:** the peak level (the tailor's rack stays open), the
-  look, the badges, the kill count, today's rations, and the debt.
+  look, the badges, the kill count, today's rations, the debt, and the
+  inks (INK below: the one purchase made for the climbs after this one).
 - **What it gives:** a mark. Marks are the paragon number, shown behind
   the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
   defense up to a cap of five (the second climb is quicker, a veteran
@@ -1398,6 +1399,31 @@ fight, spent on things gold could not buy. Both answers are in:
   the reason to walk into the bar. The prepared runner's move is to
   save one for the Old Signal (two tries in five dry, a little better
   than even with a glass).
+- **Dead Air pours a card.** Three of the six on the menu are pours: a
+  surge, a burn, or a mute in every deck dealt today, for the same
+  crystal and the same one slot. A glass is a point on the sheet and
+  reads as noise next to a tier of gear; a pour is a decision made
+  looking at the road (a surge for the bright glyph, a burn for a day of
+  noise glyphs, a mute for a heavy hitter), which is what the bar
+  lacked. A pour is never a trap: the arena holds that none costs the
+  key more than the dice against the bright glyph (a wipe did, poured
+  into a clean deck, so squelch is a burn). The three stat glasses
+  stay; they are the Old Signal's.
+- **INK: the needle.** The dark INK sign is lit. A draft inked for ten
+  crystals is both of its cards: the pick goes in as always and the
+  other option comes in beside it, from the draft's level on, in this
+  climb and every one after. Marks pay the sheet (+1 attack and defense
+  each, capped); ink pays the deck. An ink is the one thing a climb's
+  crystals buy that the mark does not take back, so the choice is this
+  climb (a blade now, a glass tonight) against every climb after. The
+  needle takes one draft for every mark held, and one more: a first
+  climb inks one, a mark opens the next, four in all. Not stats: a
+  second system paying the number the mark already pays would be the
+  mark done twice. Measured on the key, where the days a drop costs
+  are the only days a wider deck can save: the second climb marks a day
+  sooner than the first; with every draft inked, four days sooner,
+  which is the careful reader's first climb. The gate moves seven
+  points on the key with every draft inked (57% to 64%).
 - **The blade shop takes the other wallet.** The next tier up from what
   a slot carries, for three crystals and no bits. The standing sink:
   three crystals is a few days' luck, and what they buy grows with the
@@ -1412,15 +1438,16 @@ fight, spent on things gold could not buy. Both answers are in:
   Air beside them, the lockers at the wire stairs, loans toward the
   screen, the tailor out west. A shop with nothing in it yet keeps its
   sign barely on, in its own color, so the street still reads as lived
-  in (MARKET, SHRINE, PAWN, INK, which was CLINIC and read as a second
-  patch, BATHS, BANDS, SLEEP, COIN, VIDS), and says "not open yet" at
-  the door. They get lit one at a time, and a sign coming on is news.
+  in (MARKET, SHRINE, PAWN, BATHS, BANDS, SLEEP, COIN, VIDS), and says
+  "not open yet" at the door. They get lit one at a time, and a sign
+  coming on is news; INK (which was CLINIC and read as a second patch)
+  is the first one lit, for the needle.
   Stalls and carts stay as flavor and, later, small bonuses.
 - **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
   forest fights) and hired swords (a second attacker). More fights a day
   breaks the ten-minute ritual, and a companion is a second combat
   system; neither is here. A glass and one tier of gear are numbers the
-  sheet already has.
+  sheet already has; a pour and an ink are cards the deck already has.
 - **The balance is measured.** `fight/arena.rs` plays every matchup and
   four whole climbs through the real machine under any set of numbers
   (`data::Rules`), and one contract holds every target as a band

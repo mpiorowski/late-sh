@@ -48,15 +48,15 @@ impl Landmark {
             | Landmark::Repairs
             | Landmark::Board
             | Landmark::Bits
-            | Landmark::Blades => Enter::Panel(self),
+            | Landmark::Blades
+            | Landmark::Ink => Enter::Panel(self),
             Landmark::Screen => Enter::Fight,
             Landmark::Noodles | Landmark::Umbrellas | Landmark::Reader | Landmark::Stairs => {
                 Enter::Line(self)
             }
             // Not open yet: the door says so. Opening a shop moves it up
             // to `Enter::Panel`.
-            Landmark::Ink
-            | Landmark::Baths
+            Landmark::Baths
             | Landmark::Sleep
             | Landmark::Shrine
             | Landmark::Market

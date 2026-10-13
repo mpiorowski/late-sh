@@ -25,6 +25,7 @@ use crate::app::state::App;
 use super::data;
 use super::map::Landmark;
 use super::state::Enter;
+use crate::app::deadchannel::fight::cards::DRAFTS;
 use crate::app::deadchannel::fight::state::{Command, Drink, Slot};
 
 /// Go down into the city: `0` on the Lounge, or Enter on Night City's card
@@ -190,10 +191,29 @@ fn handle_panel(app: &mut App, event: &ParsedInput) -> bool {
             ParsedInput::Byte(b's') | ParsedInput::Char('s') => Some(Drink::StaticOnIce),
             ParsedInput::Byte(b'd') | ParsedInput::Char('d') => Some(Drink::DeadAirNeat),
             ParsedInput::Byte(b't') | ParsedInput::Char('t') => Some(Drink::TestPattern),
+            ParsedInput::Byte(b'f') | ParsedInput::Char('f') => Some(Drink::Feedback),
+            ParsedInput::Byte(b'q') | ParsedInput::Char('q') => Some(Drink::Squelch),
+            ParsedInput::Byte(b'o') | ParsedInput::Char('o') => Some(Drink::SignOff),
             _ => None,
         };
         if let Some(drink) = drink {
             app.fight.request(Command::Drink { drink });
+            return true;
+        }
+    }
+    // INK: a key per draft, in the order they come.
+    if app.city.panel() == Some(Landmark::Ink) {
+        let draft = match event {
+            ParsedInput::Byte(b'1') | ParsedInput::Char('1') => Some(0),
+            ParsedInput::Byte(b'2') | ParsedInput::Char('2') => Some(1),
+            ParsedInput::Byte(b'3') | ParsedInput::Char('3') => Some(2),
+            ParsedInput::Byte(b'4') | ParsedInput::Char('4') => Some(3),
+            _ => None,
+        };
+        if let Some(draft) = draft {
+            app.fight.request(Command::Ink {
+                level: DRAFTS[draft].level,
+            });
             return true;
         }
     }

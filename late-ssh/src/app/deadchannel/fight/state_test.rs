@@ -788,6 +788,148 @@ fn dead_air_pours_one_glass_a_day_for_a_crystal() {
     }
 }
 
+/// A pour is a card in every deck dealt today, not a point on the sheet:
+/// the glass is the one slot, and the roll takes it with the rest.
+#[test]
+fn a_pour_puts_a_card_in_the_deck_until_the_roll() {
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut sheet = fresh();
+    sheet.crystals = 2;
+    let poured = sheet.apply(
+        Command::Drink {
+            drink: Drink::Feedback,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        poured.applied,
+        Applied::Drank {
+            drink: Drink::Feedback
+        }
+    );
+    assert_eq!(
+        poured.lines,
+        vec!["feedback. the glass hums before you touch it. a surge in your deck until the roll."]
+    );
+    assert_eq!((sheet.crystals, sheet.attack(), sheet.defense()), (1, 1, 1));
+    let deck = sheet.deck();
+    assert_eq!(deck.len(), DECK.len() + 1);
+    assert_eq!(deck.iter().filter(|card| **card == Card::Surge).count(), 2);
+
+    // The fight is dealt from the eleven.
+    sheet.apply(STEP_IN, &mut rng);
+    let piles = &sheet.fight.as_ref().expect("a fight").piles;
+    assert_eq!(
+        piles.draw.len() + piles.hand.len() + piles.discard.len(),
+        DECK.len() + 1
+    );
+    sheet.fight = None;
+
+    // The second glass is refused like any other; the roll takes the pour.
+    let second = sheet.apply(
+        Command::Drink {
+            drink: Drink::Squelch,
+        },
+        &mut rng,
+    );
+    assert_eq!(second.applied, Applied::Refused(Refusal::GlassPoured));
+    assert!(sheet.settle(day(25)));
+    assert_eq!(sheet.deck(), DECK.to_vec());
+
+    // Every pour names its card.
+    assert_eq!(Drink::Squelch.pour(), Some(Card::Burn));
+    assert_eq!(Drink::SignOff.pour(), Some(Card::Mute));
+    assert_eq!(Drink::TestPattern.pour(), None);
+    assert_eq!(Drink::parse("sign_off"), Some(Drink::SignOff));
+}
+
+/// INK inks a draft for crystals: both of its cards from its level on,
+/// one draft a mark and one more, and a mark or the ledge leave it (the
+/// slay and ledge tests pin that).
+#[test]
+fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut sheet = fresh();
+    sheet.level = 7;
+    sheet.signal = 70;
+    sheet.cards = vec![Card::Jab, Card::Bulwark];
+    sheet.crystals = 9;
+
+    let short = sheet.apply(Command::Ink { level: 3 }, &mut rng);
+    assert_eq!(
+        short.applied,
+        Applied::Refused(Refusal::ShortCrystals { by: 1 })
+    );
+    assert_eq!(
+        short.lines,
+        vec!["10 crystals to ink jab and brace. you are 1 short."]
+    );
+
+    sheet.crystals = 25;
+    let nowhere = sheet.apply(Command::Ink { level: 7 }, &mut rng);
+    assert_eq!(nowhere.applied, Applied::Refused(Refusal::NoDraftThere));
+
+    let inked = sheet.apply(Command::Ink { level: 3 }, &mut rng);
+    assert_eq!(
+        inked.applied,
+        Applied::Inked {
+            level: 3,
+            crystals: 10
+        }
+    );
+    assert_eq!(
+        inked.lines,
+        vec![
+            "the needle goes in. 10 crystals. it does not hurt the way you expected.",
+            "jab and brace are both yours from here, this climb and every one after."
+        ]
+    );
+    assert_eq!((sheet.crystals, sheet.inks.clone()), (15, vec![3]));
+    let deck = sheet.deck();
+    assert_eq!(deck.len(), DECK.len() + 1);
+    assert!(deck.contains(&Card::Jab) && deck.contains(&Card::Brace));
+
+    // One draft a mark, and one more: no marks is one ink.
+    let waits = sheet.apply(Command::Ink { level: 6 }, &mut rng);
+    assert_eq!(waits.applied, Applied::Refused(Refusal::NeedleWaits));
+    assert_eq!(
+        waits.lines,
+        vec!["the needle has done what it will for you. bring it a mark."]
+    );
+    assert_eq!(sheet.crystals, 15);
+
+    let again = sheet.apply(Command::Ink { level: 3 }, &mut rng);
+    assert_eq!(again.applied, Applied::Refused(Refusal::AlreadyInked));
+
+    // A mark opens the needle again, and a draft not yet reached waits
+    // on its pick.
+    sheet.marks = 1;
+    let ahead = sheet.apply(Command::Ink { level: 9 }, &mut rng);
+    assert_eq!(
+        ahead.applied,
+        Applied::Inked {
+            level: 9,
+            crystals: 10
+        }
+    );
+    assert_eq!(
+        ahead.lines[1],
+        "burn and ground are both yours from level 9 on, this climb and every one after."
+    );
+    assert_eq!(sheet.deck().len(), DECK.len() + 1, "no pick at 9 yet");
+    sheet.cards.push(Card::Ground);
+    assert_eq!(sheet.deck().len(), DECK.len() + 2);
+    assert!(sheet.deck().contains(&Card::Burn));
+
+    // Not with a glyph waiting.
+    let mut waiting = fresh();
+    waiting.crystals = 10;
+    waiting.apply(STEP_IN, &mut rng);
+    let refused = waiting.apply(Command::Ink { level: 3 }, &mut rng);
+    assert_eq!(refused.applied, Applied::Refused(Refusal::FightWaiting));
+    assert_eq!((waiting.crystals, waiting.inks.len()), (10, 0));
+}
+
 #[test]
 fn the_blade_cart_sells_the_next_tier_up_for_crystals_alone() {
     let mut rng = StdRng::seed_from_u64(1);
@@ -992,6 +1134,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         reset_generation: 0,
         road: None,
         cards: None,
+        inks: None,
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": [], "bright": false,
@@ -1098,12 +1241,37 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
     ));
     let not_cards = DeadchannelRunner {
         cards: Some(serde_json::json!({"jab": true})),
-        ..drafted
+        ..drafted.clone()
     };
     assert!(matches!(
         Sheet::from_row(&not_cards),
         Err(SheetError::Cards(_))
     ));
+
+    // The inks round-trip, and a level no draft is owed at, or one inked
+    // twice, is the row being wrong.
+    let inked = DeadchannelRunner {
+        inks: Some(serde_json::json!([6, 3])),
+        ..drafted
+    };
+    let sheet = Sheet::from_row(&inked).expect("a sheet");
+    assert_eq!(sheet.inks, vec![6, 3]);
+    assert_eq!(sheet.to_write().inks, inked.inks);
+    assert_eq!(fresh().to_write().inks, None, "no inks is no column");
+    for bad in [
+        serde_json::json!([7]),
+        serde_json::json!([3, 3]),
+        serde_json::json!("3"),
+    ] {
+        let row = DeadchannelRunner {
+            inks: Some(bad.clone()),
+            ..inked.clone()
+        };
+        assert!(
+            matches!(Sheet::from_row(&row), Err(SheetError::Inks(_))),
+            "{bad}"
+        );
+    }
 
     // A glass the menu does not have is the row being wrong, not a blank.
     let off_menu = DeadchannelRunner {
@@ -1239,6 +1407,7 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
     sheet.kills = 900;
     sheet.kills_today = 4;
     sheet.cards = vec![Card::Jab, Card::Bulwark, Card::Ground, Card::Sever];
+    sheet.inks = vec![3];
 
     let outcome = sheet.apply(Command::Play { slot: 0 }, &mut rng);
 
@@ -1274,8 +1443,9 @@ fn putting_the_old_signal_down_leaves_a_mark_and_starts_the_climb_over() {
             static_cards: 0,
             patched: false,
         },
-        // The drafted cards go with the level.
+        // The drafted cards go with the level; the inks do not.
         cards: Vec::new(),
+        inks: vec![3],
     };
     assert_eq!(sheet, expected);
     assert_eq!(outcome.lines.len(), 4, "{:?}", outcome.lines);
@@ -1578,6 +1748,7 @@ fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
     sheet.signal = 12;
     sheet.road.static_cards = 2;
     sheet.cards = vec![Card::Brace];
+    sheet.inks = vec![3];
     let mut rng = StdRng::seed_from_u64(1);
 
     let outcome = sheet.apply(Command::Reset, &mut rng);
@@ -1611,8 +1782,9 @@ fn stepping_off_the_ledge_starts_the_runner_over_and_keeps_the_debt() {
             static_cards: 2,
             patched: false,
         },
-        // The drafted cards go with the level.
+        // The drafted cards go with the level; the inks do not.
         cards: Vec::new(),
+        inks: vec![3],
     };
     assert_eq!(sheet, expected);
     assert!(

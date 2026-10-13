@@ -72,7 +72,17 @@ cursor on it.
 | `s` | static on ice | attack + `drink_edge(level)` (1, and 1 more every 4 levels) |
 | `d` | dead air, neat | defense + `drink_edge(level)` |
 | `t` | test pattern | max signal + 2 a level, and the signal filled |
+| `f` | feedback | a surge in the deck |
+| `q` | squelch | a burn in the deck |
+| `o` | sign-off | a mute in the deck |
 
+- The last three are pours (GAME.md, "Dead Air pours a card"): a card
+  in every deck dealt today (`Drink::pour`, added by `Sheet::deck`), not
+  a point on the sheet. A fight already on the row keeps the deck it was
+  dealt. Every pour is a card the key plays well: the arena holds that
+  no pour costs the bright fight on auto more than the dice
+  (`BALANCE.md`, section 1); a wipe poured into a clean deck did (lv 9:
+  48% dry, 36% poured), which is why squelch is a burn.
 - The menu is the closed `Drink` enum; a code on the row that is not on
   it is `SheetError::Drink`, never a blank.
 - Refusals, in the order the row checks: the signal down (`SignalDown`),
@@ -103,9 +113,38 @@ level by level 9 and the whole wall at 11 (`BALANCE.md`, section 6).
 - Enter inside opens its panel (`city/ui.rs::cart_lines`, `w` and
   `a`); the answer is the `till` line; no news.
 
+## INK
+
+`Command::Ink { level }`: the draft at `level` inked, for
+`Sheet::ink_price` crystals (`INK_CRYSTALS`, 10; `Rules::ink_crystals`)
+and no bits. An inked draft is both of its cards: the pick goes in over
+the card the draft replaces as always, and the other option comes in
+beside it, from the draft's level on (`cards::deck(drafted, inked)`,
+`Draft::other`). `deadchannel_runners.inks` holds the levels in the
+order they were bought (migration 238); a mark and the ledge leave it,
+only the nuke clears it (GAME.md, "INK: the needle").
+
+- The needle takes one draft for every mark the runner holds, and one
+  more (`Sheet::ink_room`): a first climb inks one draft, and every
+  mark opens one more. A draft not yet reached can be inked ahead; its
+  cards come when its pick does.
+- Refusals, in the order the row checks (`Sheet::needle_refused`): a
+  glyph waiting (`FightWaiting`: the deck on the table is the one that
+  was dealt), no draft at that level (`NoDraftThere`), already inked
+  (`AlreadyInked`), the needle done until the next mark (`NeedleWaits`),
+  short (`ShortCrystals`).
+- A stored level no draft is owed at, or one stored twice, is
+  `SheetError::Inks`, never a blank.
+- The panel (`city/ui.rs::ink_lines`, keys `1` to `4` in draft order)
+  lists every draft with its two cards, says which are inked, prices the
+  rest, and spells the needle's refusal ahead of the keys; the answer is
+  the `till` line; no news.
+
 ## Measured
 
 The numbers (the bright glyph's odds on the `Auto` key and read sharp,
-what it leaves of the signal, the Old Signal with a glass, crystals a
-day, what the keen runner gains) are in `BALANCE.md`, section 6, with
-the targets they are held to.
+what it leaves of the signal, the Old Signal with a glass, with a pour,
+and with every draft inked, crystals a day, what the keen runner gains,
+what the needle costs the inker this climb and pays the key on the
+next) are in `BALANCE.md`, section 6, with the targets they are held
+to.

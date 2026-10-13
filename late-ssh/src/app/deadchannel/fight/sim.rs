@@ -91,6 +91,10 @@ pub struct Player {
     /// The glass bought before a step whenever a crystal covers it and
     /// none is poured yet; `None` never drinks.
     pub drinks: Option<Drink>,
+    /// Whether the runner inks a draft at INK whenever the crystals cover
+    /// it: the needle is visited before the blade shop and the bar, so an
+    /// inker's crystals go to the needle first.
+    pub inks: Inks,
     /// When the runner buys the blade shop's piece.
     pub carts: Carts,
     /// What the runner holds back from the armorer.
@@ -123,6 +127,28 @@ pub enum Purse {
     /// Keeps the price of one full patch at its level back from the
     /// armorer: gear never leaves it unable to heal.
     KeepAPatch,
+}
+
+/// Whether a simulated runner spends crystals at INK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inks {
+    Never,
+    /// The first draft not yet inked, whenever the needle would take it.
+    Always,
+}
+
+/// Where a climb starts: a fresh row, or one that has marked before, with
+/// the marks on it and the first `inked` drafts inked. The second climb's
+/// bench (`fight/BALANCE.md`, "The second climb").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Start {
+    pub marks: i32,
+    pub inked: usize,
+}
+
+impl Start {
+    /// A fresh row: no marks, nothing inked.
+    pub const FRESH: Start = Start { marks: 0, inked: 0 };
 }
 
 /// When a simulated runner spends crystals at the blade shop.
@@ -159,6 +185,7 @@ pub const CAREFUL: Player = Player {
     takes_bright: None,
     bright_over: 0.95,
     drinks: None,
+    inks: Inks::Never,
     carts: Carts::Never,
     purse: Purse::KeepAPatch,
     hand: Hand::Sharp,
@@ -221,9 +248,17 @@ pub const BORROWER: Player = Player {
     ..AMBIENT
 };
 
+/// The keen runner who inks a draft whenever the needle would take one:
+/// the crystals go to INK first, the blade shop and the bar get what is
+/// left. What the needle costs this climb, measured against [`KEEN`].
+pub const INKER: Player = Player {
+    inks: Inks::Always,
+    ..KEEN
+};
+
 /// The players the balance is read from, by name: the report and the
 /// sweep print every one.
-pub const PLAYERS: [(&str, Player); 7] = [
+pub const PLAYERS: [(&str, Player); 8] = [
     ("careful", CAREFUL),
     ("ambient", AMBIENT),
     ("reckless", RECKLESS),
@@ -231,6 +266,7 @@ pub const PLAYERS: [(&str, Player); 7] = [
     ("keen", KEEN),
     ("hoarder", HOARDER),
     ("borrower", BORROWER),
+    ("inker", INKER),
 ];
 
 /// One climb from a fresh row, day 1 to the first mark or to `max_days`.
@@ -389,6 +425,10 @@ pub enum Event {
     Drank {
         drink: Drink,
     },
+    Inked {
+        level: i32,
+        crystals: i32,
+    },
     /// A step down the road, onto `node`.
     Step {
         step: i32,
@@ -493,6 +533,7 @@ struct ThreatKey {
     marks: i32,
     drink: Option<Drink>,
     cards: Vec<Card>,
+    inks: Vec<i32>,
 }
 
 impl Bench {
@@ -518,6 +559,7 @@ impl Bench {
             marks: sheet.marks,
             drink: sheet.drink,
             cards: sheet.cards.clone(),
+            inks: sheet.inks.clone(),
         };
         let rules = self.rules;
         *self
@@ -540,8 +582,9 @@ struct Run<'a> {
     today: Day,
 }
 
-/// Play `player` from a fresh row with `seed` for at most `max_days`,
-/// writing what it does to `journal`. Each day: settle the roll, then
+/// Play `player` from `start` (a fresh row, or one marked before) with
+/// `seed` for at most `max_days`, writing what it does to `journal`. Each
+/// day: settle the roll, then
 /// walk the day's road until the rations are gone or the signal is down.
 /// Before every step the runner shops ([`Run::shop`]: the draft owed,
 /// patch, the loan, the armorer, the blade shop, the bar, each by its
@@ -549,6 +592,7 @@ struct Run<'a> {
 /// what answers by the rule.
 pub fn climb(
     player: Player,
+    start: Start,
     seed: u64,
     max_days: u32,
     bench: &mut Bench,
@@ -569,10 +613,20 @@ pub fn climb(
         fights: 0,
     };
     report.level_on[1] = Some(1);
+    let mut sheet = Sheet::fresh(Uuid::nil(), date(1));
+    sheet.marks = start.marks;
+    if start.marks > 0 {
+        sheet.peak_level = MAX_LEVEL;
+    }
+    sheet.inks = DRAFTS
+        .iter()
+        .take(start.inked)
+        .map(|draft| draft.level)
+        .collect();
     let mut run = Run {
         player,
         rules: bench.rules,
-        sheet: Sheet::fresh(Uuid::nil(), date(1)),
+        sheet,
         rng: StdRng::seed_from_u64(seed),
         report,
         journal,
@@ -653,7 +707,7 @@ impl Run<'_> {
     /// Everything a runner does between two steps, in the order a person
     /// would: the card owed, then patch (the heal is what the next fight
     /// is fought on, and the armorer only sees what the purse rule
-    /// leaves), the loan, the armorer, the blade shop, the bar.
+    /// leaves), the loan, the armorer, INK, the blade shop, the bar.
     fn shop(&mut self) {
         while let Some(draft) = self.sheet.draft() {
             let card = self.player.build[self.sheet.cards.len()];
@@ -683,6 +737,18 @@ impl Run<'_> {
                 self.borrow();
             }
             self.outfit();
+        }
+        if self.player.inks == Inks::Always
+            && let Some(draft) = DRAFTS.iter().find(|draft| !self.sheet.inked(draft.level))
+            && self
+                .sheet
+                .needle_refused(&self.rules, draft.level)
+                .is_none()
+            && let Applied::Inked { level, crystals } =
+                self.act(Command::Ink { level: draft.level })
+        {
+            self.report.ledger.crystals_spent += crystals;
+            self.journal.note(|| Event::Inked { level, crystals });
         }
         let slot = match self.sheet.weapon_tier <= self.sheet.armor_tier {
             true => Slot::Weapon,

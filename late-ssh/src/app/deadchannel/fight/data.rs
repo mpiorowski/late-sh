@@ -461,6 +461,8 @@ pub struct Rules {
     /// each tier above the level adds to it.
     pub cart_crystals: i32,
     pub cart_lead_crystals: i32,
+    /// What INK asks to ink a draft.
+    pub ink_crystals: i32,
     /// A glyph's signal as a percentage of the creature table's: how many
     /// turns a fight lasts.
     pub foe_signal_percent: i32,
@@ -507,6 +509,7 @@ pub const RULES: Rules = Rules {
     bright_bits_times: BRIGHT_BITS_TIMES,
     cart_crystals: CART_CRYSTALS,
     cart_lead_crystals: CART_LEAD_CRYSTALS,
+    ink_crystals: INK_CRYSTALS,
     foe_signal_percent: FOE_SIGNAL_PERCENT,
     hit_percent: HIT_PERCENT,
     hit_ramp_percent: HIT_RAMP_PERCENT,
@@ -806,6 +809,14 @@ pub const DRINK_SIGNAL_PER_LEVEL: i32 = 2;
 /// crystals keep the kit with the level, not four tiers past it.
 pub const CART_CRYSTALS: i32 = 3;
 pub const CART_LEAD_CRYSTALS: i32 = 2;
+
+/// What INK asks to ink a draft, in crystals and nothing else: both of the
+/// draft's cards from its level on, this climb and every one after
+/// ([`Rules::ink_crystals`]; GAME.md, "INK: the needle"). About half of
+/// what a careful climb finds, so an ink is this climb's crystals spent on
+/// every climb after. The needle takes one draft for every mark a runner
+/// holds, and one more.
+pub const INK_CRYSTALS: i32 = 10;
 
 /// The locker's cut of every deposit, a percentage of what goes in,
 /// rounded up so no deposit is free. LoGD's bank takes nothing and pays

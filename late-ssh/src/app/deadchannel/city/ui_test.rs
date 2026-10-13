@@ -353,6 +353,18 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
         screen.contains("[t] test pattern      +16 signal, and filled"),
         "{screen}"
     );
+    assert!(
+        screen.contains("[f] feedback          a surge in tonight's deck"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[q] squelch           a burn in tonight's deck"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[o] sign-off          a mute in tonight's deck"),
+        "{screen}"
+    );
     assert!(screen.contains(till), "the bartender's last word\n{screen}");
 
     sheet.crystals = 0;
@@ -370,6 +382,56 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
         poured.contains("one glass a day. you still have the dead air, neat in you."),
         "{poured}"
     );
+}
+
+/// INK lists every draft with its two cards, says which are inked, prices
+/// the rest, and spells the needle's refusal ahead of the keys.
+#[test]
+fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
+    let mut state = State::new();
+    state.open_panel(Landmark::Ink);
+    let mut sheet = Sheet::fresh(
+        uuid::Uuid::nil(),
+        chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
+    );
+    sheet.level = 7;
+    sheet.signal = 70;
+    sheet.crystals = 12;
+    let screen = render_with_sheet(&state, &sheet, None);
+    assert!(screen.contains(" ink "), "{screen}");
+    assert!(
+        screen.contains("crystals 12      marks 0      the needle holds 1 more"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[1] level 3   jab · brace        for 10 crystals"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[2] level 6   riposte · bulwark  for 10 crystals"),
+        "{screen}"
+    );
+
+    sheet.inks = vec![6];
+    sheet.crystals = 4;
+    let inked = render_with_sheet(&state, &sheet, None);
+    assert!(
+        inked.contains("[2] level 6   riposte · bulwark  inked"),
+        "{inked}"
+    );
+    assert!(inked.contains("the needle holds no more"), "{inked}");
+    assert!(
+        inked.contains("the needle has done what it will for you. bring it a mark."),
+        "{inked}"
+    );
+
+    sheet.marks = 1;
+    let short = render_with_sheet(&state, &sheet, None);
+    assert!(
+        short.contains("[1] level 3   jab · brace        for 10 crystals, 6 short"),
+        "{short}"
+    );
+    assert!(!short.contains("bring it a mark"), "{short}");
 }
 
 /// The blade shop prices the next tier up in each slot in crystals, and

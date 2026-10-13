@@ -59,8 +59,12 @@
 //!
 //! And the crystal pass (GAME.md): a kill now and then leaves a crystal,
 //! the one thing bits cannot buy; two nodes of every day's road are a
-//! bright glyph, harder, double pay, and always carrying one; Dead Air pours a glass for a crystal that lasts until the roll;
-//! the blade shop sells the next tier up for crystals alone.
+//! bright glyph, harder, double pay, and always carrying one; Dead Air
+//! pours a glass for a crystal that lasts until the roll, a point on the
+//! sheet or a card in the deck; the blade shop sells the next tier up for
+//! crystals alone; INK inks a draft for crystals, both of its cards from
+//! its level on, this climb and every one after (the one purchase a mark
+//! does not take back).
 //!
 //! Every number a balance pass turns comes in through `data::Rules`:
 //! `apply` plays the live `RULES`, `apply_under` any candidate set, which
@@ -278,6 +282,11 @@ pub struct Sheet {
     /// `cards[i]` is an option of `cards::DRAFTS[i]`. The deck is built
     /// from them ([`Sheet::deck`]); a mark and the ledge take them back.
     pub cards: Vec<Card>,
+    /// The drafts inked at INK, by level, in the order they were bought:
+    /// each puts its other option in the deck beside the pick, from the
+    /// draft's level on. Kept through a mark and the ledge; only the nuke
+    /// clears them.
+    pub inks: Vec<i32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -292,9 +301,14 @@ pub enum SheetError {
     /// The stored cards are not a list of cards, or hold one its draft
     /// never offered.
     Cards(String),
+    /// The stored inks are not a list of draft levels, or name one twice.
+    Inks(String),
 }
 
-/// What Dead Air pours, a crystal a glass, one a day, gone at the roll.
+/// What Dead Air pours, a crystal a glass, one a day, gone at the roll:
+/// three glasses that move a number on the sheet, and three pours that
+/// put one card in the deck for the day (GAME.md, "Dead Air pours a
+/// card").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Drink {
     /// Attack, by [`data::drink_edge`].
@@ -303,11 +317,25 @@ pub enum Drink {
     DeadAirNeat,
     /// The signal's max, by [`DRINK_SIGNAL_PER_LEVEL`], and filled.
     TestPattern,
+    /// A surge in the deck until the roll.
+    Feedback,
+    /// A burn in the deck until the roll.
+    Squelch,
+    /// A mute in the deck until the roll.
+    SignOff,
 }
 
 impl Drink {
-    /// The menu, in the order the bar lists it.
-    pub const MENU: [Drink; 3] = [Drink::StaticOnIce, Drink::DeadAirNeat, Drink::TestPattern];
+    /// The menu, in the order the bar lists it: the glasses, then the
+    /// pours.
+    pub const MENU: [Drink; 6] = [
+        Drink::StaticOnIce,
+        Drink::DeadAirNeat,
+        Drink::TestPattern,
+        Drink::Feedback,
+        Drink::Squelch,
+        Drink::SignOff,
+    ];
 
     /// The code on the row (`deadchannel_runners.drink`).
     pub fn code(self) -> &'static str {
@@ -315,6 +343,20 @@ impl Drink {
             Drink::StaticOnIce => "static_on_ice",
             Drink::DeadAirNeat => "dead_air_neat",
             Drink::TestPattern => "test_pattern",
+            Drink::Feedback => "feedback",
+            Drink::Squelch => "squelch",
+            Drink::SignOff => "sign_off",
+        }
+    }
+
+    /// The card a pour puts in the deck until the roll; `None` for a
+    /// glass, which moves the sheet instead.
+    pub fn pour(self) -> Option<Card> {
+        match self {
+            Drink::StaticOnIce | Drink::DeadAirNeat | Drink::TestPattern => None,
+            Drink::Feedback => Some(Card::Surge),
+            Drink::Squelch => Some(Card::Burn),
+            Drink::SignOff => Some(Card::Mute),
         }
     }
 
@@ -327,6 +369,9 @@ impl Drink {
             Drink::StaticOnIce => "static on ice",
             Drink::DeadAirNeat => "dead air, neat",
             Drink::TestPattern => "test pattern",
+            Drink::Feedback => "feedback",
+            Drink::Squelch => "squelch",
+            Drink::SignOff => "sign-off",
         }
     }
 }
@@ -337,6 +382,7 @@ impl std::fmt::Display for SheetError {
             Self::Fight(detail) => write!(f, "stored fight is unreadable: {detail}"),
             Self::Drink(code) => write!(f, "stored drink is not on the menu: {code}"),
             Self::Road(detail) => write!(f, "stored road is unreadable: {detail}"),
+            Self::Inks(detail) => write!(f, "stored inks are unreadable: {detail}"),
             Self::Cards(detail) => write!(f, "stored cards are unreadable: {detail}"),
         }
     }
@@ -428,6 +474,10 @@ pub enum Command {
     /// The blade shop's piece for `slot`: the next tier up from the one
     /// carried, for `Sheet::cart_price` crystals and no bits.
     Cart { slot: Slot },
+    /// INK: the draft at `level` inked, for `Sheet::ink_price` crystals.
+    /// Both of its cards are the runner's from that level on, this climb
+    /// and every one after.
+    Ink { level: i32 },
 }
 
 /// Why nothing happened.
@@ -488,6 +538,12 @@ pub enum Refusal {
     /// The blade shop for a slot already at the wall's last tier:
     /// nothing is made past it.
     PastTheWall,
+    /// An ink of a level no draft is owed at.
+    NoDraftThere,
+    /// An ink of a draft already inked.
+    AlreadyInked,
+    /// An ink past what the marks allow: one draft a mark, and one more.
+    NeedleWaits,
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
@@ -584,6 +640,11 @@ pub enum Applied {
         tier: i32,
         crystals: i32,
     },
+    /// The draft at `level` inked, for `crystals`.
+    Inked {
+        level: i32,
+        crystals: i32,
+    },
 }
 
 /// One command's result: what settled, and the lines to show for it.
@@ -651,6 +712,7 @@ impl Sheet {
             drink: None,
             road: RoadRun::default(),
             cards: Vec::new(),
+            inks: Vec::new(),
         }
     }
 
@@ -708,6 +770,21 @@ impl Sheet {
                 )));
             }
         }
+        let inks: Vec<i32> = match &row.inks {
+            None => Vec::new(),
+            Some(value) => match serde_json::from_value(value.clone()) {
+                Ok(inks) => inks,
+                Err(error) => return Err(SheetError::Inks(error.to_string())),
+            },
+        };
+        for (at, level) in inks.iter().enumerate() {
+            if cards::draft_at(*level).is_none() {
+                return Err(SheetError::Inks(format!("no draft at level {level}")));
+            }
+            if inks[..at].contains(level) {
+                return Err(SheetError::Inks(format!("level {level} inked twice")));
+            }
+        }
         Ok(Self {
             user_id: row.user_id,
             level: row.level,
@@ -731,6 +808,7 @@ impl Sheet {
             drink,
             road,
             cards,
+            inks,
         })
     }
 
@@ -767,12 +845,27 @@ impl Sheet {
                 true => None,
                 false => Some(serde_json::to_value(&self.cards).expect("cards serialize")),
             },
+            inks: match self.inks.is_empty() {
+                true => None,
+                false => Some(serde_json::to_value(&self.inks).expect("inks serialize")),
+            },
         }
     }
 
-    /// The deck this runner carries into a fight, before the day's static.
+    /// The deck this runner carries into a fight, before the day's static:
+    /// the ten with the drafts over them, the other card of every inked
+    /// draft, and the day's pour, if the glass was one.
     pub fn deck(&self) -> Vec<Card> {
-        cards::deck(&self.cards)
+        let mut deck = cards::deck(&self.cards, &self.inks);
+        if let Some(card) = self.drink.and_then(Drink::pour) {
+            deck.push(card);
+        }
+        deck
+    }
+
+    /// Whether the draft at `level` is inked.
+    pub fn inked(&self, level: i32) -> bool {
+        self.inks.contains(&level)
     }
 
     /// The draft this runner is owed, if any: the road waits on it.
@@ -783,7 +876,14 @@ impl Sheet {
     pub fn max_signal(&self) -> i32 {
         let glass = match self.drink {
             Some(Drink::TestPattern) => self.level * DRINK_SIGNAL_PER_LEVEL,
-            Some(Drink::StaticOnIce) | Some(Drink::DeadAirNeat) | None => 0,
+            Some(
+                Drink::StaticOnIce
+                | Drink::DeadAirNeat
+                | Drink::Feedback
+                | Drink::Squelch
+                | Drink::SignOff,
+            )
+            | None => 0,
         };
         self.level * SIGNAL_PER_LEVEL + glass
     }
@@ -791,7 +891,14 @@ impl Sheet {
     pub fn attack(&self) -> u32 {
         let glass = match self.drink {
             Some(Drink::StaticOnIce) => data::drink_edge(self.level),
-            Some(Drink::DeadAirNeat) | Some(Drink::TestPattern) | None => 0,
+            Some(
+                Drink::DeadAirNeat
+                | Drink::TestPattern
+                | Drink::Feedback
+                | Drink::Squelch
+                | Drink::SignOff,
+            )
+            | None => 0,
         };
         (self.level + self.weapon_tier + self.mark_bonus() + glass) as u32
     }
@@ -799,7 +906,14 @@ impl Sheet {
     pub fn defense(&self) -> u32 {
         let glass = match self.drink {
             Some(Drink::DeadAirNeat) => data::drink_edge(self.level),
-            Some(Drink::StaticOnIce) | Some(Drink::TestPattern) | None => 0,
+            Some(
+                Drink::StaticOnIce
+                | Drink::TestPattern
+                | Drink::Feedback
+                | Drink::Squelch
+                | Drink::SignOff,
+            )
+            | None => 0,
         };
         (self.level + self.armor_tier + self.mark_bonus() + glass) as u32
     }
@@ -922,6 +1036,62 @@ impl Sheet {
     pub fn cart_price(&self, slot: Slot) -> Option<i32> {
         self.cart_tier(slot)
             .map(|tier| RULES.cart_price(tier, self.level))
+    }
+
+    /// What INK asks to ink a draft, in crystals (`Rules::ink_crystals`).
+    /// The panel shows it, `Ink` charges it.
+    pub fn ink_price(&self) -> i32 {
+        RULES.ink_crystals
+    }
+
+    /// How many drafts the needle will hold for this runner: one for every
+    /// mark, and one more. The room left is this less the inks held.
+    pub fn ink_room(&self) -> usize {
+        (self.marks as usize + 1).saturating_sub(self.inks.len())
+    }
+
+    /// Why the needle would not take the draft at `level`, and the line it
+    /// says it with: the one order and the one wording, for `Command::Ink`
+    /// and for the panel that spells the refusal out ahead of the keys.
+    /// `None` when the draft would be inked.
+    pub fn needle_refused(&self, rules: &Rules, level: i32) -> Option<(Refusal, String)> {
+        if self.fight.is_some() {
+            return Some((
+                Refusal::FightWaiting,
+                "not with a glyph waiting on you. the needle can wait.".to_string(),
+            ));
+        }
+        let Some(draft) = cards::draft_at(level) else {
+            return Some((
+                Refusal::NoDraftThere,
+                format!("there is no draft at level {level}."),
+            ));
+        };
+        if self.inked(level) {
+            return Some((
+                Refusal::AlreadyInked,
+                format!("the level {level} draft is already in your skin."),
+            ));
+        }
+        if self.ink_room() == 0 {
+            return Some((
+                Refusal::NeedleWaits,
+                "the needle has done what it will for you. bring it a mark.".to_string(),
+            ));
+        }
+        let price = rules.ink_crystals;
+        if price > self.crystals {
+            let by = price - self.crystals;
+            return Some((
+                Refusal::ShortCrystals { by },
+                format!(
+                    "{price} crystals to ink {} and {}. you are {by} short.",
+                    draft.options[0].name(),
+                    draft.options[1].name()
+                ),
+            ));
+        }
+        None
     }
 
     /// What the marks add to attack and defense: one each, capped.
@@ -1051,7 +1221,8 @@ impl Sheet {
             | Applied::Borrowed { .. }
             | Applied::Repaid { .. }
             | Applied::Drank { .. }
-            | Applied::Carted { .. } => return news,
+            | Applied::Carted { .. }
+            | Applied::Inked { .. } => return news,
         }
         if self.rations_left == 0 {
             news.push(News::RoadWalked {
@@ -1095,6 +1266,7 @@ impl Sheet {
             Command::Reset => self.reset(),
             Command::Drink { drink } => self.drink(drink),
             Command::Cart { slot } => self.cart(rules, slot),
+            Command::Ink { level } => self.ink(rules, level),
         }
     }
 
@@ -1465,10 +1637,59 @@ impl Sheet {
                     self.max_signal()
                 )
             }
+            Drink::Feedback => {
+                "feedback. the glass hums before you touch it. a surge in your deck until the roll."
+                    .to_string()
+            }
+            Drink::Squelch => {
+                "squelch. it cuts the hiss off at the root. a burn in your deck until the roll."
+                    .to_string()
+            }
+            Drink::SignOff => {
+                "sign-off. the bars go to black and hold there. a mute in your deck until the roll."
+                    .to_string()
+            }
         };
         Outcome {
             applied: Applied::Drank { drink },
             lines: vec![line],
+        }
+    }
+
+    /// INK: the draft at `level` inked, for crystals alone. Both of its
+    /// cards are in the deck from that level on, in this climb and every
+    /// one after; a mark and the ledge leave it. One draft for every mark,
+    /// and one more: the needle is a climb's crystals spent on the climbs
+    /// after it. Not with a glyph waiting: the deck on the table is the
+    /// deck that was dealt.
+    fn ink(&mut self, rules: &Rules, level: i32) -> Outcome {
+        if let Some((refusal, line)) = self.needle_refused(rules, level) {
+            return Outcome {
+                applied: Applied::Refused(refusal),
+                lines: vec![line],
+            };
+        }
+        let draft = cards::draft_at(level).expect("the needle checked the draft");
+        let crystals = rules.ink_crystals;
+        self.crystals -= crystals;
+        self.inks.push(level);
+        let [first, second] = draft.options.map(Card::name);
+        let lines = vec![
+            format!(
+                "the needle goes in. {crystals} crystals. it does not hurt the way you expected."
+            ),
+            match self.level >= level {
+                true => format!(
+                    "{first} and {second} are both yours from here, this climb and every one after."
+                ),
+                false => format!(
+                    "{first} and {second} are both yours from level {level} on, this climb and every one after."
+                ),
+            },
+        ];
+        Outcome {
+            applied: Applied::Inked { level, crystals },
+            lines,
         }
     }
 
@@ -1893,8 +2114,9 @@ impl Sheet {
 
     /// The Old Signal is down: a mark, and the climb starts over. Level,
     /// exp, gear, the deck, and bits go back to a fresh runner's, the
-    /// locker is emptied, and the crystals go with it; the peak, the kills, today's rations, the debt, and
-    /// everything off the sheet (the look, the badges) stay. The mark's
+    /// locker is emptied, and the crystals go with it; the peak, the kills,
+    /// today's rations, the debt, the inks (the one purchase that outlives
+    /// a climb), and everything off the sheet (the look, the badges) stay. The mark's
     /// chips are owed from this moment (`unpaid_mark`), until the service
     /// settles them.
     fn slay(&mut self, mut lines: Vec<String>) -> Outcome {
@@ -2081,7 +2303,10 @@ fn refused(refusal: Refusal) -> Outcome {
         | Refusal::NothingToLose
         | Refusal::GlassPoured
         | Refusal::ShortCrystals { .. }
-        | Refusal::PastTheWall => {
+        | Refusal::PastTheWall
+        | Refusal::NoDraftThere
+        | Refusal::AlreadyInked
+        | Refusal::NeedleWaits => {
             unreachable!("till refusals are lined where they are refused")
         }
     };

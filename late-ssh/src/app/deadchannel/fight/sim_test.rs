@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::{
     AMBIENT, Bench, CAREFUL, Climb, Day, Event, Hand, Journal, KEEN, Ledger, NEGLECTFUL, Player,
-    RECKLESS, builds, climb, date, play_turn, summary,
+    RECKLESS, Start, builds, climb, date, play_turn, summary,
 };
 use crate::app::deadchannel::fight::cards::DRAFTS;
 use crate::app::deadchannel::fight::data::RULES;
@@ -26,9 +26,13 @@ const AMBIENT_MARK_DAYS: std::ops::RangeInclusive<u32> = 16..=22;
 const RECKLESS_MARK_DAYS: std::ops::RangeInclusive<u32> = 18..=28;
 
 fn climbs(player: Player) -> Vec<Climb> {
+    climbs_from(player, Start::FRESH)
+}
+
+fn climbs_from(player: Player, start: Start) -> Vec<Climb> {
     let mut bench = Bench::live();
     (0..SEEDS)
-        .map(|seed| climb(player, seed, MAX_DAYS, &mut bench, &mut Journal::Off))
+        .map(|seed| climb(player, start, seed, MAX_DAYS, &mut bench, &mut Journal::Off))
         .collect()
 }
 
@@ -131,7 +135,14 @@ fn a_runner_who_skipped_the_armorer_climbs_again_within_a_week_of_the_drop() {
 /// fields moved and why before re-blessing.
 #[test]
 fn one_keen_climb_holds_still() {
-    let climb = climb(KEEN, 7, MAX_DAYS, &mut Bench::live(), &mut Journal::Off);
+    let climb = climb(
+        KEEN,
+        Start::FRESH,
+        7,
+        MAX_DAYS,
+        &mut Bench::live(),
+        &mut Journal::Off,
+    );
     assert_eq!(climb, pinned_keen_climb());
 }
 
@@ -568,14 +579,51 @@ fn the_sims_auto_turn_is_the_auto_keys_turn() {
     panic!("a fight always ends");
 }
 
+/// The second climb on the key is never slower than the first, and every
+/// draft inked never slows it further: a mark and the needle are paid for
+/// in the days a drop costs, and the key is the runner who drops
+/// (`fight/BALANCE.md`, "The second climb"). The arena holds the bands;
+/// this holds the order, so a change that turns either into a tax fails
+/// fast.
+#[test]
+fn a_mark_and_the_inks_never_slow_the_second_climb() {
+    let first = marked(&climbs(AMBIENT));
+    let second = marked(&climbs_from(AMBIENT, Start { marks: 1, inked: 0 }));
+    let inked = marked(&climbs_from(
+        AMBIENT,
+        Start {
+            marks: 1,
+            inked: DRAFTS.len(),
+        },
+    ));
+    assert!(
+        second <= first && inked <= second,
+        "on the key: first climb day {first}, second day {second}, second with every draft inked day {inked}"
+    );
+}
+
 /// A journal is the climb it was kept of: keeping one changes nothing,
 /// it opens on the first dawn and closes on the mark's dusk, every day
 /// has its dawn and its dusk, and the bits it saw paid are the ledger's.
 #[test]
 fn a_journal_tells_the_climb_it_was_kept_of() {
-    let quiet = climb(KEEN, 7, MAX_DAYS, &mut Bench::live(), &mut Journal::Off);
+    let quiet = climb(
+        KEEN,
+        Start::FRESH,
+        7,
+        MAX_DAYS,
+        &mut Bench::live(),
+        &mut Journal::Off,
+    );
     let mut journal = Journal::On(Vec::new());
-    let told = climb(KEEN, 7, MAX_DAYS, &mut Bench::live(), &mut journal);
+    let told = climb(
+        KEEN,
+        Start::FRESH,
+        7,
+        MAX_DAYS,
+        &mut Bench::live(),
+        &mut journal,
+    );
     assert_eq!(told, quiet, "a journal only listens");
     let Journal::On(events) = journal else {
         panic!("the journal was on");

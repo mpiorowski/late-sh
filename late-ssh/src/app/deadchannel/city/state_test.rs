@@ -145,7 +145,6 @@ fn leaning_out_only_happens_at_the_ledge_and_never_outlives_it() {
 #[test]
 fn every_closed_shop_answers_enter_with_the_same_line() {
     for landmark in [
-        Landmark::Ink,
         Landmark::Baths,
         Landmark::Sleep,
         Landmark::Shrine,

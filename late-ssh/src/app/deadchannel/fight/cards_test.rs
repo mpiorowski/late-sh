@@ -1,6 +1,8 @@
 use rand::{SeedableRng, rngs::StdRng};
 
-use super::{Board, Card, DECK, DRAFTS, Effect, HAND, Piles, STATIC_CAP, deck, draft_owed};
+use super::{
+    Board, Card, DECK, DRAFTS, Effect, HAND, Piles, STATIC_CAP, deck, draft_at, draft_owed,
+};
 use crate::app::deadchannel::fight::state::Powers;
 
 fn count(cards: &[Card], card: Card) -> usize {
@@ -113,10 +115,10 @@ fn a_played_card_leaves_a_hole_and_static_leaves_the_deck() {
 /// A draft swaps one card for another: the deck is ten cards whatever
 /// was picked, and the drafts come in order, each once its level does.
 #[test]
-fn a_draft_swaps_one_card_and_the_deck_stays_ten() {
-    assert_eq!(deck(&[]), DECK.to_vec());
+fn a_draft_swaps_one_card_and_an_ink_adds_the_other() {
+    assert_eq!(deck(&[], &[]), DECK.to_vec());
 
-    let drafted = deck(&[Card::Brace, Card::Riposte, Card::Burn, Card::Mute]);
+    let drafted = deck(&[Card::Brace, Card::Riposte, Card::Burn, Card::Mute], &[]);
     assert_eq!(drafted.len(), DECK.len());
     let held = |card| count(&drafted, card);
     assert_eq!(
@@ -140,7 +142,30 @@ fn a_draft_swaps_one_card_and_the_deck_stays_ten() {
         (1, 1, 1, 1)
     );
     // Half a build is half the swaps.
-    assert_eq!(count(&deck(&[Card::Jab]), Card::Strike), 3);
+    assert_eq!(count(&deck(&[Card::Jab], &[]), Card::Strike), 3);
+
+    // An inked draft is both its cards from its level on: the other option
+    // comes in beside the pick, and only once the pick is made.
+    assert_eq!(
+        deck(&[], &[3]),
+        DECK.to_vec(),
+        "nothing until the draft is passed"
+    );
+    let inked = deck(&[Card::Jab, Card::Bulwark], &[3, 9]);
+    assert_eq!(inked.len(), DECK.len() + 1);
+    assert_eq!(
+        (
+            count(&inked, Card::Jab),
+            count(&inked, Card::Brace),
+            count(&inked, Card::Riposte)
+        ),
+        (1, 1, 0),
+        "the level 3 ink adds the brace; the level 9 one waits on its draft"
+    );
+    assert_eq!(DRAFTS[0].other(Card::Jab), Card::Brace);
+    assert_eq!(DRAFTS[0].other(Card::Brace), Card::Jab);
+    assert_eq!(draft_at(6), Some(&DRAFTS[1]));
+    assert_eq!(draft_at(7), None);
 
     assert_eq!(draft_owed(2, 0), None, "nothing before the first level");
     assert_eq!(draft_owed(3, 0), Some(&DRAFTS[0]));
