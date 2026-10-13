@@ -22,6 +22,7 @@ use late_core::models::chat_message_gild::{GildCounts, GildTier};
 use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
 use ratatui::{
+    Frame,
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style},
@@ -29,7 +30,6 @@ use ratatui::{
     widgets::{
         Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget,
     },
-    Frame,
 };
 
 use crate::app::{

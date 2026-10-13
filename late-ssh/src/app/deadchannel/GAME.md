@@ -1057,9 +1057,10 @@ never does.
   Signal instead of a glyph. A dropped signal against it costs what any
   drop costs, and the exp lost usually puts the gate a day or two of
   glyphs away again.
-- **The numbers.** 300 signal and 35 attack (290 and 39 until the 2026-10-13 pass: the hit ramp reaches the boss too, and ten signal is the finer knob), 22 defense, tuned for the
-  round and the drafted deck, not LoGD's dragon (300 / 45 / 25, numbers
-  for an exchange loop). From the top of the wall a first kill lands
+- **The numbers.** 300 signal, 35 attack, 22 defense, tuned for the
+  round, the drafted deck, and the hit ramp, which reaches the boss too
+  (ten signal is the finer knob to finish on), not LoGD's dragon (300 /
+  45 / 25, numbers for an exchange loop). From the top of the wall a first kill lands
   about one try in two on the `Auto` key and nine in ten for a runner
   reading the hand, whatever was drafted; a glass of static on ice makes
   the key near sure. Held by the arena's contract for every build
@@ -1084,8 +1085,8 @@ never does.
   the dragon kills (a quarter of level times a hundred per kill), a brake
   on stats that bought more forest fights a day. Here five fights a day
   pay a fixed exp, so the mark bonus buys no pace, only fewer drops, and
-  the scaling was a day's tax on a veteran reader with nothing paying it
-  back (`fight/BALANCE.md`, "The second climb is a day quicker"). The
+  scaling the ladder would be a day's tax on a veteran reader with
+  nothing paying it back (`fight/BALANCE.md`, "The second climb is a day quicker"). The
   ladder is the same on every climb.
 - **A mark empties the stash** (decided with the money pass below): a
   full locker waiting at level 1 would make the second climb a shopping
@@ -1333,14 +1334,12 @@ fight, spent on things gold could not buy. Both answers are in:
   tier needed and never caught up (`fight/BALANCE.md`, the sweep). The
   careful runner now fights every level in that level's kit and wears
   the top one at 15; gear takes over half the bits earned, patch under
-  a quarter. Nothing stops a rich runner buying ahead; a tier ahead is
-  worth two or three points of odds, so nobody needs to. *Amended
-  2026-10-13:* that stopped being true once the bright glyph was a
-  fight: the keen runner's double bits bought three tiers over the
-  level by the median climb, and at three over nothing on the road is
-  a fight. The wall now asks half as much again for every tier a piece
-  would sit above the level (`PRICE_LEAD_PERCENT`); the trade-in is
-  read off the ladder, so the premium does not come back.
+  a quarter. Nothing stops a rich runner buying ahead, but the wall
+  asks half as much again for every tier a piece would sit above the
+  level (`PRICE_LEAD_PERCENT`): at a flat price the bright glyph's double
+  bits buy the keen runner three tiers over the level by the median
+  climb, and at three over nothing on the road is a fight. The trade-in
+  is read off the ladder, so the premium does not come back.
 - **Crystals.** One kill in twelve of the glyph of your level leaves
   one. Rare enough to be a moment, common enough that a week holds a
   few. They are the one thing a dropped signal does not take (LoGD's
@@ -1362,43 +1361,42 @@ fight, spent on things gold could not buy. Both answers are in:
   From the wall's kit it is about a coin toss; one thing a crystal buys
   makes it a fight to take. *Amended 2026-10-06:* in the round it is a
   fight to read: near sure for a runner playing the hand, a real risk
-  on the `Auto` key, and most of a signal either way. *Amended
-  2026-10-13:* its edge is a share of the level, not of the glyph's own
-  numbers. A percentage rounded up doubled the flicker and added a
-  sixth at the top, so the bright one was a wall on day one and nothing
-  by level 10; now it is the same step up all the way, and read sharp it
-  is meant to go down about three times in four, never nine in ten.
+  on the `Auto` key, and most of a signal either way. Its edge is a
+  share of the level (half the level in attack, rounded up, and the
+  plain glyph's defense), not of the glyph's own numbers: a percentage
+  rounded up would double the flicker and add a sixth at the top, a wall
+  on day one and nothing by level 10. It is the same step up all the
+  way, and read sharp it is meant to go down about three times in four,
+  never nine in ten.
 - **One patch a day.** The signal is a budget of two bars a day: the one
   the roll fills and the one patch buys, spent when the runner says so.
-  Before this, patch was a bit a point at any time, and the measured
-  climb showed what that is: a careful runner who patched before every
-  fight, never ran, never dropped, and paid three percent of its bits
-  for it; the day had no attrition and the road's five fights were five
-  separate full-signal fights. A rising price was the other way, and a
+  Patch at any time, a bit a point, measures as a careful runner who
+  patches before every fight, never runs, never drops, and pays three
+  percent of its bits for it: the day has no attrition and the road's
+  five fights are five separate full-signal fights. A rising price was the other way, and a
   runner with seventy thousand idle bits buys through any price; a
   count cannot be bought. It is a wall by the balance manual's rule, and
   the rule's reason (a wall hides a wrong number) does not hold here:
   the number was tried. The day keeps the grammar it had: ten rations,
-  one glass, two brights, one patch. The siphon moved into every deck
-  from the first step as the one heal between the patch and the roll,
-  and the level 3 draft asks jab or brace (a free hit or a free guard)
-  instead. The threat word reads the sheet as it stands, so the same
+  one glass, two brights, one patch. The siphon is in every deck from
+  the first step, the one heal between the patch and the roll, and the
+  level 3 draft asks jab or brace (a free hit or a free guard). The threat word reads the sheet as it stands, so the same
   bright glyph reads easy at a full bar and grim at a third: the word
   gets its second life for free.
 - **The fight scales up.** Everything in a round is linear in the level
-  (attack and defense are level plus tier, the table is a line), so the
-  fight at 15 was the fight at 5 with bigger numbers, and the runner
-  alone gained four cards on the way up. Two numbers break the line on
+  (attack and defense are level plus tier, the table is a line), so
+  left alone the fight at 15 is the fight at 5 with bigger numbers, and
+  only the runner gains cards on the way up. Two numbers break the line on
   purpose: a glyph's hit climbs a few points a level
   (`HIT_RAMP_PERCENT`), and its noise throws one more static card every
   few levels (`NOISE_LEVEL_STEP`), so the deck the glyph corrupts keeps
   pace with the deck the runner builds.
 - **The blade shop prices the lead.** Three crystals for a piece at or
   under the level, two more a tier past it. At a flat three, the two
-  crystals a day the bright glyphs pay bought four tiers over the level
-  by level 9 and the whole wall at 11, and at four tiers over nothing
-  on the road is a fight. The keen runner's kit is now held to the same
-  band as the careful one's.
+  crystals a day the bright glyphs pay buy four tiers over the level by
+  level 9 and the whole wall at 11, and at four tiers over nothing on
+  the road is a fight. The keen runner's kit is held to the same band
+  as the careful one's.
 - **Dead Air pours.** A glass for a crystal, one a day, gone at the
   roll: attack, defense, or the signal's bars. The consumable sink, and
   the reason to walk into the bar. The prepared runner's move is to
@@ -1414,7 +1412,7 @@ fight, spent on things gold could not buy. Both answers are in:
   key more than the dice against the bright glyph (a wipe did, poured
   into a clean deck, so squelch is a burn). The three stat glasses
   stay; they are the Old Signal's.
-- **INK: the needle.** The dark INK sign is lit. A draft inked for ten
+- **INK: the needle.** The INK sign is lit. A draft inked for ten
   crystals is both of its cards: the pick goes in as always and the
   other option comes in beside it, from the draft's level on, in this
   climb and every one after. Marks pay the sheet (+1 attack and defense
@@ -1530,8 +1528,8 @@ a season beat once the loop stands.
 
 - **One deck, ten cards, no builds at v0.** Five strikes, three blocks,
   two of the band's moves (the move names already drafted under
-  "Bands"). Everyone starts with the same ten. (Since 2026-10-13 one of
-  the strikes is a siphon: "One patch a day" above.) The weapon tier adds to
+  "Bands"). Everyone starts with the same ten, one strike of them a
+  siphon ("One patch a day" above). The weapon tier adds to
   strike numbers, the armor tier to block numbers, so gear still matters
   and the armorer still sells; the deck itself does not change. Balance
   is a spreadsheet with two columns, and the gear ladder, already
@@ -1684,8 +1682,8 @@ every runner new cards to play with and keeps one deck to tune.
   arena fights all of them on every pass.
 - **Every question has two right answers.** Level 3, for a strike: a
   *jab* (free, three quarters of a strike) or a *brace* (free, a whole
-  block): a free hit or a free guard (the siphon is in every deck since
-  "One patch a day"). Level 6, for a block: a
+  block): a free hit or a free guard (the siphon is in every deck: "One
+  patch a day"). Level 6, for a block: a
   *riposte* (hits for a block and a half and all the block standing) or a
   *bulwark* (two and a half blocks for two energy): armor as a weapon
   or as a wall. Level 9, for a strike: a *burn* (free, two energy, and

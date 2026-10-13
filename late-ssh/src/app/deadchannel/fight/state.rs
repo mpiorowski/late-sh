@@ -981,6 +981,43 @@ impl Sheet {
         }
     }
 
+    /// Why patch would turn the runner away before the price, and the line
+    /// it says it with: the one order and the one wording, for
+    /// `Command::Patch` and for the panel that spells the refusal out
+    /// ahead of the key. The bits are the key's row: the panel prices the
+    /// gap red when short, and `Command::Patch` refuses with `Short`.
+    /// `None` when patch would sell.
+    pub fn patch_refused(&self) -> Option<(Refusal, String)> {
+        if self.is_down() {
+            return Some((
+                Refusal::SignalDown,
+                "your signal is down. nothing here brings it back before the roll.".to_string(),
+            ));
+        }
+        if self.fight.is_some() {
+            return Some((
+                Refusal::FightWaiting,
+                "not with a glyph waiting on you. finish it first.".to_string(),
+            ));
+        }
+        if self.rations_left <= 0 {
+            return Some((
+                Refusal::NoRations,
+                "you are spent for today. the roll brings the signal back for nothing.".to_string(),
+            ));
+        }
+        if self.signal == self.max_signal() {
+            return Some((
+                Refusal::NothingToPatch,
+                "nothing on you needs patching.".to_string(),
+            ));
+        }
+        if self.road.patched {
+            return Some((Refusal::PatchedToday, PATCHED_TODAY_LINE.to_string()));
+        }
+        None
+    }
+
     /// Why the bartender would not pour, and the line he says it with:
     /// the one order and the one wording, for `Command::Drink` and for the
     /// panel that spells the refusal out ahead of the keys. `None` when a
@@ -1474,42 +1511,13 @@ impl Sheet {
     /// away (GAME.md, "One patch a day"); otherwise the whole gap, paid
     /// in full, and the day's patch is spent.
     fn patch(&mut self, rules: &Rules) -> Outcome {
-        if self.is_down() {
+        if let Some((refusal, line)) = self.patch_refused() {
             return Outcome {
-                applied: Applied::Refused(Refusal::SignalDown),
-                lines: vec![
-                    "your signal is down. nothing here brings it back before the roll.".to_string(),
-                ],
-            };
-        }
-        if self.fight.is_some() {
-            return Outcome {
-                applied: Applied::Refused(Refusal::FightWaiting),
-                lines: vec!["not with a glyph waiting on you. finish it first.".to_string()],
-            };
-        }
-        if self.rations_left <= 0 {
-            return Outcome {
-                applied: Applied::Refused(Refusal::NoRations),
-                lines: vec![
-                    "you are spent for today. the roll brings the signal back for nothing."
-                        .to_string(),
-                ],
+                applied: Applied::Refused(refusal),
+                lines: vec![line],
             };
         }
         let restored = self.max_signal() - self.signal;
-        if restored == 0 {
-            return Outcome {
-                applied: Applied::Refused(Refusal::NothingToPatch),
-                lines: vec!["nothing on you needs patching.".to_string()],
-            };
-        }
-        if self.road.patched {
-            return Outcome {
-                applied: Applied::Refused(Refusal::PatchedToday),
-                lines: vec![PATCHED_TODAY_LINE.to_string()],
-            };
-        }
         let paid = self.patch_price_under(rules);
         if paid > self.bits {
             let by = paid - self.bits;

@@ -719,12 +719,7 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
                 return;
             };
             app.chat.close_news_modal();
-            if app.chat.begin_reply_to_article(article_id)
-                && let Some(lounge_id) = app.chat.lounge_room_id()
-            {
-                app.chat
-                    .select_room_slot(crate::app::chat::state::RoomSlot::Room(lounge_id));
-                app.sync_visible_chat_room();
+            if chat::news::input::reply_in_lounge(app, article_id) {
                 app.set_screen(Screen::Dashboard);
             }
         }

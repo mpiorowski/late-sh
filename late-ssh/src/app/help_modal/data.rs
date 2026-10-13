@@ -1506,6 +1506,7 @@ fn news_help_lines() -> Vec<String> {
             "  o on now strip    open the news item modal",
             "  Enter in modal    copy link and close",
             "  N in modal        jump to News with story selected",
+            "  r in modal        reply in #lounge quoting the story",
             "",
             "What happens after submit",
             "  1. late.sh fetches the article or video page",

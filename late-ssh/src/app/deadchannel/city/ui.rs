@@ -39,8 +39,7 @@ use ratatui::{
 use crate::app::deadchannel::fight::cards::DRAFTS;
 use crate::app::deadchannel::fight::data::{
     CART_CRYSTALS, CART_LEAD_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT,
-    LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, PATCHED_TODAY_LINE, RULES, TRADE_IN_PERCENT, drink_edge,
-    patch_rate,
+    LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, RULES, TRADE_IN_PERCENT, drink_edge, patch_rate,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{
@@ -1890,8 +1889,9 @@ pub(crate) fn mix(mut v: u64) -> u64 {
 }
 
 /// Patch: the signal, what bringing it back costs, and the one key. The
-/// price is `Sheet::patch_price`; the refusals the row would give are
-/// spelled out ahead of the key so nobody pays to read them.
+/// price is `Sheet::patch_price`; the refusals the row would give
+/// (`Sheet::patch_refused`, the order and the words `Command::Patch` uses)
+/// are spelled out in the key's row so nobody pays to read them.
 fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -1921,39 +1921,20 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         Span::styled(format!("{} bits", sheet.bits), number),
     ]));
     lines.push(Line::default());
-    let price = sheet.patch_price();
-    if sheet.is_down() {
-        lines.push(Line::from(Span::styled(
-            "your signal is down. nothing here brings it back before the roll.",
-            text,
-        )));
-    } else if sheet.fight.is_some() {
-        lines.push(Line::from(Span::styled(
-            "not with a glyph waiting on you. finish it first.",
-            text,
-        )));
-    } else if sheet.rations_left <= 0 {
-        lines.push(Line::from(Span::styled(
-            "you are spent for today. the roll brings the signal back for nothing.",
-            text,
-        )));
-    } else if price == 0 {
-        lines.push(Line::from(Span::styled(
-            "nothing on you needs patching.",
-            text,
-        )));
-    } else if sheet.road.patched {
-        lines.push(Line::from(Span::styled(PATCHED_TODAY_LINE, text)));
-    } else {
-        let style = match price > sheet.bits {
-            true => short,
-            false => number,
-        };
-        lines.push(Line::from(vec![
-            Span::styled("[p] ", key),
-            Span::styled("patch to full for ", text),
-            Span::styled(format!("{price} bits"), style),
-        ]));
+    match sheet.patch_refused() {
+        Some((_, line)) => lines.push(Line::from(Span::styled(line, text))),
+        None => {
+            let price = sheet.patch_price();
+            let style = match price > sheet.bits {
+                true => short,
+                false => number,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("[p] ", key),
+                Span::styled("patch to full for ", text),
+                Span::styled(format!("{price} bits"), style),
+            ]));
+        }
     }
     lines.push(Line::from(Span::styled(
         format!(
@@ -2287,7 +2268,7 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 ),
             ),
             Drink::Feedback => ("[f] ", "a surge in tonight's deck".to_string()),
-            Drink::Squelch => ("[q] ", "a burn in tonight's deck".to_string()),
+            Drink::Squelch => ("[u] ", "a burn in tonight's deck".to_string()),
             Drink::SignOff => ("[o] ", "a mute in tonight's deck".to_string()),
         };
         let lit_row = refusal.is_none();
@@ -2330,8 +2311,9 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
 
 /// INK: the crystals on hand, the marks, and the room the needle has
 /// left; a row per draft with its level, its two cards, and whether it
-/// is inked, priced, or short; the refusal that is not one draft's
-/// spelled out ahead of the keys.
+/// is inked, priced, or short, the cursor on the picked one; then the key
+/// that inks the picked draft, or the needle's refusal in its row
+/// (`Sheet::needle_refused`, the order and the words `Command::Ink` uses).
 fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -2348,6 +2330,8 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         )));
         return lines;
     };
+    let picked = view.state.picked_draft();
+    let price = sheet.ink_price();
     lines.push(Line::from(vec![
         Span::styled("crystals ", dim_text),
         Span::styled(sheet.crystals.to_string(), number),
@@ -2364,35 +2348,51 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ),
     ]));
     lines.push(Line::default());
-    // The refusal that is nobody's draft in particular: a glyph waiting,
-    // or the needle done until the next mark.
-    let mut general: Option<String> = None;
-    for (at, draft) in DRAFTS.iter().enumerate() {
-        let refusal = sheet.needle_refused(&RULES, draft.level);
+    for draft in &DRAFTS {
         let [first, second] = draft.options.map(|card| card.name());
-        let price = sheet.ink_price();
-        let (status, style, lit_row) = match &refusal {
+        let (status, style, lit_row) = match sheet.needle_refused(&RULES, draft.level) {
             None => (format!("for {price} crystals"), dim_text, true),
             Some((Refusal::AlreadyInked, _)) => ("inked".to_string(), lit(Neon::Amber), false),
             Some((Refusal::ShortCrystals { by }, _)) => {
                 (format!("for {price} crystals, {by} short"), short, false)
             }
-            Some((Refusal::FightWaiting | Refusal::NeedleWaits, line)) => {
-                general.get_or_insert_with(|| line.clone());
+            Some((Refusal::FightWaiting | Refusal::NeedleWaits, _)) => {
                 (format!("for {price} crystals"), muted_text, false)
             }
-            Some((other, line)) => {
-                unreachable!("the needle refused a draft on the menu with {other:?}: {line}")
-            }
+            Some((
+                Refusal::NoDraftThere
+                | Refusal::NoRations
+                | Refusal::SignalDown
+                | Refusal::NoFight
+                | Refusal::NotThatWay
+                | Refusal::WrongCall
+                | Refusal::NoEnergy
+                | Refusal::NoCard
+                | Refusal::CardWaiting
+                | Refusal::NoDraft
+                | Refusal::NotOffered
+                | Refusal::NotAnUpgrade
+                | Refusal::Short { .. }
+                | Refusal::NothingToPatch
+                | Refusal::PatchedToday
+                | Refusal::NoLowerGlyph
+                | Refusal::NothingOnHand
+                | Refusal::DepositAllCut
+                | Refusal::LockerEmpty
+                | Refusal::LoanCapped
+                | Refusal::NoDebt
+                | Refusal::NothingToLose
+                | Refusal::GlassPoured
+                | Refusal::PastTheWall,
+                line,
+            )) => unreachable!("the needle refused a draft on the menu: {line}"),
+        };
+        let marker = match draft.level == picked.level {
+            true => Span::styled("▸ ", key),
+            false => Span::styled("  ", text),
         };
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("[{}] ", at + 1),
-                match lit_row {
-                    true => key,
-                    false => muted_text,
-                },
-            ),
+            marker,
             Span::styled(
                 format!("{:<10}", format!("level {}", draft.level)),
                 dim_text,
@@ -2408,10 +2408,22 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         ]));
     }
     lines.push(Line::default());
-    // The refusal's row is there, blank, while the needle would take a draft.
-    lines.push(match general {
-        Some(reason) => Line::from(Span::styled(reason, text)),
-        None => Line::default(),
+    lines.push(Line::from(vec![
+        Span::styled("[↑↓] ", key),
+        Span::styled("pick a draft", text),
+    ]));
+    // The key's row, or the refusal standing in for it, so the panel
+    // keeps its rows whatever the needle says.
+    lines.push(match sheet.needle_refused(&RULES, picked.level) {
+        None => {
+            let [first, second] = picked.options.map(|card| card.name());
+            Line::from(vec![
+                Span::styled("[i] ", key),
+                Span::styled(format!("ink {first} and {second} for "), text),
+                Span::styled(format!("{price} crystals"), number),
+            ])
+        }
+        Some((_, line)) => Line::from(Span::styled(line, text)),
     });
     lines.push(Line::from(Span::styled(
         "a draft inked is both its cards from its level on, this climb and every one after. one draft a mark, and one more.",

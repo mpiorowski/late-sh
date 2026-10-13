@@ -358,7 +358,7 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
         "{screen}"
     );
     assert!(
-        screen.contains("[q] squelch           a burn in tonight's deck"),
+        screen.contains("[u] squelch           a burn in tonight's deck"),
         "{screen}"
     );
     assert!(
@@ -385,11 +385,13 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
 }
 
 /// INK lists every draft with its two cards, says which are inked, prices
-/// the rest, and spells the needle's refusal ahead of the keys.
+/// the rest, and offers the key for the picked draft, or spells out why
+/// the needle would not take it in the key's row.
 #[test]
 fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
     let mut state = State::new();
     state.open_panel(Landmark::Ink);
+    state.pick_draft_down();
     let mut sheet = Sheet::fresh(
         uuid::Uuid::nil(),
         chrono::NaiveDate::from_ymd_opt(2026, 9, 24).unwrap(),
@@ -404,11 +406,16 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
         "{screen}"
     );
     assert!(
-        screen.contains("[1] level 3   jab · brace        for 10 crystals"),
+        screen.contains("  level 3   jab · brace        for 10 crystals"),
         "{screen}"
     );
     assert!(
-        screen.contains("[2] level 6   riposte · bulwark  for 10 crystals"),
+        screen.contains("▸ level 6   riposte · bulwark  for 10 crystals"),
+        "the cursor on the level 6 draft\n{screen}"
+    );
+    assert!(screen.contains("[↑↓] pick a draft"), "{screen}");
+    assert!(
+        screen.contains("[i] ink riposte and bulwark for 10 crystals"),
         "{screen}"
     );
 
@@ -416,19 +423,31 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
     sheet.crystals = 4;
     let inked = render_with_sheet(&state, &sheet, None);
     assert!(
-        inked.contains("[2] level 6   riposte · bulwark  inked"),
+        inked.contains("▸ level 6   riposte · bulwark  inked"),
         "{inked}"
     );
     assert!(inked.contains("the needle holds no more"), "{inked}");
     assert!(
-        inked.contains("the needle has done what it will for you. bring it a mark."),
-        "{inked}"
+        inked.contains("the level 6 draft is already in your skin."),
+        "the refusal in the key's row\n{inked}"
+    );
+    assert!(!inked.contains("[i] ink"), "{inked}");
+
+    state.pick_draft_up();
+    let full = render_with_sheet(&state, &sheet, None);
+    assert!(
+        full.contains("the needle has done what it will for you. bring it a mark."),
+        "{full}"
     );
 
     sheet.marks = 1;
     let short = render_with_sheet(&state, &sheet, None);
     assert!(
-        short.contains("[1] level 3   jab · brace        for 10 crystals, 6 short"),
+        short.contains("▸ level 3   jab · brace        for 10 crystals, 6 short"),
+        "{short}"
+    );
+    assert!(
+        short.contains("10 crystals to ink jab and brace. you are 6 short."),
         "{short}"
     );
     assert!(!short.contains("bring it a mark"), "{short}");

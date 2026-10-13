@@ -350,7 +350,7 @@ pub const OLD_SIGNAL: FoeKind = FoeKind {
 /// the door's `DRAGON_*`), numbers for its exchange loop. In the round the
 /// Old Signal is tuned on its own (`fight/BALANCE.md`): from the top of the
 /// wall a first kill lands about one try in two on the `Auto` key and
-/// about four in five for a runner reading the hand, whatever was
+/// about nine in ten for a runner reading the hand, whatever was
 /// drafted, and a glass makes the key's try near sure. No dice but the shuffle means the odds
 /// move in steps: ten more signal is one more hit to land, and takes ten
 /// points or more off the key's chances. The arena's contract holds the

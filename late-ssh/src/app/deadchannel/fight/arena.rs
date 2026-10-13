@@ -30,14 +30,14 @@
 //! (`make deadchannel-sweep`, the candidates in `arena_test.rs::SWEEP`).
 
 use chrono::NaiveDate;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::cards::{Card, DRAFTS};
-use super::data::{self, Intent, Rules, MAX_LEVEL};
-use super::road::{Node, FIGHT_STEPS, LANES, STEPS};
+use super::data::{self, Intent, MAX_LEVEL, Rules};
+use super::road::{FIGHT_STEPS, LANES, Node, STEPS};
 use super::sim::{self, Bench, Build, Climb, Day, Event, Hand, Journal, Player, Snapshot, Start};
-use super::state::{gear_name, Applied, Drink, Pick, Sheet, Slot, MAX_TIER};
+use super::state::{Applied, Drink, MAX_TIER, Pick, Sheet, Slot, gear_name};
 
 /// What the runner carries into a matchup, both slots alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

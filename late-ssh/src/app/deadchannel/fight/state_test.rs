@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::{
@@ -9,9 +9,9 @@ use super::{
 };
 use crate::app::deadchannel::fight::cards::{Card, DECK, DRAFTS, ENERGY, HAND, STATIC_CAP};
 use crate::app::deadchannel::fight::data::{
-    exp_to_advance, exp_to_seek, title, FoeTier, Intent, BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE,
-    FOES, HEARD_LINE, MARK_BONUS_CAP, MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY,
-    RULES, START_BITS, STATIC_LINE,
+    BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE, FOES, FoeTier, HEARD_LINE, Intent, MARK_BONUS_CAP,
+    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, START_BITS, STATIC_LINE,
+    exp_to_advance, exp_to_seek, title,
 };
 use crate::app::deadchannel::fight::road::{Mark, Node, RoadRun, Trace};
 use crate::app::deadchannel::fight::state::MAX_TIER;
@@ -192,11 +192,13 @@ fn winning_past_the_threshold_levels_up() {
     assert_eq!(sheet.exp, 104);
     assert_eq!(sheet.max_signal(), 20);
     assert_eq!(sheet.signal, 20, "the new level's signal comes with it");
-    assert!(outcome
-        .lines
-        .last()
-        .expect("a line")
-        .starts_with("you are level 2."));
+    assert!(
+        outcome
+            .lines
+            .last()
+            .expect("a line")
+            .starts_with("you are level 2.")
+    );
 }
 
 /// No dice in a run: what the glyph meant to do this turn lands on the

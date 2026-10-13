@@ -149,7 +149,7 @@ pub const SECTIONS: &[Section] = &[
                 "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *300* signal, *35* attack, *22* defense, and no bits.",
             ),
             Block::Rule(
-                "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and every level costs a little more.",
+                "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and the same ladder to climb again.",
             ),
         ],
     },
@@ -275,7 +275,7 @@ pub const SECTIONS: &[Section] = &[
                 "exp levels you whether your gear is ready or not. when the glyph of your level reads grim, the one below still pays: half, but a kill is a kill. it never leaves a crystal.",
             ),
             Block::Rule(
-                "*the bright glyph* sits on two nodes of every road, one lane each, so you walk to it or around it: the glyph of your level with *half as much signal again*, and half your level more attack and defense. it pays *double bits*, the same exp, and always *a crystal*. it costs most of a signal to put down, and the day only has the one patch.",
+                "*the bright glyph* sits on two nodes of every road, one lane each, so you walk to it or around it: the glyph of your level with *half as much signal again*, and half your level more attack. its defense is the plain glyph's. it pays *double bits*, the same exp, and always *a crystal*. it costs most of a signal to put down, and the day only has the one patch.",
             ),
             Block::Rule(
                 "with your signal down or the road walked, the panel is the day's card: the lane you took, lit by how each step went. `s` copies it to paste anywhere.",
@@ -348,7 +348,7 @@ pub const SECTIONS: &[Section] = &[
                 "at levels *3*, *6*, *9*, and *12* a new card is waiting for you on the road: one of two, the same two for everybody. `1` or `2` takes it, and the road waits until you do.",
             ),
             Block::Rule(
-                "the card goes in *in place of* a strike or a block, so the deck is always ten cards. it stays until the mark; the next climb you pick again.",
+                "the card goes in *in place of* a strike or a block, so a draft never grows the deck past ten: only an inked draft's other card and a pour at dead air add one. it stays until the mark; the next climb you pick again.",
             ),
             Block::Rule(
                 "*level 3*, for a strike. *jab*: free, hits for three quarters of a strike. or *brace*: free, holds a block until a hit eats it.",
@@ -487,7 +487,7 @@ pub const SECTIONS: &[Section] = &[
                     does: "feedback: a surge in tonight's deck",
                 },
                 Key {
-                    key: "q",
+                    key: "u",
                     does: "squelch: a burn in tonight's deck",
                 },
                 Key {
@@ -529,10 +529,16 @@ pub const SECTIONS: &[Section] = &[
         title: "ink",
         neon: Neon::White,
         blocks: &[
-            Block::Keys(&[Key {
-                key: "1 to 4",
-                does: "ink the level 3, 6, 9, or 12 draft",
-            }]),
+            Block::Keys(&[
+                Key {
+                    key: "↑↓",
+                    does: "walk the drafts, level 3 to 12",
+                },
+                Key {
+                    key: "i",
+                    does: "ink the picked draft",
+                },
+            ]),
             Block::Rule(
                 "a draft inked is *both its cards*: the one you pick and the one you did not, from the draft's level on, in this climb and every one after. *ten crystals*, and nothing takes it back: not a mark, not the ledge.",
             ),

@@ -73,7 +73,7 @@ cursor on it.
 | `d` | dead air, neat | defense + `drink_edge(level)` |
 | `t` | test pattern | max signal + 2 a level, and the signal filled |
 | `f` | feedback | a surge in the deck |
-| `q` | squelch | a burn in the deck |
+| `u` | squelch | a burn in the deck |
 | `o` | sign-off | a mute in the deck |
 
 - The last three are pours (GAME.md, "Dead Air pours a card"): a card
@@ -135,10 +135,13 @@ only the nuke clears it (GAME.md, "INK: the needle").
   short (`ShortCrystals`).
 - A stored level no draft is owed at, or one stored twice, is
   `SheetError::Inks`, never a blank.
-- The panel (`city/ui.rs::ink_lines`, keys `1` to `4` in draft order)
-  lists every draft with its two cards, says which are inked, prices the
-  rest, and spells the needle's refusal ahead of the keys; the answer is
-  the `till` line; no news.
+- The panel (`city/ui.rs::ink_lines`) lists every draft with its two
+  cards, says which are inked, and prices the rest; up/down walk the
+  cursor over the drafts and `i` inks the picked one, its refusal in the
+  key's row when the needle would not. Never a digit or `q`: those stay
+  the globals' over every panel, and a misfired page switch must not buy
+  something a mark cannot take back. The answer is the `till` line; no
+  news.
 
 ## Measured
 
