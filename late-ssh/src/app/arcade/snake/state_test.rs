@@ -54,8 +54,6 @@ fn cells(cobra: &Cobra) -> Vec<(u32, u32)> {
 
 /// A cobra curled into a ring chases its own tail: the head steps into the
 /// cell the tail leaves on that same step, which is free, not a collision.
-/// The run used to end there with nothing in the way (the tail is drawn
-/// under the head once the head lands on it).
 #[test]
 fn the_head_may_follow_the_tail_into_the_cell_it_leaves() {
     let ring = [(5, 2), (4, 2), (4, 3), (4, 4), (5, 4), (5, 3)];

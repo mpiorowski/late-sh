@@ -131,9 +131,9 @@ Testing guidance:
 
 Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
-- `late-core/src/bin/gen_nonograms.rs` generates JSON packs (`cargo run -p late-core --release --bin gen_nonograms` rewrites `late-ssh/assets/nonograms/`). A candidate ships only when line logic alone finishes it (`nonogram::solve_by_lines`): no shipped puzzle needs a guess, and every one has exactly one answer. `arcade/nonogram/state_test.rs::every_shipped_puzzle_solves_by_line_logic` pins the shipped packs. Each candidate seeds its own RNG through one splitmix64 round, since raw consecutive seeds gave xorshift near-identical first draws (one target density for a whole pack).
+- `late-core/src/bin/gen_nonograms.rs` generates JSON packs (`cargo run -p late-core --release --bin gen_nonograms` rewrites `late-ssh/assets/nonograms/`). A candidate ships only when line logic alone finishes it (`nonogram::solve_by_lines`): no shipped puzzle needs a guess, and every one has exactly one answer. `arcade/nonogram/state_test.rs::every_shipped_puzzle_solves_by_line_logic` pins the shipped packs.
 - Puzzle ids are `<size>-<digest of the solution>`. Saved games find their puzzle by id, so a regenerated pack never hands an old id to a different picture: a save whose puzzle left the pack does not load, and that slot starts a fresh puzzle. A daily win is keyed by date and difficulty, not puzzle, so it is never paid twice.
-- `late-core/src/nonogram.rs` owns the shared JSON schema, clue derivation, the line-logic solver, pack validation, and deterministic daily selection.
+- `late-core/src/nonogram.rs` owns the shared JSON schema, clue derivation, the line-logic solver, pack validation, and deterministic daily selection. The runtime's red "impossible" clue labels come from the same solver (`line_fits`), with the player's marks mapped to its cells in `arcade/nonogram/state.rs`.
 - Assets live in `late-ssh/assets/nonograms/` as `index.json` plus one pack file per size.
 - `arcade/nonogram/state.rs` loads assets at server startup through `include_bytes!`.
 - SSH sessions never generate nonograms on demand.

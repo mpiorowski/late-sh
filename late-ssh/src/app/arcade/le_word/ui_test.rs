@@ -1,26 +1,6 @@
 use super::*;
-use crate::app::arcade::le_word::svc::LeWordService;
-use late_core::db::{Db, DbConfig};
-use late_core::models::le_word::DailyWord;
+use crate::app::arcade::le_word::state::state_test::state_for;
 use ratatui::{Terminal, backend::TestBackend};
-use uuid::Uuid;
-
-fn todays_state(answer: &str) -> State {
-    let (activity_feed, _) = tokio::sync::broadcast::channel(1);
-    let svc = LeWordService::new(
-        Db::new(&DbConfig::default()).expect("test db pool"),
-        activity_feed,
-    );
-    let now = chrono::Utc::now();
-    let word = DailyWord {
-        id: Uuid::now_v7(),
-        created: now,
-        updated: now,
-        puzzle_date: svc.today(),
-        answer_word: answer.to_string(),
-    };
-    State::new(Uuid::now_v7(), svc, Some(word), None)
-}
 
 /// The terminal owns the page's background: "Sync terminal background"
 /// paints it to the theme's canvas through OSC 11, and with the setting off
@@ -30,7 +10,7 @@ fn todays_state(answer: &str) -> State {
 fn the_board_leaves_the_background_to_the_terminal() {
     theme::set_current_by_id("late");
     let canvas = theme::BG_CANVAS();
-    let mut state = todays_state("crane");
+    let mut state = state_for(chrono::Utc::now().date_naive(), "crane");
     state.guesses.push("trace".to_string());
     for show_rules in [false, true] {
         state.show_rules = show_rules;

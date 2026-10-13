@@ -150,9 +150,10 @@ where
     clues
 }
 
-/// A cell while line logic works the grid.
+/// A cell as line logic sees it: the solver's working grid, or a player's
+/// marks mapped at the call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Cell {
+pub enum Cell {
     Unknown,
     Filled,
     Empty,
@@ -203,6 +204,12 @@ pub fn solve_by_lines(row_clues: &[Vec<u8>], col_clues: &[Vec<u8>]) -> Option<Ve
                 .collect()
         })
         .collect()
+}
+
+/// Whether some placement of `clues` fits the known cells of `line`, so the
+/// line can still be finished from here.
+pub fn line_fits(clues: &[u8], line: &[Cell]) -> bool {
+    solve_line(clues, line).is_some()
 }
 
 /// Every placement of `clues` that fits the known cells of `line`, folded
