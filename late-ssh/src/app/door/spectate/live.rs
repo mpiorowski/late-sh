@@ -88,11 +88,7 @@ pub(crate) fn glow() -> bool {
 /// `dcss mat · XL3 Lair:2`, after the rule label.
 pub(crate) fn compact_spans(rest: u16, strip: &DoorGameStripView) -> Vec<Span<'static>> {
     let rest = usize::from(rest);
-    let lead = format!(
-        "{} {} · ",
-        strip.key.game().door_game().key(),
-        strip.key.playname()
-    );
+    let lead = format!("{} {} · ", strip.key.game().slug(), strip.key.playname());
     let lead = truncate_chars(&lead, rest);
     let left = rest.saturating_sub(lead.chars().count());
     vec![
@@ -121,6 +117,28 @@ fn picture(game: SpectateGame) -> Vec<Line<'static>> {
         SpectateGame::Dcss => framed(&DCSS_ROOM, dcss_glyph),
         SpectateGame::Nethack => framed(&NETHACK_ROOM, nethack_glyph),
         SpectateGame::Brogue => framed(&BROGUE_CAVE, brogue_glyph),
+        SpectateGame::Zork => framed(&WHITE_HOUSE, zork_glyph),
+    }
+}
+
+/// West of House: the white house with its boarded front door, the small
+/// mailbox, and the player standing in the field.
+const WHITE_HOUSE: [&str; 5] = [
+    "         /   \\     ",
+    "        /_____\\    ",
+    "        |[] []|    ",
+    "   @  m |  +  |    ",
+    ",,,,,,,,|_____|,,,,",
+];
+
+fn zork_glyph(ch: char) -> Style {
+    match ch {
+        '@' => player_style(),
+        'm' | '+' => Style::default().fg(theme::AMBER_DIM()),
+        ',' => Style::default().fg(theme::BONSAI_LEAF()),
+        '[' | ']' => Style::default().fg(theme::TEXT_DIM()),
+        '/' | '\\' | '_' | '|' => Style::default().fg(theme::TEXT_BRIGHT()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
     }
 }
 

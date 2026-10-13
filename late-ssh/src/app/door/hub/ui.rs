@@ -379,9 +379,13 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.delete_confirm,
             scroll,
         ),
-        HubGame::Zork => {
-            crate::app::door::zork::render::draw_landing(frame, body[1], view.zork_enabled, scroll)
-        }
+        HubGame::Zork => crate::app::door::zork::render::draw_landing(
+            frame,
+            body[1],
+            view.zork_enabled,
+            view.show_watch_chat,
+            scroll,
+        ),
         HubGame::Codekeep => crate::app::door::codekeep::render::draw_landing(
             frame,
             body[1],

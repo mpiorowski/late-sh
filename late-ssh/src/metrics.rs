@@ -1,5 +1,6 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
+use late_core::models::chat_room::WatchDoor;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
 
@@ -504,6 +505,19 @@ pub enum ZorkCatalogueRead {
     Failed,
 }
 
+/// What F3 did on a player's own Zork game: type the newest command a
+/// watcher suggested into the story's prompt, or nothing, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZorkSuggestion {
+    /// The suggestion went onto the empty prompt line.
+    Typed,
+    /// The story was not at an empty prompt (the player was typing, a
+    /// confirmation or pagination was up), so nothing was typed.
+    NotAtPrompt,
+    /// No fresh suggestion was waiting.
+    NoneWaiting,
+}
+
 /// The band count a paired CLI's `viz` frame arrived with. CLIs from before
 /// the 16-band analyzer send 8, which the pair socket stretches to 16.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -542,13 +556,16 @@ mod inner {
         Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
         RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands,
+        VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
-    use super::{ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSwitchResult};
+    use super::{
+        ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
+        ZorkSwitchResult,
+    };
     use crate::app::bonsai::state::BranchAction;
     use crate::app::referral::state::AttachRefusal;
 
@@ -2847,7 +2864,7 @@ mod inner {
         })
     }
 
-    pub fn record_door_watch_stream(game: DoorGame, outcome: DoorWatchOutcome) {
+    pub fn record_door_watch_stream(game: WatchDoor, outcome: DoorWatchOutcome) {
         door_watch_streams_total().add(
             1,
             &[
@@ -2857,7 +2874,7 @@ mod inner {
         );
     }
 
-    pub fn record_door_watch_roster_failure(game: DoorGame) {
+    pub fn record_door_watch_roster_failure(game: WatchDoor) {
         door_watch_roster_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
@@ -2873,7 +2890,7 @@ mod inner {
         })
     }
 
-    pub fn record_door_watch_chat_room_failure(game: DoorGame) {
+    pub fn record_door_watch_chat_room_failure(game: WatchDoor) {
         door_watch_chat_room_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
@@ -2984,6 +3001,28 @@ mod inner {
         );
     }
 
+    fn zork_suggestion_label(result: ZorkSuggestion) -> &'static str {
+        match result {
+            ZorkSuggestion::Typed => "typed",
+            ZorkSuggestion::NotAtPrompt => "not_at_prompt",
+            ZorkSuggestion::NoneWaiting => "none_waiting",
+        }
+    }
+
+    fn zork_suggestions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_zork_suggestions_total")
+                .with_description("F3 presses on a player's own Zork game, by what they typed")
+                .build()
+        })
+    }
+
+    pub fn record_zork_suggestion(result: ZorkSuggestion) {
+        zork_suggestions_total().add(1, &[KeyValue::new("result", zork_suggestion_label(result))]);
+    }
+
     fn online_time_flush_result_label(result: OnlineTimeFlushResult) -> &'static str {
         match result {
             OnlineTimeFlushResult::Flushed => "flushed",
@@ -3033,13 +3072,16 @@ mod inner {
         Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
         RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands,
+        VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
-    use super::{ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSwitchResult};
+    use super::{
+        ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
+        ZorkSwitchResult,
+    };
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
@@ -3142,13 +3184,14 @@ mod inner {
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
-    pub fn record_door_watch_stream(_game: DoorGame, _outcome: DoorWatchOutcome) {}
-    pub fn record_door_watch_roster_failure(_game: DoorGame) {}
-    pub fn record_door_watch_chat_room_failure(_game: DoorGame) {}
+    pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
+    pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
+    pub fn record_door_watch_chat_room_failure(_game: WatchDoor) {}
     pub fn record_zork_launch(_edition: ZorkEdition, _action: ZorkAction) {}
     pub fn record_zork_session_end(_edition: ZorkEdition, _end: ZorkSessionEnd) {}
     pub fn record_zork_switch(_result: ZorkSwitchResult) {}
     pub fn record_zork_catalogue_read(_result: ZorkCatalogueRead) {}
+    pub fn record_zork_suggestion(_result: ZorkSuggestion) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
 }
 

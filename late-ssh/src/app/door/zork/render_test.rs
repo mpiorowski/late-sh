@@ -15,6 +15,7 @@ fn native_menus_and_default_game_text_follow_light_and_dark_themes() {
             term: "xterm".into(),
             enabled: false,
             repaint: None,
+            handle_svc: None,
         });
         terminal
             .draw(|frame| draw_page(frame, frame.area(), &state))

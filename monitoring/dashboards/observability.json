@@ -2205,8 +2205,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Zork Switches & Save Reads",
-      "description": "switch: leaving a live game for another edition, a manual load, or a new game. switched means the old game checkpointed and the next one started; save_failed means it closed without a checkpoint exit; timed_out means no exit within 8s, so the old game stays open. saves: the menus' read of the account's six slots; a failure shows 'Unable to read saves'.",
+      "title": "Zork Switches, Save Reads & Suggestions",
+      "description": "switch: leaving a live game for another edition, a manual load, or a new game. switched means the old game checkpointed and the next one started; save_failed means it closed without a checkpoint exit; timed_out means no exit within 8s, so the old game stays open. saves: the menus' read of the account's six slots; a failure shows 'Unable to read saves'. suggestion: F3 on a player's own game, typing a watcher's '>' command (typed), refused off an empty prompt (not_at_prompt), or with none waiting (none_waiting).",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -2222,6 +2222,12 @@
           "refId": "B",
           "expr": "sum by (result) (increase(late_ssh_zork_catalogue_reads_total[$__range]))",
           "legendFormat": "saves {{result}}",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (result) (increase(late_ssh_zork_suggestions_total[$__range]))",
+          "legendFormat": "suggestion {{result}}",
           "instant": true
         }
       ],

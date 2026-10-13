@@ -4683,15 +4683,15 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::spectate::state::SpectateGame;
     use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room::WatchDoor;
     use late_core::models::chat_room_member::ChatRoomMember;
-    use late_core::models::leaderboard::DoorGame;
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "own-chat-f2").await;
     // The player's watch-chat room, joined ahead of the session the way a
     // returning player's is, so the room list the app loads carries it.
     let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::get_or_create_watch_room(&client, DoorGame::Nethack, "tester")
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "tester")
         .await
         .expect("the player's watch room");
     ChatRoomMember::join(&client, room.id, user.id)

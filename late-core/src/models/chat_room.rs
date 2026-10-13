@@ -7,7 +7,30 @@ use uuid::Uuid;
 
 use super::arcade_handle::handle_shape_valid;
 use super::game_room::GameKind;
-use super::leaderboard::DoorGame;
+
+/// The doors whose players have a watch-chat room: the ones a game can be
+/// spectated on. Its own roster rather than the leaderboard's `DoorGame`,
+/// which is the doors with ingested runs (Zork is watchable and has none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WatchDoor {
+    Dcss,
+    Nethack,
+    Brogue,
+    Zork,
+}
+
+impl WatchDoor {
+    /// The door's key: the watch room slug's prefix and the watch metrics'
+    /// `game` label.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Dcss => "dcss",
+            Self::Nethack => "nethack",
+            Self::Brogue => "brogue",
+            Self::Zork => "zork",
+        }
+    }
+}
 
 crate::model! {
     table = "chat_rooms";
@@ -355,7 +378,7 @@ impl ChatRoom {
     /// runs.
     pub async fn get_or_create_watch_room(
         client: &Client,
-        door: DoorGame,
+        door: WatchDoor,
         playname: &str,
     ) -> Result<Self> {
         if !handle_shape_valid(playname) {

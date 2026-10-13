@@ -1,6 +1,7 @@
 use super::input::launch;
 use super::state::Mode;
 use crate::app::common::primitives::Screen;
+use crate::app::door::arcade::HandleStatus;
 use crate::test_helpers::{make_app, render_plain, wait_for_app};
 
 /// A disabled client is a banner on the hub, never a menu whose actions do
@@ -89,12 +90,29 @@ fn zork_app(token: &str) -> crate::app::state::App {
     app
 }
 
+/// Let the handle lookup settle (the test db is unreachable, so it fails and
+/// would put the claim prompt over the menus), then stand the player on a
+/// claimed name, as a returning player is.
+async fn claim_handle(app: &mut crate::app::state::App) {
+    wait_for_app(app, "handle lookup settled", |app| {
+        app.zork_state
+            .as_ref()
+            .is_some_and(|state| state.handle_status() != HandleStatus::Loading)
+    })
+    .await;
+    app.zork_state
+        .as_mut()
+        .expect("zork state")
+        .force_handle_for_test("tester");
+}
+
 /// A lone Esc on the menus backs out one level per press, edition actions
 /// to the edition list to the Games hub, as the menu's own key line says.
 #[tokio::test]
 async fn esc_backs_out_of_the_menus_one_level_at_a_time() {
     let mut app = zork_app("zork-esc");
     launch(&mut app);
+    claim_handle(&mut app).await;
     app.handle_input(b"\r");
     assert_eq!(
         app.zork_state.as_ref().map(|state| state.mode()),

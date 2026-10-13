@@ -21,10 +21,18 @@ pub fn launch(app: &mut App) {
     }
 }
 
+/// F3 in both encodings a terminal sends it (SS3 `ESC O R`, CSI
+/// `ESC [ 13 ~`), matched as a whole input chunk like the watch chat's F2.
+/// Frotz ignores function keys at a V3 prompt, so the story loses nothing.
+pub fn is_f3(data: &[u8]) -> bool {
+    data == b"\x1bOR" || data == b"\x1b[13~"
+}
+
 /// Raw bytes on the Zork screen, ahead of the parser. Returns whether Zork
 /// took them: everything during the post-exit grace, so keys typed into a
 /// game that just closed cannot drive the menu, and everything while a game
-/// is visible.
+/// is visible. F3 there types the waiting watcher suggestion
+/// (`suggest.rs`) instead of reaching the story.
 pub fn handle_raw(app: &mut App, data: &[u8]) -> bool {
     let Some(state) = app.zork_state.as_mut() else {
         return false;
@@ -34,6 +42,14 @@ pub fn handle_raw(app: &mut App, data: &[u8]) -> bool {
         (false, false) => false,
         (false, true) if data == DOOR_DETACH_KEY => {
             app.detach_door_game();
+            true
+        }
+        (false, true) if is_f3(data) => {
+            let suggestion = super::suggest::waiting(app);
+            app.zork_state
+                .as_mut()
+                .expect("a visible game has its state")
+                .type_suggestion(suggestion);
             true
         }
         (false, true) => {
@@ -65,6 +81,11 @@ pub fn handle_menu_event(app: &mut App, event: &ParsedInput) -> bool {
     };
     if state.in_exit_grace() {
         return true;
+    }
+    // The arcade-name claim modal's keys belong to the app's modal router
+    // (`input::handle_modal_input`), as on the roguelikes' launchers.
+    if state.name_modal_visible() {
+        return false;
     }
     match event {
         ParsedInput::Arrow(b'A') => {

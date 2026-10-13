@@ -1,9 +1,8 @@
 use crate::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams},
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, WatchDoor},
         chat_room_member::ChatRoomMember,
-        leaderboard::DoorGame,
         user::{User, UserParams},
     },
     test_utils::{create_test_user, test_db},
@@ -556,7 +555,7 @@ async fn test_watch_room_is_one_per_player_per_door() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let room = ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "Alice_B")
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Dcss, "Alice_B")
         .await
         .expect("watch room");
     assert_eq!(room.kind, "game");
@@ -565,25 +564,25 @@ async fn test_watch_room_is_one_per_player_per_door() {
     assert_eq!(room.slug.as_deref(), Some("dcss-alice_b"));
 
     // Handles are unique case-insensitively, so case never forks the room.
-    let again = ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "alice_b")
+    let again = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Dcss, "alice_b")
         .await
         .expect("watch room again");
     assert_eq!(again.id, room.id);
 
     // Two handles that differ only in their underscores are two players.
-    let neighbour = ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "alice__b")
+    let neighbour = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Dcss, "alice__b")
         .await
         .expect("neighbour watch room");
     assert_ne!(neighbour.id, room.id);
 
     // The same player in another door talks in another room.
-    let other_door = ChatRoom::get_or_create_watch_room(&client, DoorGame::Nethack, "Alice_B")
+    let other_door = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "Alice_B")
         .await
         .expect("other door watch room");
     assert_ne!(other_door.id, room.id);
 
     assert!(
-        ChatRoom::get_or_create_watch_room(&client, DoorGame::Dcss, "../alice")
+        ChatRoom::get_or_create_watch_room(&client, WatchDoor::Dcss, "../alice")
             .await
             .is_err(),
         "a name that is not an arcade handle gets no room"

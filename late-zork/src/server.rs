@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::host::{HostConfig, PtyHost, SessionLease};
 use crate::identity::derive_client_key;
 use crate::protocol::{Edition, Request, parse_request};
+use crate::watch::{self, LiveRegistry, WatchHost, WatchRequest};
 
 struct Shared {
     bin: String,
@@ -18,6 +19,8 @@ struct Shared {
     data_dir: String,
     authorized_key: PublicKey,
     active_accounts: Arc<Mutex<HashMap<String, Edition>>>,
+    /// Every live game, mirrored for the watch sessions.
+    live: Arc<LiveRegistry>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -35,6 +38,7 @@ impl Server {
                 data_dir: config.data_dir.clone(),
                 authorized_key: derive_client_key(&config.secret).public_key().clone(),
                 active_accounts: Arc::new(Mutex::new(HashMap::new())),
+                live: LiveRegistry::new(),
                 shutdown_rx,
             }),
         }
@@ -46,10 +50,12 @@ impl russh::server::Server for Server {
     fn new_client(&mut self, _peer: Option<std::net::SocketAddr>) -> ClientHandler {
         ClientHandler {
             shared: self.shared.clone(),
-            account: None,
+            peer: None,
             channels: HashMap::new(),
             terminals: HashMap::new(),
             host: None,
+            watch: None,
+            watch_host: None,
         }
     }
 }
@@ -68,12 +74,25 @@ impl Default for Terminal {
     }
 }
 
+/// Who authenticated on a connection.
+#[derive(Clone)]
+enum Peer {
+    /// A player, by the account label late-ssh derives from the account id.
+    Account(String),
+    /// The reserved watch identity: read-only watch streams, never a game.
+    Watcher,
+}
+
 pub(crate) struct ClientHandler {
     shared: Arc<Shared>,
-    account: Option<String>,
+    peer: Option<Peer>,
     channels: HashMap<ChannelId, Channel<Msg>>,
     terminals: HashMap<ChannelId, Terminal>,
     host: Option<(ChannelId, PtyHost)>,
+    /// What a watch session asked for, parsed from its env request; a watch
+    /// shell without one is refused.
+    watch: Option<WatchRequest>,
+    watch_host: Option<(ChannelId, WatchHost)>,
 }
 
 fn reject() -> Auth {
@@ -104,10 +123,14 @@ impl Handler for ClientHandler {
         if key.key_data() != self.shared.authorized_key.key_data() {
             return Ok(reject());
         }
+        if user == watch::WATCH_USERNAME {
+            self.peer = Some(Peer::Watcher);
+            return Ok(Auth::Accept);
+        }
         let Some(account) = account::sanitize(user) else {
             return Ok(reject());
         };
-        self.account = Some(account);
+        self.peer = Some(Peer::Account(account));
         Ok(Auth::Accept)
     }
 
@@ -128,7 +151,7 @@ impl Handler for ClientHandler {
         channel: Channel<Msg>,
         _session: &mut Session,
     ) -> Result<bool> {
-        if self.channels.len() >= 4 || self.account.is_none() {
+        if self.channels.len() >= 4 || self.peer.is_none() {
             return Ok(false);
         }
         self.channels.insert(channel.id(), channel);
@@ -163,8 +186,12 @@ impl Handler for ClientHandler {
         command: &[u8],
         session: &mut Session,
     ) -> Result<()> {
-        let Some(account) = self.account.clone() else {
-            anyhow::bail!("unauthenticated exec");
+        let account = match self.peer.clone() {
+            Some(Peer::Account(account)) => account,
+            Some(Peer::Watcher) => {
+                return channel_error(session, channel, 64, "Watch sessions only stream.\n");
+            }
+            None => anyhow::bail!("unauthenticated exec"),
         };
         if self.channels.remove(&channel).is_none() {
             return channel_error(
@@ -210,7 +237,7 @@ impl Handler for ClientHandler {
                     let _ = handle.close(channel).await;
                 });
             }
-            Some(Request::Play(edition, action)) => {
+            Some(Request::Play(edition, action, playname)) => {
                 if self
                     .host
                     .as_ref()
@@ -242,9 +269,11 @@ impl Handler for ClientHandler {
                             account,
                             edition,
                             action,
+                            playname,
                             cols: terminal.cols,
                             rows: terminal.rows,
                         },
+                        self.shared.live.clone(),
                         session.handle(),
                         channel,
                         self.shared.shutdown_rx.clone(),
@@ -257,8 +286,51 @@ impl Handler for ClientHandler {
         Ok(())
     }
 
+    async fn env_request(
+        &mut self,
+        _channel: ChannelId,
+        variable_name: &str,
+        variable_value: &str,
+        _session: &mut Session,
+    ) -> Result<()> {
+        // The one env var this host takes is a watch session's request.
+        // Anything else is ignored (the child env is a hard allowlist).
+        if matches!(self.peer, Some(Peer::Watcher)) && variable_name == watch::WATCH_ENV_VAR {
+            match watch::parse_request(variable_value) {
+                Some(request) => self.watch = Some(request),
+                None => tracing::warn!(value = variable_value, "ignoring malformed watch request"),
+            }
+        }
+        Ok(())
+    }
+
+    /// A shell is a watch stream, and only for the watch identity with a
+    /// valid request. Players reach their game through `play`.
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<()> {
-        session.channel_failure(channel)?;
+        let request = match (&self.peer, self.watch.take()) {
+            (Some(Peer::Watcher), Some(request)) => request,
+            (Some(Peer::Watcher), None) => {
+                tracing::warn!("watch shell requested without a watch request");
+                session.channel_failure(channel)?;
+                return Ok(());
+            }
+            (Some(Peer::Account(_)) | None, _) => {
+                session.channel_failure(channel)?;
+                return Ok(());
+            }
+        };
+        self.channels.remove(&channel);
+        session.channel_success(channel)?;
+        self.watch_host = Some((
+            channel,
+            WatchHost::spawn(
+                self.shared.live.clone(),
+                request,
+                session.handle(),
+                channel,
+                self.shared.shutdown_rx.clone(),
+            ),
+        ));
         Ok(())
     }
 
@@ -318,6 +390,13 @@ impl Handler for ClientHandler {
         self.terminals.remove(&channel);
         if self.host.as_ref().is_some_and(|(id, _)| *id == channel) {
             self.host = None;
+        }
+        if self
+            .watch_host
+            .as_ref()
+            .is_some_and(|(id, _)| *id == channel)
+        {
+            self.watch_host = None;
         }
         Ok(())
     }

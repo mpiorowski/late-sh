@@ -137,7 +137,7 @@ async fn fixture(busy: bool) -> (u16, Arc<Mutex<Vec<String>>>, tokio::task::Join
     (port, requests, task)
 }
 fn state(port: u16) -> State {
-    State::new(StateConfig {
+    let mut state = State::new(StateConfig {
         user_id: uuid::Uuid::from_u128(1),
         host: "127.0.0.1".into(),
         port,
@@ -145,7 +145,10 @@ fn state(port: u16) -> State {
         term: "xterm-256color".into(),
         enabled: true,
         repaint: None,
-    })
+        handle_svc: None,
+    });
+    state.force_handle_for_test("tester");
+    state
 }
 async fn wait(state: &mut State, predicate: impl Fn(&State) -> bool) {
     timeout(Duration::from_secs(3), async {
@@ -189,11 +192,11 @@ async fn menus_switch_only_after_checkpoint_exit_and_keep_one_live_destination()
     let commands = requests.lock().unwrap().clone();
     let saved = commands
         .iter()
-        .position(|c| c == "saved play zork1 auto")
+        .position(|c| c == "saved play zork1 auto tester")
         .unwrap();
     let launched = commands
         .iter()
-        .position(|c| c == "play zork2 auto")
+        .position(|c| c == "play zork2 auto tester")
         .unwrap();
     assert!(saved < launched, "{commands:?}");
     drop(state);
@@ -282,7 +285,9 @@ async fn real_frotz_trilogy_roundtrip() {
         term: "xterm-256color".into(),
         enabled: true,
         repaint: None,
+        handle_svc: None,
     });
+    state.force_handle_for_test("tester");
     state.set_viewport(ratatui::layout::Rect::new(0, 0, 100, 30));
     let mut screens = Vec::new();
     for (index, edition) in Edition::ALL.into_iter().enumerate() {
@@ -411,8 +416,10 @@ async fn real_frotz_host_restart_preserves_six_slots() {
         term: "xterm-256color".into(),
         enabled: true,
         repaint: None,
+        handle_svc: None,
     };
     let mut state = State::new(config(port));
+    state.force_handle_for_test("tester");
     state.set_viewport(ratatui::layout::Rect::new(0, 0, 100, 30));
     state.open_menu();
     wait(&mut state, |s| !s.loading()).await;
@@ -477,6 +484,7 @@ async fn real_frotz_host_restart_preserves_six_slots() {
     .await
     .expect("restarted host SSH catalogue");
     let mut resumed = State::new(config(port));
+    resumed.force_handle_for_test("tester");
     resumed.set_viewport(ratatui::layout::Rect::new(0, 0, 100, 30));
     resumed.open_menu();
     wait(&mut resumed, |s| !s.loading()).await;

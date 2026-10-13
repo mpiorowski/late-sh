@@ -54,7 +54,13 @@ fn slot_line(label: &str, slot: Option<&Slot>) -> Line<'static> {
         Style::default().fg(theme::TEXT_DIM()),
     )
 }
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    enabled: bool,
+    show_watch_chat: bool,
+    scroll: u16,
+) -> u16 {
     let mut lines = vec![Line::raw("")];
     lines.extend(zork_logo());
     lines.extend([
@@ -87,6 +93,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -
         Line::raw("RESTORE returns to the edition menu after confirmation."),
         Line::raw("` steps out while the game stays open. Autosave resumes at the last prompt."),
         Line::raw("QUIT ends the game and returns to the edition menu."),
+        Line::raw(""),
+        title("Watchers"),
+        Line::raw("You play under your arcade name, and anyone can watch live from the Games hub."),
+        Line::raw("Watchers suggest a command by starting a chat line with >. F3 types it at"),
+        Line::raw("your empty prompt; Enter sends it, as if you had typed it yourself."),
+        crate::app::door::landing::watch_chat_hint(show_watch_chat),
     ]);
     crate::app::door::landing::render_scrolled(
         frame,
@@ -240,9 +252,14 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 
 fn blit_game(buffer: &mut ratatui::buffer::Buffer, area: Rect, screen: &vt100::Screen) {
     blit_screen(buffer, area, screen);
-    // Frotz uses the terminal's default foreground. The surrounding app can
-    // change its background with OSC 11, so inherit the theme's matching text
-    // color rather than the user's potentially opposite terminal foreground.
+    inherit_theme_text(buffer, area);
+}
+
+/// Frotz uses the terminal's default foreground. The surrounding app can
+/// change its background with OSC 11, so a blitted Zork screen (the player's
+/// own, or a watched one) inherits the theme's matching text color rather
+/// than the user's potentially opposite terminal foreground.
+pub fn inherit_theme_text(buffer: &mut ratatui::buffer::Buffer, area: Rect) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buffer[(x, y)];

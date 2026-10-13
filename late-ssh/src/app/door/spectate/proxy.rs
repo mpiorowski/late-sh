@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use late_core::models::leaderboard::DoorGame;
+use late_core::models::chat_room::WatchDoor;
 use late_core::shutdown::CancellationToken;
 use russh::client::{self, Config, Handler};
 use russh::keys::PublicKey;
@@ -345,7 +345,7 @@ pub struct SpectateProcess {
 
 impl SpectateProcess {
     pub fn spawn(
-        game: DoorGame,
+        game: WatchDoor,
         target: WatchTarget,
         playname: String,
         repaint: Option<Arc<RenderSignal>>,

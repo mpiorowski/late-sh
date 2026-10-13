@@ -10,8 +10,10 @@ fn state() -> State {
         term: "xterm".into(),
         enabled: false,
         repaint: None,
+        handle_svc: None,
     });
     state.enabled = true;
+    state.force_handle_for_test("tester");
     state.catalogue = Some(Catalogue {
         editions: Edition::ALL
             .into_iter()
@@ -43,6 +45,36 @@ fn menus_do_not_create_sessions_and_default_confirmations_cancel() {
     assert!(state.proxy.is_none());
     assert!(!state.back());
     assert!(state.back());
+}
+/// Every game is played under an arcade name, as on the roguelikes: without
+/// one the claim prompt is over the menus, and choosing a game reopens it
+/// instead of starting a session.
+#[test]
+fn without_a_handle_a_launch_opens_the_claim_prompt() {
+    let mut state = State::new(StateConfig {
+        user_id: uuid::Uuid::from_u128(1),
+        host: "127.0.0.1".into(),
+        port: 1,
+        secret: "test".into(),
+        term: "xterm".into(),
+        enabled: false,
+        repaint: None,
+        handle_svc: None,
+    });
+    state.enabled = true;
+    assert!(state.name_modal_visible());
+    state.dismiss_name_modal();
+    assert!(!state.name_modal_visible());
+
+    state.menu_key(b'\r');
+    state.step(true);
+    state.step(true);
+    state.menu_key(b'\r');
+    assert_eq!(state.mode(), Mode::Confirm(Action::New));
+    state.menu_key(b'y');
+    assert!(state.name_modal_visible(), "the prompt is back");
+    assert!(state.proxy.is_none(), "no session without a handle");
+    assert_eq!(state.mode(), Mode::Actions);
 }
 #[test]
 fn invalid_saves_are_disabled_and_live_continue_wins_over_missing_auto() {

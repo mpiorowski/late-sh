@@ -149,6 +149,7 @@ pub struct LiveGamesService {
     dcss: RosterFeed,
     nethack: RosterFeed,
     brogue: RosterFeed,
+    zork: RosterFeed,
     chat_rooms: ChatRooms,
     open_watches: OpenWatches,
 }
@@ -160,6 +161,7 @@ impl LiveGamesService {
             dcss: RosterFeed::new(),
             nethack: RosterFeed::new(),
             brogue: RosterFeed::new(),
+            zork: RosterFeed::new(),
             chat_rooms: Arc::new(Mutex::new(HashMap::new())),
             open_watches: OpenWatches::new(),
         }
@@ -187,6 +189,7 @@ impl LiveGamesService {
             SpectateGame::Dcss => &self.dcss,
             SpectateGame::Nethack => &self.nethack,
             SpectateGame::Brogue => &self.brogue,
+            SpectateGame::Zork => &self.zork,
         }
     }
 
@@ -229,11 +232,11 @@ impl LiveGamesService {
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
-                        game = game.door_game().key(),
+                        game = game.watch_door().key(),
                         playname = %key.1,
                         "failed to resolve watch chat room"
                     );
-                    crate::metrics::record_door_watch_chat_room_failure(game.door_game());
+                    crate::metrics::record_door_watch_chat_room_failure(game.watch_door());
                     rooms.remove(&key);
                 }
             }
@@ -298,7 +301,8 @@ impl LiveGamesService {
         let dcss = self.dcss.tick();
         let nethack = self.nethack.tick();
         let brogue = self.brogue.tick();
-        dcss || nethack || brogue
+        let zork = self.zork.tick();
+        dcss || nethack || brogue || zork
     }
 
     /// Spawn `game`'s roster loop: connect, follow, publish; on any end
@@ -326,16 +330,16 @@ impl LiveGamesService {
                 publish.send_replace(Arc::new(Vec::new()));
                 match result {
                     Ok(()) => tracing::info!(
-                        game = game.door_game().key(),
+                        game = game.watch_door().key(),
                         "door roster stream ended; reconnecting"
                     ),
                     Err(e) => {
                         tracing::warn!(
                             error = ?e,
-                            game = game.door_game().key(),
+                            game = game.watch_door().key(),
                             "door roster stream failed; retrying"
                         );
-                        crate::metrics::record_door_watch_roster_failure(game.door_game());
+                        crate::metrics::record_door_watch_roster_failure(game.watch_door());
                     }
                 }
                 tokio::select! {
@@ -351,7 +355,7 @@ impl LiveGamesService {
 /// the room when this is the first time anyone needs it.
 async fn watch_room_id(db: &Db, game: SpectateGame, playname: &str) -> Result<Uuid> {
     let client = db.get().await.context("getting db client")?;
-    let room = ChatRoom::get_or_create_watch_room(&client, game.door_game(), playname)
+    let room = ChatRoom::get_or_create_watch_room(&client, game.watch_door(), playname)
         .await
         .context("ensuring watch chat room")?;
     Ok(room.id)

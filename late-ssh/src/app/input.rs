@@ -3486,6 +3486,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         return true;
     }
+    if ctx.screen == Screen::Zork
+        && let Some(state) = app.zork_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.name_key(byte);
+        }
+        return true;
+    }
 
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_input(

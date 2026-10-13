@@ -614,6 +614,19 @@ async fn main() -> anyhow::Result<()> {
             singleton_shutdown.clone(),
         )
     });
+    let _zork_roster_task = state.config.zork_enabled.then(|| {
+        state.live_games.start_task(
+            late_ssh::app::door::spectate::state::SpectateGame::Zork,
+            late_ssh::app::door::spectate::proxy::WatchTarget {
+                host: state.config.zork_host.clone(),
+                port: state.config.zork_port,
+                key: late_ssh::app::door::zork::identity::derive_client_key(
+                    &state.config.zork_secret,
+                ),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
 
     let mut tasks = JoinSet::new();
     let api_state = state.clone();

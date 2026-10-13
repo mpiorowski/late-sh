@@ -8,6 +8,7 @@ use russh::server::Handle;
 use tokio::sync::{mpsc, watch};
 
 use crate::protocol::{Action, Edition};
+use crate::watch::{LiveHandle, LiveRegistry};
 
 const HANGUP_SAVE_GRACE: Duration = Duration::from_secs(5);
 
@@ -52,6 +53,8 @@ pub(crate) struct HostConfig {
     pub(crate) edition: Edition,
     pub(crate) action: Action,
     pub(crate) account: String,
+    /// The player's arcade handle: the game's name in the watch roster.
+    pub(crate) playname: String,
     pub(crate) cols: u16,
     pub(crate) rows: u16,
 }
@@ -76,6 +79,7 @@ pub(crate) struct PtyHost {
 impl PtyHost {
     pub(crate) fn spawn(
         cfg: HostConfig,
+        live: Arc<LiveRegistry>,
         handle: Handle,
         channel: ChannelId,
         shutdown_rx: watch::Receiver<bool>,
@@ -84,7 +88,7 @@ impl PtyHost {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
         let cleanup = handle.clone();
         tokio::spawn(async move {
-            let result = run_bridge(cfg, cmd_rx, handle, channel, shutdown_rx).await;
+            let result = run_bridge(cfg, live, cmd_rx, handle, channel, shutdown_rx).await;
             // Release after child exit and before notifying an awaiting switch.
             drop(lease);
             let code = match result {
@@ -126,6 +130,7 @@ impl PtyHost {
 
 async fn run_bridge(
     cfg: HostConfig,
+    live: Arc<LiveRegistry>,
     mut cmd_rx: mpsc::Receiver<Command>,
     handle: Handle,
     channel: ChannelId,
@@ -234,6 +239,10 @@ async fn run_bridge(
         }
     });
 
+    // Listed from spawn until the bridge stops: watchers follow the game
+    // through this mirror, and its drop unlists the game and closes their
+    // streams before any hangup-save.
+    let live_game = live.register(&cfg.playname, cfg.edition, winsize.ws_col, winsize.ws_row);
     let stop = bridge_loop(
         &mut cmd_rx,
         &mut out_rx,
@@ -242,8 +251,10 @@ async fn run_bridge(
         &handle,
         channel,
         &mut shutdown_rx,
+        &live_game,
     )
     .await;
+    drop(live_game);
 
     if matches!(stop, StopReason::Teardown)
         && let Some(pid) = child.id()
@@ -272,6 +283,7 @@ async fn run_bridge(
     Ok(code)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn bridge_loop(
     cmd_rx: &mut mpsc::Receiver<Command>,
     out_rx: &mut mpsc::Receiver<Vec<u8>>,
@@ -280,6 +292,7 @@ async fn bridge_loop(
     handle: &Handle,
     channel: ChannelId,
     shutdown_rx: &mut watch::Receiver<bool>,
+    live_game: &LiveHandle,
 ) -> StopReason {
     use std::io::Write;
 
@@ -297,7 +310,10 @@ async fn bridge_loop(
                         return StopReason::ChildExited;
                     }
                 }
-                Some(Command::Resize { cols, rows }) => set_winsize(master, cols, rows),
+                Some(Command::Resize { cols, rows }) => {
+                    let (cols, rows) = set_winsize(master, cols, rows);
+                    live_game.resize(cols, rows);
+                }
                 Some(Command::Return) => {
                     if let Some(pid) = child.id() {
                         let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGUSR1);
@@ -307,6 +323,7 @@ async fn bridge_loop(
             },
             out = out_rx.recv() => match out {
                 Some(bytes) => {
+                    live_game.feed(&bytes);
                     if handle.data(channel, bytes).await.is_err() {
                         return StopReason::Teardown;
                     }
@@ -333,7 +350,8 @@ fn send_sighup(pid: u32, account: &str) {
     }
 }
 
-fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
+/// Resize the child's PTY, returning the `(cols, rows)` it was given.
+fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) -> (u16, u16) {
     use std::os::fd::AsRawFd;
 
     let ws = nix::libc::winsize {
@@ -345,4 +363,5 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
     unsafe {
         nix::libc::ioctl(master.as_raw_fd(), nix::libc::TIOCSWINSZ, &ws);
     }
+    (ws.ws_col, ws.ws_row)
 }
