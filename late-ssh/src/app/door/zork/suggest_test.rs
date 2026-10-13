@@ -32,6 +32,18 @@ fn a_line_starting_with_a_prompt_is_a_command() {
     assert_eq!(command("x > y"), None);
 }
 
+/// A reply opens with the composer's quote of the message it answers
+/// (`> @author: preview`). The quote is not a command; only the reply's own
+/// text can suggest one.
+#[test]
+fn a_reply_quote_is_not_a_command() {
+    assert_eq!(command("> @bob: lol the grue\nyes"), None);
+    assert_eq!(
+        command("> @bob: what now?\n>open mailbox"),
+        Some("open mailbox".into())
+    );
+}
+
 /// Only printable ASCII is typed: a control byte or an escape could reach
 /// the game as a key (Esc cancels, Enter would send), so they become spaces.
 #[test]

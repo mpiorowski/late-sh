@@ -4796,6 +4796,73 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     );
 }
 
+/// Zork's player writes to their watchers the same way: F2 opens the
+/// composer in their own room, typing and Enter are the composer's, and Esc
+/// hands the keys back to the story.
+#[tokio::test]
+async fn a_zork_player_writes_to_their_watchers_with_f2() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::SpectateGame;
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zork-own-chat-f2").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Zork, "tester")
+        .await
+        .expect("the player's watch room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zork-own-chat-f2-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Zork, "tester", room.id);
+
+    // A running game under a claimed handle. Nothing awaits from here on, as
+    // in the roguelike flow above: the fabricated proxy would end the game.
+    app.zork_enabled = true;
+    app.set_screen(Screen::Zork);
+    app.zork_state
+        .as_mut()
+        .expect("zork state")
+        .force_running_for_test();
+    app.tick();
+    let room_id = app
+        .own_watch_chat_room_id(SpectateGame::Zork)
+        .expect("the player's own room");
+    let plain = render_plain(&mut app);
+    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
+
+    app.handle_input(b"\x1bOQ");
+    assert!(app.chat.is_composing(), "F2 opens the composer");
+    assert_eq!(app.chat.composer_room_id(), Some(room_id));
+    app.handle_input(b"hi all");
+    assert_eq!(
+        app.chat.composer().lines().join("\n"),
+        "hi all",
+        "typed keys are the composer's, not the story's"
+    );
+    app.handle_input(b"\r");
+    assert!(
+        !app.chat.is_composing(),
+        "Enter sends and hands the keys back"
+    );
+
+    app.handle_input(b"\x1bOQ");
+    app.handle_input(b"draft");
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.chat.is_composing(), "Esc closes the composer");
+    assert_eq!(app.screen, Screen::Zork);
+}
+
 #[tokio::test]
 async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
     use crate::app::common::primitives::Screen;

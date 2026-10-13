@@ -41,9 +41,11 @@ pub struct State {
     /// launch intent), as on the roguelikes: every game is played, and
     /// listed for watchers, under the claimed handle.
     handle: HandleFlow,
-    /// The action that opened the claim prompt, launched once the claim
-    /// lands so the player's one Enter still starts the game.
-    after_claim: Option<Action>,
+    /// The edition and action that opened the claim prompt, launched once
+    /// the claim lands so the player's one Enter still starts the game. The
+    /// edition is the one it was chosen on: the player may browse another
+    /// meanwhile, and a New confirmed for one must not start on the other.
+    after_claim: Option<(Edition, Action)>,
     /// The watcher suggestion F3 last typed, so it is not offered again.
     typed_suggestion: Option<uuid::Uuid>,
     term: String,
@@ -224,10 +226,12 @@ impl State {
         }
         self.exit_grace = self.exit_grace.saturating_sub(1);
         // The handle lookup or claim landed on a launch the player asked for
-        // while it was in flight: start the action they chose.
+        // while it was in flight: start the action they chose, on the
+        // edition they chose it on.
         if self.handle.take_ready_launch() {
             changed = true;
-            if let Some(action) = self.after_claim.take() {
+            if let Some((edition, action)) = self.after_claim.take() {
+                self.edition = edition;
                 self.launch(action);
             }
         }
@@ -341,7 +345,7 @@ impl State {
         // the claim prompt, and the claim landing launches the same action
         // (`tick`).
         if self.handle.claimed().is_none() {
-            self.after_claim = Some(action);
+            self.after_claim = Some((self.edition, action));
             self.handle.request_launch();
             // A confirmation already answered stays answered: the menu
             // under the prompt is the action list again.

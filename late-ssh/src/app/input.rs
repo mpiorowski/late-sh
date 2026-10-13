@@ -97,14 +97,15 @@ fn screen_composes_chat(screen: Screen) -> bool {
             screen,
             Screen::Clubhouse
                 | Screen::Nightcap
-                // A roguelike's player composes into their own watch-chat
-                // room, opened by F2 or a click on its pane ahead of the
-                // game's passthrough (`App::handle_input`). The composer
-                // only opens from a running game, so with none open these
-                // screens behave as before.
+                // A watchable door's player composes into their own
+                // watch-chat room, opened by F2 or a click on its pane ahead
+                // of the game's passthrough (`App::handle_input`). The
+                // composer only opens from a running game, so with none open
+                // these screens behave as before.
                 | Screen::Nethack
                 | Screen::Dcss
                 | Screen::Brogue
+                | Screen::Zork
         )
 }
 

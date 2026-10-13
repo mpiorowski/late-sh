@@ -31,9 +31,15 @@ pub struct Suggestion {
 /// The command in a chat line that suggests one: the text after a leading
 /// `>`, cut to printable ASCII (all the story's parser reads, and nothing
 /// that could reach the game as a control key), whitespace collapsed,
-/// capped. `None` for any other line.
+/// capped. `None` for any other line. A reply is read without the quote of
+/// the message it answers, which the composer puts on its first line
+/// (`> @author: preview`, `chat/state.rs`) and is not a command.
 pub fn command(body: &str) -> Option<String> {
-    let rest = body.trim_start().strip_prefix('>')?;
+    let own_text = match body.split_once('\n') {
+        Some((quote, rest)) if quote.trim_start().starts_with("> @") => rest,
+        Some(_) | None => body,
+    };
+    let rest = own_text.trim_start().strip_prefix('>')?;
     let printable: String = rest
         .chars()
         .map(|ch| match ch.is_ascii_graphic() {

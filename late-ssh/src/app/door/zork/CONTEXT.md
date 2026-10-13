@@ -55,8 +55,10 @@ is played under the account's arcade handle, through the roguelikes' shared
 `HandleFlow`: entering the menus looks it up, an account without one gets the
 one-time claim modal over the menus (`input::handle_modal_input` routes its
 keys), and choosing Continue, Load or New without one reopens it. The action
-that opened it is kept (`after_claim`) and launched when the claim lands, so
-one Enter still starts the game. `play` carries the handle and the host lists
+that opened it is kept with its edition (`after_claim`) and launched on that
+edition when the claim lands, so one Enter still starts the game, and a New
+confirmed for one edition never starts on another the player browsed to
+meanwhile. `play` carries the handle and the host lists
 the game under it. The player's watcher pane sits beside the game only while
 the game is on screen, never beside the menus, under the same
 `show_watch_chat` setting the `t` key on the Zork card flips.
@@ -233,9 +235,11 @@ fragmentation, client errors, and the client dropping an idle or ended state;
 the host's watch path (every game in the roster under its handle and on
 screen, a launch without a handle refused, `late_watch` unable to play, the
 status bar reader), the claim prompt standing in for a launch without a
-handle, and the suggestions (`suggest_test.rs`: which chat lines are
-commands, the newest fresh one from a watcher, typed once, only at an empty
-prompt).
+handle, a launch chosen during the handle lookup starting the edition it was
+chosen on, the player's F2 composer taking typing, Enter and Esc
+(`input_flow_test.rs`), and the suggestions (`suggest_test.rs`: which chat
+lines are commands, a reply's quote never one, the newest fresh one from a
+watcher, typed once, only at an empty prompt).
 The opt-in runtime script creates and removes its own container/volume,
 exercises I → II → III → I with all six slots, then SIGTERMs/restarts the host
 with a live game and verifies persistent continuation.

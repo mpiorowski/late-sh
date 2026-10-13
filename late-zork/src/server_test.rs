@@ -326,7 +326,10 @@ async fn every_game_is_watchable_and_the_watch_identity_cannot_play() {
     assert!(line("alice").ends_with("\tZork I"), "{block}");
     assert!(line("bob").ends_with("\tZork II"), "{block}");
 
-    let mut screen = watch(&watcher, "game:alice").await;
+    // Each stream on its own connection, as late-ssh opens them: the host
+    // keeps one watch stream per connection.
+    let (screen_watcher, _) = fixture.client(watch::WATCH_USERNAME, "test-secret").await;
+    let mut screen = watch(&screen_watcher, "game:alice").await;
     until(&mut screen, "READY").await;
     listed.data(&b"look\n"[..]).await.unwrap();
     until(&mut screen, "REPLY look").await;
