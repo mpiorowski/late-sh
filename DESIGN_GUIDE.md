@@ -1,17 +1,13 @@
 # `late.sh` TUI Design Guide
 
-## Status and provenance
+## Status
 
-We did not develop a design guide alongside the app, so this document had to be
-reconstructed from the existing interface and code. That explains why the first
-draft included descriptions of the app as it is, and why some inconsistencies in
-the document reflect inconsistencies in the app itself.
-
-The initial draft covered a large surface area with limited review and testing.
-Its provenance is therefore uneven, and its caution about prescribing a single
-design is deliberate. This is a working reference: as we review the interface in
-use, we can distinguish useful conventions from accidental behavior and become
-more confident about which guidance deserves to be firmer.
+This guide is reconstructed from the existing interface and code, so it
+describes the app as it is, and some inconsistencies in it reflect
+inconsistencies in the app itself. Review coverage is uneven, and its caution
+about prescribing a single design is deliberate. It is a working reference:
+reviewing the interface in use separates useful conventions from accidental
+behavior and shows which guidance deserves to be firmer.
 
 ### How to read this guide
 
@@ -277,6 +273,15 @@ pair, or terminal configuration, and are not a claim of accessibility compliance
 the selection. Reset inherits terminal defaults, which may be opaque or
 transparent.
 
+A page surface (a screen's body, a game board, a keyboard strip) should leave
+its background `Color::Reset` rather than paint `BG_CANVAS()`. "Sync terminal
+background" sets the terminal's default background to the theme's canvas
+through OSC 11, so Reset shows the canvas with the setting on and the user's own
+background with it off. A canvas fill shows the theme's canvas either way, so
+it suits only a popup meant to read as a theme-colored panel (§6.1). Le Word
+and the calendar follow this; some surfaces still paint the canvas, such as the
+chat poll strip (`draw_poll_strip` in `late-ssh/src/app/chat/ui.rs`).
+
 Patch order is significant:
 
 ```rust
@@ -349,16 +354,9 @@ frame.render_widget(block, popup);
 ```
 
 The canvas fill is appropriate when the popup is meant to use the theme canvas.
-Other treatments can be intentional. A page surface (a screen's body, a game
-board, a keyboard strip) should not paint `BG_CANVAS`: it leaves the background
-`Color::Reset`, which "Sync terminal background" sets to the theme's canvas
-through OSC 11, and which stays the user's own background with the setting off.
-A canvas fill ignores that setting, so it belongs only on a popup that should
-read as a theme-colored panel either way. Le Word and the calendar follow this;
-some surfaces still paint the canvas, such as the chat poll strip
-(`draw_poll_strip` in `late-ssh/src/app/chat/ui.rs`). Body scrolling, focus
-visibility, footer space, and minimum usable geometry remain the component's
-responsibility.
+Other treatments can be intentional. A page surface does not take this fill
+(§5.3). Body scrolling, focus visibility, footer space, and minimum usable
+geometry remain the component's responsibility.
 Reference: [Room Info framing](late-ssh/src/app/room_info_modal/ui.rs).
 
 ### 6.2 Form rows — observed reference, with suggested budgeting
