@@ -1057,7 +1057,7 @@ never does.
   Signal instead of a glyph. A dropped signal against it costs what any
   drop costs, and the exp lost usually puts the gate a day or two of
   glyphs away again.
-- **The numbers.** 290 signal, 36 attack (39 until the 2026-10-13 pass: the hit ramp reaches the boss too), 22 defense, tuned for the
+- **The numbers.** 300 signal and 35 attack (290 and 39 until the 2026-10-13 pass: the hit ramp reaches the boss too, and ten signal is the finer knob), 22 defense, tuned for the
   round and the drafted deck, not LoGD's dragon (300 / 45 / 25, numbers
   for an exchange loop). From the top of the wall a first kill lands
   about one try in two on the `Auto` key and nine in ten for a runner

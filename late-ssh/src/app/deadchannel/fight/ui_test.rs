@@ -637,8 +637,8 @@ fn the_drafted_cards_print_what_they_would_do_now() {
     assert!(screen.contains("╰ free ─────╯"), "{screen}");
     for text in [
         format!("hit {}", powers.jab),
-        // A block's worth and the five standing.
-        format!("hit {}", powers.block + 5),
+        // A block and a half, and the five standing.
+        format!("hit {}", powers.riposte + 5),
         // A strike, and one more for the static card beside it.
         format!("hit {}", powers.strike + powers.ground),
         "+block up".to_string(),
@@ -682,7 +682,7 @@ fn a_draft_owed_takes_the_road_panel() {
         for text in [
             "a new card",
             "level 6. it takes the place of a block, until the mark",
-            "[1] riposte hits for a block's worth plus all the block you have up",
+            "[1] riposte hits for a block and a half plus all the block you have up",
             "[2] bulwark two energy. holds two blocks and a half",
             "[1] [2] take one",
             "drafted: brace",

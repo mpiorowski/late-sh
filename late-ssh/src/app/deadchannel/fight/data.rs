@@ -362,8 +362,8 @@ pub const OLD_SIGNAL: FoeKind = FoeKind {
 /// points or more off the key's chances. The arena's contract holds the
 /// band for every build; move these with it.
 pub const OLD_SIGNAL_TIER: FoeTier = FoeTier {
-    signal: 290,
-    attack: 36,
+    signal: 300,
+    attack: 35,
     defense: 22,
     bits: 0,
     exp: 0,
@@ -757,8 +757,10 @@ pub const BRACE_PERCENT: i32 = 100;
 /// (`fight/BALANCE.md`, the sweep: at half a strike the key marked on
 /// day 24, at three quarters on day 22).
 pub const SIPHON_MEND_PERCENT: i32 = 75;
-/// A riposte's own hit, of a block; the block standing comes on top.
-pub const RIPOSTE_PERCENT: i32 = 100;
+/// A riposte's own hit, of a block; the block standing comes on top. A
+/// block and a half: at a block's worth the riposte builds marked three
+/// days behind the bulwark ones on the key.
+pub const RIPOSTE_PERCENT: i32 = 150;
 /// A bulwark, of a block.
 pub const BULWARK_PERCENT: i32 = 250;
 /// Energy a burn hands back before any static feeds it; each static card

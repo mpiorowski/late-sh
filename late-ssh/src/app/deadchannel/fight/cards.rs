@@ -53,7 +53,7 @@ pub enum Card {
     /// A strike that mends you for three quarters of itself. In every
     /// deck from the first step.
     Siphon,
-    /// Hits for a block's worth and for every point of block standing;
+    /// Hits for a block and a half, and for every point of block standing;
     /// the block stays.
     Riposte,
     /// Two blocks and a half in one card, for two energy.
@@ -223,7 +223,7 @@ impl Card {
             Card::Jab => "free. hits for three quarters of a strike",
             Card::Brace => "free. holds a block until a hit eats it",
             Card::Siphon => "a strike that mends you for three quarters of what it hits",
-            Card::Riposte => "hits for a block's worth plus all the block you have up",
+            Card::Riposte => "hits for a block and a half plus all the block you have up",
             Card::Bulwark => "two energy. holds two blocks and a half",
             Card::Burn => "free. +2 energy, and +1 per static card in hand, burned",
             Card::Ground => "a strike, plus one per static card in hand. they go too",

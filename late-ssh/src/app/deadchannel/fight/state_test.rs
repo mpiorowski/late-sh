@@ -1745,12 +1745,12 @@ fn the_glyph_takes_the_turn_it_showed_and_block_holds_until_a_hit_eats_it() {
     assert_eq!(
         heavy.lines,
         vec![
-            "it comes down on you for 24. your block takes 3, you take 21.".to_string(),
+            "it comes down on you for 26. your block takes 2, you take 24.".to_string(),
             STATIC_LINE.to_string()
         ]
     );
     let fight = the_fight(&sheet);
-    assert_eq!((sheet.signal, fight.block), (29, 0));
+    assert_eq!((sheet.signal, fight.block), (26, 0));
     assert_eq!(fight.piles.static_cards(), 1);
 }
 
@@ -2167,13 +2167,14 @@ fn the_drafted_cards_do_what_they_print() {
     // Bulwark: two blocks and a half, for two.
     play(&mut sheet, &mut rng, 3);
     assert_eq!(table(&sheet), (482, 15, 2, 38));
-    // Riposte: a block's worth and the fifteen standing, which stay.
+    // Riposte: a block and a half (nine) and the fifteen standing, which
+    // stay.
     play(&mut sheet, &mut rng, 2);
-    assert_eq!(table(&sheet), (461, 15, 1, 38));
+    assert_eq!(table(&sheet), (458, 15, 1, 38));
 
     // The hit for 11 eats eleven of the block; the glyph gathers next.
     sheet.apply(Command::EndTurn, &mut rng);
-    assert_eq!(table(&sheet), (461, 4, ENERGY, 38));
+    assert_eq!(table(&sheet), (458, 4, ENERGY, 38));
     deal(
         &mut sheet,
         [
@@ -2191,7 +2192,7 @@ fn the_drafted_cards_do_what_they_print() {
         ground.lines,
         vec!["you ground 2 static into the drift. 30.".to_string()]
     );
-    assert_eq!(table(&sheet), (431, 4, 2, 35));
+    assert_eq!(table(&sheet), (428, 4, 2, 38));
     assert_eq!(
         the_fight(&sheet).piles.hand,
         vec![None, None, None, Some(Card::Sever), Some(Card::Mute)]
@@ -2204,7 +2205,7 @@ fn the_drafted_cards_do_what_they_print() {
         sever.lines,
         vec!["you sever the drift's feed. 25.".to_string()]
     );
-    assert_eq!(table(&sheet), (225, 4, 1, 35));
+    assert_eq!(table(&sheet), (225, 4, 1, 38));
     // A mute is two energy, and one is left.
     assert_eq!(
         play(&mut sheet, &mut rng, 4).applied,
@@ -2232,7 +2233,7 @@ fn the_drafted_cards_do_what_they_print() {
         burn.lines,
         vec!["you burn 2 static off your hand. +4 energy.".to_string()]
     );
-    assert_eq!(table(&sheet), (225, 4, ENERGY + 4, 35));
+    assert_eq!(table(&sheet), (225, 4, ENERGY + 4, 38));
     play(&mut sheet, &mut rng, 0);
     assert!(the_fight(&sheet).muted);
     let statics = the_fight(&sheet).piles.static_cards();
@@ -2241,7 +2242,7 @@ fn the_drafted_cards_do_what_they_print() {
         muted.lines,
         vec!["the drift moves, and nothing comes out.".to_string()]
     );
-    assert_eq!(table(&sheet), (225, 4, ENERGY, 35));
+    assert_eq!(table(&sheet), (225, 4, ENERGY, 38));
     let fight = the_fight(&sheet);
     assert_eq!((fight.muted, fight.piles.static_cards()), (false, statics));
 }

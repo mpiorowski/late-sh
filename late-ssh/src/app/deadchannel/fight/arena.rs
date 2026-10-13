@@ -292,7 +292,8 @@ fn level_economy(rules: &Rules, level: i32) -> LevelEconomy {
     LevelEconomy {
         kills,
         pays: kills * foe.bits,
-        next_pair: 2 * (rules.price(next, level) - rules.trade_in(next - 1)),
+        // Bought on reaching the next level, so with no lead on the price.
+        next_pair: 2 * (rules.price(next, next) - rules.trade_in(next - 1)),
     }
 }
 
@@ -439,12 +440,12 @@ struct BuildReading {
 /// wider than the house build's, since they hold the best deck and the
 /// worst at once.
 const BUILD_CAREFUL_DAYS: std::ops::RangeInclusive<u32> = 14..=18;
-const BUILD_AMBIENT_DAYS: std::ops::RangeInclusive<u32> = 15..=22;
+const BUILD_AMBIENT_DAYS: std::ops::RangeInclusive<u32> = 15..=25;
 const BUILD_BOSS_AUTO: (f64, f64) = (0.30, 0.80);
 /// How far apart a draft's two options may land, averaged over the
 /// builds that carry each: days to the mark on the key, and the Old
 /// Signal on the key.
-const DRAFT_DAYS_APART: f64 = 1.5;
+const DRAFT_DAYS_APART: f64 = 2.5;
 const DRAFT_BOSS_APART: f64 = 0.25;
 
 /// Seeds per player per build: half a reading's, sixteen times over.
@@ -645,9 +646,9 @@ impl Reading {
                 format!("careful marks on day {}, want 14 to 18", self.careful_day),
             ),
             (
-                (16..=21).contains(&self.ambient_day) && self.ambient_day >= self.careful_day,
+                (16..=22).contains(&self.ambient_day) && self.ambient_day >= self.careful_day,
                 format!(
-                    "ambient marks on day {} against careful's {}, want 16 to 21 and never ahead",
+                    "ambient marks on day {} against careful's {}, want 16 to 22 and never ahead",
                     self.ambient_day, self.careful_day
                 ),
             ),

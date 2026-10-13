@@ -146,7 +146,7 @@ pub const SECTIONS: &[Section] = &[
                 "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass at dead air, and three buy the next piece up at the blade shop, no bits asked, two more a tier past your level.",
             ),
             Block::Rule(
-                "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *290* signal, *36* attack, *22* defense, and no bits.",
+                "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *300* signal, *35* attack, *22* defense, and no bits.",
             ),
             Block::Rule(
                 "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and every level costs a little more.",
@@ -354,7 +354,7 @@ pub const SECTIONS: &[Section] = &[
                 "*level 3*, for a strike. *jab*: free, hits for three quarters of a strike. or *brace*: free, holds a block until a hit eats it.",
             ),
             Block::Rule(
-                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
+                "*level 6*, for a block. *riposte*: hits for a block and a half plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
             ),
             Block::Rule(
                 "*level 9*, for a strike, and both put static to work. *burn*: free, two more energy this turn, and one more again for every static card in your hand, burned up. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",

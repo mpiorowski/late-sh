@@ -84,7 +84,9 @@ pub struct Player {
     /// does.
     pub takes_bright: Option<Threat>,
     /// And only with at least this fraction of the signal standing: with
-    /// one patch a day, a bright glyph at a third of a bar is a drop.
+    /// one patch a day a bright glyph costs most of a bar, so it is a
+    /// fight to open on a full one, and the second of the day waits on
+    /// the patch.
     pub bright_over: f64,
     /// The glass bought before a step whenever a crystal covers it and
     /// none is poured yet; `None` never drinks.
@@ -155,7 +157,7 @@ pub const CAREFUL: Player = Player {
     step_down_at: None,
     heeds: Heeds::Always,
     takes_bright: None,
-    bright_over: 0.6,
+    bright_over: 0.95,
     drinks: None,
     carts: Carts::Never,
     purse: Purse::KeepAPatch,
