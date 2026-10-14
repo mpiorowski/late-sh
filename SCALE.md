@@ -11,7 +11,8 @@ Cluster shape:
 - Node usage at about 60 concurrent sessions (2026-07-24, post-render-cost-program): about 37% CPU, 46% memory. For contrast, the pre-program reading at 80 sessions was about 77% CPU, 43% memory
 - Node usage 2026-08-18 at 38 sessions: 23% CPU, 53% memory. Scheduler requests are at 56% CPU / 56% memory; limits are overcommitted to 295% CPU / 206% memory. The overcommit is normal for this shape but means a synchronized spike across pods has no referee
 - Node disk: 52% used as of 2026-08-18, down from the 75% recorded 2026-07-24 (something reclaimed, most likely containerd image GC). `DiskPressure`, `MemoryPressure`, and `PIDPressure` all `False`
-- Support workloads run on `agent-1` since 2026-09-13 (applied and verified): service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft. `server-1` keeps service-ssh, redis, the doors, ingress-nginx, ipv6-proxy, LiveKit, and both Postgres instances, the last two by decision. See Immediate Next Work 3
+- Support workloads run on `agent-1` since 2026-09-13 (applied and verified): service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft. `server-1` keeps service-ssh, redis, the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, and both Postgres instances, the last two by decision. See Immediate Next Work 3
+- Game servers run on `agent-2` (Hetzner CAX21, arm64, 4 vCPU, about 7.6 GiB allocatable), tainted `role=games`: Vintage Story only, about 1.2 GiB idle. Minecraft stays on `agent-1`
 - Node usage 2026-09-13, minutes after the move (not a settled baseline): `server-1` 13% CPU, 41% memory, 16.6 GB disk free, down from 18% CPU, 52% memory, 7.5 GB free earlier that day. `agent-1` 4% CPU, 52% memory (about 4 GiB, Minecraft's JVM included), 29.2 GB disk free
 - Storage: every PVC uses the `local-path` (hostPath) provisioner, so any pod with a volume is pinned to the node that holds its data. This matters for any node move (door-game saves, music data, Postgres).
 
@@ -200,7 +201,7 @@ The rule: never compute per-user state for every registered user and publish it 
 What exists now:
 
 - **Work and Showcase:** no fan-out at all. The badge is read once at session start (`refresh_unread_count`) and zeroed on visiting Profiles page 5. It does not move live when someone else posts; these pages are visited rarely, so that was the accepted trade.
-- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 20 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_feed_reads` cursor (`news::state::unread_in_snapshot`), so the badge saturates at `20+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
+- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 20 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_reads` rows (`news::state::unread_in_snapshot`), so the badge saturates at `20+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
 - The remaining `Lagged` arms warn once per lag and keep draining instead of breaking.
 
 **Verify after deploy:** `stats by (_msg) count()` in VictoriaLogs over 48 h should show no `failed to receive work event` / `showcase event` / `article event` lines and no `event receiver lagged` warns.
@@ -368,16 +369,17 @@ is no real pressure yet. It restarted twice in the window. Worth a look before
 streams get an audience, since the 1 CPU limit was sized on the assumption that
 a packet forwarder never approaches it.
 
-### 9. Every ingress-nginx reload drops every SSH session 240 s later
+### 9. Every ingress-nginx reload drops paired websockets 240 s later
 
-Accepted for now, not fixed. Public port 22 is a TCP stream on the RKE2
-ingress-nginx controller (`infra/ssh-tcp.tf`), so every SSH session and every
-paired websocket is held by an nginx worker. Any ingress change makes nginx
-reload: new workers take new connections, and the old ones keep the existing
-ones until `worker_shutdown_timeout` (chart default `240s`), when they are
-killed along with everything they hold. `service-ssh` itself stays up (no
-restart, no crash). Every client disconnects in the same ~50 ms, and most
-reconnect within 2 s, which then looks like a small connect storm (Pain Point 3).
+SSH and IRC are out of this: public `22` and `6697` belong to the
+`kube-system/ssh-edge` HAProxy (`infra/ssh-tcp.tf`), so nginx reloads and
+controller rollouts never touch an SSH session. What still rides on nginx is
+HTTP(S), including the paired CLI websocket on `api.late.sh`. Any ingress
+change makes nginx reload: new workers take new connections, and the old ones
+keep the existing ones until `worker_shutdown_timeout` (chart default `240s`),
+when they are killed along with everything they hold. A paired CLI then
+re-pairs through its retry loop (`PairRetryPolicy` in `late-cli`); its SSH
+session stays up.
 
 What triggers a reload:
 
@@ -387,24 +389,21 @@ What triggers a reload:
   `livekit-whip-tls`), each about every 60 days, so roughly two or three drops a
   month. `kubectl get certificates -A` shows the next `renewalTime`s.
 - **Any `terraform apply` that touches an Ingress or the controller's
-  HelmChartConfig.** The HelmChartConfig change also rolls the controller pod,
-  which is worse than a reload.
+  HelmChartConfig** (`infra/ingress.tf`). The HelmChartConfig change also rolls
+  the controller pod, which is worse than a reload: every public HTTP(S) port
+  refuses connections while the old pod drains.
 
 How to recognise it: `service-ssh` logs a burst of `websocket dirty close or
-error ... ResetWithoutClosingHandshake` plus `unregistered cli session token`
-lines at one instant, with 0 restarts, about 240 s after a `RELOAD` event on
-`rke2-ingress-nginx-controller` in `kube-system`.
+error ... ResetWithoutClosingHandshake` at one instant, with 0 restarts and no
+matching SSH reconnects, about 240 s after a `RELOAD` event on
+`rke2-ingress-nginx-controller` in `kube-system`. A burst of `registered cli
+session token` reconnects at the same instant means SSH is riding nginx again;
+see the `ssh-edge` entry in CONTEXT.md.
 
-Fixes, if the drops start to matter:
-
-1. **Raise `worker-shutdown-timeout`** (for example `24h`) under
-   `controller.config` in the same HelmChartConfig. It is one line, but old
-   workers and their memory stay around for up to a day after each reload, and
-   the next controller rollout still drops everyone.
-2. **Take port 22 off ingress-nginx.** Put a dedicated hostPort or LoadBalancer
-   on `service-ssh` that still speaks PROXY protocol, so ingress reloads never
-   affect SSH. This is the real fix, and it fits naturally with the sharding
-   work in Pain Point 2.
+If the re-pairs start to matter, raise `worker-shutdown-timeout` (for example
+`24h`) under `controller.config` in the HelmChartConfig. It is one line, but old
+workers and their memory stay around for up to a day after each reload, and the
+next controller rollout still drops every websocket.
 
 ## Render-Cost Program (shipped 2026-07-22/23)
 
@@ -630,7 +629,7 @@ Source: `late-core/src/models/chat_room.rs`
 
 Found during the 2026-08-18 health check. None of these is a capacity problem; all of them limit the ability to diagnose one.
 
-- **`otel-collector` is flapping, and it is the pipeline every other number here depends on.** 28 restarts lifetime, 5 in the 7 days to 2026-08-18, with 238 readiness and 103 liveness probe failures. Not memory (256Mi limit, 239Mi used, zero OOM events) and not a collector fault: the probes use `timeoutSeconds: 1` against a `200m` CPU limit with 64.7% peak throttling, so the health endpoint misses a 1-second deadline under its own load and liveness kills the pod. Every restart is a hole in metrics, logs, and traces. **Cheapest high-value fix on this list:** raise `timeoutSeconds` and the CPU limit in the collector's Terraform.
+- **`otel-collector` is flapping, and it is the pipeline every other number here depends on.** 28 restarts lifetime, 5 in the 7 days to 2026-08-18, with 238 readiness and 103 liveness probe failures. Not memory (256Mi limit, 239Mi used, zero OOM events) and not a collector fault: the probes use `timeoutSeconds: 1` against a `200m` CPU limit with 64.7% peak throttling, so the health endpoint misses a 1-second deadline under its own load and liveness kills the pod. Memory has since become a second killer: on `agent-1` the collector's last restart (2026-10-05) was `OOMKilled`, and its 7-day working-set peak on 2026-10-09 was 255.4 of 256 MiB. Every restart is a hole in metrics, logs, and traces. **Cheapest high-value fix on this list:** raise `timeoutSeconds`, the CPU limit, and the memory limit in the collector's Terraform.
 - **No node-exporter anywhere in the cluster.** `node_cpu_seconds_total` and the whole `node_*` family do not exist, so every host-level figure in this document is a cadvisor container sum, which cannot see the node's NIC, socket buffers, or steal time. This directly blocks Pain Point 8 item 2: the UDP receive buffer pressure is exactly what node-exporter would show and nothing currently can. The second node landed 2026-09-13 without it, so no host-level baseline from before the move exists. Still worth adding, as a DaemonSet with the `role=support` toleration so it covers both nodes.
 - **`late_ssh_render_stall_{skips,disconnects}_total` still has no series at all.** Meanwhile `late_ssh_render_frame_drops_total` recorded 168,480 drops across 29 episodes in 7 days, peaking at 946/min, which is the documented ~909/min single-stalled-session signature. So stalls are demonstrably happening while the guard's own metrics never report. Either the 32 MB threshold is never reached before the client drops, or the metric is not wired to the code path. One pass over `late-ssh/src/ssh.rs` would settle it.
 - **No stream telemetry** (no `record_stream_*` family). Already recorded as Pain Point 8 item 1; repeated here because it belongs to the same gap.
@@ -773,7 +772,7 @@ when connected time is pending. Connection and disconnection do no DB work.
 
 - `service-ssh`, `redis`: the point of the move.
 - Door hosts: save PVCs are pinned to `server-1`.
-- ingress-nginx, `ipv6-proxy`: public ports and the DNS A/AAAA records point at `server-1`. Ingress still serves pods on `agent-1` across the cluster network.
+- ingress-nginx, `ipv6-proxy`, `ssh-edge`: public ports and the DNS A/AAAA records point at `server-1`. Ingress still serves pods on `agent-1` across the cluster network.
 - **Postgres, both instances, by decision.** A standby on `agent-1` looks like node-level HA but is not: the CNPG operator and the whole control plane also live on `server-1`, so if `server-1` dies nothing is left to promote the standby. Data already leaves the node through daily barman-cloud base backups plus continuous WAL archiving to object storage, so a cross-node standby would only be a faster restore path. Keeping the primary next to `service-ssh` also keeps every query off the network. Revisit with three control-plane nodes.
 - **LiveKit and `livekit-ingress`, by decision.** Both run with `host_network`. On `agent-1`, signaling (`rtc.late.sh`) and WHIP (`whip.late.sh`) would still work through ingress, and direct media would work because `use_external_ip` advertises the node's own public IP. TURN would break: its domain is `rtc.late.sh`, which resolves to `server-1`, and that name cannot move because signaling and its HTTP-01 certificate renewal both depend on ingress-nginx on `server-1`. A clean move needs a dedicated TURN hostname (for example `turn.late.sh`) pointing at `agent-1`, with a DNS-01 certificate. Payoff: stream CPU and packet fan-out off `server-1`, and a fresh host for the UDP receive-buffer sysctls (Pain Point 8).
 - Cluster add-ons (cert-manager, the CNPG operator and barman plugin, local-path provisioner, metrics-server): untouched, no reason to move.

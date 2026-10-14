@@ -242,7 +242,7 @@ fn a_short_terminal_gets_the_hand_as_chips() {
 fn at_the_bottom() -> (Sheet, Scene) {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = MAX_LEVEL;
-    sheet.exp = exp_to_seek(0);
+    sheet.exp = exp_to_seek();
     sheet.signal = 150;
     sheet.engage(&RULES, Pick::Fair, &mut StdRng::seed_from_u64(5));
     assert_eq!(
@@ -419,8 +419,9 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         text.contains("── ▚ glyph  ▓ bright  + rest  $ cache  ─"),
         "{text}"
     );
-    // Under it, the glyph on that lane.
-    assert!(text.contains("▸ [f]"), "{text}");
+    // Under it, the glyph on that lane, with no key of its own: Enter
+    // fights it.
+    assert!(!text.contains("[f]"), "{text}");
     assert!(
         text.contains("hiss  lv 2   the glyph of your level"),
         "{text}"
@@ -442,7 +443,13 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
     // The same panel fits a terminal with no rows to spare: the lanes
     // close up, nothing is dropped.
     let short = render_road(&sheet, &picker, 21, None);
-    for needle in [" the road ", "[▚]", "▸ [f]", "[Enter] fight", "esc back"] {
+    for needle in [
+        " the road ",
+        "[▚]",
+        "hiss  lv 2",
+        "[Enter] fight",
+        "esc back",
+    ] {
         assert!(short.contains(needle), "{needle}\n{short}");
     }
 
@@ -497,23 +504,25 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
 
     let (at, picker) = before(&sheet, Node::Bright);
     let bright = render_road(&at, &picker, 30, None);
-    assert!(bright.contains("▸ [b]"), "{bright}");
+    assert!(bright.contains("[Enter] fight"), "{bright}");
+    assert!(!bright.contains("[b]"), "{bright}");
     assert!(bright.contains("bright stray signal  lv 4"), "{bright}");
     assert!(bright.contains("risky"), "{bright}");
     assert!(bright.contains("· a crystal"), "{bright}");
     assert!(bright.contains("[▓]"), "{bright}");
 
     let (at, picker) = before(&sheet, Node::Rest);
-    let rest = render_road(&at, &picker, 30, Some("+3 signal. 12/40."));
+    let rest = render_road(&at, &picker, 30, Some("1 static card gone."));
     assert!(rest.contains("a doorway out of the rain"), "{rest}");
-    assert!(rest.contains("[h] mend    +14 signal, to 26/40"), "{rest}");
     assert!(
-        rest.contains("[c] clear   3 static cards out of your deck"),
+        rest.contains("clear   3 static cards out of your deck"),
         "{rest}"
     );
+    assert!(rest.contains("[Enter] clear the deck"), "{rest}");
+    assert!(!rest.contains("mend"), "a rest no longer mends\n{rest}");
     assert!(rest.contains("[+]"), "{rest}");
     assert!(
-        rest.contains("+3 signal. 12/40."),
+        rest.contains("1 static card gone."),
         "the last step's word\n{rest}"
     );
 
@@ -521,9 +530,11 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
     let cache = render_road(&at, &picker, 30, None);
     assert!(cache.contains("a cache"), "{cache}");
     assert!(
-        cache.contains(&format!("[t] take    {} bits", RULES.cache(4))),
+        cache.contains(&format!("take    {} bits", RULES.cache(4))),
         "{cache}"
     );
+    assert!(cache.contains("[Enter] take it"), "{cache}");
+    assert!(!cache.contains("[t]"), "{cache}");
     assert!(cache.contains("[$]"), "{cache}");
 }
 
@@ -565,7 +576,7 @@ fn a_road_that_is_over_is_the_days_card() {
     );
     assert!(down.contains("[s] copy the day's card"), "{down}");
     assert!(down.contains("[Enter] back to the street"), "{down}");
-    assert!(!down.contains("[f]"), "{down}");
+    assert!(!down.contains("[Enter] fight"), "{down}");
     assert!(
         !down.contains("[▚]"),
         "no cursor on a road that is over\n{down}"
@@ -626,8 +637,8 @@ fn the_drafted_cards_print_what_they_would_do_now() {
     assert!(screen.contains("╰ free ─────╯"), "{screen}");
     for text in [
         format!("hit {}", powers.jab),
-        // A block's worth and the five standing.
-        format!("hit {}", powers.block + 5),
+        // A block and a half, and the five standing.
+        format!("hit {}", powers.riposte + 5),
         // A strike, and one more for the static card beside it.
         format!("hit {}", powers.strike + powers.ground),
         "+block up".to_string(),
@@ -659,7 +670,7 @@ fn a_draft_owed_takes_the_road_panel() {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = 6;
     sheet.signal = 60;
-    sheet.cards = vec![Card::Siphon];
+    sheet.cards = vec![Card::Brace];
     let picker = Picker {
         lane: 1,
         fair: Some(Threat::Easy),
@@ -671,10 +682,10 @@ fn a_draft_owed_takes_the_road_panel() {
         for text in [
             "a new card",
             "level 6. it takes the place of a block, until the mark",
-            "[1] riposte hits for a block's worth plus all the block you have up",
+            "[1] riposte hits for a block and a half plus all the block you have up",
             "[2] bulwark two energy. holds two blocks and a half",
             "[1] [2] take one",
-            "drafted: siphon",
+            "drafted: brace",
         ] {
             assert!(screen.contains(text), "{text} at {height} rows\n{screen}");
         }
@@ -688,5 +699,5 @@ fn a_draft_owed_takes_the_road_panel() {
     sheet.cards.push(Card::Bulwark);
     let screen = render_road(&sheet, &picker, 24, None);
     assert!(screen.contains("[Enter] fight"), "{screen}");
-    assert!(screen.contains("drafted: siphon · bulwark"), "{screen}");
+    assert!(screen.contains("drafted: brace · bulwark"), "{screen}");
 }

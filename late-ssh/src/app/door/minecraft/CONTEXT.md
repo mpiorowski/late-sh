@@ -12,7 +12,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 
 ## Card
 
-- `HubGame::Minecraft` is the one game in the `Servers` group (`servers` in the sidebar, after the remakes, before the doors; `hub/state.rs`): servers we host and you play from a game client. `ui.rs` is the landing: connect, get whitelisted, claim land, share a claim, griefing, world.
+- `HubGame::Minecraft` opens the `Servers` group (`servers` in the sidebar, after the remakes, before the doors; `hub/state.rs`), followed by Vintage Story (`door/vintagestory/CONTEXT.md`): servers we host and you play from a game client. `ui.rs` is the landing: connect, get whitelisted, claim land, share a claim, griefing, world.
 - Enter does nothing on this card (`launch_games_hub_selection` has an empty arm) and the hub footer drops its Enter hint for it. It is never "live": `live_screen` returns `None`.
 - The landing scrolls with the rest of the hub (Ctrl+J/K, Ctrl+arrows) because it is long enough to be cut on short terminals. Claiming comes before the rules on purpose, so the most useful part stays near the top.
 - `ADDRESS`, `VERSION`, `DIFFICULTY`, and `WORLD_BORDER` are constants. `ui_test.rs::quoted_settings_match_the_terraform` reads `infra/minecraft.tf` and `infra/defaults.tf` at test time and fails when the card and the server drift (version, port 25565, difficulty, online mode, whitelist, GriefPrevention, world border, and no `mob_griefing` override). The build never reads `infra/`.
@@ -21,7 +21,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 
 ## Server
 
-- Pod: `kubernetes_deployment_v1.minecraft`, image `itzg/minecraft-server:2026.9.1-java25` running `TYPE=PAPER`, `VERSION=26.2` (`local.minecraft_version`), 2G heap with Aikar's flags. Requests 500m / 2560Mi, limits 2 CPU / 3Gi.
+- Pod: `kubernetes_deployment_v1.minecraft`, image `itzg/minecraft-server:2026.10.0-java25` running `TYPE=PAPER`, `VERSION=26.3` (`local.minecraft_version`), 2G heap with Aikar's flags. Requests 500m / 2560Mi, limits 2 CPU / 3Gi.
 - `Recreate` strategy: one world, one RWO volume, one hostPort, so two pods can never coexist. Every restart is downtime.
 - 120 s termination grace: the image traps SIGTERM, runs `stop`, and waits for the world save. SIGKILL mid-save corrupts chunks.
 - Startup probe allows 10 minutes (first boot downloads Paper and the plugin). Liveness and readiness use `mc-health`.
@@ -49,7 +49,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 ## Protection and world rules
 
 - GriefPrevention (`MODRINTH_PROJECTS=griefprevention`) runs on its defaults. Its config is generated on the PVC at `/data/plugins/GriefPreventionData/config.yml`, not in git.
-  - Claims in the overworld only (`world: Survival`); Nether and End are unclaimable.
+  - Claims in the overworld and the Nether (`world: Survival`, `world_nether` set to `Survival` by the `minecraft-patches` ConfigMap in `infra/minecraft.tf`); the End is unclaimable.
   - 100 starting claim blocks, 100 accrued per hour played, 80000 cap; first chest auto-claims radius 4; claims at least 5 wide and 100 area.
   - Inside claims: no building, breaking, container access, switches, animal damage, or villager trading without trust. Trust commands: `/trust`, `/containertrust`, `/accesstrust`, `/untrust`, `/trustlist`.
   - Explosions break blocks only outside claims and below sea level. Endermen cannot move blocks. Fire never spreads or burns blocks.
@@ -78,13 +78,11 @@ kubectl logs deploy/minecraft | grep -E "Done \(|Rcon loop|Incorrect"
 
 A version bump converts the world in place and is one-way: an older server cannot load it. With no backup, a failed upgrade loses the world.
 
-Pending as of 2026-09-15: 26.3 (Wilderness Bound) released that day. Blocked on Paper (26.3 builds are ALPHA only) and GriefPrevention (16.18.7 lists up to 26.2).
-
 Gates, both must pass before bumping:
 
 ```bash
-curl -s https://fill.papermc.io/v3/projects/paper/versions/26.3/builds | jq -r '.[0].channel'           # STABLE
-curl -s https://api.modrinth.com/v2/project/griefprevention/version | jq -r '.[0].game_versions[-1]'   # 26.3
+curl -s https://fill.papermc.io/v3/projects/paper/versions/<new>/builds | jq -r '.[0].channel'           # STABLE
+curl -s https://api.modrinth.com/v2/project/griefprevention/version | jq -r '.[0].game_versions[-1]'   # <new>
 ```
 
 - Paper: the image only takes default-channel builds and fails to boot otherwise. Never set `PAPER_CHANNEL=experimental` on this world.

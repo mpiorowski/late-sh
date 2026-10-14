@@ -64,7 +64,8 @@ late.sh      → <server-ip>
 
 For IPv6, configure matching AAAA records to the node IPv6 address. The
 Terraform-managed `ipv6-proxy` DaemonSet binds only that IPv6 address and
-forwards traffic into the existing IPv4 ingress path.
+forwards HTTP(S) into the existing IPv4 ingress path; SSH and IRC bind both
+address families on `ssh-edge` (see below).
 
 This enables:
 
@@ -131,22 +132,25 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 
 ## Architecture
 
-| Component  | Service                                                                         | Ports                                                  | Description                                       |
-| ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
-| late-ssh   | `service-ssh-sv`                                                                | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled)    | SSH TUI server + HTTP API + embedded IRC          |
-| late-web   | `service-web-sv`                                                                | 3000                                                   | Web landing page + pairing                        |
-| Icecast    | `icecast-sv`                                                                    | 8000                                                   | Audio streaming server                            |
-| Liquidsoap | none (dials out to `icecast-sv`)                                                | -                                                      | Playlist encoder                                  |
-| LiveKit    | `livekit-sv`                                                                    | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media                    |
-| Minecraft  | none (hostPort)                                                                 | 25565 TCP on `agent-1`                                 | Paper server with GriefPrevention, whitelist-only |
-| PostgreSQL | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
-| Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
+| Component     | Service                                                                         | Ports                                                  | Description                                       |
+| ------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
+| late-ssh      | `service-ssh-sv`                                                                | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled)    | SSH TUI server + HTTP API + embedded IRC          |
+| late-web      | `service-web-sv`                                                                | 3000                                                   | Web landing page + pairing                        |
+| Icecast       | `icecast-sv`                                                                    | 8000                                                   | Audio streaming server                            |
+| Liquidsoap    | none (dials out to `icecast-sv`)                                                | -                                                      | Playlist encoder                                  |
+| LiveKit       | `livekit-sv`                                                                    | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media                    |
+| Minecraft     | none (hostPort)                                                                 | 25565 TCP on `agent-1`                                 | Paper server with GriefPrevention, whitelist-only |
+| Vintage Story | none (hostPort)                                                                 | 42420 TCP+UDP on `agent-2`                             | Official server (arm64), whitelist-only           |
+| PostgreSQL    | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
+| Monitoring    | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
 
-SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod
-port 2222. IRC traffic follows the same TCP passthrough pattern when enabled.
-Both NGINX for IPv4 and the host-network HAProxy for IPv6 send PROXY v1 metadata
-before the application's in-process TLS handshake; late-ssh accepts it only from
-the CIDRs configured by `SSH_PROXY_TRUSTED_CIDRS`. LiveKit signaling is routed
+SSH on port 22 and IRC on port 6697, IPv4 and IPv6, reach the late-ssh pod
+through `ssh-edge`, a host-network HAProxy DaemonSet (`ssh-tcp.tf`), never
+through NGINX: every NGINX reload (each cert-manager renewal is one) kills the
+connections its old workers hold 240 s later. HAProxy sends PROXY v1 metadata
+(for IRC, only when `IRC_PROXY_EMIT` is on) before the application's in-process
+TLS handshake; late-ssh accepts it only from the trusted CIDRs in its prod
+profile (`late-ssh/src/config.rs`). LiveKit signaling is routed
 through NGINX ingress on `rtc.<domain>`, while LiveKit media ports are bound
 directly on the node by the `livekit` pod. On a fresh cluster, the `livekit` pod
 may wait for cert-manager to create the `livekit-tls` secret used by embedded
@@ -157,12 +161,18 @@ treating the rollout as failed.
 
 | Node       | RKE2 role                    | Placement                                   | Runs                                                                                                                                                   |
 | ---------- | ---------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, LiveKit, Postgres                                                                                |
+| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, Postgres                                                                      |
 | `agent-1`  | agent                        | label and `NoSchedule` taint `role=support` | service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft, second CoreDNS replica |
+| `agent-2`  | agent (arm64)                | label and `NoSchedule` taint `role=games`   | Vintage Story                                                                                                                                          |
 
 A workload lands on `agent-1` only when it carries both the `role=support` node
-selector and toleration (`support_node_*` locals in `defaults.tf`). The taint
-keeps everything else, service-ssh included, on `server-1`. Workloads with a
+selector and toleration (`support_node_*` locals in `defaults.tf`), and on
+`agent-2` only with `role=games` (`games_node_*`). The taints keep everything
+else, service-ssh included, on `server-1`. `agent-2` is a Hetzner CAX21, arm64,
+while every image we build for the other nodes is amd64 only, so a workload
+headed there also selects `kubernetes.io/arch=arm64` and needs an arm64 image.
+Of the cluster's DaemonSets only Canal (multi-arch, tolerates every taint) and
+kube-proxy run there. Workloads with a
 `local-path` volume stay pinned to the node that holds the data, so moving one
 needs a fresh volume on the new node, not just the selector.
 
@@ -191,19 +201,21 @@ mkdir -p /etc/rancher/rke2
 tee /etc/rancher/rke2/config.yaml >/dev/null <<'CONFIG'
 server: https://<server-1-ip>:9345
 token: <token>
-node-name: agent-1
+node-name: <agent-N>
 node-label:
-  - role=support
+  - role=<support|games>
 node-taint:
-  - role=support:NoSchedule
+  - role=<support|games>:NoSchedule
 CONFIG
+chmod 600 /etc/rancher/rke2/config.yaml
 curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent INSTALL_RKE2_VERSION=v1.34.4+rke2r1 sh -
 systemctl enable rke2-agent.service
 systemctl start rke2-agent.service
 ```
 
 Pin `INSTALL_RKE2_VERSION` to whatever `kubectl get nodes` shows for `server-1`:
-an agent newer than its server is unsupported. Nodes talk on TCP 9345 and 6443
+an agent newer than its server is unsupported. The installer picks the host's
+architecture itself, arm64 included. Nodes talk on TCP 9345 and 6443
 (agent to server), UDP 8472 (Canal VXLAN) and TCP 10250 (kubelet) both ways;
 open those in any Hetzner Cloud Firewall attached to either host.
 
@@ -244,6 +256,33 @@ first. GriefPrevention resolves from Modrinth at boot for the pinned version, so
 a version bump can fail startup if the plugin has no matching release yet; the
 pod log says so.
 
+### Vintage Story
+
+`infra/vintagestory.tf` runs the official Vintage Story server on `agent-2`'s
+port 42420, TCP and UDP, as pod hostPorts for the same reason as Minecraft.
+The image is ours, `docker/vintagestory/Dockerfile`: Anego's linux-x64 server
+tarball with Anego's arm64 launcher and native libraries swapped in, built and
+published for arm64 by `.github/workflows/vintagestory.yml` at the tag
+`vintagestory_image` in `defaults.tf` names. One DNS record, by hand and
+DNS-only like the rest:
+
+```
+vs.late.sh                A    <agent-2-ip>
+```
+
+The world lives on the `vintagestory-data` PVC (`local-path`,
+`prevent_destroy`, reclaim policy Delete) on `agent-2`'s disk. Access is
+account verification plus the server's whitelist. The server reads console
+commands on stdin, so whitelisting is an attach, not an exec:
+
+```bash
+echo '/player <name> whitelist on' | kubectl attach -i -n default deploy/vintagestory
+kubectl logs -n default deploy/vintagestory --tail=20    # the command's answer
+```
+
+`late-ssh/src/app/door/vintagestory/CONTEXT.md` has the rest: settings,
+operations, and the upgrade checklist.
+
 ## Configuration Parameters
 
 Application configuration does not live in Terraform. `service-ssh` and
@@ -265,13 +304,13 @@ secrets/variables for CI/CD).
 
 The IRC edge is always provisioned: Terraform requests a Let's Encrypt
 certificate for `irc.late.sh` with cert-manager, mounts the generated Kubernetes
-TLS secret into `service-ssh`, and exposes port 6697 through ingress. The
+TLS secret into `service-ssh`, and exposes port 6697 through `ssh-edge`. The
 listener itself (ports, limits, TLS paths, trusted proxy CIDRs) is part of the
 late-ssh prod profile.
 
-| Variable         | Description                                                             |
-| ---------------- | ----------------------------------------------------------------------- |
-| `IRC_PROXY_EMIT` | Make ingress-nginx and IPv6 HAProxy emit PROXY headers, defaults to `0` |
+| Variable         | Description                                                         |
+| ---------------- | ------------------------------------------------------------------- |
+| `IRC_PROXY_EMIT` | Make the `ssh-edge` IRC backend emit PROXY headers, defaults to `0` |
 
 `IRC_PROXY_EMIT` stays a variable because flipping edge emission is a
 deploy-time rollout step: deploy a parser-capable image first, then set the
@@ -315,7 +354,9 @@ accepts PROXY headers, so the old accept-side toggle is gone.
 | `MINECRAFT_OPS`       | Comma-separated usernames granted operator, seeded on every boot                                            |
 
 Image, game version, heap, and port are locals in `defaults.tf`, not variables:
-a version bump is a reviewed diff.
+a version bump is a reviewed diff. Vintage Story has no variables at all: its
+image and port are `defaults.tf` locals too, and its whitelist lives on its
+volume.
 
 ### S3 Storage
 
@@ -325,6 +366,16 @@ a version bump is a reviewed diff.
 | `S3_SECRET_ACCESS_KEY` | S3 secret key (DB backups and file uploads)                                |
 | `S3_ENDPOINT`          | S3 endpoint URL (DB backups; the files endpoint is a prod-profile literal) |
 | `DB_BACKUPS_BUCKET`    | Bucket for CloudNativePG backups                                           |
+
+## Infrastructure Checks
+
+PRs touching `infra/` run `terraform fmt -check -recursive` and
+`terraform validate`, initialized with `terraform init -backend=false -input=false`
+so validation needs no cluster or state credentials. For same-repository PRs the
+`terraform_plan` workflow also plans against live production state and rejects
+planned destroys. It runs on PRs only, with no manual trigger. Fork PRs skip the
+live plan because GitHub withholds environment secrets; to plan a fork's infra
+change, push its branch to this repository and open the PR from there.
 
 ## Production Considerations
 

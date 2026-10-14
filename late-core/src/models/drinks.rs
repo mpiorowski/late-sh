@@ -1,10 +1,10 @@
 //! Per-user tavern drink tally backing the clubhouse drunkenness glow.
 //!
 //! `drunk_points` is the raw buzz recorded at `last_drink_at` (chips spent on
-//! drinks, capped at [`MAX_DRUNK_POINTS`]). Readers apply [`decayed_points`]
-//! against elapsed wall-clock time, so a user dries out on their own; the one
-//! write that sobers anyone up early is the Shop's hangover pill
-//! ([`UserDrinks::sober_up_in_tx`]).
+//! intoxicating drinks, capped at [`MAX_DRUNK_POINTS`]). Non-intoxicating pours
+//! only update the drink count and spending tally. Readers apply [`decayed_points`]
+//! against elapsed wall-clock time, so a user dries out on their own and
+//! nothing sobers anyone up early: the buzz is the consequence of the tab.
 //!
 //! Every drink a patron takes also leaves a `drink_pours` row (who, which
 //! bar, how many points), written by the same statement as the buzz upsert
@@ -25,6 +25,10 @@ use super::drink_round::Bar;
 /// Bounds on what the bartender may charge for a single pour.
 pub const DRINK_PRICE_MIN: i64 = 100;
 pub const DRINK_PRICE_MAX: i64 = 1_000;
+/// What every non-intoxicating pour (water, coffee, a cut-off substitute)
+/// costs. One fixed price: the bartender is told it and the server refuses
+/// any other, so a model slip can never charge top-shelf for a coffee.
+pub const SOFT_DRINK_PRICE: i64 = 50;
 /// Buzz comped to a newcomer on their first walk up to the bar. Sized to land
 /// exactly on the first drunk level so the welcome round already glows.
 pub const WELCOME_DRINK_POINTS: i64 = 100;
@@ -130,15 +134,17 @@ impl UserDrinks {
         drunk_level(self.effective_points(now))
     }
 
-    /// Record a paid drink poured at `bar`: `price` chips become both buzz
-    /// and tab.
+    /// Record a paid drink poured at `bar`: `price` chips go on the tab and
+    /// become buzz only when `intoxicating` is true.
     pub async fn record_purchase(
         client: &impl GenericClient,
         user_id: Uuid,
         bar: Bar,
         price: i64,
+        intoxicating: bool,
     ) -> Result<Self> {
-        Self::record_pour(client, user_id, bar, price, price).await
+        let points = if intoxicating { price } else { 0 };
+        Self::record_pour(client, user_id, bar, points, price, intoxicating).await
     }
 
     /// Record a drink somebody else already paid for: the buzz lands, the tab
@@ -148,63 +154,87 @@ impl UserDrinks {
     /// bartender named the drink, so what the house comps never depends on
     /// what he invented to call it. `lifetime_spent` stays put because the
     /// drinker spent nothing: the chips are on the buyer's ledger row.
+    /// A non-intoxicating pour consumes the drink without adding any buzz.
     /// `bar` is where the drink was poured, not the bar that sold the round.
     pub async fn record_comped_pour(
         client: &impl GenericClient,
         user_id: Uuid,
         bar: Bar,
         points: i64,
+        intoxicating: bool,
     ) -> Result<Self> {
-        Self::record_pour(client, user_id, bar, points, 0).await
+        let applied_points = if intoxicating { points } else { 0 };
+        Self::record_pour(client, user_id, bar, applied_points, 0, intoxicating).await
     }
 
-    /// Decay the stored buzz to now, add `points`, cap it, bump the tallies
-    /// by `spent`, and log the drink in `drink_pours` at its full `points`
-    /// (before the cap: a drink taken while wasted still counts what it
-    /// poured). One statement, so concurrent buys from two sessions can't
-    /// double-count the decay window and the log cannot miss a pour. Every
-    /// numeric parameter is cast to bigint so Postgres never infers a
-    /// `LEAST`/`GREATEST` argument as text.
+    /// Bump the tallies by `spent` and log the drink in `drink_pours` at its
+    /// full `points` before the cap. Intoxicating drinks decay the stored buzz
+    /// to now, add points and cap it; non-intoxicating drinks log zero points
+    /// and preserve the stored buzz and its decay timestamp. One statement,
+    /// so concurrent buys cannot double-count the decay window and the log
+    /// cannot miss a pour. Every numeric parameter is cast to bigint so
+    /// Postgres never infers a `LEAST`/`GREATEST` argument as text.
     async fn record_pour(
         client: &impl GenericClient,
         user_id: Uuid,
         bar: Bar,
         points: i64,
         spent: i64,
+        intoxicating: bool,
     ) -> Result<Self> {
-        let row = client
-            .query_one(
-                "WITH pour AS (
-                    INSERT INTO drink_pours (user_id, bar, points)
-                    VALUES ($1, $6, $2::bigint)
-                 )
-                 INSERT INTO user_drinks
-                    (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
-                 VALUES ($1, LEAST($2::bigint, $4::bigint), $5::bigint, 1, current_timestamp)
-                 ON CONFLICT (user_id) DO UPDATE SET
-                    drunk_points = LEAST(
-                        GREATEST(
-                            user_drinks.drunk_points
-                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $3::bigint / 3600),
-                            0
-                        ) + $2::bigint,
-                        $4::bigint
-                    ),
-                    lifetime_spent = user_drinks.lifetime_spent + $5::bigint,
-                    drink_count = user_drinks.drink_count + 1,
-                    last_drink_at = current_timestamp,
-                    updated = current_timestamp
-                 RETURNING *",
-                &[
-                    &user_id,
-                    &points,
-                    &DRUNK_DECAY_PER_HOUR,
-                    &MAX_DRUNK_POINTS,
-                    &spent,
-                    &bar.as_str(),
-                ],
-            )
-            .await?;
+        let row = if intoxicating {
+            client
+                .query_one(
+                    "WITH pour AS (
+                        INSERT INTO drink_pours (user_id, bar, points)
+                        VALUES ($1, $6, $2::bigint)
+                     )
+                     INSERT INTO user_drinks
+                        (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
+                     VALUES ($1, LEAST($2::bigint, $4::bigint), $5::bigint, 1, current_timestamp)
+                     ON CONFLICT (user_id) DO UPDATE SET
+                        drunk_points = LEAST(
+                            GREATEST(
+                                user_drinks.drunk_points
+                                    - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $3::bigint / 3600),
+                                0
+                            ) + $2::bigint,
+                            $4::bigint
+                        ),
+                        lifetime_spent = user_drinks.lifetime_spent + $5::bigint,
+                        drink_count = user_drinks.drink_count + 1,
+                        last_drink_at = current_timestamp,
+                        updated = current_timestamp
+                     RETURNING *",
+                    &[
+                        &user_id,
+                        &points,
+                        &DRUNK_DECAY_PER_HOUR,
+                        &MAX_DRUNK_POINTS,
+                        &spent,
+                        &bar.as_str(),
+                    ],
+                )
+                .await?
+        } else {
+            client
+                .query_one(
+                    "WITH pour AS (
+                        INSERT INTO drink_pours (user_id, bar, points)
+                        VALUES ($1, $3, 0)
+                     )
+                     INSERT INTO user_drinks
+                        (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
+                     VALUES ($1, 0, $2::bigint, 1, '1970-01-01 00:00:00Z'::timestamptz)
+                     ON CONFLICT (user_id) DO UPDATE SET
+                        lifetime_spent = user_drinks.lifetime_spent + $2::bigint,
+                        drink_count = user_drinks.drink_count + 1,
+                        updated = current_timestamp
+                     RETURNING *",
+                    &[&user_id, &spent, &bar.as_str()],
+                )
+                .await?
+        };
         Ok(Self::from(row))
     }
 
@@ -231,35 +261,6 @@ impl UserDrinks {
             )
             .await?;
         Ok(row.map(Self::from))
-    }
-
-    /// Whether the user is drunk at all right now (any level above sober),
-    /// read inside a purchase transaction.
-    pub async fn is_drunk_in_tx(
-        client: &impl tokio_postgres::GenericClient,
-        user_id: Uuid,
-    ) -> Result<bool> {
-        let row = client
-            .query_opt("SELECT * FROM user_drinks WHERE user_id = $1", &[&user_id])
-            .await?;
-        Ok(row
-            .map(Self::from)
-            .is_some_and(|drinks| drinks.level(Utc::now()) > 0))
-    }
-
-    /// The hangover pill: every point of buzz gone at once. The tab
-    /// (`lifetime_spent`, `drink_count`) stays, since the drinks were drunk.
-    pub async fn sober_up_in_tx(
-        client: &impl tokio_postgres::GenericClient,
-        user_id: Uuid,
-    ) -> Result<()> {
-        client
-            .execute(
-                "UPDATE user_drinks SET drunk_points = 0 WHERE user_id = $1",
-                &[&user_id],
-            )
-            .await?;
-        Ok(())
     }
 
     /// The patrons who took the most drinks at one bar, all time: the tab

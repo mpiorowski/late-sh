@@ -4,6 +4,7 @@
   "Water your bonsai once a day with the w key",
   "You can open a public room with /public #room",
   "Switch what you hear: v then x cycles audio sources, v then 1-4 picks a stream or station",
+  "Copy a track to your clipboard: ctrl+y in the Music Booth (v then v) or Stations (v then r)",
   "Configure your notification preferences: ctrl+o",
   "Press ? outside of chat to see help",
   "Press tab to cycle through chat, games, and art",
@@ -46,10 +47,14 @@
   "/crown shows who wears the crown; /crown take buys it off them and burns every chip",
   "Sliding Puzzle in the Arcade: press i to swap numbered tiles for the picture, same board, same chips",
   "Proud of your Artboard work? On page 4 pick Hang a piece in the rail and frame it",
-  "Ctrl+O > Tweaks > Show Gallery Art on Splash chooses SFW (default), Always, or Never",
+  "Artboard's NSFW disclaimer: V views this visit, A always views on this device, B returns to chat; Ctrl+O > Tweaks sets it per device",
+  "Press A (Always View) on the Artboard disclaimer and this splash shows the day's gallery piece",
   "Pool in the Lobby: ' picks the ball that's on, a aims, e sets spin, then s and stroke the mouse down and up",
   "Pool's cue panel is the shot: click the target ball to aim, the cue ball to set spin, the cue itself to stroke",
   "Pool: h and l turn the cue a degree, { and } step through the pots on offer, and the line shows where every ball ends up",
   "Daily snooker is the full frame on a 12ft table: reds and colours, free balls, and 700 chips to whoever is ahead at the end",
-  "A game somebody just moved in heads #lounge for a while; click the board to watch"
+  "A game somebody just moved in heads #lounge for a while; click the board to watch",
+  "Press 7 for the events board: anyone can post one, and i says I'm in",
+  "Posting an event? Type movie night saturday 9pm as the title and the time fills itself in",
+  "An hour before a board event starts it heads the now strip on Home; o opens it"
 ]

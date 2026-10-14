@@ -1,0 +1,6 @@
+FROTZ v2.55 - Infocom-style interactive
+fiction player. Plays all Z-machine games.
+Compiled with Turbo C++ 3.0 in 16-bit mode
+for maximum compatibility.
+Complies with the Z-Machine Standard
+version 1.1.

@@ -43,6 +43,10 @@ pub enum LiveSource {
     /// Brogue), by its door and the player's handle (one live game per
     /// player per door).
     DoorGame(LiveGameKey),
+    /// An event on the board an hour before it starts, and again when it
+    /// starts, by event id. The viewer's own personal events ride it too,
+    /// for the viewer alone.
+    BoardEvent(Uuid),
 }
 
 /// The two lanes of the queue. The strip always takes from `News` first.
@@ -59,7 +63,8 @@ fn lane(source: LiveSource) -> Lane {
         | LiveSource::DailyResult(_)
         | LiveSource::BoothTrack(_)
         | LiveSource::Stream(_)
-        | LiveSource::DoorGame(_) => Lane::Rest,
+        | LiveSource::DoorGame(_)
+        | LiveSource::BoardEvent(_) => Lane::Rest,
     }
 }
 
@@ -76,6 +81,9 @@ pub const LIVE_STREAM_MIN: Duration = Duration::from_secs(2 * 60);
 /// A door game that just started stays up at least this long, the same as a
 /// stream: long enough to see who is playing and hop in to watch.
 pub const LIVE_DOOR_GAME_MIN: Duration = Duration::from_secs(2 * 60);
+/// A board event stays up at least this long, the same as a stream: long
+/// enough to read what it is and press the key.
+pub const LIVE_BOARD_EVENT_MIN: Duration = Duration::from_secs(2 * 60);
 /// A shared link stays up at least this long: a link takes longer to read
 /// than a board takes to glance at. It equals `LIVE_MAX_UP`, so a link is
 /// up exactly this long.
@@ -103,6 +111,7 @@ fn min_for(source: LiveSource) -> chrono::Duration {
         LiveSource::BoothTrack(_) => LIVE_TRACK_MIN,
         LiveSource::Stream(_) => LIVE_STREAM_MIN,
         LiveSource::DoorGame(_) => LIVE_DOOR_GAME_MIN,
+        LiveSource::BoardEvent(_) => LIVE_BOARD_EVENT_MIN,
         LiveSource::NewsArticle(_) => LIVE_NEWS_MIN,
     })
 }

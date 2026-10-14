@@ -1,0 +1,273 @@
+! Strict Z test, written to test frotz_zstrict_patch
+!      _
+! Torbjorn Andersson, 981127
+
+Property prop1;
+Property prop2;
+Attribute attr1;   ! 0
+Attribute attr2;   ! 1
+
+! Note: obj1's property list will have prop2 before prop1.
+
+Object 	obj1
+ with 	prop1 1,
+	prop2 2,
+ has	attr1 attr2;  ! These will be set later anyway
+Object 	-> obj2
+ with 	prop1;
+Object	-> obj3;
+
+[ _jin o1 o2 expected;
+    @jin o1 o2 ?L1;
+    print "@@64jin ", o1, " ", o2, " => FALSE ";
+    if (expected)
+ 	"(incorrect)";
+    "(correct)";
+
+    .L1;
+    print "@@64jin ", o1, " ", o2, " => TRUE ";
+    if (expected)
+	"(correct)";
+    "(incorrect)";
+];
+
+[ _get_child o expected result;
+    @get_child o -> result ?L2;
+    print "@@64get_child ", o, " => ", result;
+    if (expected)
+	" (incorrect)";
+    " (correct)";
+
+    .L2;
+    print "@@64get_child ", o, " => ", result;
+    if (expected)
+	" (correct)";
+    " (incorrect)";
+];
+
+
+[ _get_parent o expected result;
+    @get_parent o -> result;
+    print "@@64get_parent ", o, " => ", result;
+    if (result)
+	result = true;
+    if (expected == result)
+	" (correct)";
+    " (incorrect)";
+];
+
+[ _get_sibling o expected result;
+    @get_sibling o -> result ?L3;
+    print "@@64get_sibling ", o, " => ", result;
+    if (expected)
+	" (incorrect)";
+    " (correct)";
+
+    .L3;
+    print "@@64get_sibling ", o, " => ", result;
+    if (expected)
+	" (correct)";
+    " (incorrect)";
+];
+
+[ _get_prop_addr o p expected result;
+    @get_prop_addr o p -> result;
+    print "@@64get_prop_addr ", o, " ", p, " => ", result;
+    if (result)
+	result = true;
+    if (result == expected)
+	" (correct)";
+    " (incorrect)";
+];
+
+[ _get_prop o p expected result;
+    @get_prop o p -> result;
+    print "@@64get_prop ", o, " ", p, " => ", result;
+    if (result)
+	result = true;
+    if (result == expected)
+	" (correct)";
+    " (incorrect)";
+];
+
+[ _clear_attr o a;
+    @clear_attr o a;
+    print_ret "@@64clear_attr ", o, " ", a;
+];
+
+[ _set_attr o a;
+    @set_attr o a;
+    print_ret "@@64set_attr ", o, " ", a;
+];
+
+[ _test_attr o a expected;
+    @test_attr o a ?L4;
+    print "@@64test_attr ", o, " ", a, " => FALSE ";
+    if (expected)
+    	"(incorrect)";
+    "(correct)";
+    .L4;
+    print "@@64test_attr ", o, " ", a, " => TRUE ";
+    if (expected)
+	"(correct)";
+    if (~~o)
+	"(incorrect; shouldn't set attributes in object 0)";
+    "(incorrect)";
+];
+
+[ _insert_object o1 o2;
+    @insert_obj o1 o2;
+    print_ret "@@64insert_obj ", o1, " ", o2;
+];
+
+[ _remove_obj o;
+    @remove_obj o;
+    print_ret "@@64remove_obj ", o;
+];
+
+[ _get_next_prop o p expected result;
+    @get_next_prop o p -> result;
+    print "@@64get_next_prop ", o, " ", p, " => ", result;
+    if (result)
+	result = true;
+    if (result == expected)
+	" (correct)";
+    " (incorrect)";
+];
+
+Array buffer string 120;
+Array parse string 64;
+
+[ Main x;
+    print "Strict Z Test^";
+
+    print "^According to the Z-Machine Standards Document, ~objects are
+	numbered consecucutively from 1 upward, with object number 0
+	being used to mean ~nothing~ (though there is formally no such
+	object).~ Hence, it seems reasonable that operations on object
+	number 0 should either fail or, if that is not an option, do
+	nothing. These tests are written with that assumption.^";
+
+    print "^Please note that whenever a test is flagged as ~correct~,
+	that only means that an instruction returned zero or non-zero
+	(or branched / didn't branch) when it was supposed to. Not
+	that it necessarily returned the correct value. If no result
+	is written the result was not tested, and the test was only
+	included to test the stability of the interpreter.^";
+
+    print "^Would you like to make a transcript of the test results?
+	(Y/N) ";
+
+    for (::)
+    {
+	read buffer parse;
+
+	if (parse-->1 == 'yes' or 'y//')
+	{
+	    print "^";
+	    @output_stream 2;
+	    break;
+	}
+
+	if (parse-->1 == 'no' or 'n//')
+	{
+	    print "^";
+	    break;
+	}
+
+	print "Transcript? (Y/N) ";
+    }
+
+    print "Testing @@64jin:^^";
+
+    _jin (obj1, obj2, false);
+    _jin (obj2, obj1, true);
+    _jin (0,    obj1, false);
+    _jin (0,    0,    true);
+
+    print "^Testing @@64get_child:^^";
+
+    _get_child (obj1, true);
+    _get_child (obj3, false);
+    _get_child (0,    false);
+
+    print "^Testing @@64get_parent:^^";
+
+    _get_parent (obj1, false);
+    _get_parent (obj2, true);
+    _get_parent (0,    false);
+
+    print "^Testing @@64get_sibling:^^";
+
+    _get_sibling (obj1, false);
+    _get_sibling (obj2, true);
+    _get_sibling (0,    false);
+
+    print "^Testing @@64get_prop_addr:^^";
+
+    _get_prop_addr (obj1, prop1, true);
+    _get_prop_addr (obj3, prop1, false);
+    _get_prop_addr (0,    prop1, false);
+
+    print "^Testing @@64get_prop:^^";
+
+    _get_prop (obj1, prop1, true);
+    _get_prop (obj2, prop1, false);
+    _get_prop (0,    prop1, false);
+
+    print "^Testing @@64clear_attr:^^";
+
+    _clear_attr (obj1, attr1);
+    _clear_attr (obj1, attr2);
+    _clear_attr (0,    attr1);
+    _clear_attr (0,    attr2);
+
+    print "^Testing @@64set_attr:^^";
+
+    _set_attr (obj1, attr1);
+    _set_attr (obj1, attr2);
+    _set_attr (0, attr1);
+
+    print "^(Note: An attempt has been made to set attribute number ",
+	attr1, " in object number 0. If the @@64test_attr test below
+	indicates that this attribute has been set, the	interpreter
+	did not ignore the instruction as it should have done.)^";
+
+    print "^Testing @@64test_attr:^^";
+
+    _test_attr (obj1, attr1, true);
+    _test_attr (obj1, attr2, true);
+    _test_attr (obj2, attr1, false);
+    _test_attr (obj2, attr2, false);
+    _test_attr (0,    attr1, false);
+    _test_attr (0,    attr2, false);
+
+    print "^Testing @@64insert_obj:^^";
+
+    _insert_object (obj3, obj1);
+    _insert_object (0,    obj1);
+    _insert_object (obj1, 0);
+    _insert_object (0,    0);
+
+    print "^Testing @@remove_obj:^^";
+
+    _remove_obj (obj3);
+    _remove_obj (0);
+
+    print "^Testing @@get_next_prop:^^";
+
+    _get_next_prop (obj1, prop2, true);
+    _get_next_prop (obj2, prop1, false);
+    _get_next_prop (0,    prop1, false);
+
+    print "^Test completed!^";
+
+    if ((0-->8) & 1)
+    {
+	print "^End of transcript^";
+	@output_stream -2;
+    }
+
+    print "^Press any key.^";
+    @read_char -> x;
+];

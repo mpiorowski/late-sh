@@ -563,9 +563,9 @@ fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
         false => Span::styled(format!(" {}/{}", sheet.signal, sheet.max_signal()), text),
     };
     // Past the top of the ladder the exp climbs toward the Old Signal.
-    let exp_goal = match fight_data::exp_to_advance(sheet.level, sheet.marks) {
+    let exp_goal = match fight_data::exp_to_advance(sheet.level) {
         Some(need) => need,
-        None => fight_data::exp_to_seek(sheet.marks),
+        None => fight_data::exp_to_seek(),
     };
     let glyphs = match sheet.kills {
         1 => "1 down".to_string(),

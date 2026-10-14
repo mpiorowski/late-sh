@@ -1,3 +1,5 @@
+use super::state::MouseTarget;
+use crate::app::common::mouse_ui::{self, Surface};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -5,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::state::{EditorState, Field, FieldKind, Page, ProjectRow, ProjectsView, Scope};
 use crate::app::common::{
@@ -34,7 +35,20 @@ pub(crate) struct EditorView<'a> {
 /// on top, the page's rows, then an error line and the keys.
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &EditorView<'_>) {
     let state = view.state;
-    state.clear_row_rects();
+    let size = frame.area();
+    state.mouse.begin((size.width, size.height));
+    draw_surface(
+        &mut Surface {
+            buffer: frame.buffer_mut(),
+        },
+        area,
+        view,
+    );
+    state.mouse.finish();
+}
+
+fn draw_surface(frame: &mut Surface<'_>, area: Rect, view: &EditorView<'_>) {
+    let state = view.state;
     let rows_height = page_height(state, view.projects.len());
     // frame(2) + padding(2) + strip(1) + blank(1) + rows + blank(1) + error(1) + keys(1)
     let wanted = rows_height + 10;
@@ -72,13 +86,72 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &EditorView<'_>) {
     .areas(inner);
 
     draw_page_strip(frame, strip, state, &subject);
-
-    match (state.page(), state.projects_view()) {
-        (Page::Projects, ProjectsView::List { selected }) => {
-            draw_project_list(frame, body, state, view.projects, *selected);
-        }
-        _ => draw_fields(frame, body, state),
-    }
+    let projects_list = state.page() == Page::Projects
+        && matches!(state.projects_view(), ProjectsView::List { .. });
+    let actions: &[(&str, MouseTarget)] = if projects_list {
+        &[
+            ("[Add]", MouseTarget::Add),
+            ("[Edit]", MouseTarget::EditProject),
+            ("[Delete]", MouseTarget::DeleteProject),
+        ]
+    } else {
+        &[]
+    };
+    let [controls, viewport] = Layout::vertical([
+        Constraint::Length(mouse_ui::buttons_height(body.width, actions)),
+        Constraint::Fill(1),
+    ])
+    .areas(body);
+    mouse_ui::buttons(frame, controls, &state.mouse, actions);
+    let rows = if projects_list {
+        view.projects.len().max(1)
+    } else {
+        state
+            .fields()
+            .iter()
+            .map(|field| usize::from(field.height()))
+            .sum()
+    };
+    let focus = if projects_list {
+        state.project_selected()
+    } else {
+        state
+            .fields()
+            .iter()
+            .take(state.row())
+            .map(|field| usize::from(field.height()))
+            .sum()
+    };
+    mouse_ui::scroll(
+        frame,
+        viewport,
+        &state.mouse,
+        state.page(),
+        rows,
+        focus
+            ..focus
+                + if projects_list {
+                    1
+                } else {
+                    state
+                        .active_field()
+                        .map_or(1, |field| usize::from(field.height()))
+                },
+        |frame, content, window| {
+            if projects_list {
+                draw_project_list(
+                    frame,
+                    content,
+                    window,
+                    state,
+                    view.projects,
+                    state.project_selected(),
+                );
+            } else {
+                draw_fields(frame, content, window, state);
+            }
+        },
+    );
 
     if let Some((_, message)) = state.error() {
         frame.render_widget(
@@ -95,7 +168,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &EditorView<'_>) {
 
 /// `card · about · projects`, the current page bright, the subject on the
 /// right. A single-page scope shows its one page and nothing to switch to.
-fn draw_page_strip(frame: &mut Frame, area: Rect, state: &EditorState, subject: &str) {
+fn draw_page_strip(frame: &mut Surface<'_>, area: Rect, state: &EditorState, subject: &str) {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (idx, page) in state.scope().pages().iter().enumerate() {
         if idx > 0 {
@@ -111,6 +184,18 @@ fn draw_page_strip(frame: &mut Frame, area: Rect, state: &EditorState, subject: 
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
+        let x = indent(area).x + spans.iter().map(Span::width).sum::<usize>() as u16;
+        if x < area.right() {
+            state.mouse.hit(
+                Rect::new(
+                    x,
+                    area.y,
+                    (Span::raw(page.title()).width() as u16).min(area.right() - x),
+                    area.height.min(1),
+                ),
+                MouseTarget::Page(*page),
+            );
+        }
         spans.push(Span::styled(page.title(), style));
     }
     let right = vec![Span::styled(
@@ -136,7 +221,7 @@ fn page_height(state: &EditorState, project_count: usize) -> u16 {
 
 /// Every row of the page: `label  value`, the active row marked by a bar in
 /// the gutter and a bright label, the row being typed showing its cursor.
-fn draw_fields(frame: &mut Frame, area: Rect, state: &EditorState) {
+fn draw_fields(frame: &mut Surface<'_>, area: Rect, window: Rect, state: &EditorState) {
     let fields = state.fields();
     let constraints: Vec<Constraint> = fields
         .iter()
@@ -144,13 +229,21 @@ fn draw_fields(frame: &mut Frame, area: Rect, state: &EditorState) {
         .collect();
     let rows = Layout::vertical(constraints).split(area);
     for (idx, (field, row_area)) in fields.iter().zip(rows.iter().copied()).enumerate() {
-        state.record_row_rect(idx, row_area);
+        if !row_area.intersects(window) {
+            continue;
+        }
+        state.mouse.hit(row_area, MouseTarget::Field(*field));
         draw_field_row(frame, row_area, state, *field, idx == state.row());
     }
 }
 
-fn draw_field_row(frame: &mut Frame, area: Rect, state: &EditorState, field: Field, active: bool) {
-    let typing = active && state.editing();
+fn draw_field_row(
+    frame: &mut Surface<'_>,
+    area: Rect,
+    state: &EditorState,
+    field: Field,
+    active: bool,
+) {
     let [gutter, label_col, _, value_col] = Layout::horizontal([
         Constraint::Length(GUTTER),
         Constraint::Length(LABEL_W),
@@ -224,21 +317,40 @@ fn draw_field_row(frame: &mut Frame, area: Rect, state: &EditorState, field: Fie
                 on_canvas(row_with_hint(spans, right, value_col.width as usize)),
                 value_col,
             );
+            if value_col.width >= 7 {
+                mouse_ui::buttons(
+                    frame,
+                    Rect::new(value_col.right() - 7, value_col.y, 7, 1),
+                    &state.mouse,
+                    &[
+                        ("[<]", MouseTarget::Choice(field, false)),
+                        ("[>]", MouseTarget::Choice(field, true)),
+                    ],
+                );
+            }
         }
         FieldKind::Tags => draw_tags_value(frame, value_col, state, field, active),
         FieldKind::Text | FieldKind::Multi => {
-            if typing && state.field_text(field).is_empty() {
-                // The block cursor sits on the hint's first letter; a bare
-                // `TextArea` would draw it in a cell of its own before it.
+            let input = state.field(field);
+            if input.is_empty() {
+                // An empty row draws its own hint: a bare `TextArea` puts a
+                // cursor cell before its placeholder, typing or not, so the
+                // hint would sit one cell right and the block cursor in a
+                // cell of its own instead of on the hint's first letter.
+                let hint = if active && state.editing() {
+                    placeholder_with_cursor(field.placeholder())
+                } else {
+                    Line::from(Span::styled(
+                        field.placeholder().to_string(),
+                        Style::default().fg(theme::TEXT_FAINT()),
+                    ))
+                };
                 frame.render_widget(
-                    Paragraph::new(placeholder_with_cursor(field.placeholder()))
-                        .style(Style::default().bg(theme::BG_CANVAS())),
+                    Paragraph::new(hint).style(Style::default().bg(theme::BG_CANVAS())),
                     value_col,
                 );
-            } else if typing {
-                frame.render_widget(state.field(field), value_col);
             } else {
-                draw_static_value(frame, value_col, state, field, active);
+                frame.render_widget(input, value_col);
             }
         }
     }
@@ -247,7 +359,13 @@ fn draw_field_row(frame: &mut Frame, area: Rect, state: &EditorState, field: Fie
 /// A tag row: the picked tags in amber, wrapped over the row's lines, with
 /// the picker hint on the right when the row is active; the placeholder
 /// dim when nothing is picked.
-fn draw_tags_value(frame: &mut Frame, area: Rect, state: &EditorState, field: Field, active: bool) {
+fn draw_tags_value(
+    frame: &mut Surface<'_>,
+    area: Rect,
+    state: &EditorState,
+    field: Field,
+    active: bool,
+) {
     let tags = state.tags(field);
     let mut spans: Vec<Span<'static>> = Vec::new();
     if tags.is_empty() {
@@ -286,42 +404,12 @@ fn draw_tags_value(frame: &mut Frame, area: Rect, state: &EditorState, field: Fi
     );
 }
 
-/// A row not being typed: its text, or the placeholder dim when empty.
-fn draw_static_value(
-    frame: &mut Frame,
-    area: Rect,
-    state: &EditorState,
-    field: Field,
-    active: bool,
-) {
-    let text = state.field_text(field);
-    let lines: Vec<Line<'static>> = if text.is_empty() {
-        vec![Line::from(Span::styled(
-            field.placeholder().to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ))]
-    } else {
-        let style = Style::default().fg(if active {
-            theme::TEXT_BRIGHT()
-        } else {
-            theme::TEXT()
-        });
-        text.lines()
-            .take(area.height as usize)
-            .map(|line| Line::from(Span::styled(truncate(line, area.width as usize), style)))
-            .collect()
-    };
-    frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
-        area,
-    );
-}
-
 /// The projects page's list: one line a project, `title  tags  age`, the
 /// selected one on the selection background.
 fn draw_project_list(
-    frame: &mut Frame,
+    frame: &mut Surface<'_>,
     area: Rect,
+    window: Rect,
     state: &EditorState,
     projects: &[ProjectRow],
     selected: usize,
@@ -336,16 +424,19 @@ fn draw_project_list(
         );
         return;
     }
-    let visible = area.height as usize;
-    let start = selected.saturating_sub(visible.saturating_sub(1));
-    for (offset, project) in projects.iter().skip(start).take(visible).enumerate() {
-        let idx = start + offset;
+    for (idx, project) in projects.iter().enumerate() {
         let row_area = Rect {
-            y: area.y + offset as u16,
+            y: area.y + idx as u16,
             height: 1,
             ..area
         };
-        state.record_row_rect(idx, row_area);
+        if row_area.y >= area.bottom() || row_area.y >= window.bottom() {
+            break;
+        }
+        if row_area.y < window.y {
+            continue;
+        }
+        state.mouse.hit(row_area, MouseTarget::Project(project.id));
         let is_selected = idx == selected;
         let marker_style = if is_selected {
             Style::default().fg(theme::BORDER_ACTIVE())
@@ -383,7 +474,7 @@ fn draw_project_list(
     }
 }
 
-fn draw_keys(frame: &mut Frame, area: Rect, state: &EditorState) {
+fn draw_keys(frame: &mut Surface<'_>, area: Rect, state: &EditorState) {
     let line = if state.confirm_discard() {
         Line::from(vec![
             Span::styled(
@@ -487,7 +578,7 @@ fn truncate(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
-    if text.width() <= width {
+    if Span::raw(text).width() <= width {
         return text.to_string();
     }
     if width == 1 {
@@ -496,7 +587,7 @@ fn truncate(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     for ch in text.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        let cw = Span::raw(ch.to_string()).width();
         if used + cw > width - 1 {
             break;
         }

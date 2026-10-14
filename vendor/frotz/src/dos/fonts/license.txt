@@ -1,0 +1,21 @@
+The bitmap fonts stored in the FONT1-4.FNT files were extracted from  
+the file frotzsrc/src/dos/fontdata.h  
+The character table is composed of 192 characters of 2x16 bytes each, followed  
+by 192 bytes containing the size of each character:  
+192x(2x16)+192 bytes; 16x16 pixels.
+
+The Bizcat monospace bitmap font stored in the FONT0.FNT file was created  
+by Robey Pointer.  
+The character table is composed of 256 characters of 16 bytes each:  
+256x(1x16) bytes; 8x16 pixels.  
+https://robey.lag.net/2020/02/09/bizcat-bitmap-font.html
+
+The EGA and VGA fonts embedded in the fontdata.h file are from the  
+sdlfonts-1.0.tar.gz package of SDL fonts provided with PDCurses:  
+cp850-16.bmp; cp850-14.bmp; cp850-08.bmp.  
+The character table is composed of 256 characters of 8, 14 or 16 bytes each:  
+VGA 256x(1x16) bytes; 8x16 pixels.  
+EGA 256x(1x14) bytes; 8x14 pixels.  
+EGA graphic 256x(1x8) bytes; 8x8 pixels.  
+https://sourceforge.net/projects/pdcurses/files/sdlfonts/1.0/
+

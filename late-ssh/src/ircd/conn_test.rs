@@ -57,3 +57,43 @@ fn cap_request_can_disable_supported_caps() {
     assert!(!caps.server_time);
     assert_eq!(caps.as_list(), "message-tags");
 }
+
+#[test]
+fn history_capabilities_can_be_negotiated_independently_and_disabled() {
+    let mut caps = IrcCapabilities::default();
+    assert!(apply_cap_request(&mut caps, "batch server-time"));
+    assert!(caps.automatic_history());
+    assert!(!caps.message_tags);
+    assert!(apply_cap_request(&mut caps, "draft/chathistory"));
+    assert!(!caps.automatic_history());
+    assert!(caps.as_list().contains("batch draft/chathistory"));
+    assert!(!apply_cap_request(&mut caps, "-batch unknown-history-cap"));
+    assert!(caps.batch);
+    assert!(apply_cap_request(&mut caps, "-batch -server-time"));
+    assert!(caps.chathistory);
+    assert!(!caps.batch);
+    assert!(!caps.server_time);
+    assert!(!caps.automatic_history());
+    assert!(apply_cap_request(
+        &mut caps,
+        "-draft/chathistory batch server-time"
+    ));
+    assert!(caps.automatic_history());
+}
+
+#[test]
+fn automatic_history_suppresses_only_queued_creations_and_preserves_edits() {
+    let replayed = uuid::Uuid::new_v4();
+    let new = uuid::Uuid::new_v4();
+    let mut channel = super::JoinedChannel {
+        name: "#room".into(),
+        slug: "room".into(),
+        is_lounge: false,
+        replayed: [replayed].into_iter().collect(),
+    };
+    assert!(!channel.suppress_replayed_create(new, false));
+    assert!(!channel.suppress_replayed_create(replayed, true));
+    assert!(channel.suppress_replayed_create(replayed, false));
+    assert!(!channel.suppress_replayed_create(replayed, true));
+    assert!(channel.replayed.is_empty());
+}

@@ -1,4 +1,59 @@
 use super::*;
+use crate::app::arcade::le_word::state::state_test::state_for;
+use ratatui::{Terminal, backend::TestBackend};
+
+/// The terminal owns the page's background: "Sync terminal background"
+/// paints it to the theme's canvas through OSC 11, and with the setting off
+/// it stays the user's own. The board, the keyboard, and the rules must not
+/// lay the canvas down themselves.
+#[test]
+fn the_board_leaves_the_background_to_the_terminal() {
+    theme::set_current_by_id("late");
+    let canvas = theme::BG_CANVAS();
+    let mut state = state_for(chrono::Utc::now().date_naive(), "crane");
+    state.guesses.push("trace".to_string());
+    for show_rules in [false, true] {
+        state.show_rules = show_rules;
+        let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
+        terminal
+            .draw(|frame| draw_game(frame, frame.area(), &state, true))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let painted: Vec<(u16, u16)> = buffer
+            .area()
+            .positions()
+            .filter(|position| buffer[*position].bg == canvas)
+            .map(|position| (position.x, position.y))
+            .collect();
+        assert_eq!(
+            painted,
+            Vec::new(),
+            "rules open: {show_rules}: cells painted with the canvas"
+        );
+    }
+}
+
+/// A tile's score must read without its color: several themes give
+/// `SUCCESS`, `AMBER`, and `TEXT_FAINT` one value, so two scores that differ
+/// only in color look the same there. Text and modifiers are what every
+/// palette keeps.
+#[test]
+fn every_letter_score_has_its_own_tile_shape() {
+    let shape = |score| {
+        let tile = score_tile('R', score);
+        (tile.content.to_string(), tile.style.add_modifier)
+    };
+    let scores = [
+        LetterScore::Correct,
+        LetterScore::Present,
+        LetterScore::Absent,
+    ];
+    for (i, a) in scores.iter().enumerate() {
+        for b in &scores[i + 1..] {
+            assert_ne!(shape(*a), shape(*b), "{a:?} and {b:?} share a shape");
+        }
+    }
+}
 
 #[test]
 fn result_panel_prefers_space_below_board() {

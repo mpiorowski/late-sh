@@ -1,37 +1,20 @@
 name: terraform_plan
 
-# Read-only terraform plan against the live cluster state, using the same
-# environment secrets the apply workflows use. Two purposes:
-#   - a dispatchable dry run: pick a branch and an environment in the Actions
-#     tab and see exactly what an apply from that ref would do (e.g. verify a
-#     state refactor plans as moves, not create/destroy, before merging).
-#   - a destroy gate: the job FAILS if the plan wants to delete anything.
-#     prevent_destroy already guards the PVCs at apply time; this catches the
-#     rest (deployments, services, secrets) at review time.
-#
-# Also runs automatically on PRs that touch infra/. Plans never write state,
-# so racing a deploy is harmless (worst case: a stale read).
+# Runs on PRs that touch infra/, and only there: there is no manual trigger.
+# Every such PR gets credential-free fmt and validate. Same-repository PRs also
+# get a read-only plan against the live production state, using the secrets
+# the apply workflows use, as a destroy gate: the job FAILS if the plan wants
+# to delete anything. prevent_destroy already guards the PVCs at apply time;
+# this catches the rest (deployments, services, secrets) at review time. Fork
+# PRs skip the plan, since GitHub withholds environment secrets from them; to
+# plan a fork's infra change, push its branch here and open the PR from it.
+# Plans never write state, so racing a deploy is harmless (a stale read at worst).
 
 on:
   pull_request:
     paths:
       - infra/**
       - .github/workflows/terraform_plan.yml
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment whose cluster/secrets to plan against"
-        required: true
-        default: production
-        type: choice
-        options:
-          - production
-          - staging
-      targets:
-        description: "Optional space-separated resource addresses to scope the plan (e.g. module.door)"
-        required: false
-        default: ""
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -41,11 +24,36 @@ permissions:
   contents: read
 
 jobs:
-  plan:
-    name: terraform_plan
+  validate:
+    name: terraform_validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: ${{ inputs.environment || 'production' }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: terraform_fmt
+        working-directory: ./infra
+        run: terraform fmt -check -recursive
+
+      - name: terraform_init
+        working-directory: ./infra
+        run: terraform init -backend=false -input=false
+
+      - name: terraform_validate
+        working-directory: ./infra
+        run: terraform validate
+
+  plan:
+    name: terraform_plan
+    needs: [validate]
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
     env:
       TF_VAR_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
@@ -97,20 +105,11 @@ jobs:
         working-directory: ./infra
         run: terraform validate
 
-      # Same argv handling as terraform.yml: quoted module instance keys are
-      # part of the address, not shell syntax. The plan file stays on the
-      # runner (it can embed secret values) and is only parsed, never
-      # uploaded.
+      # The plan file stays on the runner (it can embed secret values) and is
+      # only parsed, never uploaded.
       - name: terraform_plan
         working-directory: ./infra
-        env:
-          TARGETS: ${{ inputs.targets }}
-        run: |
-          args=()
-          for t in $TARGETS; do
-            args+=("-target=$t")
-          done
-          terraform plan -input=false -no-color -out=plan.out "${args[@]}"
+        run: terraform plan -input=false -no-color -out=plan.out
 
       # The gate: fail on any planned delete (including delete-and-recreate).
       # A resource that should genuinely go away must be removed from state

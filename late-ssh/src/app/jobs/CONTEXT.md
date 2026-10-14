@@ -37,6 +37,7 @@ The directory page (`app/directory`) owns the shelf strip and the `Space`/`w`/`i
 
 ## The shelf
 
+- Mouse: the directory owns shelf/action targets; stable posting IDs resolve against the current visible rows. Each list/detail viewport has an independent wheel offset and clickable scrollbar. A posting click opens its details, URLs copy their full value, and authorized Late postings expose Take down. Keyboard-only interaction mode ignores mouse reports.
 - Sessions never query. `tick` copies the snapshot when it moved (`watch::has_changed`), so a render reads local memory.
 - The viewer's tags are their card's `skills_tags` plus their profile `langs` (`viewer_tags`), both picked from the vocabulary in the tag picker (`app/tag_picker`), so the two sides of a match share one closed list; a posting's score is how many of those it carries (`score`); `/` keeps score > 0, best first. The strip counts the visible rows.
 - FOR YOU under the viewer's own card (People shelf) prints up to `FOR_YOU_LIMIT` = 5 matches when the card is open or casual; NEW WORK in the paper prints for every reader: up to `PAPER_MATCHES` = 3 from the covered day's releases, the one-line nudge for a reader with no card, or a faint hint for a not-looking card or a day with no release.

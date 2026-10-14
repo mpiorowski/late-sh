@@ -14,7 +14,7 @@ use late_core::models::{
     profile::ProfileParams,
     server_ban::{ServerBan, ServerBanActivation},
     statusline::default_statusline_components,
-    user::{RightSidebarMode, default_right_sidebar_components},
+    user::{RightSidebarMode, User, default_right_sidebar_components},
 };
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::{TestDb, create_test_user};
@@ -310,6 +310,200 @@ impl IrcClient {
         }
         lines
     }
+
+    async fn list_channels(&mut self) -> Vec<String> {
+        self.write_line("LIST").await.expect("send LIST");
+        let mut channels = Vec::new();
+        loop {
+            let line = self.read_line().await.expect("LIST response");
+            if line.contains(" 323 ") {
+                return channels;
+            }
+            if line.contains(" 322 ") {
+                channels.push(line.split_whitespace().nth(3).unwrap().to_string());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn private_channel_namespace_round_trips_without_crossing_public_room() {
+    let server = IrcTestServer::start().await;
+    let member = server.seed_user("compel").await;
+    let outsider = server.seed_user("outside").await;
+    let db = server.state.db.get().await.expect("db client");
+    let private = ChatRoom::create_private_room(&db, "compel", member.id)
+        .await
+        .unwrap();
+    let public = ChatRoom::get_or_create_public_room(&db, "compel")
+        .await
+        .unwrap();
+    ChatRoomMember::join(&db, private.id, member.id)
+        .await
+        .unwrap();
+
+    let mut irc = server.connect(&member.token).await;
+    irc.read_until(" 366 ").await;
+    let channels = irc.list_channels().await;
+    assert!(channels.contains(&"#compel".to_string()));
+    assert!(channels.contains(&"##compel".to_string()));
+    irc.write_line("JOIN #COMPEL,##COMPEL").await.unwrap();
+    irc.read_until(&format!(" 366 {} #compel ", member.username))
+        .await;
+    irc.read_until(&format!(" 366 {} ##compel ", member.username))
+        .await;
+    irc.write_line("MODE ##compel").await.unwrap();
+    assert!(irc.read_until(" 324 ").await.contains("##compel +inst"));
+
+    let mut other = server.connect(&outsider.token).await;
+    other.read_until(" 366 ").await;
+    let channels = other.list_channels().await;
+    assert!(channels.contains(&"#compel".to_string()));
+    assert!(!channels.contains(&"##compel".to_string()));
+    other.write_line("JOIN ##compel").await.unwrap();
+    other.read_until(" 403 ").await;
+    assert!(
+        !ChatRoomMember::is_member(&db, private.id, outsider.id)
+            .await
+            .unwrap()
+    );
+    other.write_line("JOIN #compel").await.unwrap();
+    other.read_until(" 366 ").await;
+
+    for (channel, room) in [("#compel", &public), ("##compel", &private)] {
+        let body = format!("message for {channel}");
+        irc.write_line(&format!("PRIVMSG {channel} :{body}"))
+            .await
+            .unwrap();
+        wait_until(
+            || async {
+                ChatMessage::list_recent(&db, room.id, 5)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|message| message.user_id == member.id && message.body == body)
+            },
+            "IRC message saved in the correct room",
+        )
+        .await;
+        // Exercise the same-account TUI send path, including repeating a body
+        // just sent by IRC: only the IRC connection's original echo is suppressed.
+        server.state.chat_service.send_message_task(
+            member.id,
+            room.id,
+            room.slug.clone(),
+            body.clone(),
+            uuid::Uuid::new_v4(),
+            false,
+        );
+        let line = irc.read_until(&format!("PRIVMSG {channel} :{body}")).await;
+        assert!(line.starts_with(&format!(":{}!", member.username)));
+    }
+
+    for (room, expected) in [
+        (&public, "message for #compel"),
+        (&private, "message for ##compel"),
+    ] {
+        let messages = ChatMessage::list_recent(&db, room.id, 10).await.unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message.body == expected));
+    }
+    let lines = other.read_available_for(Duration::from_millis(250)).await;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("PRIVMSG #compel :message for #compel"))
+            .count(),
+        2
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("message for ##compel"))
+    );
+
+    irc.write_line("PART ##compel").await.unwrap();
+    irc.read_until(" PART ##compel").await;
+    assert!(
+        ChatRoomMember::is_member(&db, private.id, member.id)
+            .await
+            .unwrap()
+    );
+    irc.write_line("PRIVMSG #compel :still in public")
+        .await
+        .unwrap();
+    other.read_until("PRIVMSG #compel :still in public").await;
+}
+
+#[tokio::test]
+async fn private_channel_moderation_targets_only_the_joined_room() {
+    let server = IrcTestServer::start().await;
+    let moderator = server.seed_user("room_mod").await;
+    let target = server.seed_user("room_target").await;
+    let db = server.state.db.get().await.expect("db client");
+    User::set_moderator(&db, moderator.id, true).await.unwrap();
+    let private = ChatRoom::create_private_room(&db, "shared", moderator.id)
+        .await
+        .unwrap();
+    let public = ChatRoom::get_or_create_public_room(&db, "shared")
+        .await
+        .unwrap();
+    for room in [&public, &private] {
+        for user in [&moderator, &target] {
+            ChatRoomMember::join(&db, room.id, user.id).await.unwrap();
+        }
+    }
+    let mut irc = server.connect(&moderator.token).await;
+    irc.read_until(" 366 ").await;
+    irc.write_line("JOIN #shared,##shared").await.unwrap();
+    irc.read_until(&format!(" 366 {} #shared ", moderator.username))
+        .await;
+    irc.read_until(&format!(" 366 {} ##shared ", moderator.username))
+        .await;
+    irc.write_line(&format!("KICK ##shared {} :private kick", target.username))
+        .await
+        .unwrap();
+    irc.read_until(&format!(" KICK ##shared {}", target.username))
+        .await;
+    assert!(
+        !ChatRoomMember::is_member(&db, private.id, target.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        ChatRoomMember::is_member(&db, public.id, target.id)
+            .await
+            .unwrap()
+    );
+
+    for (channel, room, other_room) in [
+        ("##shared", &private, &public),
+        ("#shared", &public, &private),
+    ] {
+        irc.write_line(&format!("MODE {channel} +b {}!*@*", target.username))
+            .await
+            .unwrap();
+        irc.read_until(&format!(" MODE {channel} +b ")).await;
+        assert!(
+            ChatRoomMember::is_banned_from_room(&db, room.id, target.id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !ChatRoomMember::is_banned_from_room(&db, other_room.id, target.id)
+                .await
+                .unwrap()
+        );
+        irc.write_line(&format!("MODE {channel} -b {}!*@*", target.username))
+            .await
+            .unwrap();
+        irc.read_until(&format!(" MODE {channel} -b ")).await;
+        assert!(
+            !ChatRoomMember::is_banned_from_room(&db, room.id, target.id)
+                .await
+                .unwrap()
+        );
+    }
 }
 
 #[tokio::test]
@@ -323,6 +517,12 @@ async fn authenticates_valid_token_and_rejects_bad_token() {
         welcome.contains(&format!(" 001 {} ", user.username)),
         "welcome should use canonical username: {welcome}"
     );
+    let logged_in = client.read_until(" 900 ").await;
+    assert!(logged_in.contains(&format!(
+        " 900 {0} {0}!{0}@late.sh {0} :You are now logged in as {0}",
+        user.username
+    )));
+    assert!(!logged_in.starts_with('@'));
     client.read_until(" 376 ").await;
     client
         .read_until(&format!(
@@ -773,8 +973,9 @@ async fn profile_username_change_projects_to_live_irc_session() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
-            art_splash_mode: late_core::models::user::ArtSplashMode::Sfw,
+            artboard_disclaimer: true,
             terminal_images: late_core::models::user::TerminalImagesMode::Auto,
             hidden_award_categories: Vec::new(),
             show_flag_fallback: false,
@@ -1403,4 +1604,477 @@ async fn token_revoke_disconnects_live_connection() {
         client.read_line().await.is_none(),
         "revoked connection should close"
     );
+}
+
+impl IrcClient {
+    async fn history_batch(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        loop {
+            let line = self.read_line().await.expect("history response");
+            let done = line.contains(" BATCH -");
+            lines.push(line);
+            if done {
+                return lines;
+            }
+        }
+    }
+
+    async fn through_pong(&mut self) -> Vec<String> {
+        self.write_line("PING history-barrier").await.unwrap();
+        let mut lines = Vec::new();
+        loop {
+            let line = self.read_line().await.expect("PONG response");
+            let done = line.contains(" PONG ") && line.contains("history-barrier");
+            lines.push(line);
+            if done {
+                return lines;
+            }
+        }
+    }
+}
+
+async fn history_seed(
+    server: &IrcTestServer,
+    room_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+    count: usize,
+) -> Vec<ChatMessage> {
+    let client = server.state.db.get().await.unwrap();
+    let start: chrono::DateTime<chrono::Utc> = "2026-10-01T00:00:00.000Z".parse().unwrap();
+    let mut messages = Vec::new();
+    for i in 0..count {
+        let message = ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id,
+                user_id,
+                body: format!("history row {i:03}"),
+            },
+        )
+        .await
+        .unwrap();
+        client
+            .execute(
+                "UPDATE chat_messages SET created = $2 WHERE id = $1",
+                &[&message.id, &(start + chrono::Duration::seconds(i as i64))],
+            )
+            .await
+            .unwrap();
+        messages.push(
+            ChatMessage::get(&client, message.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    messages
+}
+
+fn history_privmsgs(lines: &[String]) -> Vec<&String> {
+    lines
+        .iter()
+        .filter(|line| line.contains(" PRIVMSG "))
+        .collect()
+}
+
+#[tokio::test]
+async fn history_join_replays_25_and_explicit_requests_cap_at_300() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("history-client").await;
+    let messages = history_seed(&server, user.lounge_id, user.id, 305).await;
+    let mut automatic = server
+        .connect_with_caps(&user.token, "batch server-time message-tags")
+        .await;
+    let burst = automatic.history_batch().await;
+    assert!(burst.iter().any(
+        |line| line.contains("CHATHISTORY=300") && line.contains("MSGREFTYPES=msgid,timestamp")
+    ));
+    let names = burst
+        .iter()
+        .position(|line| line.contains(" 366 "))
+        .unwrap();
+    let batch = burst
+        .iter()
+        .position(|line| line.contains(" BATCH +"))
+        .unwrap();
+    assert!(names < batch);
+    let replay = history_privmsgs(&burst);
+    assert_eq!(replay.len(), 25);
+    assert!(replay[0].ends_with(":history row 280"));
+    assert!(replay[24].ends_with(":history row 304"));
+    assert!(replay[0].contains(&format!("msgid={}", messages[280].id)));
+    assert!(replay[0].contains("time=2026-10-01T00:04:40.000Z"));
+    assert!(replay.iter().all(|line| line.contains("batch=")));
+    automatic.write_line("JOIN #lounge").await.unwrap();
+    automatic.write_line("PART #lounge").await.unwrap();
+    assert!(
+        !automatic
+            .through_pong()
+            .await
+            .iter()
+            .any(|line| line.contains(" BATCH "))
+    );
+
+    let mut explicit = server
+        .connect_with_caps(
+            &user.token,
+            "batch server-time message-tags draft/chathistory",
+        )
+        .await;
+    explicit.read_until(" 366 ").await;
+    assert!(
+        !explicit
+            .through_pong()
+            .await
+            .iter()
+            .any(|line| line.contains(" BATCH ") || line.contains(" PRIVMSG "))
+    );
+    explicit
+        .write_line("CHATHISTORY LATEST #LOUNGE * 999")
+        .await
+        .unwrap();
+    let response = explicit.history_batch().await;
+    assert!(response[0].contains("chathistory #lounge"));
+    let replay = history_privmsgs(&response);
+    assert_eq!(replay.len(), 300);
+    assert!(replay[0].ends_with(":history row 005"));
+    assert!(replay[299].ends_with(":history row 304"));
+    assert!(!response[0].contains("draft/chathistory-end"));
+    explicit
+        .write_line(&format!(
+            "CHATHISTORY BEFORE #lounge msgid={} 300",
+            messages[5].id
+        ))
+        .await
+        .unwrap();
+    let response = explicit.history_batch().await;
+    assert_eq!(history_privmsgs(&response).len(), 5);
+    assert!(response[0].contains("draft/chathistory-end"));
+}
+
+#[tokio::test]
+async fn history_partial_caps_and_invalid_requests_keep_connection_usable() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("history-caps").await;
+    history_seed(&server, user.lounge_id, user.id, 1).await;
+    for caps in ["server-time", "batch", "message-tags", ""] {
+        let mut client = if caps.is_empty() {
+            server.connect(&user.token).await
+        } else {
+            server.connect_with_caps(&user.token, caps).await
+        };
+        client.read_until(" 366 ").await;
+        assert!(
+            !client
+                .through_pong()
+                .await
+                .iter()
+                .any(|line| line.contains(" BATCH ") || line.contains(" PRIVMSG "))
+        );
+        client
+            .write_line("CHATHISTORY LATEST #lounge * 1")
+            .await
+            .unwrap();
+        client.read_until(" 421 ").await;
+        client.write_line("QUIT").await.unwrap();
+        client.read_until("ERROR").await;
+    }
+    let mut client = server
+        .connect_with_caps(&user.token, "draft/chathistory")
+        .await;
+    client.read_until(" 366 ").await;
+    client
+        .write_line("CHATHISTORY LATEST #lounge * 1")
+        .await
+        .unwrap();
+    let response = client.through_pong().await;
+    assert_eq!(history_privmsgs(&response).len(), 1);
+    assert!(
+        !response
+            .iter()
+            .any(|line| line.starts_with('@') || line.contains(" BATCH "))
+    );
+    client.write_line("CAP REQ :batch").await.unwrap();
+    client.read_until(" ACK ").await;
+    client
+        .write_line("CHATHISTORY LATEST #lounge * 1")
+        .await
+        .unwrap();
+    let response = client.history_batch().await;
+    assert!(history_privmsgs(&response)[0].starts_with("@batch="));
+    assert!(
+        !response
+            .iter()
+            .any(|line| line.contains("time=") || line.contains("msgid="))
+    );
+    for (request, error) in [
+        ("CHATHISTORY NOPE #lounge * 2", "INVALID_PARAMS"),
+        (
+            "CHATHISTORY BEFORE #lounge other=abc 2",
+            "INVALID_MSGREFTYPE",
+        ),
+        ("CHATHISTORY LATEST #lounge * 0", "INVALID_PARAMS"),
+        ("CHATHISTORY LATEST ##hidden * 1", "INVALID_TARGET"),
+        (
+            "CHATHISTORY BEFORE #lounge msgid=00000000-0000-0000-0000-000000000001 2",
+            "MESSAGE_ERROR",
+        ),
+    ] {
+        client.write_line(request).await.unwrap();
+        client
+            .read_until(&format!("FAIL CHATHISTORY {error}"))
+            .await;
+    }
+    client
+        .write_line("CHATHISTORY BEFORE #lounge timestamp=2000-01-01T00:00:00.000Z 1")
+        .await
+        .unwrap();
+    assert_eq!(client.history_batch().await.len(), 2);
+    client.through_pong().await;
+}
+
+#[tokio::test]
+async fn history_private_namespace_revocation_and_targets_are_authorized() {
+    let server = IrcTestServer::start().await;
+    let member = server.seed_user("history-member").await;
+    let outsider = server.seed_user("history-outsider").await;
+    let db = server.state.db.get().await.unwrap();
+    let public = ChatRoom::get_or_create_public_room(&db, "shared")
+        .await
+        .unwrap();
+    let private = ChatRoom::create_private_room(&db, "shared", member.id)
+        .await
+        .unwrap();
+    ChatRoomMember::join(&db, private.id, member.id)
+        .await
+        .unwrap();
+    let public_messages = history_seed(&server, public.id, member.id, 1).await;
+    let private_messages = history_seed(&server, private.id, member.id, 1).await;
+    let caps = "batch message-tags draft/chathistory";
+    let mut client = server.connect_with_caps(&member.token, caps).await;
+    client.read_until(" 366 ").await;
+    client
+        .write_line("CHATHISTORY LATEST #shared * 10")
+        .await
+        .unwrap();
+    client.read_until("FAIL CHATHISTORY INVALID_TARGET").await;
+    client.write_line("JOIN #shared,##shared").await.unwrap();
+    client.read_until("##shared :End of /NAMES list").await;
+    for (channel, id) in [
+        ("#shared", public_messages[0].id),
+        ("##shared", private_messages[0].id),
+    ] {
+        client
+            .write_line(&format!("CHATHISTORY LATEST {channel} * 10"))
+            .await
+            .unwrap();
+        let response = client.history_batch().await;
+        assert_eq!(history_privmsgs(&response).len(), 1);
+        assert!(history_privmsgs(&response)[0].contains(&format!("msgid={id}")));
+    }
+    client.write_line("CHATHISTORY TARGETS timestamp=2000-01-01T00:00:00.000Z timestamp=2099-01-01T00:00:00.000Z 20").await.unwrap();
+    let response = client.history_batch().await;
+    assert!(
+        response
+            .iter()
+            .any(|line| line.contains("TARGETS #shared "))
+    );
+    assert!(
+        response
+            .iter()
+            .any(|line| line.contains("TARGETS ##shared "))
+    );
+    ChatRoomMember::leave(&db, private.id, member.id)
+        .await
+        .unwrap();
+    client
+        .write_line("CHATHISTORY LATEST ##shared * 10")
+        .await
+        .unwrap();
+    client.read_until("FAIL CHATHISTORY INVALID_TARGET").await;
+    client.write_line("PART #shared").await.unwrap();
+    client.read_until(" PART #shared").await;
+    client
+        .write_line("CHATHISTORY LATEST #shared * 10")
+        .await
+        .unwrap();
+    client.read_until("FAIL CHATHISTORY INVALID_TARGET").await;
+    let mut other = server.connect_with_caps(&outsider.token, caps).await;
+    other.read_until(" 366 ").await;
+    other
+        .write_line("CHATHISTORY LATEST ##shared * 10")
+        .await
+        .unwrap();
+    other.read_until("FAIL CHATHISTORY INVALID_TARGET").await;
+}
+
+#[tokio::test]
+async fn history_discovers_dms_and_replays_both_directions_without_creating_rooms() {
+    let server = IrcTestServer::start().await;
+    let local = server.seed_user("history.local").await;
+    let remote = server.seed_user("history.remote").await;
+    let untouched = server.seed_user("history-new").await;
+    let db = server.state.db.get().await.unwrap();
+    let dm = ChatRoom::get_or_create_dm(&db, local.id, remote.id)
+        .await
+        .unwrap();
+    ChatRoomMember::join(&db, dm.id, local.id).await.unwrap();
+    ChatRoomMember::join(&db, dm.id, remote.id).await.unwrap();
+    let incoming = history_seed(&server, dm.id, remote.id, 1).await.remove(0);
+    let outgoing = ChatMessage::create_with_reply_to(
+        &db,
+        ChatMessageParams {
+            room_id: dm.id,
+            user_id: local.id,
+            body: "my historical reply".into(),
+        },
+        Some(incoming.id),
+    )
+    .await
+    .unwrap();
+    let mut client = server
+        .connect_with_caps(
+            &local.token,
+            "batch message-tags server-time draft/chathistory",
+        )
+        .await;
+    // Halloy starts DM discovery on 900, after it has received ISUPPORT.
+    client.read_until(" 005 ").await;
+    let logged_in = client.read_until(" 900 ").await;
+    assert!(logged_in.starts_with("@time="));
+    assert!(logged_in.contains(
+        " 900 history^local history^local!history^local@late.sh history.local :You are now logged in as history.local"
+    ));
+    client.write_line("CHATHISTORY TARGETS timestamp=2000-01-01T00:00:00.000Z timestamp=2099-01-01T00:00:00.000Z 20").await.unwrap();
+    assert!(
+        client
+            .history_batch()
+            .await
+            .iter()
+            .any(|line| line.contains("TARGETS history^remote "))
+    );
+    client
+        .write_line("CHATHISTORY LATEST HISTORY^REMOTE * 10")
+        .await
+        .unwrap();
+    let response = client.history_batch().await;
+    assert!(response[0].contains("chathistory history^remote"));
+    let replay = history_privmsgs(&response);
+    assert_eq!(replay.len(), 2);
+    assert!(replay[0].contains(":history^remote!history^remote@late.sh PRIVMSG history^local "));
+    assert!(replay[1].contains(":history^local!history^local@late.sh PRIVMSG history^remote "));
+    assert!(replay[1].contains(&format!("msgid={}", outgoing.id)));
+    assert!(replay[1].contains(&format!("+reply={}", incoming.id)));
+    client
+        .write_line("CHATHISTORY LATEST history-new * 10")
+        .await
+        .unwrap();
+    assert_eq!(client.history_batch().await.len(), 2);
+    assert!(
+        ChatRoom::get_dm(&db, local.id, untouched.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let member = db
+        .query_one(
+            "SELECT last_read_at FROM chat_room_members WHERE room_id = $1 AND user_id = $2",
+            &[&dm.id, &local.id],
+        )
+        .await
+        .unwrap();
+    assert!(
+        member
+            .get::<_, Option<chrono::DateTime<chrono::Utc>>>(0)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn history_long_unicode_messages_keep_live_ids_replies_and_wire_limits() {
+    let server = IrcTestServer::start().await;
+    let user = server.seed_user("abcdefghijklmnopqrstuvwxyzabcdef").await;
+    let db = server.state.db.get().await.unwrap();
+    let room = ChatRoom::get_or_create_public_room(&db, "history-long-room-name")
+        .await
+        .unwrap();
+    let mut client = server
+        .connect_with_caps(
+            &user.token,
+            "batch message-tags server-time draft/chathistory",
+        )
+        .await;
+    client.read_until(" 366 ").await;
+    client
+        .write_line("JOIN #history-long-room-name")
+        .await
+        .unwrap();
+    client
+        .read_until("#history-long-room-name :End of /NAMES list")
+        .await;
+    let parent = ChatMessage::create(
+        &db,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "parent message".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let body = "🌲 ".repeat(300);
+    server
+        .state
+        .chat_service
+        .send_message_with_reply_task(SendMessageTask {
+            user_id: user.id,
+            room_id: room.id,
+            room_slug: room.slug.clone(),
+            body: body.clone(),
+            reply_to_message_id: Some(parent.id),
+            request_id: uuid::Uuid::new_v4(),
+            is_admin: false,
+        });
+    let first = client.read_until(" PRIVMSG #history-long-room-name ").await;
+    let live_id = first
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .trim_start_matches('@')
+        .split(';')
+        .find_map(|tag| tag.strip_prefix("msgid="))
+        .unwrap()
+        .to_string();
+    let mut live = vec![first];
+    live.extend(
+        client
+            .through_pong()
+            .await
+            .into_iter()
+            .filter(|line| line.contains(" PRIVMSG ")),
+    );
+    client
+        .write_line("CHATHISTORY LATEST #history-long-room-name * 1")
+        .await
+        .unwrap();
+    let batch = client.history_batch().await;
+    let replay = history_privmsgs(&batch);
+    assert!(replay.len() > 1);
+    assert_eq!(replay.len(), live.len());
+    assert!(replay[0].contains(&format!("msgid={live_id}")));
+    assert!(replay[0].contains(&format!("+reply={}", parent.id)));
+    let mut reconstructed = String::new();
+    for (historical, live) in replay.iter().zip(&live) {
+        let wire = historical.split_once(' ').unwrap().1;
+        assert!(
+            wire.len() + 2 <= 512,
+            "IRC command exceeded 512 bytes: {}",
+            wire.len() + 2
+        );
+        assert!(historical.contains("batch="));
+        assert_eq!(wire, live.split_once(' ').unwrap().1);
+        reconstructed.push_str(wire.split_once(" :").unwrap().1);
+    }
+    // ChatService trims trailing whitespace before persisting.
+    assert_eq!(reconstructed, body.trim());
 }

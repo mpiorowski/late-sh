@@ -66,7 +66,7 @@ live in.
   exp (`EXP_KEEP_ON_DEATH`); the armorer's wall costs 225% of LoGD's
   ladder (`PRICE_PERCENT`, "The crystal pass"), because at LoGD's
   prices a runner held the top kit half way up; and patch is a bit a
-  point (`PATCH_PERCENT`), the price of not walking to a rest. The
+  point (`PATCH_PERCENT`), the signal's price between rolls. The
   fight itself is no longer LoGD's: the round ("The road pass")
   replaced the exchange loop and the door's resolver. This is the real salvage from the dragon work, plus
   the pure-resolver + per-user save schema *shapes* as a parts bin.
@@ -634,7 +634,7 @@ to allocate, and nothing on it another player cannot see.
 
 | On screen | What it is | Number | LoGD source |
 |---|---|---|---|
-| level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, scaled by marks | `lib/experience.php` |
+| level | 1 to 15 | exp ladder `EXP_TO_ADVANCE`, the same on every climb | `lib/experience.php` |
 | a glyph's pay | bits and exp per kill | LoGD's creature table at 400% bits and 540% exp (`PAY_BITS_PERCENT`, `PAY_EXP_PERCENT`): LoGD paced a season of ten fights a day, this ladder is two to three weeks of five; paying more per kill keeps prices and thresholds LoGD's | creature seeds |
 | a drop | exp kept | 65% (`EXP_KEEP_ON_DEATH`), not LoGD's 90%: a few drops on the way up cost a week, the sim's four-week runner | `EXP_KEEP_ON_DEATH` |
 | crystals | the rare currency | one kill in twelve leaves one, a bright glyph always; a drop never takes them, a mark and the ledge do | forest gems |
@@ -1057,9 +1057,10 @@ never does.
   Signal instead of a glyph. A dropped signal against it costs what any
   drop costs, and the exp lost usually puts the gate a day or two of
   glyphs away again.
-- **The numbers.** 290 signal, 39 attack, 22 defense, tuned for the
-  round and the drafted deck, not LoGD's dragon (300 / 45 / 25, numbers
-  for an exchange loop). From the top of the wall a first kill lands
+- **The numbers.** 300 signal, 35 attack, 22 defense, tuned for the
+  round, the drafted deck, and the hit ramp, which reaches the boss too
+  (ten signal is the finer knob to finish on), not LoGD's dragon (300 /
+  45 / 25, numbers for an exchange loop). From the top of the wall a first kill lands
   about one try in two on the `Auto` key and nine in ten for a runner
   reading the hand, whatever was drafted; a glass of static on ice makes
   the key near sure. Held by the arena's contract for every build
@@ -1068,19 +1069,25 @@ never does.
   tier 0, bits to the starting 50, the locker emptied, the crystals gone. The climb is a
   real climb again, and nothing saved for it carries over.
 - **What it keeps:** the peak level (the tailor's rack stays open), the
-  look, the badges, the kill count, today's rations, and the debt.
+  look, the badges, the kill count, today's rations, the debt, and the
+  inks (INK below: the one purchase made for the climbs after this one).
 - **What it gives:** a mark. Marks are the paragon number, shown behind
   the Signal's glyph in the badge (`▚3╬2`); each adds +1 attack and +1
-  defense up to a cap of five (the second climb is quicker, a veteran
-  never outgrows the room), scales every exp threshold (LoGD's formula,
-  a quarter of level times a hundred per mark), and climbs the title
-  ladder (placeholder copy: heard, tuned, carrier, broadcast, old
+  defense up to a cap of five (the second climb drops less, a veteran
+  never outgrows the room) and climbs the title ladder (placeholder copy: heard, tuned, carrier, broadcast, old
   voice). The first kill grants the rankless `SIG` profile badge. A kill
   pays 40,000 chips, at most once every 30 days: the one milestone payout
   (see "Economy rules"), and the only place bits ever turn into chips. A
   second mark inside the month is kept all the same, unpaid. The payout is
   a debt on the row until the house answers: a grant that fails is retried
   on the next step or connect, never lost with the mark.
+- **A mark never taxes the ladder.** LoGD scaled every exp threshold by
+  the dragon kills (a quarter of level times a hundred per kill), a brake
+  on stats that bought more forest fights a day. Here five fights a day
+  pay a fixed exp, so the mark bonus buys no pace, only fewer drops, and
+  scaling the ladder would be a day's tax on a veteran reader with
+  nothing paying it back (`fight/BALANCE.md`, "The second climb is a day quicker"). The
+  ladder is the same on every climb.
 - **A mark empties the stash** (decided with the money pass below): a
   full locker waiting at level 1 would make the second climb a shopping
   trip.
@@ -1327,8 +1334,12 @@ fight, spent on things gold could not buy. Both answers are in:
   tier needed and never caught up (`fight/BALANCE.md`, the sweep). The
   careful runner now fights every level in that level's kit and wears
   the top one at 15; gear takes over half the bits earned, patch under
-  a quarter. Nothing stops a rich runner buying ahead; a tier ahead is
-  worth two or three points of odds, so nobody needs to.
+  a quarter. Nothing stops a rich runner buying ahead, but the wall
+  asks half as much again for every tier a piece would sit above the
+  level (`PRICE_LEAD_PERCENT`): at a flat price the bright glyph's double
+  bits buy the keen runner three tiers over the level by the median
+  climb, and at three over nothing on the road is a fight. The trade-in
+  is read off the ladder, so the premium does not come back.
 - **Crystals.** One kill in twelve of the glyph of your level leaves
   one. Rare enough to be a moment, common enough that a week holds a
   few. They are the one thing a dropped signal does not take (LoGD's
@@ -1350,12 +1361,72 @@ fight, spent on things gold could not buy. Both answers are in:
   From the wall's kit it is about a coin toss; one thing a crystal buys
   makes it a fight to take. *Amended 2026-10-06:* in the round it is a
   fight to read: near sure for a runner playing the hand, a real risk
-  on the `Auto` key, and most of a signal either way.
+  on the `Auto` key, and most of a signal either way. Its edge is a
+  share of the level (half the level in attack, rounded up, and the
+  plain glyph's defense), not of the glyph's own numbers: a percentage
+  rounded up would double the flicker and add a sixth at the top, a wall
+  on day one and nothing by level 10. It is the same step up all the
+  way, and read sharp it is meant to go down about three times in four,
+  never nine in ten.
+- **One patch a day.** The signal is a budget of two bars a day: the one
+  the roll fills and the one patch buys, spent when the runner says so.
+  Patch at any time, a bit a point, measures as a careful runner who
+  patches before every fight, never runs, never drops, and pays three
+  percent of its bits for it: the day has no attrition and the road's
+  five fights are five separate full-signal fights. A rising price was the other way, and a
+  runner with seventy thousand idle bits buys through any price; a
+  count cannot be bought. It is a wall by the balance manual's rule, and
+  the rule's reason (a wall hides a wrong number) does not hold here:
+  the number was tried. The day keeps the grammar it had: ten rations,
+  one glass, two brights, one patch. The siphon is in every deck from
+  the first step, the one heal between the patch and the roll, and the
+  level 3 draft asks jab or brace (a free hit or a free guard). The threat word reads the sheet as it stands, so the same
+  bright glyph reads easy at a full bar and grim at a third: the word
+  gets its second life for free.
+- **The fight scales up.** Everything in a round is linear in the level
+  (attack and defense are level plus tier, the table is a line), so
+  left alone the fight at 15 is the fight at 5 with bigger numbers, and
+  only the runner gains cards on the way up. Two numbers break the line on
+  purpose: a glyph's hit climbs a few points a level
+  (`HIT_RAMP_PERCENT`), and its noise throws one more static card every
+  few levels (`NOISE_LEVEL_STEP`), so the deck the glyph corrupts keeps
+  pace with the deck the runner builds.
+- **The blade shop prices the lead.** Three crystals for a piece at or
+  under the level, two more a tier past it. At a flat three, the two
+  crystals a day the bright glyphs pay buy four tiers over the level by
+  level 9 and the whole wall at 11, and at four tiers over nothing on
+  the road is a fight. The keen runner's kit is held to the same band
+  as the careful one's.
 - **Dead Air pours.** A glass for a crystal, one a day, gone at the
   roll: attack, defense, or the signal's bars. The consumable sink, and
   the reason to walk into the bar. The prepared runner's move is to
   save one for the Old Signal (two tries in five dry, a little better
   than even with a glass).
+- **Dead Air pours a card.** Three of the six on the menu are pours: a
+  surge, a burn, or a mute in every deck dealt today, for the same
+  crystal and the same one slot. A glass is a point on the sheet and
+  reads as noise next to a tier of gear; a pour is a decision made
+  looking at the road (a surge for the bright glyph, a burn for a day of
+  noise glyphs, a mute for a heavy hitter), which is what the bar
+  lacked. A pour is never a trap: the arena holds that none costs the
+  key more than the dice against the bright glyph (a wipe did, poured
+  into a clean deck, so squelch is a burn). The three stat glasses
+  stay; they are the Old Signal's.
+- **INK: the needle.** The INK sign is lit. A draft inked for ten
+  crystals is both of its cards: the pick goes in as always and the
+  other option comes in beside it, from the draft's level on, in this
+  climb and every one after. Marks pay the sheet (+1 attack and defense
+  each, capped); ink pays the deck. An ink is the one thing a climb's
+  crystals buy that the mark does not take back, so the choice is this
+  climb (a blade now, a glass tonight) against every climb after. The
+  needle takes one draft for every mark held, and one more: a first
+  climb inks one, a mark opens the next, four in all. Not stats: a
+  second system paying the number the mark already pays would be the
+  mark done twice. Measured on the key, where the days a drop costs
+  are the only days a wider deck can save: the second climb marks a day
+  sooner than the first; with every draft inked, four days sooner,
+  which is the careful reader's first climb. The gate moves seven
+  points on the key with every draft inked (57% to 64%).
 - **The blade shop takes the other wallet.** The next tier up from what
   a slot carries, for three crystals and no bits. The standing sink:
   three crystals is a few days' luck, and what they buy grows with the
@@ -1370,15 +1441,16 @@ fight, spent on things gold could not buy. Both answers are in:
   Air beside them, the lockers at the wire stairs, loans toward the
   screen, the tailor out west. A shop with nothing in it yet keeps its
   sign barely on, in its own color, so the street still reads as lived
-  in (MARKET, SHRINE, PAWN, INK, which was CLINIC and read as a second
-  patch, BATHS, BANDS, SLEEP, COIN, VIDS), and says "not open yet" at
-  the door. They get lit one at a time, and a sign coming on is news.
+  in (MARKET, SHRINE, PAWN, BATHS, BANDS, SLEEP, COIN, VIDS), and says
+  "not open yet" at the door. They get lit one at a time, and a sign
+  coming on is news; INK (which was CLINIC and read as a second patch)
+  is the first one lit, for the needle.
   Stalls and carts stay as flavor and, later, small bonuses.
 - **Not mounts, not mercenaries.** LoGD spent gems on a horse (more
   forest fights) and hired swords (a second attacker). More fights a day
   breaks the ten-minute ritual, and a companion is a second combat
   system; neither is here. A glass and one tier of gear are numbers the
-  sheet already has.
+  sheet already has; a pour and an ink are cards the deck already has.
 - **The balance is measured.** `fight/arena.rs` plays every matchup and
   four whole climbs through the real machine under any set of numbers
   (`data::Rules`), and one contract holds every target as a band
@@ -1456,7 +1528,8 @@ a season beat once the loop stands.
 
 - **One deck, ten cards, no builds at v0.** Five strikes, three blocks,
   two of the band's moves (the move names already drafted under
-  "Bands"). Everyone starts with the same ten. The weapon tier adds to
+  "Bands"). Everyone starts with the same ten, one strike of them a
+  siphon ("One patch a day" above). The weapon tier adds to
   strike numbers, the armor tier to block numbers, so gear still matters
   and the armorer still sells; the deck itself does not change. Balance
   is a spreadsheet with two columns, and the gear ladder, already
@@ -1506,8 +1579,8 @@ talk about.
   run ever runs past that, we built a sudoku.
 - **Node kinds:** fight (the round); elite (both intents live, a card
   drop on the kill: where jokers enter later, one at a time, as rewards
-  rather than a shop); rest (clear static from the deck, or heal
-  signal: the one decision every Spire player argues about); cache
+  rather than a shop); rest (clear static from the deck; the signal
+  is patch's); cache
   (bits, which walk back up to the armorer: the road is the faucet, the
   street is the sink); event (a line and a choice, pure copy in the
   voice, an afternoon each: the content slot that never runs dry).
@@ -1608,9 +1681,10 @@ every runner new cards to play with and keeps one deck to tune.
   and a deck is still read at a glance. Sixteen decks exist, and the
   arena fights all of them on every pass.
 - **Every question has two right answers.** Level 3, for a strike: a
-  *jab* (free, three quarters of a strike) or a *siphon* (a strike that
-  mends half of itself): tempo or sustain. Level 6, for a block: a
-  *riposte* (hits for a block's worth and all the block standing) or a
+  *jab* (free, three quarters of a strike) or a *brace* (free, a whole
+  block): a free hit or a free guard (the siphon is in every deck: "One
+  patch a day"). Level 6, for a block: a
+  *riposte* (hits for a block and a half and all the block standing) or a
   *bulwark* (two and a half blocks for two energy): armor as a weapon
   or as a wall. Level 9, for a strike: a *burn* (free, two energy, and
   one more for each static card in hand, burned up) or a *ground* (a

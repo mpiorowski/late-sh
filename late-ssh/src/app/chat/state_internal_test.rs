@@ -2951,6 +2951,67 @@ async fn brb_without_a_composer_room_is_refused() {
     assert!(!state.take_requested_brb(), "nothing is requested");
 }
 
+/// Submits `command` from the composer of a joined public room and drains
+/// events until the send succeeds, returning every banner raised on the way.
+async fn submit_and_collect_send_banners(username: &str, command: &str) -> Vec<Banner> {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, username).await;
+    let room = ChatRoom::get_or_create_public_room(&client, &format!("{username}-room"))
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join room");
+    ChatRoom::get_or_create_public_room(&client, ReportKind::Bug.slug())
+        .await
+        .expect("bugs room");
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.start_composing_in_room(room.id);
+    state.composer.insert_str(command);
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+
+    let mut banners = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while state.last_own_send_at.is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the send to succeed"
+        );
+        banners.extend(state.drain_events());
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    banners
+}
+
+/// A plain send's echo in the room is its confirmation; success raises no
+/// banner.
+#[tokio::test]
+async fn plain_send_success_raises_no_banner() {
+    let banners = submit_and_collect_send_banners("send_quiet", "hello there").await;
+
+    assert!(banners.is_empty(), "unexpected banners: {banners:?}");
+}
+
+/// A report lands in its own room, out of sight, so its success banners
+/// where it went.
+#[tokio::test]
+async fn report_success_banners_its_room() {
+    let banners =
+        submit_and_collect_send_banners("report_banner", "/bug the door ate my hat").await;
+
+    let messages: Vec<_> = banners.iter().map(|b| b.message.as_str()).collect();
+    assert_eq!(messages, ["Posted to #bugs"]);
+}
+
 #[test]
 fn format_cooldown_rounds_minutes_up() {
     assert_eq!(format_cooldown(Duration::from_secs(45)), "45s");

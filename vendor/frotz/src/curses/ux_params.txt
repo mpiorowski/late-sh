@@ -1,0 +1,30 @@
+-a   watch attribute setting
+-A   watch attribute testing
+-b <colorname> background color
+-c # context lines
+-d   disable color
+-e   enable sound
+-E <style> emphasis style
+-f <colorname> foreground color
+-F   Force color mode
+-h # text height
+-i   ignore fatal errors
+-I # interpreter number
+-l # left margin
+-L <file> load this save file
+-m   enable mouse support
+-o   watch object movement
+-O   watch object locating
+-p   plain ASCII output only
+-P   alter piracy opcode
+-q   quiet (disable sound effects)
+-r # right margin
+-R <path> restricted read/write
+-s # random number seed value
+-S # transcript width
+-t   set Tandy bit
+-u # slots for multiple undo
+-v   show version information
+-w # text width
+-x   expand abbreviations g/x/z
+-Z # error checking (see below)

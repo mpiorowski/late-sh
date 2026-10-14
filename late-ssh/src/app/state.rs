@@ -147,6 +147,12 @@ const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
 const CURSOR_SHAPE_DEFAULT: &[u8] = b"\x1b[0 q";
 const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
+/// Backtick, the workspace-cycle key, matched as a whole input chunk (like
+/// the doors' F1 remap): inside a running roguelike or Zork game it detaches
+/// instead of reaching the game. DCSS's own ` (repeat previous command) is the
+/// accepted casualty.
+pub(crate) const DOOR_DETACH_KEY: &[u8] = b"`";
+
 /// Name the window we're borrowing. `CSI 22;2t` pushes the title the user
 /// already had onto the terminal's own stack first, so [`POP_WINDOW_TITLE`]
 /// can hand it back on the way out: an `ssh late.sh` in one tab of ten should
@@ -212,6 +218,7 @@ pub struct SessionConfig {
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
+    pub calendar_service: crate::app::calendar::svc::CalendarService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
     pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: crate::app::chat::showcase::svc::ShowcaseService,
@@ -352,6 +359,10 @@ pub struct SessionConfig {
     pub codekeep_host: String,
     pub codekeep_port: u16,
     pub codekeep_secret: String,
+    pub zork_enabled: bool,
+    pub zork_host: String,
+    pub zork_port: u16,
+    pub zork_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -400,6 +411,9 @@ pub struct SessionConfig {
     /// This device's stored home rail layout, or `None` when the key has never
     /// been configured and should follow the account default.
     pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
+    /// This device's Artboard content disclaimer, or `None` when the key has
+    /// never set one and should follow the account's `artboard_disclaimer`.
+    pub key_artboard_disclaimer: Option<bool>,
     /// When you last left the app on this device (the moment the keyboard
     /// went quiet before the previous session on this key ended), or `None`
     /// for a keyless session or a device with no mark yet. The bare
@@ -462,6 +476,7 @@ pub struct App {
     /// UI state
     pub(super) size: (u16, u16),
     pub(crate) screen: Screen,
+    pub(crate) calendar: crate::app::calendar::state::CalendarState,
     pub(super) banner: Option<Banner>,
     pub(crate) show_settings: bool,
     pub(crate) show_splash: bool,
@@ -477,6 +492,21 @@ pub struct App {
     /// a short window after input so request -> response interactions
     /// (menu loads, chat send echo) land at typing latency.
     pub(crate) last_input_at: Instant,
+    /// Set on input from a person (`common::away::presence_input`): not
+    /// on a bare mouse move or a focus report. The away clock, the AFK line,
+    /// attention, and the device's left-at mark all read this one, so a
+    /// pointer resting on the terminal never keeps a session here.
+    pub(crate) last_active_at: Instant,
+    /// The tail of the last input chunk that cut an escape sequence in two
+    /// (`common::away::PresenceInput::Partial`), read again in front of the
+    /// next chunk, so who sent it is decided from the whole report and the
+    /// second half of a mouse move never reads as a person's keys.
+    pub(crate) presence_held: Vec<u8>,
+    /// A bracketed paste woke the session from under the screensaver and
+    /// its close has not arrived: the chunks up to it are swallowed too.
+    pub(crate) waking_paste_open: bool,
+    /// Transient choice and timer for the current away activation.
+    pub(crate) screensaver_playback: Option<super::ascii::playback::Playback>,
     /// Second-boundary edge state for the shared 1Hz block in tick():
     /// None = never fired (fire immediately so first frames have presence,
     /// directory, and clock state).
@@ -527,11 +557,6 @@ pub struct App {
     /// one-hertz edge and on leaving the page, so a held resize key costs
     /// one row update rather than one per key repeat.
     pub(crate) zen_layout_dirty: bool,
-    /// Whether Zen had its status row when the reef was last bound. The row
-    /// follows the status line setting, which changes outside any screen
-    /// switch (a Settings preview, a profile arriving), so tick re-binds the
-    /// reef when the two disagree.
-    pub(crate) zen_row_bound: bool,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -708,6 +733,8 @@ pub struct App {
     pub(crate) directory_editor: crate::app::directory::editor::state::EditorState,
     /// The tag picker the settings modal and the profile editor open.
     pub(crate) tag_picker: super::tag_picker::state::TagPickerState,
+    /// The piece picker a Zen ascii tile opens (`app/ascii/picker`).
+    pub(crate) piece_picker: super::ascii::picker::state::PiecePickerState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
@@ -726,6 +753,9 @@ pub struct App {
 
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
+    /// `s` was pressed on Home: the next digit opens that row of the
+    /// sidebar's Live panel (`live/input.rs::open_from_prefix`).
+    pub(crate) live_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
@@ -735,7 +765,11 @@ pub struct App {
     /// desktop on one linked account stop overwriting each other. Read through
     /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
     pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// The key `device_rails` persists to; `None` for keyless sessions.
+    /// Artboard content disclaimer for *this device*, stored on the same key
+    /// as `device_rails`, or `None` to follow the account's
+    /// `artboard_disclaimer`. Read through [`App::artboard_disclaimer_enabled`].
+    pub(crate) device_artboard_disclaimer: Option<bool>,
+    /// The key the device settings persist to; `None` for keyless sessions.
     pub(crate) key_fingerprint: Option<String>,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
     pub(crate) settings_modal_state: settings_modal::state::SettingsModalState,
@@ -826,9 +860,15 @@ pub struct App {
     pub(crate) dcss_host: String,
     pub(crate) dcss_port: u16,
     pub(crate) dcss_secret: String,
-    /// The live game this session is watching, while it watches one. Held
-    /// only on the Games hub, which draws it in place of the sidebar.
+    /// The live game this session is watching on the Games hub, previewed
+    /// beside the rail or open across the page. Held only on the hub.
     pub(crate) spectate_state: Option<crate::app::door::spectate::state::State>,
+    /// The open watches this session stepped away from, one per game:
+    /// leaving the hub moves the open one here, still streaming (without
+    /// repainting the session), so the hub shows its cards on the next visit
+    /// while each stays a stop on the backtick cycle. Each ends on its game
+    /// ending or `spectate::state::AWAY_WINDOW` off screen (`App::tick`).
+    pub(crate) away_watches: Vec<crate::app::door::spectate::state::State>,
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// This player's ties to the watch-chat rooms of their own running games,
     /// one per watchable door with a game running, held while it runs and the
@@ -894,6 +934,12 @@ pub struct App {
     pub(crate) codekeep_host: String,
     pub(crate) codekeep_port: u16,
     pub(crate) codekeep_secret: String,
+    pub(crate) zork_state: Option<crate::app::door::zork::state::State>,
+    pub(crate) zork_term: String,
+    pub(crate) zork_enabled: bool,
+    pub(crate) zork_host: String,
+    pub(crate) zork_port: u16,
+    pub(crate) zork_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -937,6 +983,9 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
+    /// Consent lasts until this Artboard visit ends.
+    pub(crate) artboard_content_accepted: bool,
+    pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
     /// page-level view state over their merged feed.
@@ -1031,12 +1080,15 @@ impl App {
     /// so peers see a session go away or come back within a second of it.
     /// Returns whether the flag moved.
     pub(crate) fn sync_away(&mut self) -> bool {
-        let away =
-            crate::app::common::away::session_is_away(self.last_input_at.elapsed(), self.sent_away);
+        let away = crate::app::common::away::session_is_away(
+            self.last_active_at.elapsed(),
+            self.sent_away,
+        );
         if away == self.away {
             return false;
         }
         self.away = away;
+        self.sync_screensaver(Instant::now(), &mut rand::thread_rng());
         if let Some(active_users) = &self.active_users {
             crate::app::common::away::set_session_away(
                 active_users,
@@ -1045,7 +1097,33 @@ impl App {
                 away,
             );
         }
+        if let Some(playback) = self.screensaver_playback {
+            let trigger = match self.sent_away {
+                true => crate::metrics::ScreensaverTrigger::Brb,
+                false => crate::metrics::ScreensaverTrigger::Idle,
+            };
+            crate::metrics::record_screensaver(trigger, playback.selection(), playback.piece());
+        }
         true
+    }
+
+    /// The piece covering the screen while this session is away, `None`
+    /// while it is here or with the Tweak off (Settings, Tweaks,
+    /// `Screensaver`).
+    pub(crate) fn screensaver(&self) -> Option<late_core::models::user::AsciiPiece> {
+        if !self.away {
+            return None;
+        }
+        let selection = self.profile_state.profile().screensaver.selection()?;
+        super::ascii::playback::Playback::resolve(self.screensaver_playback, selection)
+    }
+
+    pub(crate) fn sync_screensaver(&mut self, now: Instant, rng: &mut impl rand::Rng) -> bool {
+        let selection = self
+            .away
+            .then(|| self.profile_state.profile().screensaver.selection())
+            .flatten();
+        super::ascii::playback::Playback::sync(&mut self.screensaver_playback, selection, now, rng)
     }
 
     /// The rail modes this session renders from: this device's stored layout if
@@ -1137,6 +1215,9 @@ impl App {
                 .own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Nethack),
             Screen::Brogue => {
                 self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Brogue)
+            }
+            Screen::Zork => {
+                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Zork)
             }
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
@@ -1448,9 +1529,11 @@ impl App {
             config.user_id,
         );
         let device_rails = config.key_layout;
+        let device_artboard_disclaimer = config.key_artboard_disclaimer;
         settings_modal_state.open_from_profile(
             &initial_profile,
             device_rails_or_profile(device_rails, &initial_profile),
+            device_artboard_disclaimer.unwrap_or(initial_profile.artboard_disclaimer),
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
@@ -1484,6 +1567,10 @@ impl App {
             running: true,
             size: (cols, rows),
             screen: landing_screen,
+            calendar: crate::app::calendar::state::CalendarState::new(
+                config.calendar_service,
+                config.user_id,
+            ),
             banner: aquarium_loss_banner,
             show_settings: false,
             show_splash: true,
@@ -1491,6 +1578,10 @@ impl App {
             marquee_tick: 0,
             started_at: Instant::now(),
             last_input_at: Instant::now(),
+            last_active_at: Instant::now(),
+            presence_held: Vec::new(),
+            waking_paste_open: false,
+            screensaver_playback: None,
             last_one_hz_index: None,
             attention_mark: Instant::now(),
             attention_spot: None,
@@ -1530,7 +1621,6 @@ impl App {
                 }
             },
             zen_layout_dirty: false,
-            zen_row_bound: false,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -1678,6 +1768,7 @@ impl App {
             ),
             directory_editor: crate::app::directory::editor::state::EditorState::default(),
             tag_picker: super::tag_picker::state::TagPickerState::default(),
+            piece_picker: super::ascii::picker::state::PiecePickerState::default(),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
             paired_source: config.initial_audio_source,
             selected_radio_station: config.initial_radio_station,
@@ -1687,12 +1778,14 @@ impl App {
             interaction_mode: config.initial_interaction_mode.unwrap_or_default(),
             music_prefix_armed: false,
             room_section_prefix_armed: false,
+            live_prefix_armed: false,
             profile_state: profile::state::ProfileState::new(
                 config.profile_service.clone(),
                 config.user_id,
                 config.initial_theme_id,
             ),
             device_rails,
+            device_artboard_disclaimer,
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
@@ -1754,6 +1847,7 @@ impl App {
             dcss_port: config.dcss_port,
             dcss_secret: config.dcss_secret,
             spectate_state: None,
+            away_watches: Vec::new(),
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
             own_chat_hit: std::cell::Cell::new(None),
@@ -1792,6 +1886,12 @@ impl App {
             codekeep_host: config.codekeep_host,
             codekeep_port: config.codekeep_port,
             codekeep_secret: config.codekeep_secret,
+            zork_state: None,
+            zork_term: config.term.clone(),
+            zork_enabled: config.zork_enabled,
+            zork_host: config.zork_host,
+            zork_port: config.zork_port,
+            zork_secret: config.zork_secret,
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
@@ -1817,6 +1917,8 @@ impl App {
             scratchpad: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             artboard_interacting: false,
+            artboard_content_accepted: false,
+            artboard_disclaimer_choices: std::cell::Cell::default(),
             dartboard_server,
             dartboard_provenance,
             artboard_snapshot_service,
@@ -1843,9 +1945,7 @@ impl App {
             pending_chat_profile_open: None,
             last_terminal_bg: None,
         };
-        if app.screen == Screen::Artboard {
-            app.enter_dartboard();
-        }
+        app.sync_dartboard_connection();
         // The landing screen skips `set_screen`, so run its entry hook by
         // hand. Clubhouse: immediate crowd refresh plus the first-visit
         // tutorial. Home: refresh the room list (sync_selection runs just
@@ -1858,6 +1958,7 @@ impl App {
             LandingPage::Home => app.chat.request_list(),
             LandingPage::Zen => {
                 app.zen.note_opened();
+                app.zen.enter(Instant::now(), &mut rand::thread_rng());
                 app.sync_aquarium_bounds();
             }
         }
@@ -2050,17 +2151,15 @@ impl App {
     }
 
     /// Watch `playname`'s live `game`, replacing any watch already open.
-    pub(crate) fn start_spectating(
-        &mut self,
-        game: crate::app::door::spectate::state::SpectateGame,
-        playname: String,
-    ) {
+    pub(crate) fn start_spectating(&mut self, key: crate::app::door::spectate::state::LiveGameKey) {
         use crate::app::door::spectate::proxy::WatchTarget;
         use crate::app::door::spectate::state::{SpectateGame, State};
 
-        // Switching games is leaving one watch for another.
+        // Switching games keeps an open watch (it steps away) and drops a
+        // preview.
+        self.step_away_from_watch();
         self.stop_spectating();
-        let target = match game {
+        let target = match key.game() {
             SpectateGame::Dcss => WatchTarget {
                 host: self.dcss_host.clone(),
                 port: self.dcss_port,
@@ -2076,13 +2175,13 @@ impl App {
                 port: self.brogue_port,
                 key: crate::app::door::brogue::identity::derive_client_key(&self.brogue_secret),
             },
+            SpectateGame::Zork => WatchTarget {
+                host: self.zork_host.clone(),
+                port: self.zork_port,
+                key: crate::app::door::zork::identity::derive_client_key(&self.zork_secret),
+            },
         };
-        self.spectate_state = Some(State::new(
-            game,
-            playname,
-            target,
-            self.repaint_signal.clone(),
-        ));
+        self.spectate_state = Some(State::new(key, target, self.repaint_signal.clone()));
     }
 
     pub(crate) fn stop_spectating(&mut self) {
@@ -2097,7 +2196,10 @@ impl App {
         let Some(state) = self.spectate_state.as_mut() else {
             return;
         };
-        state.open();
+        let key = state.key();
+        state.open(self.live_games.open_watch(key, self.user_id));
+        // One watch per game: a kept one of the same game is this one now.
+        self.away_watches.retain(|away| away.key() != key);
         // The pane's composer is the watch room's alone. A draft carried in
         // from another room (a #lounge line half typed when the strip was
         // clicked) would draw under the watch chat while Enter still sent it
@@ -2108,6 +2210,37 @@ impl App {
         if !keeps_draft {
             self.chat.reset_composer();
         }
+    }
+
+    /// Leaving the hub (or the watch, for another) with the watch open
+    /// steps away from it: it keeps streaming off screen, and the hub's next
+    /// visit shows its cards. A preview stays where it is, for `App::tick`
+    /// or the caller to end.
+    fn step_away_from_watch(&mut self) {
+        use crate::app::door::spectate::state::WatchMode;
+        match self.spectate_state.as_ref().map(|state| state.mode()) {
+            Some(WatchMode::Open) => {
+                self.clear_watch_chat_focus();
+                let mut state = self.spectate_state.take().expect("an open watch");
+                state.step_away(std::time::Instant::now());
+                self.away_watches.push(state);
+            }
+            Some(WatchMode::Preview) | None => {}
+        }
+    }
+
+    /// Back onto the kept watch of `key` (the backtick cycle, `o` on the
+    /// live strip), in place of whatever the hub held: an open watch there
+    /// steps away in turn. The caller puts the hub on screen.
+    pub(crate) fn resume_watch(&mut self, key: crate::app::door::spectate::state::LiveGameKey) {
+        let Some(index) = self.away_watches.iter().position(|away| away.key() == key) else {
+            return;
+        };
+        let mut state = self.away_watches.remove(index);
+        self.step_away_from_watch();
+        self.stop_spectating();
+        state.resume();
+        self.spectate_state = Some(state);
     }
 
     /// Esc out of an open watch: back to the preview beside the rail.
@@ -2245,6 +2378,29 @@ impl App {
         // bashquest.sh. It saves continuously, so this loses at most the
         // current unanswered challenge.
         self.bashquest_state = None;
+    }
+
+    pub(crate) fn enter_zork(&mut self) {
+        if self.zork_state.is_none() {
+            self.zork_state = Some(crate::app::door::zork::state::State::new(
+                crate::app::door::zork::state::StateConfig {
+                    user_id: self.user_id,
+                    host: self.zork_host.clone(),
+                    port: self.zork_port,
+                    secret: self.zork_secret.clone(),
+                    term: self.zork_term.clone(),
+                    enabled: self.zork_enabled,
+                    repaint: self.repaint_signal.clone(),
+                    handle_svc: Some(self.arcade_handle_service.clone()),
+                },
+            ));
+        }
+    }
+
+    pub(crate) fn leave_zork(&mut self) {
+        // Dropping the State drops the proxy; the host then SIGHUP-saves a
+        // live child so Continue resumes it next launch.
+        self.zork_state = None;
     }
 
     pub(crate) fn enter_codekeep(&mut self) {
@@ -2403,6 +2559,13 @@ impl App {
     }
 
     pub(crate) fn set_screen(&mut self, screen: Screen) {
+        self.calendar.cancel_open();
+        self.calendar.invalidate_geometry();
+        self.calendar.clear_click();
+        self.calendar.context_menu = None;
+        if screen == Screen::Calendars {
+            self.calendar.refresh();
+        }
         if self.screen == screen {
             if screen == Screen::Rebels {
                 self.enter_rebels();
@@ -2425,15 +2588,21 @@ impl App {
             if screen == Screen::Bashquest {
                 self.enter_bashquest();
             }
+            if screen == Screen::Zork {
+                self.enter_zork();
+            }
             if screen == Screen::Codekeep {
                 self.enter_codekeep();
             }
-            if screen == Screen::Artboard {
-                self.enter_dartboard();
-            }
+            self.sync_dartboard_connection();
             self.sync_visible_chat_room();
             return;
         }
+
+        // The piece picker belongs to the Zen page it was opened over; a
+        // chord off the page (Ctrl+F, a door) must not carry it along to
+        // own the next page's keys.
+        self.piece_picker.close();
 
         // Leaving Home is leaving the open cyberspace chat room: its stream
         // and presence heartbeat exist only while the user is on the surface,
@@ -2443,6 +2612,7 @@ impl App {
         }
 
         if self.screen == Screen::Artboard {
+            self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
         }
@@ -2495,6 +2665,14 @@ impl App {
         {
             self.leave_brogue();
         }
+        if self.screen == Screen::Zork
+            && !self
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+        {
+            self.leave_zork();
+        }
         if self.screen == Screen::Usurper {
             self.leave_usurper();
         }
@@ -2544,6 +2722,9 @@ impl App {
         crate::app::workspace::cycle::note_screen_change(self, screen);
 
         let screen_changed = self.screen != screen;
+        if screen_changed && self.screen == Screen::Games {
+            self.step_away_from_watch();
+        }
         // Leaving Zen writes any layout edit the debounce still holds, and
         // forgets where Ctrl+F came from however the page was left (a digit,
         // a tour step), so a later Ctrl+F on Zen never hands back a stale
@@ -2551,9 +2732,13 @@ impl App {
         if screen_changed && self.screen == Screen::Zen {
             self.flush_zen_layout();
             self.zen.close_kind_picker();
+            self.zen.leave();
             self.zen_return_screen = None;
         }
         self.screen = screen;
+        if screen == Screen::Zen {
+            self.zen.enter(Instant::now(), &mut rand::thread_rng());
+        }
         // The aquarium sim is sized for whichever surface shows it next.
         self.sync_aquarium_bounds();
 
@@ -2575,9 +2760,7 @@ impl App {
             self.chat.sync_selection();
         }
 
-        if self.screen == Screen::Artboard {
-            self.enter_dartboard();
-        }
+        self.sync_dartboard_connection();
         // The Games hub draws this account's character list on the Lateania
         // card and the landing draws it in full: read it from the database the
         // first time either is opened (and retry there if that read failed).
@@ -2606,6 +2789,9 @@ impl App {
         }
         if self.screen == Screen::Bashquest {
             self.enter_bashquest();
+        }
+        if self.screen == Screen::Zork {
+            self.enter_zork();
         }
         if self.screen == Screen::Codekeep {
             self.enter_codekeep();
@@ -2730,6 +2916,9 @@ impl App {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), io::Error> {
+        self.calendar.invalidate_geometry();
+        self.calendar.clear_click();
+        self.calendar.context_menu = None;
         tracing::debug!(cols, rows, "window resized");
         self.size = (cols, rows);
         self.leaderboard_page.clear_hit_regions();
@@ -2753,21 +2942,78 @@ impl App {
     }
 
     pub fn handle_input(&mut self, data: &[u8]) {
+        use crate::app::common::away::{PresenceInput, paste_end, presence_input};
         if !data.is_empty() {
             self.last_input_at = Instant::now();
-            self.newcomer_clock.note_input(chrono::Utc::now());
         }
+        // A paste that woke the session is swallowed to its close, however
+        // many chunks it runs on for; what follows the close is the page's.
+        let data: &[u8] = match self.waking_paste_open {
+            false => data,
+            true => match paste_end(data) {
+                Some(end) => {
+                    self.waking_paste_open = false;
+                    &data[end..]
+                }
+                None => return,
+            },
+        };
+        // Read before the input can bring the session back: the one thing
+        // that drops the screensaver is swallowed, not acted on.
+        let screensaver_up = self.screensaver().is_some();
+        // Presence is read over the held tail of the last chunk and this
+        // one, so a report cut at a chunk boundary is classified whole.
+        let held = std::mem::take(&mut self.presence_held);
+        let read: std::borrow::Cow<'_, [u8]> = match held.is_empty() {
+            true => std::borrow::Cow::Borrowed(data),
+            false => std::borrow::Cow::Owned([held.as_slice(), data].concat()),
+        };
+        // A person, not the pointer crossing the terminal: the away clock
+        // restarts and `/brb` ("until your next key") ends here, for every
+        // screen including the doors that never parse their input. Coming
+        // back is synced now rather than on the next 1Hz edge, so the
+        // screensaver drops on this very key.
+        let person = match presence_input(&read) {
+            PresenceInput::Nobody => None,
+            PresenceInput::Partial { held_from } => {
+                self.presence_held = read[held_from..].to_vec();
+                None
+            }
+            PresenceInput::Person {
+                event_end,
+                paste_open,
+            } => {
+                self.last_active_at = Instant::now();
+                self.newcomer_clock.note_input(chrono::Utc::now());
+                self.sent_away = false;
+                if self.away {
+                    self.sync_away();
+                }
+                // The held tail came from a chunk already swallowed, so the
+                // event ends this far into this one.
+                Some((event_end - held.len(), paste_open))
+            }
+        };
+        let data: &[u8] = match (screensaver_up, person) {
+            (false, _) => data,
+            // The pointer, a focus change, or half a report: nothing to
+            // wake for, nothing to act on.
+            (true, None) => return,
+            (true, Some((event_end, paste_open))) => {
+                self.waking_paste_open = paste_open;
+                let rest = &data[event_end..];
+                if rest.is_empty() {
+                    return;
+                }
+                rest
+            }
+        };
         // First contact's breakthrough (`app/deadchannel/haunt`): while it
         // plays, every key is swallowed here, before a running door game or
         // the parser sees it.
         if self.haunt.breakthrough_playing() {
             return;
         }
-        /// Backtick, the workspace-cycle key, matched as a whole input chunk
-        /// (like the doors' F1 remap): inside a running roguelike it detaches
-        /// instead of reaching the game. DCSS's own ` (repeat previous
-        /// command) is the accepted casualty.
-        const DOOR_DETACH_KEY: &[u8] = b"`";
         // While the proxied rebels game is running, every byte (keys + mouse)
         // goes straight to the remote; late.sh parses nothing. Exit is by
         // quitting rebels itself (Esc/Ctrl-C), which closes the channel.
@@ -2913,6 +3159,11 @@ impl App {
             && let Some(state) = self.bashquest_state.as_ref()
             && state.in_exit_grace()
         {
+            return;
+        }
+        // Zork: a visible game takes every byte, ` detaching it; the menus
+        // fall through to the parsed-key path (`door/zork/input.rs`).
+        if self.screen == Screen::Zork && crate::app::door::zork::input::handle_raw(self, data) {
             return;
         }
         // CodeKeep is another network PTY door. Ink owns every key while the
@@ -3161,22 +3412,17 @@ impl App {
         }
     }
 
-    /// Whether Zen gives its bottom row to the status line; every caller of
-    /// `zen::layout::rice_areas` reads it from here, so the tiles, the
-    /// clicks, and the reef agree on where the row is.
-    pub(crate) fn zen_status_row(&self) -> bool {
-        crate::app::statusline::bar::zen_row_shown(self.statusline_components())
-    }
-
     /// The rect the aquarium simulation should fill on the current screen:
-    /// the tank tile's inner rect on Zen, the launch band elsewhere.
+    /// the tank tile's inner rect on Zen (the whole page, zoomed), the
+    /// launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         use crate::app::zen::{layout as zen_layout, state::TileKind};
         let (cols, rows) = self.size;
         let full = Rect::new(0, 0, cols, rows);
         match self.screen {
             Screen::Zen => {
-                let (tiles, _) = zen_layout::rice_areas(full, self.zen_status_row());
+                let (tiles, _) =
+                    zen_layout::rice_areas(full, zen_layout::rice_row(full, self.zen.zoomed));
                 let zoomed = self.zen.zoomed.then_some(self.zen.focus);
                 zen_layout::tile_rects(
                     &self.zen.rice.root,
@@ -3186,7 +3432,10 @@ impl App {
                 )
                 .into_iter()
                 .find(|(kind, _)| *kind == TileKind::Aquarium)
-                .map(|(_, rect)| zen_layout::tile_inner(rect, &self.zen.rice.look))
+                .map(|(_, rect)| match zoomed {
+                    Some(_) => rect,
+                    None => zen_layout::tile_inner(rect, &self.zen.rice.look),
+                })
                 .unwrap_or_else(|| aquarium_area_for_terminal(cols, rows))
             }
             _ => aquarium_area_for_terminal(cols, rows),
@@ -3207,7 +3456,6 @@ impl App {
     pub(crate) fn sync_aquarium_bounds(&mut self) {
         let area = self.aquarium_area_for_screen();
         self.aquarium_state.handle_resize(area.width, area.height);
-        self.zen_row_bound = self.zen_status_row();
     }
 
     /// Note a Zen layout edit. The write itself is debounced: see
@@ -4131,7 +4379,7 @@ impl Drop for App {
         // the morning left last night. Keyless sessions (ghost bots, tests)
         // have no device to remember it on.
         if let Some(fingerprint) = self.key_fingerprint.clone()
-            && let Ok(idle) = chrono::Duration::from_std(self.last_input_at.elapsed())
+            && let Ok(idle) = chrono::Duration::from_std(self.last_active_at.elapsed())
         {
             self.profile_state
                 .set_device_left_at(fingerprint, chrono::Utc::now() - idle);

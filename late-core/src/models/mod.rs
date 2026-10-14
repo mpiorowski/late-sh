@@ -9,15 +9,14 @@ mod arcade_handle_test;
 pub mod artboard;
 pub mod artboard_ban;
 pub mod artboard_piece;
-pub mod artboard_piece_rating;
 #[cfg(test)]
 mod artboard_piece_test;
 #[cfg(test)]
 mod artboard_test;
 pub mod article;
-pub mod article_feed_read;
+pub mod article_read;
 #[cfg(test)]
-mod article_feed_read_test;
+mod article_read_test;
 #[cfg(test)]
 mod article_test;
 pub mod asterion;
@@ -30,6 +29,10 @@ pub mod bonsai;
 pub mod bonsai_decay_protection;
 #[cfg(test)]
 mod bonsai_test;
+pub mod calendar;
+pub mod calendar_ban;
+#[cfg(test)]
+mod calendar_test;
 pub mod character_sheet;
 pub mod chat_message;
 pub mod chat_message_gild;
@@ -84,6 +87,9 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+pub mod irc_history;
+#[cfg(test)]
+mod irc_history_test;
 pub mod irc_token;
 pub mod job_posting;
 #[cfg(test)]

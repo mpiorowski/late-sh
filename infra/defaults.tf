@@ -25,7 +25,7 @@ locals {
   # a :bootstrap placeholder (a fresh disaster-recovery apply then needs one
   # release per component to roll real images out).
   image_tags = {
-    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "dcss", "usurper", "brogue", "bashquest"] :
+    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "zork", "dcss", "usurper", "brogue", "bashquest"] :
     component => lookup(var.IMAGE_TAGS, component, "ghcr.io/mpiorowski/late-sh/late-${component}:bootstrap")
   }
 
@@ -49,7 +49,7 @@ locals {
   livekit_whip_subdomain    = "whip"
   livekit_ingress_whip_port = tonumber(trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) != "" ? trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) : "7888")
 
-  # IRC edge (ingress TCP passthrough, IPv6 HAProxy, certificate). The app
+  # IRC edge (ssh-edge HAProxy in ssh-tcp.tf, certificate). The app
   # side is compiled into late-ssh's prod profile and always listens; these
   # gate only what the edge exposes. IRC_PROXY_EMIT stays a variable because
   # flipping edge emission is a deploy-time rollout step.
@@ -67,8 +67,8 @@ locals {
   # 26.x Paper builds. Whitelist and ops come from GitHub variables so player
   # names stay out of git; empty means nobody is seeded and the first names
   # go in through rcon-cli (README.md).
-  minecraft_image     = "itzg/minecraft-server:2026.9.1-java25"
-  minecraft_version   = "26.2"
+  minecraft_image     = "itzg/minecraft-server:2026.10.0-java25"
+  minecraft_version   = "26.3"
   minecraft_port      = 25565
   minecraft_heap      = "2G"
   minecraft_whitelist = join(",", compact([for name in split(",", var.MINECRAFT_WHITELIST) : trimspace(name)]))
@@ -79,10 +79,25 @@ locals {
   # (/etc/rancher/rke2/config.yaml on the node, infra/README.md), so a
   # workload lands there only when it carries both the node selector and the
   # toleration. Everything without them stays on server-1: service-ssh, redis,
-  # the doors, ingress-nginx, ipv6-proxy, LiveKit's media hostPorts, and every
-  # workload whose local-path volume is still pinned to server-1 (the Postgres
-  # instances). Moving one of those needs a fresh volume on agent-1, not just
-  # these two fields.
+  # the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit's media hostPorts,
+  # and every workload whose local-path volume is still pinned to server-1
+  # (the Postgres instances). Moving one of those needs a fresh volume on
+  # agent-1, not just these two fields.
   support_node_label_key   = "role"
   support_node_label_value = "support"
+
+  # The game-server node: agent-2, a Hetzner CAX21 (arm64), joined with this
+  # label and a NoSchedule taint of the same key and value, so only workloads
+  # carrying both land there, and only arm64 images can. Vintage Story runs
+  # here (infra/vintagestory.tf).
+  games_node_label_key   = "role"
+  games_node_label_value = "games"
+
+  # Vintage Story (infra/vintagestory.tf). The image is ours, built for arm64
+  # from docker/vintagestory/Dockerfile by vintagestory.yml, which publishes
+  # exactly this tag: `<game version>-<recipe revision>`. The game version
+  # must match the Dockerfile's VS_VERSION (the hub card's drift test checks
+  # both); a recipe change with the same game version bumps the revision.
+  vintagestory_image = "ghcr.io/mpiorowski/late-sh/vintagestory:1.22.7-1"
+  vintagestory_port  = 42420
 }

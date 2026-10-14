@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::door::spectate::state::SpectateGame;
 
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
@@ -7,7 +8,7 @@ fn id(n: u128) -> Uuid {
 #[test]
 fn from_home_enters_first_board() {
     assert_eq!(
-        next_workspace(&[id(1), id(2)], &[], &[], &[], false, GameWorkspace::Base),
+        next_workspace(&[id(1), id(2)], &[], &[], &[], &[], GameWorkspace::Base),
         GameWorkspace::DailyBoard(id(1))
     );
 }
@@ -15,7 +16,7 @@ fn from_home_enters_first_board() {
 #[test]
 fn from_home_with_no_stops_stays_home() {
     assert_eq!(
-        next_workspace(&[], &[], &[], &[], false, GameWorkspace::Base),
+        next_workspace(&[], &[], &[], &[], &[], GameWorkspace::Base),
         GameWorkspace::Base
     );
 }
@@ -24,11 +25,11 @@ fn from_home_with_no_stops_stays_home() {
 fn advances_through_boards_then_wraps_home() {
     let ids = [id(1), id(2)];
     assert_eq!(
-        next_workspace(&ids, &[], &[], &[], false, GameWorkspace::DailyBoard(id(1))),
+        next_workspace(&ids, &[], &[], &[], &[], GameWorkspace::DailyBoard(id(1))),
         GameWorkspace::DailyBoard(id(2))
     );
     assert_eq!(
-        next_workspace(&ids, &[], &[], &[], false, GameWorkspace::DailyBoard(id(2))),
+        next_workspace(&ids, &[], &[], &[], &[], GameWorkspace::DailyBoard(id(2))),
         GameWorkspace::Base
     );
 }
@@ -43,7 +44,7 @@ fn board_no_longer_my_turn_restarts_from_front() {
             &[],
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::DailyBoard(id(1))
         ),
         GameWorkspace::DailyBoard(id(2))
@@ -53,7 +54,7 @@ fn board_no_longer_my_turn_restarts_from_front() {
 #[test]
 fn last_board_gone_and_queue_empty_lands_home() {
     assert_eq!(
-        next_workspace(&[], &[], &[], &[], false, GameWorkspace::DailyBoard(id(1))),
+        next_workspace(&[], &[], &[], &[], &[], GameWorkspace::DailyBoard(id(1))),
         GameWorkspace::Base
     );
 }
@@ -67,7 +68,7 @@ fn seated_tables_slot_after_your_turn_boards() {
             &tables,
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::DailyBoard(id(1))
         ),
         GameWorkspace::HouseTable(HouseTable::Poker)
@@ -78,7 +79,7 @@ fn seated_tables_slot_after_your_turn_boards() {
             &tables,
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::HouseTable(HouseTable::Poker)
         ),
         GameWorkspace::HouseTable(HouseTable::Tron)
@@ -89,7 +90,7 @@ fn seated_tables_slot_after_your_turn_boards() {
             &tables,
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::HouseTable(HouseTable::Tron)
         ),
         GameWorkspace::Base
@@ -100,7 +101,7 @@ fn seated_tables_slot_after_your_turn_boards() {
 fn tables_only_cycle_works_without_boards() {
     let tables = [HouseTable::Blackjack];
     assert_eq!(
-        next_workspace(&[], &tables, &[], &[], false, GameWorkspace::Base),
+        next_workspace(&[], &tables, &[], &[], &[], GameWorkspace::Base),
         GameWorkspace::HouseTable(HouseTable::Blackjack)
     );
     assert_eq!(
@@ -109,7 +110,7 @@ fn tables_only_cycle_works_without_boards() {
             &tables,
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::HouseTable(HouseTable::Blackjack)
         ),
         GameWorkspace::Base
@@ -124,7 +125,7 @@ fn lost_seat_restarts_from_front() {
             &[HouseTable::Tron],
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::HouseTable(HouseTable::Poker)
         ),
         GameWorkspace::DailyBoard(id(1))
@@ -141,7 +142,7 @@ fn arcade_stops_slot_after_house_tables() {
             &tables,
             &arcade,
             &[],
-            false,
+            &[],
             GameWorkspace::HouseTable(HouseTable::Poker)
         ),
         GameWorkspace::Arcade(ArcadeStop::Sudoku)
@@ -152,7 +153,7 @@ fn arcade_stops_slot_after_house_tables() {
             &tables,
             &arcade,
             &[],
-            false,
+            &[],
             GameWorkspace::Arcade(ArcadeStop::Sudoku)
         ),
         GameWorkspace::Arcade(ArcadeStop::Solitaire)
@@ -163,7 +164,7 @@ fn arcade_stops_slot_after_house_tables() {
             &tables,
             &arcade,
             &[],
-            false,
+            &[],
             GameWorkspace::Arcade(ArcadeStop::Solitaire)
         ),
         GameWorkspace::Base
@@ -174,7 +175,7 @@ fn arcade_stops_slot_after_house_tables() {
 fn arcade_only_cycle_works_without_lobby_stops() {
     let arcade = [ArcadeStop::LeWord];
     assert_eq!(
-        next_workspace(&[], &[], &arcade, &[], false, GameWorkspace::Base),
+        next_workspace(&[], &[], &arcade, &[], &[], GameWorkspace::Base),
         GameWorkspace::Arcade(ArcadeStop::LeWord)
     );
     assert_eq!(
@@ -183,7 +184,7 @@ fn arcade_only_cycle_works_without_lobby_stops() {
             &[],
             &arcade,
             &[],
-            false,
+            &[],
             GameWorkspace::Arcade(ArcadeStop::LeWord)
         ),
         GameWorkspace::Base
@@ -200,7 +201,7 @@ fn live_doors_slot_last_then_wrap_home() {
             &[],
             &arcade,
             &doors,
-            false,
+            &[],
             GameWorkspace::Arcade(ArcadeStop::Sudoku)
         ),
         GameWorkspace::Door(Screen::Dcss)
@@ -211,7 +212,7 @@ fn live_doors_slot_last_then_wrap_home() {
             &[],
             &arcade,
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Dcss)
         ),
         GameWorkspace::Door(Screen::Nethack)
@@ -222,7 +223,7 @@ fn live_doors_slot_last_then_wrap_home() {
             &[],
             &arcade,
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Nethack)
         ),
         GameWorkspace::Base
@@ -240,7 +241,7 @@ fn door_only_cycle_hops_between_dungeons() {
             &[],
             &[],
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Nethack)
         ),
         GameWorkspace::Door(Screen::Brogue)
@@ -251,7 +252,7 @@ fn door_only_cycle_hops_between_dungeons() {
             &[],
             &[],
             &[Screen::Nethack],
-            false,
+            &[],
             GameWorkspace::Door(Screen::Nethack)
         ),
         GameWorkspace::Base
@@ -264,7 +265,7 @@ fn recently_detached_lateania_leads_the_door_stops() {
     // the roguelikes, then the cycle wraps home.
     let doors = [Screen::Lateania, Screen::Dcss];
     assert_eq!(
-        next_workspace(&[], &[], &[], &doors, false, GameWorkspace::Base),
+        next_workspace(&[], &[], &[], &doors, &[], GameWorkspace::Base),
         GameWorkspace::Door(Screen::Lateania)
     );
     assert_eq!(
@@ -273,7 +274,7 @@ fn recently_detached_lateania_leads_the_door_stops() {
             &[],
             &[],
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Lateania)
         ),
         GameWorkspace::Door(Screen::Dcss)
@@ -284,7 +285,7 @@ fn recently_detached_lateania_leads_the_door_stops() {
             &[],
             &[],
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Dcss)
         ),
         GameWorkspace::Base
@@ -305,7 +306,7 @@ fn native_remakes_slot_after_the_roguelikes() {
             &[],
             &[],
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Dcss)
         ),
         GameWorkspace::Door(Screen::Darkroom)
@@ -316,7 +317,7 @@ fn native_remakes_slot_after_the_roguelikes() {
             &[],
             &[],
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::Darkroom)
         ),
         GameWorkspace::Door(Screen::GreenDragon)
@@ -327,7 +328,7 @@ fn native_remakes_slot_after_the_roguelikes() {
             &[],
             &[],
             &doors,
-            false,
+            &[],
             GameWorkspace::Door(Screen::GreenDragon)
         ),
         GameWorkspace::Base
@@ -344,7 +345,7 @@ fn ended_door_run_restarts_from_front() {
             &[],
             &[],
             &[],
-            false,
+            &[],
             GameWorkspace::Door(Screen::Nethack)
         ),
         GameWorkspace::DailyBoard(id(1))
@@ -361,33 +362,41 @@ fn solved_arcade_stop_restarts_from_front() {
             &[],
             &[ArcadeStop::Nonogram],
             &[],
-            false,
+            &[],
             GameWorkspace::Arcade(ArcadeStop::Sudoku)
         ),
         GameWorkspace::DailyBoard(id(1))
     );
 }
 
+fn watch(game: SpectateGame, playname: &str) -> GameWorkspace {
+    GameWorkspace::Watch(LiveGameKey::new(game, playname).expect("a handle"))
+}
+
+/// Every open watch is a stop after the doors, in the order handed in (the
+/// caller's key order), and the last one goes home.
 #[test]
-fn an_open_watch_is_the_last_stop_before_home() {
+fn open_watches_are_the_last_stops_before_home() {
     let doors = [Screen::Dcss];
+    let watches = [
+        LiveGameKey::new(SpectateGame::Dcss, "crawler").expect("a handle"),
+        LiveGameKey::new(SpectateGame::Nethack, "digger").expect("a handle"),
+    ];
+    let hop = |current| next_workspace(&[], &[], &[], &doors, &watches, current);
     assert_eq!(
-        next_workspace(
-            &[],
-            &[],
-            &[],
-            &doors,
-            true,
-            GameWorkspace::Door(Screen::Dcss)
-        ),
-        GameWorkspace::Watch
+        hop(GameWorkspace::Door(Screen::Dcss)),
+        watch(SpectateGame::Dcss, "crawler")
     );
     assert_eq!(
-        next_workspace(&[], &[], &[], &[], true, GameWorkspace::Base),
-        GameWorkspace::Watch
+        hop(watch(SpectateGame::Dcss, "crawler")),
+        watch(SpectateGame::Nethack, "digger")
     );
     assert_eq!(
-        next_workspace(&[], &[], &[], &doors, true, GameWorkspace::Watch),
+        hop(watch(SpectateGame::Nethack, "digger")),
         GameWorkspace::Base
+    );
+    assert_eq!(
+        next_workspace(&[], &[], &[], &[], &watches, GameWorkspace::Base),
+        watch(SpectateGame::Dcss, "crawler")
     );
 }

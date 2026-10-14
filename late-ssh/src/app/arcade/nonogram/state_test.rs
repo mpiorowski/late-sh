@@ -1,5 +1,5 @@
 use super::*;
-use late_core::nonogram::derive_clues;
+use late_core::nonogram::{derive_clues, solve_by_lines};
 
 fn sample_library() -> Library {
     let solution = vec![
@@ -198,4 +198,24 @@ fn line_status_reports_impossible_when_mark_splits_required_run() {
 fn line_status_stays_pending_when_unknowns_can_complete_run() {
     let cells = vec![CELL_FILLED, CELL_EMPTY, CELL_FILLED, CELL_EMPTY];
     assert_eq!(line_status(false, &cells, &[3]), LineStatus::Pending);
+}
+
+/// Every shipped puzzle can be finished by line logic alone: each row and
+/// column on its own forces cells until the grid is full. That is what makes
+/// a puzzle fair (no guessing) and its answer the only one, since every cell
+/// was forced.
+#[test]
+fn every_shipped_puzzle_solves_by_line_logic() {
+    let library = load_default_library().expect("embedded packs");
+    let mut needs_a_guess = Vec::new();
+    for pack in library.packs.iter() {
+        for puzzle in &pack.puzzles {
+            if solve_by_lines(&puzzle.row_clues, &puzzle.col_clues).as_ref()
+                != Some(&puzzle.solution)
+            {
+                needs_a_guess.push(puzzle.id.clone());
+            }
+        }
+    }
+    assert_eq!(needs_a_guess, Vec::<String>::new());
 }

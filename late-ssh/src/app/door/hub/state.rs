@@ -12,8 +12,9 @@
 //! whether the player sees their own watchers' chat.
 //! Adding a future door game is a
 //! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
-//! new top-level screen. Minecraft is the one card with nothing to launch: the
-//! server is played from the game client, so its landing is information only.
+//! new top-level screen. Minecraft and Vintage Story are the cards with nothing
+//! to launch: those servers are played from the game client, so their landings
+//! are information only.
 //! Night City heads the sidebar for runners only ([`HubGame::roster`]): its
 //! card is the night city's front door, and Enter takes the same descent as
 //! `0` on the Lounge (`deadchannel/city/input.rs`).
@@ -28,6 +29,7 @@ pub enum HubGame {
     NightCity,
     Lateania,
     Minecraft,
+    VintageStory,
     Rebels,
     Nethack,
     Dcss,
@@ -37,6 +39,7 @@ pub enum HubGame {
     Dopewars,
     Bashquest,
     Codekeep,
+    Zork,
     Darkroom,
 }
 
@@ -68,19 +71,23 @@ impl HubGame {
     /// Selector order, top to bottom: the house games first (Night City,
     /// the runners' own card, sliced off for everyone else by
     /// [`HubGame::roster`], then Lateania, ours from the ground up), the
-    /// roguelikes by stature, the remakes (our own
-    /// build of A Dark Room), the servers we host and you play from a game
-    /// client (Minecraft), then the doors: Green Dragon (our native LORD
-    /// remake, filed with the BBS doors it descends from) and the foreign
-    /// upstream terminal games hosted on a PTY.
-    pub const ALL: [HubGame; 13] = [
+    /// roguelikes by stature, the remakes (our own build of A Dark Room,
+    /// then the Zork Trilogy behind our own edition and save menus), the
+    /// servers we host and you play from a game client (Minecraft, Vintage
+    /// Story), then the
+    /// doors: Green Dragon (our native LORD remake, filed with the BBS doors
+    /// it descends from) and the foreign upstream terminal games hosted on a
+    /// PTY.
+    pub const ALL: [HubGame; 15] = [
         HubGame::NightCity,
         HubGame::Lateania,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
         HubGame::Darkroom,
+        HubGame::Zork,
         HubGame::Minecraft,
+        HubGame::VintageStory,
         HubGame::GreenDragon,
         HubGame::Usurper,
         HubGame::Dopewars,
@@ -104,6 +111,7 @@ impl HubGame {
             HubGame::NightCity => "Night City",
             HubGame::Lateania => "Lateania",
             HubGame::Minecraft => "Minecraft",
+            HubGame::VintageStory => "Vintage Story",
             HubGame::Rebels => "Rebels",
             HubGame::Nethack => "NetHack",
             HubGame::Dcss => "DCSS",
@@ -113,6 +121,7 @@ impl HubGame {
             HubGame::Dopewars => "dopewars",
             HubGame::Bashquest => "BashQuest",
             HubGame::Codekeep => "CodeKeep",
+            HubGame::Zork => "Zork Trilogy",
             HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
         }
     }
@@ -121,8 +130,8 @@ impl HubGame {
         match self {
             HubGame::NightCity | HubGame::Lateania => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::Darkroom => HubGroup::Remakes,
-            HubGame::Minecraft => HubGroup::Servers,
+            HubGame::Darkroom | HubGame::Zork => HubGroup::Remakes,
+            HubGame::Minecraft | HubGame::VintageStory => HubGroup::Servers,
             HubGame::GreenDragon
             | HubGame::Usurper
             | HubGame::Dopewars
@@ -143,28 +152,33 @@ impl HubGame {
             HubGame::NightCity
             | HubGame::Lateania
             | HubGame::Minecraft
+            | HubGame::VintageStory
             | HubGame::Rebels
             | HubGame::Brogue
             | HubGame::Usurper
             | HubGame::GreenDragon
             | HubGame::Dopewars
             | HubGame::Bashquest
+            | HubGame::Zork
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }
     }
 
     /// The watchable door behind this card, for the doors whose hosts serve
-    /// watch sessions (the hub's `s` key).
+    /// watch sessions (the hub's `t` key, which flips the player's watcher
+    /// chat).
     pub fn spectate_game(self) -> Option<crate::app::door::spectate::state::SpectateGame> {
         use crate::app::door::spectate::state::SpectateGame;
         match self {
             HubGame::Dcss => Some(SpectateGame::Dcss),
             HubGame::Nethack => Some(SpectateGame::Nethack),
             HubGame::Brogue => Some(SpectateGame::Brogue),
+            HubGame::Zork => Some(SpectateGame::Zork),
             HubGame::NightCity
             | HubGame::Lateania
             | HubGame::Minecraft
+            | HubGame::VintageStory
             | HubGame::Rebels
             | HubGame::Usurper
             | HubGame::GreenDragon
@@ -182,14 +196,16 @@ impl HubGame {
     /// models. Lateania has no detached session, so its test is the recency
     /// window a backtick detach arms (`App::lateania_recently_active`): hop
     /// out and the door stays live for a few minutes, hopping in re-joins the
-    /// saved character. The roguelikes count a running (attached or detached)
-    /// game: a door sitting on its launcher is not live. Dark Room and Green
-    /// Dragon keep their loaded state across a hop, so being loaded is the
-    /// test; `App::tick` saves and drops them once the player has been away
-    /// past [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
+    /// saved character. The roguelikes and the Zork Trilogy count a running
+    /// (attached or detached) game: a door sitting on its launcher or menus
+    /// is not live, and Zork's own `tick` drops a game after twenty minutes
+    /// without input. Dark Room and Green Dragon keep their loaded state
+    /// across a hop, so being loaded is the test; `App::tick` saves and drops
+    /// them once the player has been away past
+    /// [`crate::app::door::game::IDLE_WINDOW`], which is what ends it.
     /// The PTY doors (Usurper, dopewars, BashQuest, Rebels, CodeKeep) end
     /// their session on leaving the screen, so they are never live. Minecraft
-    /// has no session here at all, and Night City is not a door: the street
+    /// and Vintage Story have no session here at all, and Night City is not a door: the street
     /// keeps a runner standing on its own (`deadchannel/street`).
     pub(crate) fn live_screen(self, app: &App) -> Option<Screen> {
         match self {
@@ -209,6 +225,11 @@ impl HubGame {
                 .as_ref()
                 .is_some_and(|state| state.is_running())
                 .then_some(Screen::Brogue),
+            HubGame::Zork => app
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+                .then_some(Screen::Zork),
             HubGame::Darkroom => app.darkroom_state.is_some().then_some(Screen::Darkroom),
             HubGame::GreenDragon => app
                 .greendragon_state
@@ -216,6 +237,7 @@ impl HubGame {
                 .then_some(Screen::GreenDragon),
             HubGame::NightCity
             | HubGame::Minecraft
+            | HubGame::VintageStory
             | HubGame::Usurper
             | HubGame::Dopewars
             | HubGame::Bashquest

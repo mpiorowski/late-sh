@@ -7,7 +7,7 @@ use late_core::{
     db::Db,
     models::{
         article::{Article, ArticleParams},
-        article_feed_read::ArticleFeedRead,
+        article_read::ArticleRead,
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -73,21 +73,21 @@ impl ArticleService {
         self.snapshot_tx.send(snapshot)?;
         Ok(())
     }
-    fn publish_event(&self, event: ArticleEvent) {
+    pub(crate) fn publish_event(&self, event: ArticleEvent) {
         if let Err(e) = self.evt_tx.send(event) {
             tracing::error!(%e, "failed to send article event");
         }
     }
 
-    pub fn load_read_cursor_task(&self, user_id: Uuid) {
+    pub fn load_reads_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = service.publish_read_cursor(user_id).await {
+            if let Err(e) = service.load_and_publish_reads(user_id).await {
                 late_core::error_span!(
-                    "article_read_cursor_load_failed",
+                    "article_reads_load_failed",
                     error = ?e,
                     user_id = %user_id,
-                    "failed to load article read cursor"
+                    "failed to load article reads"
                 );
             }
         });
@@ -102,6 +102,26 @@ impl ArticleService {
                     error = ?e,
                     user_id = %user_id,
                     "failed to mark article feed read"
+                );
+            }
+        });
+    }
+
+    /// Mark the one article a modal opened on as read for this reader, then
+    /// republish their reads so every session of theirs drops its mark.
+    pub fn mark_article_read_task(&self, user_id: Uuid, article_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service
+                .mark_article_read_and_publish(user_id, article_id)
+                .await
+            {
+                late_core::error_span!(
+                    "article_mark_article_read_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    article_id = %article_id,
+                    "failed to mark article read"
                 );
             }
         });
@@ -170,23 +190,35 @@ impl ArticleService {
         Ok(())
     }
 
-    async fn publish_read_cursor(&self, user_id: Uuid) -> Result<()> {
+    async fn load_and_publish_reads(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::ReadCursorLoaded {
-            user_id,
-            last_read_at,
-        });
-        Ok(())
+        self.publish_reads(&db_client, user_id).await
     }
 
+    /// A visit to the News room: every article in the snapshot is read.
     async fn mark_read_and_publish(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
-        ArticleFeedRead::mark_read_now(&db_client, user_id).await?;
-        let last_read_at = ArticleFeedRead::last_read_at(&db_client, user_id).await?;
-        self.publish_event(ArticleEvent::ReadCursorLoaded {
+        ArticleRead::mark_feed_read(&db_client, user_id)
+            .await
+            .context("marking article feed read")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn mark_article_read_and_publish(&self, user_id: Uuid, article_id: Uuid) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleRead::mark_read(&db_client, user_id, article_id)
+            .await
+            .context("marking article read")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn publish_reads(&self, db_client: &tokio_postgres::Client, user_id: Uuid) -> Result<()> {
+        let read_article_ids = ArticleRead::article_ids_for_user(db_client, user_id)
+            .await
+            .context("loading article reads")?;
+        self.publish_event(ArticleEvent::ReadsLoaded {
             user_id,
-            last_read_at,
+            read_article_ids,
         });
         Ok(())
     }

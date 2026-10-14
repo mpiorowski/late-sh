@@ -69,8 +69,9 @@ pub struct Player {
     /// Run from a glyph once the signal is under this fraction of the
     /// max. Never from the Old Signal: that fight is always to the end.
     pub run_under: f64,
-    /// Patch, when the bits cover it, once the signal is under this
-    /// fraction of the max. `1.0` patches any missing point.
+    /// Spend the day's one patch, when the bits cover it, the first time
+    /// the signal is under this fraction of the max. `1.0` spends it on
+    /// the first missing point.
     pub patch_under: f64,
     /// Step down to the glyph a level below whenever the glyph of your
     /// level reads this or worse at full signal; `None` never steps down.
@@ -82,9 +83,18 @@ pub struct Player {
     /// whenever it reads this or better at full signal; `None` never
     /// does.
     pub takes_bright: Option<Threat>,
+    /// And only with at least this fraction of the signal standing: with
+    /// one patch a day a bright glyph costs most of a bar, so it is a
+    /// fight to open on a full one, and the second of the day waits on
+    /// the patch.
+    pub bright_over: f64,
     /// The glass bought before a step whenever a crystal covers it and
     /// none is poured yet; `None` never drinks.
     pub drinks: Option<Drink>,
+    /// Whether the runner inks a draft at INK whenever the crystals cover
+    /// it: the needle is visited before the blade shop and the bar, so an
+    /// inker's crystals go to the needle first.
+    pub inks: Inks,
     /// When the runner buys the blade shop's piece.
     pub carts: Carts,
     /// What the runner holds back from the armorer.
@@ -119,6 +129,28 @@ pub enum Purse {
     KeepAPatch,
 }
 
+/// Whether a simulated runner spends crystals at INK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inks {
+    Never,
+    /// The first draft not yet inked, whenever the needle would take it.
+    Always,
+}
+
+/// Where a climb starts: a fresh row, or one that has marked before, with
+/// the marks on it and the first `inked` drafts inked. The second climb's
+/// bench (`fight/BALANCE.md`, "The second climb").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Start {
+    pub marks: i32,
+    pub inked: usize,
+}
+
+impl Start {
+    /// A fresh row: no marks, nothing inked.
+    pub const FRESH: Start = Start { marks: 0, inked: 0 };
+}
+
 /// When a simulated runner spends crystals at the blade shop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Carts {
@@ -142,15 +174,18 @@ pub enum Heeds {
     AfterFirstDrop,
 }
 
-/// Plays it safe and reads the hand: runs early, patches every point.
-/// The runner the two-week end of the target is set by.
+/// Plays it safe and reads the hand: runs early, spends the day's patch
+/// once two fifths of the signal are gone (under that a heavy is the
+/// end). The runner the two-week end of the target is set by.
 pub const CAREFUL: Player = Player {
     run_under: 0.3,
-    patch_under: 0.75,
+    patch_under: 0.6,
     step_down_at: None,
     heeds: Heeds::Always,
     takes_bright: None,
+    bright_over: 0.95,
     drinks: None,
+    inks: Inks::Never,
     carts: Carts::Never,
     purse: Purse::KeepAPatch,
     hand: Hand::Sharp,
@@ -166,8 +201,8 @@ pub const AMBIENT: Player = Player {
     ..CAREFUL
 };
 
-/// Pushes it: on the `Auto` key, runs late, patches only when half gone.
-/// Drops a few times on the way up.
+/// Pushes it: on the `Auto` key, runs late, spends the patch only when
+/// two thirds are gone. Drops a few times on the way up.
 pub const RECKLESS: Player = Player {
     run_under: 0.1,
     patch_under: 0.35,
@@ -213,9 +248,17 @@ pub const BORROWER: Player = Player {
     ..AMBIENT
 };
 
+/// The keen runner who inks a draft whenever the needle would take one:
+/// the crystals go to INK first, the blade shop and the bar get what is
+/// left. What the needle costs this climb, measured against [`KEEN`].
+pub const INKER: Player = Player {
+    inks: Inks::Always,
+    ..KEEN
+};
+
 /// The players the balance is read from, by name: the report and the
 /// sweep print every one.
-pub const PLAYERS: [(&str, Player); 7] = [
+pub const PLAYERS: [(&str, Player); 8] = [
     ("careful", CAREFUL),
     ("ambient", AMBIENT),
     ("reckless", RECKLESS),
@@ -223,6 +266,7 @@ pub const PLAYERS: [(&str, Player); 7] = [
     ("keen", KEEN),
     ("hoarder", HOARDER),
     ("borrower", BORROWER),
+    ("inker", INKER),
 ];
 
 /// One climb from a fresh row, day 1 to the first mark or to `max_days`.
@@ -297,8 +341,9 @@ pub struct Ledger {
     pub cached: i64,
     /// Bits paid at the armorer, net of trade-ins.
     pub gear: i64,
-    /// Bits paid at patch.
+    /// Bits paid at patch, and the days the patch was spent on.
     pub patched: i64,
+    pub patch_days: u32,
     /// Bits the street took with a dropped signal.
     pub dropped: i64,
     /// Bits the machine lent, and what its fees and nothing else cost.
@@ -380,15 +425,15 @@ pub enum Event {
     Drank {
         drink: Drink,
     },
+    Inked {
+        level: i32,
+        crystals: i32,
+    },
     /// A step down the road, onto `node`.
     Step {
         step: i32,
         lane: u8,
         node: Node,
-    },
-    Mended {
-        restored: i32,
-        signal: i32,
     },
     Cleared {
         cards: usize,
@@ -488,6 +533,7 @@ struct ThreatKey {
     marks: i32,
     drink: Option<Drink>,
     cards: Vec<Card>,
+    inks: Vec<i32>,
 }
 
 impl Bench {
@@ -513,6 +559,7 @@ impl Bench {
             marks: sheet.marks,
             drink: sheet.drink,
             cards: sheet.cards.clone(),
+            inks: sheet.inks.clone(),
         };
         let rules = self.rules;
         *self
@@ -535,8 +582,9 @@ struct Run<'a> {
     today: Day,
 }
 
-/// Play `player` from a fresh row with `seed` for at most `max_days`,
-/// writing what it does to `journal`. Each day: settle the roll, then
+/// Play `player` from `start` (a fresh row, or one marked before) with
+/// `seed` for at most `max_days`, writing what it does to `journal`. Each
+/// day: settle the roll, then
 /// walk the day's road until the rations are gone or the signal is down.
 /// Before every step the runner shops ([`Run::shop`]: the draft owed,
 /// patch, the loan, the armorer, the blade shop, the bar, each by its
@@ -544,6 +592,7 @@ struct Run<'a> {
 /// what answers by the rule.
 pub fn climb(
     player: Player,
+    start: Start,
     seed: u64,
     max_days: u32,
     bench: &mut Bench,
@@ -564,10 +613,20 @@ pub fn climb(
         fights: 0,
     };
     report.level_on[1] = Some(1);
+    let mut sheet = Sheet::fresh(Uuid::nil(), date(1));
+    sheet.marks = start.marks;
+    if start.marks > 0 {
+        sheet.peak_level = MAX_LEVEL;
+    }
+    sheet.inks = DRAFTS
+        .iter()
+        .take(start.inked)
+        .map(|draft| draft.level)
+        .collect();
     let mut run = Run {
         player,
         rules: bench.rules,
-        sheet: Sheet::fresh(Uuid::nil(), date(1)),
+        sheet,
         rng: StdRng::seed_from_u64(seed),
         report,
         journal,
@@ -648,7 +707,7 @@ impl Run<'_> {
     /// Everything a runner does between two steps, in the order a person
     /// would: the card owed, then patch (the heal is what the next fight
     /// is fought on, and the armorer only sees what the purse rule
-    /// leaves), the loan, the armorer, the blade shop, the bar.
+    /// leaves), the loan, the armorer, INK, the blade shop, the bar.
     fn shop(&mut self) {
         while let Some(draft) = self.sheet.draft() {
             let card = self.player.build[self.sheet.cards.len()];
@@ -669,6 +728,7 @@ impl Run<'_> {
             && let Applied::Patched { restored, paid } = self.act(Command::Patch)
         {
             self.report.ledger.patched += paid;
+            self.report.ledger.patch_days += 1;
             self.today.patched += paid;
             self.journal.note(|| Event::Patched { restored, paid });
         }
@@ -677,6 +737,18 @@ impl Run<'_> {
                 self.borrow();
             }
             self.outfit();
+        }
+        if self.player.inks == Inks::Always
+            && let Some(draft) = DRAFTS.iter().find(|draft| !self.sheet.inked(draft.level))
+            && self
+                .sheet
+                .needle_refused(&self.rules, draft.level)
+                .is_none()
+            && let Applied::Inked { level, crystals } =
+                self.act(Command::Ink { level: draft.level })
+        {
+            self.report.ledger.crystals_spent += crystals;
+            self.journal.note(|| Event::Inked { level, crystals });
         }
         let slot = match self.sheet.weapon_tier <= self.sheet.armor_tier {
             true => Slot::Weapon,
@@ -740,9 +812,9 @@ impl Run<'_> {
     /// first, bought: the wall walked from the top down to the first
     /// piece whose price leaves the purse rule's reserve.
     fn outfit(&mut self) {
-        let reserve = match self.player.purse {
-            Purse::SpendAll => 0,
-            Purse::KeepAPatch => {
+        let reserve = match (self.player.purse, self.sheet.road.patched) {
+            (Purse::SpendAll, _) | (Purse::KeepAPatch, true) => 0,
+            (Purse::KeepAPatch, false) => {
                 i64::from(self.sheet.max_signal())
                     * i64::from(self.sheet.level)
                     * self.rules.patch_percent
@@ -795,15 +867,7 @@ impl Run<'_> {
                 })
             }
             Node::Bright => Call::Fight(Pick::Bright),
-            Node::Rest => {
-                let missing = self.sheet.max_signal() - self.sheet.signal;
-                // The deck when the signal is nearly whole and there is
-                // static to shake out; the signal otherwise.
-                match self.sheet.road.static_cards > 0 && missing * 6 < self.sheet.max_signal() {
-                    true => Call::Clear,
-                    false => Call::Mend,
-                }
-            }
+            Node::Rest => Call::Clear,
             Node::Cache => Call::Take,
         };
         let step = self.sheet.step();
@@ -812,11 +876,6 @@ impl Run<'_> {
         let kit = (self.sheet.weapon_tier, self.sheet.armor_tier);
         let pick = match self.act(Command::Step { lane, call }) {
             Applied::Started { pick } => pick,
-            Applied::Mended { restored } => {
-                let signal = self.sheet.signal;
-                self.journal.note(|| Event::Mended { restored, signal });
-                return false;
-            }
             Applied::Cleared { cards } => {
                 self.journal.note(|| Event::Cleared { cards });
                 return false;
@@ -1017,21 +1076,21 @@ const ROUTE_FADE: f64 = 0.6;
 /// The lane a simulated runner steps to, and what waits there: the one
 /// whose next few steps are worth the most to the runner as it stands. A
 /// bright glyph is worth a detour to the player who takes them and is
-/// walked around by the one who does not; a rest is worth what the signal
-/// and the deck are missing; a cache is a cache.
+/// walked around by the one who does not; a rest is worth the static in
+/// the deck; a cache is a cache.
 fn route(player: &Player, sheet: &Sheet, road: &Road, bench: &mut Bench) -> (u8, Node) {
+    let standing = f64::from(sheet.signal) >= f64::from(sheet.max_signal()) * player.bright_over;
     let wants_bright = match player.takes_bright {
-        Some(line) => bench.threat(Pick::Bright, sheet) <= line,
+        Some(line) => standing && bench.threat(Pick::Bright, sheet) <= line,
         None => false,
     };
-    let missing = 1.0 - f64::from(sheet.signal) / f64::from(sheet.max_signal().max(1));
     let worth = |node: Node| match node {
         Node::Glyph => 0.0,
         Node::Bright => match wants_bright {
             true => 3.0,
             false => -3.0,
         },
-        Node::Rest => missing * 4.0 + f64::from(sheet.road.static_cards) * 0.6,
+        Node::Rest => f64::from(sheet.road.static_cards) * 0.6,
         Node::Cache => 1.0,
     };
     fn best(road: &Road, worth: &dyn Fn(Node) -> f64, step: i32, from: u8, depth: i32) -> f64 {

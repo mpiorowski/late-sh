@@ -44,3 +44,27 @@ fn daily_selection_is_deterministic() {
     let b = pack.select_for_date(date).expect("puzzle").id.clone();
     assert_eq!(a, b);
 }
+
+#[test]
+fn line_logic_finishes_a_puzzle_with_one_answer() {
+    let solution = vec![
+        vec![0, 0, 1, 0, 0],
+        vec![0, 1, 1, 1, 0],
+        vec![1, 0, 1, 0, 1],
+        vec![0, 0, 1, 0, 0],
+        vec![0, 0, 1, 0, 0],
+    ];
+    let (rows, cols) = derive_clues(&solution);
+
+    assert_eq!(solve_by_lines(&rows, &cols), Some(solution));
+}
+
+/// Two diagonals fit the same clues, so no cell is ever forced: finishing
+/// would take a guess.
+#[test]
+fn line_logic_gives_up_where_the_clues_allow_two_answers() {
+    let rows = vec![vec![1], vec![1]];
+    let cols = vec![vec![1], vec![1]];
+
+    assert_eq!(solve_by_lines(&rows, &cols), None);
+}

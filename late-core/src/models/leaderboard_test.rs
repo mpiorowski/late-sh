@@ -16,7 +16,9 @@ use crate::{
         mud_character::MudCharacter,
         rubiks_cube, sliding_puzzle, snake, sudoku, tetris, twenty_forty_eight,
     },
-    test_utils::{create_test_user, roll_high_scores_back_a_month, test_db},
+    test_utils::{
+        create_test_user, roll_high_scores_back_a_month, roll_score_events_back_a_month, test_db,
+    },
 };
 
 fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
@@ -722,9 +724,125 @@ async fn an_old_best_stays_off_the_monthly_board_when_the_player_plays_again() {
     }
 }
 
+/// Migration 236 repairs the bests the old submit path re-stamped. When a
+/// score event reached a best before its `updated` stamp, the best was set
+/// back then, whatever the stamp says, so it leaves this month's board. A
+/// best set this month stays on it, whether its run is still going or
+/// finished with its event written after the best.
+#[tokio::test]
+async fn the_timestamp_repair_takes_restamped_bests_off_the_monthly_board() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let veteran = create_test_user(&test_db.db, "score-restamped").await;
+    let climber = create_test_user(&test_db.db, "score-climber").await;
+    let finisher = create_test_user(&test_db.db, "score-finisher").await;
+
+    // Last month: the veteran finishes a 9,000 run, the climber a 500 run.
+    for (user_id, score) in [(veteran.id, 9_000), (climber.id, 500)] {
+        tetris::HighScore::update_score_if_higher(&client, user_id, score)
+            .await
+            .expect("lateris best");
+        tetris::HighScore::record_score_event(&client, user_id, score)
+            .await
+            .expect("lateris event");
+        twenty_forty_eight::HighScore::update_score_if_higher(&client, user_id, score)
+            .await
+            .expect("2048 best");
+        twenty_forty_eight::HighScore::record_score_event(&client, user_id, score)
+            .await
+            .expect("2048 event");
+        snake::HighScore::update_score_if_higher(&client, user_id, score)
+            .await
+            .expect("snake best");
+        snake::HighScore::record_score_event(&client, user_id, score)
+            .await
+            .expect("snake event");
+    }
+    let tables = [
+        "tetris_high_scores",
+        "twenty_forty_eight_high_scores",
+        "snake_high_scores",
+    ];
+    for table in tables {
+        roll_high_scores_back_a_month(&client, table).await;
+    }
+    roll_score_events_back_a_month(&client).await;
+
+    // This month: the veteran plays without beating 9,000, and the old
+    // submit path stamped `updated` anyway.
+    for table in tables {
+        client
+            .execute(
+                &format!("UPDATE {table} SET updated = current_timestamp WHERE user_id = $1"),
+                &[&veteran.id],
+            )
+            .await
+            .expect("old submit stamp");
+    }
+    // The climber is mid-run past their old best; the finisher ends a 700 run.
+    tetris::HighScore::update_score_if_higher(&client, climber.id, 2_000)
+        .await
+        .expect("lateris run");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, climber.id, 2_000)
+        .await
+        .expect("2048 run");
+    snake::HighScore::update_score_if_higher(&client, climber.id, 2_000)
+        .await
+        .expect("snake run");
+    tetris::HighScore::update_score_if_higher(&client, finisher.id, 700)
+        .await
+        .expect("lateris best");
+    tetris::HighScore::record_score_event(&client, finisher.id, 700)
+        .await
+        .expect("lateris event");
+    twenty_forty_eight::HighScore::update_score_if_higher(&client, finisher.id, 700)
+        .await
+        .expect("2048 best");
+    twenty_forty_eight::HighScore::record_score_event(&client, finisher.id, 700)
+        .await
+        .expect("2048 event");
+    snake::HighScore::update_score_if_higher(&client, finisher.id, 700)
+        .await
+        .expect("snake best");
+    snake::HighScore::record_score_event(&client, finisher.id, 700)
+        .await
+        .expect("snake event");
+
+    client
+        .batch_execute(include_str!(
+            "../../migrations/236_repair_best_score_timestamps.sql"
+        ))
+        .await
+        .expect("timestamp repair");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    for game in [
+        ScoreGame::Lateris,
+        ScoreGame::TwentyFortyEight,
+        ScoreGame::Snake,
+    ] {
+        let board = data.score_board(game).expect("score board");
+        let monthly: Vec<(Uuid, i64)> = board
+            .monthly
+            .iter()
+            .filter(|entry| [veteran.id, climber.id, finisher.id].contains(&entry.user_id))
+            .map(|entry| (entry.user_id, entry.value))
+            .collect();
+        assert_eq!(
+            monthly,
+            vec![(climber.id, 2_000), (finisher.id, 700)],
+            "{game:?}: only bests set this month"
+        );
+        assert_eq!(entry_for(&board.all_time, veteran.id).value, 9_000);
+    }
+}
+
 /// Top Drinkers sums the buzz of every drink taken: paid or comped, either
 /// bar, past the buzz cap, this month and this year. The welcome pour is not
-/// a drink anybody took, and last year's drinks are off both windows.
+/// a drink anybody took, non-intoxicating pours add no points, and last
+/// year's drinks are off both windows.
 #[tokio::test]
 async fn top_drinkers_sums_buzz_by_month_and_year() {
     let test_db = test_db().await;
@@ -733,28 +851,37 @@ async fn top_drinkers_sums_buzz_by_month_and_year() {
     let steady = create_test_user(&test_db.db, "drinkers-steady").await;
     let newcomer = create_test_user(&test_db.db, "drinkers-newcomer").await;
     let lapsed = create_test_user(&test_db.db, "drinkers-lapsed").await;
+    let sober = create_test_user(&test_db.db, "drinkers-sober").await;
 
     // Three big pours: the stored buzz caps at 4000, the board does not.
     for _ in 0..3 {
-        UserDrinks::record_purchase(&client, binger.id, Bar::Tavern, 2_000)
+        UserDrinks::record_purchase(&client, binger.id, Bar::Tavern, 2_000, true)
             .await
             .expect("pour");
     }
-    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 250)
+    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 250, true)
         .await
         .expect("pour");
-    UserDrinks::record_comped_pour(&client, steady.id, Bar::Tavern, 400)
+    UserDrinks::record_comped_pour(&client, steady.id, Bar::Tavern, 400, true)
         .await
         .expect("round credit");
-    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 1_000)
+    UserDrinks::record_purchase(&client, steady.id, Bar::Nightcap, 1_000, true)
         .await
         .expect("pour");
     UserDrinks::record_welcome_pour(&client, newcomer.id, WELCOME_DRINK_POINTS)
         .await
         .expect("welcome");
-    UserDrinks::record_purchase(&client, lapsed.id, Bar::Tavern, 1_000)
+    UserDrinks::record_purchase(&client, lapsed.id, Bar::Tavern, 1_000, true)
         .await
         .expect("pour");
+    for user in [&steady, &sober] {
+        UserDrinks::record_purchase(&client, user.id, Bar::Tavern, 50, false)
+            .await
+            .expect("coffee");
+        UserDrinks::record_comped_pour(&client, user.id, Bar::Nightcap, 400, false)
+            .await
+            .expect("comped water");
+    }
 
     // steady's top shelf was the first night of the year; lapsed drank last
     // year. Only drink_pours is moved: it is the table the board reads.

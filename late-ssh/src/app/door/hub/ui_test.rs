@@ -8,15 +8,16 @@ use crate::app::door::hub::ui::{sidebar_hit_test, watch_pane_area};
 /// sidebar falls through to other handlers.
 #[test]
 fn clicks_select_games_and_ignore_chrome() {
-    // 80x30 body: breathing row at y=0, the cards fit without scrolling and
+    // 80x31 body: breathing row at y=0, the cards fit without scrolling and
     // the live section sits under them.
-    let body = Rect::new(0, 0, 80, 30);
+    let body = Rect::new(0, 0, 80, 31);
     // The ` hop hint leads the nav (y=1) and is not selectable, nor is the
     // blank under it (y=2). Then "the house" header (y=3), Lateania (y=4),
     // blank (y=5), "roguelikes" header (y=6), DCSS (y=7), NetHack (y=8),
     // Brogue (y=9), blank (y=10), "remakes" header (y=11), A Dark Room
-    // (y=12), blank (y=13), "servers" header (y=14), Minecraft (y=15),
-    // blank (y=16), "doors" header (y=17), Green Dragon (y=18).
+    // (y=12), Zork Trilogy (y=13), blank (y=14), "servers" header (y=15),
+    // Minecraft (y=16), Vintage Story (y=17), blank (y=18), "doors" header
+    // (y=19), Green Dragon (y=20).
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 1),
         None
@@ -59,7 +60,7 @@ fn clicks_select_games_and_ignore_chrome() {
     );
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 13),
-        None
+        Some(RailEntry::Card(5))
     );
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 14),
@@ -67,24 +68,36 @@ fn clicks_select_games_and_ignore_chrome() {
     );
     assert_eq!(
         sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 15),
-        Some(RailEntry::Card(5))
-    );
-    assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 17),
         None
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 18),
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 16),
         Some(RailEntry::Card(6))
     );
-    // Last games: Rebels at y=22, CodeKeep at y=23.
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 22),
-        Some(RailEntry::Card(10))
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 17),
+        Some(RailEntry::Card(7))
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 23),
-        Some(RailEntry::Card(11))
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 18),
+        None
+    );
+    assert_eq!(
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 19),
+        None
+    );
+    assert_eq!(
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 20),
+        Some(RailEntry::Card(8))
+    );
+    // Last games: Rebels at y=24, CodeKeep at y=25.
+    assert_eq!(
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 24),
+        Some(RailEntry::Card(12))
+    );
+    assert_eq!(
+        sidebar_hit_test(body, HubGame::roster(false), 0, 0, None, 5, 25),
+        Some(RailEntry::Card(13))
     );
     // The rule column and the landing pane are not selectable.
     assert_eq!(
@@ -114,23 +127,23 @@ fn clicks_select_games_and_ignore_chrome() {
 /// the hit test follows the same window.
 #[test]
 fn hit_test_follows_the_scroll_window() {
-    // Height 10: 8 sidebar rows visible of 23, selection on the last game
+    // Height 10: 8 sidebar rows visible of 25, selection on the last game
     // slides the window to the bottom of the list.
     let body = Rect::new(0, 0, 80, 10);
-    // Window starts at row 15 (the blank above "doors"), so y=1 is dead
+    // Window starts at row 17 (the blank above "doors"), so y=1 is dead
     // and y=3 lands on Green Dragon...
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 1),
+        sidebar_hit_test(body, HubGame::roster(false), 13, 0, None, 5, 1),
         None
     );
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 3),
-        Some(RailEntry::Card(6))
+        sidebar_hit_test(body, HubGame::roster(false), 13, 0, None, 5, 3),
+        Some(RailEntry::Card(8))
     );
     // ...and the selected CodeKeep row is visible at the window's bottom.
     assert_eq!(
-        sidebar_hit_test(body, HubGame::roster(false), 11, 0, None, 5, 8),
-        Some(RailEntry::Card(11))
+        sidebar_hit_test(body, HubGame::roster(false), 13, 0, None, 5, 8),
+        Some(RailEntry::Card(13))
     );
 }
 
@@ -166,30 +179,30 @@ fn runner_sidebar_puts_night_city_first_in_the_house() {
 fn clicks_select_live_games_under_the_cards() {
     let body = Rect::new(0, 0, 80, 34);
     let public = HubGame::roster(false);
-    // The cards end with CodeKeep at y=23. Then the gap (y=24), the rule
-    // (y=25), the header (y=26), the first game's name (y=27) and status
-    // (y=28), the second game's (y=29, y=30).
+    // The cards end with CodeKeep at y=25. Then the gap (y=26), the rule
+    // (y=27), the header (y=28), the first game's name (y=29) and status
+    // (y=30), the second game's (y=31, y=32).
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, None, 5, 23),
-        Some(RailEntry::Card(11))
+        sidebar_hit_test(body, public, 0, 2, None, 5, 25),
+        Some(RailEntry::Card(13))
     );
-    for dead in [24, 25, 26] {
+    for dead in [26, 27, 28] {
         assert_eq!(sidebar_hit_test(body, public, 0, 2, None, 5, dead), None);
     }
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, None, 5, 27),
+        sidebar_hit_test(body, public, 0, 2, None, 5, 29),
         Some(RailEntry::Live(0))
     );
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, None, 5, 28),
+        sidebar_hit_test(body, public, 0, 2, None, 5, 30),
         Some(RailEntry::Live(0))
     );
     assert_eq!(
-        sidebar_hit_test(body, public, 0, 2, Some(1), 5, 30),
+        sidebar_hit_test(body, public, 0, 2, Some(1), 5, 32),
         Some(RailEntry::Live(1))
     );
     // With nobody playing the section is its header and one dead line.
-    for dead in [24, 25, 26, 27] {
+    for dead in [26, 27, 28, 29] {
         assert_eq!(sidebar_hit_test(body, public, 0, 0, None, 5, dead), None);
     }
 }
@@ -199,7 +212,7 @@ fn clicks_select_live_games_under_the_cards() {
 #[test]
 fn a_short_rail_pins_the_live_section_under_scrolling_cards() {
     // Height 16: a 14-row rail. One live game takes five rows (gap, rule,
-    // header, name, status), leaving nine for the 23 card rows.
+    // header, name, status), leaving nine for the 24 card rows.
     let body = Rect::new(0, 0, 80, 16);
     let public = HubGame::roster(false);
     // The cards window starts at the top with the first card selected:

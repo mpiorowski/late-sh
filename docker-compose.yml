@@ -30,6 +30,8 @@ services:
         condition: service_started
       service-codekeep:
         condition: service_started
+      service-zork:
+        condition: service_started
       service-dcss:
         condition: service_started
       service-usurper:
@@ -133,6 +135,24 @@ services:
       - cargo-git:/usr/local/cargo/git
       - cargo-target:/app/target
       - codekeep-data:/var/lib/late-codekeep
+
+  service-zork:
+    # Published door assets and the shared dev base target x86-64.
+    platform: linux/amd64
+    build:
+      context: .
+      target: dev-zork
+    container_name: ${INSTANCE}-zork
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target-amd64:/app/target
+      - zork-data:/var/lib/late-zork
 
   service-dcss:
     build:
@@ -271,3 +291,4 @@ volumes:
   cargo-target:
   cargo-target-amd64:
   codekeep-data:
+  zork-data:

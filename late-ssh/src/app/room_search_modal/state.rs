@@ -37,11 +37,13 @@ impl PickerScope {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom
             | Screen::Artboard
             | Screen::Profiles
+            | Screen::Calendars
             | Screen::Leaderboard
             | Screen::Clubhouse
             | Screen::Nightcap

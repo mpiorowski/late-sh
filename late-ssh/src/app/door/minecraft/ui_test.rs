@@ -55,7 +55,7 @@ fn quoted(line: &str) -> String {
 fn landing_tells_a_player_how_to_join() {
     let text = landing_text();
     assert!(text.contains("address   mc.late.sh"), "{text}");
-    assert!(text.contains("Minecraft: Java Edition 26.2"), "{text}");
+    assert!(text.contains("Minecraft: Java Edition 26.3"), "{text}");
     assert!(
         text.contains("/dm       a moderator with your exact Java Edition username"),
         "{text}"

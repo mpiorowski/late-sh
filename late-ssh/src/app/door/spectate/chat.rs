@@ -96,7 +96,7 @@ fn own_games(app: &App) -> Vec<(SpectateGame, String)> {
 
 /// This session's own running games on the watchable doors, by door and the
 /// player's handle.
-pub(crate) fn own_running_games(app: &App) -> Vec<(SpectateGame, String)> {
+fn own_running_games(app: &App) -> Vec<(SpectateGame, String)> {
     SpectateGame::ALL
         .into_iter()
         .filter_map(|game| Some((game, own_running_handle(app, game)?)))
@@ -117,6 +117,10 @@ pub(crate) fn own_running_handle(app: &App, game: SpectateGame) -> Option<String
         }
         SpectateGame::Brogue => {
             let state = app.brogue_state.as_ref()?;
+            (state.is_running(), state.handle_status())
+        }
+        SpectateGame::Zork => {
+            let state = app.zork_state.as_ref()?;
             (state.is_running(), state.handle_status())
         }
     };

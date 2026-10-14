@@ -31,6 +31,8 @@ on:
     paths:
       - docker/doors/**
       - docker/codekeep/**
+      - vendor/frotz/**
+      - assets/zork/**
       - scripts/usurper_seed_data.py
       - scripts/brogue_hangup_save.patch
       - .github/workflows/doors.yml
@@ -39,6 +41,8 @@ on:
     paths:
       - docker/doors/**
       - docker/codekeep/**
+      - vendor/frotz/**
+      - assets/zork/**
       - scripts/usurper_seed_data.py
       - scripts/brogue_hangup_save.patch
       - .github/workflows/doors.yml
@@ -59,6 +63,7 @@ on:
           - usurper
           - brogue
           - codekeep
+          - zork
           - bashquest
       run_verify_deployed:
         description: "Also verify the door host is rolled out on the live cluster (needs a single game, not all)"
@@ -106,13 +111,14 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          all_games="nethack dopewars dcss usurper brogue codekeep bashquest"
+          all_games="nethack dopewars dcss usurper brogue codekeep bashquest zork"
 
           game_for_file() {
             case "$1" in
               docker/doors/smoke/*.sh) basename "$1" .sh ;;
               docker/doors/*.Dockerfile) basename "$1" .Dockerfile ;;
               docker/codekeep/*) echo codekeep ;;
+              vendor/frotz/*|assets/zork/*) echo zork ;;
               scripts/usurper_seed_data.py) echo usurper ;;
               scripts/brogue_hangup_save.patch) echo brogue ;;
               *) echo all ;;
@@ -155,7 +161,8 @@ jobs:
             games="$all_games"
           fi
 
-          json=$(printf '%s\n' $games | jq -R . | jq -cs .)
+          read -r -a game_array <<< "$games"
+          json=$(printf '%s\n' "${game_array[@]}" | jq -R . | jq -cs .)
           echo "games: $json"
           echo "games=$json" >> "$GITHUB_OUTPUT"
 

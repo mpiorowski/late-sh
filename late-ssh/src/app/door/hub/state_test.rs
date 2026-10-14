@@ -39,7 +39,7 @@ fn the_rail_wraps_the_cards_alone_when_nobody_is_live() {
 #[test]
 fn select_jumps_directly() {
     let mut s = State::default();
-    s.select(public(), 6);
+    s.select(public(), 8);
     assert_eq!(s.selected_game(public()), HubGame::GreenDragon);
     s.select(public(), 99);
     assert_eq!(s.selected_game(public()), HubGame::GreenDragon);
@@ -56,7 +56,9 @@ fn all_games_are_listed_in_order() {
             "NetHack",
             "Brogue",
             "A Dark Room",
+            "Zork Trilogy",
             "Minecraft",
+            "Vintage Story",
             "Green Dragon",
             "Usurper",
             "dopewars",

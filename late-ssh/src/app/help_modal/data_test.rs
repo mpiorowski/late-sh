@@ -25,6 +25,8 @@ fn all_purpose_guide_splits_game_topics() {
     assert!(bot_app_context().contains("## Lateania\n"));
     assert!(bot_app_context().contains("## Minecraft\n"));
     assert!(bot_app_context().contains("mc.late.sh"));
+    assert!(bot_app_context().contains("## Vintage Story\n"));
+    assert!(bot_app_context().contains("vs.late.sh"));
     assert!(!bot_app_context().contains("## Games\n"));
 }
 

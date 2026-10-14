@@ -16,7 +16,7 @@ use crate::app::{
     games::chess_core::types::ChessColor,
     lobby::daily::{
         games::DailyGame,
-        state::{ChallengeDraft, DailyState, format_deadline, result_phrase},
+        state::{ChallengeDraft, DailyState, format_deadline, format_posted, result_phrase},
         svc::{
             DAILY_WIN_MIN_MOVES, DailyChallengeItem, DailyFinishedItem, DailyMatchItem,
             DailyOutcome, DailyWinPayout,
@@ -445,21 +445,23 @@ fn challenge_line(
         col(challenge.game.label(), GAME_COL),
         Style::default().fg(theme::TEXT()),
     ));
-    // A match of several frames says so where a single game says nothing,
-    // and quotes what it pays played out: the prize once per frame won.
+    // A match of several frames says so ahead of its age, and quotes what it
+    // pays played out: the prize once per frame won.
+    let posted = format_posted(challenge.created, Utc::now());
     let (detail, prize) = if challenge.best_of > 1 {
         (
-            format!("best of {}", challenge.best_of),
+            format!(
+                "best of {} · {}",
+                challenge.best_of,
+                posted.trim_start_matches("posted ")
+            ),
             format!(
                 "up to {} chips",
                 challenge.game.win_payout() * frames_to_win(challenge.best_of)
             ),
         )
     } else {
-        (
-            "open challenge".to_string(),
-            format!("{} chips", challenge.game.win_payout()),
-        )
+        (posted, format!("{} chips", challenge.game.win_payout()))
     };
     spans.push(Span::styled(
         col(&detail, DETAIL_COL),

@@ -37,7 +37,7 @@ use ratatui::{
 };
 
 use super::cards::{Board, Card, Draft, ENERGY, HAND};
-use super::data::{self, FOES, FoeKind, FoeTier, Intent, NOISE_CARDS, OLD_SIGNAL, RATIONS_PER_DAY};
+use super::data::{self, FOES, FoeKind, FoeTier, Intent, OLD_SIGNAL, RATIONS_PER_DAY};
 use super::road::{LANES, Mark, Node, STEPS};
 use super::session::{Picker, Scene};
 use super::sim::Threat;
@@ -455,7 +455,7 @@ fn card_neon(card: Card) -> Option<Neon> {
     match card {
         Card::Strike | Card::Jab | Card::Sever => Some(Neon::Red),
         Card::Surge | Card::Burn => Some(Neon::Amber),
-        Card::Block | Card::Bulwark | Card::Riposte => Some(Neon::Cyan),
+        Card::Block | Card::Brace | Card::Bulwark | Card::Riposte => Some(Neon::Cyan),
         Card::Wipe | Card::Siphon => Some(Neon::Green),
         Card::Ground => Some(Neon::Magenta),
         Card::Mute => Some(Neon::White),
@@ -476,6 +476,7 @@ fn card_text(card: Card, powers: &Powers, board: &Board) -> [String; 2] {
         Card::Block | Card::Bulwark => [hold, "till hit".to_string()],
         Card::Wipe => [hold, "-static".to_string()],
         Card::Jab => [hit, "free".to_string()],
+        Card::Brace => [hold, "free".to_string()],
         Card::Siphon => [hit, format!("mend {}", effect.mend)],
         Card::Riposte => [hit, "+block up".to_string()],
         Card::Burn => [format!("+{} energy", effect.energy), "-static".to_string()],
@@ -497,7 +498,7 @@ fn chip_number(card: Card, powers: &Powers, board: &Board) -> String {
         | Card::Riposte
         | Card::Ground
         | Card::Sever => format!(" {}", effect.damage),
-        Card::Block | Card::Wipe | Card::Bulwark => format!(" {}", effect.block),
+        Card::Block | Card::Brace | Card::Wipe | Card::Bulwark => format!(" {}", effect.block),
         Card::Burn | Card::Mute | Card::Static => String::new(),
     }
 }
@@ -675,7 +676,10 @@ fn intent_spans(fight: &Fight, powers: &Powers, live: bool, tick: u64) -> Vec<Sp
             },
         ),
         Intent::Noise => (
-            format!("▸ noise: {NOISE_CARDS} static cards"),
+            match powers.noise {
+                1 => "▸ noise: 1 static card".to_string(),
+                n => format!("▸ noise: {n} static cards"),
+            },
             glow(Neon::Magenta),
         ),
     };
@@ -902,7 +906,7 @@ pub(crate) struct PickerView<'a> {
     pub own_username: &'a str,
     /// The city's animation clock: the bright nodes flicker on it.
     pub tick: u64,
-    /// The last step's word (`FightSession::till`): what the rest mended,
+    /// The last step's word (`FightSession::till`): what the rest cleared,
     /// what the cache held, why the row refused.
     pub word: Option<&'a str>,
 }
@@ -925,7 +929,6 @@ fn threat_span(threat: Option<Threat>) -> Span<'static> {
 /// A fight waiting on the road, as the panel shows it under the map: the
 /// face, and three rows of numbers beside it.
 struct Offer {
-    key: &'static str,
     kind: &'static FoeKind,
     tier: FoeTier,
     /// `None` for the Old Signal, which has no level.
@@ -975,7 +978,7 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
         }
         row
     };
-    let width = INNER.saturating_sub(4 + 5 + 5 + 3 + 8);
+    let width = INNER.saturating_sub(4 + 5 + 3 + 8);
     // The note takes what the name leaves, so the threat word keeps its
     // column whatever the glyph is called.
     let head = {
@@ -987,7 +990,7 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
         ));
         row
     };
-    let hit = data::RULES.hit(offer.tier.attack, sheet.defense());
+    let hit = data::RULES.hit(offer.tier.attack, sheet.defense(), sheet.level);
     let numbers = format!("signal {} · hits for {hit} · it ", offer.tier.signal);
     let moves = truncate(
         &pattern_words(offer.kind),
@@ -1008,10 +1011,6 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
                 0 => Span::styled("  ▸ ", key),
                 _ => Span::styled("    ", text),
             }];
-            spans.push(match i {
-                0 => Span::styled(format!("[{}]  ", offer.key), key),
-                _ => Span::styled("     ", text),
-            });
             spans.push(Span::styled(offer.kind.portrait[i].to_string(), face));
             spans.push(Span::styled("   ", text));
             let threat = match i {
@@ -1082,7 +1081,6 @@ fn walked_cell(node: Node, mark: Mark, tick: u64) -> MapCell {
         Mark::BrightWon => ('▓', lit(Neon::Amber)),
         Mark::Ran => (node_char(node, tick), dim(Neon::Amber)),
         Mark::Fell => ('░', lit(Neon::Red)),
-        Mark::Mended => ('+', lit(Neon::Green)),
         Mark::Cleared => ('+', lit(Neon::Cyan)),
         Mark::Cached => ('$', lit(Neon::White)),
     }
@@ -1302,7 +1300,6 @@ fn node_lines(
         Node::Glyph => {
             let offer = match sheet.signal_hears() {
                 true => Offer {
-                    key: "f",
                     kind: &OLD_SIGNAL,
                     tier: data::RULES.old_signal,
                     level: None,
@@ -1314,7 +1311,6 @@ fn node_lines(
                 false => {
                     let (index, kind, tier) = data::foe_for_level(sheet.level);
                     Offer {
-                        key: "f",
                         kind,
                         tier,
                         level: Some(index as i32 + 1),
@@ -1346,7 +1342,6 @@ fn node_lines(
             ]);
             offer_lines(
                 &Offer {
-                    key: "b",
                     kind,
                     tier,
                     level: Some(index as i32 + 1),
@@ -1359,57 +1354,25 @@ fn node_lines(
             )
         }
         Node::Rest => {
-            let mends = data::RULES
-                .mend(sheet.max_signal())
-                .min(sheet.max_signal() - sheet.signal);
-            let statics = sheet.road.static_cards;
-            let plain = match sheet.rest_clears() {
-                true => "clear",
-                false => "mend",
-            };
-            keys.extend([Span::styled("   [Enter] ", key), Span::styled(plain, text)]);
+            keys.extend([
+                Span::styled("   [Enter] ", key),
+                Span::styled("clear the deck", text),
+            ]);
             vec![
                 Line::from(vec![
                     Span::styled("  ▸ ", key),
                     Span::styled("a doorway out of the rain", lit(Neon::Green)),
-                    Span::styled("   one or the other", dim_text),
+                    Span::styled("   shake the static out", dim_text),
                 ]),
                 Line::from(vec![
-                    Span::styled("      [h] ", key),
-                    Span::styled("mend    ", text),
-                    match mends {
-                        0 => Span::styled("your signal is whole", muted),
-                        n => Span::styled(
-                            format!(
-                                "+{n} signal, to {}/{}",
-                                sheet.signal + n,
-                                sheet.max_signal()
-                            ),
-                            dim_text,
-                        ),
-                    },
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        "      [c] ",
-                        match statics {
-                            0 => muted,
-                            _ => key,
-                        },
-                    ),
-                    Span::styled(
-                        "clear   ",
-                        match statics {
-                            0 => muted,
-                            _ => text,
-                        },
-                    ),
-                    match statics {
-                        0 => Span::styled("no static in your deck", muted),
+                    Span::styled("      clear   ", text),
+                    match sheet.road.static_cards {
+                        0 => Span::styled("your deck is clean", muted),
                         1 => Span::styled("1 static card out of your deck", dim_text),
                         n => Span::styled(format!("{n} static cards out of your deck"), dim_text),
                     },
                 ]),
+                Line::default(),
             ]
         }
         Node::Cache => {
@@ -1424,8 +1387,7 @@ fn node_lines(
                     Span::styled("   somebody left it, or lost it", dim_text),
                 ]),
                 Line::from(vec![
-                    Span::styled("      [t] ", key),
-                    Span::styled("take    ", text),
+                    Span::styled("      take    ", text),
                     Span::styled(format!("{} bits", data::RULES.cache(sheet.level)), dim_text),
                     match sheet.debt {
                         0 => Span::styled("", dim_text),
@@ -1524,13 +1486,10 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 drafted = format!(" drafted: {} ", names.join(" · "));
             }
             let face = runner_rows(sheet, view.look);
-            let exp = match (
-                sheet.signal_hears(),
-                data::exp_to_advance(sheet.level, sheet.marks),
-            ) {
+            let exp = match (sheet.signal_hears(), data::exp_to_advance(sheet.level)) {
                 (true, _) => format!("exp {}  the Old Signal hears you", sheet.exp),
                 (false, Some(need)) => format!("exp {}/{need}", sheet.exp),
-                (false, None) => format!("exp {}/{}", sheet.exp, data::exp_to_seek(sheet.marks)),
+                (false, None) => format!("exp {}/{}", sheet.exp, data::exp_to_seek()),
             };
             let stats: [Vec<Span<'static>>; 3] = [
                 vec![

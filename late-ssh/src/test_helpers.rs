@@ -215,6 +215,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
     }
 }
 
@@ -326,6 +330,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paper_service,
         jobs_service,
         article_service,
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -517,6 +522,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -655,6 +661,10 @@ fn make_app_with_chat_service_and_permissions(
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -686,6 +696,7 @@ fn make_app_with_chat_service_and_permissions(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
         flair_directory: None,
@@ -776,6 +787,7 @@ pub fn make_app_with_paired_client(
         ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
             db.clone(),
@@ -914,6 +926,10 @@ pub fn make_app_with_paired_client(
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        zork_enabled: false,
+        zork_host: String::new(),
+        zork_port: 2331,
+        zork_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
@@ -945,6 +961,7 @@ pub fn make_app_with_paired_client(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
         flair_directory: None,

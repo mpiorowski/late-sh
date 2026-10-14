@@ -141,6 +141,7 @@ fn parse_bartender_order_pours_within_spendable() {
     assert_eq!(
         parse_bartender_order(raw, BartenderTab::Paying { spendable: 900 }, "bartender"),
         BartenderDecision::Pour {
+            intoxicating: true,
             drink: "Segfault Sour".to_string(),
             price: 400,
             line: "one segfault sour, that is 400 chips".to_string(),
@@ -167,6 +168,63 @@ fn parse_bartender_order_refuses_out_of_range_price() {
             line: "here".to_string()
         }
     );
+}
+
+#[test]
+fn parse_bartender_order_pours_non_intoxicating_drinks_on_either_tab() {
+    // Both valid JSON and the trailing-quote repair must preserve false.
+    for raw in [
+        r#"{"action":"pour","drink":"coffee","price":50,"intoxicating":false,"line":"coffee, 50 chips"}"#,
+        r#"{"action":"pour","drink":"coffee","price":50,"intoxicating":false,"line":"coffee, 50 chips""}"#,
+    ] {
+        assert_eq!(
+            parse_bartender_order(raw, BartenderTab::Paying { spendable: 50 }, "bartender"),
+            BartenderDecision::Pour {
+                drink: "coffee".to_string(),
+                price: 50,
+                intoxicating: false,
+                line: "coffee, 50 chips".to_string(),
+            }
+        );
+        assert!(matches!(
+            parse_bartender_order(raw, BartenderTab::Paying { spendable: 49 }, "bartender"),
+            BartenderDecision::Say { .. }
+        ));
+    }
+    for action in ["pour", "offer"] {
+        let raw = format!(
+            r#"{{"action":"{action}","drink":"water","price":null,"intoxicating":false,"line":"on the house"}}"#
+        );
+        assert_eq!(
+            parse_bartender_order(&raw, BartenderTab::Comped, "bartender"),
+            BartenderDecision::PourComped {
+                drink: "water".to_string(),
+                intoxicating: false,
+                line: "on the house".to_string(),
+            }
+        );
+    }
+}
+
+#[test]
+fn parse_bartender_order_pins_non_intoxicating_drinks_to_the_soft_price() {
+    // Any other price on a coffee is a model slip: served uncharged, never
+    // debited at a number the prompt did not promise.
+    for price in [
+        0,
+        SOFT_DRINK_PRICE - 1,
+        SOFT_DRINK_PRICE + 1,
+        DRINK_PRICE_MIN,
+        DRINK_PRICE_MAX,
+    ] {
+        let raw = format!(
+            r#"{{"action":"pour","price":{price},"intoxicating":false,"line":"a coffee"}}"#
+        );
+        assert!(matches!(
+            parse_bartender_order(&raw, BartenderTab::Paying { spendable: 5000 }, "bartender"),
+            BartenderDecision::Say { .. }
+        ));
+    }
 }
 
 #[test]
@@ -210,6 +268,7 @@ fn parse_bartender_order_pours_a_comped_drink_past_every_price_gate() {
         assert_eq!(
             parse_bartender_order(&raw, BartenderTab::Comped, "bartender"),
             BartenderDecision::PourComped {
+                intoxicating: true,
                 drink: "Null Pointer Negroni".to_string(),
                 line: "this one's on them".to_string(),
             }
@@ -235,6 +294,7 @@ fn parse_bartender_order_accepts_fenced_json_and_defaults_drink() {
     assert_eq!(
         parse_bartender_order(raw, BartenderTab::Paying { spendable: 900 }, "bartender"),
         BartenderDecision::Pour {
+            intoxicating: true,
             drink: "house pour".to_string(),
             price: 200,
             line: "here you go".to_string(),
@@ -292,6 +352,7 @@ fn parse_bartender_order_recovers_pour_fields_when_json_is_broken() {
     assert_eq!(
         parse_bartender_order(raw, BartenderTab::Paying { spendable: 900 }, "bartender"),
         BartenderDecision::Pour {
+            intoxicating: true,
             drink: "Kernel Panic Punch".to_string(),
             price: 250,
             line: "one Kernel Panic Punch, 250 chips.".to_string(),

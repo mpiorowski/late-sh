@@ -1,5 +1,6 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
+use late_core::models::chat_room::WatchDoor;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
 
@@ -11,19 +12,33 @@ use crate::app::audio::radio_meta::svc::PollOutcome;
 use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
+use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
 use crate::app::chat::news::svc::XMediaLookup;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
+use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
+use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
+use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
+use late_core::models::calendar::CalendarRefusalKind;
 use late_core::models::referral::ReferralSource;
+
+/// What put the away screensaver up (`App::sync_away`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreensaverTrigger {
+    /// Thirty quiet minutes (`common::away::AWAY_AFTER`).
+    Idle,
+    /// `/brb`.
+    Brb,
+}
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -159,22 +174,6 @@ pub enum GalleryApplauseResult {
     Failed,
 }
 
-/// How a content-rating request on a gallery piece ended: the dialog's read,
-/// a community vote, or the hanger's NSFW flag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GalleryContentRatingResult {
-    Viewed,
-    Voted,
-    VoteWithdrawn,
-    Flagged,
-    Unflagged,
-    OwnPiece,
-    NotYours,
-    NotFound,
-    Closed,
-    Failed,
-}
-
 /// How a hanger's own take-down resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GalleryTakeDownResult {
@@ -227,8 +226,7 @@ pub enum FightBeat {
     Round,
     /// A card drafted into the deck.
     Drafted,
-    /// A rest on the road spent on the signal, or on the deck.
-    Mended,
+    /// A rest on the road: the static out of the deck.
     Cleared,
     /// A cache on the road taken.
     Cached,
@@ -248,6 +246,8 @@ pub enum FightBeat {
     Drank,
     /// A piece bought off the blade cart.
     Carted,
+    /// A draft inked at INK.
+    Inked,
     Refused,
     Failed,
 }
@@ -463,6 +463,64 @@ pub enum DoorWatchOutcome {
     Failed,
 }
 
+/// How one Zork play session (one interpreter on the `late-zork` host)
+/// ended, as the client's tick saw it. The exit statuses are the host's
+/// contract (`door/zork/CONTEXT.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZorkSessionEnd {
+    /// The player quit the story (exit 0).
+    Quit,
+    /// A checkpointed return to the menus (exit 20): RESTORE, or the save
+    /// half of an edition switch.
+    Returned,
+    /// The selected save was invalid or unavailable (exit 21).
+    SaveRejected,
+    /// The host refused the launch for now (exit 75): another session of
+    /// this account holds the game, or the host is shutting down.
+    Busy,
+    /// Any other exit status, or the channel closing without one: the
+    /// interpreter or the host bridge broke.
+    Crashed,
+    /// Connect, auth, or the launch request failed, or the stream broke.
+    ConnectFailed,
+    /// Twenty minutes without game input; the client closed the session.
+    Idle,
+}
+
+/// How a switch away from a live Zork game (another edition, a manual load,
+/// a new game) resolved. The old game must checkpoint and exit before the
+/// next one starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZorkSwitchResult {
+    /// The old game checkpointed and the next one launched.
+    Switched,
+    /// The old game closed without a successful checkpoint exit.
+    SaveFailed,
+    /// No exit within the return timeout; the old game stays open.
+    TimedOut,
+}
+
+/// How a read of the account's six Zork save slots (the menu's metadata,
+/// its own `list` request) resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZorkCatalogueRead {
+    Read,
+    Failed,
+}
+
+/// What F3 did on a player's own Zork game: type the newest command a
+/// watcher suggested into the story's prompt, or nothing, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZorkSuggestion {
+    /// The suggestion went onto the empty prompt line.
+    Typed,
+    /// The story was not at an empty prompt (the player was typing, a
+    /// confirmation or pagination was up), so nothing was typed.
+    NotAtPrompt,
+    /// No fresh suggestion was waiting.
+    NoneWaiting,
+}
+
 /// The band count a paired CLI's `viz` frame arrived with. CLIs from before
 /// the 16-band analyzer send 8, which the pair socket stretches to 16.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,6 +533,8 @@ pub enum VizWireBands {
 mod inner {
     use std::sync::{Arc, OnceLock};
 
+    use late_core::models::user::{AsciiPiece, AsciiSelection};
+
     use opentelemetry::{
         KeyValue, global,
         metrics::{Counter, Gauge, Histogram, ObservableGauge, UpDownCounter},
@@ -484,25 +544,32 @@ mod inner {
     use crate::app::activity::event::GameFamily;
 
     use super::HomeRoom;
+    use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
-        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryContentRatingResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands,
+        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
+        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
+    use super::{
+        ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
+        ZorkSwitchResult,
+    };
     use crate::app::bonsai::state::BranchAction;
     use crate::app::referral::state::AttachRefusal;
 
@@ -1102,6 +1169,99 @@ mod inner {
         })
     }
 
+    fn calendar_write_label(write: CalendarWrite) -> &'static str {
+        match write {
+            CalendarWrite::BoardPosted => "board_posted",
+            CalendarWrite::PersonalPosted => "personal_posted",
+            CalendarWrite::Edited => "edited",
+            CalendarWrite::Deleted => "deleted",
+            CalendarWrite::StaffDeleted => "staff_deleted",
+            CalendarWrite::RsvpIn => "rsvp_in",
+            CalendarWrite::RsvpOut => "rsvp_out",
+        }
+    }
+
+    fn calendar_op_label(op: CalendarOp) -> &'static str {
+        match op {
+            CalendarOp::Load => "load",
+            CalendarOp::Open => "open",
+            CalendarOp::Save => "save",
+            CalendarOp::Delete => "delete",
+            CalendarOp::Rsvp => "rsvp",
+            CalendarOp::Announce => "announce",
+        }
+    }
+
+    fn calendar_announcement_label(announcement: CalendarAnnouncement) -> &'static str {
+        match announcement {
+            CalendarAnnouncement::Posted => "posted",
+            CalendarAnnouncement::Starting => "starting",
+        }
+    }
+
+    fn live_origin_label(origin: LiveOrigin) -> &'static str {
+        match origin {
+            LiveOrigin::Strip => "strip",
+            LiveOrigin::Panel => "panel",
+        }
+    }
+
+    fn calendar_writes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_writes_total")
+                .with_description(
+                    "Settled writes to the events board and personal calendars, by what the write was",
+                )
+                .build()
+        })
+    }
+
+    fn calendar_refusals_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_refusals_total")
+                .with_description("Calendar writes refused, by the rule that refused them")
+                .build()
+        })
+    }
+
+    fn calendar_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_failures_total")
+                .with_description("Calendar operations that failed in the database, by operation")
+                .build()
+        })
+    }
+
+    fn calendar_announcements_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_announcements_total")
+                .with_description(
+                    "Board lines handed to #lounge: a post, or a start claimed by this replica",
+                )
+                .build()
+        })
+    }
+
+    fn calendar_opens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_calendar_opens_total")
+                .with_description(
+                    "Board events opened from the live strip or the Live panel, by which surface brought the viewer",
+                )
+                .build()
+        })
+    }
+
     fn chat_gilds_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1141,6 +1301,18 @@ mod inner {
                 .u64_counter("late_ssh_daily_snapshot_rows_rejected_total")
                 .with_description(
                     "Daily match rows left out of the lobby snapshot, by reason, counted once per replica when a row first goes missing. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
+                )
+                .build()
+        })
+    }
+
+    fn irc_history_requests_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_irc_history_requests_total")
+                .with_description(
+                    "IRC history reads by who asked (a CHATHISTORY command, or the automatic replay after JOIN) and how they resolved. `failed` is a database error; `rate_limited`, `invalid_request`, `invalid_target`, and `invalid_reference` are refusals a client loop would repeat",
                 )
                 .build()
         })
@@ -1452,7 +1624,6 @@ mod inner {
             FightBeat::Played => "played",
             FightBeat::Round => "round",
             FightBeat::Drafted => "drafted",
-            FightBeat::Mended => "mended",
             FightBeat::Cleared => "cleared",
             FightBeat::Cached => "cached",
             FightBeat::Won => "won",
@@ -1467,6 +1638,7 @@ mod inner {
             FightBeat::Repaid => "repaid",
             FightBeat::Drank => "drank",
             FightBeat::Carted => "carted",
+            FightBeat::Inked => "inked",
             FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
@@ -1710,6 +1882,7 @@ mod inner {
             Refresh::Articles => "articles",
             Refresh::ActiveQuestBoards => "active_quest_boards",
             Refresh::ShopFlairDirectory => "shop_flair_directory",
+            Refresh::CalendarNotices => "calendar_notices",
         }
     }
 
@@ -1803,12 +1976,14 @@ mod inner {
             Screen::Dopewars => "dopewars",
             Screen::Bashquest => "bashquest",
             Screen::Codekeep => "codekeep",
+            Screen::Zork => "zork",
             Screen::Usurper => "usurper",
             Screen::GreenDragon => "greendragon",
             Screen::Darkroom => "darkroom",
             Screen::Artboard => "artboard",
             Screen::Profiles => "profiles",
             Screen::Leaderboard => "leaderboard",
+            Screen::Calendars => "calendars",
             Screen::Clubhouse => "clubhouse",
             Screen::Nightcap => "nightcap",
             Screen::City => "city",
@@ -1886,6 +2061,42 @@ mod inner {
             &[
                 KeyValue::new("screen", screen_label(screen)),
                 KeyValue::new("place", place_label(place)),
+            ],
+        );
+    }
+
+    fn screensavers_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_screensavers_total")
+                .with_description(
+                    "Away screensavers put up, by what put them up, the selection mode and the piece",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_screensaver(
+        trigger: ScreensaverTrigger,
+        selection: AsciiSelection,
+        piece: AsciiPiece,
+    ) {
+        let trigger = match trigger {
+            ScreensaverTrigger::Idle => "idle",
+            ScreensaverTrigger::Brb => "brb",
+        };
+        let selection = match selection {
+            AsciiSelection::Piece(_) => "fixed",
+            AsciiSelection::Random => "random",
+            AsciiSelection::Randomer => "randomer",
+        };
+        screensavers_total().add(
+            1,
+            &[
+                KeyValue::new("trigger", trigger),
+                KeyValue::new("selection", selection),
+                KeyValue::new("piece", piece.as_str()),
             ],
         );
     }
@@ -1982,6 +2193,34 @@ mod inner {
                 "reason",
                 daily_snapshot_row_rejected_label(error),
             )],
+        );
+    }
+
+    fn irc_history_request_label(request: IrcHistoryRequest) -> &'static str {
+        match request {
+            IrcHistoryRequest::Explicit => "explicit",
+            IrcHistoryRequest::JoinReplay => "join_replay",
+        }
+    }
+
+    fn irc_history_outcome_label(outcome: IrcHistoryOutcome) -> &'static str {
+        match outcome {
+            IrcHistoryOutcome::Served => "served",
+            IrcHistoryOutcome::RateLimited => "rate_limited",
+            IrcHistoryOutcome::InvalidRequest => "invalid_request",
+            IrcHistoryOutcome::InvalidTarget => "invalid_target",
+            IrcHistoryOutcome::InvalidReference => "invalid_reference",
+            IrcHistoryOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn record_irc_history(request: IrcHistoryRequest, outcome: IrcHistoryOutcome) {
+        irc_history_requests_total().add(
+            1,
+            &[
+                KeyValue::new("request", irc_history_request_label(request)),
+                KeyValue::new("outcome", irc_history_outcome_label(outcome)),
+            ],
         );
     }
 
@@ -2203,6 +2442,38 @@ mod inner {
     /// count; a sweep with no pot in its window is silence, not an outcome.
     pub fn record_pot_reminder(outcome: PotReminderOutcome) {
         pot_reminders_total().add(1, &[KeyValue::new("outcome", pot_reminder_label(outcome))]);
+    }
+
+    pub fn record_calendar_write(write: CalendarWrite) {
+        calendar_writes_total().add(1, &[KeyValue::new("write", calendar_write_label(write))]);
+    }
+
+    pub fn record_calendar_refusal(kind: CalendarRefusalKind) {
+        calendar_refusals_total().add(
+            1,
+            &[KeyValue::new(
+                "reason",
+                crate::app::calendar::svc::refusal_label(kind),
+            )],
+        );
+    }
+
+    pub fn record_calendar_failure(op: CalendarOp) {
+        calendar_failures_total().add(1, &[KeyValue::new("op", calendar_op_label(op))]);
+    }
+
+    pub fn record_calendar_announcement(announcement: CalendarAnnouncement) {
+        calendar_announcements_total().add(
+            1,
+            &[KeyValue::new(
+                "line",
+                calendar_announcement_label(announcement),
+            )],
+        );
+    }
+
+    pub fn record_calendar_open(origin: LiveOrigin) {
+        calendar_opens_total().add(1, &[KeyValue::new("from", live_origin_label(origin))]);
     }
 
     pub fn record_referral_attach(source: ReferralSource, outcome: ReferralAttachOutcome) {
@@ -2573,43 +2844,6 @@ mod inner {
         );
     }
 
-    fn gallery_content_rating_result_label(result: GalleryContentRatingResult) -> &'static str {
-        match result {
-            GalleryContentRatingResult::Viewed => "viewed",
-            GalleryContentRatingResult::Voted => "voted",
-            GalleryContentRatingResult::VoteWithdrawn => "vote_withdrawn",
-            GalleryContentRatingResult::Flagged => "flagged",
-            GalleryContentRatingResult::Unflagged => "unflagged",
-            GalleryContentRatingResult::OwnPiece => "own_piece",
-            GalleryContentRatingResult::NotYours => "not_yours",
-            GalleryContentRatingResult::NotFound => "not_found",
-            GalleryContentRatingResult::Closed => "closed",
-            GalleryContentRatingResult::Failed => "failed",
-        }
-    }
-
-    fn gallery_content_ratings_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_artboard_gallery_content_ratings_total")
-                .with_description(
-                    "Artboard gallery content-rating reads, votes and owner flags by result",
-                )
-                .build()
-        })
-    }
-
-    pub fn record_gallery_content_rating(result: GalleryContentRatingResult) {
-        gallery_content_ratings_total().add(
-            1,
-            &[KeyValue::new(
-                "result",
-                gallery_content_rating_result_label(result),
-            )],
-        );
-    }
-
     fn door_ingest_lines_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2675,7 +2909,7 @@ mod inner {
         })
     }
 
-    pub fn record_door_watch_stream(game: DoorGame, outcome: DoorWatchOutcome) {
+    pub fn record_door_watch_stream(game: WatchDoor, outcome: DoorWatchOutcome) {
         door_watch_streams_total().add(
             1,
             &[
@@ -2685,7 +2919,7 @@ mod inner {
         );
     }
 
-    pub fn record_door_watch_roster_failure(game: DoorGame) {
+    pub fn record_door_watch_roster_failure(game: WatchDoor) {
         door_watch_roster_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
@@ -2701,8 +2935,137 @@ mod inner {
         })
     }
 
-    pub fn record_door_watch_chat_room_failure(game: DoorGame) {
+    pub fn record_door_watch_chat_room_failure(game: WatchDoor) {
         door_watch_chat_room_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
+
+    fn zork_launches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_zork_launches_total")
+                .with_description(
+                    "Zork play sessions started, by edition and what they loaded (auto, manual, new)",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_zork_launch(edition: ZorkEdition, action: ZorkAction) {
+        // `Edition::key` and `Action::mode` are the wire protocol's own
+        // exhaustive label maps.
+        zork_launches_total().add(
+            1,
+            &[
+                KeyValue::new("edition", edition.key()),
+                KeyValue::new("action", action.mode()),
+            ],
+        );
+    }
+
+    fn zork_session_end_label(end: ZorkSessionEnd) -> &'static str {
+        match end {
+            ZorkSessionEnd::Quit => "quit",
+            ZorkSessionEnd::Returned => "returned",
+            ZorkSessionEnd::SaveRejected => "save_rejected",
+            ZorkSessionEnd::Busy => "busy",
+            ZorkSessionEnd::Crashed => "crashed",
+            ZorkSessionEnd::ConnectFailed => "connect_failed",
+            ZorkSessionEnd::Idle => "idle",
+        }
+    }
+
+    fn zork_session_ends_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_zork_session_ends_total")
+                .with_description("Zork play sessions ended, by edition and how they ended")
+                .build()
+        })
+    }
+
+    pub fn record_zork_session_end(edition: ZorkEdition, end: ZorkSessionEnd) {
+        zork_session_ends_total().add(
+            1,
+            &[
+                KeyValue::new("edition", edition.key()),
+                KeyValue::new("end", zork_session_end_label(end)),
+            ],
+        );
+    }
+
+    fn zork_switch_result_label(result: ZorkSwitchResult) -> &'static str {
+        match result {
+            ZorkSwitchResult::Switched => "switched",
+            ZorkSwitchResult::SaveFailed => "save_failed",
+            ZorkSwitchResult::TimedOut => "timed_out",
+        }
+    }
+
+    fn zork_switches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_zork_switches_total")
+                .with_description(
+                    "Switches away from a live Zork game (edition, manual load, new game), by result",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_zork_switch(result: ZorkSwitchResult) {
+        zork_switches_total().add(
+            1,
+            &[KeyValue::new("result", zork_switch_result_label(result))],
+        );
+    }
+
+    fn zork_catalogue_read_label(result: ZorkCatalogueRead) -> &'static str {
+        match result {
+            ZorkCatalogueRead::Read => "read",
+            ZorkCatalogueRead::Failed => "failed",
+        }
+    }
+
+    fn zork_catalogue_reads_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_zork_catalogue_reads_total")
+                .with_description("Zork save-slot catalogue reads for the menus, by result")
+                .build()
+        })
+    }
+
+    pub fn record_zork_catalogue_read(result: ZorkCatalogueRead) {
+        zork_catalogue_reads_total().add(
+            1,
+            &[KeyValue::new("result", zork_catalogue_read_label(result))],
+        );
+    }
+
+    fn zork_suggestion_label(result: ZorkSuggestion) -> &'static str {
+        match result {
+            ZorkSuggestion::Typed => "typed",
+            ZorkSuggestion::NotAtPrompt => "not_at_prompt",
+            ZorkSuggestion::NoneWaiting => "none_waiting",
+        }
+    }
+
+    fn zork_suggestions_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_zork_suggestions_total")
+                .with_description("F3 presses on a player's own Zork game, by what they typed")
+                .build()
+        })
+    }
+
+    pub fn record_zork_suggestion(result: ZorkSuggestion) {
+        zork_suggestions_total().add(1, &[KeyValue::new("result", zork_suggestion_label(result))]);
     }
 
     fn online_time_flush_result_label(result: OnlineTimeFlushResult) -> &'static str {
@@ -2737,25 +3100,34 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
+    use late_core::models::user::{AsciiPiece, AsciiSelection};
+
+    use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::XMediaLookup;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
-        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryContentRatingResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands,
+        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
+        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
+        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
+    use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
+    use super::{
+        ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
+        ZorkSwitchResult,
+    };
 
     pub fn record_ssh_connection() {}
     pub fn record_ssh_connection_rejected(_reason: SshRejectReason) {}
@@ -2798,11 +3170,18 @@ mod inner {
     }
     pub fn record_attention(_screen: Screen, _place: Place, _presence: Presence, _seconds: f64) {}
     pub fn record_place_visit(_screen: Screen, _place: Place) {}
+    pub fn record_screensaver(
+        _trigger: ScreensaverTrigger,
+        _selection: AsciiSelection,
+        _piece: AsciiPiece,
+    ) {
+    }
     pub fn record_share_card(_kind: ShareCardKind) {}
     pub fn record_sliding_puzzle_art(_load: SlidingPuzzleArtLoad) {}
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_daily_snapshot_row_rejected(_error: &SnapshotRowError) {}
+    pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
@@ -2824,6 +3203,11 @@ mod inner {
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_pot_reminder(_outcome: PotReminderOutcome) {}
+    pub fn record_calendar_write(_write: CalendarWrite) {}
+    pub fn record_calendar_refusal(_kind: CalendarRefusalKind) {}
+    pub fn record_calendar_failure(_op: CalendarOp) {}
+    pub fn record_calendar_announcement(_announcement: CalendarAnnouncement) {}
+    pub fn record_calendar_open(_origin: LiveOrigin) {}
     pub fn record_referral_attach(_source: ReferralSource, _outcome: ReferralAttachOutcome) {}
     pub fn record_referral_settlement(_settlement: ReferralSettlement) {}
     pub fn record_newcomer_minute(_result: NewcomerMinuteResult) {}
@@ -2844,13 +3228,17 @@ mod inner {
     pub fn record_gallery_hang(_result: GalleryHangResult) {}
     pub fn record_gallery_applause(_result: GalleryApplauseResult) {}
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
-    pub fn record_gallery_content_rating(_result: GalleryContentRatingResult) {}
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
-    pub fn record_door_watch_stream(_game: DoorGame, _outcome: DoorWatchOutcome) {}
-    pub fn record_door_watch_roster_failure(_game: DoorGame) {}
-    pub fn record_door_watch_chat_room_failure(_game: DoorGame) {}
+    pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
+    pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
+    pub fn record_door_watch_chat_room_failure(_game: WatchDoor) {}
+    pub fn record_zork_launch(_edition: ZorkEdition, _action: ZorkAction) {}
+    pub fn record_zork_session_end(_edition: ZorkEdition, _end: ZorkSessionEnd) {}
+    pub fn record_zork_switch(_result: ZorkSwitchResult) {}
+    pub fn record_zork_catalogue_read(_result: ZorkCatalogueRead) {}
+    pub fn record_zork_suggestion(_result: ZorkSuggestion) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
 }
 

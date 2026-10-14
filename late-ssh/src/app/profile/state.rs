@@ -114,6 +114,14 @@ impl ProfileState {
             .set_key_layout(self.user_id, fingerprint, layout);
     }
 
+    /// Store whether this device shows the Artboard content disclaimer. Fire
+    /// and forget, and per device for the same reason the rails are: it does
+    /// not touch the account profile.
+    pub fn set_device_artboard_disclaimer(&self, fingerprint: String, enabled: bool) {
+        self.profile_service
+            .set_key_artboard_disclaimer(self.user_id, fingerprint, enabled);
+    }
+
     /// Persist when this device's session went quiet before ending, fire and
     /// forget like every other profile write. Per device for the same reason
     /// the rails are: it is a fact about this terminal.
@@ -219,8 +227,9 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         start_with_music_muted: profile.start_with_music_muted,
         landing_page: profile.landing_page,
         paper_at_login: profile.paper_at_login,
+        screensaver: profile.screensaver,
         show_watch_chat: profile.show_watch_chat,
-        art_splash_mode: profile.art_splash_mode,
+        artboard_disclaimer: profile.artboard_disclaimer,
         terminal_images: profile.terminal_images,
         hidden_award_categories: profile.hidden_award_categories.clone(),
         show_flag_fallback: profile.show_flag_fallback,

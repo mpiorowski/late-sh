@@ -16,11 +16,13 @@ use crate::session::SessionMessage;
 /// The hot world-tick cadence (the classic 15fps): animations that earn
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
-/// Half-rate cadence (~7.5fps): Clubhouse ambience, riding the shared
+/// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
+/// (a drawn Zen ascii tile, the away screensaver), riding the shared
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
 /// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
-/// tile + profile-modal reef), stepping on the `anim_quarter` /4 edge in tick().
+/// tile + profile-modal reef) and the lively ascii pieces in pixels,
+/// stepping on the `anim_quarter` /4 edge in tick().
 pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
 /// Idle floor: nothing visible animates, ticks only drain service channels.
 /// Worst-case latency for an unprompted event (a chat message arriving
@@ -140,11 +142,13 @@ impl App {
             changed = true;
         }
         // Going away is not urgent to the millisecond, so this session's away
-        // flag rides the 1Hz edge. It only writes the roster on a change and
-        // paints nothing of its own: peers pick it up on their presence edge
-        // below, so an idle session still settles.
-        if one_hz {
-            self.sync_away();
+        // flag rides the 1Hz edge. It only writes the roster on a change, and
+        // paints nothing of its own unless the screensaver comes up with it:
+        // peers pick it up on their presence edge below, so an idle session
+        // with the Tweak off still settles. Coming back is input's, which
+        // syncs at once and repaints anyway.
+        if one_hz && self.sync_away() && self.screensaver().is_some() {
+            changed = true;
         }
         // UTC midnight rolls the Arcade dailies over. This rides the 1Hz edge
         // rather than an input path so a session parked in chat overnight is
@@ -198,8 +202,21 @@ impl App {
         }
 
         // Services
+        // Only the page and its modals read the session's own month; Home's
+        // strip and Live panel read the replica's shared board snapshot.
+        changed |= self.calendar.tick(
+            self.screen == Screen::Calendars || self.calendar.modal.is_some(),
+            late_core::models::calendar::effective_timezone(
+                self.profile_state.profile().timezone.as_deref(),
+            ),
+        );
         let chat_tick = self.chat.tick();
         changed |= chat_tick.changed;
+        if chat_tick.changed {
+            self.directory_state.feed_changed();
+            self.directory_editor.feed_changed();
+            self.jobs.feed_changed();
+        }
         if let Some(b) = chat_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -306,6 +323,9 @@ impl App {
             self.banner = Some(b);
             changed = true;
         }
+        // The saved Artboard disclaimer tweak may land after the page was
+        // opened; the board seat follows it.
+        self.sync_dartboard_connection();
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         self.chat
@@ -315,7 +335,7 @@ impl App {
         // The AFK line: how long this terminal's keyboard has been quiet is
         // an `App` fact, mirrored into chat the same way the timezone is,
         // because chat is what knows which room is on screen to hang it on.
-        changed |= self.chat.sync_afk_line(self.last_input_at.elapsed());
+        changed |= self.chat.sync_afk_line(self.last_active_at.elapsed());
         let translate_to = self.profile_state.profile().translate_to;
         let auto_translate = self.profile_state.profile().auto_translate;
         changed |= self
@@ -337,8 +357,12 @@ impl App {
             && !self.profile_state.profile().username.is_empty()
         {
             let device_rails = self.rail_modes();
-            self.settings_modal_state
-                .open_from_profile(self.profile_state.profile(), device_rails);
+            let device_artboard_disclaimer = self.artboard_disclaimer_enabled();
+            self.settings_modal_state.open_from_profile(
+                self.profile_state.profile(),
+                device_rails,
+                device_artboard_disclaimer,
+            );
         }
 
         for msg in messages {
@@ -481,19 +505,13 @@ impl App {
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
-        let own_door_games: Vec<_> = crate::app::door::spectate::chat::own_running_games(self)
-            .into_iter()
-            .filter_map(|(game, playname)| {
-                crate::app::door::spectate::state::LiveGameKey::new(game, &playname)
-            })
-            .collect();
         changed |= self.live.tick(
             &self.daily,
             &self.audio,
             self.chat.news.all_articles(),
             &self.chat.live_streams,
             &self.live_games.live_rows(),
-            &own_door_games,
+            &self.calendar,
             reading,
             picture_settings,
         );
@@ -595,21 +613,15 @@ impl App {
         // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);
         // A preview lives only on the Games hub, so leaving the hub ends it.
-        // An open watch outlives a hop away until it has been off screen for
-        // `AWAY_WINDOW`; the stamp below is what that measures from. The
-        // watched game ending (or its stream dropping) ends either, with a
-        // word on why the screen went away.
+        // An open watch is only ever on the hub: leaving steps away from it
+        // (`App::away_watches`, below). The watched game ending (or its
+        // stream dropping) ends either, with a word on why it went away.
         let now = std::time::Instant::now();
         let on_hub = self.screen == Screen::Games;
-        let watch_end = match self.spectate_state.as_mut() {
-            Some(state) => {
-                if on_hub {
-                    state.mark_seen(now);
-                }
-                state.end_reason(on_hub, now)
-            }
-            None => None,
-        };
+        let watch_end = self
+            .spectate_state
+            .as_ref()
+            .and_then(|state| state.end_reason(on_hub, now));
         match watch_end {
             Some(
                 crate::app::door::spectate::state::WatchEnd::LeftHub
@@ -626,6 +638,28 @@ impl App {
                 changed = true;
             }
             None => {}
+        }
+        // A kept watch ends with its game, or once it has been off screen
+        // for `AWAY_WINDOW`, quietly: nobody is looking at it.
+        let mut index = 0;
+        while index < self.away_watches.len() {
+            match self.away_watches[index].end_reason(false, now) {
+                Some(crate::app::door::spectate::state::WatchEnd::GameEnded(playname)) => {
+                    self.banner = Some(crate::app::common::primitives::Banner::info(&format!(
+                        "{playname}'s game is no longer running."
+                    )));
+                    self.away_watches.remove(index);
+                    changed = true;
+                }
+                Some(crate::app::door::spectate::state::WatchEnd::WentAway) => {
+                    self.away_watches.remove(index);
+                    changed = true;
+                }
+                Some(crate::app::door::spectate::state::WatchEnd::LeftHub) => {
+                    unreachable!("only a preview leaves with the hub, and a kept watch is open")
+                }
+                None => index += 1,
+            }
         }
         // A detached roguelike whose game has ended (death, save, idle
         // shutdown, network drop) has nothing left to resume: drop the state
@@ -669,6 +703,20 @@ impl App {
         }
         if let Some(state) = self.bashquest_state.as_mut() {
             state.tick();
+        }
+        if let Some(state) = self.zork_state.as_mut() {
+            changed |= state.tick();
+        }
+        // Same reap as the roguelikes: a detached Zork game that ended
+        // (quit, crash, idle shutdown) leaves only its menus behind.
+        if self.screen != Screen::Zork
+            && self
+                .zork_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_zork();
+            changed = true;
         }
         if let Some(state) = self.codekeep_state.as_mut() {
             state.tick();
@@ -1096,14 +1144,24 @@ impl App {
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
         self.aquarium_state.set_hungry(self.aquarium_care.hungry());
-        if self.screen == Screen::Zen && self.zen_status_row() != self.zen_row_bound {
-            self.sync_aquarium_bounds();
-            changed = true;
-        }
         if anim_quarter && self.aquarium_visible() {
             self.aquarium_state.tick();
             changed = true;
         }
+        // The ascii pieces (`app/ascii`) are pure functions of the shared
+        // clock: a new frame on every edge of a drawn piece's cadence, the
+        // half edge for the lively ones in dots, the quarter edge for the
+        // lively ones in pixels, and the 1Hz edge for the slow.
+        if one_hz {
+            let now = Instant::now();
+            let mut rng = rand::thread_rng();
+            changed |= self.sync_screensaver(now, &mut rng);
+            if self.screen == Screen::Zen {
+                let zen_changed = self.zen.sync_playback(now, &mut rng);
+                changed |= zen_changed && self.screensaver().is_none();
+            }
+        }
+        changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
         // The activity feed subscription survives the retired sidebar panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
@@ -1363,6 +1421,17 @@ impl App {
     /// clean tick, never a frame. Input, resize, and push wakes
     /// (RenderSignal) interrupt the sleep regardless.
     pub fn wake_hint(&self) -> Duration {
+        // The screensaver covers everything else, so nothing under it earns
+        // a faster tier, and the pointer moving over it never wakes it hot.
+        // A slow piece rides the idle floor's 1Hz edge (a frame every one
+        // or every few of them; a repaint between frames diffs to nothing).
+        if let Some(piece) = self.screensaver() {
+            return match crate::app::ascii::piece::cadence(piece) {
+                crate::app::ascii::piece::Cadence::Half => ANIM_HALF_TICK,
+                crate::app::ascii::piece::Cadence::Quarter => ANIM_QUARTER_TICK,
+                crate::app::ascii::piece::Cadence::Slow { .. } => IDLE_TICK,
+            };
+        }
         let hot = self.show_splash
             || self.haunt.breakthrough_playing()
             || self.last_input_at.elapsed() < POST_INPUT_HOT_WINDOW
@@ -1382,13 +1451,16 @@ impl App {
         // bonsai care modal and the profile's bonsai sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway. A
         // Zen music or visualizer tile paints its eq on that edge too; left
-        // to the aquarium's quarter tier it drops to ~3.8fps.
+        // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
+        // tile in dots plays its frames on this edge too; one in pixels
+        // rides the quarter tier below.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || crate::app::door::hub::state::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
+            || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
@@ -1397,10 +1469,54 @@ impl App {
         }
         if self.aquarium_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
+            || self.quarter_ascii_visible()
         {
             return ANIM_QUARTER_TICK;
         }
         IDLE_TICK
+    }
+
+    /// The ascii pieces on screen: the away screensaver's, or the Zen ascii
+    /// tiles' that are drawn (not zoomed away).
+    fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
+        match (self.screensaver(), self.screen) {
+            (Some(piece), _) => vec![piece],
+            (None, Screen::Zen) => self.zen.drawn_pieces(),
+            (None, _) => Vec::new(),
+        }
+    }
+
+    /// Whether a piece on screen plays a new frame on this tick: the lively
+    /// ones on the half edge in dots and the quarter edge in pixels, the
+    /// slow ones on the 1Hz edge.
+    fn ascii_edge(&self, anim_half: bool, anim_quarter: bool, one_hz: bool) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| match cadence(piece) {
+                Cadence::Half => anim_half,
+                Cadence::Quarter => anim_quarter,
+                Cadence::Slow { .. } => one_hz,
+            })
+    }
+
+    /// Whether a piece on screen plays at the half tier, which earns it.
+    /// A slow piece asks for nothing: the idle floor already carries the
+    /// 1Hz edge it plays on.
+    fn lively_ascii_visible(&self) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| cadence(piece) == Cadence::Half)
+    }
+
+    /// Whether a piece on screen plays at the quarter tier: a lively piece
+    /// in pixels.
+    fn quarter_ascii_visible(&self) -> bool {
+        use crate::app::ascii::piece::{Cadence, cadence};
+        self.visible_pieces()
+            .into_iter()
+            .any(|piece| cadence(piece) == Cadence::Quarter)
     }
 
     /// Whether the reef is actually on screen: the Zen page draws it for
@@ -1433,12 +1549,10 @@ impl App {
             )
     }
 
-    /// Whether the live strip is on screen: the #lounge card, or a Live
-    /// tile drawn on Zen (a Live tile zoomed away from doesn't count).
+    /// Whether the live strip is on screen: the #lounge card (Zen's Live
+    /// tile is the panel, which does not animate).
     fn live_strip_shown(&self) -> bool {
         self.lounge_card_shown()
-            || (self.screen == Screen::Zen
-                && self.zen.draws(crate::app::zen::state::TileKind::Live))
     }
 
     /// Whether the right sidebar draws this frame (the settings draft
@@ -1495,7 +1609,7 @@ impl App {
             self.attention_spot = spot;
             crate::metrics::record_place_visit(self.screen, place);
         }
-        let presence = match self.last_input_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
+        let presence = match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
             true => crate::metrics::Presence::Active,
             false => crate::metrics::Presence::Idle,
         };
@@ -1542,10 +1656,12 @@ impl App {
             | Screen::Dopewars
             | Screen::Bashquest
             | Screen::Codekeep
+            | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom
             | Screen::Leaderboard
+            | Screen::Calendars
             | Screen::Clubhouse
             | Screen::Nightcap
             | Screen::City

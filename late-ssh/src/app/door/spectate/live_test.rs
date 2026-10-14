@@ -4,13 +4,17 @@ use super::*;
 
 const STARTED: u64 = 1_790_000_000;
 
-fn row(playname: &str, status: &str, watchers: usize) -> LiveRow {
+fn row(playname: &str, status: &str) -> LiveRow {
+    row_of(SpectateGame::Dcss, playname, status)
+}
+
+fn row_of(game: SpectateGame, playname: &str, status: &str) -> LiveRow {
     LiveRow {
-        game: SpectateGame::Dcss,
+        key: LiveGameKey::new(game, playname).expect("a handle"),
         entry: LiveGame {
             playname: playname.to_string(),
             started_unix: STARTED,
-            watchers,
+            watchers: 0,
             status: status.to_string(),
         },
     }
@@ -25,35 +29,39 @@ fn text(spans: &[Span<'_>]) -> String {
 }
 
 /// A game joins the queue when it starts, stamped with the host's start
-/// time, which every replica reads the same. The viewer's own running game
-/// is never offered.
+/// time, which every replica reads the same. Nothing is filtered: whoever
+/// is looking, their own game included, every live game is offered.
 #[test]
-fn every_live_game_but_your_own_is_offered_stamped_with_its_start() {
-    let live = [row("mat", "XL3 Lair:2", 0), row("eggy", "", 1)];
+fn every_live_game_is_offered_stamped_with_its_start() {
+    let live = [row("mat", "XL3 Lair:2"), row("eggy", "")];
 
-    let offered = candidates(&live, &[key("eggy")]);
+    let offered = candidates(&live);
 
-    assert_eq!(offered.len(), 1);
-    assert_eq!(offered[0].source, LiveSource::DoorGame(key("mat")));
+    let started = Utc.timestamp_opt(STARTED as i64, 0).unwrap();
     assert_eq!(
-        offered[0].updated,
-        Utc.timestamp_opt(STARTED as i64, 0).unwrap()
+        offered
+            .iter()
+            .map(|candidate| (candidate.source, candidate.updated))
+            .collect::<Vec<_>>(),
+        vec![
+            (LiveSource::DoorGame(key("mat")), started),
+            (LiveSource::DoorGame(key("eggy")), started),
+        ]
     );
-    assert_eq!(candidates(&live, &[]).len(), 2);
 }
 
 #[test]
 fn a_game_no_longer_listed_has_no_view() {
-    let live = [row("mat", "", 0)];
+    let live = [row("mat", "")];
 
-    assert!(view(&live, key("mat")).is_some());
-    assert!(view(&live, key("eggy")).is_none());
+    assert!(view(&live, key("mat"), 0).is_some());
+    assert!(view(&live, key("eggy"), 0).is_none());
 }
 
 #[test]
 fn the_body_names_the_door_where_they_are_who_watches_and_the_key() {
-    let live = [row("mat", "XL3 Lair:2", 2)];
-    let strip = view(&live, key("mat")).expect("a listed game has a view");
+    let live = [row("mat", "XL3 Lair:2")];
+    let strip = view(&live, key("mat"), 2).expect("a listed game has a view");
 
     let body = body(60, &strip);
     let words: Vec<String> = body.words.iter().map(|spans| text(spans)).collect();
@@ -70,8 +78,8 @@ fn the_body_names_the_door_where_they_are_who_watches_and_the_key() {
 /// strip says how long they have been in; nobody watching says nothing.
 #[test]
 fn a_game_without_a_status_reads_its_time_in() {
-    let live = [row("mat", "", 0)];
-    let strip = view(&live, key("mat")).expect("a listed game has a view");
+    let live = [row("mat", "")];
+    let strip = view(&live, key("mat"), 0).expect("a listed game has a view");
 
     let words: Vec<String> = body(60, &strip)
         .words
@@ -95,12 +103,9 @@ fn every_door_draws_its_own_picture_in_the_picture_column() {
     let pictures: Vec<Vec<String>> = statuses
         .into_iter()
         .map(|(game, status)| {
-            let live = [LiveRow {
-                game,
-                ..row("mat", status, 0)
-            }];
+            let live = [row_of(game, "mat", status)];
             let key = LiveGameKey::new(game, "mat").expect("a handle");
-            let strip = view(&live, key).expect("a listed game has a view");
+            let strip = view(&live, key, 0).expect("a listed game has a view");
             let body = body(60, &strip);
             let words: Vec<String> = body.words.iter().map(|spans| text(spans)).collect();
             assert_eq!(words[1], game.label());

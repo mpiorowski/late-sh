@@ -20,7 +20,7 @@ fn glyph(mark: Mark) -> Glyph {
         Mark::BrightWon => Glyph::Yellow,
         Mark::Ran => Glyph::Orange,
         Mark::Fell => Glyph::Boom,
-        Mark::Mended | Mark::Cleared => Glyph::Blue,
+        Mark::Cleared => Glyph::Blue,
         Mark::Cached => Glyph::White,
         // A fight still on is not a result; the card is only cut once the
         // road is over, so this is a step the day roll will wipe.

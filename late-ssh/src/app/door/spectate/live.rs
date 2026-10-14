@@ -28,21 +28,19 @@ use super::ui::{duration_label, minutes_since};
 pub struct DoorGameStripView {
     pub key: LiveGameKey,
     pub entry: LiveGame,
+    /// People with this game's watch open (`LiveGamesService::watchers_of`).
+    pub watching: usize,
 }
 
 /// Every live game on the watchable doors' rosters, stamped with when it
 /// started: a game is news when it starts. The rosters come from the door
-/// hosts, so every replica reads the same stamps. The viewer's own running
-/// games are never offered: there is nothing to hop into.
-pub(crate) fn candidates(live: &[LiveRow], own: &[LiveGameKey]) -> Vec<LiveCandidate> {
+/// hosts, so every replica reads the same stamps. The viewer's own games are
+/// offered like anyone else's: a live surface never filters the viewer out.
+pub(crate) fn candidates(live: &[LiveRow]) -> Vec<LiveCandidate> {
     live.iter()
         .filter_map(|row| {
-            let key = LiveGameKey::new(row.game, &row.entry.playname)?;
-            if own.contains(&key) {
-                return None;
-            }
             Some(LiveCandidate {
-                source: LiveSource::DoorGame(key),
+                source: LiveSource::DoorGame(row.key),
                 updated: started_at(&row.entry)?,
                 aimed_at: None,
             })
@@ -54,13 +52,19 @@ fn started_at(entry: &LiveGame) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(i64::try_from(entry.started_unix).ok()?, 0)
 }
 
-/// One live game as the strip paints it. `None` once it ended.
-pub(crate) fn view(live: &[LiveRow], key: LiveGameKey) -> Option<DoorGameStripView> {
+/// One live game as the strip paints it, `watching` the people with its
+/// watch open. `None` once it ended.
+pub(crate) fn view(
+    live: &[LiveRow],
+    key: LiveGameKey,
+    watching: usize,
+) -> Option<DoorGameStripView> {
     live.iter()
-        .find(|row| row.game == key.game() && row.entry.playname == key.playname())
+        .find(|row| row.key == key)
         .map(|row| DoorGameStripView {
             key,
             entry: row.entry.clone(),
+            watching,
         })
 }
 
@@ -84,11 +88,7 @@ pub(crate) fn glow() -> bool {
 /// `dcss mat · XL3 Lair:2`, after the rule label.
 pub(crate) fn compact_spans(rest: u16, strip: &DoorGameStripView) -> Vec<Span<'static>> {
     let rest = usize::from(rest);
-    let lead = format!(
-        "{} {} · ",
-        strip.key.game().door_game().key(),
-        strip.key.playname()
-    );
+    let lead = format!("{} {} · ", strip.key.game().slug(), strip.key.playname());
     let lead = truncate_chars(&lead, rest);
     let left = rest.saturating_sub(lead.chars().count());
     vec![
@@ -117,6 +117,28 @@ fn picture(game: SpectateGame) -> Vec<Line<'static>> {
         SpectateGame::Dcss => framed(&DCSS_ROOM, dcss_glyph),
         SpectateGame::Nethack => framed(&NETHACK_ROOM, nethack_glyph),
         SpectateGame::Brogue => framed(&BROGUE_CAVE, brogue_glyph),
+        SpectateGame::Zork => framed(&WHITE_HOUSE, zork_glyph),
+    }
+}
+
+/// West of House: the white house with its boarded front door, the small
+/// mailbox, and the player standing in the field.
+const WHITE_HOUSE: [&str; 5] = [
+    "         /   \\     ",
+    "        /_____\\    ",
+    "        |[] []|    ",
+    "   @  m |  +  |    ",
+    ",,,,,,,,|_____|,,,,",
+];
+
+fn zork_glyph(ch: char) -> Style {
+    match ch {
+        '@' => player_style(),
+        'm' | '+' => Style::default().fg(theme::AMBER_DIM()),
+        ',' => Style::default().fg(theme::BONSAI_LEAF()),
+        '[' | ']' => Style::default().fg(theme::TEXT_DIM()),
+        '/' | '\\' | '_' | '|' => Style::default().fg(theme::TEXT_BRIGHT()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
     }
 }
 
@@ -226,9 +248,9 @@ fn word_rows(budget: usize, strip: &DoorGameStripView) -> Vec<Vec<Span<'static>>
             .fg(theme::TEXT())
             .add_modifier(Modifier::BOLD),
     )];
-    let watching = match strip.entry.watchers {
+    let watching = match strip.watching {
         0 => String::new(),
-        watchers => format!(" · {watchers} watching"),
+        watching => format!(" · {watching} watching"),
     };
     rows[2] = vec![Span::styled(
         truncate_chars(&format!("{}{watching}", whereabouts(&strip.entry)), budget),

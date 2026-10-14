@@ -87,7 +87,9 @@ fn score_letter_from_guesses_keeps_best_keyboard_hint() {
     assert_eq!(score_letter_from_guesses(&guesses, "apple", 'z'), None);
 }
 
-fn yesterdays_state() -> (State, chrono::NaiveDate, chrono::NaiveDate) {
+/// A board on the daily word `answer` for `puzzle_date`, behind a service
+/// whose pool never connects.
+pub(crate) fn state_for(puzzle_date: chrono::NaiveDate, answer: &str) -> State {
     use crate::app::arcade::le_word::svc::LeWordService;
     use late_core::db::{Db, DbConfig};
     use late_core::models::le_word::DailyWord;
@@ -98,22 +100,25 @@ fn yesterdays_state() -> (State, chrono::NaiveDate, chrono::NaiveDate) {
         Db::new(&DbConfig::default()).expect("test db pool"),
         activity_feed,
     );
-    let today = svc.today();
-    let yesterday = today.pred_opt().expect("yesterday");
     let now = chrono::Utc::now();
-    let state = State::new(
+    State::new(
         Uuid::now_v7(),
         svc,
         Some(DailyWord {
             id: Uuid::now_v7(),
             created: now,
             updated: now,
-            puzzle_date: yesterday,
-            answer_word: "crane".to_string(),
+            puzzle_date,
+            answer_word: answer.to_string(),
         }),
         None,
-    );
-    (state, today, yesterday)
+    )
+}
+
+fn yesterdays_state() -> (State, chrono::NaiveDate, chrono::NaiveDate) {
+    let today = chrono::Utc::now().date_naive();
+    let yesterday = today.pred_opt().expect("yesterday");
+    (state_for(yesterday, "crane"), today, yesterday)
 }
 
 fn todays_word(today: chrono::NaiveDate) -> late_core::models::le_word::DailyWord {

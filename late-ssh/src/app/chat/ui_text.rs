@@ -560,6 +560,11 @@ fn render_message_footer_lines(
     footer_lines
 }
 
+/// The wave's reaction kind. Kinds `1..=9` are the digit shortcuts; the
+/// wave sits at `0` only because that slot was free, its key is `w` (the `0`
+/// key opens the icon picker instead), so name it rather than write the 0.
+pub(super) const WAVE_REACTION_KIND: i16 = 0;
+
 pub(super) fn reaction_label(kind: i16) -> &'static str {
     match kind {
         1 => "👍",
@@ -571,7 +576,7 @@ pub(super) fn reaction_label(kind: i16) -> &'static str {
         7 => "🚀",
         8 => "🤔",
         9 => "💩",
-        0 => "👋",
+        WAVE_REACTION_KIND => "👋",
         _ => "?",
     }
 }

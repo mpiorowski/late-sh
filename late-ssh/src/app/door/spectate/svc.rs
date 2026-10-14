@@ -1,11 +1,18 @@
 // Orchestration for the live-game rosters: one connect-with-retry task per
 // door whose host serves watch sessions (spawned from main.rs), following the
 // host's `list` stream and publishing each block as a snapshot every session
-// reads. The roster drives the live rows on the hub's rail, the `s` key's
-// target, and the watcher count a player sees in their own game's chrome.
+// reads. The roster drives the live rows on the hub's rail and the live
+// strip's target.
 //
 // While the stream is down the published roster is empty, never stale: a
 // list of games nobody can open is worse than no list.
+//
+// It also counts who is watching (`OpenWatches`): the people with a watch
+// open on a game, across every session of this process, which is all of
+// them (service-ssh runs as one replica). This is the count every `N
+// watching` shows. The host's own count on the roster line is of streams,
+// which previews and the player's own screen inflate, so it is parsed and
+// ignored.
 //
 // It also resolves the watch-chat rooms: one permanent chat room per player,
 // per door (`ChatRoom::get_or_create_watch_room`), created the first time
@@ -24,7 +31,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::proxy::{LiveGame, WatchTarget, run_roster_stream};
-use super::state::{LiveRow, SpectateGame};
+use super::state::{LiveGameKey, LiveRow, SpectateGame};
 use crate::render_signal::RenderSignal;
 
 /// Backoff between roster-stream attempts (host restarts, rollouts, network
@@ -42,6 +49,66 @@ enum RoomSlot {
 }
 
 type ChatRooms = Arc<Mutex<HashMap<(SpectateGame, String), RoomSlot>>>;
+
+/// For each live game, each user with its watch open and how many of their
+/// sessions hold it.
+type Held = Arc<Mutex<HashMap<LiveGameKey, HashMap<Uuid, usize>>>>;
+
+/// Who has a watch open on which game, process wide. A watch counts from
+/// `state::State::open` until the [`OpenWatch`] it holds drops, which is
+/// every way an open watch ends (Esc, the game ending, the away window, the
+/// session going), so nothing decrements by hand. A preview never counts,
+/// an away watch still does, and a user in two sessions counts once.
+#[derive(Clone, Default)]
+pub struct OpenWatches {
+    held: Held,
+}
+
+impl OpenWatches {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Count `user_id` as watching `key` for as long as the guard lives.
+    pub fn open(&self, key: LiveGameKey, user_id: Uuid) -> OpenWatch {
+        let mut held = self.held.lock().expect("open watches mutex");
+        *held.entry(key).or_default().entry(user_id).or_insert(0) += 1;
+        OpenWatch {
+            key,
+            user_id,
+            held: self.held.clone(),
+        }
+    }
+
+    /// People with `key`'s watch open.
+    pub fn watchers_of(&self, key: LiveGameKey) -> usize {
+        let held = self.held.lock().expect("open watches mutex");
+        held.get(&key).map_or(0, HashMap::len)
+    }
+}
+
+/// One session's open watch on one game, as [`OpenWatches`] counts it.
+/// Dropping it is the only way out of the count.
+pub struct OpenWatch {
+    key: LiveGameKey,
+    user_id: Uuid,
+    held: Held,
+}
+
+impl Drop for OpenWatch {
+    fn drop(&mut self) {
+        let mut held = self.held.lock().expect("open watches mutex");
+        let users = held.get_mut(&self.key).expect("an open watch is held");
+        let sessions = users.get_mut(&self.user_id).expect("an open watch is held");
+        *sessions -= 1;
+        if *sessions == 0 {
+            users.remove(&self.user_id);
+        }
+        if users.is_empty() {
+            held.remove(&self.key);
+        }
+    }
+}
 
 /// One door's published roster: the roster task's sender, and this holder's
 /// read position on it.
@@ -73,16 +140,18 @@ impl RosterFeed {
     }
 }
 
-/// The published rosters plus this holder's read position, and the shared
-/// watch-chat room cache. Cloned into every session, so each clone tracks its
-/// own "seen" for [`Self::tick`].
+/// The published rosters plus this holder's read position, the shared
+/// watch-chat room cache, and the open-watch count. Cloned into every
+/// session, so each clone tracks its own "seen" for [`Self::tick`].
 #[derive(Clone)]
 pub struct LiveGamesService {
     db: Db,
     dcss: RosterFeed,
     nethack: RosterFeed,
     brogue: RosterFeed,
+    zork: RosterFeed,
     chat_rooms: ChatRooms,
+    open_watches: OpenWatches,
 }
 
 impl LiveGamesService {
@@ -92,8 +161,27 @@ impl LiveGamesService {
             dcss: RosterFeed::new(),
             nethack: RosterFeed::new(),
             brogue: RosterFeed::new(),
+            zork: RosterFeed::new(),
             chat_rooms: Arc::new(Mutex::new(HashMap::new())),
+            open_watches: OpenWatches::new(),
         }
+    }
+
+    /// Count `user_id` as watching `key` for as long as the guard lives; the
+    /// watch's `State` holds it while open.
+    pub fn open_watch(&self, key: LiveGameKey, user_id: Uuid) -> OpenWatch {
+        self.open_watches.open(key, user_id)
+    }
+
+    /// People with `key`'s watch open, process wide.
+    pub fn watchers_of(&self, key: LiveGameKey) -> usize {
+        self.open_watches.watchers_of(key)
+    }
+
+    /// The open-watch count itself, for a reader that lists many games at
+    /// once (the sidebar's Live panel) and its tests, which need no roster.
+    pub fn open_watches(&self) -> &OpenWatches {
+        &self.open_watches
     }
 
     fn feed(&self, game: SpectateGame) -> &RosterFeed {
@@ -101,6 +189,7 @@ impl LiveGamesService {
             SpectateGame::Dcss => &self.dcss,
             SpectateGame::Nethack => &self.nethack,
             SpectateGame::Brogue => &self.brogue,
+            SpectateGame::Zork => &self.zork,
         }
     }
 
@@ -143,11 +232,11 @@ impl LiveGamesService {
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
-                        game = game.door_game().key(),
+                        game = game.watch_door().key(),
                         playname = %key.1,
                         "failed to resolve watch chat room"
                     );
-                    crate::metrics::record_door_watch_chat_room_failure(game.door_game());
+                    crate::metrics::record_door_watch_chat_room_failure(game.watch_door());
                     rooms.remove(&key);
                 }
             }
@@ -164,26 +253,22 @@ impl LiveGamesService {
     }
 
     /// Every live game across the watchable doors, in the order the Games
-    /// hub's rail lists them: door by door, oldest game first.
+    /// hub's rail lists them: door by door, oldest game first. This is the
+    /// boundary for the hosts' playnames: a roster line whose name is not a
+    /// handle (`LiveGameKey::new`) is no row, so nothing downstream can hold
+    /// a game it cannot key.
     pub fn live_rows(&self) -> Vec<LiveRow> {
         SpectateGame::ALL
             .into_iter()
             .flat_map(|game| {
                 let roster = self.roster(game);
-                (0..roster.len()).map(move |index| LiveRow {
-                    game,
-                    entry: roster[index].clone(),
+                (0..roster.len()).filter_map(move |index| {
+                    let entry = roster[index].clone();
+                    let key = LiveGameKey::new(game, &entry.playname)?;
+                    Some(LiveRow { key, entry })
                 })
             })
             .collect()
-    }
-
-    /// Watchers on `playname`'s game, `None` when it is not listed.
-    pub fn watchers_of(&self, game: SpectateGame, playname: &str) -> Option<usize> {
-        self.roster(game)
-            .iter()
-            .find(|g| g.playname == playname)
-            .map(|g| g.watchers)
     }
 
     /// Publish `roster` as `game`'s live games, as the roster task does for
@@ -216,7 +301,8 @@ impl LiveGamesService {
         let dcss = self.dcss.tick();
         let nethack = self.nethack.tick();
         let brogue = self.brogue.tick();
-        dcss || nethack || brogue
+        let zork = self.zork.tick();
+        dcss || nethack || brogue || zork
     }
 
     /// Spawn `game`'s roster loop: connect, follow, publish; on any end
@@ -244,16 +330,16 @@ impl LiveGamesService {
                 publish.send_replace(Arc::new(Vec::new()));
                 match result {
                     Ok(()) => tracing::info!(
-                        game = game.door_game().key(),
+                        game = game.watch_door().key(),
                         "door roster stream ended; reconnecting"
                     ),
                     Err(e) => {
                         tracing::warn!(
                             error = ?e,
-                            game = game.door_game().key(),
+                            game = game.watch_door().key(),
                             "door roster stream failed; retrying"
                         );
-                        crate::metrics::record_door_watch_roster_failure(game.door_game());
+                        crate::metrics::record_door_watch_roster_failure(game.watch_door());
                     }
                 }
                 tokio::select! {
@@ -269,8 +355,12 @@ impl LiveGamesService {
 /// the room when this is the first time anyone needs it.
 async fn watch_room_id(db: &Db, game: SpectateGame, playname: &str) -> Result<Uuid> {
     let client = db.get().await.context("getting db client")?;
-    let room = ChatRoom::get_or_create_watch_room(&client, game.door_game(), playname)
+    let room = ChatRoom::get_or_create_watch_room(&client, game.watch_door(), playname)
         .await
         .context("ensuring watch chat room")?;
     Ok(room.id)
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

@@ -592,8 +592,15 @@ async fn a_newcomers_paper_waits_until_the_tour_is_walked() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // Nothing pops while the tour holds the keys, however long it takes.
-    // Enter is the only key the route takes, stop after stop.
+    // Enter is the only key the route takes, stop after stop (it skips the
+    // hidden Artboard without showing it).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while app.clubhouse.tutorial != Tutorial::Homecoming {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tour did not reach Homecoming: {:?}",
+            app.clubhouse.tutorial
+        );
         app.handle_input(b"\r");
         let frame = render_plain(&mut app);
         assert!(!frame.contains("The Late Edition"), "{frame}");

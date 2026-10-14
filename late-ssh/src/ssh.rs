@@ -3,7 +3,7 @@ use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
     artboard_ban::ArtboardBan,
-    article_feed_read::ArticleFeedRead,
+    article_read::ArticleRead,
     server_ban::ServerBan,
     user::{User, UserParams, extract_theme_id},
 };
@@ -901,14 +901,6 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        // The door: the day's wall piece, or the cup.
-        let splash_piece = self
-            .state
-            .gallery_service
-            .splash_piece_for_mode(late_core::models::user::extract_art_splash_mode(
-                &user.settings,
-            ))
-            .await;
         let key_fingerprint = self.auth_fingerprint.clone();
         let device = crate::session_bootstrap::load_device_state(
             &self.state,
@@ -916,6 +908,13 @@ impl russh::server::Handler for ClientHandler {
             key_fingerprint.as_deref(),
         )
         .await;
+        // The door: the day's wall piece for those who chose Always View on
+        // the Artboard content disclaimer (on this device), else the cup.
+        let splash_piece = self
+            .state
+            .gallery_service
+            .splash_piece_for_login(device.shows_artboard_disclaimer(user))
+            .await;
         let initial_door_rcs = match self.state.door_rc_service.list(user_id).await {
             Ok(rcs) => rcs,
             Err(e) => {
@@ -947,6 +946,7 @@ impl russh::server::Handler for ClientHandler {
             jobs_service: self.state.jobs_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,
+            calendar_service: self.state.calendar_service.clone(),
             feed_service: self.state.feed_service.clone(),
             cyberspace_service: self.state.cyberspace_service.clone(),
             showcase_service: self.state.showcase_service.clone(),
@@ -1069,6 +1069,10 @@ impl russh::server::Handler for ClientHandler {
             codekeep_host: self.state.config.codekeep_host.clone(),
             codekeep_port: self.state.config.codekeep_port,
             codekeep_secret: self.state.config.codekeep_secret.clone(),
+            zork_enabled: self.state.config.zork_enabled,
+            zork_host: self.state.config.zork_host.clone(),
+            zork_port: self.state.config.zork_port,
+            zork_secret: self.state.config.zork_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),
@@ -1093,6 +1097,7 @@ impl russh::server::Handler for ClientHandler {
             zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
             key_fingerprint,
             key_layout: device.layout,
+            key_artboard_disclaimer: device.artboard_disclaimer,
             key_left_at: device.left_at,
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
@@ -1844,11 +1849,13 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
                     );
                 }
             }
-            if let Err(e) = ArticleFeedRead::seed_read_for_new_user(&client, user.id).await {
+            // A first login never shows the back catalog as unread: the new
+            // user has read the feed as it stands.
+            if let Err(e) = ArticleRead::mark_feed_read(&client, user.id).await {
                 tracing::warn!(
                     user_id = %user.id,
                     error = ?e,
-                    "failed to seed news read cursor for newly created user"
+                    "failed to seed news reads for newly created user"
                 );
             }
             (user, true)

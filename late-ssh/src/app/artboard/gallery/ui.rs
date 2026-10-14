@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::app::artboard::state::State;
@@ -243,7 +243,7 @@ fn rail_label(marker: &str, label: &str, tail: &str) -> String {
 }
 
 /// The listing pane: list on the left, the selected piece on the right.
-pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State, can_moderate: bool) {
+pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State) {
     let gallery = state.gallery();
     let Some(section) = gallery.viewed_section() else {
         return;
@@ -278,16 +278,11 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State, can_moder
         let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[3]);
         draw_list(frame, body[0], gallery, section);
         let hints: &[(&str, &str)] = if mine {
-            &[("n", "rating"), ("Enter", "view"), ("x", "take down")]
+            &[("Enter", "view"), ("x", "take down")]
         } else {
-            &[("n", "rating"), ("Enter", "view"), ("v", "applaud")]
+            &[("Enter", "view"), ("v", "applaud")]
         };
-        let can_moderate =
-            can_moderate && gallery.focus() == Focus::List && gallery.selected_piece().is_some();
-        frame.render_widget(
-            Paragraph::new(piece_key_hint_line(hints, can_moderate)),
-            body[1],
-        );
+        frame.render_widget(Paragraph::new(key_hint_line(hints)), body[1]);
         return;
     }
     let list_width = (area.width / 5 * 2).clamp(LIST_MIN_WIDTH, area.width.saturating_sub(20));
@@ -299,14 +294,7 @@ pub fn draw_gallery_pane(frame: &mut Frame, area: Rect, state: &State, can_moder
     .split(rows[3]);
     draw_list(frame, columns[0], gallery, section);
     if let Some(piece) = gallery.selected_piece() {
-        draw_preview(
-            frame,
-            columns[2],
-            piece,
-            mine,
-            gallery.focus(),
-            can_moderate,
-        );
+        draw_preview(frame, columns[2], piece, mine, gallery.focus());
     }
 }
 
@@ -348,12 +336,7 @@ fn draw_list(frame: &mut Frame, area: Rect, gallery: &GalleryState, section: Gal
         } else {
             " "
         };
-        let badge = if piece.content_rating.determination().0.is_nsfw() {
-            " [NSFW]"
-        } else {
-            ""
-        };
-        let title_width = (area.width as usize).saturating_sub(12 + Span::raw(badge).width());
+        let title_width = (area.width as usize).saturating_sub(12);
         let mut title = String::new();
         for ch in piece.title.chars() {
             let candidate = format!("{title}{ch}");
@@ -362,7 +345,7 @@ fn draw_list(frame: &mut Frame, area: Rect, gallery: &GalleryState, section: Gal
             }
             title.push(ch);
         }
-        let text = format!(" {marker} {:>3} {clap}{badge} {title}", piece.applause);
+        let text = format!(" {marker} {:>3} {clap} {title}", piece.applause);
         let style = if is_selected && list_focused {
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -380,14 +363,7 @@ fn draw_list(frame: &mut Frame, area: Rect, gallery: &GalleryState, section: Gal
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn draw_preview(
-    frame: &mut Frame,
-    area: Rect,
-    piece: &GalleryPiece,
-    mine: bool,
-    focus: Focus,
-    can_moderate: bool,
-) {
+fn draw_preview(frame: &mut Frame, area: Rect, piece: &GalleryPiece, mine: bool, focus: Focus) {
     if area.width < 10 || area.height < 4 {
         return;
     }
@@ -409,32 +385,16 @@ fn draw_preview(
     );
     draw_piece_canvas(frame, rows[2], piece);
     let keys: &[(&str, &str)] = match (focus, mine) {
-        (Focus::List, true) => &[
-            ("n", "rating"),
-            ("x", "take down"),
-            ("Enter", "full frame"),
-            ("Esc", "rail"),
-        ],
-        (Focus::List, false) => &[
-            ("n", "rating"),
-            ("v", "applaud"),
-            ("Enter", "full frame"),
-            ("Esc", "rail"),
-        ],
+        (Focus::List, true) => &[("x", "take down"), ("Enter", "full frame"), ("Esc", "rail")],
+        (Focus::List, false) => &[("v", "applaud"), ("Enter", "full frame"), ("Esc", "rail")],
         (Focus::Rail, _) => &[("Enter/→", "browse")],
         (Focus::Canvas | Focus::Piece | Focus::Archive, _) => &[],
     };
-    frame.render_widget(
-        Paragraph::new(piece_key_hint_line(
-            keys,
-            can_moderate && focus == Focus::List,
-        )),
-        rows[3],
-    );
+    frame.render_widget(Paragraph::new(key_hint_line(keys)), rows[3]);
 }
 
 /// One piece, full frame, over the whole detail pane.
-pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State, can_moderate: bool) {
+pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State) {
     let gallery = state.gallery();
     let Some(piece) = gallery.selected_piece() else {
         return;
@@ -463,21 +423,11 @@ pub fn draw_piece_view(frame: &mut Frame, area: Rect, state: &State, can_moderat
     // The first two groups (12 hex digits) are enough to be unique and
     // short enough to copy by eye.
     let hints: &[(&str, &str)] = if gallery.is_mine(piece) {
-        &[
-            ("n", "rating"),
-            ("x", "take down"),
-            ("j/k", "next/prev"),
-            ("Esc", "back"),
-        ]
+        &[("x", "take down"), ("j/k", "next/prev"), ("Esc", "back")]
     } else {
-        &[
-            ("n", "rating"),
-            ("v", "applaud"),
-            ("j/k", "next/prev"),
-            ("Esc", "back"),
-        ]
+        &[("v", "applaud"), ("j/k", "next/prev"), ("Esc", "back")]
     };
-    let mut keys = piece_key_hint_line(hints, can_moderate);
+    let mut keys = key_hint_line(hints);
     keys.spans.push(Span::styled(
         format!("   id {}", piece_id_prefix(piece.id)),
         Style::default().fg(theme::TEXT_FAINT()),
@@ -746,14 +696,6 @@ fn caption_line(piece: &GalleryPiece) -> Line<'static> {
             Style::default().fg(theme::TEXT_BRIGHT()),
         ),
         Span::styled(
-            if piece.content_rating.determination().0.is_nsfw() {
-                " [NSFW]"
-            } else {
-                ""
-            },
-            Style::default().fg(theme::ERROR()),
-        ),
-        Span::styled(
             format!(" · {}", applause_label(piece.applause)),
             Style::default().fg(if piece.applauded_by_viewer {
                 theme::SUCCESS()
@@ -770,121 +712,6 @@ fn caption_line(piece: &GalleryPiece) -> Line<'static> {
             Style::default().fg(theme::TEXT_FAINT()),
         ),
     ])
-}
-
-pub fn draw_rating_dialog(frame: &mut Frame, area: Rect, gallery: &GalleryState) {
-    let Some(dialog) = &gallery.rating_dialog else {
-        return;
-    };
-    let Some(piece) = gallery.rating_piece() else {
-        return;
-    };
-    let actions = gallery.rating_actions();
-    let width = 66.min(area.width);
-    let height = (12 + actions.len() as u16).min(area.height);
-    let popup = Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" Content rating ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    let layout = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Length(actions.len() as u16),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-    let summary = piece.content_rating;
-    let (rating, source) = summary.determination();
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(format!("\"{}\" by @{}", piece.title, piece.username)),
-            Line::from(format!("{} · {}", rating.label(), source.label())),
-            Line::from(format!(
-                "Community: SFW {} / NSFW {}",
-                summary.sfw_votes, summary.nsfw_votes
-            )),
-            Line::from(format!(
-                "Owner NSFW: {} · Mods {}/{} · Admins {}/{} (SFW/NSFW)",
-                if summary.owner_marked_nsfw {
-                    "on"
-                } else {
-                    "off"
-                },
-                summary.mod_sfw,
-                summary.mod_nsfw,
-                summary.admin_sfw,
-                summary.admin_nsfw
-            )),
-            Line::from(if gallery.is_mine(piece) {
-                "Artists cannot vote on their own pieces.".to_string()
-            } else {
-                format!(
-                    "Your vote: {}",
-                    summary
-                        .viewer_vote
-                        .map(|vote| vote.label())
-                        .unwrap_or("none")
-                )
-            }),
-        ])
-        .style(Style::default().fg(theme::TEXT())),
-        layout[0],
-    );
-    let mut action_areas = Vec::new();
-    for (index, (label, _)) in actions.iter().enumerate() {
-        if index as u16 >= layout[1].height {
-            break;
-        }
-        let row = Rect::new(layout[1].x, layout[1].y + index as u16, layout[1].width, 1);
-        action_areas.push(row);
-        let style = if index == dialog.selected {
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        frame.render_widget(
-            Paragraph::new(format!(
-                "{} {label}",
-                if index == dialog.selected { ">" } else { " " }
-            ))
-            .style(style),
-            row,
-        );
-    }
-    dialog.action_areas.set(action_areas);
-    let status = if dialog.pending {
-        "Updating content rating…"
-    } else {
-        dialog
-            .error
-            .as_deref()
-            .unwrap_or("Staff marks are managed through /mod.")
-    };
-    frame.render_widget(
-        Paragraph::new(status)
-            .wrap(Wrap { trim: true })
-            .style(Style::default().fg(theme::TEXT_DIM())),
-        layout[2],
-    );
-    frame.render_widget(
-        Paragraph::new(key_hint_line(&[
-            ("↑↓ j/k", "select"),
-            ("Enter", "apply"),
-            ("Esc/q", "close"),
-        ])),
-        layout[3],
-    );
 }
 
 /// "with @bob 6%, @ann 3% · hung Sep 3" style credits: every hand but the
@@ -955,14 +782,6 @@ fn section_heading(text: &str) -> Line<'static> {
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ))
-}
-
-fn piece_key_hint_line(keys: &[(&str, &str)], can_moderate: bool) -> Line<'static> {
-    let mut keys = keys.to_vec();
-    if can_moderate {
-        keys.insert(1, ("m", "moderate"));
-    }
-    key_hint_line(&keys)
 }
 
 fn key_hint_line(keys: &[(&str, &str)]) -> Line<'static> {

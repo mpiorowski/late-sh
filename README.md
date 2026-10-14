@@ -21,15 +21,31 @@ Read the details in [LICENSE](LICENSE), the plain-English policy in [LICENSING.m
 ## What It Includes
 
 - SSH TUI with dashboard, chat, profile, news, and arcade screens
+- Mouse controls on Profiles (screen 5): click people, jobs, links, and form controls; wheel scrolls the hovered pane
+- The events board on `7`: anyone posts an event, everyone sees it, `i` says I'm in; your own events sit beside it, private. A post is a line in #lounge, the hour before a timed event it heads the Home `now` strip and the Live panel, an all-day event takes the #lounge topic row for its day, the start is a headline
 - Real-time global chat and shared activity feed
 - Audio streaming via Icecast/Liquidsoap, played by the paired CLI or the public `/listen` page
+- Animated ASCII scenes in Zen tiles and away screensavers, with random and five-minute randomer modes
 - Terminal games including 2048, Sudoku, Nonograms, Minesweeper, and Solitaire
+- Zork Trilogy door with an autosave and a manual save per edition
 - Web frontend for landing, profiles, and the token-less `/listen` page
 - Companion CLI for local audio playback and synced visualizer data
 
+IRC uses `#name` for public rooms and `##name` for private rooms. `/LIST`
+shows both when you belong to the private room; `/join ##name` opens that
+private room using your existing late.sh membership. Create private rooms
+and invite members from the TUI. IRC JOIN only opens existing rooms.
+
+IRC clients with `draft/chathistory` can retrieve joined-channel and existing
+DM history, including missed conversations through `CHATHISTORY TARGETS`.
+Requests support message IDs and timestamps, up to 300 stored messages per
+page. Clients with `batch` and `server-time` that do not request
+`draft/chathistory` receive the latest 25 messages after joining a channel.
+Private membership and room bans apply to history as well as live chat.
+
 ## Workspace
 
-This is a Rust workspace with five crates:
+The Rust workspace contains the main apps and standalone door hosts:
 
 | Crate | Role |
 |-------|------|
@@ -38,6 +54,10 @@ This is a Rust workspace with five crates:
 | `late-ssh` | SSH server and terminal UI application |
 | `late-web` | Web server, landing page, profiles/gallery, stream proxy, and the public `/listen` page |
 | `late-webview` | Helper process hosting the official YouTube IFrame Player for the CLI |
+| `late-zork` | Private SSH/PTY host for the separately executed Frotz interpreter and Zork trilogy |
+
+The other standalone door hosts are `late-bashquest`, `late-brogue`,
+`late-codekeep`, `late-dcss`, `late-dopewars`, `late-nethack`, and `late-usurper`.
 
 The stack is backed by PostgreSQL, Icecast, and Liquidsoap.
 
@@ -121,6 +141,24 @@ Local host development can use Cargo's normal defaults, including the standard
 repo-local `target/` directory. The `/app/target` path is only for Docker/dev
 containers.
 
+The Zork door is enabled in the development profile. Build its vendored asset
+image once before building the Compose services (the current door base images
+target amd64):
+
+```bash
+docker build --platform linux/amd64 -f docker/doors/zork.Dockerfile \
+  -t ghcr.io/mpiorowski/late-sh/door-zork:2.56pre-r1 .
+make start
+```
+
+Open Games (`3`) → **Zork Trilogy** → choose an edition. Each has automatic
+progress and one deliberate `SAVE`; the six slots belong to your account.
+`SAVE` accepts an optional description, `RESTORE` asks before returning to the
+edition menu, and backtick steps out while the current game stays open.
+After 20 minutes without game input, Continue resumes its last prompt.
+See the [Zork component context](late-ssh/src/app/door/zork/CONTEXT.md) for the
+save contract, standalone host configuration, container tests, and rollout order.
+
 ```bash
 export CARGO_HOME=$HOME/.cargo
 ```
@@ -134,23 +172,51 @@ with clearly marked sample text and enables the paper. Use
 `make seed-paper PAPER_PARAGRAPHS=5` for a shorter edition (default: 100;
 range: 1–1000). Close and reopen `/paper` after reseeding; no restart is needed.
 
+To test IRC history in Halloy, run `make seed-irc-history USERNAME=yourname`
+with your local TUI username. It adds 400 numbered messages to `#history-lab`,
+80 to `##history-lab`, two 80-message DM conversations with `history_ada` and
+`history^lin`, and 40 messages to `#lounge`. Samples include Unicode, replies,
+long and multiline bodies, and equal timestamps. Rerunning restores these
+fixture messages and preserves other chat and existing read markers.
+
+Connect Halloy to localhost port 6667 without TLS, using an IRC token from the
+local app's Settings. Reconnect after seeding, join `#history-lab` and
+`##history-lab`, and scroll upward to request older pages. Open the two peer
+queries to check DM history. These SQL fixtures populate stored history; they
+do not send live events. No server restart is needed after seeding.
+
 To test the Artboard gallery, run `make seed-artboard` after the current stack
 has applied its migrations. It creates 11 test accounts and 12 distinguishable,
-numbered ASCII pieces with applause and community/owner/moderator/admin rating
-scenarios, and enables the gallery. The first three have enough applause for
+numbered ASCII pieces with applause. The first three have enough applause for
 monthly awards. Pieces 01–11 predate today UTC and qualify for the daily splash
-queue. Piece 01 is selected for today, unless a non-fixture piece owns the day.
-Use `make seed-artboard ART_SPLASH_PIECE=3` for an NSFW-rated splash (the drawing
-itself is harmless), or choose any piece 1–11. Restart the SSH service with
-`docker compose restart service-ssh` and reconnect to refresh its splash cache.
+queue. Piece 01 is selected for today, unless a non-fixture piece owns the day;
+choose any piece 1–11 with `make seed-artboard ART_SPLASH_PIECE=3`. Restart the
+SSH service with `docker compose restart service-ssh` and reconnect to refresh
+its splash cache.
 
-Open Artboard (`4`), choose **Newest** in the gallery rail, and press `n` on a
-piece to vote. Fixture SSH identities are retained in the gitignored
+Open Artboard (`4`), choose **Newest** in the gallery rail, and press `v` on a
+piece to applaud. Fixture SSH identities are retained in the gitignored
 `tmp/artboard-seed-keys/` directory. For example:
 
 ```bash
 ssh -o IdentitiesOnly=yes -i tmp/artboard-seed-keys/art_artist1 -p 2222 localhost
 ```
+
+Artboard opens behind a content disclaimer because the art may be NSFW.
+Press `V` (**View**) for this visit, `A` (**Always View**) to turn off future
+reminders on this device, or `B` (**Back to Chat**) to return to Home (screen `1`). The default-on **Artboard
+content disclaimer** toggle in Settings → Tweaks can turn reminders off or on.
+The choice is per device (the SSH key you logged in with), so it can stay on
+at work and off at home. A device that has never chosen inherits the account's
+value: on for a new account, off if you pressed Always View before the setting
+became per device.
+The page shortcuts `1`, `2`, `3`, `5`, `6`, and `7` also work from the disclaimer;
+leaving this way keeps the reminder enabled for the next visit.
+The same toggle gates the login splash: only with it off does the day's
+gallery piece replace the coffee cup, so newcomers always see the cup.
+During the newcomer tour the dialog does not appear: the tour box at the
+Artboard stop offers `S` to show the art for that visit or Enter to skip to
+Profiles, and neither changes the preference.
 
 Accounts are `art_artist1`–`art_artist3`, `art_voter1`–`art_voter4`, `art_mod1`/
 `art_mod2`, and `art_admin1`/`art_admin2`, each with a matching key filename.
@@ -158,38 +224,23 @@ Their tutorial is already marked completed, including when reseeding existing
 fixture accounts.
 They join the normal public auto-join rooms, including `#lounge`. From Home,
 select `#lounge` and enter `/mod` in its composer to open the staff console.
-Moderators and admins can also press `m` in a gallery list or full-piece view
-to open the console with art safety help and that piece's safety record.
-Rerunning restores these fixture pieces, applause, votes, marks, and staff
-roles; it preserves account preferences and all other users and art. Changes
-made while testing these pieces are reset by the next seed. Existing
-leaderboard seeding is separate, so art seeding does not rewrite game scores.
+Rerunning restores these fixture pieces, applause, and staff roles; it
+preserves account preferences and all other users and art. Changes made while
+testing these pieces are reset by the next seed. Existing leaderboard seeding
+is separate, so art seeding does not rewrite game scores.
 The dev profile grants admin privileges to every session; set `force_admin`
 to `false` in `late-ssh/src/config.rs` when testing role-based permissions.
-Plain safety commands write moderator marks even for admin accounts; the
-`admin` keyword explicitly selects the admin tier.
-
-Inside the `/mod` console:
-
-```text
-artboard safety help
-artboard safety view
-artboard safety view @art_artist1
-artboard safety view 0e77a39a
-artboard safety nsfw 0e77a39a
-artboard safety admin sfw 0e77a39a reviewed
-artboard safety admin none 0e77a39a
-artboard safety none 0e77a39a by @art_mod1
-```
-
-`view` shows a summary and review candidates; `@user` lists their hanging art,
-and an ID shows one piece's full safety record. `none` clears your mark at the
-selected tier. The per-piece record prints the full UUID on an `Art id:` line
-for copying into commands. Removing another account's mark, at either tier, with `by`
-is admin-only. Each account has one staff mark per piece; marking again
-replaces its mark and tier.
 
 ## Verification
+
+For events-board development, run `make seed-calendar` after starting the
+current stack. Fixture accounts are two ordinary users, a moderator and an
+admin, with a board of posts between them (one on now, one half an hour out),
+a few "I'm in"s and a private event; SSH keys live in
+`tmp/calendar-seed-keys/`. Press `1` to see the `now` strip and the Live
+panel, `7` for the board: `n` posts, `i` says I'm in, right-click offers what
+you may do. See [CALENDAR.md](CALENDAR.md) for the rules, the two #lounge
+lines, timing, telemetry and the fixture.
 
 Run the local gate before opening a PR:
 

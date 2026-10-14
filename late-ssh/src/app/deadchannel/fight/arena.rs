@@ -36,7 +36,7 @@ use uuid::Uuid;
 use super::cards::{Card, DRAFTS};
 use super::data::{self, Intent, MAX_LEVEL, Rules};
 use super::road::{FIGHT_STEPS, LANES, Node, STEPS};
-use super::sim::{self, Bench, Build, Climb, Day, Event, Hand, Journal, Player, Snapshot};
+use super::sim::{self, Bench, Build, Climb, Day, Event, Hand, Journal, Player, Snapshot, Start};
 use super::state::{Applied, Drink, MAX_TIER, Pick, Sheet, Slot, gear_name};
 
 /// What the runner carries into a matchup, both slots alike.
@@ -69,6 +69,13 @@ struct Recipe {
     marks: i32,
     /// The cards drafted, in the order of the drafts.
     cards: Vec<Card>,
+    /// The drafts inked, by level.
+    inks: Vec<i32>,
+}
+
+/// Every draft inked: the needle's most, the deck at its widest.
+fn all_inks() -> Vec<i32> {
+    DRAFTS.iter().map(|draft| draft.level).collect()
 }
 
 /// The cards a runner on `build` holds at `level`: a pick for every
@@ -126,6 +133,7 @@ impl Recipe {
             drink: None,
             marks: 0,
             cards: drafted(build, level),
+            inks: Vec::new(),
         }
     }
 
@@ -140,6 +148,7 @@ impl Recipe {
         sheet.armor_tier = self.kit.tier(self.level);
         sheet.drink = self.drink;
         sheet.cards = self.cards.clone();
+        sheet.inks = self.inks.clone();
         sheet.signal = sheet.max_signal();
         sheet
     }
@@ -227,6 +236,7 @@ fn old_signal(
     rules: &Rules,
     marks: i32,
     drink: Option<Drink>,
+    inks: &[i32],
     hand: Hand,
     build: &Build,
 ) -> Matchup {
@@ -236,9 +246,10 @@ fn old_signal(
         drink,
         marks,
         cards: build.to_vec(),
+        inks: inks.to_vec(),
     }
     .sheet();
-    recipe.exp = data::exp_to_seek(marks);
+    recipe.exp = data::exp_to_seek();
     let mut rng = StdRng::seed_from_u64(MATCHUP_SEED);
     let (mut wins, mut turns) = (0u32, 0u64);
     for _ in 0..MATCHUP_FIGHTS {
@@ -284,23 +295,24 @@ fn level_economy(rules: &Rules, level: i32) -> LevelEconomy {
     let (_, _, foe) = rules.foe(level);
     let from = match level {
         1 => 0,
-        level => data::exp_to_advance(level - 1, 0).expect("a level under the top"),
+        level => data::exp_to_advance(level - 1).expect("a level under the top"),
     };
-    let to = data::exp_to_advance(level, 0).unwrap_or_else(|| data::exp_to_seek(0));
+    let to = data::exp_to_advance(level).unwrap_or_else(data::exp_to_seek);
     let kills = (to - from + foe.exp - 1) / foe.exp;
     let next = (level + 1).min(MAX_TIER);
     LevelEconomy {
         kills,
         pays: kills * foe.bits,
-        next_pair: 2 * (rules.price(next) - rules.trade_in(next - 1)),
+        // Bought on reaching the next level, so with no lead on the price.
+        next_pair: 2 * (rules.price(next, next) - rules.trade_in(next - 1)),
     }
 }
 
-/// `player` climbed from a fresh row on `seeds` seeds under `rules`.
-fn climbs(player: Player, rules: Rules, seeds: u64, max_days: u32) -> Vec<Climb> {
+/// `player` climbed from `start` on `seeds` seeds under `rules`.
+fn climbs(player: Player, start: Start, rules: Rules, seeds: u64, max_days: u32) -> Vec<Climb> {
     let mut bench = Bench::under(rules);
     (0..seeds)
-        .map(|seed| sim::climb(player, seed, max_days, &mut bench, &mut Journal::Off))
+        .map(|seed| sim::climb(player, start, seed, max_days, &mut bench, &mut Journal::Off))
         .collect()
 }
 
@@ -346,6 +358,18 @@ struct Reading {
     ambient_day: u32,
     reckless_day: u32,
     keen_day: u32,
+    /// The keen runner who inks first: what the needle costs this climb.
+    inker_day: u32,
+    /// The ambient runner's second climb (one mark on the row), its sixth
+    /// (five marks, the bonus capped), and its second with every draft
+    /// inked: what a mark is worth on the way back up, and what the
+    /// needle adds. Read on the key: the pace is set by the road (five
+    /// fights a day pay a fixed exp), so a wider deck and a bigger sheet
+    /// can only save the days a drop costs, and the key is the runner who
+    /// drops.
+    second_day: u32,
+    veteran_day: u32,
+    inked_day: u32,
     /// The day the Old Signal first hears the runner (level 15 with the
     /// exp to leave it): the day the boss is reached, win or lose.
     careful_gate_day: u32,
@@ -361,6 +385,11 @@ struct Reading {
     lead_high: i64,
     /// The first level the careful runner fought in the whole top kit.
     top_kit_at: Option<i32>,
+    /// The keen runner's kit lead at its highest over levels 3 to 15, and
+    /// the first level it fought in the whole top kit: the crystals buy
+    /// a tier, never the wall.
+    keen_lead_high: i64,
+    keen_top_kit_at: Option<i32>,
     /// Where the careful runner's bits went, as shares of what it earned.
     gear_share: f64,
     patch_share: f64,
@@ -370,6 +399,9 @@ struct Reading {
     /// Patch's share of what the ambient runner earned: the runner on
     /// the key is the one who gets hit.
     ambient_patch_share: f64,
+    /// The days the careful runner spent its one patch, as a share of the
+    /// days it played: a decision most days, a formality on none.
+    careful_patch_days: f64,
     /// The fair fight on auto from a kit level with the runner, at its
     /// hardest over levels 2 to 15.
     fair_low: f64,
@@ -390,11 +422,20 @@ struct Reading {
     /// The signal a bright glyph leaves a runner on auto who puts it down,
     /// as a share of the max, averaged over levels 4 to 15: what it costs.
     bright_left: f64,
+    /// What a pour does to the bright glyph on auto, at its worst over
+    /// the three pours and levels 4 to 15: the most it ever costs the
+    /// key. A card poured into the deck must never be a trap; the band
+    /// is the dice (two 400-fight odds differ by a few points on their
+    /// own).
+    pour_low: f64,
     /// The Old Signal at no marks: on auto, read sharp, and on auto with
     /// static on ice.
     boss_auto: f64,
     boss_sharp: f64,
     boss_glass: f64,
+    /// The Old Signal on auto at no marks with every draft inked: what the
+    /// needle hands over at the gate.
+    boss_inked: f64,
     boss_turns: f64,
     /// Crystals the keen runner found a day, and how many it spent.
     crystals_a_day: f64,
@@ -431,12 +472,12 @@ struct BuildReading {
 /// wider than the house build's, since they hold the best deck and the
 /// worst at once.
 const BUILD_CAREFUL_DAYS: std::ops::RangeInclusive<u32> = 14..=18;
-const BUILD_AMBIENT_DAYS: std::ops::RangeInclusive<u32> = 15..=22;
+const BUILD_AMBIENT_DAYS: std::ops::RangeInclusive<u32> = 15..=25;
 const BUILD_BOSS_AUTO: (f64, f64) = (0.30, 0.80);
 /// How far apart a draft's two options may land, averaged over the
 /// builds that carry each: days to the mark on the key, and the Old
 /// Signal on the key.
-const DRAFT_DAYS_APART: f64 = 1.5;
+const DRAFT_DAYS_APART: f64 = 2.5;
 const DRAFT_BOSS_APART: f64 = 0.25;
 
 /// Seeds per player per build: half a reading's, sixteen times over.
@@ -446,7 +487,15 @@ impl BuildReading {
     fn take(rules: Rules, build: Build) -> Self {
         let marked =
             |climbs: &[Climb]| sim::median(climbs.iter().map(|climb| climb.marked_on), MAX_DAYS);
-        let on = |player: Player| climbs(Player { build, ..player }, rules, BUILD_SEEDS, MAX_DAYS);
+        let on = |player: Player| {
+            climbs(
+                Player { build, ..player },
+                Start::FRESH,
+                rules,
+                BUILD_SEEDS,
+                MAX_DAYS,
+            )
+        };
         let ambient = on(sim::AMBIENT);
         let fight = |level, pick| {
             matchup(&rules, &Recipe::level_kit(level, &build), pick, Hand::Auto)
@@ -469,8 +518,8 @@ impl BuildReading {
             fair_low: low(&mut fair.iter().map(|fight| fight.odds)),
             bright_low: low(&mut (4..=MAX_LEVEL).map(|level| fight(level, Pick::Bright).odds)),
             left_auto: fair.iter().map(|fight| fight.signal_left).sum::<f64>() / fair.len() as f64,
-            boss_auto: old_signal(&rules, 0, None, Hand::Auto, &build).odds,
-            boss_sharp: old_signal(&rules, 0, None, Hand::Sharp, &build).odds,
+            boss_auto: old_signal(&rules, 0, None, &[], Hand::Auto, &build).odds,
+            boss_sharp: old_signal(&rules, 0, None, &[], Hand::Sharp, &build).odds,
         }
     }
 }
@@ -515,16 +564,36 @@ fn draft_spreads(builds: &[BuildReading]) -> Vec<DraftSpread> {
 const SEEDS: u64 = 80;
 const MAX_DAYS: u32 = 120;
 
+/// The second climb's benches (`fight/BALANCE.md`, "The second climb"):
+/// one mark on the row, five (the bonus capped), and one mark with every
+/// draft inked.
+const SECOND: Start = Start { marks: 1, inked: 0 };
+const VETERAN: Start = Start { marks: 5, inked: 0 };
+const INKED: Start = Start {
+    marks: 1,
+    inked: DRAFTS.len(),
+};
+
 impl Reading {
     fn take(rules: Rules) -> Self {
         let house = sim::HOUSE_BUILD;
         let mut batches = fan(
-            vec![sim::CAREFUL, sim::AMBIENT, sim::RECKLESS, sim::KEEN],
-            |player| climbs(player, rules, SEEDS, MAX_DAYS),
+            vec![
+                (sim::CAREFUL, Start::FRESH),
+                (sim::AMBIENT, Start::FRESH),
+                (sim::RECKLESS, Start::FRESH),
+                (sim::KEEN, Start::FRESH),
+                (sim::INKER, Start::FRESH),
+                (sim::AMBIENT, SECOND),
+                (sim::AMBIENT, VETERAN),
+                (sim::AMBIENT, INKED),
+            ],
+            |(player, start)| climbs(player, start, rules, SEEDS, MAX_DAYS),
         )
         .into_iter();
         let mut batch = || batches.next().expect("a batch a player");
         let (careful, ambient, reckless, keen) = (batch(), batch(), batch(), batch());
+        let (inker, second, veteran, inked) = (batch(), batch(), batch(), batch());
         let builds = fan(sim::builds(), |build| BuildReading::take(rules, build));
         let marked =
             |climbs: &[Climb]| sim::median(climbs.iter().map(|climb| climb.marked_on), MAX_DAYS);
@@ -533,6 +602,13 @@ impl Reading {
         let leads: Vec<i64> = (3..=MAX_LEVEL)
             .filter_map(|level| kit_lead(&careful, level))
             .collect();
+        let keen_leads: Vec<i64> = (3..=MAX_LEVEL)
+            .filter_map(|level| kit_lead(&keen, level))
+            .collect();
+        let top_kit_at = |climbs: &[Climb]| {
+            (1..=MAX_LEVEL)
+                .find(|level| kit_lead(climbs, *level) == Some(i64::from(2 * (MAX_TIER - level))))
+        };
         let earned = median_of(&careful, |climb| climb.ledger.earned).max(1) as f64;
         let share = |read: fn(&Climb) -> i64| median_of(&careful, read) as f64 / earned;
         let gear_share = share(|climb| climb.ledger.gear);
@@ -560,16 +636,34 @@ impl Reading {
         };
         let bright_fights = bright(Hand::Auto);
         let bright_auto: Vec<f64> = bright_fights.iter().map(|fight| fight.odds).collect();
+        let pour_low = [Drink::Feedback, Drink::Squelch, Drink::SignOff]
+            .into_iter()
+            .flat_map(|drink| (4..=MAX_LEVEL).map(move |level| (drink, level)))
+            .map(|(drink, level)| {
+                let recipe = Recipe {
+                    drink: Some(drink),
+                    ..Recipe::level_kit(level, &house)
+                };
+                let poured = matchup(&rules, &recipe, Pick::Bright, Hand::Auto)
+                    .expect("the fight starts")
+                    .odds;
+                poured - bright_auto[(level - 4) as usize]
+            })
+            .fold(f64::MAX, f64::min);
         let bright_sharp: Vec<f64> = bright(Hand::Sharp).iter().map(|fight| fight.odds).collect();
         let turns: Vec<f64> = fair_auto.iter().map(|fight| fight.turns).collect();
         let fair_odds: Vec<f64> = fair_auto.iter().map(|fight| fight.odds).collect();
         let keen_day = marked(&keen);
-        let boss = old_signal(&rules, 0, None, Hand::Sharp, &house);
+        let boss = old_signal(&rules, 0, None, &[], Hand::Sharp, &house);
         Self {
             careful_day: marked(&careful),
             ambient_day: marked(&ambient),
             reckless_day: marked(&reckless),
             keen_day,
+            inker_day: marked(&inker),
+            second_day: marked(&second),
+            veteran_day: marked(&veteran),
+            inked_day: marked(&inked),
             careful_gate_day: heard(&careful),
             ambient_gate_day: heard(&ambient),
             ambient_drops: median_of(&ambient, |climb| i64::from(climb.deaths)),
@@ -578,15 +672,18 @@ impl Reading {
             day_seven_level: median_of(&careful, |climb| level_after(climb, 7)),
             lead_low: leads.iter().copied().min().unwrap_or(i64::MIN),
             lead_high: leads.iter().copied().max().unwrap_or(i64::MAX),
-            top_kit_at: (1..=MAX_LEVEL).find(|level| {
-                kit_lead(&careful, *level) == Some(i64::from(2 * (MAX_TIER - level)))
-            }),
+            top_kit_at: top_kit_at(&careful),
+            keen_lead_high: keen_leads.iter().copied().max().unwrap_or(i64::MAX),
+            keen_top_kit_at: top_kit_at(&keen),
             gear_share,
             patch_share,
             dropped_share,
             idle_share: 1.0 - gear_share - patch_share - dropped_share,
             ambient_patch_share: median_of(&ambient, |climb| climb.ledger.patched) as f64
                 / median_of(&ambient, |climb| climb.ledger.earned).max(1) as f64,
+            careful_patch_days: median_of(&careful, |climb| i64::from(climb.ledger.patch_days))
+                as f64
+                / median_of(&careful, |climb| climb.days.len() as i64).max(1) as f64,
             fair_low: low(&fair_odds),
             turns_low: low(&turns),
             turns_high: high(&turns),
@@ -597,9 +694,12 @@ impl Reading {
             bright_sharp_low: low(&bright_sharp),
             bright_sharp_high: high(&bright_sharp),
             bright_left: mean(&bright_fights, |fight| fight.signal_left),
-            boss_auto: old_signal(&rules, 0, None, Hand::Auto, &house).odds,
+            pour_low,
+            boss_auto: old_signal(&rules, 0, None, &[], Hand::Auto, &house).odds,
             boss_sharp: boss.odds,
-            boss_glass: old_signal(&rules, 0, Some(Drink::StaticOnIce), Hand::Auto, &house).odds,
+            boss_glass: old_signal(&rules, 0, Some(Drink::StaticOnIce), &[], Hand::Auto, &house)
+                .odds,
+            boss_inked: old_signal(&rules, 0, None, &all_inks(), Hand::Auto, &house).odds,
             boss_turns: boss.turns,
             crystals_a_day: median_of(&keen, |climb| i64::from(climb.ledger.crystals_found)) as f64
                 / f64::from(keen_day.max(1)),
@@ -627,9 +727,9 @@ impl Reading {
                 format!("careful marks on day {}, want 14 to 18", self.careful_day),
             ),
             (
-                (16..=21).contains(&self.ambient_day) && self.ambient_day >= self.careful_day,
+                (16..=22).contains(&self.ambient_day) && self.ambient_day >= self.careful_day,
                 format!(
-                    "ambient marks on day {} against careful's {}, want 16 to 21 and never ahead",
+                    "ambient marks on day {} against careful's {}, want 16 to 22 and never ahead",
                     self.ambient_day, self.careful_day
                 ),
             ),
@@ -652,10 +752,38 @@ impl Reading {
                 format!("reckless drops {} times, want 1 to 8", self.reckless_drops),
             ),
             (
-                self.keen_day <= self.careful_day && self.keen_day + 5 >= self.careful_day,
+                self.keen_day.abs_diff(self.careful_day) <= 4,
                 format!(
-                    "keen marks on day {} against careful's {}, want 0 to 5 days ahead",
+                    "keen marks on day {} against careful's {}, want within 4 days either way",
                     self.keen_day, self.careful_day
+                ),
+            ),
+            (
+                self.inker_day.abs_diff(self.careful_day) <= 4,
+                format!(
+                    "the inker marks on day {} against careful's {}, want within 4 days either way",
+                    self.inker_day, self.careful_day
+                ),
+            ),
+            (
+                (self.ambient_day.saturating_sub(4)..=self.ambient_day).contains(&self.second_day),
+                format!(
+                    "the second climb on the key marks on day {} against the first's {}, want 0 to 4 days sooner",
+                    self.second_day, self.ambient_day
+                ),
+            ),
+            (
+                (self.ambient_day.saturating_sub(6)..=self.second_day).contains(&self.veteran_day),
+                format!(
+                    "the sixth climb on the key marks on day {} against the second's {} and the first's {}, want no slower than the second and at most 6 days sooner than the first",
+                    self.veteran_day, self.second_day, self.ambient_day
+                ),
+            ),
+            (
+                (self.second_day.saturating_sub(4)..=self.second_day).contains(&self.inked_day),
+                format!(
+                    "the second climb on the key with every draft inked marks on day {} against the plain second's {}, want 0 to 4 days sooner",
+                    self.inked_day, self.second_day
                 ),
             ),
             (
@@ -677,6 +805,26 @@ impl Reading {
                 },
             ),
             (
+                self.keen_lead_high <= 5,
+                format!(
+                    "the keen runner's kit lead reaches {:+.1} tiers, want +2.5 at most",
+                    self.keen_lead_high as f64 / 2.0
+                ),
+            ),
+            (
+                match self.keen_top_kit_at {
+                    Some(level) => level >= 13,
+                    None => false,
+                },
+                match self.keen_top_kit_at {
+                    Some(level) => format!(
+                        "the keen runner wears the top kit at level {level}, want 13 or later"
+                    ),
+                    None => "the keen runner never wears the top kit, want it at 13 or later"
+                        .to_string(),
+                },
+            ),
+            (
                 self.gear_share >= 0.45,
                 format!(
                     "gear takes {}% of the bits, want 45% or more",
@@ -690,6 +838,13 @@ impl Reading {
                     "patch takes {}% of the ambient runner's bits and {}% of the careful one's, want 5 to 30% on the key and no more read sharp",
                     pct(self.ambient_patch_share),
                     pct(self.patch_share)
+                ),
+            ),
+            (
+                (0.40..=0.90).contains(&self.careful_patch_days),
+                format!(
+                    "careful spends its patch on {}% of its days, want 40 to 90%",
+                    pct(self.careful_patch_days)
                 ),
             ),
             (
@@ -721,6 +876,14 @@ impl Reading {
                 ),
             ),
             (
+                (0.75..=0.90).contains(&self.left_sharp) && self.left_auto >= 0.60,
+                format!(
+                    "a fair fight leaves {}% of the signal read sharp and {}% on auto, want 75 to 90% sharp and 60% or more on auto",
+                    pct(self.left_sharp),
+                    pct(self.left_auto)
+                ),
+            ),
+            (
                 self.left_sharp - self.left_auto >= 0.08,
                 format!(
                     "reading the hand leaves {}% of the signal against auto's {}%, want 8 points or more",
@@ -729,9 +892,9 @@ impl Reading {
                 ),
             ),
             (
-                self.bright_low >= 0.40,
+                self.bright_low >= 0.30,
                 format!(
-                    "the bright glyph on auto dips to {}%, want 40% or more",
+                    "the bright glyph on auto dips to {}%, want 30% or more",
                     pct(self.bright_low)
                 ),
             ),
@@ -743,9 +906,17 @@ impl Reading {
                 ),
             ),
             (
-                self.bright_sharp_low >= 0.85 && self.bright_sharp_low >= self.bright_low + 0.10,
+                self.pour_low >= -0.08,
                 format!(
-                    "the bright glyph read sharp dips to {}% against auto's {}%, want 85% or more and 10 points over",
+                    "a pour costs the key {} points against the bright glyph at its worst, want 8 at most",
+                    pct(-self.pour_low)
+                ),
+            ),
+            (
+                (0.60..=0.90).contains(&self.bright_sharp_low)
+                    && self.bright_sharp_low >= self.bright_low + 0.10,
+                format!(
+                    "the bright glyph read sharp dips to {}% against auto's {}%, want 60 to 90% and 10 points over",
                     pct(self.bright_sharp_low),
                     pct(self.bright_low)
                 ),
@@ -758,9 +929,10 @@ impl Reading {
                 ),
             ),
             (
-                self.boss_sharp >= self.boss_auto + 0.15 && self.boss_sharp <= 0.95,
+                self.boss_sharp >= self.boss_auto + 0.15
+                    && (0.65..=0.90).contains(&self.boss_sharp),
                 format!(
-                    "the old signal read sharp is {}% against auto's {}%, want 15 points over and 95% at most",
+                    "the old signal read sharp is {}% against auto's {}%, want 15 points over and 65 to 90%",
                     pct(self.boss_sharp),
                     pct(self.boss_auto)
                 ),
@@ -771,6 +943,14 @@ impl Reading {
                     "a glass moves the old signal on auto {}% to {}%, want 10 points or more",
                     pct(self.boss_auto),
                     pct(self.boss_glass)
+                ),
+            ),
+            (
+                self.boss_inked <= self.boss_auto + 0.25,
+                format!(
+                    "every draft inked moves the old signal on auto {}% to {}%, want 25 points at most",
+                    pct(self.boss_auto),
+                    pct(self.boss_inked)
                 ),
             ),
             (
@@ -805,9 +985,9 @@ impl Reading {
                     ),
                 ),
                 (
-                    reading.bright_low >= 0.40,
+                    reading.bright_low >= 0.30,
                     format!(
-                        "{name}: the bright glyph on auto dips to {}%, want 40% or more",
+                        "{name}: the bright glyph on auto dips to {}%, want 30% or more",
                         pct(reading.bright_low)
                     ),
                 ),
@@ -859,13 +1039,13 @@ impl Reading {
             .collect()
     }
 
-    const HEADER: &str = "| rules | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | lv day 1 / 7 | kit lead | top kit | gear | patch, careful / ambient | dropped | idle | fair low | turns | left auto / sharp | bright auto (left) | bright sharp | boss auto / sharp / auto with a glass (turns) | crystals a day | builds: ambient day, boss auto | misses |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    const HEADER: &str = "| rules | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | inker | second climb: mark 1 / mark 5 / mark 1 inked | lv day 1 / 7 | kit lead | top kit | keen lead high, top kit | gear | patch, careful / ambient | careful patch days | dropped | idle | fair low | turns | left auto / sharp | bright auto (left) | bright sharp | pour low | boss auto / sharp / auto with a glass / auto inked (turns) | crystals a day | builds: ambient day, boss auto | misses |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
 
     /// The reading as one row of the sweep's table.
     fn row(&self, name: &str) -> String {
         let half = |lead: i64| format!("{:+.1}", lead as f64 / 2.0);
         format!(
-            "| {name} | {} / {} | {} | {} ({}) | {} ({}) | {} | {} / {} | {} to {} | {} | {:.0}% | {:.0}% / {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} to {:.1} | {:.0}% / {:.0}% | {:.0} to {:.0}% ({:.0}%) | {:.0} to {:.0}% | {:.0}% / {:.0}% / {:.0}% ({:.1}) | {:.1} | {} to {}, {:.0} to {:.0}% | {} |\n",
+            "| {name} | {} / {} | {} | {} ({}) | {} ({}) | {} | {} | {} / {} / {} | {} / {} | {} to {} | {} | {}, {} | {:.0}% | {:.0}% / {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} to {:.1} | {:.0}% / {:.0}% | {:.0} to {:.0}% ({:.0}%) | {:.0} to {:.0}% | {:+.0} | {:.0}% / {:.0}% / {:.0}% / {:.0}% ({:.1}) | {:.1} | {} to {}, {:.0} to {:.0}% | {} |\n",
             self.careful_gate_day,
             self.ambient_gate_day,
             self.careful_day,
@@ -874,6 +1054,10 @@ impl Reading {
             self.reckless_day,
             self.reckless_drops,
             self.keen_day,
+            self.inker_day,
+            self.second_day,
+            self.veteran_day,
+            self.inked_day,
             self.day_one_level,
             self.day_seven_level,
             half(self.lead_low),
@@ -882,9 +1066,15 @@ impl Reading {
                 Some(level) => format!("lv {level}"),
                 None => "never".to_string(),
             },
+            half(self.keen_lead_high),
+            match self.keen_top_kit_at {
+                Some(level) => format!("lv {level}"),
+                None => "never".to_string(),
+            },
             self.gear_share * 100.0,
             self.patch_share * 100.0,
             self.ambient_patch_share * 100.0,
+            self.careful_patch_days * 100.0,
             self.dropped_share * 100.0,
             self.idle_share * 100.0,
             self.fair_low * 100.0,
@@ -897,9 +1087,11 @@ impl Reading {
             self.bright_left * 100.0,
             self.bright_sharp_low * 100.0,
             self.bright_sharp_high * 100.0,
+            self.pour_low * 100.0,
             self.boss_auto * 100.0,
             self.boss_sharp * 100.0,
             self.boss_glass * 100.0,
+            self.boss_inked * 100.0,
             self.boss_turns,
             self.crystals_a_day,
             self.builds
@@ -997,7 +1189,7 @@ fn hands_table(rules: &Rules) -> String {
             "| {level} | {} | {strike} / {} / {} | {} | {} | {} | {} | {} |\n",
             build_name(&recipe.cards),
             rules.block(sheet.defense()),
-            rules.hit(foe.attack, sheet.defense()),
+            rules.hit(foe.attack, sheet.defense(), level),
             foe.signal,
             cell(Pick::Fair, Hand::Auto),
             cell(Pick::Fair, Hand::Sharp),
@@ -1012,7 +1204,7 @@ fn hands_table(rules: &Rules) -> String {
 /// level with the runner, a tier either side, and with each glass.
 fn bright_table(rules: &Rules) -> String {
     let mut out = String::from(
-        "| lv | lower | bright -1 | bright 0 | bright +1 | +ice | +neat | +pattern | bright pays |\n|---|---|---|---|---|---|---|---|---|\n",
+        "| lv | lower | bright -1 | bright 0 | bright +1 | +ice | +neat | +pattern | +feedback | +squelch | +sign-off | bright pays |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for level in 1..=MAX_LEVEL {
         let recipe = |lead, drink| Recipe {
@@ -1022,7 +1214,7 @@ fn bright_table(rules: &Rules) -> String {
         };
         let bright = |lead, drink| matchup(rules, &recipe(lead, drink), Pick::Bright, Hand::Auto);
         out.push_str(&format!(
-            "| {level} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {level} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             pct(matchup(rules, &recipe(0, None), Pick::Lower, Hand::Auto)),
             pct(bright(-1, None)),
             pct(bright(0, None)),
@@ -1030,6 +1222,9 @@ fn bright_table(rules: &Rules) -> String {
             pct(bright(0, Some(Drink::StaticOnIce))),
             pct(bright(0, Some(Drink::DeadAirNeat))),
             pct(bright(0, Some(Drink::TestPattern))),
+            pct(bright(0, Some(Drink::Feedback))),
+            pct(bright(0, Some(Drink::Squelch))),
+            pct(bright(0, Some(Drink::SignOff))),
             rules.bright_foe(level).2.bits,
         ));
     }
@@ -1037,22 +1232,29 @@ fn bright_table(rules: &Rules) -> String {
 }
 
 /// The Old Signal from a kit level with the runner, by marks and by
-/// glass, read sharp, and on auto with no glass.
+/// glass, read sharp, and on auto with no glass; and on auto and read
+/// sharp with every draft inked.
 fn old_signal_table(rules: &Rules) -> String {
     let mut out = String::from(
-        "| marks | auto | sharp | static on ice | dead air, neat | test pattern | turns |\n|---|---|---|---|---|---|---|\n",
+        "| marks | auto | sharp | static on ice | dead air, neat | test pattern | feedback | squelch | sign-off | inked auto | inked sharp | turns |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for marks in 0..=5 {
         let house = sim::HOUSE_BUILD;
-        let odds = |drink| old_signal(rules, marks, drink, Hand::Sharp, &house).odds * 100.0;
+        let odds = |drink| old_signal(rules, marks, drink, &[], Hand::Sharp, &house).odds * 100.0;
+        let inked = |hand| old_signal(rules, marks, None, &all_inks(), hand, &house).odds * 100.0;
         out.push_str(&format!(
-            "| {marks} | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} |\n",
-            old_signal(rules, marks, None, Hand::Auto, &house).odds * 100.0,
+            "| {marks} | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.0}% | {:.1} |\n",
+            old_signal(rules, marks, None, &[], Hand::Auto, &house).odds * 100.0,
             odds(None),
             odds(Some(Drink::StaticOnIce)),
             odds(Some(Drink::DeadAirNeat)),
             odds(Some(Drink::TestPattern)),
-            old_signal(rules, marks, None, Hand::Sharp, &house).turns,
+            odds(Some(Drink::Feedback)),
+            odds(Some(Drink::Squelch)),
+            odds(Some(Drink::SignOff)),
+            inked(Hand::Auto),
+            inked(Hand::Sharp),
+            old_signal(rules, marks, None, &[], Hand::Sharp, &house).turns,
         ));
     }
     out
@@ -1082,7 +1284,7 @@ fn economy_table(rules: &Rules) -> String {
             economy.next_pair as f64 / economy.pays as f64 * 100.0,
             fight.patch,
             fight.patch / fight.pays.max(1) as f64 * 100.0,
-            rules.price(level),
+            rules.price(level, level),
             rules.cache(level),
         ));
     }
@@ -1246,6 +1448,7 @@ fn cards_table(rules: &Rules) -> String {
                 drink: None,
                 marks: 0,
                 cards,
+                inks: Vec::new(),
             };
             let cell = |pick, hand| match matchup(rules, &recipe, pick, hand) {
                 Some(fight) => format!(
@@ -1429,6 +1632,11 @@ fn run_words(events: &[Event]) -> String {
             Event::Drank { drink } => {
                 out.push_str(&format!("- dead air: a glass of {}\n", drink.name()));
             }
+            Event::Inked { level, crystals } => {
+                out.push_str(&format!(
+                    "- **ink: the level {level} draft**, for {crystals} crystals\n"
+                ));
+            }
             Event::Step { step, lane, node } => {
                 step_no = *step;
                 out.push_str(&format!(
@@ -1441,9 +1649,6 @@ fn run_words(events: &[Event]) -> String {
                         Node::Cache => "a cache",
                     }
                 ));
-            }
-            Event::Mended { restored, signal } => {
-                out.push_str(&format!(". mended +{restored}, signal {signal}\n"));
             }
             Event::Cleared { cards } => {
                 out.push_str(&format!(". {cards} static shaken out of the deck\n"));
@@ -1561,6 +1766,7 @@ fn run(name: &str, player: Player, seed: u64, rules: Rules) -> String {
     let mut journal = Journal::On(Vec::new());
     let climb = sim::climb(
         player,
+        Start::FRESH,
         seed,
         MAX_DAYS,
         &mut Bench::under(rules),
@@ -1623,8 +1829,20 @@ fn report(rules: Rules) -> String {
     for miss in reading.misses() {
         out.push_str(&format!("\nMissed: {miss}\n"));
     }
-    let batches = fan(sim::PLAYERS.to_vec(), |(name, player)| {
-        (name, climbs(player, rules, SEEDS, MAX_DAYS))
+    let mut lineup: Vec<(&str, Player, Start)> = sim::PLAYERS
+        .iter()
+        .map(|(name, player)| (*name, *player, Start::FRESH))
+        .collect();
+    lineup.extend([
+        ("ambient, mark 1", sim::AMBIENT, SECOND),
+        ("ambient, mark 5", sim::AMBIENT, VETERAN),
+        ("ambient, mark 1, inked", sim::AMBIENT, INKED),
+        ("careful, mark 1", sim::CAREFUL, SECOND),
+        ("careful, mark 5", sim::CAREFUL, VETERAN),
+        ("careful, mark 1, inked", sim::CAREFUL, INKED),
+    ]);
+    let batches = fan(lineup, |(name, player, start)| {
+        (name, climbs(player, start, rules, SEEDS, MAX_DAYS))
     });
     out.push_str("\n## The climb, day by day: the level at the end of each day\n\n");
     out.push_str(&days_table(&batches, CURVE_DAYS));

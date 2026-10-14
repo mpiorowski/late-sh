@@ -1,5 +1,8 @@
 pub mod auth;
 pub mod conn;
+pub mod history;
+#[cfg(test)]
+mod history_test;
 pub mod motd;
 pub mod proj;
 pub mod registry;

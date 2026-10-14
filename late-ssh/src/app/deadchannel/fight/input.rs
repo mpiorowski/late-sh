@@ -7,13 +7,14 @@
 //! is on, a close once it is over).
 //!
 //! Before it, the road (`handle_picker`): up and down move the cursor
-//! over the lanes the next step reaches, Enter does the plain thing with
-//! what waits there, and each call has its own key: `f` the glyph, `g`
-//! the one below it, `b` the bright one, `h` mend at a rest, `c` clear the
-//! deck at one, `t` take a cache. A key the node does not answer does
-//! nothing. With a draft owed the panel shows the two cards instead of a
-//! step, and `1` and `2` take one. With the road over for the day any of those closes it, and
-//! `s` copies the day's card. Esc closes it from the root, the same way.
+//! over the lanes the next step reaches, and Enter takes what waits
+//! there, the one thing each node is for: a glyph or a bright one is
+//! fought, a rest clears the deck, a cache is taken. `g` on a glyph's
+//! node is the one other call, the glyph a level down for less pay. With
+//! a draft owed the panel shows the two cards instead of a step, and `1`
+//! and `2` take one. With the road over for the day Enter or `g` closes
+//! it, and `s` copies the day's card. Esc closes it from the root, the
+//! same way.
 
 use crate::app::arcade::share::{self, ShareCardKind, ShareFormat};
 use crate::app::common::primitives::Banner;
@@ -21,7 +22,7 @@ use crate::app::input::ParsedInput;
 use crate::app::state::App;
 
 use super::share::road_card;
-use super::state::{Call, Command, Pick};
+use super::state::Command;
 
 /// Keys while the road is open. The row decides what a step meets;
 /// `FightSession::call` only keeps a key from asking for something the
@@ -40,22 +41,13 @@ pub fn handle_picker(app: &mut App, event: &ParsedInput) -> bool {
     {
         return true;
     }
-    let call = match event {
-        ParsedInput::Byte(b'f') | ParsedInput::Char('f') => Some(Call::Fight(Pick::Fair)),
-        ParsedInput::Byte(b'g') | ParsedInput::Char('g') => Some(Call::Fight(Pick::Lower)),
-        ParsedInput::Byte(b'b') | ParsedInput::Char('b') => Some(Call::Fight(Pick::Bright)),
-        ParsedInput::Byte(b'h') | ParsedInput::Char('h') => Some(Call::Mend),
-        ParsedInput::Byte(b'c') | ParsedInput::Char('c') => Some(Call::Clear),
-        ParsedInput::Byte(b't') | ParsedInput::Char('t') => Some(Call::Take),
-        _ => None,
-    };
-    if let Some(call) = call {
-        app.fight.call(call);
-        return true;
-    }
     match event {
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b'\n') => {
             app.fight.enter();
+            true
+        }
+        ParsedInput::Byte(b'g') | ParsedInput::Char('g') => {
+            app.fight.step_down();
             true
         }
         ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {

@@ -1058,6 +1058,7 @@ fn chat_view<'a>(
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
     static AFK_LINES: OnceLock<HashMap<Uuid, DateTime<Utc>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
+    static NEWS_MARKER: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
     static AWAY_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1093,7 +1094,7 @@ fn chat_view<'a>(
         news_view: crate::app::chat::news::ui::ArticleListView {
             articles: &[],
             selected_index: 0,
-            marker_read_at: None,
+            marker: NEWS_MARKER.get_or_init(HashSet::new),
             mine_only: false,
         },
         discover_selected: false,
@@ -1466,7 +1467,7 @@ fn reaction_picker_placeholder_uses_one_line() {
         .collect();
     assert_eq!(
         rendered,
-        "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  0 icon  f list"
+        "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔  9 💩  w 👋  0 icon  f list"
     );
 }
 
@@ -1488,7 +1489,7 @@ fn reaction_picker_placeholder_wraps_at_narrow_width() {
         rendered,
         vec![
             "1 👍  2 🧡  3 😂  4 👀  5 🔥  6 🙌  7 🚀  8 🤔",
-            "9 💩  0 icon  f list",
+            "9 💩  w 👋  0 icon  f list",
         ]
     );
 }
@@ -1549,6 +1550,10 @@ fn draw_composer_block_renders_reaction_picker_in_placeholder() {
     assert!(
         row_1.contains("9 💩"),
         "ninth reaction choice missing from {row_1:?}",
+    );
+    assert!(
+        row_1.contains("w 👋"),
+        "wave reaction choice missing from {row_1:?}",
     );
     assert!(
         row_1.contains("0 icon"),
@@ -3029,8 +3034,10 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 super::RoomHeader {
                     stream: None,
                     voice: None,
-                    topic: super::room_topic(&room),
-                    has_rules: super::room_has_rules(&room),
+                    row: super::room_topic(&room).map(|text| super::TopicRow::Topic {
+                        text,
+                        has_rules: super::room_has_rules(&room),
+                    }),
                     closing_rule: true,
                 },
             )
@@ -3069,8 +3076,10 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 super::RoomHeader {
                     stream: None,
                     voice: None,
-                    topic: super::room_topic(&room),
-                    has_rules: super::room_has_rules(&room),
+                    row: super::room_topic(&room).map(|text| super::TopicRow::Topic {
+                        text,
+                        has_rules: super::room_has_rules(&room),
+                    }),
                     closing_rule: true,
                 },
             )
@@ -3093,8 +3102,10 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 super::RoomHeader {
                     stream: None,
                     voice: None,
-                    topic: super::room_topic(&room),
-                    has_rules: super::room_has_rules(&room),
+                    row: super::room_topic(&room).map(|text| super::TopicRow::Topic {
+                        text,
+                        has_rules: super::room_has_rules(&room),
+                    }),
                     closing_rule: true,
                 },
             );
@@ -3103,6 +3114,33 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
     let row = row_text(terminal.backend().buffer(), 0, 40);
     assert!(row.contains("A cozy corner"));
     assert!(!row.contains("/rules"));
+}
+
+/// On a day the board has an all-day post the row is the board's day, in
+/// the topic's place, with the board's key where `/rules` would be.
+#[test]
+fn room_header_gives_the_topic_row_to_the_boards_day() {
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+    let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
+    let area = Rect::new(0, 0, 40, 20);
+    let mut remaining = area;
+    terminal
+        .draw(|f| {
+            remaining = super::draw_room_header(
+                f,
+                area,
+                super::RoomHeader {
+                    stream: None,
+                    voice: None,
+                    row: Some(super::TopicRow::BoardDay("Hackathon")),
+                    closing_rule: true,
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(remaining.y, 2);
+    let row = row_text(terminal.backend().buffer(), 0, 40);
+    assert_eq!(row, format!(" Hackathon{}7 for the board ", " ".repeat(14)));
 }
 
 fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::LiveStreamView {

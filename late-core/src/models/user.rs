@@ -191,56 +191,295 @@ impl LandingPage {
     }
 }
 
-/// Which hung pieces may appear over the login splash. Unmarked art is SFW.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ArtSplashMode {
-    #[default]
-    Sfw,
-    Always,
-    Never,
+/// A colour scene from ascii.rest: shaded per cell, drawn in a
+/// `SceneStyle`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Scene {
+    /// A slow one, the default: the Earth turning over the lunar horizon,
+    /// played at a crawl.
+    Earthrise,
+    /// A slow one: fog and sunbeams through pines, played at a crawl.
+    MistyForest,
+    AuroraFjord,
+    AlpineDawn,
 }
 
-impl ArtSplashMode {
+impl Scene {
+    pub const ALL: [Scene; 4] = [
+        Scene::Earthrise,
+        Scene::MistyForest,
+        Scene::AuroraFjord,
+        Scene::AlpineDawn,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Sfw => "sfw",
-            Self::Always => "always",
-            Self::Never => "never",
+            Self::Earthrise => "earthrise",
+            Self::MistyForest => "misty_forest",
+            Self::AuroraFjord => "aurora_fjord",
+            Self::AlpineDawn => "alpine_dawn",
         }
     }
 
+    /// Lowercase display name, the way ascii.rest names its pieces.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Sfw => "SFW",
-            Self::Always => "Always",
-            Self::Never => "Never",
+            Self::Earthrise => "earthrise",
+            Self::MistyForest => "misty forest",
+            Self::AuroraFjord => "aurora fjord",
+            Self::AlpineDawn => "alpine dawn",
+        }
+    }
+}
+
+/// How a scene is drawn on the terminal's cells.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SceneStyle {
+    /// The original's halftone: a grid of dots sized and lit by
+    /// brightness.
+    Dots,
+    /// Solid half-block pixels, two to a cell, in true colour.
+    Pixels,
+}
+
+impl SceneStyle {
+    pub const ALL: [SceneStyle; 2] = [SceneStyle::Dots, SceneStyle::Pixels];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dots => "dots",
+            Self::Pixels => "pixels",
+        }
+    }
+}
+
+/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Zen ascii tile
+/// shows and what the away screensaver plays, a scene in one of its styles.
+/// Ported from ascii.rest by @bas3line (MIT). Stored by key (`as_str`) in
+/// `users.settings` and in the Zen layout: a scene's key is its name for
+/// dots, `<name>_pixels` for pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AsciiPiece {
+    pub scene: Scene,
+    pub style: SceneStyle,
+}
+
+impl AsciiPiece {
+    /// What plays when nothing was picked, on a Zen ascii tile and as the
+    /// screensaver alike: earthrise in dots, a slow piece, a frame a second
+    /// that moves a few cells, so a tile left up or an away session costs
+    /// about what idling does.
+    pub const DEFAULT: AsciiPiece = AsciiPiece {
+        scene: Scene::Earthrise,
+        style: SceneStyle::Dots,
+    };
+
+    /// Picker and cycle order: each scene in both styles, the screensaver's
+    /// default first.
+    pub const ALL: [AsciiPiece; 8] = [
+        AsciiPiece {
+            scene: Scene::Earthrise,
+            style: SceneStyle::Dots,
+        },
+        AsciiPiece {
+            scene: Scene::Earthrise,
+            style: SceneStyle::Pixels,
+        },
+        AsciiPiece {
+            scene: Scene::MistyForest,
+            style: SceneStyle::Dots,
+        },
+        AsciiPiece {
+            scene: Scene::MistyForest,
+            style: SceneStyle::Pixels,
+        },
+        AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Dots,
+        },
+        AsciiPiece {
+            scene: Scene::AuroraFjord,
+            style: SceneStyle::Pixels,
+        },
+        AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Dots,
+        },
+        AsciiPiece {
+            scene: Scene::AlpineDawn,
+            style: SceneStyle::Pixels,
+        },
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match (self.scene, self.style) {
+            (Scene::Earthrise, SceneStyle::Dots) => "earthrise",
+            (Scene::Earthrise, SceneStyle::Pixels) => "earthrise_pixels",
+            (Scene::MistyForest, SceneStyle::Dots) => "misty_forest",
+            (Scene::MistyForest, SceneStyle::Pixels) => "misty_forest_pixels",
+            (Scene::AuroraFjord, SceneStyle::Dots) => "aurora_fjord",
+            (Scene::AuroraFjord, SceneStyle::Pixels) => "aurora_fjord_pixels",
+            (Scene::AlpineDawn, SceneStyle::Dots) => "alpine_dawn",
+            (Scene::AlpineDawn, SceneStyle::Pixels) => "alpine_dawn_pixels",
         }
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "sfw" => Some(Self::Sfw),
-            "always" => Some(Self::Always),
-            "never" => Some(Self::Never),
-            _ => None,
-        }
+        let key = key.trim();
+        Self::ALL.into_iter().find(|piece| piece.as_str() == key)
     }
 
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::Sfw, true) | (Self::Never, false) => Self::Always,
-            (Self::Always, true) | (Self::Sfw, false) => Self::Never,
-            (Self::Never, true) | (Self::Always, false) => Self::Sfw,
+    /// Lowercase display name, the way ascii.rest names its pieces, with the
+    /// style: `aurora fjord · dots`.
+    pub fn label(self) -> String {
+        format!("{} · {}", self.scene.label(), self.style.label())
+    }
+}
+
+impl Serialize for AsciiPiece {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AsciiPiece {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let key = String::deserialize(deserializer)?;
+        match Self::from_key(&key) {
+            Some(piece) => Ok(piece),
+            None => Err(serde::de::Error::custom(format!(
+                "unknown ascii piece {key:?}"
+            ))),
         }
     }
 }
 
-pub fn extract_art_splash_mode(settings: &Value) -> ArtSplashMode {
-    settings
-        .get("art_splash_mode")
-        .and_then(Value::as_str)
-        .and_then(ArtSplashMode::from_key)
-        .unwrap_or_default()
+/// What an animated view plays. Persist the selection, never its random result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AsciiSelection {
+    Piece(AsciiPiece),
+    Random,
+    Randomer,
+}
+
+impl AsciiSelection {
+    pub const DEFAULT: Self = Self::Piece(AsciiPiece::DEFAULT);
+    /// Fixed pieces in their existing order, then the two random modes.
+    pub const ALL: [Self; AsciiPiece::ALL.len() + 2] = {
+        let mut choices = [Self::Random; AsciiPiece::ALL.len() + 2];
+        let mut i = 0;
+        while i < AsciiPiece::ALL.len() {
+            choices[i] = Self::Piece(AsciiPiece::ALL[i]);
+            i += 1;
+        }
+        choices[i + 1] = Self::Randomer;
+        choices
+    };
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Piece(piece) => piece.as_str(),
+            Self::Random => "random",
+            Self::Randomer => "randomer",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "random" => Some(Self::Random),
+            "randomer" => Some(Self::Randomer),
+            other => AsciiPiece::from_key(other).map(Self::Piece),
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Self::Piece(piece) => piece.label(),
+            Self::Random => "random".to_string(),
+            Self::Randomer => "randomer".to_string(),
+        }
+    }
+
+    pub fn cycle(self, forward: bool) -> Self {
+        let at = Self::ALL
+            .iter()
+            .position(|choice| *choice == self)
+            .expect("every selection is in ALL");
+        let len = Self::ALL.len();
+        Self::ALL[(at + if forward { 1 } else { len - 1 }) % len]
+    }
+}
+
+impl Serialize for AsciiSelection {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AsciiSelection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let key = String::deserialize(deserializer)?;
+        Self::from_key(&key)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown ascii selection {key:?}")))
+    }
+}
+
+/// Tweak: what covers the screen while the session is away. Defaults to
+/// earthrise in dots; random selections are resolved separately per activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Screensaver {
+    Off,
+    On(AsciiSelection),
+}
+
+impl Screensaver {
+    pub const DEFAULT: Self = Self::On(AsciiSelection::DEFAULT);
+
+    pub fn selection(self) -> Option<AsciiSelection> {
+        match self {
+            Self::Off => None,
+            Self::On(selection) => Some(selection),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On(selection) => selection.as_str(),
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim() {
+            "off" => Some(Self::Off),
+            other => AsciiSelection::from_key(other).map(Self::On),
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Self::Off => "off".to_string(),
+            Self::On(selection) => selection.label(),
+        }
+    }
+
+    /// Off, then every selection in picker order, then Off again.
+    pub fn cycle(self, forward: bool) -> Self {
+        let first = AsciiSelection::ALL[0];
+        let last = AsciiSelection::ALL[AsciiSelection::ALL.len() - 1];
+        match (self, forward) {
+            (Self::Off, true) => Self::On(first),
+            (Self::Off, false) => Self::On(last),
+            (Self::On(selection), true) if selection == last => Self::Off,
+            (Self::On(selection), false) if selection == first => Self::Off,
+            (Self::On(selection), forward) => Self::On(selection.cycle(forward)),
+        }
+    }
 }
 
 /// Inline terminal image previews (Settings, Tweaks, Display). `Auto` trusts
@@ -323,7 +562,7 @@ impl RoomListMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 6;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 7;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
 /// listed here: it is always pinned at the top of the sidebar. The
@@ -331,6 +570,9 @@ pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 6;
 /// `Music`, see `common/sidebar.rs`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RightSidebarComponent {
+    /// What the house can watch right now: the live games on the
+    /// watchable doors, a row each.
+    Live,
     Music,
     Bonsai,
     Daily,
@@ -346,15 +588,17 @@ pub enum RightSidebarComponent {
 
 impl RightSidebarComponent {
     /// Default order, top to bottom. Used when a user has no stored list and
-    /// to backfill any panels missing from a stored list. Every panel has a
+    /// to place any panel missing from a stored list (right after the panel
+    /// before it here, see `normalize_right_sidebar_components`). Every panel has a
     /// fixed height; when the rail runs short, panels drop from the bottom
     /// of this order up. Stale stored keys (e.g. the retired "pet",
     /// "activity", "visualizer" and "pot" panels) are dropped on read by
     /// `from_key`; the pet panel came back under a new key so an old stored
     /// "pet" entry cannot switch it on.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
-        Self::Daily,
         Self::Music,
+        Self::Daily,
+        Self::Live,
         Self::Spacer,
         Self::Bonsai,
         Self::Pet,
@@ -363,6 +607,7 @@ impl RightSidebarComponent {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Live => "live",
             Self::Music => "music",
             Self::Bonsai => "bonsai",
             Self::Daily => "daily",
@@ -374,6 +619,7 @@ impl RightSidebarComponent {
 
     pub fn from_key(key: &str) -> Option<Self> {
         match key.trim() {
+            "live" => Some(Self::Live),
             "music" => Some(Self::Music),
             "bonsai" => Some(Self::Bonsai),
             "daily" => Some(Self::Daily),
@@ -386,6 +632,7 @@ impl RightSidebarComponent {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Live => "Live",
             Self::Music => "Audio playback",
             Self::Bonsai => "Bonsai",
             Self::Daily => "Lobby",
@@ -397,10 +644,11 @@ impl RightSidebarComponent {
 
     /// Whether the panel starts enabled, for new users and when a new panel
     /// is backfilled into an existing user's stored list. The pet and the
-    /// tank start off: the rail is tight and they are opt-in.
+    /// tank start off: the rail is tight and they are opt-in. Live starts
+    /// on: a game nobody can see is a game nobody watches.
     pub fn default_enabled(self) -> bool {
         match self {
-            Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
+            Self::Live | Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
             Self::Pet | Self::Tank => false,
         }
     }
@@ -426,10 +674,13 @@ pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
         .collect()
 }
 
-/// Drop duplicates and backfill any missing panels at the end so the list
-/// always covers every component exactly once, preserving stored order.
-/// A backfilled panel takes its `default_enabled()`, the same as a new
-/// user gets it.
+/// Drop duplicates and backfill any missing panels so the list always
+/// covers every component exactly once, preserving stored order. A missing
+/// panel lands where a new user has it: right under the panel that precedes
+/// it in `ALL`, wherever the stored order put that one (the first panel of
+/// `ALL` goes on top), so a new panel shipped under the lobby sits under
+/// the lobby on every rail and is not lost off the bottom of a full one.
+/// It takes its `default_enabled()`, the same as a new user gets it.
 pub fn normalize_right_sidebar_components(
     components: &[RightSidebarComponentSetting],
 ) -> Vec<RightSidebarComponentSetting> {
@@ -440,13 +691,30 @@ pub fn normalize_right_sidebar_components(
         }
         result.push(*setting);
     }
-    for component in RightSidebarComponent::ALL {
-        if !result.iter().any(|s| s.component == component) {
-            result.push(RightSidebarComponentSetting {
+    for (index, component) in RightSidebarComponent::ALL.into_iter().enumerate() {
+        if result.iter().any(|s| s.component == component) {
+            continue;
+        }
+        // Missing panels are placed in ALL order, so the predecessor is
+        // in the list by now, stored or just placed.
+        let at = match index {
+            0 => 0,
+            _ => {
+                let before = RightSidebarComponent::ALL[index - 1];
+                result
+                    .iter()
+                    .position(|s| s.component == before)
+                    .expect("the panel before it in ALL is placed first")
+                    + 1
+            }
+        };
+        result.insert(
+            at,
+            RightSidebarComponentSetting {
                 component,
                 enabled: component.default_enabled(),
-            });
-        }
+            },
+        );
     }
     result
 }
@@ -476,6 +744,7 @@ const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
+const SCREENSAVER_KEY: &str = "screensaver";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
 const SHOW_WATCH_CHAT_KEY: &str = "show_watch_chat";
 const TERMINAL_IMAGES_KEY: &str = "terminal_images";
@@ -1978,6 +2247,15 @@ pub fn extract_landing_page(settings: &Value) -> LandingPage {
     }
 }
 
+/// Tweak: what plays over the screen while the session is away. Absent or
+/// unreadable values play the default, earthrise.
+pub fn extract_screensaver(settings: &Value) -> Screensaver {
+    match settings.get(SCREENSAVER_KEY).and_then(Value::as_str) {
+        Some(key) => Screensaver::from_key(key).unwrap_or(Screensaver::DEFAULT),
+        None => Screensaver::DEFAULT,
+    }
+}
+
 /// Tweak: the award badges hidden from the user's chat label. Unknown
 /// categories are dropped, so the stored list only ever names real badges.
 pub fn extract_hidden_award_categories(settings: &Value) -> Vec<String> {
@@ -2009,6 +2287,14 @@ pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
 pub fn extract_paper_at_login(settings: &Value) -> bool {
     settings
         .get(PAPER_AT_LOGIN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Ask before displaying Artboard content on each visit. Enabled by default.
+pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
+    settings
+        .get("artboard_disclaimer")
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }

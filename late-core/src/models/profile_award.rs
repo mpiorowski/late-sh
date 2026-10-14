@@ -513,6 +513,7 @@ pub async fn snapshot_previous_month_profile_awards(
                     WHERE pours.created >= bounds.period_start
                       AND pours.created < bounds.period_end
                     GROUP BY pours.user_id
+                    HAVING SUM(pours.points) > 0
                 ) standings
                 WHERE rank = 1
              ),

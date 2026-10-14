@@ -92,3 +92,163 @@ async fn only_a_write_that_changes_a_row_notifies() {
         .expect("post a challenge");
     assert_eq!(next_channel().await, DAILY_MATCH_CHANGED_CHANNEL);
 }
+
+/// The lobby lists what just went up at the top: newest challenge first.
+#[tokio::test]
+async fn open_challenges_list_newest_first() {
+    use crate::models::daily_match::DailyMatch;
+    use crate::test_utils::{create_test_user, test_db};
+
+    let test_db = test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-open-order").await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let mut posted = Vec::new();
+    for game in ["chess", "gin", "8ball"] {
+        posted.push(
+            DailyMatch::create_challenge(&client, game, challenger.id)
+                .await
+                .expect("create challenge"),
+        );
+    }
+    // Stamp them an hour apart, oldest first, so the order does not hang on
+    // statement timing.
+    for (hours_ago, challenge) in [(3i32, &posted[0]), (2, &posted[1]), (1, &posted[2])] {
+        client
+            .execute(
+                "UPDATE daily_matches SET created = now() - make_interval(hours => $1) WHERE id = $2",
+                &[&hours_ago, &challenge.id],
+            )
+            .await
+            .expect("stamp created");
+    }
+
+    let lobby: Vec<_> = DailyMatch::list_lobby(&client)
+        .await
+        .expect("list lobby")
+        .into_iter()
+        .map(|challenge| challenge.id)
+        .collect();
+    assert_eq!(lobby, vec![posted[2].id, posted[1].id, posted[0].id]);
+}
+
+#[tokio::test]
+async fn lobby_preserves_active_and_result_order_and_excludes_seen_old_and_cancelled() {
+    use crate::models::daily_match::{DailyMatch, DailyResult};
+    use crate::test_utils::{create_test_user, test_db};
+    use chrono::{Duration, Utc};
+
+    let test_db = test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-lobby-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-lobby-opponent").await;
+    let client = test_db.db.get().await.expect("db client");
+    let state = serde_json::json!({"revision": 0});
+
+    // Active matches by deadline: claimed with the far deadline first so the
+    // nearest deadline sorting cannot hang on insertion order.
+    let mut active = Vec::new();
+    for hours in [2, 1] {
+        let challenge = DailyMatch::create_challenge(&client, "chess", challenger.id)
+            .await
+            .expect("create challenge");
+        let claimed = DailyMatch::claim(
+            &client,
+            challenge.id,
+            opponent.id,
+            challenger.id,
+            Utc::now() + Duration::hours(hours),
+            &state,
+        )
+        .await
+        .expect("claim")
+        .expect("challenge was open");
+        active.push(claimed.id);
+    }
+
+    // Finished matches: two unseen, one seen by both players, one seen by
+    // the challenger only, and one unseen but older than the 30-day window.
+    let mut finished = Vec::new();
+    for (days_ago, seen_by) in [
+        (2, Vec::new()),
+        (1, Vec::new()),
+        (0, vec![challenger.id, opponent.id]),
+        (0, vec![challenger.id]),
+        (31, Vec::new()),
+    ] {
+        let challenge = DailyMatch::create_challenge(&client, "chess", challenger.id)
+            .await
+            .expect("create challenge");
+        DailyMatch::claim(
+            &client,
+            challenge.id,
+            opponent.id,
+            challenger.id,
+            Utc::now() + Duration::hours(1),
+            &state,
+        )
+        .await
+        .expect("claim")
+        .expect("challenge was open");
+        assert_eq!(
+            DailyMatch::finish(
+                &client,
+                challenge.id,
+                Some(challenger.id),
+                DailyResult::Resign,
+                &state,
+                0,
+            )
+            .await
+            .expect("finish"),
+            1
+        );
+        for user_id in seen_by {
+            assert_eq!(
+                DailyMatch::mark_result_seen(&client, challenge.id, user_id)
+                    .await
+                    .expect("mark seen"),
+                1
+            );
+        }
+        // The finish time is the sort key and the window cutoff; stamp it.
+        client
+            .execute(
+                "UPDATE daily_matches SET updated = now() - make_interval(days => $1) WHERE id = $2",
+                &[&days_ago, &challenge.id],
+            )
+            .await
+            .expect("stamp finished");
+        finished.push(challenge.id);
+    }
+
+    let cancelled = DailyMatch::create_challenge(&client, "chess", challenger.id)
+        .await
+        .expect("create challenge");
+    assert_eq!(
+        DailyMatch::cancel_challenge(&client, cancelled.id, challenger.id)
+            .await
+            .expect("cancel"),
+        1
+    );
+
+    let lobby = DailyMatch::list_lobby(&client).await.expect("list lobby");
+    let listed_active: Vec<_> = lobby
+        .iter()
+        .filter(|row| row.status == DailyMatch::STATUS_ACTIVE)
+        .map(|row| row.id)
+        .collect();
+    let listed_finished: Vec<_> = lobby
+        .iter()
+        .filter(|row| row.status == DailyMatch::STATUS_FINISHED)
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(listed_active, vec![active[1], active[0]]);
+    // Newest finish first. A result only one player has seen stays listed;
+    // one both players saw, and one older than 30 days, do not.
+    assert_eq!(listed_finished, vec![finished[3], finished[1], finished[0]]);
+    assert_eq!(
+        lobby.len(),
+        listed_active.len() + listed_finished.len(),
+        "cancelled challenges never reach the lobby"
+    );
+}

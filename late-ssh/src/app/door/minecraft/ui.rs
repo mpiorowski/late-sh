@@ -17,7 +17,7 @@ use crate::app::door::landing;
 /// running the pod; the client's default port 25565 is the hostPort.
 pub const ADDRESS: &str = "mc.late.sh";
 /// `local.minecraft_version` in `infra/defaults.tf`: the client must match.
-pub const VERSION: &str = "26.2";
+pub const VERSION: &str = "26.3";
 /// The `DIFFICULTY` env in `infra/minecraft.tf`.
 pub const DIFFICULTY: &str = "normal";
 /// `worldborder set` in `RCON_CMDS_STARTUP`, in blocks.

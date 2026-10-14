@@ -18,7 +18,7 @@ fn prev_room_keys_include_ctrl_p() {
 }
 
 #[test]
-fn leader_reaction_keys_are_plain_digits_except_custom_zero() {
+fn leader_reaction_keys_include_digits_and_wave_except_custom_zero() {
     assert_eq!(leader_reaction_emoji(b'0'), None);
     assert_eq!(leader_reaction_emoji(b'1'), Some("👍"));
     assert_eq!(leader_reaction_emoji(b'5'), Some("🔥"));
@@ -26,6 +26,8 @@ fn leader_reaction_keys_are_plain_digits_except_custom_zero() {
     assert_eq!(leader_reaction_emoji(b'7'), Some("🚀"));
     assert_eq!(leader_reaction_emoji(b'8'), Some("🤔"));
     assert_eq!(leader_reaction_emoji(b'9'), Some("💩"));
+    assert_eq!(leader_reaction_emoji(b'w'), Some("👋"));
+    assert_eq!(leader_reaction_emoji(b'W'), Some("👋"));
     assert_eq!(leader_reaction_emoji(b'!'), None);
 }
 

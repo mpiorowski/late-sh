@@ -1,5 +1,7 @@
 //! Pure room↔channel projection helpers (no I/O).
 
+use std::collections::HashMap;
+
 use irc_proto::message::Tag;
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
@@ -204,7 +206,12 @@ pub fn channel_name(room: &ChatRoom) -> Option<String> {
     if !is_irc_channel_kind(room) {
         return None;
     }
-    room.slug.as_deref().map(|slug| format!("#{slug}"))
+    let prefix = if room.visibility == "private" {
+        "##"
+    } else {
+        "#"
+    };
+    room.slug.as_deref().map(|slug| format!("{prefix}{slug}"))
 }
 
 /// Whether a room kind/visibility combination is exposed as an IRC channel.
@@ -226,9 +233,15 @@ pub fn normalize_channel(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
-/// Slug for a client-supplied channel name (`#foo` → `foo`).
-pub fn slug_for_channel(name: &str) -> Option<&str> {
-    name.strip_prefix('#').filter(|slug| !slug.is_empty())
+/// Visibility and slug for a client-supplied channel name.
+/// `#foo` addresses the public room; `##foo` addresses the private room.
+pub fn channel_parts(name: &str) -> Option<(&'static str, &str)> {
+    let rest = name.strip_prefix('#')?;
+    let (visibility, slug) = match rest.strip_prefix('#') {
+        Some(slug) => ("private", slug),
+        None => ("public", rest),
+    };
+    (!slug.is_empty() && !slug.contains('#')).then_some((visibility, slug))
 }
 
 /// Split a message body into IRC-sized lines: hard line breaks first, then
@@ -269,6 +282,19 @@ pub fn body_for_irc(body: &str, author: &str) -> String {
     crate::app::chat::action::parse_action_body(body)
         .map(|action| format!("* {author} {action}"))
         .unwrap_or_else(|| body.to_string())
+}
+
+/// A stored channel message body as IRC delivers it, live or replayed: the
+/// `/me` and CTCP shape from `body_for_irc`, then a leading `@username`
+/// mention rewritten to the matching IRC nick when the username is known.
+pub fn channel_body_for_irc(body: &str, author: &str, directory: &HashMap<Uuid, String>) -> String {
+    let body = body_for_irc(body, author);
+    rewrite_leading_mention_for_irc(&body, |username| {
+        directory
+            .values()
+            .find(|candidate| candidate.eq_ignore_ascii_case(username))
+            .cloned()
+    })
 }
 
 /// Extract CTCP ACTION text from a PRIVMSG body, if present.

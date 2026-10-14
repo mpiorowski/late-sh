@@ -31,12 +31,12 @@ fn a_walked_road_is_a_card() {
         step(1, Mark::Won),
         step(0, Mark::Cached),
         step(0, Mark::Won),
-        step(1, Mark::Mended),
+        step(1, Mark::Cleared),
         step(2, Mark::BrightWon),
         step(2, Mark::Cleared),
         step(1, Mark::Ran),
         step(1, Mark::Cached),
-        step(1, Mark::Mended),
+        step(1, Mark::Cleared),
         step(0, Mark::Won),
     ];
     let number = puzzle_number(walked.day);

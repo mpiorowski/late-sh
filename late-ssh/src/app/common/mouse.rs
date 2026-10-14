@@ -28,7 +28,7 @@ impl<T, P> Default for MouseState<T, P> {
     }
 }
 
-impl<T: Copy, P: Copy + PartialEq> MouseState<T, P> {
+impl<T: Clone, P: Copy + PartialEq> MouseState<T, P> {
     pub(crate) fn begin(&self, size: (u16, u16)) {
         self.clear_surface();
         if self.size.replace(size) != size {
@@ -74,20 +74,30 @@ impl<T: Copy, P: Copy + PartialEq> MouseState<T, P> {
             .borrow()
             .iter()
             .rev()
-            .find_map(|(rect, target)| rect.contains((x, y).into()).then_some(*target))
+            .find_map(|(rect, target)| rect.contains((x, y).into()).then(|| target.clone()))
     }
 
     /// Register a pane of `rows` lines shown in `area` and return its scroll
     /// offset, moved to show `focus` when the keyboard asked for a reveal.
     pub(crate) fn pane(&self, area: Rect, pane: P, rows: usize, focus: usize) -> usize {
+        self.pane_range(area, pane, rows, focus..focus.saturating_add(1))
+    }
+
+    pub(crate) fn pane_range(
+        &self,
+        area: Rect,
+        pane: P,
+        rows: usize,
+        focus: std::ops::Range<usize>,
+    ) -> usize {
         let height = area.height as usize;
         let max = rows.saturating_sub(height);
         let mut offset = self.offset(pane).min(max);
         if self.reveal.get() && height > 0 {
-            if focus < offset {
-                offset = focus;
-            } else if focus >= offset + height {
-                offset = focus + 1 - height;
+            if focus.start < offset {
+                offset = focus.start;
+            } else if focus.end > offset + height {
+                offset = focus.end.saturating_sub(height).min(focus.start);
             }
             offset = offset.min(max);
         }
@@ -96,9 +106,35 @@ impl<T: Copy, P: Copy + PartialEq> MouseState<T, P> {
         offset
     }
 
-    pub(crate) fn scroll(&self, x: u16, y: u16, delta: isize, size: (u16, u16)) {
+    /// The final column of an overflowing pane is its scrollbar track.
+    pub(crate) fn click_track(&self, x: u16, y: u16, size: (u16, u16)) -> bool {
         if !self.valid.get() || self.size.get() != size {
-            return;
+            return false;
+        }
+        let track = self
+            .panes
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|(area, pane, max)| {
+                (*max > 0 && x == area.right().saturating_sub(1) && area.contains((x, y).into()))
+                    .then_some((*area, *pane, *max))
+            });
+        if let Some((area, pane, max)) = track {
+            let offset =
+                usize::from(y - area.y) * max / usize::from(area.height.saturating_sub(1).max(1));
+            self.set_offset(pane, offset);
+            self.hits.borrow_mut().clear();
+            return true;
+        }
+        false
+    }
+
+    /// Scroll the pane under the pointer; false when no pane is there, so
+    /// the caller can let the wheel fall through.
+    pub(crate) fn scroll(&self, x: u16, y: u16, delta: isize, size: (u16, u16)) -> bool {
+        if !self.valid.get() || self.size.get() != size {
+            return false;
         }
         let hovered = self
             .panes
@@ -107,13 +143,15 @@ impl<T: Copy, P: Copy + PartialEq> MouseState<T, P> {
             .rev()
             .find(|(area, _, _)| area.contains((x, y).into()))
             .map(|(_, pane, max)| (*pane, *max));
-        if let Some((pane, max)) = hovered {
-            self.set_offset(
-                pane,
-                self.offset(pane).saturating_add_signed(delta).min(max),
-            );
-            self.hits.borrow_mut().clear();
-        }
+        let Some((pane, max)) = hovered else {
+            return false;
+        };
+        self.set_offset(
+            pane,
+            self.offset(pane).saturating_add_signed(delta).min(max),
+        );
+        self.hits.borrow_mut().clear();
+        true
     }
 
     /// Where the next recorded hit will land; pass it to `translate` after
@@ -150,7 +188,7 @@ impl<T: Copy, P: Copy + PartialEq> MouseState<T, P> {
         self.hits.borrow().clone()
     }
 
-    fn offset(&self, pane: P) -> usize {
+    pub(crate) fn offset(&self, pane: P) -> usize {
         self.offsets
             .borrow()
             .iter()

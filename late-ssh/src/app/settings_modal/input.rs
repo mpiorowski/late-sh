@@ -313,8 +313,12 @@ fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) {
     };
     let state = &mut app.settings_modal_state;
     match mouse.kind {
-        MouseEventKind::ScrollUp => state.mouse.scroll(x, y, -3, app.size),
-        MouseEventKind::ScrollDown => state.mouse.scroll(x, y, 3, app.size),
+        MouseEventKind::ScrollUp => {
+            state.mouse.scroll(x, y, -3, app.size);
+        }
+        MouseEventKind::ScrollDown => {
+            state.mouse.scroll(x, y, 3, app.size);
+        }
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             let Some(target) = state.mouse.target(x, y, app.size) else {
                 return;
@@ -853,9 +857,10 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Flip the selected tweak, then adopt it as this device's rail layout if it
-/// was one of the two rail rows. The modal owns the account default; the device
-/// layout is the app's, so the sync lives here rather than inside the modal.
+/// Flip the selected tweak, then adopt it as this device's setting if it was
+/// one of the per-device rows (the two rails, the Artboard disclaimer). The
+/// modal owns the account default; the device settings are the app's, so the
+/// sync lives here rather than inside the modal.
 fn toggle_tweak(app: &mut App) {
     if app.settings_modal_state.selected_tweak_row() == TweakRow::InteractionMode {
         app.settings_modal_state
@@ -863,6 +868,7 @@ fn toggle_tweak(app: &mut App) {
         return;
     }
     app.settings_modal_state.toggle_selected_tweak();
+    app.sync_artboard_disclaimer_from_settings();
     app.sync_device_rails_from_settings();
 }
 
@@ -879,6 +885,7 @@ fn cycle_tweak(app: &mut App, forward: bool) {
         return;
     }
     app.settings_modal_state.cycle_selected_tweak(forward);
+    app.sync_artboard_disclaimer_from_settings();
     app.sync_device_rails_from_settings();
 }
 

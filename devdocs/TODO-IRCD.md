@@ -118,7 +118,8 @@ Spec: FRD-IRCD.md §5.2 / §7. Implemented as a single listener:
 - `Config::validate` rejects a cert without a key and vice versa. Production
   cert requirements remain: publicly trusted CA, full chain, exact hostname
   (e.g. `irc.late.sh`).
-- Production IPv4 ingress-nginx and the IPv6 HAProxy edge send PROXY v1 metadata.
+- The production `ssh-edge` HAProxy sends PROXY v1 metadata when `IRC_PROXY_EMIT`
+  is on.
   `serve.rs` consumes trusted headers before rustls and keeps an unavailable
   client IP as `None` instead of substituting the shared transport address.
 
