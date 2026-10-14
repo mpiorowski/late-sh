@@ -187,7 +187,9 @@ Press `V` (**View**) for this visit, `A` (**Always View**) to turn off future
 reminders on this device, or `B` (**Back to Chat**) to return to Home (screen `1`). The default-on **Artboard
 content disclaimer** toggle in Settings → Tweaks can turn reminders off or on.
 The choice is per device (the SSH key you logged in with), so it can stay on
-at work and off at home; a new device starts with it on.
+at work and off at home. A device that has never chosen inherits the account's
+value: on for a new account, off if you pressed Always View before the setting
+became per device.
 The same toggle gates the login splash: only with it off does the day's
 gallery piece replace the coffee cup, so newcomers always see the cup.
 During the newcomer tour the dialog does not appear: the tour box at the

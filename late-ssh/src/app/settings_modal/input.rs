@@ -868,7 +868,7 @@ fn toggle_tweak(app: &mut App) {
         return;
     }
     app.settings_modal_state.toggle_selected_tweak();
-    sync_artboard_disclaimer(app);
+    app.sync_artboard_disclaimer_from_settings();
     app.sync_device_rails_from_settings();
 }
 
@@ -885,24 +885,8 @@ fn cycle_tweak(app: &mut App, forward: bool) {
         return;
     }
     app.settings_modal_state.cycle_selected_tweak(forward);
-    sync_artboard_disclaimer(app);
+    app.sync_artboard_disclaimer_from_settings();
     app.sync_device_rails_from_settings();
-}
-
-/// Adopt the Artboard disclaimer row as this device's, like the rail rows:
-/// only when that row was the one edited and its value changed, so unrelated
-/// tweaks never write to the key.
-fn sync_artboard_disclaimer(app: &mut App) {
-    let enabled = app.settings_modal_state.device_artboard_disclaimer();
-    if app.settings_modal_state.selected_tweak_row() == TweakRow::ArtboardDisclaimer
-        && enabled != app.artboard_disclaimer_enabled()
-    {
-        app.set_device_artboard_disclaimer(enabled);
-        if enabled {
-            app.artboard_content_accepted = false;
-            app.deactivate_artboard_interaction();
-        }
-    }
 }
 
 /// If the Input row is selected, cycle the interaction mode on the app (which

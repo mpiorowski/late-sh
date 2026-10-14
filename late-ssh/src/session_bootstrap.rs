@@ -250,15 +250,19 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 }
 
 /// What the SSH key a session authenticated with remembers about its device.
-/// Every field is `None` for a keyless session, a key with nothing stored, or
-/// a failed read, and every consumer treats `None` as "no device fact":
-/// the rails and the Artboard disclaimer follow the account default and a
-/// bare `/summary` opens its default window. That is why a failure here is logged and swallowed rather
-/// than failing the connection.
+/// Every field is `None` for a keyless session or a key with nothing stored,
+/// and every consumer treats `None` as "no device fact": the rails and the
+/// Artboard disclaimer follow the account default and a bare `/summary` opens
+/// its default window. A failed read is logged and swallowed rather than
+/// failing the connection; it reads as `None` too, except for the disclaimer,
+/// which is a content gate and fails closed (`Some(true)`): a device that
+/// turned the gate on must not lose it to a dropped query when the account
+/// seed is off.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DeviceState {
     pub layout: Option<KeyLayout>,
     /// This device's Artboard content disclaimer, `None` to follow the account.
+    /// `Some(true)` when the key could not be read.
     pub artboard_disclaimer: Option<bool>,
     /// When the last session on this device went quiet before it ended.
     /// Taken, not read: the row is cleared by the read, so this session is
@@ -278,7 +282,10 @@ pub async fn load_device_state(
         Ok(client) => client,
         Err(e) => {
             tracing::warn!(error = ?e, "failed to get db client for device state");
-            return DeviceState::default();
+            return DeviceState {
+                artboard_disclaimer: Some(true),
+                ..DeviceState::default()
+            };
         }
     };
     let (layout, artboard_disclaimer) =
@@ -290,7 +297,7 @@ pub async fn load_device_state(
             Ok(None) => (None, None),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load device settings");
-                (None, None)
+                (None, Some(true))
             }
         };
     let left_at = match UserSshKey::take_left_at(&client, user_id, fingerprint).await {

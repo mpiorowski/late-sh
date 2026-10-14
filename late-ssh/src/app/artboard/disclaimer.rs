@@ -11,6 +11,7 @@ use ratatui::{
 use crate::app::{
     common::{primitives::Screen, theme},
     input::{MouseButton, MouseEventKind, ParsedInput},
+    settings_modal::state::TweakRow,
     state::App,
 };
 
@@ -46,6 +47,24 @@ impl App {
         if let Some(fingerprint) = self.key_fingerprint.clone() {
             self.profile_state
                 .set_device_artboard_disclaimer(fingerprint, enabled);
+        }
+    }
+
+    /// Adopt the Tweaks row as this device's disclaimer, like the rail rows:
+    /// only when that row was the one edited and its value changed, so
+    /// unrelated tweaks never write to the key. Re-enabling it withdraws the
+    /// current visit's consent and leaves the editor, which is why this lives
+    /// here and not in the settings modal.
+    pub(crate) fn sync_artboard_disclaimer_from_settings(&mut self) {
+        let enabled = self.settings_modal_state.device_artboard_disclaimer();
+        if self.settings_modal_state.selected_tweak_row() == TweakRow::ArtboardDisclaimer
+            && enabled != self.artboard_disclaimer_enabled()
+        {
+            self.set_device_artboard_disclaimer(enabled);
+            if enabled {
+                self.artboard_content_accepted = false;
+                self.deactivate_artboard_interaction();
+            }
         }
     }
 
