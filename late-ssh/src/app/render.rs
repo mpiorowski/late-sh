@@ -2302,6 +2302,7 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Nethack,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
@@ -2324,6 +2325,7 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Dcss,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
@@ -2346,6 +2348,7 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Brogue,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
@@ -2390,6 +2393,7 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Zork,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),

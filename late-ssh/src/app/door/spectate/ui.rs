@@ -2,7 +2,7 @@
 // landing's place) while the rail sits on a live row: one header row, then
 // the player's screen alone. Opened (Enter on the row) it takes the whole
 // page: the header over the screen, and the watch chat docked beside it
-// (`chat_dock`) under its `watcher chat · N watching` row. The screen is the player's size, not ours: a smaller one is
+// (`chat_dock`) under its `N watching` row. The screen is the player's size, not ours: a smaller one is
 // centered, a larger one is cropped to a window around the game's cursor
 // (crawl and NetHack park it on the `@`), or pinned top-left while the game
 // hides its cursor (`crop_anchor`; Brogue). Brogue's black canvas is keyed
@@ -207,7 +207,13 @@ pub fn draw(
     if let (WatchPane::Open(chat), Some((rule, chat_area))) = (pane, layout.chat) {
         draw_rule(frame, rule);
         let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(chat_area);
-        draw_chat_header(frame, rows[0], view.watchers);
+        draw_chat_header(
+            frame,
+            rows[0],
+            view.watchers,
+            view.state.game(),
+            ChatSide::Watcher,
+        );
         if let Some(chat) = chat {
             let composer = draw_embedded_room_chat(frame, rows[1], *chat, terminal_images);
             join_rule_to_composer(frame, rule, composer);
@@ -311,14 +317,6 @@ fn draw_header(
             "widen the terminal to chat \u{b7} ` hop out \u{b7} Esc back "
         }
     };
-    // A Zork player can take a command from the chat (`door/zork/suggest.rs`),
-    // so where there is a chat to write it in, the header says how.
-    let suggests = match (view.state.game(), dock) {
-        (SpectateGame::Zork, ChatDock::Right | ChatDock::Below) => "\">cmd\" suggests \u{b7} ",
-        (SpectateGame::Zork, ChatDock::Hidden)
-        | (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, _) => "",
-    };
-    let keys = format!("{suggests}{keys}");
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(keys, faint))).alignment(Alignment::Right),
         area,
@@ -412,8 +410,10 @@ pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
 /// (`door/zork/suggest.rs`), which F3 types: it rides its own row under the
 /// pane's header, and takes the one-row form over the newest message, since
 /// it is the line the player can act on.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_own_chat(
     frame: &mut Frame,
+    game: SpectateGame,
     own_chat: OwnChat,
     chat: Option<EmbeddedRoomChatView<'_>>,
     line: Option<&WatchLine>,
@@ -425,6 +425,7 @@ pub fn draw_own_chat(
         (OwnChat::Pane { rule, pane }, _) => {
             draw_own_chat_pane(
                 frame,
+                game,
                 rule,
                 pane,
                 chat,
@@ -434,7 +435,7 @@ pub fn draw_own_chat(
             );
         }
         (OwnChat::Line(row), Some(command)) => draw_suggestion(frame, row, command),
-        (OwnChat::Line(row), None) => draw_watch_line(frame, row, line, watchers),
+        (OwnChat::Line(row), None) => draw_watch_line(frame, row, line, watchers, game),
         (OwnChat::Hidden, _) => {}
     }
 }
@@ -470,8 +471,10 @@ fn draw_suggestion(frame: &mut Frame, area: Rect, command: &str) {
 /// there, so the rows never jump: inert, its title and placeholder name F2
 /// and the click (`chat::ui::ComposerInert::OwnWatchChat`); open, it names
 /// its own keys (Enter sends, Esc hands the keys back to the game).
+#[allow(clippy::too_many_arguments)]
 fn draw_own_chat_pane(
     frame: &mut Frame,
+    game: SpectateGame,
     rule: Rect,
     pane: Rect,
     chat: Option<EmbeddedRoomChatView<'_>>,
@@ -481,7 +484,7 @@ fn draw_own_chat_pane(
 ) {
     draw_rule(frame, rule);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(pane);
-    draw_chat_header(frame, rows[0], watchers);
+    draw_chat_header(frame, rows[0], watchers, game, ChatSide::Player);
     let body = match suggestion {
         Some(command) => {
             let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(rows[1]);
@@ -498,13 +501,38 @@ fn draw_own_chat_pane(
     }
 }
 
+/// Which end of a game's watch chat is reading it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatSide {
+    /// Someone watching the game.
+    Watcher,
+    /// The player whose game it is.
+    Player,
+}
+
+/// What the watch chat says after its count: on Zork, how a suggested
+/// command works from this side of the chat (`door/zork/suggest.rs`).
+fn suggestion_hint(game: SpectateGame, side: ChatSide) -> &'static str {
+    match (game, side) {
+        (SpectateGame::Zork, ChatSide::Watcher) => " \u{b7} type >look to suggest",
+        (SpectateGame::Zork, ChatSide::Player) => " \u{b7} F3 takes a >suggestion",
+        (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, _) => "",
+    }
+}
+
 /// The watch chat's header row, the one place a watch view or a player's
 /// own game says how many are watching: everyone with the watch open, even
-/// when that is nobody.
-fn draw_chat_header(frame: &mut Frame, area: Rect, watchers: usize) {
+/// when that is nobody. Both fit the 40-column dock.
+fn draw_chat_header(
+    frame: &mut Frame,
+    area: Rect,
+    watchers: usize,
+    game: SpectateGame,
+    side: ChatSide,
+) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!(" watcher chat \u{b7} {watchers} watching"),
+            format!(" {watchers} watching{}", suggestion_hint(game, side)),
             Style::default().fg(theme::TEXT_FAINT()),
         ))),
         area,
@@ -513,8 +541,16 @@ fn draw_chat_header(frame: &mut Frame, area: Rect, watchers: usize) {
 
 /// The one row under a player's own running game, where the terminal is too
 /// narrow for the pane: the newest thing a watcher said, or a faint word
-/// that nobody has, with how many are watching either way.
-fn draw_watch_line(frame: &mut Frame, area: Rect, line: Option<&WatchLine>, watchers: usize) {
+/// that nobody has, with how many are watching either way, and on Zork
+/// what F3 does.
+fn draw_watch_line(
+    frame: &mut Frame,
+    area: Rect,
+    line: Option<&WatchLine>,
+    watchers: usize,
+    game: SpectateGame,
+) {
+    let hint = suggestion_hint(game, ChatSide::Player);
     let dim = Style::default().fg(theme::TEXT_DIM());
     let faint = Style::default().fg(theme::TEXT_FAINT());
     match line {
@@ -535,7 +571,7 @@ fn draw_watch_line(frame: &mut Frame, area: Rect, line: Option<&WatchLine>, watc
             // that gets cut.
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
-                    format!("  {} \u{b7} {watchers} watching ", line.age),
+                    format!("  {} \u{b7} {watchers} watching{hint} ", line.age),
                     faint,
                 )))
                 .alignment(Alignment::Right),
@@ -544,7 +580,7 @@ fn draw_watch_line(frame: &mut Frame, area: Rect, line: Option<&WatchLine>, watc
         }
         None => frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                format!(" {watchers} watching \u{b7} nobody has said anything"),
+                format!(" {watchers} watching \u{b7} nobody has said anything{hint}"),
                 faint,
             ))),
             area,

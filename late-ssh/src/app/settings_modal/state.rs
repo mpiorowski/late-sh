@@ -596,6 +596,11 @@ pub(crate) struct SettingsModalState {
     /// the account default on any unrelated settings edit, and every key that
     /// never stored a layout of its own would inherit it.
     device_rails: (RoomListMode, RightSidebarMode),
+    /// The Artboard content disclaimer row, held apart from `draft` for the
+    /// same reason as `device_rails`: it is this device's, and
+    /// `draft.artboard_disclaimer` stays the account default that keys with no
+    /// choice of their own inherit.
+    device_artboard_disclaimer: bool,
     selected_tab: Tab,
     row_index: usize,
     account_row_index: usize,
@@ -677,6 +682,7 @@ impl SettingsModalState {
             user_id,
             draft: Profile::default(),
             device_rails: (RoomListMode::On, RightSidebarMode::On),
+            device_artboard_disclaimer: true,
             selected_tab: Tab::Settings,
             row_index: 0,
             account_row_index: 0,
@@ -744,6 +750,12 @@ impl SettingsModalState {
         self.device_rails
     }
 
+    /// The Artboard content disclaimer the Tweaks row is editing: this
+    /// device's, picked up by `App::set_device_artboard_disclaimer`.
+    pub(crate) fn device_artboard_disclaimer(&self) -> bool {
+        self.device_artboard_disclaimer
+    }
+
     pub(crate) fn gem(&self) -> &GemState {
         &self.gem
     }
@@ -756,15 +768,18 @@ impl SettingsModalState {
     /// session is actually rendering with (`App::rail_modes`) separately: the two
     /// rail rows are per device, so showing the account default would misreport
     /// what the user is looking at, and writing it back would leak this device's
-    /// layout onto every other one.
+    /// layout onto every other one. The Artboard disclaimer is per device too
+    /// (`App::artboard_disclaimer_enabled`).
     pub(crate) fn open_from_profile(
         &mut self,
         profile: &Profile,
         device_rails: (RoomListMode, RightSidebarMode),
+        device_artboard_disclaimer: bool,
     ) {
         self.mouse.reveal_selection();
         self.draft = profile.clone();
         self.device_rails = device_rails;
+        self.device_artboard_disclaimer = device_artboard_disclaimer;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
         self.account_row_index = 0;
@@ -1180,7 +1195,7 @@ impl SettingsModalState {
                 self.draft.paper_at_login ^= true;
             }
             TweakRow::ArtboardDisclaimer => {
-                self.draft.artboard_disclaimer ^= true;
+                self.device_artboard_disclaimer ^= true;
             }
             TweakRow::InteractionMode => {
                 // Applied on the app (it flips the mouse live and persists on its

@@ -1,6 +1,7 @@
 use crate::models::user::{RightSidebarMode, RoomListMode};
 use crate::models::user_ssh_key::{
-    KeyAudio, KeyLayout, UserSshKey, extract_key_audio, extract_key_layout,
+    KeyAudio, KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_audio,
+    extract_key_layout,
 };
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
@@ -355,4 +356,72 @@ async fn left_at_is_per_device_served_once_and_scoped_to_its_owner() {
         Some(last_night),
         "a stranger's read must not spend the owner's mark"
     );
+}
+
+#[test]
+fn stored_artboard_disclaimer_reads_only_explicit_bools() {
+    assert_eq!(extract_key_artboard_disclaimer(&json!({})), None);
+    assert_eq!(
+        extract_key_artboard_disclaimer(&json!({"artboard_disclaimer": "off"})),
+        None
+    );
+    assert_eq!(
+        extract_key_artboard_disclaimer(&json!({"artboard_disclaimer": false})),
+        Some(false)
+    );
+    assert_eq!(
+        extract_key_artboard_disclaimer(&json!({"artboard_disclaimer": true})),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn artboard_disclaimer_is_per_device_and_leaves_other_settings_alone() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "artdevice").await;
+    let stranger = create_test_user(&test_db.db, "artstranger").await;
+
+    UserSshKey::ensure(&client, user.id, "SHA256:home")
+        .await
+        .expect("home key");
+    UserSshKey::ensure(&client, user.id, "SHA256:work")
+        .await
+        .expect("work key");
+    UserSshKey::set_layout(&client, user.id, "SHA256:home", phone_layout())
+        .await
+        .expect("home layout");
+
+    let user_id = user.id;
+    let stored = |fingerprint: &'static str| {
+        let client = &client;
+        async move {
+            let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint)
+                .await
+                .expect("load key")
+                .expect("key exists");
+            (
+                extract_key_artboard_disclaimer(&key.settings),
+                extract_key_layout(&key.settings),
+            )
+        }
+    };
+
+    UserSshKey::set_artboard_disclaimer(&client, user.id, "SHA256:home", false)
+        .await
+        .expect("home off");
+    UserSshKey::set_artboard_disclaimer(&client, user.id, "SHA256:work", true)
+        .await
+        .expect("work on");
+    assert_eq!(
+        stored("SHA256:home").await,
+        (Some(false), Some(phone_layout())),
+        "home turns it off and keeps its layout"
+    );
+    assert_eq!(stored("SHA256:work").await, (Some(true), None));
+
+    let denied =
+        UserSshKey::set_artboard_disclaimer(&client, stranger.id, "SHA256:work", false).await;
+    assert!(denied.is_err(), "cross-account write is refused");
+    assert_eq!(stored("SHA256:work").await, (Some(true), None));
 }

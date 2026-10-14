@@ -17,8 +17,11 @@ async fn fixture() -> (TestDb, App) {
     app.interaction_mode = InteractionMode::Hybrid;
     let client = db.db.get().await.unwrap();
     let profile = Profile::load(&client, user.id).await.unwrap();
-    app.settings_modal_state
-        .open_from_profile(&profile, app.rail_modes());
+    app.settings_modal_state.open_from_profile(
+        &profile,
+        app.rail_modes(),
+        app.artboard_disclaimer_enabled(),
+    );
     app.settings_modal_state
         .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;
@@ -511,6 +514,7 @@ async fn settings_mouse_rss_click_away_adds_the_feed_and_keeps_the_clicked_one_s
     app.settings_modal_state.open_from_profile(
         &Profile::load(&client, app.user_id).await.unwrap(),
         app.rail_modes(),
+        app.artboard_disclaimer_enabled(),
     );
     drop(client);
     settle(&mut app, |app| app.settings_modal_state.feeds().len() == 1).await;

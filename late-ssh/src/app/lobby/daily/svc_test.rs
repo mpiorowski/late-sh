@@ -151,6 +151,100 @@ async fn win_deltas(client: &tokio_postgres::Client, user_id: Uuid, reason: &str
 }
 
 #[tokio::test]
+async fn snapshots_keep_each_match_in_one_list_while_another_replica_finishes_them() {
+    use std::{collections::HashSet, time::Duration};
+
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-snapshot-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-snapshot-opponent").await;
+    let client = test_db.db.get().await.expect("writer client");
+    let state = serde_json::to_value(DailyChessState::new(
+        challenger.id,
+        opponent.id,
+        &Board::default(),
+    ))
+    .expect("chess state");
+    // Many distinct matches make a stream of real active -> finished commits,
+    // without reverting finished rows or relying on sleeps between reads.
+    // Built through the model; the per-player entry cap lives in the service.
+    let deadline = chrono::Utc::now() + chrono::Duration::hours(24);
+    let mut ids = HashSet::new();
+    for _ in 0..64 {
+        let challenge = DailyMatch::create_challenge(&client, "chess", challenger.id)
+            .await
+            .expect("create challenge");
+        DailyMatch::claim(
+            &client,
+            challenge.id,
+            opponent.id,
+            challenger.id,
+            deadline,
+            &state,
+        )
+        .await
+        .expect("claim")
+        .expect("challenge was open");
+        ids.insert(challenge.id);
+    }
+    let svc = daily_service(&test_db);
+    let mut listener = crate::pg_listener::PgListener::new();
+    let worker = svc.start_notify_worker(listener.subscribe(DailyService::CHANNELS));
+    let listener_task = listener.start(test_db.db.config().clone());
+    let mut snapshots = svc.subscribe_snapshot();
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while snapshots.borrow_and_update().active_matches.len() != ids.len() {
+            snapshots.changed().await.expect("snapshot channel open");
+        }
+    })
+    .await
+    .expect("initial active snapshot");
+
+    let write = async {
+        for id in &ids {
+            assert_eq!(
+                DailyMatch::finish(
+                    &client,
+                    *id,
+                    Some(challenger.id),
+                    DailyResult::Resign,
+                    &state,
+                    0
+                )
+                .await
+                .expect("finish on another connection"),
+                1
+            );
+        }
+    };
+    let read = async {
+        loop {
+            snapshots.changed().await.expect("snapshot channel open");
+            let snapshot = snapshots.borrow_and_update().clone();
+            let listed: Vec<Uuid> = snapshot
+                .active_matches
+                .iter()
+                .map(|item| item.id)
+                .chain(snapshot.finished_matches.iter().map(|item| item.id))
+                .collect();
+            assert_eq!(listed.len(), ids.len(), "no match is duplicated or lost");
+            assert_eq!(listed.into_iter().collect::<HashSet<_>>(), ids);
+            if snapshot.finished_matches.len() == ids.len() {
+                assert!(snapshot.active_matches.is_empty());
+                break;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(write, read);
+    })
+    .await
+    .expect("all matches finish and the final snapshot arrives");
+    worker.abort();
+    listener_task.abort();
+}
+
+#[tokio::test]
 async fn claim_has_exactly_one_winner() {
     let test_db = new_test_db().await;
     let challenger = create_test_user(&test_db.db, "daily-race-challenger").await;

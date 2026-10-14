@@ -1009,7 +1009,7 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
         ),
         TweakRow::ArtboardDisclaimer => (
             "Artboard content disclaimer",
-            toggle_span(draft.artboard_disclaimer),
+            toggle_span(state.device_artboard_disclaimer()),
             false,
         ),
         TweakRow::Screensaver => ("Screensaver", screensaver_span(draft.screensaver), true),

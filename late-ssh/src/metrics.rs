@@ -26,6 +26,7 @@ use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
+use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
 use late_core::models::calendar::CalendarRefusalKind;
 use late_core::models::referral::ReferralSource;
@@ -562,6 +563,7 @@ mod inner {
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
     use super::{
@@ -1299,6 +1301,18 @@ mod inner {
                 .u64_counter("late_ssh_daily_snapshot_rows_rejected_total")
                 .with_description(
                     "Daily match rows left out of the lobby snapshot, by reason, counted once per replica when a row first goes missing. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
+                )
+                .build()
+        })
+    }
+
+    fn irc_history_requests_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_irc_history_requests_total")
+                .with_description(
+                    "IRC history reads by who asked (a CHATHISTORY command, or the automatic replay after JOIN) and how they resolved. `failed` is a database error; `rate_limited`, `invalid_request`, `invalid_target`, and `invalid_reference` are refusals a client loop would repeat",
                 )
                 .build()
         })
@@ -2179,6 +2193,34 @@ mod inner {
                 "reason",
                 daily_snapshot_row_rejected_label(error),
             )],
+        );
+    }
+
+    fn irc_history_request_label(request: IrcHistoryRequest) -> &'static str {
+        match request {
+            IrcHistoryRequest::Explicit => "explicit",
+            IrcHistoryRequest::JoinReplay => "join_replay",
+        }
+    }
+
+    fn irc_history_outcome_label(outcome: IrcHistoryOutcome) -> &'static str {
+        match outcome {
+            IrcHistoryOutcome::Served => "served",
+            IrcHistoryOutcome::RateLimited => "rate_limited",
+            IrcHistoryOutcome::InvalidRequest => "invalid_request",
+            IrcHistoryOutcome::InvalidTarget => "invalid_target",
+            IrcHistoryOutcome::InvalidReference => "invalid_reference",
+            IrcHistoryOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn record_irc_history(request: IrcHistoryRequest, outcome: IrcHistoryOutcome) {
+        irc_history_requests_total().add(
+            1,
+            &[
+                KeyValue::new("request", irc_history_request_label(request)),
+                KeyValue::new("outcome", irc_history_outcome_label(outcome)),
+            ],
         );
     }
 
@@ -3079,6 +3121,7 @@ mod inner {
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
     use super::{
@@ -3138,6 +3181,7 @@ mod inner {
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_daily_snapshot_row_rejected(_error: &SnapshotRowError) {}
+    pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}

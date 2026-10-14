@@ -857,9 +857,10 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Flip the selected tweak, then adopt it as this device's rail layout if it
-/// was one of the two rail rows. The modal owns the account default; the device
-/// layout is the app's, so the sync lives here rather than inside the modal.
+/// Flip the selected tweak, then adopt it as this device's setting if it was
+/// one of the per-device rows (the two rails, the Artboard disclaimer). The
+/// modal owns the account default; the device settings are the app's, so the
+/// sync lives here rather than inside the modal.
 fn toggle_tweak(app: &mut App) {
     if app.settings_modal_state.selected_tweak_row() == TweakRow::InteractionMode {
         app.settings_modal_state
@@ -867,7 +868,7 @@ fn toggle_tweak(app: &mut App) {
         return;
     }
     app.settings_modal_state.toggle_selected_tweak();
-    sync_artboard_disclaimer(app);
+    app.sync_artboard_disclaimer_from_settings();
     app.sync_device_rails_from_settings();
 }
 
@@ -884,19 +885,8 @@ fn cycle_tweak(app: &mut App, forward: bool) {
         return;
     }
     app.settings_modal_state.cycle_selected_tweak(forward);
-    sync_artboard_disclaimer(app);
+    app.sync_artboard_disclaimer_from_settings();
     app.sync_device_rails_from_settings();
-}
-
-fn sync_artboard_disclaimer(app: &mut App) {
-    if app.settings_modal_state.selected_tweak_row() == TweakRow::ArtboardDisclaimer {
-        let enabled = app.settings_modal_state.draft().artboard_disclaimer;
-        app.profile_state.profile.artboard_disclaimer = enabled;
-        if enabled {
-            app.artboard_content_accepted = false;
-            app.deactivate_artboard_interaction();
-        }
-    }
 }
 
 /// If the Input row is selected, cycle the interaction mode on the app (which

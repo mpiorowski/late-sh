@@ -196,7 +196,8 @@ async fn account_lease_spans_editions_and_metadata_does_not_stop_game() {
     let (client, accepted) = fixture.client(ACCOUNT, "test-secret").await;
     assert!(accepted);
     let mut game = request(&client, "play zork1 new alice").await;
-    let ready = until(&mut game, "READY").await;
+    // PTY/SSH reads can split the readiness line before its trailing newline.
+    let ready = until(&mut game, "\r\n").await;
     assert!(ready.contains("/zork1 new secret=\r\n"), "{ready}");
     let mut list = request(&client, "list").await;
     let (code, json) = exit(&mut list).await;

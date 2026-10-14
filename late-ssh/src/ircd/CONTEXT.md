@@ -36,6 +36,7 @@ late-ssh/src/ircd/
 |-- mod.rs          # Module declarations only
 |-- serve.rs        # TCP listener, optional TLS, accept loop, global socket cap, shutdown disconnect
 |-- conn.rs         # Per-connection IRC registration, session state, commands, event projection
+|-- history.rs      # CHATHISTORY parsing and history/target batch framing
 |-- auth.rs         # PASS token auth, token lookup, user/IP server-ban checks
 |-- registry.rs     # Process-local user -> IRC connection control handles
 |-- proj.rs         # Pure room/channel/body/CTCP projection helpers
@@ -48,7 +49,8 @@ must consume a trusted proxy header before rustls sees the stream.
 
 Core model touchpoints:
 - `late-core/src/models/irc_token.rs` stores one hashed IRC token per user.
-- `chat_room.rs`, `chat_room_member.rs`, and `chat_message.rs` back channel/DM access and message delivery.
+- `chat_room.rs`, `chat_room_member.rs`, and `chat_message.rs` back channel/DM access and message delivery. The IRC channel predicate (which room kinds are channels, and for whom) is one SQL fragment in `chat_room.rs` shared by LIST, JOIN, and history reads; `proj::is_irc_channel_kind` is its Rust twin.
+- `irc_history.rs` turns CHATHISTORY selections into bounded page reads; the history queries themselves live with their tables (`chat_message.rs` pages and anchors, `chat_room.rs` access and target discovery), each enforcing the viewer's current access.
 - `room_ban.rs` and `server_ban.rs` back room/server moderation checks and ban-list projection.
 
 App/service touchpoints:
@@ -176,6 +178,16 @@ Message receive:
 - Edited messages are projected with an `[edit]` prefix.
 - IRC sessions load the user's ignored-user set at registration, update it from `ChatEvent::IgnoreListUpdated`, and suppress ignored authors in channel projections; DMs are not filtered by this IRC-side ignore check.
 
+History:
+- CAP advertises `batch` and `draft/chathistory`, alongside `message-tags`, `server-time`, `echo-message`, and `away-notify`. ISUPPORT advertises `CHATHISTORY=300` and `MSGREFTYPES=msgid,timestamp`.
+- Negotiating `draft/chathistory` enables `LATEST`, `BEFORE`, `AFTER`, `AROUND`, `BETWEEN`, and `TARGETS`. Positive limits are capped at 300 stored messages/targets. Other capabilities are independent: batch framing, timestamps, and IDs/reply tags follow their respective negotiated caps.
+- Registration sends `RPL_LOGGEDIN` (900) after ISUPPORT, identifying the token-authenticated late.sh account; its `time` tag follows `server-time`. Halloy uses this login notification to begin `TARGETS` discovery for missed DMs.
+- Channel requests require this IRC connection's JOIN; the model rechecks room kind, private membership, and active bans for pages, anchors, and target discovery. DMs require the existing participant pair and viewer membership. Reads create no rooms/memberships and update no read markers.
+- `TARGETS` returns joined channels and existing DMs whose latest visible message is strictly inside the requested timestamp interval, selected in the requested direction. Message pages always read oldest first, ordered by `(created, id)`; UUID anchors are scoped to the visible conversation. Timestamp selectors exclude their entire server-time millisecond. `AROUND` includes the anchor, aims for half older rows, and fills from either side.
+- `batch` responses use `chathistory <canonical channel or peer nick>` or `draft/chathistory-targets`; successful empty reads still produce an empty batch. Results are loaded before starting a batch. `draft/chathistory-end` is emitted for tag-aware clients only when lookahead proves the requested range exhausted. Parse/access/read failures use `FAIL CHATHISTORY`; history requests share the expensive-command rate limiter. Every request counts once in `late_ssh_irc_history_requests_total` (`request`: explicit or join_replay; `outcome`: served, rate_limited, invalid_request, invalid_target, invalid_reference, failed), recorded in `conn.rs` where the request is answered.
+- A fresh channel JOIN (including initial #lounge) replays 25 messages after topic/NAMES only for clients with `batch` + `server-time` and without `draft/chathistory`. Duplicate JOIN and lounge PART-refusal bursts do not replay. Each joined channel retains at most 25 replayed IDs to suppress queued creation events already sent in its join batch; edits remain live.
+- Replay uses original creation times and UUIDs, current usernames and stored bodies, including system activity. Channel ignores are refreshed before querying and applied before limiting; DMs are unfiltered. Deleted messages are absent; historical reaction/state events are not reconstructed. Long messages use the same UTF-8 splitting as live delivery, with msgid/reply tags only on their first line.
+
 ---
 
 ## 7. Moderation
@@ -262,6 +274,8 @@ Integration tests:
 - PROXY regressions cover a banned shared transport IP with a different
   projected client IP, `PROXY UNKNOWN`, and the no-header rollout transition.
 - Use shared DB helpers for any DB-backed test.
+- History regressions live beside `history.rs` and the core `irc_history.rs`, with capability/replay/DM/private-access TCP coverage in `serve_test.rs`.
+- Manual Halloy fixtures: `make seed-irc-history USERNAME=<local TUI username>` seeds numbered public/private channel and DM history, including more than one 300-message page. Reconnect and join `#history-lab` / `##history-lab`; fixture peers are `history_ada` / `history^lin`. Inserts are historical only and do not broadcast live events.
 
 Agent command policy:
 - LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy`.

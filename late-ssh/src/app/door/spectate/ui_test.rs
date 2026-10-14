@@ -209,7 +209,15 @@ fn the_players_chat_row_always_counts_the_watchers() {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 1))
             .expect("test terminal");
         terminal
-            .draw(|frame| draw_watch_line(frame, Rect::new(0, 0, 60, 1), line, watchers))
+            .draw(|frame| {
+                draw_watch_line(
+                    frame,
+                    Rect::new(0, 0, 60, 1),
+                    line,
+                    watchers,
+                    SpectateGame::Dcss,
+                )
+            })
             .expect("draw");
         let buffer = terminal.backend().buffer();
         (0..60)
@@ -229,5 +237,59 @@ fn the_players_chat_row_always_counts_the_watchers() {
     assert_eq!(
         row(Some(&line), 3),
         format!(" mira: nice dodge{}now \u{b7} 3 watching", " ".repeat(26))
+    );
+}
+
+/// One row of a 40-column (or wider) buffer, as plain text.
+fn drawn_row(width: u16, draw: impl FnOnce(&mut Frame, Rect)) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1))
+        .expect("test terminal");
+    terminal
+        .draw(|frame| draw(frame, Rect::new(0, 0, width, 1)))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..width)
+        .map(|x| buffer[(x, 0)].symbol().to_string())
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+/// On Zork the watch chat's header says how a suggested command works from
+/// each side, whole within the 40-column dock even at three-digit counts;
+/// the other games' headers are the count alone.
+#[test]
+fn the_zork_chat_header_says_how_to_suggest() {
+    let header = |watchers: usize, game: SpectateGame, side: ChatSide| {
+        drawn_row(DOCK_RIGHT_WIDTH, |frame, area| {
+            draw_chat_header(frame, area, watchers, game, side)
+        })
+    };
+
+    assert_eq!(
+        header(2, SpectateGame::Zork, ChatSide::Watcher),
+        " 2 watching \u{b7} type >look to suggest"
+    );
+    assert_eq!(
+        header(100, SpectateGame::Zork, ChatSide::Player),
+        " 100 watching \u{b7} F3 takes a >suggestion"
+    );
+    assert_eq!(
+        header(2, SpectateGame::Nethack, ChatSide::Player),
+        " 2 watching"
+    );
+}
+
+/// The one-row fallback under a player's own Zork game names F3 too, after
+/// the count.
+#[test]
+fn the_zork_players_chat_row_names_f3() {
+    let row = drawn_row(80, |frame, area| {
+        draw_watch_line(frame, area, None, 1, SpectateGame::Zork)
+    });
+
+    assert_eq!(
+        row,
+        " 1 watching \u{b7} nobody has said anything \u{b7} F3 takes a >suggestion"
     );
 }

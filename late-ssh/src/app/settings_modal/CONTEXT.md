@@ -41,9 +41,12 @@ before complete controls. Right sidebar's label and always-visible `[Panels]`
 button open its panel editor, including when Off.
 
 The Artboard group contains the default-on Artboard content disclaimer toggle.
-It persists `artboard_disclaimer` in account settings; re-enabling it closes
+It is per device like the rail rows: it edits `device_artboard_disclaimer`
+(outside `draft`, so `save()` never republishes it) and persists onto this
+session's SSH key, with the account's `artboard_disclaimer` only the default a
+new device inherits; re-enabling it closes
 editing and hides the current Artboard visit until consent. `A` (Always View) in the Artboard
-prompt turns the same tweak off and allows that visit. The same tweak gates
+prompt turns the same tweak off for this device and allows that visit. The same tweak gates
 the login splash: only with it off does the day's hung gallery piece replace
 the coffee cup. The tour never shows
 the dialog; its Artboard stop's `S` grants one-visit consent and does not

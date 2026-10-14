@@ -2,7 +2,7 @@ use super::calendar::*;
 use super::calendar_ban::CalendarBan;
 use crate::db::Db;
 use crate::test_utils::{create_test_user, test_db};
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 fn draft() -> EventDraft {
     EventDraft {
@@ -15,26 +15,25 @@ fn draft() -> EventDraft {
     }
 }
 
-fn timed(from_now: Duration) -> EventDraft {
+fn timed_at(now: DateTime<Utc>, offset: Duration) -> EventDraft {
     EventDraft {
         title: "Movie night".into(),
         description: String::new(),
         timing: EventTiming::Timed {
-            start: Utc::now() + from_now,
-            end: Some(Utc::now() + from_now + Duration::hours(2)),
+            start: now + offset,
+            end: Some(now + offset + Duration::hours(2)),
         },
     }
 }
 
-/// An all-day board post on today's UTC date.
-fn today_all_day() -> EventDraft {
-    let today = Utc::now().date_naive();
+/// An all-day board post on the supplied UTC date.
+fn all_day_on(day: NaiveDate) -> EventDraft {
     EventDraft {
         title: "Hackathon".into(),
         description: String::new(),
         timing: EventTiming::AllDay {
-            start: today,
-            end_exclusive: today.succ_opt().unwrap(),
+            start: day,
+            end_exclusive: day.succ_opt().unwrap(),
         },
     }
 }
@@ -403,6 +402,18 @@ async fn the_daily_cap_resets_at_utc_midnight_in_any_session_zone() {
 
 #[tokio::test]
 async fn rsvps_count_and_the_start_is_claimed_once() {
+    // Five minutes ago is yesterday just after UTC midnight: a timed event
+    // can sort before today's all-day event. Cover both orders independently
+    // of the wall clock, including the boundary that failed in CI.
+    for (timestamp, all_day_first) in [
+        ("2026-10-13T00:01:00Z", false),
+        ("2026-10-13T12:00:00Z", true),
+    ] {
+        rsvps_and_start_claim_at(timestamp.parse().unwrap(), all_day_first).await;
+    }
+}
+
+async fn rsvps_and_start_claim_at(now: DateTime<Utc>, all_day_first: bool) {
     let db = test_db().await;
     let poster = create_test_user(&db.db, "cal_host").await;
     let guest = create_test_user(&db.db, "cal_guest").await;
@@ -412,7 +423,7 @@ async fn rsvps_count_and_the_start_is_claimed_once() {
             poster.id,
             CalendarSource::Board,
             None,
-            &timed(Duration::minutes(30)),
+            &timed_at(now, Duration::minutes(30)),
         )
         .await
         .unwrap()
@@ -422,7 +433,7 @@ async fn rsvps_count_and_the_start_is_claimed_once() {
             poster.id,
             CalendarSource::Board,
             None,
-            &timed(-Duration::minutes(5)),
+            &timed_at(now, -Duration::minutes(5)),
         )
         .await
         .unwrap()
@@ -432,7 +443,7 @@ async fn rsvps_count_and_the_start_is_claimed_once() {
             poster.id,
             CalendarSource::Board,
             None,
-            &timed(-Duration::hours(5)),
+            &timed_at(now, -Duration::hours(5)),
         )
         .await
         .unwrap()
@@ -442,14 +453,19 @@ async fn rsvps_count_and_the_start_is_claimed_once() {
             poster.id,
             CalendarSource::Board,
             None,
-            &timed(Duration::days(3)),
+            &timed_at(now, Duration::days(3)),
         )
         .await
         .unwrap()
         .event;
 
     let day = store
-        .save(poster.id, CalendarSource::Board, None, &today_all_day())
+        .save(
+            poster.id,
+            CalendarSource::Board,
+            None,
+            &all_day_on(now.date_naive()),
+        )
         .await
         .unwrap()
         .event;
@@ -476,7 +492,6 @@ async fn rsvps_count_and_the_start_is_claimed_once() {
     // Live is the window: the one three days out is not in it, the one
     // five hours over is not either, the one on now and the one an hour
     // out are, and the all-day one is for its whole day.
-    let now = Utc::now();
     let live: Vec<_> = store
         .live_board(now)
         .await
@@ -484,7 +499,12 @@ async fn rsvps_count_and_the_start_is_claimed_once() {
         .into_iter()
         .map(|e| e.id)
         .collect();
-    assert_eq!(live, vec![day.id, on.id, soon.id]);
+    let expected = if all_day_first {
+        vec![day.id, on.id, soon.id]
+    } else {
+        vec![on.id, day.id, soon.id]
+    };
+    assert_eq!(live, expected);
     assert!(soon.live(now) && on.live(now) && day.live(now));
     assert!(!far.live(now) && !over.live(now));
     assert!(on.started(now) && !soon.started(now));

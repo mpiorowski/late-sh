@@ -87,6 +87,9 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+pub mod irc_history;
+#[cfg(test)]
+mod irc_history_test;
 pub mod irc_token;
 pub mod job_posting;
 #[cfg(test)]

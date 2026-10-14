@@ -11,12 +11,13 @@ use ratatui::{
 use crate::app::{
     common::{primitives::Screen, theme},
     input::{MouseButton, MouseEventKind, ParsedInput},
+    settings_modal::state::TweakRow,
     state::App,
 };
 
 const OPTIONS: [(u8, &str, &str, usize, Color); 3] = [
     (b'V', "View", "will ask next time too", 10, Color::Yellow),
-    (b'A', "Always View", "will not ask again", 7, Color::Red),
+    (b'A', "Always View", "off for this device", 6, Color::Red),
     (
         b'B',
         "Back to Chat",
@@ -30,11 +31,48 @@ const ASIDE: &str = "⁽ᵘˢᵘᵃˡˡʸ ᵇᵒᵒᵇⁱᵉˢ⁾";
 const FOOTER: &str = "ʸᵒᵘ ᶜᵃⁿ ᵃˡʷᵃʸˢ ʳᵉˢᵉᵗ ᵗʰⁱˢ ᵈⁱᵃˡᵒᵍ ⁱⁿ ˢᵉᵗᵗⁱⁿᵍˢ⁻ᵗʷᵉᵃᵏˢ";
 
 impl App {
+    /// Whether this device gates the Artboard: its own choice when its key has
+    /// one, else the account's `artboard_disclaimer`. Per device so one account
+    /// can keep the prompt at work and skip it at home.
+    pub(crate) fn artboard_disclaimer_enabled(&self) -> bool {
+        self.device_artboard_disclaimer
+            .unwrap_or(self.profile_state.profile().artboard_disclaimer)
+    }
+
+    /// Set this device's disclaimer. Lands on the SSH key, never on the
+    /// account, so the account's other devices keep their own choice.
+    /// Keyless sessions (ghost bots, tests) apply it and persist nothing.
+    pub(crate) fn set_device_artboard_disclaimer(&mut self, enabled: bool) {
+        self.device_artboard_disclaimer = Some(enabled);
+        if let Some(fingerprint) = self.key_fingerprint.clone() {
+            self.profile_state
+                .set_device_artboard_disclaimer(fingerprint, enabled);
+        }
+    }
+
+    /// Adopt the Tweaks row as this device's disclaimer, like the rail rows:
+    /// only when that row was the one edited and its value changed, so
+    /// unrelated tweaks never write to the key. Re-enabling it withdraws the
+    /// current visit's consent and leaves the editor, which is why this lives
+    /// here and not in the settings modal.
+    pub(crate) fn sync_artboard_disclaimer_from_settings(&mut self) {
+        let enabled = self.settings_modal_state.device_artboard_disclaimer();
+        if self.settings_modal_state.selected_tweak_row() == TweakRow::ArtboardDisclaimer
+            && enabled != self.artboard_disclaimer_enabled()
+        {
+            self.set_device_artboard_disclaimer(enabled);
+            if enabled {
+                self.artboard_content_accepted = false;
+                self.deactivate_artboard_interaction();
+            }
+        }
+    }
+
     pub(crate) fn artboard_disclaimer_visible(&self) -> bool {
         let enabled = if self.show_settings {
-            self.settings_modal_state.draft().artboard_disclaimer
+            self.settings_modal_state.device_artboard_disclaimer()
         } else {
-            self.profile_state.profile().artboard_disclaimer
+            self.artboard_disclaimer_enabled()
         };
         self.screen == Screen::Artboard && enabled && !self.artboard_content_accepted
     }
@@ -81,7 +119,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         Some(b'B' | 0x1B) => app.set_screen(Screen::Dashboard),
         Some(b'A') => {
             app.artboard_content_accepted = true;
-            app.profile_state.dismiss_artboard_disclaimer();
+            app.set_device_artboard_disclaimer(false);
             app.sync_dartboard_connection();
         }
         _ => {}
