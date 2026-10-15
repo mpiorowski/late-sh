@@ -10,7 +10,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::{FOES, RATIONS_PER_DAY, RULES};
 use crate::app::deadchannel::fight::road::{Mark, Node};
-use crate::app::deadchannel::fight::state::{Applied, Call, Outcome, Refusal};
+use crate::app::deadchannel::fight::state::{Applied, Call, Lookout, Outcome, Refusal};
 use crate::app::deadchannel::fight::state::{Command, Pick, Sheet};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::runner::state::Look;
@@ -233,6 +233,7 @@ async fn a_card_refused_keeps_the_scene_and_a_step_refused_ends_it() {
             applied: Applied::Refused(refusal),
             lines: vec![line.to_string()],
         },
+        lookout: Lookout::default(),
     };
 
     session

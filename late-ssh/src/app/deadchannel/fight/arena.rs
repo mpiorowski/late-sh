@@ -1557,7 +1557,7 @@ fn card_names(cards: &[Card]) -> String {
 }
 
 /// The day's road as three rows of ten: `g` a glyph, `B` a bright one,
-/// `+` a rest, `$` a cache.
+/// `+` a rest, `$` a cache, `x` the crossing.
 fn road_words(day: u32) -> String {
     let road = super::road::road_for(sim::date(day));
     (0..LANES)
@@ -1568,6 +1568,7 @@ fn road_words(day: u32) -> String {
                     Node::Bright => 'B',
                     Node::Rest => '+',
                     Node::Cache => '$',
+                    Node::Crossing => 'x',
                 })
                 .collect();
             format!("`{row}`")
@@ -1647,6 +1648,7 @@ fn run_words(events: &[Event]) -> String {
                         Node::Bright => "a bright glyph",
                         Node::Rest => "a rest",
                         Node::Cache => "a cache",
+                        Node::Crossing => "a crossing",
                     }
                 ));
             }

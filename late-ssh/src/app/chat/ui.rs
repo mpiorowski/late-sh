@@ -139,6 +139,9 @@ pub struct DashboardChatView<'a> {
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
+    /// A lounge spawn on the composer (`deadchannel/lounge`), for a
+    /// runner looking at #lounge while one shows.
+    pub lounge: Option<crate::app::deadchannel::lounge::ui::LoungeLine>,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
     pub mention_active: bool,
@@ -221,6 +224,11 @@ pub(crate) struct ComposerBlockView<'a> {
     pub keep_composer_focused: bool,
     /// Whether the composer takes keys, and if not, what focuses it.
     pub inert: ComposerInert,
+    /// A lounge spawn on the composer (`deadchannel/lounge`): the
+    /// placeholder while the composer is empty, the glyph in the title
+    /// while it is not. `Some` only on #lounge, for a runner, while one
+    /// shows.
+    pub lounge: Option<&'a crate::app::deadchannel::lounge::ui::LoungeLine>,
 }
 
 /// A composer that takes no keys keeps its strip so the rows never jump,
@@ -270,6 +278,12 @@ fn pick_title_that_fits<'a>(block_width: u16, tiers: &[&'a str]) -> &'a str {
 
 fn composer_title(view: &ComposerBlockView<'_>, block_width: u16) -> String {
     let picked = pick_composer_title_text(view, block_width);
+    // The lounge's glyph stays in the title while what is being typed
+    // covers the placeholder.
+    let picked = match view.lounge {
+        Some(line) if !view.composer.is_empty() => format!(" {}{picked}", line.glyph),
+        _ => picked,
+    };
     if picked.is_empty() {
         String::new()
     } else {
@@ -517,6 +531,12 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
             )));
         }
         ComposerInert::No => {}
+    }
+
+    // A lounge spawn takes the row over every hint: it is the one thing
+    // on the screen that will not wait.
+    if let Some(line) = view.lounge {
+        return Paragraph::new(crate::app::deadchannel::lounge::ui::placeholder(line));
     }
 
     if view.composing {
@@ -1207,6 +1227,7 @@ pub fn draw_dashboard_chat_card(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: ComposerInert::No,
+                lounge: view.lounge.as_ref(),
             },
             composer_text_width,
         ));
@@ -1369,6 +1390,7 @@ pub fn draw_dashboard_chat_card(
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
             inert: ComposerInert::No,
+            lounge: view.lounge.as_ref(),
         },
     );
     record_composer_mouse_target(
@@ -3440,6 +3462,7 @@ pub fn draw_embedded_room_chat(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: view.composer_inert,
+                lounge: None,
             },
             composer_text_width,
         ));
@@ -3463,6 +3486,7 @@ pub fn draw_embedded_room_chat(
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
             inert: view.composer_inert,
+            lounge: None,
         },
     );
     record_composer_mouse_target(
@@ -3687,6 +3711,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
                         inert: ComposerInert::No,
+                        lounge: None,
                     },
                     composer_text_width,
                 ),
@@ -5781,6 +5806,7 @@ fn draw_selected_content(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: ComposerInert::No,
+                lounge: None,
             },
         );
         record_composer_mouse_target(

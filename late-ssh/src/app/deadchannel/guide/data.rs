@@ -242,7 +242,7 @@ pub const SECTIONS: &[Section] = &[
                 },
                 Key {
                     key: "enter",
-                    does: "step: fight the glyph, clear the deck at a rest, take a cache",
+                    does: "step: fight the glyph, clear the deck at a rest, take a cache, cross a sleeper",
                 },
                 Key {
                     key: "g",
@@ -285,6 +285,54 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Rule(
                 "a dropped signal ends your day where you stand: the street takes the bits on you, you keep most of the exp, and the road is shut until the roll.",
+            ),
+        ],
+    },
+    Section {
+        title: "the crossing",
+        neon: Neon::Magenta,
+        blocks: &[
+            Block::Rule(
+                "one quiet step of every road has a *crossing* on one lane, beside a rest and a cache: another runner, asleep on their feet. the road says who, their level, their numbers, and what they carry. walk past it or take it.",
+            ),
+            Block::Keys(&[
+                Key {
+                    key: "enter",
+                    does: "on the crossing: fight them for what they carry",
+                },
+                Key {
+                    key: "r",
+                    does: "on the road: answer the one who crossed you, no ration",
+                },
+            ]),
+            Block::Rule(
+                "a crossing costs a *ration*, like any step. the sleeper fights at *full signal* with your numbers against theirs and one mind: hit, hit, wind up, heavy. their cards stay in their pocket; yours do not.",
+            ),
+            Block::Rule(
+                "put them down and you take every bit they were carrying. *no exp*, no kill on the sheet: the road is the way up, the crossing is the money and the story. go down and it is the road's full fall: your signal is down for the day, every bit on you goes to them, and you keep most of the exp.",
+            ),
+            Block::Rule(
+                "a sleeper risks only what they carry. their signal, their exp, and their day are untouched. the locker is for nights you would rather not be carrying.",
+            ),
+            Block::Rule(
+                "whoever was crossed and lost is owed an *answer*: within a day, `r` on the road fights the one who did it for what they carry now, no ration. win and it is back; lose and it is the full fall again. one answer per crossing.",
+            ),
+            Block::Figures(&[
+                Figure {
+                    value: "2",
+                    means: "levels either way: the crossing meets only runners within the band",
+                },
+                Figure {
+                    value: "1",
+                    means: "crossing on a sleeper a day, and one between any two runners a day",
+                },
+                Figure {
+                    value: "24h",
+                    means: "to answer, from the moment it ended",
+                },
+            ]),
+            Block::Rule(
+                "nobody who never joined can be crossed. a runner with their signal down, or a glyph waiting on their row, is off the road that night. the wire hears every crossing: who, which step, and what changed hands.",
             ),
         ],
     },
@@ -457,7 +505,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "it lends *fifty bits a level*, less what you already owe. enough at level 2 for a first weapon and a first coat.",
+                "it lends *the price of a piece at your level*, less what you already owe. the blade now, the kills later.",
             ),
             Block::Rule(
                 "it adds *a tenth* of every loan to the debt, rounded up, once. the debt never grows after that, and *half* of every glyph's and every cache's bits goes to it until you are square.",
@@ -621,11 +669,45 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "the lounge",
+        neon: Neon::Amber,
+        blocks: &[
+            Block::Rule(
+                "now and then a glyph leaks into *#lounge*. only runners see it: it stands in the composer, where you type, and nobody upstairs sees a thing.",
+            ),
+            Block::Keys(&[Key {
+                key: "/hit",
+                does: "hit it (typed in the composer; never posts)",
+            }]),
+            Block::Rule(
+                "a *flicker* dies to one hit and leaves a cache's worth of bits for whoever landed it. a *howler* takes *three hits from three different runners* and leaves a crystal for each. one hit per runner per glyph: a howler needs the room.",
+            ),
+            Block::Figures(&[
+                Figure {
+                    value: "3",
+                    means: "flickers a day, one in each eight hours of the UTC day, at a moment the dice pick",
+                },
+                Figure {
+                    value: "1",
+                    means: "howler a day, at a moment the dice pick, once two runners are in the lounge",
+                },
+                Figure {
+                    value: "90s / 3m",
+                    means: "a flicker and a howler stay that long, then slip away",
+                },
+            ]),
+            Block::Rule(
+                "a glyph lands only while a runner is looking at #lounge, and one that nobody puts down in time slips away: the wire says so, and nobody is paid. no exp, ever: the climb's pace stays the road's.",
+            ),
+            Block::Rule("a dropped signal cannot hit. nothing in the lounge hits back."),
+        ],
+    },
+    Section {
         title: "the wire",
         neon: Neon::Green,
         blocks: &[
             Block::Rule(
-                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a bright glyph put down, a near miss, the day's road walked.",
+                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a bright glyph put down, a near miss, the day's road walked, a lounge glyph put down or slipped past, a crossing and what it moved.",
             ),
             Block::Rule(
                 "your name there wears your mark and your level in the newest tint it opened: grey to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15. marks ride behind the Signal's glyph: ▚3╬2.",

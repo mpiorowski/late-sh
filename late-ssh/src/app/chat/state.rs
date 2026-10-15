@@ -1108,6 +1108,13 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
+    /// Set by a runner's `/hit`; consumed by `deadchannel::lounge::svc`
+    /// every tick. Swallowed for a runner, never posted; for anyone else
+    /// the line is words (`is_runner` says which).
+    requested_hit: bool,
+    /// Whether this user is a standing runner, as the directory last
+    /// said (`App::is_runner`, kept here by `set_is_runner`).
+    is_runner: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
@@ -1456,6 +1463,8 @@ impl ChatState {
             requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
+            requested_hit: false,
+            is_runner: false,
             requested_paper: None,
             requested_jobs: None,
             own_message_landed: None,
@@ -2242,6 +2251,14 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
         self.requested_haunt.take()
+    }
+
+    pub(crate) fn take_requested_hit(&mut self) -> bool {
+        std::mem::take(&mut self.requested_hit)
+    }
+
+    pub(crate) fn set_is_runner(&mut self, is_runner: bool) {
+        self.is_runner = is_runner;
     }
 
     pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
@@ -3997,6 +4014,17 @@ impl ChatState {
                 return Some(Banner::error("Only admins can run the job press"));
             }
             self.requested_jobs = Some(command);
+            return None;
+        }
+
+        // A runner's `/hit` is the lounge's (`deadchannel/lounge`): swallowed
+        // and never posted, whatever is or is not there to hit. For anyone
+        // else it is the words it is, and the room wonders.
+        if self.is_runner
+            && crate::app::deadchannel::lounge::state::parse_lounge_command(&body).is_some()
+        {
+            self.clear_composer_after_submit();
+            self.requested_hit = true;
             return None;
         }
 

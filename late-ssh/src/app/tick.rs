@@ -314,6 +314,9 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        // The lounge spawns (`app/deadchannel/lounge`): the spawn copy, a
+        // runner's `/hit`, and the word it came back with.
+        changed |= crate::app::deadchannel::lounge::svc::tick(self);
         changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()

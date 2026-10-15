@@ -66,6 +66,18 @@
 //! its level on, this climb and every one after (the one purchase a mark
 //! does not take back).
 //!
+//! And the crossing (GAME.md, "The crossing pass"): one quiet step of
+//! every road holds another runner, asleep, met for what they carry.
+//! The sleeper fights as a glyph wearing the runner's numbers (the
+//! signal, the attack, and the defense of their sheet) with one pattern
+//! (`data::RUNNER_PATTERN`); the deck on the table is the one awake. Who
+//! waits there is the service's to find (`svc.rs`: the day's caps, the
+//! level band, the rows); this file is handed the `Prey` and plays it
+//! (`Sheet::cross`, `Sheet::answer`). The attacker chose the fight and
+//! takes the road's full bet on a loss; the sleeper risks only what they
+//! carry, and the two-row transfer is the service's, so a win here
+//! reports the stake and moves nothing.
+//!
 //! Every number a balance pass turns comes in through `data::Rules`:
 //! `apply` plays the live `RULES`, `apply_under` any candidate set, which
 //! is how the sim and the arena compare one with another.
@@ -80,9 +92,9 @@ use super::cards::{self, Board, Card, Draft, ENERGY, Piles};
 use super::data::{
     self, BRIGHT_LINE, CACHE_LINES, CLEAR_LINE, CRYSTAL_LINE, DRAFT_LINE, DRINK_CRYSTALS,
     DRINK_SIGNAL_PER_LEVEL, DROP_LINES, FOES, FoeKind, FoeTier, GARNISH_PERCENT, HEARD_LINE,
-    Intent, KILL_LINES, LOAN_FEE_PERCENT, LOAN_PER_LEVEL, LOCKER_FEE_PERCENT, MARK_BONUS_CAP,
-    MAX_LEVEL, NEAR_MISS_SIGNAL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUN_LINES,
-    Rules, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE, percent_up,
+    Intent, KILL_LINES, LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, MARK_BONUS_CAP, MAX_LEVEL,
+    NEAR_MISS_SIGNAL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUN_LINES, Rules,
+    SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE, percent_up,
 };
 use super::policy;
 use super::road::{self, Mark, Node, Road, RoadRun, Trace};
@@ -95,14 +107,133 @@ pub const MAX_TIER: i32 = COST_LADDER.len() as i32;
 /// a dropped session shows how it got there.
 const LOG_KEEP: usize = 6;
 
-/// What is in front of you: a glyph of the table, or the Old Signal.
-/// Stored as `{"glyph": 3}` or `"old_signal"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What is in front of you: a glyph of the table, the Old Signal, or
+/// another runner. Stored as `{"glyph": 3}`, `"old_signal"`, or
+/// `{"runner": {...}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Quarry {
     /// Index into `data::FOES`.
     Glyph(usize),
     OldSignal,
+    Runner(Rival),
+}
+
+/// The runner on the other side of a crossing, as the fight stores them:
+/// enough to draw them, name them, and settle the row when it ends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rival {
+    pub user_id: Uuid,
+    pub username: String,
+    pub level: i32,
+    /// The `deadchannel_ambushes` row this fight is.
+    pub ambush_id: Uuid,
+    /// This is the sleeper's answer, not a crossing.
+    pub answer: bool,
+    /// Three rows of five cells, the runner's own portrait.
+    pub portrait: [String; 3],
+}
+
+/// Who a crossing meets, as the service hands it to the sheet: the rival
+/// and the numbers they fight with, read off their settled sheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prey {
+    pub rival: Rival,
+    /// Their signal, full: a sleeper is never a free kill for logging off
+    /// hurt.
+    pub signal: i32,
+    pub attack: u32,
+    pub defense: u32,
+    /// Their bits on hand: the most a win can take.
+    pub stake: i64,
+}
+
+impl Prey {
+    /// `sheet`'s runner as prey, with `portrait` as the look paints it.
+    pub fn of(
+        sheet: &Sheet,
+        username: &str,
+        portrait: [String; 3],
+        ambush_id: Uuid,
+        answer: bool,
+    ) -> Self {
+        Self {
+            rival: Rival {
+                user_id: sheet.user_id,
+                username: username.to_string(),
+                level: sheet.level,
+                ambush_id,
+                answer,
+                portrait,
+            },
+            signal: sheet.max_signal(),
+            attack: sheet.attack(),
+            defense: sheet.defense(),
+            stake: sheet.bits,
+        }
+    }
+
+    fn tier(&self) -> FoeTier {
+        FoeTier {
+            signal: self.signal,
+            attack: self.attack,
+            defense: self.defense,
+            bits: self.stake,
+            exp: 0,
+        }
+    }
+}
+
+/// What the service found for an answer: the crossing owed one, and the
+/// one who did it as prey.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// No crossing is owed an answer.
+    Nobody,
+    /// The one owed the answer cannot be reached: gone dark, signal
+    /// down, or in a fight of their own. The answer keeps.
+    OffTheWire,
+    Prey(Prey),
+}
+
+/// What the service reads for a session beside the sheet, once per
+/// answer: who waits at the crossing ahead, the answer the runner is
+/// owed, and the latest fight on them. Read-only; the row decides again
+/// under the lock when the runner acts on any of it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Lookout {
+    /// Who the crossing on the next step would meet; `None` with no
+    /// crossing in reach, or nobody left to meet there.
+    pub crossing: Option<Prey>,
+    /// The crossing this runner can answer, if any.
+    pub token: Option<Token>,
+    /// The latest fight on this runner inside the answer window.
+    pub news: Option<late_core::models::deadchannel_ambush::Ambush>,
+}
+
+/// A crossing owed an answer, and the one who did it as prey, when they
+/// are on the wire to be answered (standing, signal up, no fight on
+/// their row).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    pub ambush: late_core::models::deadchannel_ambush::Ambush,
+    pub prey: Option<Prey>,
+}
+
+/// The order a crossing tries the runners it could meet in: a seeded
+/// shuffle of the day and the attacker, so the road shows one name and
+/// the step meets the same one, and two attackers the same night do not
+/// all find the same sleeper first.
+pub fn crossing_order(day: NaiveDate, attacker: Uuid, candidates: &mut [Uuid]) {
+    use chrono::Datelike;
+    let salt = (day.num_days_from_ce() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (attacker.as_u128() as u64);
+    candidates.sort_by_key(|candidate| {
+        let mut z = salt ^ (candidate.as_u128() as u64);
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    });
 }
 
 /// The fight in progress, as stored on the row (`deadchannel_runners.fight`).
@@ -200,32 +331,81 @@ impl Fight {
 
     /// What it means to do `turns` turns from now.
     pub fn intent_in(&self, turns: u32) -> Intent {
-        let pattern = self.foe().pattern;
+        let pattern = self.pattern();
         pattern[(self.turn + turns) as usize % pattern.len()]
     }
 
     /// The foe as the lines call it: its kind's name, `bright` ahead of
-    /// it when it is.
+    /// it when it is; a rival's name.
     pub fn name(&self) -> String {
-        match self.bright {
-            true => format!("bright {}", self.foe().name),
-            false => self.foe().name.to_string(),
+        match (&self.quarry, self.bright) {
+            (Quarry::Runner(rival), _) => rival.username.clone(),
+            (Quarry::Glyph(_) | Quarry::OldSignal, true) => {
+                format!("bright {}", self.kind_name())
+            }
+            (Quarry::Glyph(_) | Quarry::OldSignal, false) => self.kind_name().to_string(),
         }
     }
 
-    pub fn foe(&self) -> &'static FoeKind {
-        match self.quarry {
-            Quarry::Glyph(kind) => &FOES[kind],
-            Quarry::OldSignal => &OLD_SIGNAL,
+    /// The table's kind in front of you; `None` for a rival, who is on
+    /// no table.
+    pub fn kind(&self) -> Option<&'static FoeKind> {
+        match &self.quarry {
+            Quarry::Glyph(kind) => Some(&FOES[*kind]),
+            Quarry::OldSignal => Some(&OLD_SIGNAL),
+            Quarry::Runner(_) => None,
         }
     }
 
-    /// The glyph's level (one kind per level); `None` for the Old Signal,
-    /// which has none.
+    /// The kind's name, for the lines that name a glyph: a rival's is
+    /// their username.
+    pub fn kind_name(&self) -> &str {
+        match &self.quarry {
+            Quarry::Glyph(kind) => FOES[*kind].name,
+            Quarry::OldSignal => OLD_SIGNAL.name,
+            Quarry::Runner(rival) => &rival.username,
+        }
+    }
+
+    /// The whole of its mind: the table's pattern, or the one every
+    /// sleeper has.
+    pub fn pattern(&self) -> &'static [Intent] {
+        match &self.quarry {
+            Quarry::Glyph(kind) => FOES[*kind].pattern,
+            Quarry::OldSignal => OLD_SIGNAL.pattern,
+            Quarry::Runner(_) => data::RUNNER_PATTERN,
+        }
+    }
+
+    /// Its face, three rows of five cells.
+    pub fn portrait(&self) -> [&str; 3] {
+        match &self.quarry {
+            Quarry::Glyph(kind) => FOES[*kind].portrait,
+            Quarry::OldSignal => OLD_SIGNAL.portrait,
+            Quarry::Runner(rival) => [
+                rival.portrait[0].as_str(),
+                rival.portrait[1].as_str(),
+                rival.portrait[2].as_str(),
+            ],
+        }
+    }
+
+    /// The runner on the other side, when the fight is a crossing or an
+    /// answer.
+    pub fn rival(&self) -> Option<&Rival> {
+        match &self.quarry {
+            Quarry::Runner(rival) => Some(rival),
+            Quarry::Glyph(_) | Quarry::OldSignal => None,
+        }
+    }
+
+    /// The glyph's level (one kind per level) or the rival's; `None` for
+    /// the Old Signal, which has none.
     pub fn foe_level(&self) -> Option<i32> {
-        match self.quarry {
-            Quarry::Glyph(kind) => Some(kind as i32 + 1),
+        match &self.quarry {
+            Quarry::Glyph(kind) => Some(*kind as i32 + 1),
             Quarry::OldSignal => None,
+            Quarry::Runner(rival) => Some(rival.level),
         }
     }
 
@@ -478,6 +658,11 @@ pub enum Command {
     /// Both of its cards are the runner's from that level on, this climb
     /// and every one after.
     Ink { level: i32 },
+    /// What a lounge glyph left (`deadchannel/lounge`): with `cache`, a
+    /// cache's worth of bits at the runner's level on hand, the machine's
+    /// garnish first; and `crystals`. Costs nothing and is never refused:
+    /// the hit that earned it was already judged.
+    Pocket { cache: bool, crystals: i32 },
 }
 
 /// Why nothing happened.
@@ -544,6 +729,14 @@ pub enum Refusal {
     AlreadyInked,
     /// An ink past what the marks allow: one draft a mark, and one more.
     NeedleWaits,
+    /// A step onto the crossing with nobody left to meet there: every
+    /// runner in the band was crossed today, is off the wire, or is you.
+    NobodyThere,
+    /// An answer with no crossing owed one.
+    NoAnswerOwed,
+    /// An answer to a runner who cannot be reached: gone dark, signal
+    /// down, or in a fight of their own. The answer keeps.
+    NotOnTheWire,
 }
 
 /// How one command settled. `Won`, `Lost`, and `Escaped` clear the fight.
@@ -555,6 +748,23 @@ pub enum Applied {
     },
     /// A fight was already waiting on the row; nothing was spent.
     Resumed,
+    /// A crossing stepped onto, or an answer given: the rival is on the
+    /// row. A crossing spent the ration; an answer spent nothing.
+    Crossed {
+        rival: Rival,
+    },
+    /// The rival put down. `stake` is what they carried when it started,
+    /// the most the service moves; the sheet itself gained nothing yet.
+    Ambushed {
+        rival: Rival,
+        stake: i64,
+    },
+    /// The signal dropped to a rival: the road's full fall, `bits_lost`
+    /// off the hand to them.
+    Downed {
+        rival: Rival,
+        bits_lost: i64,
+    },
     /// A card played, the fight still on.
     Played {
         card: Card,
@@ -645,6 +855,13 @@ pub enum Applied {
         level: i32,
         crystals: i32,
     },
+    /// A lounge glyph's leavings pocketed: `bits`, of which `garnished`
+    /// went to the debt, and `crystals`.
+    Pocketed {
+        bits: i64,
+        garnished: i64,
+        crystals: i32,
+    },
 }
 
 /// One command's result: what settled, and the lines to show for it.
@@ -663,6 +880,16 @@ pub enum News {
     /// The signal dropped at `step` of the road; the street took
     /// `bits_lost`.
     Dropped { bits_lost: i64, step: i32 },
+    /// A rival put down at `step` of the road (`None` for an answer).
+    /// What moved is the service's to say.
+    Ambushed { rival: Rival, step: Option<i32> },
+    /// The signal dropped to a rival at `step` (`None` for an answer);
+    /// `bits_lost` went to them.
+    Downed {
+        rival: Rival,
+        step: Option<i32>,
+        bits_lost: i64,
+    },
     /// A level gained: the line the face rides.
     Leveled { level: i32 },
     /// The Old Signal put down, the runner reset: the other line the face
@@ -725,11 +952,11 @@ impl Sheet {
                     Ok(fight) => fight,
                     Err(error) => return Err(SheetError::Fight(error.to_string())),
                 };
-                match fight.quarry {
-                    Quarry::Glyph(kind) if kind >= FOES.len() => {
+                match &fight.quarry {
+                    Quarry::Glyph(kind) if *kind >= FOES.len() => {
                         return Err(SheetError::Fight(format!("unknown glyph kind {kind}")));
                     }
-                    Quarry::Glyph(_) | Quarry::OldSignal => Some(fight),
+                    Quarry::Glyph(_) | Quarry::OldSignal | Quarry::Runner(_) => Some(fight),
                 }
             }
         };
@@ -1220,6 +1447,18 @@ impl Sheet {
                 });
                 return news;
             }
+            Applied::Downed { rival, bits_lost } => {
+                news.push(News::Downed {
+                    rival: rival.clone(),
+                    step: self.crossing_step(rival),
+                    bits_lost: *bits_lost,
+                });
+                return news;
+            }
+            Applied::Ambushed { rival, .. } => news.push(News::Ambushed {
+                rival: rival.clone(),
+                step: self.crossing_step(rival),
+            }),
             Applied::Slain { marks } => news.push(News::Slain { marks: *marks }),
             Applied::Won {
                 foe,
@@ -1248,6 +1487,7 @@ impl Sheet {
             Applied::Refused(_)
             | Applied::Started { .. }
             | Applied::Resumed
+            | Applied::Crossed { .. }
             | Applied::Played { .. }
             | Applied::Round
             | Applied::Drafted { .. }
@@ -1259,7 +1499,8 @@ impl Sheet {
             | Applied::Repaid { .. }
             | Applied::Drank { .. }
             | Applied::Carted { .. }
-            | Applied::Inked { .. } => return news,
+            | Applied::Inked { .. }
+            | Applied::Pocketed { .. } => return news,
         }
         if self.rations_left == 0 {
             news.push(News::RoadWalked {
@@ -1270,6 +1511,136 @@ impl Sheet {
             });
         }
         news
+    }
+
+    /// The step a fight with `rival` was on: the last one taken, for a
+    /// crossing; an answer is no step.
+    fn crossing_step(&self, rival: &Rival) -> Option<i32> {
+        match rival.answer {
+            true => None,
+            false => Some(self.step() - 1),
+        }
+    }
+
+    /// `bits` onto the hand, the machine's garnish taken first, like
+    /// everything the road pays. Returns what the machine took.
+    pub fn earn(&mut self, bits: i64) -> i64 {
+        let garnished = (bits * GARNISH_PERCENT / 100).min(self.debt);
+        self.debt -= garnished;
+        self.bits += bits - garnished;
+        garnished
+    }
+
+    /// Up to `stake` bits off the hand, as a crossing takes them from the
+    /// sleeper. Returns what came off.
+    pub fn robbed(&mut self, stake: i64) -> i64 {
+        let taken = stake.min(self.bits).max(0);
+        self.bits -= taken;
+        taken
+    }
+
+    /// Why a step onto the crossing on `lane` would start nothing, read
+    /// off the sheet as it stands; `None` when it would. The service asks
+    /// this before going looking for who waits there, so a refused step
+    /// never locks a sleeper's row. A fight already on the row is not a
+    /// refusal: the step resumes it (`Sheet::cross`).
+    pub fn crossing_refused(&self, lane: u8) -> Option<Refusal> {
+        if self.fight.is_some() {
+            return None;
+        }
+        match self.shut() {
+            Some(Shut::SignalDown) => return Some(Refusal::SignalDown),
+            Some(Shut::NoRations) => return Some(Refusal::NoRations),
+            None => {}
+        }
+        if self.draft().is_some() {
+            return Some(Refusal::CardWaiting);
+        }
+        if !self.road.reaches(lane) {
+            return Some(Refusal::NotThatWay);
+        }
+        match self.node_ahead(lane) {
+            Some(Node::Crossing) => None,
+            Some(Node::Glyph | Node::Bright | Node::Rest | Node::Cache) | None => {
+                Some(Refusal::WrongCall)
+            }
+        }
+    }
+
+    /// A step onto the crossing: the ration, the lane, and `prey` on the
+    /// row as the fight (GAME.md, "The crossing pass"). A fight already on
+    /// the row resumes instead, like any step. With nobody to meet the
+    /// service passes `None`, and the step is refused and spends nothing.
+    pub fn cross<R: Rng>(
+        &mut self,
+        rules: &Rules,
+        lane: u8,
+        prey: Option<Prey>,
+        rng: &mut R,
+    ) -> Outcome {
+        if self.fight.is_some() {
+            return Outcome {
+                applied: Applied::Resumed,
+                lines: Vec::new(),
+            };
+        }
+        if let Some(refusal) = self.crossing_refused(lane) {
+            return refused(refusal);
+        }
+        let Some(prey) = prey else {
+            return refused(Refusal::NobodyThere);
+        };
+        self.take_step(lane, Mark::Fighting);
+        self.engage_rival(rules, prey, rng)
+    }
+
+    /// The sleeper's answer: the one who crossed them on the row as the
+    /// fight, no ration and no step. Not with a fight waiting, not with
+    /// the signal down; with nothing owed, or the one owed it off the
+    /// wire, refused, and the answer keeps.
+    pub fn answer<R: Rng>(&mut self, rules: &Rules, answer: Answer, rng: &mut R) -> Outcome {
+        if self.fight.is_some() {
+            return fight_waiting("not with a glyph waiting on you. the answer keeps.");
+        }
+        if self.is_down() {
+            return refused(Refusal::SignalDown);
+        }
+        let prey = match answer {
+            Answer::Nobody => return refused(Refusal::NoAnswerOwed),
+            Answer::OffTheWire => return refused(Refusal::NotOnTheWire),
+            Answer::Prey(prey) => prey,
+        };
+        self.engage_rival(rules, prey, rng)
+    }
+
+    /// `prey` on the row: a fight against a glyph wearing their numbers,
+    /// the deck dealt with the day's static in it. No ration and no step:
+    /// `cross` and `answer` spend those, and the sim reads a crossing's
+    /// odds from here.
+    pub(crate) fn engage_rival<R: Rng>(
+        &mut self,
+        rules: &Rules,
+        prey: Prey,
+        rng: &mut R,
+    ) -> Outcome {
+        let static_cards = usize::from(self.road.static_cards);
+        let deck = self.deck();
+        let tier = prey.tier();
+        let answer = prey.rival.answer;
+        let arrives = match answer {
+            true => data::answer_arrives(&prey.rival.username, prey.stake),
+            false => data::crossing_arrives(&prey.rival.username, prey.stake),
+        };
+        let rival = prey.rival;
+        let mut fight = Fight::new(Quarry::Runner(rival.clone()), tier, deck, static_cards, rng);
+        fight.push(arrives);
+        let lines = fight.log.clone();
+        self.fight = Some(fight);
+        let _ = rules;
+        Outcome {
+            applied: Applied::Crossed { rival },
+            lines,
+        }
     }
 
     /// One command under the live rules.
@@ -1298,7 +1669,8 @@ impl Sheet {
             Command::Patch => self.patch(rules),
             Command::Deposit => self.deposit(),
             Command::Withdraw => self.withdraw(),
-            Command::Borrow => self.borrow(),
+            Command::Pocket { cache, crystals } => self.pocket(rules, cache, crystals),
+            Command::Borrow => self.borrow(rules),
             Command::Repay => self.repay(),
             Command::Reset => self.reset(),
             Command::Drink { drink } => self.drink(drink),
@@ -1307,20 +1679,33 @@ impl Sheet {
         }
     }
 
-    /// What the bits machine will have lent at most: the level's cap.
+    /// What the bits machine will have lent at most: one piece at the
+    /// level, off the wall ([`Rules::loan_cap`]).
     pub fn loan_cap(&self) -> i64 {
-        i64::from(self.level) * LOAN_PER_LEVEL
+        self.loan_cap_under(&RULES)
+    }
+
+    pub fn loan_cap_under(&self, rules: &Rules) -> i64 {
+        rules.loan_cap(self.level)
     }
 
     /// What a loan would hand over now: the cap less the debt, nothing at
     /// or past the cap (the fee carries the debt past it).
     pub fn loan_room(&self) -> i64 {
-        (self.loan_cap() - self.debt).max(0)
+        self.loan_room_under(&RULES)
+    }
+
+    pub fn loan_room_under(&self, rules: &Rules) -> i64 {
+        (self.loan_cap_under(rules) - self.debt).max(0)
     }
 
     /// The machine's fee on that loan, added to the debt with it.
     pub fn loan_fee(&self) -> i64 {
-        percent_up(self.loan_room(), LOAN_FEE_PERCENT)
+        self.loan_fee_under(&RULES)
+    }
+
+    pub fn loan_fee_under(&self, rules: &Rules) -> i64 {
+        percent_up(self.loan_room_under(rules), LOAN_FEE_PERCENT)
     }
 
     /// Whether a step off the ledge would take anything: a level, exp, a
@@ -1392,13 +1777,46 @@ impl Sheet {
         }
     }
 
-    /// The machine lends up to the level's cap, all the room at once, and
-    /// adds its fee to the debt then and never again.
-    fn borrow(&mut self) -> Outcome {
+    /// A lounge glyph's leavings onto the sheet: a cache's worth of bits
+    /// at this level on hand with the machine's garnish taken first, like
+    /// a kill's, and the crystals. Never refused: a glyph waiting, a
+    /// signal down, or a day spent change nothing about a hit the lounge
+    /// already counted.
+    fn pocket(&mut self, rules: &Rules, cache: bool, crystals: i32) -> Outcome {
+        let bits = match cache {
+            true => rules.cache(self.level),
+            false => 0,
+        };
+        let garnished = self.earn(bits);
+        self.crystals += crystals;
+        let mut lines = Vec::new();
+        if bits > 0 {
+            lines.push(format!("{bits} bits off the lounge floor."));
+        }
+        if garnished > 0 {
+            lines.push(self.garnish_line(garnished));
+        }
+        if crystals > 0 {
+            lines.push(CRYSTAL_LINE.to_string());
+        }
+        Outcome {
+            applied: Applied::Pocketed {
+                bits,
+                garnished,
+                crystals,
+            },
+            lines,
+        }
+    }
+
+    /// The machine lends up to the level's cap, a piece at the level, all
+    /// the room at once, and adds its fee to the debt then and never
+    /// again.
+    fn borrow(&mut self, rules: &Rules) -> Outcome {
         if self.fight.is_some() {
             return fight_waiting("not with a glyph waiting on you. the machine can wait.");
         }
-        let amount = self.loan_room();
+        let amount = self.loan_room_under(rules);
         if amount == 0 {
             return Outcome {
                 applied: Applied::Refused(Refusal::LoanCapped),
@@ -1408,7 +1826,7 @@ impl Sheet {
                 )],
             };
         }
-        let fee = self.loan_fee();
+        let fee = self.loan_fee_under(rules);
         self.bits += amount;
         self.debt += amount + fee;
         Outcome {
@@ -1754,6 +2172,9 @@ impl Sheet {
                 Call::Take => self.cache(rules, lane, rng),
                 Call::Fight(_) | Call::Clear => refused(Refusal::WrongCall),
             },
+            // The crossing is its own step (`Sheet::cross`): the row needs
+            // to be told who waits there.
+            Node::Crossing => refused(Refusal::WrongCall),
         }
     }
 
@@ -1792,7 +2213,8 @@ impl Sheet {
                 fight
             }
         };
-        fight.push(fight.foe().arrives.to_string());
+        let arrives = fight.kind().expect("a pick meets the table").arrives;
+        fight.push(arrives.to_string());
         match pick {
             Pick::Fair => {}
             Pick::Lower => fight.push(STEPPED_DOWN_LINE.to_string()),
@@ -1829,9 +2251,7 @@ impl Sheet {
     fn cache<R: Rng>(&mut self, rules: &Rules, lane: u8, rng: &mut R) -> Outcome {
         self.take_step(lane, Mark::Cached);
         let bits = rules.cache(self.level);
-        let garnished = (bits * GARNISH_PERCENT / 100).min(self.debt);
-        self.debt -= garnished;
-        self.bits += bits - garnished;
+        let garnished = self.earn(bits);
         let mut lines = vec![format!("{} +{bits} bits.", pick(rng, &CACHE_LINES))];
         if garnished > 0 {
             lines.push(self.garnish_line(garnished));
@@ -2114,9 +2534,27 @@ impl Sheet {
         rng: &mut R,
         lines: Vec<String>,
     ) -> Outcome {
-        match fight.quarry {
+        match &fight.quarry {
             Quarry::OldSignal => self.slay(lines),
             Quarry::Glyph(_) => self.put_down(rules, fight, rng, lines),
+            Quarry::Runner(_) => self.put_down_rival(fight, lines),
+        }
+    }
+
+    /// A rival is down. The sheet gains nothing here: what they carried
+    /// is theirs until the service moves it (two rows, one transaction),
+    /// and a crossing pays no exp and counts no kill, so the road stays
+    /// the way up and the band stays a courtesy.
+    fn put_down_rival(&mut self, fight: Fight, mut lines: Vec<String>) -> Outcome {
+        let rival = fight.rival().expect("a rival fight").clone();
+        lines.push(data::rival_down_line(&rival.username, rival.answer));
+        self.leave_fight(&fight, Mark::Won);
+        Outcome {
+            applied: Applied::Ambushed {
+                rival,
+                stake: fight.foe_bits,
+            },
+            lines,
         }
     }
 
@@ -2168,9 +2606,7 @@ impl Sheet {
         mut lines: Vec<String>,
     ) -> Outcome {
         let heard_before = self.signal_hears();
-        let garnished = (fight.foe_bits * GARNISH_PERCENT / 100).min(self.debt);
-        self.debt -= garnished;
-        self.bits += fight.foe_bits - garnished;
+        let garnished = self.earn(fight.foe_bits);
         self.exp += fight.foe_exp;
         self.kills += 1;
         self.kills_today += 1;
@@ -2226,7 +2662,7 @@ impl Sheet {
         }
         Outcome {
             applied: Applied::Won {
-                foe: fight.foe().name,
+                foe: fight.kind().expect("a glyph of the table").name,
                 bits: fight.foe_bits,
                 garnished,
                 exp: fight.foe_exp,
@@ -2250,13 +2686,27 @@ impl Sheet {
         self.bits = 0;
         self.exp = (self.exp as f64 * rules.exp_keep_on_death).round() as i64;
         lines.push(pick(rng, &DROP_LINES).to_string());
-        lines.push(match bits_lost {
-            0 => "the street finds nothing on you.".to_string(),
-            n => format!("the street takes {n} bits off you. back tomorrow."),
-        });
-        Outcome {
-            applied: Applied::Lost { bits_lost },
-            lines,
+        match fight.rival() {
+            Some(rival) => {
+                lines.push(data::rival_took_line(&rival.username, bits_lost));
+                Outcome {
+                    applied: Applied::Downed {
+                        rival: rival.clone(),
+                        bits_lost,
+                    },
+                    lines,
+                }
+            }
+            None => {
+                lines.push(match bits_lost {
+                    0 => "the street finds nothing on you.".to_string(),
+                    n => format!("the street takes {n} bits off you. back tomorrow."),
+                });
+                Outcome {
+                    applied: Applied::Lost { bits_lost },
+                    lines,
+                }
+            }
         }
     }
 }
@@ -2298,6 +2748,9 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::CardWaiting => "a new card is waiting for you. pick it before the next step.",
         Refusal::NoDraft => "no new card is waiting for you.",
         Refusal::NotOffered => "that card is not on offer.",
+        Refusal::NobodyThere => "nobody is at the crossing tonight. the street is yours.",
+        Refusal::NoAnswerOwed => "nobody crossed you. there is nothing to answer.",
+        Refusal::NotOnTheWire => "they are off the wire. the answer keeps.",
         Refusal::NotAnUpgrade
         | Refusal::Short { .. }
         | Refusal::NothingToPatch

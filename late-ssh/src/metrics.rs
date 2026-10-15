@@ -248,8 +248,35 @@ pub enum FightBeat {
     Carted,
     /// A draft inked at INK.
     Inked,
+    /// A lounge glyph's leavings onto the sheet (`deadchannel/lounge`).
+    Pocketed,
+    /// A step onto the crossing: a sleeper on the row.
+    Crossed,
+    /// The sleeper's answer: the one who crossed them on the row.
+    Answered,
+    /// A rival put down.
+    Ambushed,
+    /// The signal dropped to a rival.
+    Downed,
     Refused,
     Failed,
+}
+
+/// One beat of the lounge spawns (`deadchannel/lounge`): a spawn landed,
+/// a hit on it, it put down, it slipped away; a hitter paid, one with no
+/// standing runner left unpaid, a pay that erred; a hit the row turned
+/// down (already hit, nothing live, signal down), a hit that did not land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoungeBeat {
+    Spawned,
+    Hit,
+    Slain,
+    Slipped,
+    Paid,
+    PayLeft,
+    PayFailed,
+    HitRefused,
+    HitFailed,
 }
 
 /// The Old Signal's chips after a kill (`fight/svc.rs::pay_mark`): `Paid`
@@ -553,13 +580,13 @@ mod inner {
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
         FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
-        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
-        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
+        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
+        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -1533,6 +1560,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_lounge_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_lounge_total")
+                .with_description("deadchannel lounge spawns, hits, and pay, by beat")
+                .build()
+        })
+    }
+
     fn runner_door_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1639,6 +1676,11 @@ mod inner {
             FightBeat::Drank => "drank",
             FightBeat::Carted => "carted",
             FightBeat::Inked => "inked",
+            FightBeat::Pocketed => "pocketed",
+            FightBeat::Crossed => "crossed",
+            FightBeat::Answered => "answered",
+            FightBeat::Ambushed => "ambushed",
+            FightBeat::Downed => "downed",
             FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
@@ -1655,6 +1697,24 @@ mod inner {
 
     pub fn record_deadchannel_tailor(beat: TailorBeat) {
         deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
+    }
+
+    fn lounge_beat_label(beat: LoungeBeat) -> &'static str {
+        match beat {
+            LoungeBeat::Spawned => "spawned",
+            LoungeBeat::Hit => "hit",
+            LoungeBeat::Slain => "slain",
+            LoungeBeat::Slipped => "slipped",
+            LoungeBeat::Paid => "paid",
+            LoungeBeat::PayLeft => "pay_left",
+            LoungeBeat::PayFailed => "pay_failed",
+            LoungeBeat::HitRefused => "hit_refused",
+            LoungeBeat::HitFailed => "hit_failed",
+        }
+    }
+
+    pub fn record_deadchannel_lounge(beat: LoungeBeat) {
+        deadchannel_lounge_total().add(1, &[KeyValue::new("beat", lounge_beat_label(beat))]);
     }
 
     fn presence_wire_label(beat: PresenceWire) -> &'static str {
@@ -1876,6 +1936,7 @@ mod inner {
     fn refresh_label(refresh: Refresh) -> &'static str {
         match refresh {
             Refresh::RunnerLooks => "runner_looks",
+            Refresh::LoungeSpawn => "lounge_spawn",
             Refresh::CrownHolder => "crown_holder",
             Refresh::DailyMatches => "daily_matches",
             Refresh::Pot => "pot",
@@ -3111,13 +3172,13 @@ mod inner {
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
         FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, NewsShareReward,
-        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
-        PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome,
-        Presence, PresenceScope, PresenceWire, Refresh, RefreshOutcome, RenderReason, RoundRefusal,
-        RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
+        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
+        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -3135,6 +3196,7 @@ mod inner {
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
+    pub fn record_deadchannel_lounge(_beat: LoungeBeat) {}
     pub fn record_presence(_beat: PresenceWire) {}
     pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
     pub fn record_runner_door(_door: RunnerDoor) {}

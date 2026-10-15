@@ -797,7 +797,7 @@ impl Run<'_> {
             return;
         }
         let price = self.sheet.outfit_price_under(&self.rules, slot, next);
-        let reach = self.sheet.bits + self.sheet.loan_room();
+        let reach = self.sheet.bits + self.sheet.loan_room_under(&self.rules);
         if self.sheet.bits < price
             && reach >= price
             && let Applied::Borrowed { amount, fee } = self.act(Command::Borrow)
@@ -869,6 +869,7 @@ impl Run<'_> {
             Node::Bright => Call::Fight(Pick::Bright),
             Node::Rest => Call::Clear,
             Node::Cache => Call::Take,
+            Node::Crossing => unreachable!("the sim walks around the crossing"),
         };
         let step = self.sheet.step();
         self.journal.note(|| Event::Step { step, lane, node });
@@ -1092,6 +1093,9 @@ fn route(player: &Player, sheet: &Sheet, road: &Road, bench: &mut Bench) -> (u8,
         },
         Node::Rest => f64::from(sheet.road.static_cards) * 0.6,
         Node::Cache => 1.0,
+        // The sim has no sleepers to meet; the other two lanes of a
+        // crossing's step are always a rest and a cache.
+        Node::Crossing => -100.0,
     };
     fn best(road: &Road, worth: &dyn Fn(Node) -> f64, step: i32, from: u8, depth: i32) -> f64 {
         let Some(node) = road.node(step, from) else {
@@ -1224,6 +1228,38 @@ pub fn odds_played(
                     break;
                 }
                 Applied::Lost { .. } => break,
+                other => panic!("a turn answered {other:?}"),
+            }
+        }
+    }
+    Some(f64::from(wins) / f64::from(fights))
+}
+
+/// The chance of putting `prey` down from `sheet` as it stands, the
+/// crossing's threat word: the same seeded fights as [`odds`], the
+/// sleeper on the row instead of a pick. `None` with a fight on the row
+/// or the signal down.
+pub fn odds_rival(sheet: &Sheet, prey: &super::state::Prey, fights: u32) -> Option<f64> {
+    if sheet.fight.is_some() || sheet.is_down() {
+        return None;
+    }
+    let rules = &RULES;
+    let mut rng = StdRng::seed_from_u64(ODDS_SEED);
+    let mut wins = 0u32;
+    for _ in 0..fights {
+        let mut trial = sheet.clone();
+        match trial.engage_rival(rules, prey.clone(), &mut rng).applied {
+            Applied::Crossed { .. } => {}
+            other => panic!("a crossing started with {other:?}"),
+        }
+        for _ in 0..ODDS_TURNS {
+            match play_turn(&mut trial, rules, Hand::Auto, &mut rng).applied {
+                Applied::Round => continue,
+                Applied::Ambushed { .. } => {
+                    wins += 1;
+                    break;
+                }
+                Applied::Downed { .. } => break,
                 other => panic!("a turn answered {other:?}"),
             }
         }

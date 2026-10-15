@@ -17,6 +17,7 @@ fn picture(road: &Road) -> Vec<String> {
                     Node::Bright => 'B',
                     Node::Rest => '+',
                     Node::Cache => '$',
+                    Node::Crossing => 'x',
                 })
                 .collect()
         })
@@ -97,6 +98,10 @@ fn every_road_has_the_same_shape() {
                 );
             }
             assert!(
+                lanes.iter().filter(|node| **node == Node::Crossing).count() <= 1,
+                "{date}: the crossing can always be walked past"
+            );
+            assert!(
                 lanes.iter().filter(|node| **node == Node::Bright).count() <= 1,
                 "{date}: a bright one can always be walked around"
             );
@@ -109,6 +114,15 @@ fn every_road_has_the_same_shape() {
                 .count(),
             BRIGHT_NODES,
             "{date}"
+        );
+        assert_eq!(
+            road.steps
+                .iter()
+                .flatten()
+                .filter(|node| **node == Node::Crossing)
+                .count(),
+            1,
+            "{date}: one crossing a day"
         );
     }
     assert!(

@@ -519,6 +519,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(state.db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(state.db.clone()),
+        lounge_service: state.lounge_service.clone(),
         initial_bonsai_tree,
         initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),

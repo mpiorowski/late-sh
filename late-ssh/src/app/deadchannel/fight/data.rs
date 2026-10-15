@@ -327,6 +327,63 @@ pub const FOES: [FoeKind; 15] = [
     },
 ];
 
+/// What a sleeping runner does with its turns when another runner crosses
+/// it (GAME.md, "The crossing pass"): it swings, swings again, winds up,
+/// and lands the heavy. The sleeper's deck does not play; its numbers do
+/// (the signal, the attack, and the defense of its sheet, with the glass
+/// and the marks in them), and this is the one mind every sleeper has.
+pub const RUNNER_PATTERN: &[Intent] = &[Intent::Hit, Intent::Hit, Intent::Charge, Intent::Heavy];
+
+/// How far up or down the ladder a crossing reaches: a runner meets only
+/// runners within this many levels, no punching down.
+pub const CROSSING_LEVEL_BAND: i32 = 2;
+
+/// How long a crossing can be answered for, from the moment it ended.
+pub const ANSWER_HOURS: i64 = 24;
+
+/// What the scene says when a crossing starts: the sleeper, and what they
+/// carry.
+pub fn crossing_arrives(username: &str, stake: i64) -> String {
+    match stake {
+        0 => format!("{username}. asleep on their feet, and carrying nothing."),
+        n => format!("{username}. asleep on their feet, carrying {n} bits."),
+    }
+}
+
+/// What the scene says when an answer starts.
+pub fn answer_arrives(username: &str, stake: i64) -> String {
+    match stake {
+        0 => format!("{username}. awake this time, and carrying nothing."),
+        n => format!("{username}. awake this time, carrying {n} bits."),
+    }
+}
+
+/// The scene's line for a sleeper put down.
+pub fn rival_down_line(username: &str, answer: bool) -> String {
+    match answer {
+        true => format!("{username} goes down. that is the answer."),
+        false => format!("{username} goes down without waking."),
+    }
+}
+
+/// The scene's line for what the win took off them, once the service
+/// has moved it.
+pub fn took_line(username: &str, taken: i64) -> String {
+    match taken {
+        0 => format!("there is nothing on {username} to take."),
+        n => format!("you take {n} bits off {username}."),
+    }
+}
+
+/// The scene's line for what a lost crossing cost, in place of the
+/// street's.
+pub fn rival_took_line(username: &str, bits_lost: i64) -> String {
+    match bits_lost {
+        0 => format!("{username} finds nothing on you. back tomorrow."),
+        n => format!("{username} takes {n} bits off you. back tomorrow."),
+    }
+}
+
 /// The Old Signal: the thing broadcasting under the static, the one fight
 /// that is not a glyph of your level. It carries no bits and no exp:
 /// putting it down resets the runner, so a purse would be gone before it
@@ -661,6 +718,15 @@ impl Rules {
         self.ladder(tier) * (100 + lead * self.price_lead_percent) / 100
     }
 
+    /// What the bits machine lends a runner of `level` at most: the wall
+    /// price of one piece at that level. The cap the debt fills up to, so
+    /// the machine buys the blade now and takes half the kills until it
+    /// is square. Read off the wall, never set apart from it: a loan that
+    /// cannot reach a piece bridges nothing one more glyph would not.
+    pub fn loan_cap(&self, level: i32) -> i64 {
+        self.price(level, level)
+    }
+
     /// The ladder's price for `tier`, with no lead on it: what a piece at
     /// the level costs, and what the trade-in is read off.
     fn ladder(&self, tier: i32) -> i64 {
@@ -816,10 +882,6 @@ pub const INK_CRYSTALS: i32 = 10;
 /// rounded up so no deposit is free. LoGD's bank takes nothing and pays
 /// interest; the locker pays none and takes this. Withdrawals are free.
 pub const LOCKER_FEE_PERCENT: i64 = 10;
-
-/// What the bits machine lends a runner, per level: the cap a loan fills
-/// the debt up to. A level-2 runner can borrow the two tier-1 pieces.
-pub const LOAN_PER_LEVEL: i64 = 50;
 
 /// The machine's fee on every loan, a percentage of what it hands over,
 /// rounded up, added to the debt once when it lends. The debt never grows

@@ -644,7 +644,7 @@ to allocate, and nothing on it another player cannot see.
 | charge | moves left today | band skill / 3 + 1 per UTC day | specialty uses |
 | bits | money on hand | start with 50 | `START_GOLD` |
 | stash | money in the city's locker | untouched by death; a tenth kept on the way in, no interest; a mark or the ledge empties it | `bank.php` |
-| debt | owed to the bits machine | up to 50 a level; +10% of each loan, once; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
+| debt | owed to the bits machine | up to one piece at the level, off the wall; +10% of each loan, once; half of every kill's bits until paid; nothing clears it | `bank.php` borrowing |
 | band | tuner, jammer, ghost, or none | chosen on the first descent | specialties |
 | band skill | move unlocks | +1 per level gained | specialty points |
 | marks | Old Signal kills | permanent; each resets level, gear, and bits, adds +1 attack and defense (cap 5) | dragon kills |
@@ -1294,10 +1294,13 @@ one it borrowed from.
   because it is a walk away: bits earned in a fight are on you until
   you carry them there, which keeps "one more fight or bank it" a real
   question.
-- **The bits machine.** The machine that hums on the street lends: fifty
-  bits a level, a tenth of the loan added to the debt once when it pays
-  out, half of every kill's bits taken until it is square, and nothing
-  clears it but paying. No daily rate: a day roll is any touch on the
+- **The bits machine.** The machine that hums on the street lends: the
+  price of one piece at the level, read off the armorer's wall, a tenth
+  of the loan added to the debt once when it pays out, half of every
+  kill's bits taken until it is square, and nothing clears it but
+  paying. The blade now, about two levels of garnish later: one piece
+  ahead for a tenth of its price, and a piece is safe from a crossing
+  where bits on hand are not. No daily rate: a day roll is any touch on the
   row, a connect included, so interest at the roll would bill a runner
   for days they never fought and compound past anything the garnish
   could pay. The debt only goes down, and playing pays it.
@@ -1778,14 +1781,142 @@ this pass:
    Events and card drops follow as data.
 3. Level badge and color bands in #deadchannel, tints gated by level in
    the tailor.
-4. Ambush with the replay and the revenge token (the locker is in, so
-   carrying bits into the day is already a choice).
-5. Arena and bets, then bounties. Bands as tribes when the band choice
+4. *Built.* The lounge spawn ("The lounge pass"): the flicker and the
+   howler on #lounge's composer, `/hit`, the day's budget and dice.
+5. *Built.* The crossing ("The crossing pass"): ambush as a road node,
+   the answer in place of the revenge token, the news as a line on the
+   road rather than a replay (the locker is in, so carrying bits into
+   the day is already a choice).
+6. Arena and bets, then bounties. Bands as tribes when the band choice
    ships.
 
 Telemetry is the prerequisite for reading any of it: game wins must be
 exported per game and split so the dashboard says what people actually
 do, and share rate per completion per daily is the first number to pull.
+
+## The lounge pass: the glyph on the composer (2026-10-14)
+
+Status: **built, staff only like the rest** (`late-ssh/src/app/deadchannel/lounge/`,
+`CONTEXT.md` §3d). The first piece of "#lounge: the snack" and the
+first shared world object: one spawn, server-side hits, every runner's
+screen in step. Decided over ambush as the social piece to ship first,
+because it is the north-star mechanic (a story civilians overhear), it
+works at three runners of any level, and it is positive-sum: the first
+social thing a new runner meets is a pile-on, not a mugging.
+
+- **Two kinds, hits not damage.** A flicker dies to one hit; a howler
+  takes three hits from three different runners. One hit per runner per
+  spawn, so a howler needs the room: "dax get in here" is literal. Level
+  does not matter in the lounge: the level 2 and the level 12 are equals
+  there, which is what makes the level 2 useful on day one. No cards, no
+  `Auto`: the card fight is the city's ten minutes, the lounge is twenty
+  seconds mid-scroll, so a lounge glyph is one command.
+- **On the composer, as chrome.** The glyph stands in the composer's
+  placeholder, where the eye and the fingers already are and where it
+  never scrolls away; while the person types it is the glyph alone in
+  the composer's title. "Never eat the message" holds: it never covers
+  typed text, and `/hit` is swallowed only for a runner. For a civilian
+  `/hit` posts as the words it is, exactly how `/haunt` behaves for
+  non-admins, and the room wondering is the marketing.
+- **Three flickers and one howler a day, spread by rule, landing by
+  dice.** The UTC day is cut into three eight-hour windows and each owns
+  one flicker, at a dice minute inside it, landing only while a runner
+  is looking at #lounge (so the Europe evening and the US evening each
+  get theirs, and the first hour cannot eat all three); a window that
+  closes unspent loses it. The howler lands at a dice minute anywhere in
+  the day once two runners are looking; two cannot finish it, so when it
+  lands the pressure is real, and slipping is content. 45 minutes
+  between any two. A flicker lives 90 seconds, a howler three minutes:
+  you had to be looking. The counts and the windows are fixed; only the
+  moments are dice, so nobody sets an alarm and the lounge never becomes
+  a queue. The dice are rolled once per day on the row, by whichever
+  replica touches it first, and shared.
+- **Pay, never exp.** A flicker pays its killer a cache's worth of bits
+  at their level (the road's cache, the machine's garnish first); a
+  howler pays every hitter a crystal. The climb's pace stays the
+  rations', and the daily budget caps the faucet by construction: at
+  most three caches and one crystal a day, and only for runners who
+  were there. Nothing in the lounge hits back; the only stake is time.
+  A dropped signal cannot hit.
+- **The wire, once per spawn.** The kill names everyone who hit; a
+  slip says nobody was looking, or who hit it and that it needed three.
+  Nothing lands in #lounge, in scrollback, or on IRC.
+- **Measured where it lands.** The lounge's pay is not in the sim yet:
+  the budget bounds it (three caches and a crystal a day at most), and
+  a lounge income line in `fight/sim.rs` is the next balance question
+  once staff have watched a week of spawns.
+
+Still open: the howler's hit count against the room (as many hits as
+runners looking, minimum two, if two-runner evenings always lose it);
+whether the spawner should wait for a runner at all or let a flicker
+slip into the wire; and the "hide the static" setting and its name.
+
+## The crossing pass: a runner on the road (2026-10-15)
+
+Status: **built, staff only like the rest** (`fight/` with the rest of
+the road, `CONTEXT.md` §3c "The crossing"; the rows in
+`deadchannel_ambushes`). Ambush on the road-node shape "PvP at forty
+people" chose, and the first negative-sum thing in the game, so the
+decisions are mostly about who pays what.
+
+- **A node, never a menu.** One quiet step of every road has a crossing
+  on one lane, beside a rest and a cache, so it is always a choice and
+  never the only way. Who waits there is found the moment the road is
+  looked at and again under the lock when the step is taken: a standing
+  runner within two levels either way, not crossed today, not paired
+  with you today, signal up, no fight on their row. The road says who,
+  their level, their numbers, their threat word, and what they carry:
+  "carrying 340 bits" is the lure and "carrying nothing" is the locker
+  doing its job. Nobody left is a quiet crossing and a free walk past.
+- **The sleeper fights as a glyph wearing their numbers.** Full signal,
+  their attack and defense with the kit, the marks, and today's glass,
+  and one mind for every sleeper: hit, hit, wind up, heavy. Their cards
+  stay in their pocket. The deck-plays-itself fight of "PvP at forty
+  people" needs a symmetric engine the round does not have; the
+  numbers are what the kit and the level bought, and that is what the
+  crossing tests. Logging off hurt is not a free kill: a sleeper is
+  never fought at the signal they left at.
+- **The attacker chose the fight, so the attacker takes the road's full
+  bet.** Win: every bit the sleeper carried, no exp, no kill on the
+  sheet. Lose: the fall the road already has, signal down for the day,
+  every bit on hand to the sleeper, the exp cut. No exp on a win on
+  purpose: with exp on the table the optimal road is hunting runners
+  and the band stops being a courtesy and becomes a farm; bits buy the
+  kit, so the prize is real anyway.
+- **The sleeper risks only what they carry.** Signal is the day's
+  budget of whoever is actually playing; taking it from someone asleep
+  spends their next day before it starts, and an exp cut for a fight
+  they never saw is the thing that empties a room of thirty. The worst
+  login is "tom crossed you while you were gone. 340 bits gone." on the
+  road, which stings and makes a story and costs no day.
+- **The answer is the revenge token.** Whoever was crossed and lost is
+  owed one answer within a day: `r` on the road fights the one who did
+  it for what they carry now, no ration, the same stakes, one per
+  crossing, and only while they are on the wire (standing, signal up,
+  no fight); otherwise it keeps. The answer is the renewable middle of
+  the retention model: a hit becomes a rivalry.
+- **Caps as rows.** One crossing on a sleeper a day and one between any
+  two runners a day are unique partial indexes on the ambush row, so
+  any number of replicas enforce them, and the answer counts against
+  neither. The two-runner evening the lounge worries about is the
+  crossing's good night: two runners in the band is one crossing and
+  one answer.
+- **The news is a line, not a replay.** The road shows the latest
+  fight on you inside the answer window and the answer owed; the wire
+  carries every crossing with the step and what changed hands. The
+  replay of the scene with the attacker's portrait is a day of its own
+  once the log format settles; the line carries the story the doc
+  wanted first.
+- **Measured where it lands.** The crossing moves bits between runners
+  and burns nothing, so the economy's totals are untouched and the sim
+  walks around the crossing (`fight/sim.rs::route`). What to watch in
+  staff play: how often the crossing is taken against walked past, and
+  whether the locker empties the hands so every crossing reads
+  "carrying nothing".
+
+Still open: whether the sleeper's deck should play (a second mind per
+build, or a pattern chosen from the drafts), bounties on top of the
+crossing, and the scene replay.
 
 ## Experiment framing
 
@@ -1829,12 +1960,13 @@ Sequencing, each phase testing something before paying for the next:
 
 ## Open questions
 
-- **PvP consent/grief model.** The base layer is now decided
-  (2026-08-31): the whole game is opt-in via `/join #deadchannel`, so
-  nobody who never joined can be ambushed, ever. Still open is the
-  in-game tuning for people who did join: level bands? Shields after a
-  loss? A way to retire a runner without deleting it? Needs an answer
-  before the ambush engine ships.
+- ~~**PvP consent/grief model.**~~ Decided in two halves: the base
+  layer (2026-08-31) is that the whole game is opt-in via `/join
+  #deadchannel`, so nobody who never joined can be crossed, ever; the
+  in-game tuning (2026-10-15, "The crossing pass") is a band of two
+  levels either way, one crossing on a sleeper a day, one between any
+  two runners a day, the sleeper risking only what they carry, and the
+  answer. Retiring a runner without deleting it is `/leave`.
 - ~~**V1's one visible surface.**~~ Decided 2026-09-02: the mark and
   level in the chat badge stack, plus the mark as the clubhouse floor
   glyph; see "The look" in the phase 2 design pass.
@@ -1848,11 +1980,12 @@ Sequencing, each phase testing something before paying for the next:
   wire until the day roll, bits on hand and a share of the exp lost, the
   mark renders as static in chat meanwhile; see "Death" in the phase 2
   design pass.
-- **Who may start a fight.** Leading idea, undecided (extends the PvP
-  consent question): unprovoked player-vs-player aggression does not
-  exist; only the static starts trouble, and a bounty on your head is
-  the only thing that opens you to other runners. At 30 users one bully
-  empties the room.
+- ~~**Who may start a fight.**~~ Decided 2026-10-15 ("The crossing
+  pass"): the road does, one crossing a day on one lane, and the caps
+  are what keep one bully from emptying the room: a sleeper is crossed
+  once a day at most, and only by someone within two levels. The
+  bounty as the only opener was the earlier idea and starves ambush at
+  this population.
 - **The big-fight grammar.** What a howler pile-on and a season boss look
   like beat by beat (threshold reactions, frame corruption for watchers
   after the public flip), and the exact name of the "hide the static"

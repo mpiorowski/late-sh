@@ -19,8 +19,11 @@
 //! what waits on the lane the cursor is on, a glyph with its face, its
 //! numbers, its moves, its pay, and the threat word the sim read for it
 //! (the warning LoGD's master gave, before the fight instead of after),
-//! or a rest, or a cache. Once the day's road is over the same panel is
-//! the day's card.
+//! or a rest, or a cache, or the crossing with the sleeper the lookout
+//! found there and what they carry. Under the legend, the news of the
+//! last fight on this runner and the answer they are owed (GAME.md, "The
+//! crossing pass"). Once the day's road is over the same panel is the
+//! day's card.
 //!
 //! Also the sheet strip: level, signal, rations, bits, the crystals and
 //! the day's glass when there are any, pinned top-right
@@ -41,13 +44,14 @@ use super::data::{self, FOES, FoeKind, FoeTier, Intent, OLD_SIGNAL, RATIONS_PER_
 use super::road::{LANES, Mark, Node, STEPS};
 use super::session::{Picker, Scene};
 use super::sim::Threat;
-use super::state::{Fight, Powers, Quarry, Sheet, Shut, Slot};
+use super::state::{Fight, Lookout, Powers, Prey, Quarry, Sheet, Shut, Slot};
 use crate::app::arcade::share::puzzle_number;
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
     INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, neon_rgb, scale, tint_rgb,
 };
 use crate::app::deadchannel::runner::state::{Look, PORTRAIT_HEIGHT, PORTRAIT_WIDTH};
+use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
 
 /// Cells of a signal bar.
 const BAR_CELLS: usize = 12;
@@ -100,6 +104,19 @@ fn bright_dress() -> Dress {
         title: lit(Neon::Amber),
         title_text: " something bright ",
         rule: dim(Neon::Amber),
+    }
+}
+
+/// Another runner: the same box, in the street's magenta.
+fn rival_dress() -> Dress {
+    Dress {
+        foe: glow(Neon::Magenta),
+        foe_name: lit(Neon::Magenta),
+        foe_lost: dim(Neon::Red),
+        frame: glow(Neon::Magenta),
+        title: lit(Neon::Magenta),
+        title_text: " the crossing ",
+        rule: dim(Neon::Magenta),
     }
 }
 
@@ -203,12 +220,13 @@ fn runner_rows(sheet: &Sheet, look: Option<&Look>) -> Vec<Vec<Span<'static>>> {
 
 fn foe_rows(fight: &Fight, dress: &Dress) -> Vec<Vec<Span<'static>>> {
     let missing = missing(fight.foe_signal, fight.foe_max_signal);
-    let kind = match fight.quarry {
-        Quarry::Glyph(kind) => kind as u64,
+    let kind = match &fight.quarry {
+        Quarry::Glyph(kind) => *kind as u64,
         Quarry::OldSignal => FOES.len() as u64,
+        Quarry::Runner(rival) => rival.user_id.as_u128() as u64,
     };
     let seed = (kind + 1).wrapping_mul(0x51_7cc1_b727_220a);
-    corrupt(fight.foe().portrait, missing, seed)
+    corrupt(fight.portrait(), missing, seed)
         .into_iter()
         .map(|cells| {
             cells
@@ -722,10 +740,15 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     let boss = view.scene.old_signal;
     let live = !view.scene.over;
     let fight = view.sheet.and_then(|sheet| sheet.fight.as_ref());
-    let dress = match (boss, fight.is_some_and(|fight| fight.bright)) {
-        (true, _) => old_signal_dress(view.scene.over),
-        (false, true) => bright_dress(),
-        (false, false) => glyph_dress(),
+    let dress = match (
+        boss,
+        fight.is_some_and(|fight| fight.bright),
+        fight.is_some_and(|fight| fight.rival().is_some()),
+    ) {
+        (true, _, _) => old_signal_dress(view.scene.over),
+        (false, _, true) => rival_dress(),
+        (false, true, false) => bright_dress(),
+        (false, false, false) => glyph_dress(),
     };
 
     // Fixed height: the header, the stance row, the rule, the log, the
@@ -902,6 +925,9 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
 pub(crate) struct PickerView<'a> {
     pub sheet: Option<&'a Sheet>,
     pub picker: &'a Picker,
+    /// What the service read beside the sheet: the sleeper at the
+    /// crossing, the answer owed, the latest fight on this runner.
+    pub lookout: &'a Lookout,
     pub look: Option<&'a Look>,
     pub own_username: &'a str,
     /// The city's animation clock: the bright nodes flicker on it.
@@ -1024,6 +1050,154 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// The sleeper at the crossing, as the panel shows them under the map:
+/// the face, the name and level, the numbers, what they carry and what
+/// the step costs.
+fn rival_lines(prey: &Prey, threat: Option<Threat>, sheet: &Sheet) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let key = lit(Neon::Amber);
+    let face = glow(Neon::Magenta);
+    let width = INNER.saturating_sub(4 + 5 + 3 + 8);
+    let head = {
+        let mut row = vec![
+            Span::styled(prey.rival.username.clone(), lit(Neon::Magenta)),
+            Span::styled(format!("  lv {}", prey.rival.level), text),
+        ];
+        let room = width.saturating_sub(spans_width(&row) + 3);
+        row.push(Span::styled(
+            format!("   {}", truncate("asleep on their feet", room)),
+            dim_text,
+        ));
+        row
+    };
+    let hit = data::RULES.hit(prey.attack, sheet.defense(), sheet.level);
+    let numbers = format!("signal {} · hits for {hit} · it ", prey.signal);
+    let moves = data::RUNNER_PATTERN
+        .iter()
+        .map(|intent| intent_word(*intent))
+        .collect::<Vec<_>>()
+        .join(" > ");
+    let moves = truncate(&moves, width.saturating_sub(numbers.chars().count()));
+    let carrying = match prey.stake {
+        0 => "carrying nothing".to_string(),
+        n => format!("carrying {n} bits"),
+    };
+    let rows: [Vec<Span<'static>>; 3] = [
+        head,
+        vec![
+            Span::styled(numbers, dim_text),
+            Span::styled(moves, ink(INK_MUTED)),
+        ],
+        vec![Span::styled(
+            format!("{carrying} · a ration · theirs if you go down: everything on you"),
+            text,
+        )],
+    ];
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut spans = vec![match i {
+                0 => Span::styled("  ▸ ", key),
+                _ => Span::styled("    ", text),
+            }];
+            spans.push(Span::styled(prey.rival.portrait[i].clone(), face));
+            spans.push(Span::styled("   ", text));
+            let threat = match i {
+                0 => vec![threat_span(threat)],
+                _ => Vec::new(),
+            };
+            spans.extend(pad(row, width, false));
+            spans.extend(threat);
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// The latest fight on this runner, in one line, as the road tells it:
+/// who crossed them, how it went, what moved.
+pub(crate) fn news_line(news: &Ambush) -> String {
+    let them = &news.attacker_username;
+    let moved = news.bits_moved.abs();
+    match (news.is_answer(), news.outcome) {
+        (false, Some(AmbushOutcome::Won)) => match moved {
+            0 => format!("{them} crossed you while you were gone. you were carrying nothing."),
+            n => format!("{them} crossed you while you were gone. {n} bits gone."),
+        },
+        (false, Some(AmbushOutcome::Lost)) => match moved {
+            0 => format!("{them} crossed you while you were gone and went down. nothing on them."),
+            n => format!(
+                "{them} crossed you while you were gone and went down. {n} bits off them are yours."
+            ),
+        },
+        (false, Some(AmbushOutcome::Ran)) => {
+            format!("{them} crossed you while you were gone and ran.")
+        }
+        (true, Some(AmbushOutcome::Won)) => match moved {
+            0 => format!("{them} answered you. you were carrying nothing."),
+            n => format!("{them} answered you. {n} bits gone."),
+        },
+        (true, Some(AmbushOutcome::Lost)) => match moved {
+            0 => format!("{them} answered you and went down again. nothing on them."),
+            n => format!("{them} answered you and went down again. {n} bits more."),
+        },
+        (true, Some(AmbushOutcome::Ran)) => format!("{them} answered you and ran."),
+        (_, Some(AmbushOutcome::Dropped)) | (_, None) => {
+            format!("{them} crossed you while you were gone. the day rolled over it.")
+        }
+    }
+}
+
+/// The news and the answer owed, under the legend: at most two rows,
+/// and the key row's extra key when the answer can be given now.
+fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let key = lit(Neon::Amber);
+    let mut lines = Vec::new();
+    let mut keys = Vec::new();
+    if let Some(news) = &lookout.news {
+        lines.push(Line::from(vec![
+            Span::styled("    ", text),
+            Span::styled(
+                truncate(&news_line(news), INNER.saturating_sub(6)),
+                lit(Neon::Magenta),
+            ),
+        ]));
+    }
+    if let Some(token) = &lookout.token {
+        let them = &token.ambush.attacker_username;
+        match &token.prey {
+            Some(prey) => {
+                lines.push(Line::from(vec![
+                    Span::styled("    ", text),
+                    Span::styled(
+                        format!("you are owed an answer. {them} is on the wire, carrying {}. no ration. ", prey.stake),
+                        dim_text,
+                    ),
+                    threat_span(picker.answer),
+                ]));
+                keys.extend([
+                    Span::styled("   [r] ", key),
+                    Span::styled(format!("answer {them}"), text),
+                ]);
+            }
+            None => {
+                lines.push(Line::from(vec![
+                    Span::styled("    ", text),
+                    Span::styled(
+                        format!(
+                            "you are owed an answer. {them} is off the wire. it keeps for a day."
+                        ),
+                        dim_text,
+                    ),
+                ]));
+            }
+        }
+    }
+    (lines, keys)
+}
+
 /// Why the road is over for the day, in the words the row would refuse a
 /// step with; `None` while there is road to walk.
 fn shut_reason(sheet: &Sheet) -> Option<&'static str> {
@@ -1061,6 +1235,7 @@ fn node_char(node: Node, tick: u64) -> char {
         },
         Node::Rest => '+',
         Node::Cache => '$',
+        Node::Crossing => '@',
     }
 }
 
@@ -1070,6 +1245,7 @@ fn node_neon(node: Node) -> Neon {
         Node::Bright => Neon::Amber,
         Node::Rest => Neon::Green,
         Node::Cache => Neon::White,
+        Node::Crossing => Neon::Magenta,
     }
 }
 
@@ -1202,7 +1378,7 @@ fn road_map(sheet: &Sheet, cursor: u8, tick: u64, pitch: usize) -> Vec<Line<'sta
                         (0, _) => dim(neon),
                         (_, Node::Bright) => glow(neon),
                         (ahead, _) if ahead <= SEE_AHEAD => dim(neon),
-                        (_, Node::Glyph | Node::Rest | Node::Cache) => {
+                        (_, Node::Glyph | Node::Rest | Node::Cache | Node::Crossing) => {
                             ink(scale(neon_rgb(neon), 0.3))
                         }
                     };
@@ -1258,7 +1434,7 @@ fn step_numbers(sheet: &Sheet) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The rule under the map, with the legend set into it: four marks, and
+/// The rule under the map, with the legend set into it: five marks, and
 /// that is the whole road.
 fn legend_rule() -> Line<'static> {
     let rule = dim(Neon::Cyan);
@@ -1268,6 +1444,7 @@ fn legend_rule() -> Line<'static> {
         (Node::Bright, "bright"),
         (Node::Rest, "rest"),
         (Node::Cache, "cache"),
+        (Node::Crossing, "crossing"),
     ];
     let mut spans = vec![Span::styled("  ── ", rule)];
     for (node, name) in entries {
@@ -1289,6 +1466,7 @@ fn legend_rule() -> Line<'static> {
 fn node_lines(
     sheet: &Sheet,
     picker: &Picker,
+    lookout: &Lookout,
     node: Node,
 ) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
     let text = ink(INK);
@@ -1397,6 +1575,30 @@ fn node_lines(
                 Line::default(),
             ]
         }
+        Node::Crossing => match &lookout.crossing {
+            Some(prey) => {
+                keys.extend([
+                    Span::styled("   [Enter] ", key),
+                    Span::styled(format!("cross {}", prey.rival.username), text),
+                ]);
+                rival_lines(prey, picker.crossing, sheet)
+            }
+            None => vec![
+                Line::from(vec![
+                    Span::styled("  ▸ ", key),
+                    Span::styled("the crossing", lit(Neon::Magenta)),
+                    Span::styled("   nobody is here tonight", dim_text),
+                ]),
+                Line::from(vec![
+                    Span::styled("      ", text),
+                    Span::styled(
+                        "every runner within two levels was crossed today, or is off the wire.",
+                        muted,
+                    ),
+                ]),
+                Line::default(),
+            ],
+        },
     };
     keys.push(Span::styled("  esc back", dim_text));
     (lines, keys)
@@ -1571,6 +1773,8 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 lines.push(Line::default());
             }
             lines.push(legend_rule());
+            let (notice, answer_keys) = lookout_lines(view.lookout, view.picker);
+            lines.extend(notice);
 
             let word = Line::from(match view.word {
                 Some(word) => vec![
@@ -1623,12 +1827,14 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                         Span::styled("    [Enter] ", key),
                         Span::styled("back to the street", text),
                     ]);
+                    keys.extend(answer_keys);
                     lines.push(Line::from(keys));
                 }
                 (None, Some(node)) => {
-                    let (detail, keys) = node_lines(sheet, view.picker, node);
+                    let (detail, mut keys) = node_lines(sheet, view.picker, view.lookout, node);
                     lines.extend(detail);
                     lines.push(word);
+                    keys.extend(answer_keys);
                     lines.push(Line::from(keys));
                 }
             }

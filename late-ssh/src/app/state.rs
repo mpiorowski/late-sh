@@ -277,6 +277,9 @@ pub struct SessionConfig {
     pub tailor_service: crate::app::deadchannel::tailor::svc::TailorService,
     /// The first descent's claim (`app/deadchannel/guide`).
     pub guide_service: crate::app::deadchannel::guide::svc::GuideService,
+    /// The lounge spawns (`app/deadchannel/lounge`): the live spawn and
+    /// the hit path.
+    pub lounge_service: crate::app::deadchannel::lounge::svc::LoungeService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
@@ -790,6 +793,9 @@ pub struct App {
     /// The tailor's mirror (`app/deadchannel/tailor`): the draft while
     /// the panel is open, and the write that puts it on the row.
     pub(crate) tailor: crate::app::deadchannel::tailor::session::TailorSession,
+    /// The lounge spawns (`app/deadchannel/lounge`): this session's copy of
+    /// the spawn, its own `/hit` and the word it came back with.
+    pub(crate) lounge: crate::app::deadchannel::lounge::session::LoungeSession,
     /// The undercity guide (`app/deadchannel/guide`): the box over the
     /// street, opened by `?` and by itself on the first descent.
     pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
@@ -1069,6 +1075,18 @@ impl App {
     /// follows a join on the next tick edge, on every replica.
     pub fn is_runner(&self) -> bool {
         self.runner_looks.contains_key(&self.user_id)
+    }
+
+    /// Whether this session is looking at #lounge: Home with the lounge
+    /// card selected. What presence carries for the lounge spawns
+    /// (`deadchannel/lounge`), and where the spawn's line is drawn.
+    pub(crate) fn looking_at_lounge(&self) -> bool {
+        self.screen == Screen::Dashboard
+            && crate::app::render::dashboard_home_selected(
+                self.chat.lounge_room_id(),
+                self.chat.selected_room_id,
+                self.chat.synthetic_entry_selected(),
+            )
     }
 
     pub fn is_running(&self) -> bool {
@@ -1444,6 +1462,11 @@ impl App {
             config.user_id,
             config.guide_service.clone(),
         );
+        let lounge = crate::app::deadchannel::lounge::session::LoungeSession::new(
+            config.user_id,
+            config.username.clone(),
+            config.lounge_service.clone(),
+        );
 
         let pet_state = if let Some(companion) = config.initial_pet {
             crate::app::pet::state::PetState::new(
@@ -1657,6 +1680,7 @@ impl App {
             fight,
             tailor,
             guide,
+            lounge,
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
@@ -3294,6 +3318,7 @@ impl App {
             clubhouse: self.clubhouse.stand(),
             nightcap: self.nightcap.stand(),
             street: self.street.stand(),
+            lounge: self.looking_at_lounge(),
         };
         self.presence.publish(record);
         changed

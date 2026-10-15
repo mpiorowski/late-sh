@@ -2,7 +2,7 @@ use super::*;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-use crate::app::deadchannel::fight::state::Sheet;
+use crate::app::deadchannel::fight::state::{Lookout, Sheet};
 use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::street::state::StreetRunner;
 use crate::app::deadchannel::tailor::ui as tailor_ui;
@@ -23,6 +23,7 @@ fn render(state: &State, width: u16, height: u16) -> String {
                     sheet: None,
                     scene: None,
                     picker: None,
+                    lookout: &Lookout::default(),
                     till: None,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -108,6 +109,7 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                     sheet: Some(&sheet),
                     scene: None,
                     picker: None,
+                    lookout: &Lookout::default(),
                     till: Some("the armorer hands over the box cutter. 506 bits."),
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -186,6 +188,7 @@ fn render_panel(
                     sheet: Some(sheet),
                     scene: None,
                     picker: None,
+                    lookout: &Lookout::default(),
                     till,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -505,6 +508,7 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                         sheet,
                         scene: None,
                         picker: None,
+                        lookout: &Lookout::default(),
                         till: Some("patch works fast. +18 signal, back to full. 54 bits."),
                         tailor: tailor_ui::MirrorView {
                             draft: None,
@@ -672,6 +676,7 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                     sheet: None,
                     scene: None,
                     picker: None,
+                    lookout: &Lookout::default(),
                     till: None,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -842,6 +847,7 @@ fn other_runners_stand_on_the_street_with_their_names_and_you_are_not_twice() {
                     sheet: None,
                     scene: None,
                     picker: None,
+                    lookout: &Lookout::default(),
                     till: None,
                     tailor: tailor_ui::MirrorView {
                         draft: None,
@@ -922,6 +928,7 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
             sheet: None,
             scene: None,
             picker: None,
+            lookout: &Lookout::default(),
             till: None,
             tailor: tailor_ui::MirrorView {
                 draft: None,

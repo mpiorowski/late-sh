@@ -63,8 +63,10 @@ pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
+pub mod deadchannel_ambush;
 pub mod deadchannel_name_hit;
 pub mod deadchannel_runner;
+pub mod deadchannel_spawn;
 pub mod door_log_cursor;
 pub mod door_milestone;
 pub mod door_rc;

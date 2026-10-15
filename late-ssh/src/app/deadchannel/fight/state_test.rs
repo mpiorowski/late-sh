@@ -4,14 +4,14 @@ use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::{
-    Applied, Call, Command, Drink, Fight, News, Outcome, Pick, Quarry, Refusal, Sheet, SheetError,
-    Slot,
+    Answer, Applied, Call, Command, Drink, Fight, News, Outcome, Pick, Prey, Quarry, Refusal,
+    Rival, Sheet, SheetError, Slot, crossing_order,
 };
 use crate::app::deadchannel::fight::cards::{Card, DECK, DRAFTS, ENERGY, HAND, STATIC_CAP};
 use crate::app::deadchannel::fight::data::{
     BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE, FOES, FoeTier, HEARD_LINE, Intent, MARK_BONUS_CAP,
-    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, START_BITS, STATIC_LINE,
-    exp_to_advance, exp_to_seek, title,
+    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUNNER_PATTERN, START_BITS,
+    STATIC_LINE, exp_to_advance, exp_to_seek, title,
 };
 use crate::app::deadchannel::fight::road::{Mark, Node, RoadRun, Trace};
 use crate::app::deadchannel::fight::state::MAX_TIER;
@@ -82,7 +82,7 @@ fn stepping_in_spends_a_ration_and_meets_the_glyph_of_your_level() {
         }]
     );
     let fight = the_fight(&sheet);
-    assert_eq!(fight.foe().name, "flicker");
+    assert_eq!(fight.kind_name(), "flicker");
     assert_eq!(fight.foe_signal, fight.foe_max_signal);
     assert_eq!(fight.log, outcome.lines);
     // The deal: five of the ten in hand, five to draw, full energy, and
@@ -1364,7 +1364,7 @@ fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
     assert!(!short.signal_hears());
     short.apply(STEP_IN, &mut rng);
     assert_eq!(
-        short.fight.as_ref().map(|fight| fight.quarry),
+        short.fight.as_ref().map(|fight| fight.quarry.clone()),
         Some(Quarry::Glyph(14))
     );
 
@@ -1372,7 +1372,7 @@ fn the_old_signal_answers_only_at_the_top_with_the_exp_to_leave_it() {
     let outcome = ready.apply(STEP_IN, &mut rng);
     let fight = ready.fight.as_ref().expect("a fight on the row");
     assert_eq!(fight.quarry, Quarry::OldSignal);
-    assert_eq!(fight.foe().name, "Old Signal");
+    assert_eq!(fight.kind_name(), "Old Signal");
     assert_eq!(outcome.lines, vec![OLD_SIGNAL.arrives.to_string()]);
 
     // The ladder is the same on every climb: a mark asks no more exp.
@@ -1579,7 +1579,7 @@ fn stepping_down_meets_the_glyph_a_level_below_at_half_pay() {
     let fight = the_fight(&sheet);
     // The hiss, level 2, at half of what it pays a level-2 runner.
     let (_, _, hiss) = RULES.foe(2);
-    assert_eq!(fight.foe().name, "hiss");
+    assert_eq!(fight.kind_name(), "hiss");
     assert_eq!(fight.foe_level(), Some(2));
     assert_eq!(
         (fight.foe_bits, fight.foe_exp),
@@ -1668,25 +1668,39 @@ fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() 
 
     let loan = sheet.apply(Command::Borrow, &mut rng);
 
-    // A tenth of the loan on top, charged when it lends.
-    assert_eq!(loan.applied, Applied::Borrowed { amount: 50, fee: 5 });
-    assert_eq!((sheet.bits, sheet.debt), (50, 55));
+    // The cap is a piece at the level: the tier-1 price on the wall, 108.
+    // A tenth of the loan on top, rounded up, charged when it lends.
+    assert_eq!(
+        loan.applied,
+        Applied::Borrowed {
+            amount: 108,
+            fee: 11
+        }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (108, 119));
     assert_eq!(
         sheet.apply(Command::Borrow, &mut rng).applied,
         Applied::Refused(Refusal::LoanCapped)
     );
 
-    // A level up opens the cap by what the debt has not taken of it, the
-    // fee included, and the fee on the new loan rounds up.
+    // A level up opens the cap to the next piece (506 at level 2), less
+    // what the debt has not taken of it, the fee included, and the fee on
+    // the new loan rounds up.
     sheet.level = 2;
     let more = sheet.apply(Command::Borrow, &mut rng);
-    assert_eq!(more.applied, Applied::Borrowed { amount: 45, fee: 5 });
-    assert_eq!((sheet.bits, sheet.debt), (95, 105));
+    assert_eq!(
+        more.applied,
+        Applied::Borrowed {
+            amount: 387,
+            fee: 39
+        }
+    );
+    assert_eq!((sheet.bits, sheet.debt), (495, 545));
 
     // The debt never grows by itself: a roll adds nothing, however many.
     sheet.settle(day(25));
     sheet.settle(day(30));
-    assert_eq!(sheet.debt, 105);
+    assert_eq!(sheet.debt, 545);
 
     // A kill pays half its bits to the machine first.
     sheet.bits = 0;
@@ -1703,14 +1717,14 @@ fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() 
         ),
         "{won:?}"
     );
-    assert_eq!((sheet.bits, sheet.debt), (30, 75));
+    assert_eq!((sheet.bits, sheet.debt), (30, 515));
 
     // Repaying takes what the hand holds, up to the debt.
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
         Applied::Repaid { amount: 30 }
     );
-    assert_eq!((sheet.bits, sheet.debt), (0, 45));
+    assert_eq!((sheet.bits, sheet.debt), (0, 485));
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
         Applied::Refused(Refusal::NothingOnHand)
@@ -1718,9 +1732,9 @@ fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() 
     sheet.bits = 500;
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
-        Applied::Repaid { amount: 45 }
+        Applied::Repaid { amount: 485 }
     );
-    assert_eq!((sheet.bits, sheet.debt), (455, 0));
+    assert_eq!((sheet.bits, sheet.debt), (15, 0));
     assert_eq!(
         sheet.apply(Command::Repay, &mut rng).applied,
         Applied::Refused(Refusal::NoDebt)
@@ -1732,7 +1746,7 @@ fn the_bits_machine_lends_to_the_cap_charges_its_fee_once_and_takes_its_share() 
         fight_out(&mut sheet, &mut rng),
         Applied::Won { garnished: 0, .. }
     ));
-    assert_eq!(sheet.bits, 515);
+    assert_eq!(sheet.bits, 75);
 }
 
 /// Whole state: a step off the ledge wipes the climb, the purse, and the
@@ -2051,6 +2065,7 @@ fn a_step_reaches_the_lane_beside_and_a_node_answers_only_its_own_call() {
         Node::Bright => Call::Fight(Pick::Bright),
         Node::Rest => Call::Clear,
         Node::Cache => Call::Take,
+        Node::Crossing => Call::Take,
     };
     let refused = sheet.apply(Command::Step { lane: 2, call }, &mut rng);
     assert_eq!(refused.applied, Applied::Refused(Refusal::NotThatWay));
@@ -2418,4 +2433,342 @@ fn the_drafted_cards_do_what_they_print() {
     assert_eq!(table(&sheet), (225, 4, ENERGY, 38));
     let fight = the_fight(&sheet);
     assert_eq!((fight.muted, fight.piles.static_cards()), (false, statics));
+}
+
+/// `sheet` as the row would hold it, for a round trip through
+/// `Sheet::from_row`.
+fn row_of(sheet: &Sheet) -> DeadchannelRunner {
+    let now = chrono::Utc::now();
+    let write = sheet.to_write();
+    DeadchannelRunner {
+        id: Uuid::nil(),
+        created: now,
+        updated: now,
+        left_at: None,
+        guide_seen_at: None,
+        level: write.level,
+        exp: write.exp,
+        signal: write.signal,
+        weapon_tier: write.weapon_tier,
+        armor_tier: write.armor_tier,
+        bits: write.bits,
+        rations_left: write.rations_left,
+        day: write.day,
+        kills: write.kills,
+        kills_today: write.kills_today,
+        runs_today: write.runs_today,
+        peak_level: write.peak_level,
+        marks: write.marks,
+        unpaid_mark: write.unpaid_mark,
+        stash: write.stash,
+        debt: write.debt,
+        crystals: write.crystals,
+        drink: write.drink,
+        reset_generation: 0,
+        road: write.road,
+        cards: write.cards,
+        inks: write.inks,
+        fight: write.fight,
+        user_id: write.user_id,
+        look: serde_json::json!({}),
+    }
+}
+
+/// Where today's crossing is on `sheet`'s road: the step (1 is the
+/// first) and the lane.
+fn crossing_at(sheet: &Sheet) -> (i32, u8) {
+    let road = sheet.todays_road();
+    for (step, lanes) in road.steps.iter().enumerate() {
+        if let Some(lane) = lanes.iter().position(|node| *node == Node::Crossing) {
+            return (step as i32 + 1, lane as u8);
+        }
+    }
+    panic!("every road has a crossing");
+}
+
+/// A runner stood one step short of today's crossing, down its lane.
+fn before_the_crossing() -> (Sheet, u8) {
+    let mut sheet = fresh();
+    let (step, lane) = crossing_at(&sheet);
+    sheet.rations_left = RATIONS_PER_DAY - (step - 1);
+    sheet.road.path = (1..step)
+        .map(|_| Trace {
+            lane,
+            mark: Mark::Won,
+        })
+        .collect();
+    (sheet, lane)
+}
+
+fn tom(stake: i64, answer: bool) -> Prey {
+    Prey {
+        rival: Rival {
+            user_id: Uuid::from_u128(7),
+            username: "tom".to_string(),
+            level: 2,
+            ambush_id: Uuid::from_u128(77),
+            answer,
+            portrait: [
+                "  ▘  ".to_string(),
+                " ▗▖▝ ".to_string(),
+                "  ▖  ".to_string(),
+            ],
+        },
+        signal: 20,
+        attack: 3,
+        defense: 0,
+        stake,
+    }
+}
+
+#[test]
+fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
+    let (mut sheet, lane) = before_the_crossing();
+    let mut rng = StdRng::seed_from_u64(3);
+    let rations = sheet.rations_left;
+    let steps = sheet.road.path.len();
+
+    // The wrong node, and nobody there: refused, nothing spent.
+    let other = (0..3u8).find(|other| *other != lane && sheet.road.reaches(*other));
+    if let Some(other) = other {
+        assert_eq!(sheet.crossing_refused(other), Some(Refusal::WrongCall));
+    }
+    assert_eq!(sheet.crossing_refused(lane), None);
+    let nobody = sheet.cross(&RULES, lane, None, &mut rng);
+    assert_eq!(nobody.applied, Applied::Refused(Refusal::NobodyThere));
+    assert_eq!(sheet.rations_left, rations);
+    assert_eq!(sheet.road.path.len(), steps);
+
+    let outcome = sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    assert_eq!(
+        outcome.applied,
+        Applied::Crossed {
+            rival: tom(340, false).rival
+        }
+    );
+    assert_eq!(
+        outcome.lines,
+        vec!["tom. asleep on their feet, carrying 340 bits.".to_string()]
+    );
+    assert_eq!(sheet.rations_left, rations - 1);
+    assert_eq!(
+        sheet.road.path.last(),
+        Some(&Trace {
+            lane,
+            mark: Mark::Fighting
+        })
+    );
+    let fight = the_fight(&sheet);
+    assert_eq!(fight.name(), "tom");
+    assert_eq!(fight.foe_level(), Some(2));
+    assert_eq!(fight.foe_signal, 20);
+    assert_eq!(fight.foe_max_signal, 20);
+    assert_eq!(fight.foe_attack, 3);
+    assert_eq!(fight.foe_bits, 340);
+    assert_eq!(fight.foe_exp, 0);
+    assert_eq!(fight.pattern(), RUNNER_PATTERN);
+    assert_eq!(fight.portrait(), ["  ▘  ", " ▗▖▝ ", "  ▖  "]);
+    assert!(fight.kind().is_none());
+    assert_eq!(
+        fight.rival().map(|rival| rival.ambush_id),
+        Some(Uuid::from_u128(77))
+    );
+
+    // A second step resumes it, like any fight on the row.
+    let again = sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    assert_eq!(again.applied, Applied::Resumed);
+    assert_eq!(sheet.rations_left, rations - 1);
+
+    // The row round-trips with the rival in the quarry.
+    let row = row_of(&sheet);
+    assert_eq!(Sheet::from_row(&row).expect("a readable sheet"), sheet);
+}
+
+#[test]
+fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
+    let (mut sheet, lane) = before_the_crossing();
+    let mut rng = StdRng::seed_from_u64(3);
+    sheet.bits = 50;
+    sheet.exp = 30;
+    sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    deal(&mut sheet, [Card::Strike; HAND]);
+
+    let outcome = sheet.apply(Command::Play { slot: 0 }, &mut rng);
+
+    assert_eq!(
+        outcome.applied,
+        Applied::Ambushed {
+            rival: tom(340, false).rival,
+            stake: 340
+        }
+    );
+    assert_eq!(
+        outcome.lines.last(),
+        Some(&"tom goes down without waking.".to_string())
+    );
+    assert!(sheet.fight.is_none());
+    assert_eq!(sheet.bits, 50, "the service moves the bits");
+    assert_eq!(sheet.exp, 30, "a crossing pays no exp");
+    assert_eq!(sheet.kills, 0, "and counts no kill");
+    assert_eq!(sheet.kills_today, 0);
+    assert_eq!(
+        sheet.road.path.last().map(|trace| trace.mark),
+        Some(Mark::Won)
+    );
+    let (step, _) = crossing_at(&sheet);
+    assert_eq!(
+        sheet.news(&outcome.applied),
+        vec![News::Ambushed {
+            rival: tom(340, false).rival,
+            step: Some(step)
+        }]
+    );
+}
+
+#[test]
+fn going_down_to_a_sleeper_is_the_full_fall_with_the_bits_going_to_them() {
+    let (mut sheet, lane) = before_the_crossing();
+    let mut rng = StdRng::seed_from_u64(3);
+    sheet.bits = 120;
+    sheet.exp = 100;
+    sheet.signal = 1;
+    sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    sheet.fight.as_mut().expect("a fight").foe_attack = 50;
+    deal(&mut sheet, [Card::Static; HAND]);
+
+    let outcome = sheet.apply(Command::EndTurn, &mut rng);
+
+    assert_eq!(
+        outcome.applied,
+        Applied::Downed {
+            rival: tom(340, false).rival,
+            bits_lost: 120
+        }
+    );
+    assert_eq!(
+        outcome.lines.last(),
+        Some(&"tom takes 120 bits off you. back tomorrow.".to_string())
+    );
+    assert!(sheet.fight.is_none());
+    assert!(sheet.is_down());
+    assert_eq!(sheet.bits, 0);
+    assert_eq!(sheet.exp, 65);
+    assert_eq!(
+        sheet.road.path.last().map(|trace| trace.mark),
+        Some(Mark::Fell)
+    );
+    let (step, _) = crossing_at(&sheet);
+    assert_eq!(
+        sheet.news(&outcome.applied),
+        vec![News::Downed {
+            rival: tom(340, false).rival,
+            step: Some(step),
+            bits_lost: 120
+        }]
+    );
+}
+
+#[test]
+fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer() {
+    let mut sheet = fresh();
+    let mut rng = StdRng::seed_from_u64(3);
+    sheet.rations_left = 0;
+
+    let nobody = sheet.answer(&RULES, Answer::Nobody, &mut rng);
+    assert_eq!(nobody.applied, Applied::Refused(Refusal::NoAnswerOwed));
+    let off = sheet.answer(&RULES, Answer::OffTheWire, &mut rng);
+    assert_eq!(off.applied, Applied::Refused(Refusal::NotOnTheWire));
+    assert_eq!(
+        off.lines,
+        vec!["they are off the wire. the answer keeps.".to_string()]
+    );
+
+    // No ration needed: the day can be spent.
+    let outcome = sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    assert_eq!(
+        outcome.applied,
+        Applied::Crossed {
+            rival: tom(90, true).rival
+        }
+    );
+    assert_eq!(
+        outcome.lines,
+        vec!["tom. awake this time, carrying 90 bits.".to_string()]
+    );
+    assert_eq!(sheet.rations_left, 0);
+    assert!(sheet.road.path.is_empty(), "an answer is no step");
+
+    // With a fight waiting: refused.
+    let waiting = sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    assert_eq!(waiting.applied, Applied::Refused(Refusal::FightWaiting));
+
+    // Running from an answer is a run like any other, and no step to mark.
+    let ran = sheet.apply(Command::Run, &mut rng);
+    assert_eq!(ran.applied, Applied::Escaped);
+    assert!(sheet.road.path.is_empty());
+
+    // The answer's kill names no step.
+    let mut sheet = fresh();
+    sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    sheet.fight.as_mut().expect("a fight").foe_signal = 1;
+    deal(&mut sheet, [Card::Strike; HAND]);
+    let won = sheet.apply(Command::Play { slot: 0 }, &mut rng);
+    assert_eq!(
+        won.lines.last(),
+        Some(&"tom goes down. that is the answer.".to_string())
+    );
+    assert_eq!(
+        sheet.news(&won.applied),
+        vec![News::Ambushed {
+            rival: tom(90, true).rival,
+            step: None
+        }]
+    );
+
+    // Down: refused.
+    sheet.signal = 0;
+    let down = sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    assert_eq!(down.applied, Applied::Refused(Refusal::SignalDown));
+}
+
+#[test]
+fn the_hand_earns_with_the_garnish_first_and_is_robbed_up_to_the_stake() {
+    let mut sheet = fresh();
+    sheet.bits = 10;
+    sheet.debt = 30;
+    assert_eq!(sheet.earn(100), 30, "half, capped by the debt");
+    assert_eq!(sheet.bits, 80);
+    assert_eq!(sheet.debt, 0);
+    assert_eq!(sheet.earn(0), 0);
+
+    assert_eq!(sheet.robbed(340), 80, "what is there");
+    assert_eq!(sheet.bits, 0);
+    sheet.bits = 500;
+    assert_eq!(sheet.robbed(340), 340, "the stake");
+    assert_eq!(sheet.bits, 160);
+    assert_eq!(sheet.robbed(0), 0);
+}
+
+#[test]
+fn the_crossing_order_holds_still_for_a_day_and_an_attacker() {
+    let candidates: Vec<Uuid> = (1..=6).map(Uuid::from_u128).collect();
+    let attacker = Uuid::from_u128(100);
+    let mut once = candidates.clone();
+    crossing_order(day(24), attacker, &mut once);
+    let mut again = candidates.clone();
+    crossing_order(day(24), attacker, &mut again);
+    assert_eq!(once, again);
+    let mut sorted = once.clone();
+    sorted.sort();
+    assert_eq!(sorted, candidates, "a shuffle, nothing lost");
+
+    let mut other_day = candidates.clone();
+    crossing_order(day(25), attacker, &mut other_day);
+    let mut other_attacker = candidates.clone();
+    crossing_order(day(24), Uuid::from_u128(101), &mut other_attacker);
+    assert!(
+        once != other_day || once != other_attacker,
+        "the order moves with the day or the attacker"
+    );
 }
