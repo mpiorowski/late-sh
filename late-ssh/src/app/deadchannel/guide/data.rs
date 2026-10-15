@@ -128,7 +128,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a *rest* or a *cache*.",
+                "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a *rest* or a *cache*, and one of them has a *crossing* on one lane.",
             ),
             Block::Rule(
                 "a fight is a *hand of cards*: five drawn, three energy a turn, and the glyph shows its next move before you play. `a` plays the obvious turn for you, every turn if you like. at levels *3*, *6*, *9*, and *12* you pick a *new card* for the deck.",
@@ -266,7 +266,7 @@ pub const SECTIONS: &[Section] = &[
                 "a *rest* shakes every static card out of your deck. it never mends your signal: that is patch's, once a day, and the siphon's in the fight.",
             ),
             Block::Rule(
-                "a *cache* is bits for the taking: *half* of what the glyph of your level pays, and no fight.",
+                "a *cache* is bits for the taking: *three fifths* of what the glyph of your level pays, and no fight.",
             ),
             Block::Rule(
                 "under the map is what waits on the lane you picked. for a glyph: its signal, what it hits for, its moves in the order they come, its pay, and how the fight reads on the `a` key from where you stand, *easy*, *even*, *risky*, or *grim*. play the hand yourself and you beat the word.",

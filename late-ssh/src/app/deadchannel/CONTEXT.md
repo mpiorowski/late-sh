@@ -628,7 +628,7 @@ so (`Undercity · f road · p patch · ? guide`,
   pay; `fight/MONEY.md`), a bright node `Fight(Bright)`
   (`fight/CRYSTALS.md`), a rest `Clear` (every static card out of the
   deck, the signal untouched; taken with a clean deck too, the ration
-  spent, so a road of rests never blocks a step), a cache `Take` (half of what the glyph of the level
+  spent, so a road of rests never blocks a step), a cache `Take` (`CACHE_PERCENT` of what the glyph of the level
   pays, the bits machine's garnish first). A lane out of reach is
   `Refusal::NotThatWay` and a call the node does not answer is
   `Refusal::WrongCall`; neither spends anything. At level 15 with the exp

@@ -847,7 +847,7 @@ pub fn noise_cards_for_level(level: i32) -> usize {
 
 /// What a cache on the road holds, as a percentage of what the glyph of
 /// your level pays.
-pub const CACHE_PERCENT: i64 = 50;
+pub const CACHE_PERCENT: i64 = 60;
 
 /// What a glass at Dead Air costs, in crystals. One glass a day.
 pub const DRINK_CRYSTALS: i32 = 1;
