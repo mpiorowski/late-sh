@@ -17,7 +17,7 @@ use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RULES;
 use crate::app::deadchannel::fight::state::Sheet;
 use crate::app::deadchannel::fight::svc::FightService;
-use crate::app::deadchannel::lounge::state::SpawnKindRules;
+use crate::app::deadchannel::lounge::state::lifetime_secs;
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::deadchannel::runner::svc::{RunnerEntry, fixed_looks_rx};
 use crate::app::games::chips::svc::ChipService;
@@ -141,7 +141,7 @@ async fn a_flicker_lands_once_a_runner_looks_and_the_day_row_spends_it() {
     assert_eq!(spawn.spawned_at_ms, now.timestamp_millis());
     assert_eq!(
         spawn.expires_at_ms,
-        now.timestamp_millis() + SpawnKind::Flicker.lifetime_secs() * 1_000
+        now.timestamp_millis() + lifetime_secs(SpawnKind::Flicker) * 1_000
     );
     let day = LoungeDay::ensure(&**client, now.date_naive(), EARLY_DICE)
         .await
@@ -160,7 +160,7 @@ async fn a_flicker_lands_once_a_runner_looks_and_the_day_row_spends_it() {
     );
 
     // Past its time: it slips, and the sweeper ends it.
-    let later = now + Duration::seconds(SpawnKind::Flicker.lifetime_secs());
+    let later = now + Duration::seconds(lifetime_secs(SpawnKind::Flicker));
     svc.sweep(later).await;
     let ended = Spawn::get(&**client, spawn.id)
         .await

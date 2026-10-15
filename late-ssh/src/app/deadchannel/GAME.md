@@ -1815,9 +1815,10 @@ social thing a new runner meets is a pile-on, not a mugging.
   placeholder, where the eye and the fingers already are and where it
   never scrolls away; while the person types it is the glyph alone in
   the composer's title. "Never eat the message" holds: it never covers
-  typed text, and `/hit` is swallowed only for a runner. For a civilian
-  `/hit` posts as the words it is, exactly how `/haunt` behaves for
-  non-admins, and the room wondering is the marketing.
+  typed text, and `/hit` is swallowed only for a runner looking at
+  #lounge. For a civilian `/hit` is an unknown command like any other
+  slash word, exactly how `/haunt` behaves for non-admins: nothing is
+  posted and nothing is explained.
 - **Three flickers and one howler a day, spread by rule, landing by
   dice.** The UTC day is cut into three eight-hour windows and each owns
   one flicker, at a dice minute inside it, landing only while a runner

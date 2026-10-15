@@ -298,3 +298,44 @@ async fn one_live_spawn_at_a_time_and_a_slipped_one_is_ended_once() {
     .await
     .expect("the next spawn");
 }
+
+#[tokio::test]
+async fn a_new_day_starts_its_gap_from_the_newest_spawn() {
+    let test_db = test_db().await;
+    let pooled = test_db.db.get().await.expect("db client");
+    let client: &tokio_postgres::Client = &pooled;
+    // A spawn late on one day; the next day's row has to know about it,
+    // or a flicker rolled for 00:05 lands five minutes after it.
+    let day = fresh_day();
+    let late = day.and_hms_opt(23, 50, 0).unwrap().and_utc();
+    Spawn::insert(
+        client,
+        Uuid::now_v7(),
+        SpawnKind::Flicker,
+        1,
+        late,
+        late + Duration::seconds(90),
+    )
+    .await
+    .expect("insert");
+    Spawn::end_expired(client, late + Duration::minutes(2))
+        .await
+        .expect("end");
+
+    let tomorrow = LoungeDay::ensure(client, day + Duration::days(1), DICE)
+        .await
+        .expect("ensure tomorrow");
+    assert_eq!(tomorrow.last_spawn_at, Some(late));
+    let soon = late + Duration::minutes(5);
+    assert!(
+        !LoungeDay::claim_flicker(
+            client,
+            tomorrow.day,
+            Window::Early,
+            soon,
+            soon - Duration::minutes(45)
+        )
+        .await
+        .expect("claim inside the gap")
+    );
+}

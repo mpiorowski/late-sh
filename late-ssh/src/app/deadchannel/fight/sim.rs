@@ -1248,7 +1248,7 @@ pub fn odds_rival(sheet: &Sheet, prey: &super::state::Prey, fights: u32) -> Opti
     let mut wins = 0u32;
     for _ in 0..fights {
         let mut trial = sheet.clone();
-        match trial.engage_rival(rules, prey.clone(), &mut rng).applied {
+        match trial.engage_rival(prey.clone(), &mut rng).applied {
             Applied::Crossed { .. } => {}
             other => panic!("a crossing started with {other:?}"),
         }

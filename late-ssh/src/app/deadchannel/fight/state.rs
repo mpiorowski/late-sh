@@ -658,11 +658,22 @@ pub enum Command {
     /// Both of its cards are the runner's from that level on, this climb
     /// and every one after.
     Ink { level: i32 },
-    /// What a lounge glyph left (`deadchannel/lounge`): with `cache`, a
-    /// cache's worth of bits at the runner's level on hand, the machine's
-    /// garnish first; and `crystals`. Costs nothing and is never refused:
-    /// the hit that earned it was already judged.
-    Pocket { cache: bool, crystals: i32 },
+    /// What a lounge glyph left (`deadchannel/lounge`), onto the sheet.
+    /// Costs nothing and is never refused: the hit that earned it was
+    /// already judged.
+    Pocket(Leavings),
+}
+
+/// What one lounge kill leaves each hitter (`deadchannel/lounge`): the
+/// closed set, so the lounge cannot hand the sheet a pay it does not
+/// know. Never exp: the climb's pace is the rations' (GAME.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leavings {
+    /// A cache's worth of bits at the runner's level on hand, the
+    /// machine's garnish first.
+    Cache,
+    /// One crystal.
+    Crystal,
 }
 
 /// Why nothing happened.
@@ -1571,13 +1582,7 @@ impl Sheet {
     /// row as the fight (GAME.md, "The crossing pass"). A fight already on
     /// the row resumes instead, like any step. With nobody to meet the
     /// service passes `None`, and the step is refused and spends nothing.
-    pub fn cross<R: Rng>(
-        &mut self,
-        rules: &Rules,
-        lane: u8,
-        prey: Option<Prey>,
-        rng: &mut R,
-    ) -> Outcome {
+    pub fn cross<R: Rng>(&mut self, lane: u8, prey: Option<Prey>, rng: &mut R) -> Outcome {
         if self.fight.is_some() {
             return Outcome {
                 applied: Applied::Resumed,
@@ -1591,14 +1596,14 @@ impl Sheet {
             return refused(Refusal::NobodyThere);
         };
         self.take_step(lane, Mark::Fighting);
-        self.engage_rival(rules, prey, rng)
+        self.engage_rival(prey, rng)
     }
 
     /// The sleeper's answer: the one who crossed them on the row as the
     /// fight, no ration and no step. Not with a fight waiting, not with
     /// the signal down; with nothing owed, or the one owed it off the
     /// wire, refused, and the answer keeps.
-    pub fn answer<R: Rng>(&mut self, rules: &Rules, answer: Answer, rng: &mut R) -> Outcome {
+    pub fn answer<R: Rng>(&mut self, answer: Answer, rng: &mut R) -> Outcome {
         if self.fight.is_some() {
             return fight_waiting("not with a glyph waiting on you. the answer keeps.");
         }
@@ -1610,19 +1615,14 @@ impl Sheet {
             Answer::OffTheWire => return refused(Refusal::NotOnTheWire),
             Answer::Prey(prey) => prey,
         };
-        self.engage_rival(rules, prey, rng)
+        self.engage_rival(prey, rng)
     }
 
     /// `prey` on the row: a fight against a glyph wearing their numbers,
     /// the deck dealt with the day's static in it. No ration and no step:
     /// `cross` and `answer` spend those, and the sim reads a crossing's
     /// odds from here.
-    pub(crate) fn engage_rival<R: Rng>(
-        &mut self,
-        rules: &Rules,
-        prey: Prey,
-        rng: &mut R,
-    ) -> Outcome {
+    pub(crate) fn engage_rival<R: Rng>(&mut self, prey: Prey, rng: &mut R) -> Outcome {
         let static_cards = usize::from(self.road.static_cards);
         let deck = self.deck();
         let tier = prey.tier();
@@ -1636,7 +1636,6 @@ impl Sheet {
         fight.push(arrives);
         let lines = fight.log.clone();
         self.fight = Some(fight);
-        let _ = rules;
         Outcome {
             applied: Applied::Crossed { rival },
             lines,
@@ -1669,7 +1668,7 @@ impl Sheet {
             Command::Patch => self.patch(rules),
             Command::Deposit => self.deposit(),
             Command::Withdraw => self.withdraw(),
-            Command::Pocket { cache, crystals } => self.pocket(rules, cache, crystals),
+            Command::Pocket(leavings) => self.pocket(rules, leavings),
             Command::Borrow => self.borrow(rules),
             Command::Repay => self.repay(),
             Command::Reset => self.reset(),
@@ -1782,10 +1781,10 @@ impl Sheet {
     /// a kill's, and the crystals. Never refused: a glyph waiting, a
     /// signal down, or a day spent change nothing about a hit the lounge
     /// already counted.
-    fn pocket(&mut self, rules: &Rules, cache: bool, crystals: i32) -> Outcome {
-        let bits = match cache {
-            true => rules.cache(self.level),
-            false => 0,
+    fn pocket(&mut self, rules: &Rules, leavings: Leavings) -> Outcome {
+        let (bits, crystals) = match leavings {
+            Leavings::Cache => (rules.cache(self.level), 0),
+            Leavings::Crystal => (0, 1),
         };
         let garnished = self.earn(bits);
         self.crystals += crystals;

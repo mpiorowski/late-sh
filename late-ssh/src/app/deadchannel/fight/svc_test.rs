@@ -1,5 +1,5 @@
 use chrono::Utc;
-use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
+use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome, NewAmbush};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::test_utils::create_test_user;
 use tokio::sync::mpsc;
@@ -10,7 +10,9 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
 use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
-use crate::app::deadchannel::fight::state::{Applied, Call, Command, Pick, Refusal, Sheet, Slot};
+use crate::app::deadchannel::fight::state::{
+    Applied, Call, Command, Pick, Prey, Refusal, Sheet, Slot,
+};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
 use crate::test_helpers::{age_payout_claims, new_test_db};
@@ -959,4 +961,78 @@ async fn the_crossing_meets_only_a_sleeper_in_the_band_on_the_wire() {
         "{:?}",
         outcome.applied
     );
+}
+
+fn blank_portrait() -> [String; 3] {
+    [
+        "     ".to_string(),
+        "  @  ".to_string(),
+        "     ".to_string(),
+    ]
+}
+
+/// A sleeper whose row still carries yesterday's rival fight: the roll
+/// under the crosser's lock wipes the fight and closes its ambush row as
+/// dropped, the same as the roll on the runner's own touch. Without that
+/// the row would read a fight that ended nowhere.
+#[tokio::test]
+async fn crossing_a_sleeper_rolls_their_day_and_drops_their_hanging_fight() {
+    let (test_db, mira, svc) = runner_and_service("fight-roll-mira").await;
+    let (tom, tom_name) = another_runner(&test_db, "fight-roll-tom").await;
+    let (dax, dax_name) = another_runner(&test_db, "fight-roll-dax").await;
+    let lane = at_the_crossing(&test_db, mira, 50).await;
+    let client = test_db.db.get().await.expect("db client");
+
+    // Yesterday tom crossed dax and never finished: the fight is on tom's
+    // row, dated yesterday, and the ambush row is still open.
+    let yesterday = FightService::today() - chrono::Duration::days(1);
+    let hanging = Ambush::insert(
+        &**client,
+        &NewAmbush {
+            id: uuid::Uuid::now_v7(),
+            day: yesterday,
+            attacker_user_id: tom,
+            defender_user_id: dax,
+            attacker_username: tom_name.clone(),
+            defender_username: dax_name.clone(),
+            step: Some(3),
+            stake: 20,
+            answer_to: None,
+            started_at: Utc::now() - chrono::Duration::days(1),
+        },
+    )
+    .await
+    .expect("insert")
+    .expect("the row claimed");
+    let mut toms = sheet_of(&test_db, tom).await;
+    toms.day = yesterday;
+    toms.bits = 120;
+    let daxs = sheet_of(&test_db, dax).await;
+    let prey = Prey::of(&daxs, &dax_name, blank_portrait(), hanging.id, false);
+    toms.engage_rival(prey, &mut rand::thread_rng());
+    assert!(toms.fight.is_some());
+    store(&test_db, &toms).await;
+
+    // Mira steps onto the crossing and meets tom, as the preview did.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers with the sheet");
+    };
+    let Applied::Crossed { rival } = outcome.applied else {
+        panic!("tom is on the row: {:?}", outcome.applied);
+    };
+    assert_eq!(rival.username, tom_name);
+
+    // Tom's row rolled under the lock: today, no fight, and the hanging
+    // ambush closed as dropped with nothing moved.
+    let toms = sheet_of(&test_db, tom).await;
+    assert_eq!(toms.day, FightService::today());
+    assert!(toms.fight.is_none());
+    let dropped = Ambush::get(&**client, hanging.id)
+        .await
+        .expect("read")
+        .expect("the row");
+    assert_eq!(dropped.outcome, Some(AmbushOutcome::Dropped));
+    assert_eq!(dropped.bits_moved, 0);
 }

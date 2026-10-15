@@ -5,15 +5,18 @@
 
 use late_core::models::deadchannel_spawn::{Spawn, SpawnKind};
 
-use super::state::{Pay, names, pay_for};
+use super::state::{names, pay_for};
+use crate::app::deadchannel::fight::state::Leavings;
 
 /// The wire's line for a spawn put down.
 pub(crate) fn slain_line(spawn: &Spawn) -> String {
     let who = names(spawn);
     let kind = spawn.kind.as_str();
     match pay_for(spawn.kind) {
-        Pay::Bits => format!("{who} put down a {kind} in the lounge."),
-        Pay::Crystal => format!("{who} put down a {kind} in the lounge. a crystal each."),
+        Leavings::Cache => format!("{who} put down a {kind} in the lounge."),
+        Leavings::Crystal => {
+            format!("{who} put down a {kind} in the lounge. a crystal each.")
+        }
     }
 }
 

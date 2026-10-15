@@ -173,17 +173,25 @@ impl LoungeDay {
 
     /// The day's row, inserted with `dice` if it is not there yet. A
     /// conditional insert: the first replica to touch the day rolls, every
-    /// other reads what it rolled.
+    /// other reads what it rolled. The new row starts with the previous
+    /// day's last spawn as its `last_spawn_at`, so the gap between two
+    /// spawns holds across midnight too; a day's own spawns all come after
+    /// its row.
     pub async fn ensure(
         client: &impl GenericClient,
         day: NaiveDate,
         dice: LoungeDice,
     ) -> Result<LoungeDay> {
+        let day_starts = day.and_hms_opt(0, 0, 0).expect("midnight").and_utc();
+        let eve_starts = day_starts - chrono::Duration::days(1);
         client
             .execute(
                 "INSERT INTO deadchannel_lounge_days
-                    (day, flicker_0_minute, flicker_1_minute, flicker_2_minute, howler_minute)
-                 VALUES ($1, $2, $3, $4, $5)
+                    (day, flicker_0_minute, flicker_1_minute, flicker_2_minute, howler_minute,
+                     last_spawn_at)
+                 VALUES ($1, $2, $3, $4, $5,
+                         (SELECT max(spawned_at) FROM deadchannel_spawns
+                           WHERE spawned_at >= $6 AND spawned_at < $7))
                  ON CONFLICT (day) DO NOTHING",
                 &[
                     &day,
@@ -191,6 +199,8 @@ impl LoungeDay {
                     &dice.flicker_minutes[1],
                     &dice.flicker_minutes[2],
                     &dice.howler_minute,
+                    &eve_starts,
+                    &day_starts,
                 ],
             )
             .await

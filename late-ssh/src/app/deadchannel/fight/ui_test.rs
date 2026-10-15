@@ -948,7 +948,6 @@ fn the_news_line_tells_the_sleeper_what_happened() {
 fn a_rival_on_the_scene_wears_their_own_face_and_name() {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.answer(
-        &RULES,
         crate::app::deadchannel::fight::state::Answer::Prey(tom(90)),
         &mut StdRng::seed_from_u64(5),
     );

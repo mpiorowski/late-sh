@@ -2912,6 +2912,44 @@ async fn submit_brb_in_room(username: &str, command: &str) -> (ChatState, String
     (state, body)
 }
 
+/// `/hit` is the lounge's only while the lounge tick says so (a runner
+/// looking at #lounge): swallowed, never posted, and asked for once.
+#[tokio::test]
+async fn hit_is_swallowed_and_requested_only_while_hits_are_on() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "hit_on").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    state.set_hits_on(true);
+
+    state.composer.insert_str("/hit");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+    assert!(state.take_requested_hit());
+    assert!(!state.take_requested_hit(), "the request is taken once");
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
+/// From any other room, or for anyone who is not a runner, `/hit` is an
+/// unknown command like any other slash word: nothing posted, nothing
+/// asked of the lounge.
+#[tokio::test]
+async fn hit_is_an_unknown_command_while_hits_are_off() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "hit_off").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/hit");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
+    assert_eq!(banner.message, "Unknown command: /hit");
+    assert!(!state.take_requested_hit());
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
 /// Bare `/brb` only sends this session away: nothing is posted, so it needs
 /// no composer room.
 #[tokio::test]

@@ -2534,12 +2534,12 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
         assert_eq!(sheet.crossing_refused(other), Some(Refusal::WrongCall));
     }
     assert_eq!(sheet.crossing_refused(lane), None);
-    let nobody = sheet.cross(&RULES, lane, None, &mut rng);
+    let nobody = sheet.cross(lane, None, &mut rng);
     assert_eq!(nobody.applied, Applied::Refused(Refusal::NobodyThere));
     assert_eq!(sheet.rations_left, rations);
     assert_eq!(sheet.road.path.len(), steps);
 
-    let outcome = sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    let outcome = sheet.cross(lane, Some(tom(340, false)), &mut rng);
     assert_eq!(
         outcome.applied,
         Applied::Crossed {
@@ -2575,7 +2575,7 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     );
 
     // A second step resumes it, like any fight on the row.
-    let again = sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    let again = sheet.cross(lane, Some(tom(340, false)), &mut rng);
     assert_eq!(again.applied, Applied::Resumed);
     assert_eq!(sheet.rations_left, rations - 1);
 
@@ -2590,7 +2590,7 @@ fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
     let mut rng = StdRng::seed_from_u64(3);
     sheet.bits = 50;
     sheet.exp = 30;
-    sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    sheet.cross(lane, Some(tom(340, false)), &mut rng);
     sheet.fight.as_mut().expect("a fight").foe_signal = 1;
     deal(&mut sheet, [Card::Strike; HAND]);
 
@@ -2633,7 +2633,7 @@ fn going_down_to_a_sleeper_is_the_full_fall_with_the_bits_going_to_them() {
     sheet.bits = 120;
     sheet.exp = 100;
     sheet.signal = 1;
-    sheet.cross(&RULES, lane, Some(tom(340, false)), &mut rng);
+    sheet.cross(lane, Some(tom(340, false)), &mut rng);
     sheet.fight.as_mut().expect("a fight").foe_attack = 50;
     deal(&mut sheet, [Card::Static; HAND]);
 
@@ -2675,9 +2675,9 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
     let mut rng = StdRng::seed_from_u64(3);
     sheet.rations_left = 0;
 
-    let nobody = sheet.answer(&RULES, Answer::Nobody, &mut rng);
+    let nobody = sheet.answer(Answer::Nobody, &mut rng);
     assert_eq!(nobody.applied, Applied::Refused(Refusal::NoAnswerOwed));
-    let off = sheet.answer(&RULES, Answer::OffTheWire, &mut rng);
+    let off = sheet.answer(Answer::OffTheWire, &mut rng);
     assert_eq!(off.applied, Applied::Refused(Refusal::NotOnTheWire));
     assert_eq!(
         off.lines,
@@ -2685,7 +2685,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
     );
 
     // No ration needed: the day can be spent.
-    let outcome = sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    let outcome = sheet.answer(Answer::Prey(tom(90, true)), &mut rng);
     assert_eq!(
         outcome.applied,
         Applied::Crossed {
@@ -2700,7 +2700,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
     assert!(sheet.road.path.is_empty(), "an answer is no step");
 
     // With a fight waiting: refused.
-    let waiting = sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    let waiting = sheet.answer(Answer::Prey(tom(90, true)), &mut rng);
     assert_eq!(waiting.applied, Applied::Refused(Refusal::FightWaiting));
 
     // Running from an answer is a run like any other, and no step to mark.
@@ -2710,7 +2710,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
 
     // The answer's kill names no step.
     let mut sheet = fresh();
-    sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    sheet.answer(Answer::Prey(tom(90, true)), &mut rng);
     sheet.fight.as_mut().expect("a fight").foe_signal = 1;
     deal(&mut sheet, [Card::Strike; HAND]);
     let won = sheet.apply(Command::Play { slot: 0 }, &mut rng);
@@ -2728,7 +2728,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
 
     // Down: refused.
     sheet.signal = 0;
-    let down = sheet.answer(&RULES, Answer::Prey(tom(90, true)), &mut rng);
+    let down = sheet.answer(Answer::Prey(tom(90, true)), &mut rng);
     assert_eq!(down.applied, Applied::Refused(Refusal::SignalDown));
 }
 

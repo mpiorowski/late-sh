@@ -260,12 +260,16 @@ pub enum FightBeat {
     Downed,
     Refused,
     Failed,
+    /// The lookout beside an answer or a reload did not read; the
+    /// answer stood, the session got an empty lookout.
+    LookoutFailed,
 }
 
 /// One beat of the lounge spawns (`deadchannel/lounge`): a spawn landed,
 /// a hit on it, it put down, it slipped away; a hitter paid, one with no
 /// standing runner left unpaid, a pay that erred; a hit the row turned
-/// down (already hit, nothing live, signal down), a hit that did not land.
+/// down (already hit, nothing live, signal down), a hit that did not land;
+/// a row that moved but could not be announced to the replicas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoungeBeat {
     Spawned,
@@ -277,6 +281,7 @@ pub enum LoungeBeat {
     PayFailed,
     HitRefused,
     HitFailed,
+    NotifyFailed,
 }
 
 /// The Old Signal's chips after a kill (`fight/svc.rs::pay_mark`): `Paid`
@@ -1684,6 +1689,7 @@ mod inner {
             FightBeat::Reset => "reset",
             FightBeat::Refused => "refused",
             FightBeat::Failed => "failed",
+            FightBeat::LookoutFailed => "lookout_failed",
         }
     }
 
@@ -1710,6 +1716,7 @@ mod inner {
             LoungeBeat::PayFailed => "pay_failed",
             LoungeBeat::HitRefused => "hit_refused",
             LoungeBeat::HitFailed => "hit_failed",
+            LoungeBeat::NotifyFailed => "notify_failed",
         }
     }
 

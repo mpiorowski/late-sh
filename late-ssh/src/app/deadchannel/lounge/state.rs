@@ -4,9 +4,13 @@
 //! clock reads: every `now` is handed in.
 
 use chrono::{DateTime, Timelike, Utc};
-use late_core::models::deadchannel_spawn::{LoungeDay, LoungeDice, Spawn, SpawnKind, Window};
+use late_core::models::deadchannel_spawn::{
+    LoungeDay, LoungeDice, Spawn, SpawnKind, SpawnOutcome, Window,
+};
 use rand::Rng;
 use uuid::Uuid;
+
+use crate::app::deadchannel::fight::state::Leavings;
 
 /// What the spawner asks on every tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,53 +32,53 @@ pub(crate) const HOWLER_MIN_RUNNERS: usize = 2;
 /// The least time between two spawns, whatever the dice say.
 pub(crate) const SPAWN_GAP_SECS: i64 = 45 * 60;
 
-impl SpawnKindRules for SpawnKind {
-    fn hits_needed(self) -> i32 {
-        match self {
-            SpawnKind::Flicker => 1,
-            SpawnKind::Howler => 3,
-        }
-    }
-
-    fn lifetime_secs(self) -> i64 {
-        match self {
-            SpawnKind::Flicker => 90,
-            SpawnKind::Howler => 180,
-        }
-    }
-
-    fn glyph(self) -> char {
-        match self {
-            SpawnKind::Flicker => '▖',
-            SpawnKind::Howler => '╫',
-        }
+/// Hits that put a spawn of `kind` down, each from a different runner.
+pub(crate) fn hits_needed(kind: SpawnKind) -> i32 {
+    match kind {
+        SpawnKind::Flicker => 1,
+        SpawnKind::Howler => 3,
     }
 }
 
-/// The lounge's numbers per kind, on the model's enum so the match is
-/// exhaustive here and nowhere else.
-pub(crate) trait SpawnKindRules {
-    /// Hits that put it down, each from a different runner.
-    fn hits_needed(self) -> i32;
-    /// How long it stays before it slips away.
-    fn lifetime_secs(self) -> i64;
-    /// Its one cell on the composer.
-    fn glyph(self) -> char;
+/// How long a spawn of `kind` stays before it slips away.
+pub(crate) fn lifetime_secs(kind: SpawnKind) -> i64 {
+    match kind {
+        SpawnKind::Flicker => 90,
+        SpawnKind::Howler => 180,
+    }
 }
 
-/// What a kill pays each hitter: a cache's worth of bits at the hitter's
+/// A spawn's one cell on the composer.
+pub(crate) fn glyph(kind: SpawnKind) -> char {
+    match kind {
+        SpawnKind::Flicker => '▖',
+        SpawnKind::Howler => '╫',
+    }
+}
+
+/// What a kill pays each hitter, in the sheet's own closed set
+/// (`fight::state::Leavings`): a cache's worth of bits at the hitter's
 /// level for a flicker, a crystal for a howler. Never exp: the climb's
 /// pace is the rations' (GAME.md).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Pay {
-    Bits,
-    Crystal,
+pub(crate) fn pay_for(kind: SpawnKind) -> Leavings {
+    match kind {
+        SpawnKind::Flicker => Leavings::Cache,
+        SpawnKind::Howler => Leavings::Crystal,
+    }
 }
 
-pub(crate) fn pay_for(kind: SpawnKind) -> Pay {
-    match kind {
-        SpawnKind::Flicker => Pay::Bits,
-        SpawnKind::Howler => Pay::Crystal,
+/// Whether `incoming`, heard on the channel, is older news of `held`
+/// than what the process already holds: the same spawn, and the copy
+/// held has ended while this one has not, or has more hits. Two hits
+/// landing together can notify in the other order from their rows; the
+/// older payload is dropped so a slain spawn never reads live again.
+pub(crate) fn is_stale(held: Option<&Spawn>, incoming: &Spawn) -> bool {
+    match held {
+        Some(held) if held.id == incoming.id => {
+            (held.ended_at_ms.is_some() && incoming.ended_at_ms.is_none())
+                || held.hits.len() > incoming.hits.len()
+        }
+        Some(_) | None => false,
     }
 }
 
@@ -121,8 +125,9 @@ pub(crate) fn due(day: &LoungeDay, now: DateTime<Utc>, runners_looking: usize, l
     Due::Nothing
 }
 
-/// The composer command. Only `/hit` for now; parsed for runners only,
-/// so for everyone else it posts as the words it is.
+/// The composer command. Only `/hit` for now; parsed while the session
+/// is a runner looking at #lounge, so anywhere else it is an unknown
+/// command like any other slash word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoungeCommand {
     Hit,
@@ -159,35 +164,50 @@ pub(crate) fn names(spawn: &Spawn) -> String {
     }
 }
 
+/// What the composer says about `spawn`, and whether the `/hit` key
+/// goes with it: lit while the spawn is live and the viewer has not hit
+/// it. The ui styles the key off the flag, never off the words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ComposerText {
+    pub text: String,
+    pub hit_key: bool,
+}
+
 /// What the composer says about `spawn` to `viewer`, when no word of the
 /// viewer's own stands in for it.
-pub(crate) fn composer_text(spawn: &Spawn, viewer: Uuid) -> String {
+pub(crate) fn composer_text(spawn: &Spawn, viewer: Uuid) -> ComposerText {
     let kind = spawn.kind.as_str();
     match spawn.outcome {
-        Some(late_core::models::deadchannel_spawn::SpawnOutcome::Slain) => {
+        Some(SpawnOutcome::Slain) => {
             let who = names(spawn);
-            match pay_for(spawn.kind) {
-                Pay::Bits => format!("the {kind} is down. {who} put it down."),
-                Pay::Crystal => format!("the {kind} is down. {who} put it down. a crystal each."),
+            let text = match pay_for(spawn.kind) {
+                Leavings::Cache => format!("the {kind} is down. {who} put it down."),
+                Leavings::Crystal => {
+                    format!("the {kind} is down. {who} put it down. a crystal each.")
+                }
+            };
+            ComposerText {
+                text,
+                hit_key: false,
             }
         }
-        Some(late_core::models::deadchannel_spawn::SpawnOutcome::Slipped) => {
-            format!("the {kind} slipped away.")
-        }
+        Some(SpawnOutcome::Slipped) => ComposerText {
+            text: format!("the {kind} slipped away."),
+            hit_key: false,
+        },
         None => {
             let left = spawn.hits_left();
-            let hit = if spawn.hit_by(viewer) {
-                String::new()
-            } else {
-                " /hit".to_string()
-            };
-            match spawn.hits.last() {
-                None if left == 1 => format!("a {kind} is in the channel.{hit}"),
-                None => format!("a {kind} is in the channel. {left} hits to put it down.{hit}"),
+            let text = match spawn.hits.last() {
+                None if left == 1 => format!("a {kind} is in the channel."),
+                None => format!("a {kind} is in the channel. {left} hits to put it down."),
                 Some(last) => format!(
-                    "a {kind} is in the channel. {} hit it. {left} to go.{hit}",
+                    "a {kind} is in the channel. {} hit it. {left} to go.",
                     last.username
                 ),
+            };
+            ComposerText {
+                text,
+                hit_key: !spawn.hit_by(viewer),
             }
         }
     }

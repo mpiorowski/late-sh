@@ -49,10 +49,10 @@ use tokio_postgres::{Client, GenericClient};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-use super::data::{self, ANSWER_HOURS, CROSSING_LEVEL_BAND, RULES};
+use super::data::{self, ANSWER_HOURS, CROSSING_LEVEL_BAND};
 use super::road::Node;
 use super::state::{
-    Answer, Applied, Command, Lookout, News, Outcome, Pick, Prey, Rival, Sheet, Token,
+    Answer, Applied, Command, Leavings, Lookout, News, Outcome, Pick, Prey, Rival, Sheet, Token,
     crossing_order,
 };
 use crate::app::chat::svc::ChatService;
@@ -88,22 +88,25 @@ pub struct FightService {
 }
 
 /// What a session asks the row for: a command of the machine's, or one
-/// of the two steps that need another row found first.
+/// of the two steps that need another row found first. The two carry
+/// the asker's name: the ambush row keeps both names as they were.
 #[derive(Debug, Clone)]
 enum Ask {
     Command(Command),
     /// A step onto the crossing on `lane`.
     Cross {
         lane: u8,
+        username: String,
     },
     /// The answer to the crossing this runner is owed.
-    Answer,
+    Answer {
+        username: String,
+    },
 }
 
 /// One applied ask, as `act` hands it to the task: the runner row it ran
 /// on (the Old Signal's payout keys on it), the sheet after, what
-/// happened, what a rival's fall or fate moved onto the hand, and what
-/// the session reads beside the sheet.
+/// happened, and what a rival's fall or fate moved onto the hand.
 struct Acted {
     runner_id: Uuid,
     generation: i32,
@@ -111,16 +114,14 @@ struct Acted {
     outcome: Outcome,
     /// Bits taken off a rival this ask put down; zero otherwise.
     taken: i64,
-    lookout: Lookout,
 }
 
 /// One reload, as `reload` hands it to the task: the runner row and the
-/// sheet as settled, and what the session reads beside it.
+/// sheet as settled.
 struct Reloaded {
     runner_id: Uuid,
     generation: i32,
     sheet: Sheet,
-    lookout: Lookout,
 }
 
 impl FightService {
@@ -151,7 +152,11 @@ impl FightService {
         reply: mpsc::UnboundedSender<FightOutcome>,
     ) {
         let span = info_span!("deadchannel.fight.cross_task", user_id = %user_id, username = %username, lane);
-        self.ask_task(user_id, username, Ask::Cross { lane }, reply, span);
+        let ask = Ask::Cross {
+            lane,
+            username: username.clone(),
+        };
+        self.ask_task(user_id, username, ask, reply, span);
     }
 
     /// The answer to the crossing this session's runner is owed.
@@ -163,7 +168,10 @@ impl FightService {
     ) {
         let span =
             info_span!("deadchannel.fight.answer_task", user_id = %user_id, username = %username);
-        self.ask_task(user_id, username, Ask::Answer, reply, span);
+        let ask = Ask::Answer {
+            username: username.clone(),
+        };
+        self.ask_task(user_id, username, ask, reply, span);
     }
 
     fn ask_task(
@@ -177,14 +185,13 @@ impl FightService {
         let svc = self.clone();
         tokio::spawn(
             async move {
-                let outcome = match svc.act(user_id, &username, ask).await {
+                let outcome = match svc.act(user_id, ask).await {
                     Ok(Some(Acted {
                         runner_id,
                         generation,
                         sheet,
                         mut outcome,
                         taken,
-                        lookout,
                     })) => {
                         metrics::record_deadchannel_fight(beat_for(&outcome.applied));
                         tracing::info!(applied = ?outcome.applied, level = sheet.level, signal = sheet.signal, rations_left = sheet.rations_left, bits = sheet.bits, crystals = sheet.crystals, taken, "fight command applied");
@@ -199,6 +206,7 @@ impl FightService {
                         if let Applied::Slain { marks } = outcome.applied {
                             svc.grant_old_signal_badge(user_id, marks).await;
                         }
+                        let lookout = svc.lookout_for(&sheet).await;
                         FightOutcome::Acted {
                             sheet,
                             outcome,
@@ -223,8 +231,9 @@ impl FightService {
     }
 
     /// Lock, settle, apply, settle the rival's side if there is one,
-    /// store. Returns `None` when there is no standing runner.
-    async fn act(&self, user_id: Uuid, username: &str, ask: Ask) -> Result<Option<Acted>> {
+    /// store, commit. Returns `None` when there is no standing runner.
+    /// Nothing after the commit: what landed is what is answered.
+    async fn act(&self, user_id: Uuid, ask: Ask) -> Result<Option<Acted>> {
         let today = Self::today();
         let now = Utc::now();
         let mut client = self.db.get().await?;
@@ -233,28 +242,19 @@ impl FightService {
             return Ok(None);
         };
         let mut sheet = Sheet::from_row(&row).context("reading the runner's sheet")?;
-        let hanging = sheet
+        let rolled = settle_day(&*tx, &mut sheet, today, now).await?;
+        // The rival fight still on the row after the roll, if any.
+        let rival_on = sheet
             .fight
             .as_ref()
             .and_then(|fight| fight.rival().cloned());
-        let rolled = sheet.settle(today);
-        // A rival fight the day rolled over: nothing moved, the row says so.
-        let rival_on = match (rolled, hanging) {
-            (true, Some(rival)) => {
-                Ambush::end(&*tx, rival.ambush_id, AmbushOutcome::Dropped, 0, now).await?;
-                tracing::info!(ambush_id = %rival.ambush_id, "crossing dropped by the day roll");
-                None
-            }
-            (true, None) => None,
-            (false, rival) => rival,
-        };
         let mut outcome = match ask {
             Ask::Command(command) => sheet.apply(command, &mut rand::thread_rng()),
-            Ask::Cross { lane } => {
-                self.cross(&tx, &mut sheet, lane, username, today, now)
+            Ask::Cross { lane, username } => {
+                self.cross(&tx, &mut sheet, lane, &username, today, now)
                     .await?
             }
-            Ask::Answer => self.answer(&tx, &mut sheet, username, today, now).await?,
+            Ask::Answer { username } => self.answer(&tx, &mut sheet, &username, today, now).await?,
         };
         let mut taken = 0;
         match (&outcome.applied, &rival_on) {
@@ -278,14 +278,12 @@ impl FightService {
             DeadchannelRunner::store_sheet(&*tx, sheet.to_write()).await?;
         }
         tx.commit().await?;
-        let lookout = self.lookout(&client, &sheet, today, now).await?;
         Ok(Some(Acted {
             runner_id: row.id,
             generation: row.reset_generation,
             sheet,
             outcome,
             taken,
-            lookout,
         }))
     }
 
@@ -302,10 +300,10 @@ impl FightService {
         now: DateTime<Utc>,
     ) -> Result<Outcome> {
         if sheet.fight.is_some() || sheet.crossing_refused(lane).is_some() {
-            return Ok(sheet.cross(&RULES, lane, None, &mut rand::thread_rng()));
+            return Ok(sheet.cross(lane, None, &mut rand::thread_rng()));
         }
         let prey = self.find_prey(tx, sheet, username, today, now).await?;
-        let outcome = sheet.cross(&RULES, lane, prey, &mut rand::thread_rng());
+        let outcome = sheet.cross(lane, prey, &mut rand::thread_rng());
         match outcome.applied {
             Applied::Crossed { .. } | Applied::Refused(_) => Ok(outcome),
             ref other => anyhow::bail!("a crossing answered {other:?}"),
@@ -330,11 +328,12 @@ impl FightService {
             let Some(row) = DeadchannelRunner::lock_standing(tx, user_id).await? else {
                 continue;
             };
-            let Some(theirs) = Self::sleeper(&row, sheet.level, today)? else {
-                continue;
-            };
-            if theirs.day != row.day {
+            let mut theirs = Sheet::from_row(&row).context("reading a sleeper's sheet")?;
+            if settle_day(tx, &mut theirs, today, now).await? {
                 DeadchannelRunner::store_sheet(tx, theirs.to_write()).await?;
+            }
+            if !can_be_crossed(&theirs, sheet.level) {
+                continue;
             }
             let ambush_id = Uuid::now_v7();
             let claimed = Ambush::insert(
@@ -386,46 +385,33 @@ impl FightService {
         )
         .await?;
         let crossings = Ambush::crossings_of_day(client, today).await?;
-        let mut ids: Vec<Uuid> = rows
-            .iter()
-            .filter(|row| row.user_id != sheet.user_id)
-            .filter(|row| {
-                crossings.iter().all(|crossing| {
-                    crossing.defender_user_id != row.user_id
-                        && !(crossing.attacker_user_id == sheet.user_id
-                            && crossing.defender_user_id == row.user_id)
-                        && !(crossing.defender_user_id == sheet.user_id
-                            && crossing.attacker_user_id == row.user_id)
-                })
-            })
-            .filter(|row| {
-                Self::sleeper(row, sheet.level, today)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            })
-            .map(|row| row.user_id)
-            .collect();
+        let mut ids = Vec::new();
+        for row in &rows {
+            if row.user_id == sheet.user_id {
+                continue;
+            }
+            // The day's caps, as the indexes on the ambush table hold
+            // them: crossed once a day, one crossing per pair a day.
+            let counted = crossings.iter().any(|crossing| {
+                crossing.defender_user_id == row.user_id
+                    || (crossing.attacker_user_id == sheet.user_id
+                        && crossing.defender_user_id == row.user_id)
+                    || (crossing.defender_user_id == sheet.user_id
+                        && crossing.attacker_user_id == row.user_id)
+            });
+            if counted {
+                continue;
+            }
+            if can_be_crossed(&settled(row, today)?, sheet.level) {
+                ids.push(row.user_id);
+            }
+        }
         crossing_order(today, sheet.user_id, &mut ids);
         let usernames = User::list_usernames_by_ids(client, &ids).await?;
         Ok(ids
             .into_iter()
             .filter_map(|id| usernames.get(&id).map(|name| (id, name.clone())))
             .collect())
-    }
-
-    /// `row`'s runner as a sleeper a runner of `level` could cross, their
-    /// sheet settled for `today`: `None` when their signal is down, a
-    /// fight is on their row, or they are out of the band. An unreadable
-    /// sheet is an error: the row is the truth and it is wrong.
-    fn sleeper(row: &DeadchannelRunner, level: i32, today: NaiveDate) -> Result<Option<Sheet>> {
-        let mut theirs = Sheet::from_row(row).context("reading a sleeper's sheet")?;
-        theirs.settle(today);
-        let in_band = (theirs.level - level).abs() <= CROSSING_LEVEL_BAND;
-        match theirs.fight.is_none() && !theirs.is_down() && in_band {
-            true => Ok(Some(theirs)),
-            false => Ok(None),
-        }
     }
 
     /// The three rows of a runner's look, for the scene's other face. An
@@ -455,22 +441,22 @@ impl FightService {
         today: NaiveDate,
         now: DateTime<Utc>,
     ) -> Result<Outcome> {
-        if sheet.fight.is_some() || sheet.is_down() {
-            return Ok(sheet.answer(&RULES, Answer::OffTheWire, &mut rand::thread_rng()));
+        if !on_the_wire(sheet) {
+            return Ok(sheet.answer(Answer::OffTheWire, &mut rand::thread_rng()));
         }
         let since = now - chrono::Duration::hours(ANSWER_HOURS);
         let Some(owed) = Ambush::answerable(tx.client(), sheet.user_id, since).await? else {
-            return Ok(sheet.answer(&RULES, Answer::Nobody, &mut rand::thread_rng()));
+            return Ok(sheet.answer(Answer::Nobody, &mut rand::thread_rng()));
         };
         let Some(row) = DeadchannelRunner::lock_standing(tx, owed.attacker_user_id).await? else {
-            return Ok(sheet.answer(&RULES, Answer::OffTheWire, &mut rand::thread_rng()));
+            return Ok(sheet.answer(Answer::OffTheWire, &mut rand::thread_rng()));
         };
         let mut theirs = Sheet::from_row(&row).context("reading the crosser's sheet")?;
-        if theirs.settle(today) {
+        if settle_day(tx, &mut theirs, today, now).await? {
             DeadchannelRunner::store_sheet(tx, theirs.to_write()).await?;
         }
-        if theirs.fight.is_some() || theirs.is_down() {
-            return Ok(sheet.answer(&RULES, Answer::OffTheWire, &mut rand::thread_rng()));
+        if !on_the_wire(&theirs) {
+            return Ok(sheet.answer(Answer::OffTheWire, &mut rand::thread_rng()));
         }
         let ambush_id = Uuid::now_v7();
         let claimed = Ambush::insert(
@@ -499,7 +485,7 @@ impl FightService {
             ambush_id,
             true,
         );
-        Ok(sheet.answer(&RULES, Answer::Prey(prey), &mut rand::thread_rng()))
+        Ok(sheet.answer(Answer::Prey(prey), &mut rand::thread_rng()))
     }
 
     /// A rival put down: up to `stake` off their hand onto this sheet's
@@ -517,7 +503,7 @@ impl FightService {
         let taken = match DeadchannelRunner::lock_standing(client, rival.user_id).await? {
             Some(row) => {
                 let mut theirs = Sheet::from_row(&row).context("reading the rival's sheet")?;
-                theirs.settle(today);
+                settle_day(client, &mut theirs, today, now).await?;
                 let taken = theirs.robbed(stake);
                 DeadchannelRunner::store_sheet(client, theirs.to_write()).await?;
                 taken
@@ -546,7 +532,7 @@ impl FightService {
         match DeadchannelRunner::lock_standing(client, rival.user_id).await? {
             Some(row) => {
                 let mut theirs = Sheet::from_row(&row).context("reading the rival's sheet")?;
-                theirs.settle(today);
+                settle_day(client, &mut theirs, today, now).await?;
                 theirs.earn(bits_lost);
                 DeadchannelRunner::store_sheet(client, theirs.to_write()).await?;
             }
@@ -563,6 +549,27 @@ impl FightService {
         )
         .await?;
         Ok(())
+    }
+
+    /// The lookout beside an answer or a reload, read after the commit
+    /// off the rows as they stand. A read that fails costs the session
+    /// the lookout, never the answer: logged and counted here, the empty
+    /// lookout handed back, and the next answer or reload reads again.
+    async fn lookout_for(&self, sheet: &Sheet) -> Lookout {
+        let read = async {
+            let client = self.db.get().await?;
+            self.lookout(&client, sheet, Self::today(), Utc::now())
+                .await
+        }
+        .await;
+        match read {
+            Ok(lookout) => lookout,
+            Err(error) => {
+                metrics::record_deadchannel_fight(FightBeat::LookoutFailed);
+                tracing::error!(error = ?error, user_id = %sheet.user_id, "failed to read the lookout");
+                Lookout::default()
+            }
+        }
     }
 
     /// What the session reads beside the sheet: who the crossing ahead
@@ -600,10 +607,8 @@ impl FightService {
                         .await?
                     {
                         Some(row) => {
-                            let mut theirs =
-                                Sheet::from_row(&row).context("reading the crosser's sheet")?;
-                            theirs.settle(today);
-                            match theirs.fight.is_none() && !theirs.is_down() {
+                            let theirs = settled(&row, today)?;
+                            match on_the_wire(&theirs) {
                                 true => Some(Prey::of(
                                     &theirs,
                                     &ambush.attacker_username,
@@ -639,9 +644,10 @@ impl FightService {
             let Some(row) = DeadchannelRunner::find_by_user_standing(client, user_id).await? else {
                 continue;
             };
-            let Some(theirs) = Self::sleeper(&row, sheet.level, today)? else {
+            let theirs = settled(&row, today)?;
+            if !can_be_crossed(&theirs, sheet.level) {
                 continue;
-            };
+            }
             return Ok(Some(Prey::of(
                 &theirs,
                 &their_name,
@@ -924,12 +930,12 @@ impl FightService {
                         runner_id,
                         generation,
                         sheet,
-                        lookout,
                     })) => {
                         if let Some(mark) = sheet.unpaid_mark {
                             let line = svc.pay_mark(user_id, runner_id, generation, mark).await;
                             tracing::info!(mark, line = %line, "old signal mark settled on reload");
                         }
+                        let lookout = svc.lookout_for(&sheet).await;
                         let _ = reply.send(FightOutcome::Reloaded { sheet, lookout });
                     }
                     Ok(None) => {
@@ -956,19 +962,12 @@ impl FightService {
     /// the wire line for the kill itself; this logs and counts the pay.
     /// `None` for no standing runner: the hitter left between the hit and
     /// the kill, and the leavings are theirs no longer.
-    pub(crate) async fn pocket(
-        &self,
-        user_id: Uuid,
-        cache: bool,
-        crystals: i32,
-    ) -> Result<Option<Sheet>> {
+    pub(crate) async fn pocket(&self, user_id: Uuid, leavings: Leavings) -> Result<Option<Sheet>> {
         let acted = self
-            .act(
-                user_id,
-                "",
-                Ask::Command(Command::Pocket { cache, crystals }),
+            .act(user_id, Ask::Command(Command::Pocket(leavings)))
+            .instrument(
+                info_span!("deadchannel.fight.pocket", user_id = %user_id, leavings = ?leavings),
             )
-            .instrument(info_span!("deadchannel.fight.pocket", user_id = %user_id, cache, crystals))
             .await?;
         Ok(acted.map(|acted| {
             metrics::record_deadchannel_fight(beat_for(&acted.outcome.applied));
@@ -990,30 +989,66 @@ impl FightService {
             return Ok(None);
         };
         let mut sheet = Sheet::from_row(&row).context("reading the runner's sheet")?;
-        let hanging = sheet
-            .fight
-            .as_ref()
-            .and_then(|fight| fight.rival().cloned());
-        if sheet.settle(today) {
-            if let Some(rival) = hanging {
-                Ambush::end(&*tx, rival.ambush_id, AmbushOutcome::Dropped, 0, now).await?;
-                tracing::info!(ambush_id = %rival.ambush_id, "crossing dropped by the day roll");
-            }
+        if settle_day(&*tx, &mut sheet, today, now).await? {
             DeadchannelRunner::store_sheet(&*tx, sheet.to_write()).await?;
         }
         tx.commit().await?;
-        let lookout = self.lookout(&client, &sheet, today, now).await?;
         Ok(Some(Reloaded {
             runner_id: row.id,
             generation: row.reset_generation,
             sheet,
-            lookout,
         }))
     }
 
     pub fn today() -> NaiveDate {
         chrono::Utc::now().date_naive()
     }
+}
+
+/// The lazy day roll on a locked row, and the one thing it owes another
+/// table: a rival fight the roll drops is closed on its ambush row as
+/// dropped, since nothing moved. Every settle of a locked sheet goes
+/// through here, the runner's own and a sleeper's or a rival's alike,
+/// so no row is stored with its fight wiped and the ambush left open.
+/// Returns whether the day rolled; the caller stores the sheet.
+async fn settle_day(
+    client: &impl GenericClient,
+    sheet: &mut Sheet,
+    today: NaiveDate,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    let hanging = sheet
+        .fight
+        .as_ref()
+        .and_then(|fight| fight.rival().cloned());
+    let rolled = sheet.settle(today);
+    if let (true, Some(rival)) = (rolled, hanging) {
+        Ambush::end(client, rival.ambush_id, AmbushOutcome::Dropped, 0, now).await?;
+        tracing::info!(ambush_id = %rival.ambush_id, user_id = %sheet.user_id, "crossing dropped by the day roll");
+    }
+    Ok(rolled)
+}
+
+/// Another runner's sheet as it would stand after the roll, read off an
+/// unlocked row and stored nowhere: what the preview and the lookout
+/// judge by. The lock decides again. An unreadable sheet is an error:
+/// the row is the truth and it is wrong.
+fn settled(row: &DeadchannelRunner, today: NaiveDate) -> Result<Sheet> {
+    let mut theirs = Sheet::from_row(row).context("reading another runner's sheet")?;
+    theirs.settle(today);
+    Ok(theirs)
+}
+
+/// Whether a settled sheet is on the wire for the crossing: signal up
+/// and no fight on the row.
+fn on_the_wire(theirs: &Sheet) -> bool {
+    theirs.fight.is_none() && !theirs.is_down()
+}
+
+/// Whether a settled sheet is a sleeper a runner of `level` could cross:
+/// on the wire and within the band.
+fn can_be_crossed(theirs: &Sheet, level: i32) -> bool {
+    on_the_wire(theirs) && (theirs.level - level).abs() <= CROSSING_LEVEL_BAND
 }
 
 fn beat_for(applied: &Applied) -> FightBeat {

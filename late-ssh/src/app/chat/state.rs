@@ -1108,13 +1108,14 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
-    /// Set by a runner's `/hit`; consumed by `deadchannel::lounge::svc`
-    /// every tick. Swallowed for a runner, never posted; for anyone else
-    /// the line is words (`is_runner` says which).
+    /// Set by `/hit` while `hits_on`; consumed by `deadchannel::lounge::svc`
+    /// every tick. Swallowed then, never posted; otherwise the line is
+    /// words.
     requested_hit: bool,
-    /// Whether this user is a standing runner, as the directory last
-    /// said (`App::is_runner`, kept here by `set_is_runner`).
-    is_runner: bool,
+    /// Whether `/hit` is the lounge's here: a standing runner looking at
+    /// #lounge, where the spawn and every answer to a hit are drawn.
+    /// Written by the lounge tick (`set_hits_on`).
+    hits_on: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
@@ -1464,7 +1465,7 @@ impl ChatState {
             requested_pot: None,
             requested_haunt: None,
             requested_hit: false,
-            is_runner: false,
+            hits_on: false,
             requested_paper: None,
             requested_jobs: None,
             own_message_landed: None,
@@ -2257,8 +2258,8 @@ impl ChatState {
         std::mem::take(&mut self.requested_hit)
     }
 
-    pub(crate) fn set_is_runner(&mut self, is_runner: bool) {
-        self.is_runner = is_runner;
+    pub(crate) fn set_hits_on(&mut self, hits_on: bool) {
+        self.hits_on = hits_on;
     }
 
     pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
@@ -4017,10 +4018,11 @@ impl ChatState {
             return None;
         }
 
-        // A runner's `/hit` is the lounge's (`deadchannel/lounge`): swallowed
-        // and never posted, whatever is or is not there to hit. For anyone
-        // else it is the words it is, and the room wonders.
-        if self.is_runner
+        // `/hit` is the lounge's (`deadchannel/lounge`) for a runner looking
+        // at #lounge: swallowed and never posted, whatever is or is not
+        // there to hit. Anywhere else, and for anyone else, it falls
+        // through to the unknown-command banner like any slash word.
+        if self.hits_on
             && crate::app::deadchannel::lounge::state::parse_lounge_command(&body).is_some()
         {
             self.clear_composer_after_submit();
@@ -4028,9 +4030,9 @@ impl ChatState {
             return None;
         }
 
-        // Admin-only on purpose, and not an error for anyone else: for a
-        // non-admin the line falls through and posts as plain text, exactly
-        // as if the command did not exist. First contact stays a mystery.
+        // Admin-only on purpose: for a non-admin the line falls through to
+        // the unknown-command banner, exactly as if the command did not
+        // exist. First contact stays a mystery.
         if self.is_admin
             && let Some(parsed) = crate::app::deadchannel::haunt::state::parse_haunt_command(&body)
         {

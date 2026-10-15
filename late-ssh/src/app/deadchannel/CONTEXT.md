@@ -16,7 +16,8 @@
   tailor in `tailor/` (the mirror as the look's editor, the look's writer
   after the join; §3b), and the lounge spawns in `lounge/` (a glyph on
   #lounge's composer for runners to put down together, over
-  `deadchannel_spawns` and the `deadchannel_spawn` channel; §3d). Built for
+  `deadchannel_spawns` and the `deadchannel_spawn` channel; §3d,
+  `lounge/CONTEXT.md`). Built for
   several replicas (root CONTEXT.md, multi-replica rule); staff only
   (admins and moderators) by decision in code (`haunt::svc::arm` and
   `bootstrap_gate`), so only staff are haunted, and only they can finish
@@ -24,7 +25,10 @@
 - Status: Active, staff only
 - Parent context: `../../../../CONTEXT.md`; design sources live in this
   directory: `GAME.md` (the game: thesis, first contact, the runner) and
-  `DIGEST.md` (the feed budget and the welcome-back paper)
+  `DIGEST.md` (the feed budget and the welcome-back paper); the fight's
+  contracts sit beside its code (`fight/MONEY.md`, `fight/BALANCE.md`,
+  `fight/CRYSTALS.md`, `fight/CROSSING.md`), the lounge's in
+  `lounge/CONTEXT.md`
 
 ## 1. Summary
 
@@ -102,8 +106,8 @@ number of replicas spend one AI call per text.
 | `fight/road.rs` | The road and the run on it. `road_for(day)`: a pure function of the UTC date, ten steps by three lanes of `Node` (`Glyph`, `Bright`, `Rest`, `Cache`, `Crossing`), `FIGHT_STEPS` (5) of them a fight in every lane (the first and the last always, never three fights or three quiet steps in a row), `BRIGHT_NODES` (2) bright glyphs on fight steps of their own after the first, every quiet step holding both a rest and a cache, and one quiet step holding the crossing on one lane beside them (§3c, "The crossing"). `RoadRun` is one runner's day on it (the `road` column): `path`, a `Trace` (lane and `Mark`: fighting, won, bright won, ran, fell, cleared, cached; a stored `mended` from when rests healed reads as cleared) per step taken, and `static_cards`; `lane`, `reaches` / `open_lanes` (the lane stood in and the ones beside it, every lane before the first step), `settle_fight`. `road_test` pins one day's road whole and asserts the shape over 800 days. |
 | `fight/policy.rs` | How a turn is played without a person choosing: `Table` (one read of the hand, the energy, the block, both signals and their maxes, the `Powers`, and the glyph's move now and next), a private `Turn` that plays cards out through `Card::effect` the way the machine would, `auto` (the game's `Auto` key: a burn first, the kill if the hand holds it, a mute or at most two guards on the turn a heavy lands, everything else hits by the best damage for the energy, leftover energy goes on a guard against whatever is landing and then shakes static out) and `sharp` (every order of every affordable set of cards played out and weighed, signal against signal; for the sim and the arena only, the game plays it for nobody). Pure. |
 | `fight/share.rs` | `road_card(sheet)`: the day's road as an `arcade/share.rs` card once the road is over (`Sheet::road_over`) and at least one step was taken: three lanes by ten steps, the lane walked lit by each step's `Mark`, a stat line under it, the header `late.sh the road #N · walked` or `· fell at S`. Pure; copying is `fight/input.rs`. |
-| `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed, with `peak_level`, `marks`, `mark_bonus`, `signal_hears`, and `road`, the day's `RoadRun`; `from_row` rejects an unreadable fight, drink, or road loudly; the row's `deadchannel_runners_fight_has_piles` check refuses a stored fight with no `piles`, so a pre-round binary still draining its sessions cannot leave one), `Fight` (the `Quarry`, a glyph, the Old Signal, or a `Rival` (another runner: id, name, level, the ambush row, whether it is an answer, their portrait), its numbers, the last six lines, and the round: `turn`, `energy`, `block`, `piles`; `intent` / `intent_in` read its pattern, `kind` / `kind_name` / `pattern` / `portrait` / `rival` read whichever it is), the crossing (`Prey`, who a crossing meets and the numbers they fight with, `Prey::of` off their settled sheet; `Sheet::crossing_refused`, `cross(rules, lane, Option<Prey>, rng)` the step onto it, `answer(rules, Answer, rng)` the sleeper's answer with no step, both through `engage_rival`; `Applied::Crossed`, `Ambushed { rival, stake }` which moves nothing on the sheet, `Downed { rival, bits_lost }` the full fall; `earn` the garnish in one place, `robbed` what a crossing takes; `crossing_order` the day's seeded order of who is met; `Lookout` and `Token`, what the service reads beside the sheet), `Powers` (what a strike, a surge, a block, and the glyph's hit are worth in this fight: `Sheet::powers`), the step in `step_to` (`Command::Step { lane, call }`: the lane must be in reach, and the node there answers only its own `Call`: `Fight(Pick::Fair \| Pick::Lower)` on a glyph, `Fight(Pick::Bright)` on a bright one, `Clear` at a rest, `Take` at a cache), `engage` (the fight on the row with a fresh deal, no ration: what the sim's odds and the arena call), `Command::Resume`, the round (`Play { slot }`, `EndTurn`, `Auto`, `Run`), `shut` (why a step would start nothing, the closed `Shut`), `road_over`, the reset in `slay` (GAME.md, "Marks: the reset"), `settle(today)` (the lazy day roll, which wipes the road), `apply(Command, rng)`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`; no level gate, the price keeps the kit with the level), the bar (`Command::Drink`, the closed `Drink` menu: three glasses that move the sheet and three pours that put a card in the deck until the roll, `Drink::pour`; `glass_refused` the one order and wording of the bartender's refusals), the blade shop (`Command::Cart`, `cart_tier`), INK (`Command::Ink { level }`, `inks` on the sheet, the draft levels inked, kept through a mark and the ledge; `ink_price`, `ink_room` one a mark and one more, `needle_refused` the one order and wording), `Sheet::deck` (the drafts, the inks, and the day's pour), patch (`Command::Patch`, `patch_price`, `patch_refused` the one order and wording of its refusals ahead of the price), the lockers (`Deposit`, `Withdraw`, `deposit_fee`), the bits machine (`Borrow`, `Repay`, `loan_cap`, `loan_room`, `loan_fee`, the garnish in `put_down` and on a cache), and the ledge (`Reset`, `has_something_to_lose`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
-| `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (`post_news`: what `Sheet::news` decided, worded; a dropped signal with the step it fell on, a level gained with the face, the Old Signal put down with the face, a step off the ledge, the first kill, a bright glyph put down, a near miss, the day's road walked, a crossing won or lost with what changed hands) through `ChatService::post_wire_line_task`; the crossing (`cross_task`, `answer_task`: the private `Ask` beside `Command`; `find_prey` picks the sleeper under the lock in `crossing_order` and claims the `deadchannel_ambushes` row, `answer` finds the crossing owed and claims the answer row, and when a rival fight ends the same transaction moves the bits between the two rows (`settle_won`, `settle_lost`) and closes the ambush row; a rival fight the day roll drops is closed as dropped; `lookout` reads the `Lookout` beside every answer and reload); the mark's chips after an Old Signal kill's commit (`pay_mark`: `ChipService::credit_run_cooldown_reward_template` on the `deadchannel_old_signal_slain` template, 40,000, keyed `<runner row id>:<generation>:<mark>` and at most once every 30 days per account; the answer's last line says whether the house paid, paid already this month, or failed; each outcome is counted (`late_ssh_deadchannel_old_signal_payouts_total`) and the failure logged as an error. The debt is durable: the kill writes the mark to `unpaid_mark` in its own transaction (migration 210), a paid or refused grant settles it (`DeadchannelRunner::settle_mark`), and a grant that erred leaves it standing, so the next command or reload on the row calls `pay_mark` again with the same event key; the unique gate makes the repeat safe) and the `SIG` milestone badge (`grant_unique_milestone_award`, once per account). `act_task` and `reload_task` answer on a session's `mpsc`. |
+| `fight/state.rs` | The pure machine: `Sheet` (the row's stats and tally, typed, with `peak_level`, `marks`, `mark_bonus`, `signal_hears`, and `road`, the day's `RoadRun`; `from_row` rejects an unreadable fight, drink, or road loudly; the row's `deadchannel_runners_fight_has_piles` check refuses a stored fight with no `piles`, so a pre-round binary still draining its sessions cannot leave one), `Fight` (the `Quarry`, a glyph, the Old Signal, or a `Rival` (another runner: id, name, level, the ambush row, whether it is an answer, their portrait), its numbers, the last six lines, and the round: `turn`, `energy`, `block`, `piles`; `intent` / `intent_in` read its pattern, `kind` / `kind_name` / `pattern` / `portrait` / `rival` read whichever it is), the crossing (`Prey`, who a crossing meets and the numbers they fight with, `Prey::of` off their settled sheet; `Sheet::crossing_refused`, `cross(lane, Option<Prey>, rng)` the step onto it, `answer(Answer, rng)` the sleeper's answer with no step, both through `engage_rival`; `Applied::Crossed`, `Ambushed { rival, stake }` which moves nothing on the sheet, `Downed { rival, bits_lost }` the full fall; `earn` the garnish in one place, `robbed` what a crossing takes; `crossing_order` the day's seeded order of who is met; `Lookout` and `Token`, what the service reads beside the sheet; `fight/CROSSING.md`), the lounge's leavings (`Command::Pocket(Leavings)`, the closed `Leavings`: a cache's worth of bits, or a crystal), `Powers` (what a strike, a surge, a block, and the glyph's hit are worth in this fight: `Sheet::powers`), the step in `step_to` (`Command::Step { lane, call }`: the lane must be in reach, and the node there answers only its own `Call`: `Fight(Pick::Fair \| Pick::Lower)` on a glyph, `Fight(Pick::Bright)` on a bright one, `Clear` at a rest, `Take` at a cache), `engage` (the fight on the row with a fresh deal, no ration: what the sim's odds and the arena call), `Command::Resume`, the round (`Play { slot }`, `EndTurn`, `Auto`, `Run`), `shut` (why a step would start nothing, the closed `Shut`), `road_over`, the reset in `slay` (GAME.md, "Marks: the reset"), `settle(today)` (the lazy day roll, which wipes the road), `apply(Command, rng)`, plus the armorer's till (`Command::Outfit`, `Slot`, `gear_name`, `outfit_price`, `MAX_TIER`; no level gate, the price keeps the kit with the level), the bar (`Command::Drink`, the closed `Drink` menu: three glasses that move the sheet and three pours that put a card in the deck until the roll, `Drink::pour`; `glass_refused` the one order and wording of the bartender's refusals), the blade shop (`Command::Cart`, `cart_tier`), INK (`Command::Ink { level }`, `inks` on the sheet, the draft levels inked, kept through a mark and the ledge; `ink_price`, `ink_room` one a mark and one more, `needle_refused` the one order and wording), `Sheet::deck` (the drafts, the inks, and the day's pour), patch (`Command::Patch`, `patch_price`, `patch_refused` the one order and wording of its refusals ahead of the price), the lockers (`Deposit`, `Withdraw`, `deposit_fee`), the bits machine (`Borrow`, `Repay`, `loan_cap`, `loan_room`, `loan_fee`, the garnish in `put_down` and on a cache), and the ledge (`Reset`, `has_something_to_lose`), returning an `Outcome` (`Applied` plus the lines), and `news(&Applied)` (the closed `News` list the wire prints for it; §3c). No I/O, no clock. |
+| `fight/svc.rs` | `FightService`, the one writer: lock the standing row, settle, apply, store, commit; the metric, the log line per outcome, and the wire's news (`post_news`: what `Sheet::news` decided, worded; a dropped signal with the step it fell on, a level gained with the face, the Old Signal put down with the face, a step off the ledge, the first kill, a bright glyph put down, a near miss, the day's road walked, a crossing won or lost with what changed hands) through `ChatService::post_wire_line_task`; the crossing (`cross_task`, `answer_task`: the private `Ask` beside `Command`, carrying the asker's name; `find_prey` picks the sleeper under the lock in `crossing_order` and claims the `deadchannel_ambushes` row, `answer` finds the crossing owed and claims the answer row, and when a rival fight ends the same transaction moves the bits between the two rows (`settle_won`, `settle_lost`) and closes the ambush row; `settle_day` is the one day roll on a locked sheet, the runner's own or another's, and closes a rival fight it drops as dropped; `lookout_for` reads the `Lookout` after the commit in `ask_task` and `reload_task`, a failed read logged and counted and the empty lookout handed back, never a failed answer; `fight/CROSSING.md`); `settled_sheet` and `pocket` for the lounge; the mark's chips after an Old Signal kill's commit (`pay_mark`: `ChipService::credit_run_cooldown_reward_template` on the `deadchannel_old_signal_slain` template, 40,000, keyed `<runner row id>:<generation>:<mark>` and at most once every 30 days per account; the answer's last line says whether the house paid, paid already this month, or failed; each outcome is counted (`late_ssh_deadchannel_old_signal_payouts_total`) and the failure logged as an error. The debt is durable: the kill writes the mark to `unpaid_mark` in its own transaction (migration 210), a paid or refused grant settles it (`DeadchannelRunner::settle_mark`), and a grant that erred leaves it standing, so the next command or reload on the row calls `pay_mark` again with the same event key; the unique gate makes the repeat safe) and the `SIG` milestone badge (`grant_unique_milestone_award`, once per account). `act_task` and `reload_task` answer on a session's `mpsc`. |
 | `fight/arena.rs` | Test-only (`#[cfg(test)] mod arena`): the balance arena, `fight/BALANCE.md`. `matchup(rules, &Recipe, Pick, Hand)` (a level, a `Kit` as a lead over the level, a glass, marks, the cards drafted, against one pick, the cards played by the `Auto` key or read sharp, 400 fights to the end: odds, turns, signal left, static left, patch, pay), `old_signal`, `level_economy`, `climbs`, `BuildReading` (one of the sixteen builds read on its own) and `draft_spreads` (each draft's two options side by side), `Reading` (every number the targets are stated in, for one `Rules`, every build beside the named players, the batches on threads through `fan`) with `Reading::misses` (the bands it is out of), the report's tables (the day-by-day curve, a day at a time per player, the drafts, every build among them), `sweep` (one reading per candidate), and `run` and `run_words` (one journaled climb printed whole, every shop visit, step, and turn). `arena_test.rs` holds the contract (`the_live_rules_miss_no_target`), the `SWEEP` list, and three `#[ignore]` prints: `make deadchannel-arena` (`late-ssh/target/deadchannel-arena.md`), `make deadchannel-sweep` (`deadchannel-sweep.md`), and `make deadchannel-run` (`deadchannel-run.md`). |
 | `fight/sim.rs` | The balance harness: a `Player` (who plays the cards, `Hand::Auto` or `Hand::Sharp`; the card it takes at each draft, its `Build`; a run line, a patch line, a step-down line, when it starts heeding them, `Heeds`; whether it routes to the bright glyph, drinks, inks (`Inks`), when it buys at the blade shop, `Carts`, and whether it borrows; how it holds its `Purse`; `CAREFUL`, `AMBIENT`, `RECKLESS`, `NEGLECTFUL`, `KEEN`, `HOARDER`, `BORROWER`, and `INKER` named, all on `HOUSE_BUILD`; `builds()` is all sixteen) played through the real `Sheet` from a `Start` (`Start::FRESH`, or a row marked before: the marks and the first drafts inked, the second climb's bench) with seeded dice, a road a day: before every step the runner shops (the card owed, patch, the loan, the armorer, INK, the blade shop, the bar), `route` picks the lane (a few steps read ahead: a rest is worth the static in the deck, a bright glyph a detour or a berth), `play_turn` plays one turn by the hand a card at a time, and `climb` returns a `Climb` (the day of every level and the kit it was fought in, every `Day` played with where the runner stood at dusk and what the day held, the gate, the mark, the drops, the first drop and the level that ended it, the boss tries, the turns and the fights, the `Ledger` of bits and crystals; under a `Bench`: the `Rules` in play and a memo of threat reads shared across a batch) and, with `Journal::On`, writes every `Event` of it in order (dawns and dusks with a `Snapshot` of the sheet, shop visits, steps, and every turn with the glyph's move, the hand, and the cards played), `median`, `summary`. `sim_test.rs` pins GAME.md's target (about two weeks to the first mark read sharp, about three on the `Auto` key, later reckless, a level within a week of the first drop for the runner who skipped the armorer) and one seeded climb whole. Also `odds(sheet, pick, fights)` (and `odds_under` a `Rules`, `odds_played` by a `Hand`), one fight played to the end on the `Auto` key `ODDS_FIGHTS` times on fixed dice through the same machine, and `Threat` (easy, even, risky, grim) over it: the road's word is the sim's number, and the floor. Pure. |
 | `fight/session.rs` | `FightSession`, the session's side: the sheet mirror, the `lookout` (what the service read beside the sheet), the `Picker` (the road open over the street: the cursor's `lane`, and the threat of each pick read from the mirror by `sim::odds` when it opens and when the mirror moves, never per frame, and only for the nodes on the lanes the next step reaches; `crossing` and `answer` by `sim::odds_rival` over the lookout's prey), the `Scene` over the street (lines, `over`, `waiting`, `failed` while the last answer was the service not answering, `old_signal` set from the row's quarry when a fight starts or resumes and kept until the scene closes), the `till` line (an answer that lands with no scene open: a counter's word, or the road's last step), one action in flight (and none at all on a process draining for a deploy: `request` reads `State::is_draining` and answers every command, a step, a card, or a counter, with the word to reconnect), `step_up` (the road, or a waiting fight straight back in through `Command::Resume`) / `enter` (the one call the node under the cursor answers: the fight on a glyph or a bright one, the clear at a rest, the take at a cache) / `step_down` (`g`: the lower glyph, on a glyph's node only), both through the private `call`, / the private `cross` (Enter on the crossing with a sleeper shown there, through `FightService::cross_task`) / `answer` (`r`: through `answer_task`, only with an answer owed and the one who did it on the wire) (ignored when the node does not answer it, closes the road when the day's road is over, opens the scene for a fight, steps in place for a rest or a cache) / `pick_up` / `pick_down` (the cursor over `open_lanes`) / `leave_scene` (a finished scene back to the road) / `close` / `clear_till` / `request` / `reload` / `drop_sheet` / `tick`. A card the turn cannot pay for (`Refusal::NoEnergy`, `NoCard`) is a line on the scene and the fight goes on; any other refusal there ends it. Decides nothing. |
@@ -119,11 +123,11 @@ number of replicas spend one AI call per text.
 | `guide/session.rs` | `GuideSession`: the `state`, `descend` (the claim), `tick` (opens the guide on `FirstDescent`). Decides nothing. |
 | `guide/input.rs` | Keys while the guide is open: `j`/`k` and the arrows scroll a line, PageUp/PageDown a screen, Enter, `q` and `?` close it; digits and Tab stay global, everything else is swallowed. `opens` names the key (`?`). |
 | `guide/ui.rs` | `draw`: the box over the street in the city's palette, each section under a neon `▚ heading ───` rule, each block drawn its own way (the loop joined by arrows, the prize in a rounded amber box, keys as amber chips in as many columns as fit and one wrapped column when narrow, figures bright beside their meaning, rules as bullets with a hanging indent, the marks read into chips and bright spans), wrapped here through `common/markdown::wrap_spans` so the row count is the page the scroll holds against; the keys under; `body_lines`. Pure. |
-| `lounge/state.rs` | Pure: `Due` and `due` (what the spawner lands this tick: a window's flicker once its minute has come, its window is open, and a runner is looking at #lounge; the howler once its minute has come and two are; nothing while one is live), `roll_dice` (the day's moments), `SpawnKindRules` on the model's `SpawnKind` (hits needed: one and three; lifetime: 90s and 3m; the glyph), `pay_for` (a flicker a cache's worth of bits, a howler a crystal each), `SPAWN_GAP_SECS` (45m), `parse_lounge_command` (`/hit`), `shows` (live and in time, or ended within `AFTERMATH_MS`), `names` and `composer_text` (what the composer says to a viewer). No I/O, no clock. |
-| `lounge/data.rs` | The copy: the wire's slain and slipped lines, the composer's answers to a hit (`hit_line`, already hit, nothing to hit, signal down, not answering, deciding). |
-| `lounge/svc.rs` | `LoungeService`: the spawner and sweeper on every replica (`start_spawner_task`, every 20s: end what slipped and tell the wire, pay what a dead replica left unpaid, land what `due` says: the day row ensured with this replica's dice, the claim and the insert one transaction, the notify after the commit), the notify worker (`deadchannel_spawn` carries the whole row; a resync re-reads the live one) into a process-shared `watch<Option<Spawn>>`, `hit_task` / `hit` (the runner's standing and signal off `FightService::settled_sheet`, then one conditional update on the live spawn; the hit that makes the count calls `settle`: the pay claim, `FightService::pocket` per hitter, the wire line), and `tick(app)` (the session's side: the runner flag chat parses `/hit` under, the hit, the copy, the word, the sheet re-read after a kill this session was part of). The metric and the log line per outcome. |
-| `lounge/session.rs` | `LoungeSession`: the tick copy of the spawn, the session's own word and its expiry, one hit in flight, `showing` (the spawn the composer shows at `now_ms`). Decides nothing. |
-| `lounge/ui.rs` | `LoungeLine` and `line` (the glyph and the words: the session's word while it stands, else the spawn's), `placeholder` (the row in the composer: the glyph lit, the words dim, `/hit` lit). Pure; `chat/ui.rs::draw_composer_block` draws it in the placeholder and puts the glyph in the title while the person types. |
+| `lounge/state.rs` | Pure: `due`, `roll_dice`, `hits_needed` / `lifetime_secs` / `glyph` per `SpawnKind`, `pay_for` (as the sheet's `Leavings`), `parse_lounge_command`, `shows`, `is_stale`, `names`, `composer_text` (`ComposerText`: the words and whether the `/hit` key goes with them). No I/O, no clock. `lounge/CONTEXT.md`. |
+| `lounge/data.rs` | The copy: the wire's slain and slipped lines, the composer's answers to a hit. |
+| `lounge/svc.rs` | `LoungeService`: the spawner and sweeper on every replica, the notify worker into a process-shared `watch<Option<Spawn>>`, `hit_task` / `hit` (the settled sheet, one conditional update, the pay through `FightService::pocket` before the slain row is announced), `announce` (a failed `pg_notify` logged and counted), and `tick(app)` (the session's side; writes chat's `hits_on`). The metric and the log line per outcome. `lounge/CONTEXT.md`. |
+| `lounge/session.rs` | `LoungeSession`: the tick copy of the spawn, the session's own word and its expiry, one hit in flight, `showing`. Decides nothing. |
+| `lounge/ui.rs` | `LoungeLine` and `line` (the glyph, the words, the `hit_key`), `placeholder` (the row in the composer). Pure; `chat/ui.rs::draw_composer_block` draws it. |
 | `tailor/ui.rs` | `mirror_lines` for the city's panel: the draft as a portrait with the mark under it, four rack rows beside it (the cursor, the label, the tint's name, a window of up to five pieces around the worn one, bracketed, the whole rack once while it is shorter; the mark alphabet on the mark row), the keys (`[s] wear it` lit only when the draft differs from what is worn), what the next unlock level opens. Pure; `city/ui.rs::draw_panel` puts the tailor's word at the panel's foot. |
 
 Root integration is deliberately thin: `App.haunt` (the one field),
@@ -162,12 +166,14 @@ The lounge's seams: `App.lounge` (the session), one tick line in
 record (`App::sync_presence`: Home with the #lounge card up, the
 `lounge` flag in `models/presence.rs`), `dashboard_lounge` in
 `render.rs` (the line for a runner on the #lounge card, handed to the
-dashboard's composer block), chat's `requested_hit` slot and `is_runner`
-flag (`submit_composer` swallows `/hit` for a runner and lets it post as
-words for anyone else; `set_is_runner` is written by the lounge tick),
-`FightService::settled_sheet` and `pocket` (`Command::Pocket`, the one
-sheet writer paying the leavings), `State.lounge_service` (started in
-`main.rs`), and `Channel::DeadchannelSpawn` in `pg_listener.rs`.
+dashboard's composer block), chat's `requested_hit` slot and `hits_on`
+flag (`submit_composer` swallows `/hit` while a runner is looking at
+#lounge and lets it fall through to the unknown-command banner anywhere
+else and for anyone else;
+`set_hits_on` is written by the lounge tick), `FightService::settled_sheet`
+and `pocket` (`Command::Pocket(Leavings)`, the one sheet writer paying
+the leavings), `State.lounge_service` (started in `main.rs`), and
+`Channel::DeadchannelSpawn` in `pg_listener.rs`.
 
 The runner's seams are as thin: `ChatService::join_deadchannel_room`
 creates the row (`DeadchannelRunner::ensure_for_user`, a conditional
@@ -841,54 +847,13 @@ so (`Undercity · f road · p patch · ? guide`,
   `till` line like the armorer's.
 - **The crossing.** GAME.md, "The crossing pass": one quiet step of
   every road holds a `Node::Crossing` on one lane beside a rest and a
-  cache, and who waits there is another runner, asleep. The session's
-  Enter there is `FightService::cross_task`, not a `Command`: under the
-  attacker's lock the service lists the standing runners within
-  `CROSSING_LEVEL_BAND` (2) levels, drops the ones the day's crossings
-  already count (`deadchannel_ambushes`, migration 240: a sleeper is
-  crossed once a day, a pair crosses once a day, both unique partial
-  indexes), orders the rest by `crossing_order` (seeded by the day and
-  the attacker, so the road previews the name the step meets), locks
-  the first whose settled row stands (signal up, no fight), stores
-  their roll if the day turned, claims the ambush row (`stake` their
-  bits on hand), and hands the sheet a `Prey` (`Sheet::cross`: the
-  ration, the step marked, `Quarry::Runner(Rival)` on the row with the
-  sleeper's full signal, attack, and defense as the glyph's numbers,
-  `data::RUNNER_PATTERN` as its mind; their cards do not play). Nobody
-  left is `Refusal::NobodyThere`, nothing spent. The fight is the
-  normal round. `Applied::Ambushed { rival, stake }` moves nothing on
-  the sheet: the same transaction locks the sleeper's row, takes up to
-  the stake off their hand (`Sheet::robbed`; what they carry now, so a
-  deposit mid-fight shrinks it), puts it on the attacker's with the
-  garnish (`Sheet::earn`), closes the row as won with `bits_moved`, and
-  the scene gets the took line. `Applied::Downed { rival, bits_lost }`
-  is the attacker's full fall (signal down, every bit on hand, the exp
-  cut) with the bits onto the sleeper's row and the row closed as
-  lost. A run closes it as ran; a rival fight the day roll drops is
-  closed as dropped on the next touch. No exp, no kill counted. The
-  sleeper's signal, exp, and day are untouched. The answer
-  (`answer_task`, `r` on the road): the latest crossing won against
-  this runner inside `ANSWER_HOURS` (24) and not yet answered
-  (`Ambush::answerable`), the one who did it locked and claimed as an
-  answer row (`answer_to`, one per crossing), on the row as a rival
-  through `Sheet::answer` with no ration and no step, the same stakes;
-  refused with nothing owed (`NoAnswerOwed`), with them gone dark, down,
-  or in a fight (`NotOnTheWire`: the answer keeps), down, or with a
-  fight waiting. Beside every answer and reload the service reads a
-  `Lookout` for the session: `crossing` (the preview, `Prey` with a nil
-  ambush id), `token` (the crossing owed an answer, and the crosser as
-  prey when on the wire), `news` (the latest fight on this runner in
-  the window), all `None` while a fight is on the row; the road draws
-  them under the legend and the threat words come from
-  `sim::odds_rival`. The wire: "<a> crossed <d> at step S. <d> never
-  woke. N bits changed hands.", "... and went down. <d> never woke. N
-  bits off <a> are <d>'s.", "<a> answered <d>. N bits back.", "<a>
-  answered <d> and went down again. N bits more to <d>."; the
-  carrying-nothing wordings beside each. Beats on the fight counter:
-  `crossed`, `answered`, `ambushed`, `downed`. Two rows lock in one
-  transaction, attacker first, so two runners crossing each other at
-  the same instant can deadlock; Postgres breaks it and one answers
-  `ActionFailed`, which the scene shows as the static not answering.
+  cache, and who waits there is another runner, asleep. Enter there
+  (`FightService::cross_task`) fights them for what they carry, the
+  answer they are owed is `r` on the road (`answer_task`), and the two
+  rows settle in one transaction over `deadchannel_ambushes` (migration
+  240). The contract (who is met and in what order, the caps as
+  indexes, the settle, the day roll dropping a hanging fight, the
+  lookout the session reads, the wire lines) is `fight/CROSSING.md`.
 - **Not yet:** bands and charge (the surge and the wipe are the
   bandless deck's two moves; a band's replace them), events and card
   drops on the road, the operators (levels climb on exp until they
@@ -898,65 +863,13 @@ so (`Undercity · f road · p patch · ? guide`,
 
 ## 3d. The lounge (the snack: a glyph on the composer)
 
-GAME.md, "The lounge pass": the first shared world object. Runners
-only; civilians see a composer. Three flickers and one howler a day,
-spread by rule, landing by dice.
-
-- **The budget is a row a day** (`deadchannel_lounge_days`): the first
-  replica to touch a UTC day inserts it with its dice (a minute inside
-  each eight-hour window for that window's flicker, a minute anywhere
-  for the howler), every other reads what it rolled. Spending a flicker
-  or the howler is a conditional update on its spent flag, with the
-  45-minute gap in the same `WHERE`, so any number of replicas spend
-  each exactly once; the insert of the spawn is in the same transaction
-  and the one-live partial index (`WHERE ended_at IS NULL`) rolls the
-  claim back if another kind landed first.
-- **When one lands.** The spawner on every replica asks every 20s
-  (`state::due`): a window's flicker once its minute has come, while
-  the window is open, with at least one runner looking at #lounge (the
-  `lounge` flag on presence, counted against the runner directory); the
-  howler once its minute has come, any time in the day, with at least
-  two. A minute that passed with nobody looking lands the moment someone
-  is; a window that closes unspent loses its flicker. A live spawn
-  blocks the next. A draining replica stops asking.
-- **A hit is one command.** `/hit` in the composer, swallowed for a
-  runner (never posts, whatever is there to hit), words for anyone else.
-  The service reads the runner's standing and signal off the settled
-  row (a dropped signal cannot hit, as decided under "Death"), then one
-  conditional update appends the hit and ends the spawn as slain in the
-  same statement when the count is made. **One hit per runner per
-  spawn** (the `NOT EXISTS` over `hits`): a howler needs three runners.
-  Level does not matter: a hit is a hit.
-- **Pay goes through the sheet's one writer.** The slaying hit takes the
-  pay claim (`paid_at`, one caller) and calls `FightService::pocket` per
-  hitter: `Command::Pocket { cache, crystals }` under the row lock, a
-  flicker a cache's worth of bits at the hitter's level (the machine's
-  garnish first), a howler a crystal each, never exp. A hitter who left
-  the row meanwhile is logged and left; a pay that errs is logged and
-  counted, not retried (the claim is taken, and paying twice is the
-  worse failure). A slain spawn a dead replica left unpaid for 30s is
-  settled by any sweeper. The hitting session re-reads its sheet when a
-  spawn it hit goes down, so the strip shows the leavings.
-- **The wire, once per spawn:** "tom, dax and mira put down a howler in
-  the lounge. a crystal each." or "a howler slipped past the lounge.
-  nobody was looking." (with the hitters named when some hit it).
-  Nothing in #lounge, nothing in scrollback, nothing on IRC: the spawn
-  is render-layer chrome on the composer of runners looking at the
-  lounge card, and the `/hit` line never becomes a message.
-- **On the composer.** While the composer is empty the placeholder is
-  the glyph and the line (who hit last, how many to go, `/hit` lit
-  unless the viewer already hit it); while the person types, the glyph
-  alone sits in the composer's title. The session's own answer (`your
-  tire iron hits the howler. 2 to go.`, `you already hit it.`) stands in
-  for the line for 8s. A spawn that ended stays 8s more as the
-  aftermath (who put it down, or that it slipped), then the composer is
-  a composer. A spawn past its time hides on every session's own clock
-  before the sweeper ends it.
-- **The copy of the spawn** rides `deadchannel_spawn` (the whole row as
-  JSON, every change: landed, hit, slain, slipped) into a process-shared
-  `watch`; sessions copy it on every tick. A replica that boots
-  mid-spawn re-reads the live row on its resync. There is no
-  "hide the static" setting yet (GAME.md names it; its name is open).
+GAME.md, "The lounge pass": the first shared world object, a flicker or
+a howler on #lounge's composer that runners put down together with
+`/hit`, three flickers and a howler a day by dice, paid through the
+sheet's one writer. The contract (the day row and its claims, when one
+lands, the hit, the pay before the kill is told, the wire, the composer,
+the copy on the channel, the beats) is `lounge/CONTEXT.md`; the file
+roles are in §2.
 
 ## 4. Persistence (`users.settings`, late-core `User`; `deadchannel_runners`)
 

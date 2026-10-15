@@ -31,7 +31,8 @@ fn the_line_is_the_spawn_s_unless_the_session_has_a_word() {
         line(&spawn, None, viewer),
         LoungeLine {
             glyph: '╫',
-            text: "a howler is in the channel. 3 hits to put it down. /hit".to_string(),
+            text: "a howler is in the channel. 3 hits to put it down.".to_string(),
+            hit_key: true,
         }
     );
     assert_eq!(
@@ -43,6 +44,7 @@ fn the_line_is_the_spawn_s_unless_the_session_has_a_word() {
         LoungeLine {
             glyph: '╫',
             text: "your tire iron hits the howler. 2 to go.".to_string(),
+            hit_key: false,
         }
     );
 }
@@ -51,7 +53,8 @@ fn the_line_is_the_spawn_s_unless_the_session_has_a_word() {
 fn the_placeholder_lights_the_glyph_and_the_key() {
     let drawn = placeholder(&LoungeLine {
         glyph: '▖',
-        text: "a flicker is in the channel. /hit".to_string(),
+        text: "a flicker is in the channel.".to_string(),
+        hit_key: true,
     });
     assert_eq!(text_of(&drawn), "▖ a flicker is in the channel. /hit");
     assert_eq!(
@@ -66,6 +69,7 @@ fn the_placeholder_lights_the_glyph_and_the_key() {
     let drawn = placeholder(&LoungeLine {
         glyph: '╫',
         text: "you already hit it. somebody else has to.".to_string(),
+        hit_key: false,
     });
     assert_eq!(
         text_of(&drawn),

@@ -29,7 +29,9 @@ use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use super::data;
-use super::state::{Due, Pay, SPAWN_GAP_SECS, SpawnKindRules, due, pay_for, roll_dice};
+use super::state::{
+    Due, SPAWN_GAP_SECS, due, hits_needed, is_stale, lifetime_secs, pay_for, roll_dice,
+};
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::Screen;
 use crate::app::deadchannel::fight::svc::FightService;
@@ -128,7 +130,15 @@ impl LoungeService {
                     }
                     Signal::Notify { payload, .. } => match parse_spawn_payload(&payload) {
                         Some(spawn) => {
-                            service.spawn_tx.send_replace(Some(spawn));
+                            let stale = is_stale(service.spawn_tx.borrow().as_ref(), &spawn);
+                            match stale {
+                                true => {
+                                    tracing::debug!(spawn_id = %spawn.id, "older deadchannel spawn payload dropped");
+                                }
+                                false => {
+                                    service.spawn_tx.send_replace(Some(spawn));
+                                }
+                            }
                         }
                         None => tracing::warn!(payload, "unreadable deadchannel spawn payload"),
                     },
@@ -247,7 +257,7 @@ impl LoungeService {
                 spawn
             }
         };
-        notify_spawn(&client, &spawn).await?;
+        announce(&client, &spawn).await;
         Ok(Some(spawn))
     }
 
@@ -260,9 +270,9 @@ impl LoungeService {
             tx,
             Uuid::now_v7(),
             kind,
-            kind.hits_needed(),
+            hits_needed(kind),
             now,
-            now + chrono::Duration::seconds(kind.lifetime_secs()),
+            now + chrono::Duration::seconds(lifetime_secs(kind)),
         )
         .await
     }
@@ -273,7 +283,7 @@ impl LoungeService {
         for spawn in Spawn::end_expired(&**client, now).await? {
             metrics::record_deadchannel_lounge(LoungeBeat::Slipped);
             tracing::info!(spawn_id = %spawn.id, kind = spawn.kind.as_str(), hits = spawn.hits.len(), "lounge spawn slipped away");
-            notify_spawn(&client, &spawn).await?;
+            announce(&client, &spawn).await;
             self.chat.post_wire_line_task(data::slipped_line(&spawn));
         }
         Ok(())
@@ -337,7 +347,10 @@ impl LoungeService {
 
     /// One hit: the runner's standing and signal read off the settled row
     /// (the day rolls there if it has not), then one conditional update on
-    /// the live spawn. The hit that makes the count settles the kill.
+    /// the live spawn. The hit that makes the count settles the kill, and
+    /// the pay lands before the slain spawn is announced: every hitter's
+    /// session re-reads its sheet when the kill reaches it, and what it
+    /// reads has to hold the leavings.
     pub(crate) async fn hit(
         &self,
         user_id: Uuid,
@@ -364,10 +377,10 @@ impl LoungeService {
         };
         match Spawn::hit(&**client, spawn.id, &hit, now).await? {
             HitResult::Landed(after) => {
-                notify_spawn(&client, &after).await?;
                 if after.outcome == Some(SpawnOutcome::Slain) {
                     self.settle(&after, now).await;
                 }
+                announce(&client, &after).await;
                 Ok(HitOutcome::Landed {
                     kind: after.kind,
                     left: after.hits_left(),
@@ -399,12 +412,9 @@ impl LoungeService {
         };
         metrics::record_deadchannel_lounge(LoungeBeat::Slain);
         tracing::info!(spawn_id = %spawn.id, kind = spawn.kind.as_str(), hitters = spawn.hits.len(), "lounge spawn put down");
-        let (cache, crystals) = match pay_for(spawn.kind) {
-            Pay::Bits => (true, 0),
-            Pay::Crystal => (false, 1),
-        };
+        let leavings = pay_for(spawn.kind);
         for hit in &spawn.hits {
-            match self.fight.pocket(hit.user_id, cache, crystals).await {
+            match self.fight.pocket(hit.user_id, leavings).await {
                 Ok(Some(_)) => metrics::record_deadchannel_lounge(LoungeBeat::Paid),
                 Ok(None) => {
                     metrics::record_deadchannel_lounge(LoungeBeat::PayLeft);
@@ -420,11 +430,25 @@ impl LoungeService {
     }
 }
 
-/// One tick of a session's lounge: the runner flag the composer parses
-/// `/hit` under, the hit it asked for, the spawn copy and the word. A
-/// frame is owed only where the line is drawn: Home with #lounge up.
+/// Tell every replica the spawn's row moved. The row is the truth and
+/// has landed; a notify that fails costs the copies their freshness
+/// until the next one or a resync, never the hit or the spawn. Logged
+/// and counted here.
+async fn announce(client: &tokio_postgres::Client, spawn: &Spawn) {
+    if let Err(error) = notify_spawn(client, spawn).await {
+        metrics::record_deadchannel_lounge(LoungeBeat::NotifyFailed);
+        tracing::error!(error = ?error, spawn_id = %spawn.id, "failed to announce the lounge spawn");
+    }
+}
+
+/// One tick of a session's lounge: whether the composer parses `/hit`
+/// (a standing runner, looking at #lounge, where the spawn and every
+/// answer to a hit are drawn), the hit it asked for, the spawn copy and
+/// the word. A frame is owed only where the line is drawn: Home with
+/// #lounge up.
 pub(crate) fn tick(app: &mut App) -> bool {
-    app.chat.set_is_runner(app.is_runner());
+    app.chat
+        .set_hits_on(app.is_runner() && app.looking_at_lounge());
     let now_ms = crate::app::presence::svc::now_ms();
     if app.chat.take_requested_hit() {
         app.lounge.hit(now_ms);
