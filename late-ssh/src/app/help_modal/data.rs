@@ -610,7 +610,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /icons             open emoji / nerd font picker",
         "  /picker            open the room picker (same as Ctrl+/)",
         "  /petname [name]    show or set your pet's name",
-        "  /brb [reason]      post brb here, away until your next key (the screensaver covers the screen; Settings, Tweaks, Screensaver)",
+        "  /brb [reason]      away until your next key, a reason is posted here (the screensaver covers the screen; Settings, Tweaks, Screensaver)",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
         "  /ultimate          open owned Ultimate Spells",
@@ -1281,12 +1281,17 @@ fn minecraft_help_lines() -> Vec<String> {
         "",
         "Griefing and world rules",
         "  In a claim nobody else builds, breaks, loots, uses switches, or hurts animals.",
-        "  Outside claims anything goes, and the Nether and End cannot be claimed at all.",
+        "  Outside claims anything goes, and the End cannot be claimed at all.",
         "  Creepers and TNT break blocks only outside claims and below sea level.",
         "  Mob griefing is on, so villager and piglin farms work; endermen can't take blocks.",
         "  Fire never spreads or burns blocks. PvP is on in the open, off inside claims.",
         "  Dying drops everything and anyone can pick it up; items despawn after 5 minutes.",
         "  A claim lapses after 60 days away, or 7 days for a first-chest claim never resized.",
+        "",
+        "Voice chat (Simple Voice Chat)",
+        "  mod               Simple Voice Chat on a Fabric, NeoForge, Forge, or Quilt client",
+        "                    (the card's version); vanilla clients join without voice",
+        "  V                 in game: pick your microphone; players near you hear you",
     ]
     .into_iter()
     .map(str::to_string)

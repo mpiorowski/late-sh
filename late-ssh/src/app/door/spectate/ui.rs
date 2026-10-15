@@ -410,6 +410,7 @@ pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
 /// (`door/zork/suggest.rs`), which F3 types: it rides its own row under the
 /// pane's header, and takes the one-row form over the newest message, since
 /// it is the line the player can act on.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_own_chat(
     frame: &mut Frame,
     game: SpectateGame,
@@ -470,6 +471,7 @@ fn draw_suggestion(frame: &mut Frame, area: Rect, command: &str) {
 /// there, so the rows never jump: inert, its title and placeholder name F2
 /// and the click (`chat::ui::ComposerInert::OwnWatchChat`); open, it names
 /// its own keys (Enter sends, Esc hands the keys back to the game).
+#[allow(clippy::too_many_arguments)]
 fn draw_own_chat_pane(
     frame: &mut Frame,
     game: SpectateGame,

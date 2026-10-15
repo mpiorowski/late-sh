@@ -875,6 +875,7 @@ impl ChatRoom {
     /// `[lower, upper)`, by that message's time in the requested direction,
     /// `limit` at most. A lateral index lookup avoids scanning each room's
     /// history; DMs carry the peer's username.
+    #[allow(clippy::too_many_arguments)]
     pub async fn irc_history_targets(
         client: &Client,
         viewer: Uuid,

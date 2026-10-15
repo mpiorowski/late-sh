@@ -724,6 +724,7 @@ impl ChatMessage {
     /// `(created, id)` bounds, walked from the newer end when `descending`.
     /// The row comparison matches `idx_chat_messages_room_created`, so ties
     /// on `created` never skip or repeat across pages.
+    #[allow(clippy::too_many_arguments)]
     pub async fn irc_history_range(
         client: &Client,
         viewer: Uuid,

@@ -619,7 +619,7 @@ late-sh/
 └── infra/
     ├── icecast/icecast.xml     # Icecast config
     ├── liquidsoap/             # Radio config + local fallback playlists
-    ├── minecraft.tf            # Paper + GriefPrevention on agent-1 hostPort 25565, whitelist-only (see infra/README.md)
+    ├── minecraft.tf            # Paper + GriefPrevention + voice chat on agent-1 hostPorts 25565/24454, whitelist-only (see infra/README.md)
     └── vintagestory.tf         # Official Vintage Story server on agent-2 (arm64) hostPort 42420 TCP+UDP, whitelist-only; image from docker/vintagestory/
 ```
 

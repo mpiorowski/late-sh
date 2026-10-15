@@ -4223,9 +4223,15 @@ impl ChatState {
         if let Some(rest) = body.trim().strip_prefix("/brb")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let chat_body = match rest.trim() {
-                "" => "🌙 brb".to_string(),
-                reason => format!("🌙 brb: {reason}"),
+            // Bare `/brb` only goes away; the room hears about it only when
+            // there is a reason to tell.
+            let reason = match rest.trim() {
+                "" => {
+                    self.clear_composer_after_submit();
+                    self.requested_brb = true;
+                    return None;
+                }
+                reason => reason.to_string(),
             };
             // Snapshot the composer's room before `clear_composer_after_submit`
             // wipes it. Only the composer's room, like `/me`: a stale visible
@@ -4233,8 +4239,9 @@ impl ChatState {
             let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
             let Some(room_id) = room_id else {
-                return Some(Banner::error("Use /brb from inside a room"));
+                return Some(Banner::error("Use /brb <reason> from inside a room"));
             };
+            let chat_body = format!("🌙 brb: {reason}");
             let request_id = Uuid::now_v7();
             self.service
                 .send_message_with_reply_task(super::svc::SendMessageTask {
