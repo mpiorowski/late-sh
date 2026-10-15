@@ -2469,7 +2469,7 @@ impl Sheet {
             lines.extend(outcome.lines);
             match outcome.applied {
                 Applied::Played { .. } => {}
-                Applied::Won { .. } | Applied::Slain { .. } => {
+                Applied::Won { .. } | Applied::Slain { .. } | Applied::Ambushed { .. } => {
                     return Outcome {
                         applied: outcome.applied,
                         lines,

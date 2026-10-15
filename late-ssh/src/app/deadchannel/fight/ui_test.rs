@@ -417,11 +417,11 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         "{text}"
     );
     assert!(
-        text.contains("▸ [▚]·····+"),
+        text.contains("▸ [▚]·····$"),
         "the way in, and the rail\n{text}"
     );
     assert!(
-        text.contains("── ▚ glyph  ▓ bright  + rest  $ cache  ─"),
+        text.contains("── ▚ glyph  ▓ bright  + rest  $ cache  @ crossing  ─"),
         "{text}"
     );
     // Under it, the glyph on that lane, with no key of its own: Enter
@@ -818,12 +818,11 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
     assert!(crossing.contains("risky"), "{crossing}");
     assert!(crossing.contains("signal 30 · hits for"), "{crossing}");
     assert!(
-        crossing.contains("hit > hit > charge > heavy"),
+        crossing.contains("it hits > hits > gathers > heavy"),
         "{crossing}"
     );
     assert!(
-        crossing
-            .contains("carrying 340 bits · a ration · theirs if you go down: everything on you"),
+        crossing.contains("carrying 340 bits · a ration · fall, lose all you carry"),
         "{crossing}"
     );
     assert!(crossing.contains("[Enter] cross tom"), "{crossing}");

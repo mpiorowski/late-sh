@@ -183,4 +183,4 @@ fn a_stored_mended_step_reads_as_a_rest_taken() {
 }
 
 /// The road of 2026-09-24, top lane first.
-const PINNED_ROAD: [&str; 3] = ["g$B++B+$gg", "g+g$+g$+gg", "g$g+$g$$gg"];
+const PINNED_ROAD: [&str; 3] = ["gxg++g+$gg", "g$g$+g$+gB", "g+g+$g$$Bg"];

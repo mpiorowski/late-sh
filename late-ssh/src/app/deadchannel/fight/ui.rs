@@ -1090,7 +1090,7 @@ fn rival_lines(prey: &Prey, threat: Option<Threat>, sheet: &Sheet) -> Vec<Line<'
             Span::styled(moves, ink(INK_MUTED)),
         ],
         vec![Span::styled(
-            format!("{carrying} · a ration · theirs if you go down: everything on you"),
+            truncate(&format!("{carrying} · a ration · fall, lose all you carry"), width),
             text,
         )],
     ];

@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, SubsecRound, Utc};
 use uuid::Uuid;
 
 use super::{
@@ -84,7 +84,8 @@ async fn a_flicker_is_spent_once_and_the_gap_holds() {
     let client: &tokio_postgres::Client = &pooled;
     let day = fresh_day();
     LoungeDay::ensure(client, day, DICE).await.expect("ensure");
-    let now = Utc::now();
+    // Postgres keeps microseconds; trim so the stored stamp compares equal.
+    let now = Utc::now().trunc_subsecs(6);
     let gap = Duration::minutes(45);
 
     assert!(

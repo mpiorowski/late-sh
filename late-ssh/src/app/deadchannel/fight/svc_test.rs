@@ -8,7 +8,7 @@ use tokio::time::{Duration, timeout};
 use super::{FightOutcome, FightService};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
-use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
+use crate::app::deadchannel::fight::data::{CROSSING_LEVEL_BAND, RATIONS_PER_DAY};
 use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
 use crate::app::deadchannel::fight::state::{
     Applied, Call, Command, Pick, Prey, Refusal, Sheet, Slot,
@@ -174,13 +174,14 @@ async fn a_loan_and_a_deposit_land_on_the_row() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-money").await;
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    // A fresh runner's 50 bits, the level-1 loan of 50 (5 more on the
-    // debt), then all 100 into the locker less its 10.
+    // A fresh runner's 50 bits, the level-1 loan of 108 (the wall price
+    // of a piece, 11 more on the debt), then all 158 into the locker less
+    // its 16.
     svc.act_task(user_id, "mira".to_string(), Command::Borrow, tx.clone());
     let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
         panic!("a loan answers with the sheet");
     };
-    assert_eq!(outcome.applied, Applied::Borrowed { amount: 50, fee: 5 });
+    assert_eq!(outcome.applied, Applied::Borrowed { amount: 108, fee: 11 });
     svc.act_task(user_id, "mira".to_string(), Command::Deposit, tx);
     let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a deposit answers with the sheet");
@@ -188,18 +189,18 @@ async fn a_loan_and_a_deposit_land_on_the_row() {
     assert_eq!(
         outcome.applied,
         Applied::Deposited {
-            stored: 90,
-            fee: 10
+            stored: 142,
+            fee: 16
         }
     );
-    assert_eq!((sheet.bits, sheet.stash, sheet.debt), (0, 90, 55));
+    assert_eq!((sheet.bits, sheet.stash, sheet.debt), (0, 142, 119));
 
     let client = test_db.db.get().await.expect("db client");
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
         .expect("row");
-    assert_eq!((row.bits, row.stash, row.debt), (0, 90, 55));
+    assert_eq!((row.bits, row.stash, row.debt), (0, 142, 119));
 }
 
 #[tokio::test]
@@ -803,7 +804,8 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     let token = lookout.token.expect("an answer owed");
     assert_eq!(token.ambush.id, rival.ambush_id);
     let crosser = token.prey.expect("mira is on the wire");
-    assert_eq!(crosser.rival.username, "fight-cross-mira");
+    // The name the crossing row kept: the one mira's session went by.
+    assert_eq!(crosser.rival.username, "mira");
     assert_eq!(crosser.stake, 390);
 
     // The answer: no ration, mira on tom's row, and mira's whole hand back.
@@ -1007,7 +1009,11 @@ async fn crossing_a_sleeper_rolls_their_day_and_drops_their_hanging_fight() {
     let mut toms = sheet_of(&test_db, tom).await;
     toms.day = yesterday;
     toms.bits = 120;
-    let daxs = sheet_of(&test_db, dax).await;
+    // Dax climbed out of mira's band since, so tom is the one sleeper
+    // mira can meet.
+    let mut daxs = sheet_of(&test_db, dax).await;
+    daxs.level = 1 + CROSSING_LEVEL_BAND + 1;
+    store(&test_db, &daxs).await;
     let prey = Prey::of(&daxs, &dax_name, blank_portrait(), hanging.id, false);
     toms.engage_rival(prey, &mut rand::thread_rng());
     assert!(toms.fight.is_some());
