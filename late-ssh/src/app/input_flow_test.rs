@@ -1644,6 +1644,29 @@ async fn realm_keeps_the_originating_page_when_switching_games_or_visiting_zen()
     assert_eq!(app.screen, Screen::Profiles);
 }
 
+/// The realm board is a stop on the backtick cycle like a detached
+/// roguelike: the key hops out with the board kept open, and from Home the
+/// same key hops back onto it.
+#[tokio::test]
+async fn the_realm_board_is_a_backtick_stop() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-hop").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-hop-it");
+
+    app.set_screen(Screen::Dashboard);
+    app.realm.open_board(uuid::Uuid::new_v4(), Screen::Games);
+    app.set_screen(Screen::Realm);
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "a hop out lands on the base");
+    assert!(app.realm.board.is_some(), "with the board kept open");
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Realm, "and the next hop comes back to it");
+}
+
 #[tokio::test]
 async fn ctrl_s_opens_shop_from_door_launchers() {
     use crate::app::common::primitives::Screen;

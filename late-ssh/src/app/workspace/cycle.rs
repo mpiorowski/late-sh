@@ -194,6 +194,15 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             true => GameWorkspace::Door(Screen::GreenDragon),
             false => return false,
         },
+        // The realm board reaches here through the backtick arm in
+        // `door::realm::input::handle_key`. Like the remakes, nothing is
+        // armed first: the board stays open across the hop (`q`/Esc is what
+        // closes it), so an open board is itself the proof it is live, and
+        // the hub's door list offers it back (`HubGame::Realm`).
+        Screen::Realm => match app.realm.board.is_some() {
+            true => GameWorkspace::Door(Screen::Realm),
+            false => return false,
+        },
         // An open watch reaches here through its own key handler
         // (`door::spectate::input`); the hub proper and a preview never do.
         Screen::Games => match watch_key_on_hub(app) {
