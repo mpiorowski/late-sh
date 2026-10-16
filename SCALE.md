@@ -538,7 +538,7 @@ Added DB cost is at most one extra pass per 300 s window, and only on a process 
 
 ### Remaining DB work, ranked by impact
 
-**Re-ranked 2026-08-18.** This list was written against the pre-fix baseline and its order no longer holds. Current order: **Discover (item 2) is now first**, because it regressed to 771 ms mean and is the only user-facing DB latency left, and its fix turns out to be a `VACUUM` rather than anything in the list below. The chat-poll leftovers (item 1) drop to housekeeping: verified at ~1.9% of one core total, so the percentages quoted in item 1 are shares of a baseline that no longer exists. Everything below is retained for its analysis, not its ranking.
+**Re-ranked 2026-08-18.** This list was written against the pre-fix baseline and its order no longer holds. Current order: **Discover (item 2) is now first**, because it regressed to 771 ms mean and is the only user-facing DB latency left, and its fix turns out to be autovacuum tuning (migration 244) rather than anything in the list below. The chat-poll leftovers (item 1) drop to housekeeping: verified at ~1.9% of one core total, so the percentages quoted in item 1 are shares of a baseline that no longer exists. Everything below is retained for its analysis, not its ranking.
 
 1. **The rest of the chat snapshot poll, about 13% of baseline** (was 26% before the merge). Still the largest single item and still the only one that scales with concurrency. What is left is `list_chat_author_metadata` 9.0%, `voice_channels` 2.1%, then polls, owners, and settings under 1% each: individually cheap (0.2 ms to 0.9 ms) and expensive only because the bundle runs 5.5M times. `list_chat_author_metadata` is now the one worth looking at, and it is the odd one out because it keys off the *user* set, not the room set, so it did not merge. Remaining directions:
    - **Merge what is left.** `voice_channels` and `owner_ids_for_rooms` still key off the room set and could fold into `list_for_user_with_state`, but neither is one row per room (voice is 0-N, owners only apply to private topic rooms), so both need lateral guards to avoid making the lounge scan its 14k members. Smaller payoff than the merge already done, and more ways to get the plan wrong. Measure first.
@@ -621,7 +621,17 @@ Source: `late-core/src/models/chat_room.rs`
 
   Mechanism: 1.63M cumulative updates to `last_read_at` continuously clear all-visible bits, while neither autovacuum threshold ever trips to restore them. The dead-tuple threshold is `50 + 0.2 × 492,729 ≈ 98,595` against 8,145 actual dead tuples; the insert threshold is `1000 + 0.2 × 492,729 ≈ 99,546` against 26,850 `n_ins_since_vacuum`. So the table is updated constantly, is never eligible for autovacuum, and its visibility map decays indefinitely.
 
-  **Fix, in order of cost:** run `VACUUM chat_room_members` and re-measure; if the lateral converts to an index-only scan, make it durable with `ALTER TABLE chat_room_members SET (autovacuum_vacuum_scale_factor = 0.02)` or a low `autovacuum_vacuum_insert_threshold`. No migration, no schema change, no query rewrite. This should also help the Pain Point 7 snapshot bundle, which counts against the same table. **Not yet tested:** the payoff is inferred from the plan and the visibility-map figure, not measured, because the 2026-08-18 check was read-only.
+  **Fix shipped in code, not yet deployed:** migration `late-core/migrations/244_chat_room_members_autovacuum.sql` sets per-table `autovacuum_vacuum_scale_factor = 0.01`, `autovacuum_vacuum_insert_scale_factor = 0.01`, `autovacuum_analyze_scale_factor = 0.02`, so autovacuum runs at about 1% churn (~5.8k dead or ~6.8k inserted rows) and keeps the visibility map fresh with no manual `VACUUM`. The dead tuples already present exceed the new threshold, so the first run starts on its own within a minute of the migration. Pre-deploy reading 2026-10-16: 577k rows, 25.8k dead, 114k inserted since vacuum, last autovacuum still 2026-08-04, **11.3% of pages all-visible** (649 / 5,767), Discover at 843 ms mean and 6.1 s max over 10,347 calls. **Not yet tested:** the payoff is inferred from the plan and the visibility-map figure. This should also help the Pain Point 7 snapshot bundle, which counts against the same table.
+
+  **Health-check verification (every kube check until confirmed):**
+
+  ```sql
+  SELECT reloptions, round(100.0 * relallvisible / nullif(relpages, 0), 1) AS pct_all_visible
+  FROM pg_class WHERE relname = 'chat_room_members';
+  SELECT n_dead_tup, n_ins_since_vacuum, last_autovacuum FROM pg_stat_user_tables WHERE relname = 'chat_room_members';
+  ```
+
+  Expected: `reloptions` lists the three settings, `last_autovacuum` is within the last day or so, `pct_all_visible` above 90%. Then `EXPLAIN (ANALYZE, BUFFERS)` the Discover query: the member-count lateral should be an `Index Only Scan` with `Heap Fetches` near zero. Do not judge by the `pg_stat_statements` mean, which is cumulative since 2026-07-25 and moves slowly; take two readings of `calls` and `total_exec_time` an hour apart and compare the delta mean against 843 ms. If the scan stays a bitmap heap scan with a fresh visibility map, the cause is elsewhere and the query-shape options below come back.
 
 - Options for the query shape itself, now **deprioritized**: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation with a better index. All three solve a query-shape problem. Measure after vacuuming before building any of them, because the evidence says this is a vacuum problem wearing a query-shape costume.
 
@@ -710,7 +720,7 @@ Rules for the moves, so they do not become a rewrite:
 
 **Re-ordered 2026-08-18** after the health check. The four 2026-07-26 DB fixes are verified and their follow-ups have dropped down the list; what rose to the top is a two-week-stale visibility map and a flapping telemetry collector, neither of which was on the list at all. Current order of payoff:
 
-0. **`VACUUM chat_room_members`.** Cheapest real win available. Fixes the only user-facing DB latency in the system (Discover at 771 ms mean, 4.1 s max) and probably helps the chat snapshot bundle too. See DB Hot Queries, `list_discover_public_topic_rooms`. Then make it durable with a per-table autovacuum setting.
+0. **Deploy and verify the `chat_room_members` autovacuum migration (244).** Cheapest real win available. Targets the only user-facing DB latency in the system (Discover at 843 ms mean, 6.1 s max on 2026-10-16) and probably helps the chat snapshot bundle too. Durable by construction, no manual `VACUUM`. Verification queries in DB Hot Queries, `list_discover_public_topic_rooms`.
 0b. **Apply the prepared `otel-collector` fix** (probes, memory, spanmetrics expiry) and then fix the unmatched-route span name in `late-core/src/telemetry.rs`. Protects every measurement this document depends on. See Observability Gaps.
 0c. **Add node-exporter** so host-level CPU/NIC/socket-buffer pressure is visible at all. The second node landed without it (2026-09-13); the DaemonSet needs the `role=support` toleration to cover `agent-1`. See Observability Gaps.
 
@@ -891,7 +901,7 @@ Residual risk (updated 2026-08-18, node layout 2026-09-13):
 
 - single control-plane node: `agent-1` carries support workloads, but etcd, the CNPG operator, and both Postgres instances live on `server-1`, so losing `server-1` stops the control plane and the database together (running pods on `agent-1` keep serving, nothing reschedules). etcd snapshots stay on `server-1`'s disk until the S3 upload is configured
 - single `service-ssh` pod for real session ownership
-- Discover latency is a live product problem: 771 ms mean, 4.1 s max, and it regressed rather than improved. Likely a stale visibility map, fix untested
+- Discover latency is a live product problem: 843 ms mean, 6.1 s max on 2026-10-16, still regressing. Stale visibility map; autovacuum migration 244 written, not yet deployed or verified
 - `otel-collector` restarts several times a week (probe timeouts and OOMs), punching holes in the telemetry that all of these judgements rest on; a fix is prepared in infra, not yet applied
 - no node-exporter, so host-level NIC and socket-buffer pressure is invisible (blocks Pain Point 8 item 2)
 - no PgBouncer yet
