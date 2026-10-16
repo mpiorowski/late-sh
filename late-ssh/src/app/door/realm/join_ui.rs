@@ -13,6 +13,7 @@ use ratatui::{
 use crate::app::common::theme;
 
 use super::state::{PLAYER_PALETTES, RealmJoinDraft};
+use super::ui::truncate;
 
 pub(crate) fn draw_join_overlay(frame: &mut Frame, area: Rect, draft: &RealmJoinDraft) {
     let width = 58u16.min(area.width);
@@ -144,14 +145,6 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .areas(vertical);
     rect
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let keep: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{keep}\u{2026}")
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {

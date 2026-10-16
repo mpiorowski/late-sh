@@ -9,8 +9,8 @@
 //! the loser reloads and finds the world already changed.
 //!
 //! What a day still means: the action budget. Every player gets N points per
-//! *realm day*, which rolls over at the game's own `reset_hour_utc` (picked at
-//! creation so a US game and an EU game can refill at civilised local times).
+//! *realm day*, which rolls over at the game's own `reset_hour_utc` (the house
+//! hour for the house world, kept per row for the rows from before it).
 //! Days also drive dormancy decay and the abandoned-realm dissolve.
 
 use std::collections::BTreeMap;
@@ -113,7 +113,10 @@ pub struct RealmPlayer {
     pub user_id: Uuid,
     pub username: String,
     pub status: RealmPlayerStatus,
-    /// UTC day (days since epoch) the player entered the game.
+    /// The realm day this player's clocks start on (protection, quiet days,
+    /// the opening budget): the day they arrived, or for an arrival during
+    /// the muster the day the gates opened, since a frozen day is not one
+    /// they could play.
     pub joined_day: i32,
     /// UTC day the player exited (eliminated/left/kicked); None while alive.
     pub exit_day: Option<i32>,
@@ -846,7 +849,7 @@ impl RealmGameState {
         self.claimed_fraction_of(map.territories.len())
     }
 
-    /// `claimed_fraction` from the territory count alone, for the Lobby
+    /// `claimed_fraction` from the territory count alone, for the snapshot
     /// listing, which knows how big a world is without having built it.
     pub fn claimed_fraction_of(&self, territory_total: usize) -> f64 {
         if territory_total == 0 {
@@ -1001,7 +1004,7 @@ impl RealmGameState {
         self.ruleset.fort_transit_per_level * f64::from(level - 1) * decay
     }
 
-    /// Is this option on for this game? Anything the creator never saw
+    /// Is this option on for this game? Anything it was not opened with
     /// falls back to the roster default, so adding one does not disturb a
     /// running realm.
     pub fn option(&self, id: &str) -> bool {
@@ -1569,14 +1572,14 @@ pub fn apply_action(
 /// comes back, and a week away from a terminal is a week away whether the
 /// realm was a blitz or a slow burn. Five days is long enough to cover a
 /// holiday nobody announced and short enough that a dead realm is not still
-/// in the Lobby when the people who started it have forgotten it.
+/// standing when the people who played it have forgotten it.
 pub const REALM_ABANDON_DAYS: i32 = 5;
 
 /// Per-day housekeeping. Nobody is removed from a running game any more: a
 /// quiet player keeps their land, it simply gets easier to take as their
 /// empire decays (`decay_multiplier`). What this still does is notice a game
-/// that everyone has abandoned, so dead rows do not sit in the Lobby forever
-/// — and that path pays nothing, so it cannot be farmed.
+/// that everyone has abandoned, so a dead world does not stand forever in
+/// place of the next one — and that path pays nothing, so it cannot be farmed.
 pub fn sweep_idle(state: &mut RealmGameState, map: &WorldMap, day: i32) -> (Vec<Uuid>, ResolveEnd) {
     let day_seed = day_seed_of(state, day);
     // Long-abandoned: every living player quiet for `REALM_ABANDON_DAYS`.
@@ -1625,6 +1628,11 @@ pub fn sweep_idle(state: &mut RealmGameState, map: &WorldMap, day: i32) -> (Vec<
 /// days. Eliminating everyone in an afternoon does not end the game; it
 /// leaves you holding the field until the week is in.
 fn check_end(state: &mut RealmGameState, map: &WorldMap, day: i32, seed: u64) -> ResolveEnd {
+    // Nobody has marched in yet: an invitation, not an abandoned game. It
+    // stands until somebody does.
+    if state.players.is_empty() {
+        return ResolveEnd::Ongoing;
+    }
     let alive: Vec<Uuid> = state
         .players
         .iter()

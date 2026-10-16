@@ -1,17 +1,19 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use tokio_postgres::{Client, error::SqlState};
 use uuid::Uuid;
 
 /// The notify channel a row-level trigger (migration 241) fires on every
-/// write to `realm_games`. Every replica re-reads its Lobby snapshot on it;
+/// write to `realm_games`. Every replica re-reads its realm snapshot on it;
 /// the payload is empty and never trusted.
 pub const REALM_GAME_CHANGED_CHANNEL: &str = "realm_game_changed";
 
 // One realm game: a season of the house's standing world. `season` numbers
 // the worlds in order (0 on rows from before the house opened them);
-// `name` is the world's label; `reset_hour_utc` (0-23) is when its action
+// `name` is the label player-made realms carried, blank on house worlds
+// (read as "Season N"); `reset_hour_utc` (0-23) is when its action
 // points refill; `last_resolved_day` is the last realm day the sweeper
 // closed out (log archived, idle clocks checked); `payout` is what the pot
 // did once a finished game was settled (`paid`, `unearned`, `dissolved`),
@@ -71,15 +73,17 @@ impl RealmGame {
     pub const PAYOUT_UNEARNED: &'static str = "unearned";
     pub const PAYOUT_DISSOLVED: &'static str = "dissolved";
 
-    /// Open the next world. `None` when a world is already standing: the
-    /// partial unique index `realm_games_one_live` refuses a second open or
-    /// active row, which is how two replicas opening the same season at
-    /// once settle on one. The season number is taken inside the same
-    /// statement, so it cannot be handed out twice either.
+    /// Insert the next world, already live: the row lands active, so there
+    /// is no second write to promote it and nothing between two writes that
+    /// can strand it. The caller holds the opening claim
+    /// (`try_lock_season_opening`) and passes the season it read under it.
+    /// `None` when a world is already standing: the partial unique index
+    /// `realm_games_one_live` refuses a second open or active row, whatever
+    /// path the write came by.
     pub async fn open_season(
-        client: &Client,
+        client: &impl GenericClient,
+        season: i32,
         creator_id: Uuid,
-        name: &str,
         ruleset_id: &str,
         reset_hour_utc: i16,
         last_resolved_day: i32,
@@ -88,16 +92,14 @@ impl RealmGame {
         let inserted = client
             .query_one(
                 "INSERT INTO realm_games
-                     (status, season, creator_id, name, ruleset_id, reset_hour_utc,
+                     (status, season, creator_id, ruleset_id, reset_hour_utc,
                       last_resolved_day, state)
-                 VALUES ($1,
-                         (SELECT COALESCE(MAX(season), 0) + 1 FROM realm_games),
-                         $2, $3, $4, $5, $6, $7)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                  RETURNING *",
                 &[
-                    &Self::STATUS_OPEN,
+                    &Self::STATUS_ACTIVE,
+                    &season,
                     &creator_id,
-                    &name,
                     &ruleset_id,
                     &reset_hour_utc,
                     &last_resolved_day,
@@ -112,10 +114,25 @@ impl RealmGame {
         }
     }
 
+    /// Claim the opening of the next season, for the length of the caller's
+    /// transaction. `false` when another replica holds it: that one is
+    /// opening the world, and this one spends nothing on it (CONTEXT.md,
+    /// once-only actions). Released when the transaction ends, committed or
+    /// not, so an opening that dies half way leaves no claim behind.
+    pub async fn try_lock_season_opening(client: &impl GenericClient) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT pg_try_advisory_xact_lock(hashtextextended('realm_season_opening', 0))
+                     AS claimed",
+                &[],
+            )
+            .await?;
+        Ok(row.get("claimed"))
+    }
+
     /// The number the next world will carry: one past the highest so far.
-    /// `open_season` computes the same inside its insert; this is for naming
-    /// what is about to be opened.
-    pub async fn next_season(client: &Client) -> Result<i32> {
+    /// Read under the opening claim, so it is handed out once.
+    pub async fn next_season(client: &impl GenericClient) -> Result<i32> {
         let row = client
             .query_one(
                 "SELECT (COALESCE(MAX(season), 0) + 1)::int AS season FROM realm_games",
@@ -126,7 +143,7 @@ impl RealmGame {
     }
 
     /// The standing world: the one open or active row, if there is one.
-    pub async fn live(client: &Client) -> Result<Option<Self>> {
+    pub async fn live(client: &impl GenericClient) -> Result<Option<Self>> {
         let row = client
             .query_opt(
                 "SELECT * FROM realm_games
@@ -165,8 +182,8 @@ impl RealmGame {
 
     /// Recently finished games, bounded like the daily unseen-result window so
     /// the snapshot can show fresh results without pinning rows forever.
-    /// Games that finished within the last `hours` — what the Lobby still
-    /// shows so the result can be read. The rows live on either way; this is
+    /// Games that finished within the last `hours` — what the hub card and
+    /// the live strip still show so the result can be read. The rows live on either way; this is
     /// only about what is worth listing.
     pub async fn list_finished_recent(client: &Client, hours: i64) -> Result<Vec<Self>> {
         let rows = client
@@ -245,7 +262,7 @@ impl RealmGame {
     /// Replace the state JSONB while the game is open or active. Guarded by
     /// the stored-revision compare-and-swap: a concurrent writer advanced the
     /// revision, this touches 0 rows, and the caller reloads instead of
-    /// clobbering. Used by join/leave and any pre-start mutation.
+    /// clobbering. Used by join and leave.
     pub async fn update_state_cas(
         client: &Client,
         game_id: Uuid,
@@ -264,42 +281,6 @@ impl RealmGame {
                     Self::stored_revision_eq_sql("$3")
                 ),
                 &[&game_id, state, &expected_revision],
-            )
-            .await?;
-        Ok(updated)
-    }
-
-    /// Start an open game: flip to active, set the resolution day floor, and
-    /// persist the spawn-populated state. Creator-guarded and CAS-guarded.
-    pub async fn start_cas(
-        client: &Client,
-        game_id: Uuid,
-        creator_id: Uuid,
-        last_resolved_day: i32,
-        state: &Value,
-        expected_revision: i64,
-    ) -> Result<u64> {
-        let updated = client
-            .execute(
-                &format!(
-                    "UPDATE realm_games
-                     SET status = 'active',
-                         last_resolved_day = $3,
-                         state = $2,
-                         updated = current_timestamp
-                     WHERE id = $1
-                       AND status = 'open'
-                       AND creator_id = $4
-                       AND {}",
-                    Self::stored_revision_eq_sql("$5")
-                ),
-                &[
-                    &game_id,
-                    state,
-                    &last_resolved_day,
-                    &creator_id,
-                    &expected_revision,
-                ],
             )
             .await?;
         Ok(updated)

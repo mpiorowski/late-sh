@@ -13,6 +13,7 @@
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 use crate::app::state::App;
+use uuid::Uuid;
 
 use super::map_ui::cell_at;
 use super::state::RealmView;
@@ -484,15 +485,39 @@ pub(crate) fn open_realm(app: &mut App) {
         ));
         return;
     };
-    if !app
-        .realm
-        .board
-        .as_ref()
-        .is_some_and(|b| b.game_id == game_id)
-    {
-        app.realm.open_board(game_id, Screen::Games);
+    enter_board(app, game_id, Screen::Games);
+}
+
+/// `o` or a click on the live strip while it shows a realm moment: the board
+/// of that world, to play or to watch, the way the hub card opens it. `false`
+/// when there is nothing to open: the viewer is on that board already, or
+/// the world left the listing since the last tick.
+pub(crate) fn open_from_live(app: &mut App, game_id: Uuid, return_screen: Screen) -> bool {
+    let on_its_board = app.screen == Screen::Realm && board_is_on(app, game_id);
+    let listed = app.realm.snapshot.listed().any(|game| game.id == game_id);
+    match (on_its_board, listed) {
+        (true, _) | (false, false) => false,
+        (false, true) => {
+            enter_board(app, game_id, return_screen);
+            true
+        }
+    }
+}
+
+/// The board of `game_id` on screen. A board already open on it (hopped
+/// away from) is resumed as it was.
+fn enter_board(app: &mut App, game_id: Uuid, return_screen: Screen) {
+    if !board_is_on(app, game_id) {
+        app.realm.open_board(game_id, return_screen);
     }
     app.set_screen(Screen::Realm);
+}
+
+fn board_is_on(app: &App, game_id: Uuid) -> bool {
+    app.realm
+        .board
+        .as_ref()
+        .is_some_and(|board| board.game_id == game_id)
 }
 
 /// The colour picker: `j`/`k` or the wheel walk the free colours, Enter

@@ -1,7 +1,7 @@
 //! Realm: multiplayer territory conquest. DB-durable games (see
 //! `late-core/src/models/realm_game.rs`); actions resolve the instant they
-//! are taken, and each game refills its daily action points at its own
-//! chosen hour. See CONTEXT.md.
+//! are taken, and the house world refills its daily action points at the
+//! house hour (`svc::HOUSE_RESET_HOUR_UTC`). See CONTEXT.md.
 
 pub mod history_ui;
 pub mod input;

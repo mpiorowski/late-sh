@@ -16,7 +16,7 @@ use crate::app::door::realm::resolver::{
     RealmAction, RealmGameState, RealmNewsKind, RealmPlayerStatus,
 };
 use crate::app::door::realm::svc::{
-    NewRealm, RealmService, next_reset, parse_state, realm_day, reset_hour_label,
+    RealmService, WorldChoice, WorldSpec, next_reset, parse_state, realm_day, reset_hour_label,
     reset_hour_label_at,
 };
 use crate::app::games::chips::svc::ChipService;
@@ -27,16 +27,26 @@ use tokio::sync::broadcast;
 /// days so the arithmetic in the assertions stays obvious.
 const RESET_HOUR: i16 = 0;
 
-/// The usual game: standard rules at the slow tempo, default options.
-fn spec(name: &str, hour: i16) -> NewRealm {
-    NewRealm {
-        name: name.to_string(),
-        ruleset_id: "standard".to_string(),
-        pace_id: "slow".to_string(),
+/// The usual world: standard rules at the slow tempo, the rules as written,
+/// on Earth.
+fn spec(hour: i16) -> WorldSpec {
+    WorldSpec {
+        ruleset: &crate::app::door::realm::rulesets::STANDARD,
+        pace: crate::app::door::realm::rulesets::pace_by_id("slow").expect("slow"),
         reset_hour_utc: hour,
-        options: Default::default(),
-        map_id: "earth".to_string(),
-        map_spec: None,
+        map: WorldChoice::Earth,
+    }
+}
+
+/// The usual world, drawn in this shape instead of Earth.
+fn drawn(continents: u8, islands: u8, territories: u16) -> WorldSpec {
+    WorldSpec {
+        map: WorldChoice::Drawn {
+            continents,
+            islands,
+            territories,
+        },
+        ..spec(RESET_HOUR)
     }
 }
 
@@ -63,10 +73,9 @@ async fn house(test_db: &TestDb) -> User {
 }
 
 /// Open a world from `spec`, the way the house does: nobody on it yet.
-async fn open(svc: &RealmService, test_db: &TestDb, spec: &NewRealm) -> RealmGame {
+async fn open(svc: &RealmService, test_db: &TestDb, spec: &WorldSpec) -> RealmGame {
     house(test_db).await;
-    let client = test_db.db.get().await.expect("db");
-    svc.open_world(&client, spec)
+    svc.open_world(|_| spec.clone())
         .await
         .expect("open world")
         .expect("no world was standing")
@@ -79,7 +88,7 @@ async fn create_game(
     svc: &RealmService,
     test_db: &TestDb,
     user: &User,
-    spec: &NewRealm,
+    spec: &WorldSpec,
 ) -> RealmGame {
     let game = open(svc, test_db, spec).await;
     svc.join_game(user.id, &user.username, game.id, None)
@@ -139,7 +148,7 @@ async fn started_game(svc: &RealmService, test_db: &TestDb, names: &[&str]) -> (
     for name in names {
         ids.push(create_test_user(&test_db.db, name).await);
     }
-    let game = open(svc, test_db, &spec("The Long War", RESET_HOUR)).await;
+    let game = open(svc, test_db, &spec(RESET_HOUR)).await;
     for user in &ids {
         svc.join_game(user.id, &user.username, game.id, None)
             .await
@@ -256,34 +265,17 @@ async fn a_world_is_live_from_its_opening_and_takes_comers() {
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "realm_alice").await;
     let bob = create_test_user(&test_db.db, "realm_bob").await;
-    let client = test_db.db.get().await.expect("client");
 
-    // Unknown ruleset and an impossible hour are refused before anything
-    // is written.
+    // An impossible hour is refused, and nothing is written.
     house(&test_db).await;
-    assert!(
-        svc.open_world(
-            &client,
-            &NewRealm {
-                ruleset_id: "nope".into(),
-                ..spec("x", RESET_HOUR)
-            }
-        )
-        .await
-        .is_err()
-    );
-    assert!(svc.open_world(&client, &spec("x", 24)).await.is_err());
+    assert!(svc.open_world(|_| spec(24)).await.is_err());
 
-    let game = open(&svc, &test_db, &spec("  Spring   Offensive  ", 18)).await;
+    let game = open(&svc, &test_db, &spec(18)).await;
     // No waiting room and no starting gun: it is being played already, by
     // nobody yet. The row is the house's and the season is numbered.
     assert_eq!(game.status, RealmGame::STATUS_ACTIVE);
     assert_eq!(game.season, 1, "the first world the house opened");
     assert_eq!(game.reset_hour_utc, 18, "the chosen hour is persisted");
-    assert_eq!(
-        game.name, "Spring Offensive",
-        "the name is tidied, not taken raw"
-    );
     let state = parse_state(&game.state).expect("state");
     assert!(state.players.is_empty(), "nobody has marched in");
     assert_eq!(
@@ -414,7 +406,11 @@ async fn the_house_raises_the_next_world_when_none_stands() {
         .await;
         assert_eq!(
             opened.kind,
-            ActivityKind::RealmSeasonOpened { game_id, season }
+            ActivityKind::RealmSeasonOpened {
+                game_id,
+                season,
+                opens_in: "a day".to_string(),
+            }
         );
     }
 }
@@ -427,14 +423,10 @@ async fn only_one_world_stands_at_a_time() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     house(&test_db).await;
-    let client = test_db.db.get().await.expect("client");
-    let first = svc
-        .open_world(&client, &spec("First", RESET_HOUR))
-        .await
-        .expect("open");
+    let first = svc.open_world(|_| spec(RESET_HOUR)).await.expect("open");
     assert!(first.is_some());
     let second = svc
-        .open_world(&client, &spec("Second", RESET_HOUR))
+        .open_world(|_| spec(RESET_HOUR))
         .await
         .expect("the second open is not an error");
     assert!(second.is_none(), "but it opens nothing");
@@ -1038,7 +1030,7 @@ async fn the_last_player_can_pack_the_realm_up() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "realm_solo").await;
-    let game = create_game(&svc, &test_db, &alice, &spec("", RESET_HOUR)).await;
+    let game = create_game(&svc, &test_db, &alice, &spec(RESET_HOUR)).await;
 
     // Nobody else ever turned up, so there is nobody to hand it to.
     svc.leave_game(alice.id, game.id)
@@ -1271,7 +1263,7 @@ async fn two_players_cannot_wear_the_same_colour() {
     let bob = create_test_user(&test_db.db, "bob").await;
     let carol = create_test_user(&test_db.db, "carol").await;
 
-    let game = open(&svc, &test_db, &spec("Colours", RESET_HOUR)).await;
+    let game = open(&svc, &test_db, &spec(RESET_HOUR)).await;
     svc.join_game(alice.id, &alice.username, game.id, Some(4))
         .await
         .expect("alice joins in her colour");
@@ -1306,32 +1298,17 @@ async fn two_players_cannot_wear_the_same_colour() {
     assert_eq!(state.player(bob.id).expect("bob").color, Some(7));
 }
 
-/// The map is the opener's choice, frozen into the game like every other
-/// rule: not something the ruleset carries, and not something a later
-/// roster change can move under a game being played.
+/// The map is frozen into the game like every other rule: not something the
+/// ruleset carries, and not something a later roster change can move under a
+/// game being played.
 #[tokio::test]
 async fn the_world_is_picked_at_the_opening_and_frozen_with_the_rules() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
-    let client = test_db.db.get().await.expect("client");
-
-    house(&test_db).await;
-    assert!(
-        svc.open_world(
-            &client,
-            &NewRealm {
-                map_id: "atlantis".to_string(),
-                ..spec("Nowhere", RESET_HOUR)
-            }
-        )
-        .await
-        .is_err(),
-        "a world that does not exist is not a game"
-    );
-
-    let game = open(&svc, &test_db, &spec("Earth", RESET_HOUR)).await;
+    let game = open(&svc, &test_db, &spec(RESET_HOUR)).await;
     let state = load_state(&svc, game.id).await;
     assert_eq!(state.ruleset.map_id, "earth");
+    assert!(state.ruleset.map_spec.is_none());
 }
 
 /// A generated world is stored as the numbers it was drawn from, not as a
@@ -1341,37 +1318,16 @@ async fn the_world_is_picked_at_the_opening_and_frozen_with_the_rules() {
 #[tokio::test]
 async fn a_generated_world_is_frozen_as_the_recipe_that_draws_it() {
     use crate::app::door::realm::map::{GENERATED_MAP_ID, map_handle};
-    use crate::app::door::realm::mapgen::GeneratedMapSpec;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
 
-    let game = create_game(
-        &svc,
-        &test_db,
-        &alice,
-        &crate::app::door::realm::svc::NewRealm {
-            map_id: GENERATED_MAP_ID.to_string(),
-            map_spec: Some(GeneratedMapSpec {
-                // A seed the creator would like: it must not be the one
-                // used, or a creator could shop for a favourable world by
-                // making games until they liked their own corner.
-                seed: 1,
-                continents: 3,
-                islands: 4,
-                territories: 60,
-                names: Vec::new(),
-            }),
-            ..spec("Uncharted", RESET_HOUR)
-        },
-    )
-    .await;
+    let game = create_game(&svc, &test_db, &alice, &drawn(3, 4, 60)).await;
 
     let state = load_state(&svc, game.id).await;
     assert_eq!(state.ruleset.map_id, GENERATED_MAP_ID);
     let stored = state.ruleset.map_spec.clone().expect("a spec is frozen");
-    assert_ne!(stored.seed, 1, "the server picks the seed, not the client");
     assert_eq!((stored.continents, stored.islands), (3, 4));
     assert_eq!(stored.territories, 60);
     assert_eq!(
@@ -1387,43 +1343,23 @@ async fn a_generated_world_is_frozen_as_the_recipe_that_draws_it() {
     assert_eq!(map.territories[0].name, again.territories[0].name);
     assert_eq!(map.grid.cells, again.grid.cells);
 
-    // And the creator is standing on it.
+    // And the first arrival is standing on it.
     assert_eq!(state.ownership.len(), 1);
     let (territory, owner) = state.ownership.iter().next().expect("a spawn");
     assert_eq!(*owner, alice.id);
     assert!(map.territory(*territory).is_some(), "spawned off the map");
 }
 
-/// The shape a creator dials in is not trusted: the service clamps it the
-/// same way the generator does, so an out-of-range client cannot ask for a
-/// world that cannot be built.
+/// The shape is clamped the way the generator clamps it, so no spec can ask
+/// for a world that cannot be built.
 #[tokio::test]
 async fn a_generated_world_clamps_the_shape_it_was_asked_for() {
-    use crate::app::door::realm::map::GENERATED_MAP_ID;
-    use crate::app::door::realm::mapgen::{
-        GEN_MAX_CONTINENTS, GEN_MAX_TERRITORIES, GeneratedMapSpec,
-    };
+    use crate::app::door::realm::mapgen::{GEN_MAX_CONTINENTS, GEN_MAX_TERRITORIES};
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
-    let game = create_game(
-        &svc,
-        &test_db,
-        &alice,
-        &crate::app::door::realm::svc::NewRealm {
-            map_id: GENERATED_MAP_ID.to_string(),
-            map_spec: Some(GeneratedMapSpec {
-                seed: 0,
-                continents: 250,
-                islands: 0,
-                territories: 9_000,
-                names: Vec::new(),
-            }),
-            ..spec("Too much world", RESET_HOUR)
-        },
-    )
-    .await;
+    let game = create_game(&svc, &test_db, &alice, &drawn(250, 0, 9_000)).await;
     let stored = load_state(&svc, game.id)
         .await
         .ruleset
@@ -1433,33 +1369,19 @@ async fn a_generated_world_clamps_the_shape_it_was_asked_for() {
     assert_eq!(stored.territories, GEN_MAX_TERRITORIES);
 }
 
-/// Two realms made from the same request are still two different worlds —
-/// the seed is drawn per game, so "another go at this shape" means another
-/// map rather than the same one again.
+/// Two worlds drawn in the same shape are still two different worlds: the
+/// seed is drawn per game, so "another go at this shape" means another map
+/// rather than the same one again.
 #[tokio::test]
 async fn two_generated_realms_are_two_different_worlds() {
-    use crate::app::door::realm::map::GENERATED_MAP_ID;
-    use crate::app::door::realm::mapgen::GeneratedMapSpec;
-
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
-    let ask = |name: &'static str| crate::app::door::realm::svc::NewRealm {
-        map_id: GENERATED_MAP_ID.to_string(),
-        map_spec: Some(GeneratedMapSpec {
-            seed: 0,
-            continents: 2,
-            islands: 2,
-            territories: 50,
-            names: Vec::new(),
-        }),
-        ..spec(name, RESET_HOUR)
-    };
-    let one = create_game(&svc, &test_db, &alice, &ask("First")).await;
+    let one = create_game(&svc, &test_db, &alice, &drawn(2, 2, 50)).await;
     // One world at a time: the first has to end before the next is drawn.
     let client = test_db.db.get().await.expect("client");
     RealmGame::cancel(&client, one.id).await.expect("cancel");
-    let two = create_game(&svc, &test_db, &alice, &ask("Second")).await;
+    let two = create_game(&svc, &test_db, &alice, &drawn(2, 2, 50)).await;
     let a = load_state(&svc, one.id).await.ruleset.map_spec.unwrap();
     let b = load_state(&svc, two.id).await.ruleset.map_spec.unwrap();
     assert_ne!(a.seed, b.seed);
@@ -1648,7 +1570,7 @@ async fn a_rolled_day_calls_the_players_by_name() {
     }
     assert_eq!(
         called.as_deref(),
-        Some("The Long War"),
+        Some("Season 1"),
         "the summons says which realm is calling"
     );
 }
@@ -1661,7 +1583,7 @@ async fn only_a_realm_with_players_calls_the_lounge() {
     let test_db = new_test_db().await;
     let (svc, mut activity) = realm_service_watching(&test_db);
     let alice = create_test_user(&test_db.db, "realm_lounge_solo").await;
-    let solo = create_game(&svc, &test_db, &alice, &spec("Alone", RESET_HOUR)).await;
+    let solo = create_game(&svc, &test_db, &alice, &spec(RESET_HOUR)).await;
     svc.sweep(Utc::now() + Duration::days(1))
         .await
         .expect("sweep");
@@ -1692,7 +1614,7 @@ async fn only_a_realm_with_players_calls_the_lounge() {
     assert!(
         called.iter().any(|(id, who, what)| *id == shared_id
             && who == "realm"
-            && what == "The Long War calls its players"),
+            && what == "Season 2 calls its players"),
         "a war with players in it calls the lounge: {called:?}"
     );
 }
@@ -1707,7 +1629,7 @@ async fn a_new_realm_is_frozen_until_its_muster_ends() {
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "realm_muster_a").await;
     let bob = create_test_user(&test_db.db, "realm_muster_b").await;
-    let game = create_game(&svc, &test_db, &alice, &spec("Muster", RESET_HOUR)).await;
+    let game = create_game(&svc, &test_db, &alice, &spec(RESET_HOUR)).await;
 
     let state = load_state(&svc, game.id).await;
     let target = nearest_free(&state, alice.id);
@@ -1744,6 +1666,114 @@ async fn a_new_realm_is_frozen_until_its_muster_ends() {
     .expect("the realm is open");
 }
 
+/// A world nobody has marched into yet is an invitation, not an abandoned
+/// game. The day turning over inside its muster, or long after it, never
+/// dissolves it: the house would otherwise end a world the moment its first
+/// reset came round, before the day it promised was out, and open and close
+/// a season every day while it waited for its first player.
+#[tokio::test]
+async fn an_empty_world_stands_until_somebody_marches_in() {
+    use chrono::Timelike;
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    // A reset an hour or two after the opening, so the muster crosses it.
+    let hour = ((Utc::now().hour() + 2) % 24) as i16;
+    let game = open(&svc, &test_db, &spec(hour)).await;
+    let client = test_db.db.get().await.expect("client");
+
+    for later in [Duration::hours(12), Duration::days(3)] {
+        svc.sweep(Utc::now() + later).await.expect("sweep");
+        let standing = RealmGame::live(&client).await.expect("live");
+        assert_eq!(
+            standing.map(|g| (g.id, g.status)),
+            Some((game.id, RealmGame::STATUS_ACTIVE.to_string())),
+            "the same world still stands {later} on"
+        );
+    }
+}
+
+/// The muster always crosses a reset, so somebody who marches in on the
+/// opening day would spend their first protected day frozen. Their clocks
+/// start when play does: on the day the gates open they are new, with the
+/// whole shield ahead of them and no quiet days behind them, like somebody
+/// arriving that morning.
+#[tokio::test]
+async fn an_early_arrival_is_still_new_when_the_muster_ends() {
+    use crate::app::door::realm::resolver::PlayerPhase;
+    use crate::app::door::realm::svc::REALM_MUSTER;
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let alice = create_test_user(&test_db.db, "realm_early_a").await;
+    let game = create_game(&svc, &test_db, &alice, &spec(RESET_HOUR)).await;
+
+    let opens = realm_day(game.created + REALM_MUSTER, RESET_HOUR);
+    let state = load_state(&svc, game.id).await;
+    assert_eq!(state.phase(alice.id, opens), PlayerPhase::New);
+    assert_eq!(
+        i32::from(state.days_until(alice.id, opens, PlayerPhase::Rampup)),
+        state.shield_days(alice.id),
+        "the whole shield is still ahead of her"
+    );
+    assert_eq!(
+        state.player(alice.id).expect("alice").quiet_days(opens),
+        0,
+        "and the frozen day is not a quiet one"
+    );
+}
+
+/// The insert alone makes a world live. There is no second write to promote
+/// it, so nothing that fails between two writes can strand a row that blocks
+/// every season after it.
+#[tokio::test]
+async fn a_world_is_live_from_its_own_insert() {
+    let test_db = new_test_db().await;
+    let house = house(&test_db).await;
+    let client = test_db.db.get().await.expect("client");
+    let game = RealmGame::open_season(
+        &client,
+        1,
+        house.id,
+        "standard",
+        RESET_HOUR,
+        realm_day(Utc::now(), RESET_HOUR),
+        &serde_json::json!({ "revision": 1 }),
+    )
+    .await
+    .expect("insert")
+    .expect("no world was standing");
+    assert_eq!(game.status, RealmGame::STATUS_ACTIVE);
+}
+
+/// Opening a season is claimed in the database before anything is spent on
+/// it. While another replica holds the claim this one opens nothing, so it
+/// never pays for names it would throw away; once the claim is let go, the
+/// next tick opens the world.
+#[tokio::test]
+async fn a_season_being_opened_elsewhere_is_left_to_it() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    house(&test_db).await;
+
+    let mut holder = test_db.db.get().await.expect("holder");
+    let claim = holder.transaction().await.expect("tx");
+    assert!(
+        RealmGame::try_lock_season_opening(&claim)
+            .await
+            .expect("claim")
+    );
+
+    let client = test_db.db.get().await.expect("client");
+    let opened = svc.open_season().await.expect("not an error");
+    assert!(opened.is_none(), "the other replica is opening it");
+    assert!(RealmGame::live(&client).await.expect("live").is_none());
+
+    claim.rollback().await.expect("let go");
+    let opened = svc.open_season().await.expect("open");
+    assert!(opened.is_some(), "the claim is free again");
+}
+
 /// The muster is only worth anything if people hear about it, so creation
 /// announces itself — named, attributed to whoever raised it, and with the
 /// deadline in the line.
@@ -1751,7 +1781,7 @@ async fn a_new_realm_is_frozen_until_its_muster_ends() {
 async fn opening_a_world_announces_it_to_the_house() {
     let test_db = new_test_db().await;
     let (svc, mut activity) = realm_service_watching(&test_db);
-    let game = open(&svc, &test_db, &spec("", RESET_HOUR)).await;
+    let game = open(&svc, &test_db, &spec(RESET_HOUR)).await;
 
     let announced = activity_where(&mut activity, |event| {
         matches!(event.kind, ActivityKind::RealmSeasonOpened { game_id, .. } if game_id == game.id)
@@ -1763,7 +1793,13 @@ async fn opening_a_world_announces_it_to_the_house() {
         ActivityKind::RealmSeasonOpened {
             game_id: game.id,
             season: game.season,
+            opens_in: "a day".to_string(),
         }
+    );
+    assert!(
+        crate::app::activity::filter::lounge_headline(&announced)
+            .is_some_and(|headline| headline.contains("the first point is spent in a day")),
+        "the #lounge headline carries the same deadline"
     );
     assert!(
         announced.action.contains("season 1") && announced.action.contains("gates open in a day"),
@@ -2102,7 +2138,7 @@ async fn a_write_from_another_replica_reaches_this_one_on_the_re_read() {
             RealmEvent::DayRolled {
                 game_id,
                 day: row.last_resolved_day,
-                name: "The Long War".to_string(),
+                name: "Season 1".to_string(),
             },
         ]
     );
@@ -2240,7 +2276,7 @@ async fn a_corrupt_row_leaves_the_listing_without_taking_it_down() {
     // The rotten row is a world that just ended, still in the listing; the
     // sound one is the world standing after it.
     let carol = create_test_user(&test_db.db, "realm_rot_c").await;
-    let rotten = create_game(&svc, &test_db, &carol, &spec("Rotten", RESET_HOUR))
+    let rotten = create_game(&svc, &test_db, &carol, &spec(RESET_HOUR))
         .await
         .id;
     client

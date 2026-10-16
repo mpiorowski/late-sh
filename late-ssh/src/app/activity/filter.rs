@@ -295,9 +295,11 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         // A new world is a day-long invitation to the whole house, and the
         // people it is for are exactly the ones not looking at the ticker
         // when it rises. No `@`: nobody is being told anything personally.
-        ActivityKind::RealmSeasonOpened { season, .. } => Some(format!(
+        ActivityKind::RealmSeasonOpened {
+            season, opens_in, ..
+        } => Some(format!(
             "\u{2694}  A new realm rises: season {season}. The gates are open and the first \
-             point is spent in a day. Press 3, then Realm, to take your spot."
+             point is spent in {opens_in}. Press 3, then Realm, to take your spot."
         )),
         // The fall of a world outlives the ticker like a pot draw does: the
         // conqueror is named so they get the notification, and the house

@@ -22,6 +22,7 @@ use super::map_ui::compact;
 use super::resolver::RealmPlayerStatus;
 use super::state::{RealmState, player_color};
 use super::svc::{FinalPlace, final_table};
+use super::ui::truncate;
 
 /// Rendered over the board, so the map stays visible around the edges — the
 /// world you were just fighting over is the right backdrop for the result.
@@ -232,15 +233,6 @@ fn place_line(
         Style::default().fg(theme::TEXT_FAINT()),
     ));
     Line::from(spans)
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 fn centered(width: u16, height: u16, area: Rect) -> Rect {

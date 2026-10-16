@@ -391,7 +391,7 @@ impl RealmState {
     }
 
     /// Has a countdown on screen moved to another second? The muster clock
-    /// counts down in the board header and in the Lobby row, and nothing
+    /// counts down in the board header and on the hub card, and nothing
     /// else would ask for the frame that shows 1:22 after 1:23.
     fn countdown_ticked(&mut self) -> bool {
         let showing = self
@@ -401,7 +401,7 @@ impl RealmState {
             .and_then(|d| d.muster_left())
             .map(|left| left.num_seconds())
             .or_else(|| {
-                // The Lobby list counts down too, for every realm on it.
+                // The hub card counts down too, for the world it shows.
                 self.snapshot
                     .active_games
                     .iter()
@@ -528,6 +528,8 @@ impl RealmState {
 
     /// Open the full-screen board for a game.
     pub fn open_board(&mut self, game_id: Uuid, return_screen: Screen) {
+        // A picker belongs to the board it was opened over.
+        self.join_draft = None;
         self.board = Some(RealmBoardState {
             game_id,
             return_screen,
@@ -561,6 +563,7 @@ impl RealmState {
     }
 
     pub fn close_board(&mut self) -> Option<Screen> {
+        self.join_draft = None;
         self.board.take().map(|b| b.return_screen)
     }
 

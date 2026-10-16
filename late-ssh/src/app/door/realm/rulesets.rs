@@ -1,15 +1,15 @@
 //! The realm ruleset roster. Every game-mechanic knob lives here as data so
 //! new rulesets are added by appending to `RULESETS`, never by branching game
-//! code. A game freezes a `RealmRulesetSnapshot` into its state JSONB at
-//! creation, so later edits to a ruleset never mutate running games.
+//! code. A game freezes a `RealmRulesetSnapshot` into its state JSONB at its
+//! opening, so later edits to a ruleset never mutate running games.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
 /// How fast a realm runs. Orthogonal to the ruleset: the rules say how a
-/// conquest works, the pace says how long it takes. Picked at creation and
-/// baked into the game's frozen snapshot, so a running game never changes
+/// conquest works, the pace says how long it takes. Picked by the house
+/// (`svc::HOUSE_PACE`) and baked into the game's frozen snapshot, so a running game never changes
 /// tempo underneath its players.
 ///
 /// Everything scales together. More points a day makes the map fill faster,
@@ -87,11 +87,11 @@ pub fn pace_by_id(id: &str) -> Option<&'static RealmPace> {
     PACES.iter().find(|p| p.id == id)
 }
 
-/// A rule a creator can switch on or off for their own game.
+/// A rule a game can be played with on or off.
 ///
 /// Rulesets are whole variants; these are the knobs inside one, and they
-/// exist as data so the create screen is a list rather than a growing pile
-/// of branches. Games store only what was chosen (`RealmRulesetSnapshot::
+/// exist as data so a new one is an entry here rather than a growing pile
+/// of branches. Games store what they were opened with (`RealmRulesetSnapshot::
 /// options`), and anything absent falls back to the default here — so a new
 /// option can be added without touching a single running game.
 pub struct RealmOption {
@@ -307,7 +307,8 @@ pub fn ruleset_by_id(id: &str) -> Option<&'static RealmRuleset> {
     RULESETS.iter().find(|rs| rs.id == id)
 }
 
-/// The serde-owned copy of a ruleset frozen into a game's state at creation.
+/// The serde-owned copy of a ruleset frozen into a game's state at its
+/// opening.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RealmRulesetSnapshot {
     pub id: String,
@@ -359,7 +360,8 @@ pub struct RealmRulesetSnapshot {
     pub fort_defence_per_level: f64,
     #[serde(default = "default_fort_transit_per_level")]
     pub fort_transit_per_level: f64,
-    /// What the creator switched on. Absent entries take the roster default,
+    /// The options the game was opened with. Absent entries take the roster
+    /// default,
     /// so a game frozen before an option existed simply gets it.
     #[serde(default)]
     pub options: BTreeMap<String, bool>,
@@ -387,13 +389,13 @@ pub struct RealmRulesetSnapshot {
     pub min_payout_days: u8,
     #[serde(default = "default_min_payout_territories")]
     pub min_payout_territories: u16,
-    /// The world this game is played on, chosen at creation. Frozen here
+    /// The world this game is played on, chosen at its opening. Frozen here
     /// like every other rule, so a map being retired never strands a game
     /// halfway through.
     #[serde(default = "default_map_id")]
     pub map_id: String,
     /// For a generated world, everything needed to rebuild it: the seed, the
-    /// shape the creator asked for, and the names, which are the one part
+    /// shape it was drawn in, and the names, which are the one part
     /// that cannot be recomputed. `None` for the fixed maps. Frozen with the
     /// rest, so a generated realm is as re-derivable in a year as it is now.
     #[serde(default)]
@@ -402,7 +404,7 @@ pub struct RealmRulesetSnapshot {
 
 impl From<&RealmRuleset> for RealmRulesetSnapshot {
     /// The ruleset at its own tempo — the `slow` pace, which is the rules as
-    /// written. `RealmRulesetSnapshot::at_pace` is what creation uses.
+    /// written. `RealmRulesetSnapshot::at_pace` is what an opening uses.
     fn from(rs: &RealmRuleset) -> Self {
         Self {
             id: rs.id.to_string(),

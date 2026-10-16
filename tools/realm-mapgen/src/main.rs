@@ -3,7 +3,7 @@
 //!   - earth_territories.json: id, iso, name, population, area_km2,
 //!     neighbors, center (grid coords)
 //!   - earth_grid.bin: equirectangular RLE cell grid, u16 territory id per
-//!     cell, 0xFFFF water (format doc in late-ssh lobby/realm/map.rs)
+//!     cell, 0xFFFF water (format doc in late-ssh app/common/worldmap/data.rs)
 //!
 //! Input is downloaded by the developer (public domain), e.g.:
 //!   curl -sL -o tmp/realm/ne_50m.geojson \

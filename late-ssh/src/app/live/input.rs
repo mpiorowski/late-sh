@@ -200,35 +200,8 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
         // is nothing to open. Gone between the frame and the key (the world
         // left the listing): nothing to open.
         LiveSource::Realm(game_id) => {
-            let on_its_board = app.screen == Screen::Realm
-                && app
-                    .realm
-                    .board
-                    .as_ref()
-                    .is_some_and(|board| board.game_id == game_id);
-            let listed = app
-                .realm
-                .live()
-                .into_iter()
-                .chain(app.realm.snapshot.last_finished())
-                .any(|game| game.id == game_id);
-            match (on_its_board, listed) {
-                (true, _) => false,
-                (false, true) => {
-                    let return_screen = return_screen_for_opening(app);
-                    if !app
-                        .realm
-                        .board
-                        .as_ref()
-                        .is_some_and(|b| b.game_id == game_id)
-                    {
-                        app.realm.open_board(game_id, return_screen);
-                    }
-                    app.set_screen(Screen::Realm);
-                    true
-                }
-                (false, false) => false,
-            }
+            let return_screen = return_screen_for_opening(app);
+            crate::app::door::realm::input::open_from_live(app, game_id, return_screen)
         }
     }
 }

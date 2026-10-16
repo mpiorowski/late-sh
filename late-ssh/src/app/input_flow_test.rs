@@ -1673,6 +1673,47 @@ async fn the_realm_board_is_a_backtick_stop() {
     );
 }
 
+/// A lone Esc never reaches the realm board's own keys: it is held as a
+/// pending escape and flushed later. It still has to put the colour picker
+/// away before it puts the board away, and a picker left open when the board
+/// closes does not come back with the next board.
+#[tokio::test]
+async fn a_lone_esc_puts_the_realm_colour_picker_away_first() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::realm::state::RealmJoinDraft;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-esc-picker").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-esc-picker-it");
+    let game_id = uuid::Uuid::new_v4();
+    let picker = || RealmJoinDraft {
+        game_id,
+        game_name: "Season 1".to_string(),
+        color: 0,
+        taken: Vec::new(),
+    };
+
+    app.set_screen(Screen::Games);
+    app.realm.open_board(game_id, Screen::Games);
+    app.set_screen(Screen::Realm);
+    app.realm.join_draft = Some(picker());
+
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(app.realm.join_draft.is_none(), "the picker is put away");
+    assert_eq!(app.screen, Screen::Realm, "and the board stays up");
+    assert!(app.realm.board.is_some());
+
+    app.realm.join_draft = Some(picker());
+    crate::app::door::realm::input::close_board(&mut app);
+    app.realm.open_board(game_id, Screen::Games);
+    assert!(
+        app.realm.join_draft.is_none(),
+        "a closed board takes its picker with it"
+    );
+}
+
 #[tokio::test]
 async fn ctrl_s_opens_shop_from_door_launchers() {
     use crate::app::common::primitives::Screen;
@@ -7032,7 +7073,11 @@ async fn the_map_command_lands_on_the_profiles_map_shelf() {
     wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"/map\r");
-    assert_eq!(app.screen, Screen::Profiles, "the command lands on the page");
+    assert_eq!(
+        app.screen,
+        Screen::Profiles,
+        "the command lands on the page"
+    );
     assert_eq!(app.directory_state.shelf(), Shelf::Map, "on its map shelf");
     app.tick();
     assert!(app.usermap.is_shown(), "the tick asks for the counts");
@@ -7041,7 +7086,10 @@ async fn the_map_command_lands_on_the_profiles_map_shelf() {
     app.handle_input(b" ");
     assert_eq!(app.directory_state.shelf(), Shelf::People);
     app.tick();
-    assert!(!app.usermap.is_shown(), "a shelf nobody looks at counts nothing");
+    assert!(
+        !app.usermap.is_shown(),
+        "a shelf nobody looks at counts nothing"
+    );
     wait_for_render_not_contains(&mut app, "where everyone is").await;
 }
 

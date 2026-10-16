@@ -2438,8 +2438,11 @@ fn dispatch_escape(app: &mut App) {
     // nothing to confirm on the way out: closing the board is not leaving
     // the game, because a running realm cannot be left at all.
     if ctx.screen == Screen::Realm {
-        // The results card peels first: Esc should put the news away before
-        // it puts the whole board away.
+        // The colour picker peels first, then the results card: Esc puts
+        // away what is on top before it puts the whole board away.
+        if app.realm.join_cancel() {
+            return;
+        }
         if app.realm.close_results() {
             return;
         }

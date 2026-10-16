@@ -232,10 +232,13 @@ pub enum ActivityKind {
     /// The first pet of the UTC day cleared the DB chip gate.
     PetPetted,
     /// The house opened the next world and it stands frozen while people
-    /// arrive. The invitation, and the only one with a deadline on it.
+    /// arrive. The invitation, and the only one with a deadline on it:
+    /// `opens_in` is the muster as Realm writes it for a sentence ("a day"),
+    /// so the headline cannot drift from the rule.
     RealmSeasonOpened {
         game_id: Uuid,
         season: i32,
+        opens_in: String,
     },
     /// The world ended: conquered by `winner`, or dissolved when nobody held
     /// it. `pot` is what the conquest paid in all, 0 when it paid nothing.
@@ -629,7 +632,11 @@ impl ActivityEvent {
         Self::new(
             None,
             "realm",
-            ActivityKind::RealmSeasonOpened { game_id, season },
+            ActivityKind::RealmSeasonOpened {
+                game_id,
+                season,
+                opens_in: opens_in.to_string(),
+            },
             format!("rises: season {season} on {world}, the gates open in {opens_in}"),
         )
     }

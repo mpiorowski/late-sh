@@ -364,6 +364,13 @@ resource "kubernetes_deployment_v1" "otel_collector" {
             value = "http://victoriametrics.monitoring.svc.cluster.local:8428/api/v1/write"
           }
 
+          # Soft Go heap target matching the memory_limiter in
+          # otel-collector-config.yaml, under the 512Mi container limit.
+          env {
+            name  = "GOMEMLIMIT"
+            value = "400MiB"
+          }
+
           port {
             name           = "otlp-grpc"
             container_port = 4317
@@ -381,15 +388,18 @@ resource "kubernetes_deployment_v1" "otel_collector" {
 
           resources {
             limits = {
-              cpu    = "200m"
-              memory = "256Mi"
+              cpu    = "500m"
+              memory = "512Mi"
             }
             requests = {
-              cpu    = "25m"
-              memory = "64Mi"
+              cpu    = "50m"
+              memory = "192Mi"
             }
           }
 
+          # The health endpoint shares the collector's CPU budget, so a 1 s
+          # timeout under load reads as dead. Liveness only restarts after
+          # about two minutes of sustained failure.
           liveness_probe {
             http_get {
               path = "/"
@@ -397,6 +407,8 @@ resource "kubernetes_deployment_v1" "otel_collector" {
             }
             initial_delay_seconds = 30
             period_seconds        = 20
+            timeout_seconds       = 5
+            failure_threshold     = 6
           }
 
           readiness_probe {
@@ -406,6 +418,7 @@ resource "kubernetes_deployment_v1" "otel_collector" {
             }
             initial_delay_seconds = 20
             period_seconds        = 10
+            timeout_seconds       = 5
           }
 
           volume_mount {

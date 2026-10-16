@@ -266,6 +266,16 @@ pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
     );
 }
 
+/// `text` cut to `width` characters, an ellipsis standing in for the rest.
+/// Every realm renderer cuts names and labels the same way.
+pub(crate) fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let keep: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{keep}\u{2026}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -38,9 +38,7 @@ pub struct RealmStripView {
 /// a stamp that is old news.
 pub(crate) fn candidates(snapshot: &RealmSnapshot) -> Vec<LiveCandidate> {
     snapshot
-        .live()
-        .into_iter()
-        .chain(snapshot.last_finished())
+        .listed()
         .filter_map(|item| {
             item.news.as_ref().map(|news| LiveCandidate {
                 source: LiveSource::Realm(item.id),
@@ -58,9 +56,7 @@ pub(crate) fn view(
     now: DateTime<Utc>,
 ) -> Option<RealmStripView> {
     snapshot
-        .live()
-        .into_iter()
-        .chain(snapshot.last_finished())
+        .listed()
         .find(|item| item.id == game_id)
         .and_then(|item| {
             item.news.as_ref().map(|news| RealmStripView {

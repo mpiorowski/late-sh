@@ -42,14 +42,16 @@ use crate::app::ai::svc::{AI_MODEL, AiService};
 use crate::app::games::chips::svc::ChipService;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
-use super::map::{GENERATED_MAP_ID, TerritoryId, WorldMap, map_handle, territory_total};
+use super::map::{
+    EARTH_MAP_ID, GENERATED_MAP_ID, TerritoryId, WorldMap, map_handle, territory_total,
+};
 use super::mapgen::{self, GeneratedMapSpec};
 use super::resolver::{
     self, ActionRejected, DayBoard, DayResult, PALETTE_SLOTS, PlayerPhase, RealmAction,
     RealmGameState, RealmNews, RealmNewsKind, RealmPlayer, RealmPlayerStatus, ResolveEnd,
     STATE_VERSION, SplitMix64, day_seed,
 };
-use super::rulesets::{RealmRulesetSnapshot, pace_by_id, ruleset_by_id};
+use super::rulesets::{RealmPace, RealmRuleset, RealmRulesetSnapshot, STANDARD, pace_by_id};
 
 /// How long a world stands frozen after it is opened: the gates are open,
 /// the map, the spawns and the roster are all there to look at, and nothing
@@ -62,6 +64,12 @@ pub const REALM_MUSTER: chrono::Duration = chrono::Duration::hours(24);
 pub fn muster_left(created: DateTime<Utc>, now: DateTime<Utc>) -> Option<chrono::Duration> {
     let left = (created + REALM_MUSTER) - now;
     (left > chrono::Duration::zero()).then_some(left)
+}
+
+/// The first realm day a point can be spent on, in a world opened at
+/// `created`: the day its muster ends on.
+pub fn first_playable_day(created: DateTime<Utc>, reset_hour_utc: i16) -> i32 {
+    realm_day(created + REALM_MUSTER, reset_hour_utc)
 }
 
 /// A countdown for the header, the hub card and the refusal that explains
@@ -95,8 +103,6 @@ pub fn muster_label() -> String {
 /// the history and the log archive stay.
 pub const REALM_RESULTS_HOURS: i64 = 24;
 
-/// The rules the house world runs on (`rulesets::RULESETS`).
-pub const HOUSE_RULESET: &str = "standard";
 /// The house tempo: a season every few weeks, so an arrival at the wrong
 /// moment is never far from the next world (`rulesets::PACES`).
 pub const HOUSE_PACE: &str = "fast";
@@ -104,28 +110,56 @@ pub const HOUSE_PACE: &str = "fast";
 /// and an afternoon in the Americas: the hours the house is fullest.
 pub const HOUSE_RESET_HOUR_UTC: i16 = 18;
 
+/// What a season is opened as, and nothing else: the rules and the tempo are
+/// entries on the rulesets' own rosters, so an unknown one cannot be asked
+/// for, and the map is one of the two kinds the house plays.
+#[derive(Clone)]
+pub struct WorldSpec {
+    pub ruleset: &'static RealmRuleset,
+    pub pace: &'static RealmPace,
+    /// UTC hour the daily points come back. The column's CHECK holds it to
+    /// 0-23.
+    pub reset_hour_utc: i16,
+    pub map: WorldChoice,
+}
+
+/// The world a season is played on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldChoice {
+    Earth,
+    /// A world drawn from a seed the server picks, in this shape. The seed
+    /// and the names are settled at the opening, so what is asked for here
+    /// is three numbers and nothing that could fish for a favourable world.
+    Drawn {
+        continents: u8,
+        islands: u8,
+        territories: u16,
+    },
+}
+
 /// What the house opens for `season`: the standard rules at the house pace,
 /// on Earth for odd seasons and a drawn world for even ones, so the two kinds
 /// of world take turns and nobody plays the same map twice running.
-pub fn house_spec(season: i32) -> NewRealm {
-    let generated = season % 2 == 0;
-    NewRealm {
-        name: String::new(),
-        ruleset_id: HOUSE_RULESET.to_string(),
-        pace_id: HOUSE_PACE.to_string(),
+pub fn house_spec(season: i32) -> WorldSpec {
+    let shape = GeneratedMapSpec::default();
+    WorldSpec {
+        ruleset: &STANDARD,
+        pace: pace_by_id(HOUSE_PACE).expect("the house pace is on the roster"),
         reset_hour_utc: HOUSE_RESET_HOUR_UTC,
-        options: BTreeMap::new(),
-        map_id: match generated {
-            true => GENERATED_MAP_ID.to_string(),
-            false => super::map::EARTH_MAP_ID.to_string(),
+        map: match season % 2 == 0 {
+            true => WorldChoice::Drawn {
+                continents: shape.continents,
+                islands: shape.islands,
+                territories: shape.territories,
+            },
+            false => WorldChoice::Earth,
         },
-        map_spec: generated.then(GeneratedMapSpec::default),
     }
 }
 
 /// A seed for a new generated world. Wall-clock plus a fresh uuid: the map
-/// has to be unguessable before it exists (a creator who could predict it
-/// could re-roll until their own corner looked good) and reproducible after,
+/// has to be unguessable before it exists (anyone who could predict it could
+/// wait for a world where their own corner looked good) and reproducible after,
 /// which is what storing it in the snapshot is for.
 fn rand_seed() -> u64 {
     let bytes = Uuid::now_v7();
@@ -206,7 +240,7 @@ pub fn next_reset(now: DateTime<Utc>, reset_hour_utc: i16) -> DateTime<Utc> {
 /// the whole failure this label prevents. When that instant lands on another
 /// date in the viewer's zone the label says so — a refill at 23:00 UTC is
 /// tomorrow morning for half the world, and the day it belongs to is what a
-/// creator is actually picking.
+/// player is actually planning around.
 pub fn reset_hour_label(reset_hour_utc: i16, viewer_tz: Option<chrono_tz::Tz>) -> String {
     reset_hour_label_at(reset_hour_utc, viewer_tz, Utc::now())
 }
@@ -292,6 +326,12 @@ impl RealmSnapshot {
     pub fn last_finished(&self) -> Option<&RealmGameItem> {
         self.finished_games.first()
     }
+
+    /// The worlds the house still shows: the standing one, and the last one
+    /// that ended while it is listed. What the live strip paints and opens.
+    pub fn listed(&self) -> impl Iterator<Item = &RealmGameItem> {
+        self.live().into_iter().chain(self.last_finished())
+    }
 }
 
 /// Public per-game info: enough for the hub card, the live strip and the
@@ -313,7 +353,7 @@ pub struct RealmGameItem {
     pub revision: u64,
     /// What the pot did once settled; `None` until the sweeper has.
     pub payout: Option<String>,
-    /// What the creator called it, already filled in when they left it blank.
+    /// The world's name: the stored one, else "Season N" (`game_name`).
     pub name: String,
     pub ruleset_id: String,
     pub ruleset_name: String,
@@ -548,72 +588,74 @@ impl RealmService {
 
     // ----- mutations
 
-    /// Open the next season of the house world, when none is standing. The
+    /// Open the next season of the house world, when none is standing: the
     /// house's spec (`house_spec`) for the season number the row will get.
-    /// `None` when a world already stands, which is what a second replica's
-    /// sweeper sees when the first one got there.
-    pub async fn open_season(&self, client: &tokio_postgres::Client) -> Result<Option<RealmGame>> {
-        let season = RealmGame::next_season(client).await?;
-        self.open_world(client, &house_spec(season)).await
+    /// `None` when a world already stands or another replica is opening one.
+    pub async fn open_season(&self) -> Result<Option<RealmGame>> {
+        self.open_world(house_spec).await
     }
 
-    /// Open a world from `spec`. The row is the system user's: nobody is on
-    /// the roster until somebody marches in, so the first point can never be
-    /// spent before the muster the headline announced. `None` when a world
-    /// already stands (`realm_games_one_live`).
+    /// Open a world, `spec` saying what it is for the season number it will
+    /// carry. The opening is claimed in the database first, and everything
+    /// after the claim (the season number, the names the AI is paid for, the
+    /// insert) happens in its one transaction: the loser of a race spends
+    /// nothing, and an opening that dies half way leaves no row and no claim
+    /// behind. The row is the system user's and lands live: nobody is on the
+    /// roster until somebody marches in, and the muster is what holds the
+    /// first point back. `None` when a world already stands or another
+    /// replica holds the claim.
     pub(crate) async fn open_world(
         &self,
-        client: &tokio_postgres::Client,
-        spec: &NewRealm,
+        spec: impl FnOnce(i32) -> WorldSpec,
     ) -> Result<Option<RealmGame>> {
-        if !(0..=23).contains(&spec.reset_hour_utc) {
-            bail!("the daily reset must be a whole hour, 00-23 UTC");
-        }
-        let ruleset = ruleset_by_id(&spec.ruleset_id)
-            .with_context(|| format!("unknown realm ruleset: {}", spec.ruleset_id))?;
-        let pace = pace_by_id(&spec.pace_id)
-            .with_context(|| format!("unknown realm pace: {}", spec.pace_id))?;
-        let mut snapshot = RealmRulesetSnapshot::at_pace(ruleset, pace);
-        // Only options this build knows are stored; anything else would be a
-        // rule nothing enforces.
-        snapshot.options = super::rulesets::OPTIONS
-            .iter()
-            .map(|o| {
-                let on = spec.options.get(o.id).copied().unwrap_or(o.default_on);
-                (o.id.to_string(), on)
-            })
-            .collect();
-        // The map is the creator's pick, and freezes into the snapshot with
-        // everything else: a map retired later never strands a live game.
-        super::map::map_info_by_id(&spec.map_id)
-            .with_context(|| format!("unknown realm map: {}", spec.map_id))?;
-        snapshot.map_id = spec.map_id.clone();
-        if spec.map_id == GENERATED_MAP_ID {
-            // A generated world is drawn from a seed the server picks, not one
-            // the client sends: the seed decides the map, and a client that
-            // chose it could shop for a world where its own first spawn is a
-            // fortress. Names are settled here too, once, because the AI is
-            // not a pure function of the seed and everything after this point
-            // has to be able to rebuild the same world from what was stored.
-            let shape = spec.map_spec.clone().unwrap_or_default();
-            let mut built = GeneratedMapSpec {
-                seed: rand_seed(),
-                names: Vec::new(),
-                ..shape
-            }
-            .normalized();
-            built.names = self
-                .invent_names(built.territories as usize, built.seed)
-                .await;
-            snapshot.map_spec = Some(built);
-        }
+        let mut client = self.db.get().await?;
         // The house's own row. The system user is ensured by the lounge feed
         // at startup; a sweeper tick that runs before it is simply too early
         // and the next one opens the world.
-        let house = match User::find_by_fingerprint(client, SYSTEM_FINGERPRINT).await? {
+        let house = match User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT).await? {
             Some(user) => user.id,
             None => bail!("system user not ensured yet"),
         };
+        let tx = client.transaction().await?;
+        if !RealmGame::try_lock_season_opening(&tx).await? {
+            return Ok(None);
+        }
+        if RealmGame::live(&tx).await?.is_some() {
+            return Ok(None);
+        }
+        let season = RealmGame::next_season(&tx).await?;
+        let spec = spec(season);
+        // The rules, the tempo and the map freeze into the snapshot: a map
+        // or a pace retired later never strands a live game.
+        let mut snapshot = RealmRulesetSnapshot::at_pace(spec.ruleset, spec.pace);
+        match spec.map {
+            WorldChoice::Earth => snapshot.map_id = EARTH_MAP_ID.to_string(),
+            WorldChoice::Drawn {
+                continents,
+                islands,
+                territories,
+            } => {
+                // Drawn from a seed the server picks: the seed decides the
+                // map, and anyone who could choose it could shop for a world
+                // where their own first spawn is a fortress. Names are
+                // settled here too, once, because the AI is not a pure
+                // function of the seed and everything after this point has
+                // to be able to rebuild the same world from what was stored.
+                let mut built = GeneratedMapSpec {
+                    seed: rand_seed(),
+                    continents,
+                    islands,
+                    territories,
+                    names: Vec::new(),
+                }
+                .normalized();
+                built.names = self
+                    .invent_names(built.territories as usize, built.seed)
+                    .await;
+                snapshot.map_id = GENERATED_MAP_ID.to_string();
+                snapshot.map_spec = Some(built);
+            }
+        }
         map_handle(&snapshot.map_id, snapshot.map_spec.as_ref())
             .context("realm map has no board")?;
         let now = Utc::now();
@@ -638,10 +680,10 @@ impl RealmService {
         };
         state.roll_day(today, day_seed(Uuid::nil(), today));
         let Some(game) = RealmGame::open_season(
-            client,
+            &tx,
+            season,
             house,
-            &sanitize_name(&spec.name),
-            &spec.ruleset_id,
+            spec.ruleset.id,
             spec.reset_hour_utc,
             today,
             &serde_json::to_value(&state)?,
@@ -650,20 +692,7 @@ impl RealmService {
         else {
             return Ok(None);
         };
-        // Live from the opening: the row goes straight to active, and the
-        // muster is what holds the first point back.
-        RealmGame::start_cas(
-            client,
-            game.id,
-            house,
-            today,
-            &serde_json::to_value(&state)?,
-            state.revision as i64,
-        )
-        .await?;
-        let game = RealmGame::get(client, game.id)
-            .await?
-            .context("realm game vanished after creation")?;
+        tx.commit().await?;
         // The banner every session gets is derived from the snapshot (so it
         // is raised on every replica); the headline goes out from here, once,
         // so the announcement sits in #lounge history for everyone who was
@@ -674,7 +703,7 @@ impl RealmService {
             &world_label(&state),
             &muster_label(),
         );
-        self.publish(client).await?;
+        self.publish(&client).await?;
         Ok(Some(game))
     }
 
@@ -712,14 +741,17 @@ impl RealmService {
                 );
             }
             let expected = state.revision as i64;
-            let today = realm_day(Utc::now(), game.reset_hour_utc);
+            // Clocks start when play does: an arrival during the muster is
+            // new on the day the gates open, not on a day spent frozen.
+            let joined_day = realm_day(Utc::now(), game.reset_hour_utc)
+                .max(first_playable_day(game.created, game.reset_hour_utc));
             let color = pick_color(&state.taken_colors(), color)?;
             let claimed = (state.claimed_fraction(&map) * 100.0)
                 .round()
                 .clamp(0.0, 100.0) as u8;
             state
                 .players
-                .push(new_player(user_id, username, today, color, claimed));
+                .push(new_player(user_id, username, joined_day, color, claimed));
             state.start_player_count = state.start_player_count.max(state.players.len() as u8);
             let spawn_seed =
                 day_seed(game_id, state.revision as i32) ^ u64::from(user_id.as_u128() as u32);
@@ -963,7 +995,7 @@ impl RealmService {
         // No world standing: the next season rises. Every replica's sweeper
         // tries; the unique index lets exactly one in.
         if RealmGame::live(&client).await?.is_none() {
-            let outcome = match self.open_season(&client).await {
+            let outcome = match self.open_season().await {
                 Ok(Some(game)) => {
                     tracing::info!(game_id = %game.id, season = game.season, "realm season opened");
                     RealmSeasonOpen::Opened
@@ -1145,20 +1177,11 @@ impl RealmService {
         let winner_name = winner
             .and_then(|id| state.player(id))
             .map(|p| p.username.clone());
-        let pot = match winner {
-            Some(winner) if payout_earned(state, 0, winner) => {
-                payout_plan(paying_players(state), state.ruleset.pot_scale)
-                    .iter()
-                    .map(|(_, chips)| *chips)
-                    .sum()
-            }
-            Some(_) | None => 0,
-        };
         self.activity.realm_season_ended(
             game_id,
             game.season,
             winner_name,
-            pot,
+            ended_pot(state, game_id, winner),
             state.start_player_count,
         );
         let svc = self.clone();
@@ -1312,7 +1335,7 @@ impl RealmService {
                     tracing::error!(
                         game_id = %game.id,
                         error = %error,
-                        "realm game row left out of the lobby snapshot"
+                        "realm game row left out of the realm snapshot"
                     );
                 }
                 None
@@ -1358,7 +1381,7 @@ impl RealmService {
     }
 
     /// One batched conversation with the model. Errors are logged and end the
-    /// batching rather than failing creation: a half-named world is finished
+    /// batching rather than failing the opening: a half-named world is finished
     /// from the pool and nobody can tell which country came from where.
     async fn ask_for_names(&self, count: usize, flavour: &str, names: &mut Vec<String>) {
         let schema = serde_json::json!({
@@ -1438,10 +1461,8 @@ impl RealmService {
 
 /// Put a player on the map: a free territory drawn with `spawn_seed`.
 /// Returns false when the world is full, which is the one thing that can
-/// refuse a join outright. The caller owns the seed because the creator's
-/// cannot be derived: their game has no id yet, and anything else they hold
-/// in common across realms (their user id, an empty world) would put them on
-/// the same country every time.
+/// refuse a join outright. The caller owns the seed, drawn from the game and
+/// its revision at the join, so two arrivals never land by the same draw.
 fn spawn_player(
     state: &mut RealmGameState,
     map: &WorldMap,
@@ -1503,47 +1524,6 @@ impl ArchivedDay {
     pub fn day(&self) -> i32 {
         self.result.day
     }
-}
-
-/// Everything a world is opened with, in one piece: the house builds it in
-/// `house_spec`, and tests build their own.
-#[derive(Clone, Debug)]
-pub struct NewRealm {
-    pub name: String,
-    pub ruleset_id: String,
-    pub pace_id: String,
-    /// UTC hour the daily points come back.
-    pub reset_hour_utc: i16,
-    /// Rule toggles, by option id. Anything missing takes its default.
-    pub options: BTreeMap<String, bool>,
-    /// The world to play on, from `map::MAPS`.
-    pub map_id: String,
-    /// For `map::GENERATED_MAP_ID`, the shape the creator asked for. The seed
-    /// and the names are filled in by the service, so what arrives here is
-    /// three numbers and nothing that could be used to fish for a favourable
-    /// world.
-    pub map_spec: Option<GeneratedMapSpec>,
-}
-
-/// How long a game's name may be. Long enough for "The Second Punic War",
-/// short enough to sit in a header next to the ruleset and the roster.
-pub const REALM_NAME_MAX: usize = 32;
-
-/// Tidy a creator-typed name: no control characters, no runaway whitespace,
-/// capped at [`REALM_NAME_MAX`] characters (characters, not bytes — a name in
-/// any script gets the same room).
-pub fn sanitize_name(raw: &str) -> String {
-    let cleaned: String = raw
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    cleaned
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(REALM_NAME_MAX)
-        .collect()
 }
 
 /// The display name of a loaded row.
@@ -1750,6 +1730,21 @@ pub fn final_table(state: &RealmGameState, game_id: Uuid, winner: Option<Uuid>) 
             })
         })
         .collect()
+}
+
+/// What the ending headline says the conquest paid in all, 0 when it paid
+/// nothing. The places `final_table` pays, the list the payout walks, so the
+/// headline cannot promise a place nobody is left to take.
+fn ended_pot(state: &RealmGameState, game_id: Uuid, winner: Option<Uuid>) -> i64 {
+    match winner {
+        Some(winner) if payout_earned(state, 0, winner) => {
+            final_table(state, game_id, Some(winner))
+                .iter()
+                .map(|place| place.chips)
+                .sum()
+        }
+        Some(_) | None => 0,
+    }
 }
 
 /// Whether this player can take a place in the money at all.
@@ -2330,6 +2325,66 @@ mod tests {
         // A realm win is worth more than a day's Asterion escape (4000),
         // which is the whole reason these numbers moved.
         assert!(payout_plan(2, 1.0)[0].1 > 4_000);
+    }
+
+    /// The headline that a world fell names what the conquest paid, and the
+    /// payout walks `final_table`. Players who cleared the win bar size the
+    /// pot whatever became of them, but only the ones still standing take a
+    /// place, so a plan with more places than takers must not be announced
+    /// in full.
+    #[test]
+    fn the_ending_headline_names_only_the_places_that_pay() {
+        let mut state: RealmGameState = serde_json::from_value(serde_json::json!({
+            "version": STATE_VERSION,
+            "revision": 2,
+            "ruleset": serde_json::to_value(RealmRulesetSnapshot::from(
+                &super::super::rulesets::STANDARD,
+            ))
+            .unwrap(),
+            "players": [],
+            "ownership": {},
+            "last_day": null,
+            "start_player_count": 0,
+            "start_day": 20_000
+        }))
+        .expect("state");
+        let bar = state.ruleset.min_active_days_to_win;
+        for (n, status) in [
+            (1u128, "alive"),
+            (2, "kicked"),
+            (3, "kicked"),
+            (4, "kicked"),
+        ] {
+            state.players.push(
+                serde_json::from_value(serde_json::json!({
+                    "user_id": Uuid::from_u128(n),
+                    "username": format!("p{n}"),
+                    "status": status,
+                    "joined_day": 20_000,
+                    "exit_day": null,
+                    "exit_territories": 0,
+                    "active_days": bar
+                }))
+                .expect("player"),
+            );
+        }
+        let winner = Uuid::from_u128(1);
+        for territory in 0..state.ruleset.min_payout_territories {
+            state.ownership.insert(territory, winner);
+        }
+        let game_id = Uuid::from_u128(77);
+
+        let paid: i64 = final_table(&state, game_id, Some(winner))
+            .iter()
+            .map(|place| place.chips)
+            .sum();
+        assert!(paid > 0, "the winner is paid");
+        assert_eq!(ended_pot(&state, game_id, Some(winner)), paid);
+        assert_eq!(
+            ended_pot(&state, game_id, None),
+            0,
+            "a dissolve pays nothing"
+        );
     }
 
     #[test]

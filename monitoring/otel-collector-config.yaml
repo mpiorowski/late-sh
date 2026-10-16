@@ -13,12 +13,18 @@ receivers:
 processors:
   memory_limiter:
     check_interval: 5s
-    limit_mib: 192
-    spike_limit_mib: 64
+    # About 80% of the 512Mi container limit (infra/monitoring.tf), leaving the
+    # rest for the Go runtime. Keep in step with that limit and GOMEMLIMIT.
+    limit_mib: 400
+    spike_limit_mib: 100
   batch:
 
 connectors:
   spanmetrics:
+    # Span names carry the raw path for unmatched routes, so scanner traffic
+    # mints new series without bound. Expire series idle this long so memory
+    # tracks recent traffic instead of growing until the pod is OOMKilled.
+    metrics_expiration: 15m
     # Keep only the dimensions the dashboard needs; everything else stays on current defaults.
     dimensions:
       - name: http.request.method

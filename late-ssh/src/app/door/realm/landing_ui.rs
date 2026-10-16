@@ -19,6 +19,7 @@ use crate::app::door::landing;
 use super::resolver::RealmPlayerStatus;
 use super::state::RealmState;
 use super::svc::{RealmGameItem, countdown_label, muster_left, reset_hour_label};
+use super::ui::truncate;
 
 const LABEL_PAD: usize = 8;
 
@@ -207,14 +208,6 @@ fn world_lines(realm: &RealmState, game: &RealmGameItem, width: usize) -> Vec<Li
         lines.push(landing::stat("you", &mine, LABEL_PAD));
     }
     lines
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let keep: String = text.chars().take(width.saturating_sub(1)).collect();
-    format!("{keep}\u{2026}")
 }
 
 fn title_art() -> Vec<Line<'static>> {

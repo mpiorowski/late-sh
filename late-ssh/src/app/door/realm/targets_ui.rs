@@ -16,6 +16,7 @@ use crate::app::common::theme;
 use super::map_ui::compact;
 use super::resolver::ActionRejected;
 use super::state::{RealmState, TargetRow, points_left};
+use super::ui::truncate;
 
 /// Which columns fit, and how wide the name gets. A table cannot wrap
 /// without losing its alignment, so instead it sheds what it can afford to:
@@ -307,15 +308,6 @@ fn lock_label(locked: &ActionRejected) -> String {
         ActionRejected::DistantAttacksLocked(days) => format!("near {days}d"),
         _ => "locked".to_string(),
     }
-}
-
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 #[cfg(test)]

@@ -120,3 +120,6 @@ One thing that was wrong on the first cut, worth not repeating:
   picker and the map have not drifted apart.
 - `ui_test`: draws at several sizes — while still counting, with tallies (the
   rung colours have to actually reach the screen), and with nothing to show.
+- The host side: `directory/ui_test` draws the page opening on the map shelf
+  (strip, buttons, title, world, footer), and `input_flow_test` walks `/map`
+  onto the shelf, sees the tick turn the counts on, and Space turn them off.

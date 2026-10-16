@@ -541,9 +541,15 @@ fn the_page_opens_on_the_map_shelf() {
     let fixture = fixture();
     let state = DirectoryState::new();
     let lines = render(&fixture, &state, 140, 40);
-    assert!(lines[0].contains("map 0  ·  people 2  ·  jobs"), "{:?}", lines[0]);
     assert!(
-        lines.iter().any(|line| line.contains("[Online]") && line.contains("[Refresh]")),
+        lines[0].contains("map 0  ·  people 2  ·  jobs"),
+        "{:?}",
+        lines[0]
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("[Online]") && line.contains("[Refresh]")),
         "the slice buttons"
     );
     assert!(
