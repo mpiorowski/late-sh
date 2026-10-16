@@ -2003,8 +2003,12 @@ async fn a_write_from_another_replica_reaches_this_one_on_the_re_read() {
 async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
-    let (game_id, ids) =
-        started_game(&svc, &test_db, &["realm_owe_a", "realm_owe_b", "realm_owe_c"]).await;
+    let (game_id, ids) = started_game(
+        &svc,
+        &test_db,
+        &["realm_owe_a", "realm_owe_b", "realm_owe_c"],
+    )
+    .await;
     let alice = ids[0];
     let client = test_db.db.get().await.expect("client");
 
@@ -2066,7 +2070,10 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
     // The sweeper tries and cannot: nothing paid, nothing recorded.
     svc.sweep(Utc::now()).await.expect("sweep");
     let row = svc.load_game(game_id).await.expect("load").expect("row");
-    assert_eq!(row.payout, None, "an unpaid pot is not recorded as anything");
+    assert_eq!(
+        row.payout, None,
+        "an unpaid pot is not recorded as anything"
+    );
     assert_eq!(ledger_rows().await, 0);
 
     // The template is back: the next tick settles it.
@@ -2143,7 +2150,11 @@ async fn a_creator_does_not_start_every_realm_in_the_same_place() {
     let mut spawns = std::collections::BTreeSet::new();
     for n in 0..5 {
         let game = svc
-            .create_game(alice.id, &alice.username, &spec(&format!("War {n}"), RESET_HOUR))
+            .create_game(
+                alice.id,
+                &alice.username,
+                &spec(&format!("War {n}"), RESET_HOUR),
+            )
             .await
             .expect("create");
         let state = parse_state(&game.state).expect("state");
@@ -2167,7 +2178,13 @@ async fn the_board_counts_points_against_the_days_real_allowance() {
     let (game_id, ids) = started_game(
         &svc,
         &test_db,
-        &["realm_cap_a", "realm_cap_b", "realm_cap_c", "realm_cap_d", "realm_cap_e"],
+        &[
+            "realm_cap_a",
+            "realm_cap_b",
+            "realm_cap_c",
+            "realm_cap_d",
+            "realm_cap_e",
+        ],
     )
     .await;
     let state = load_state(&svc, game_id).await;
@@ -2242,5 +2259,9 @@ async fn withdrawing_takes_your_walls_with_you() {
     let state = load_state(&svc, game_id).await;
     assert_eq!(state.ownership.get(&spawn), None, "the ground went back");
     assert_eq!(state.fort_level(spawn), 1, "and so did the walls on it");
-    assert!(state.forts.is_empty(), "nothing left standing: {:?}", state.forts);
+    assert!(
+        state.forts.is_empty(),
+        "nothing left standing: {:?}",
+        state.forts
+    );
 }

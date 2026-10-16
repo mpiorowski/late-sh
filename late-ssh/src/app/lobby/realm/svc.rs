@@ -1736,7 +1736,11 @@ impl std::fmt::Display for RealmSnapshotRowError {
 /// Nothing is derived from an unseeded snapshot: the first read after a
 /// start or a reconnect is a seed, not news. Ordered by game id, so what a
 /// session drains is the same whatever the lists came back in.
-fn derive_events(previous: &RealmSnapshot, next: &RealmSnapshot, now: DateTime<Utc>) -> Vec<RealmEvent> {
+fn derive_events(
+    previous: &RealmSnapshot,
+    next: &RealmSnapshot,
+    now: DateTime<Utc>,
+) -> Vec<RealmEvent> {
     if !previous.seeded {
         return Vec::new();
     }

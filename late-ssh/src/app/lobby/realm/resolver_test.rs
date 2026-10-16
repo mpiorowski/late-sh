@@ -1483,7 +1483,9 @@ fn staying_away_longer_never_shrinks_the_bank() {
     // Each rung is its own rate: the first day at the one-day rate, the rest
     // up to the cutoff at the few-days rate.
     let ladder = rs.bank_rate_one_missed + rs.bank_rate_few_missed * f64::from(cutoff - 1);
-    let expected = (base * ladder).min(base * f64::from(rs.bank_cap_days)).floor() as u8;
+    let expected = (base * ladder)
+        .min(base * f64::from(rs.bank_cap_days))
+        .floor() as u8;
     assert_eq!(standing(cutoff).banked, expected);
     assert_eq!(
         standing(cutoff + 5).banked,
