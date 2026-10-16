@@ -1,44 +1,15 @@
-//! The small pieces every panel of the Lobby modal is built from: a wrapped
-//! blurb, a truncated cell, a selection marker, a section rule, the two span
-//! styles that make a key look like a key, and the centring maths.
+//! The small pieces every panel of the Lobby modal is built from: a padded
+//! cell, a selection marker, a section rule, the two span styles that make a
+//! key look like a key, and the centring maths.
 //!
-//! They live apart from the panels because there is more than one panel now —
-//! the modal draws the daily games and the house tables, `realm/modal_ui.rs`
-//! draws the realm row and its overlays — and a shared widget owned by one of
-//! them would have the other reaching sideways into a sibling.
+//! They live apart from the panels so that every panel of the modal draws
+//! with the same pieces instead of one panel reaching sideways into another.
 
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::common::theme;
-
-pub(super) fn wrap_blurb(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
-pub(super) fn truncate_text(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
 
 pub(super) fn col(text: &str, width: usize) -> String {
     let chars: Vec<char> = text.chars().collect();

@@ -55,55 +55,6 @@ impl RealmView {
     }
 }
 
-/// Where the create-game overlay is: the rules, then the tempo, then the
-/// hour its daily points come back, then a name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CreateStep {
-    Ruleset,
-    /// The world it is fought over. Its own step rather than a property of
-    /// the rules: the same rules on another map is another game.
-    Map,
-    /// The shape of a generated world — continents, islands, countries. Only
-    /// reached when the map picked is the generated one, so choosing Earth
-    /// still walks the same short path it always did.
-    MapShape,
-    Pace,
-    ResetHour,
-    Name,
-    /// Which colour the creator plays in.
-    Color,
-    /// The rule toggles. Last, because everything before it has a sensible
-    /// default and this is where a creator tinkers.
-    Options,
-}
-
-#[derive(Clone, Debug)]
-pub struct RealmCreateDraft {
-    pub step: CreateStep,
-    /// Cursor into `rulesets::OPTIONS`.
-    pub option: usize,
-    /// What is switched on, by option id.
-    pub options: BTreeMap<String, bool>,
-    pub ruleset: usize,
-    /// Cursor into `map::MAPS`.
-    pub map: usize,
-    /// The generated world's parameters, and which of the three the cursor is
-    /// on. Carried even when Earth is picked, so stepping back and forth
-    /// between the maps does not lose what was dialled in.
-    pub shape: super::mapgen::GeneratedMapSpec,
-    pub shape_field: usize,
-    /// Cursor into `state::PLAYER_PALETTES` — the creator's colour. They are
-    /// first, so every colour is theirs to take.
-    pub color: usize,
-    /// Index into `rulesets::PACES`.
-    pub pace: usize,
-    /// UTC hour the game refills at.
-    pub hour: i16,
-    /// What the creator is calling it. Left blank, the service fills in
-    /// "<creator>'s realm".
-    pub name: String,
-}
-
 /// Arriving at a realm someone else is already playing. The only thing to
 /// settle is which colour is yours, and the one thing it must not do is let
 /// two players wear the same one.
@@ -128,9 +79,7 @@ pub struct RealmState {
     snapshot_rx: watch::Receiver<Arc<RealmSnapshot>>,
     event_rx: broadcast::Receiver<RealmEvent>,
     pub board: Option<RealmBoardState>,
-    /// The create-game overlay in the Lobby modal.
-    pub create_draft: Option<RealmCreateDraft>,
-    /// The join overlay: the colour you will be arriving as.
+    /// The join overlay over the board: the colour you will be arriving as.
     pub join_draft: Option<RealmJoinDraft>,
     /// The second a countdown on screen was last drawn at. A muster clock is
     /// the one thing here that changes without anything arriving, so it is
@@ -303,57 +252,6 @@ impl TargetRow {
     }
 }
 
-/// The three numbers a generated world is shaped by, in the order the shape
-/// step shows them.
-pub const SHAPE_FIELDS: [&str; 3] = ["continents", "islands", "countries"];
-
-impl RealmCreateDraft {
-    /// Is the map picked the generated one? The shape step and the spec sent
-    /// to the service both hang off this, so it is asked rather than stored —
-    /// a flag could disagree with the cursor.
-    pub fn generated(&self) -> bool {
-        super::map::MAPS
-            .get(self.map)
-            .is_some_and(|m| m.id == super::map::GENERATED_MAP_ID)
-    }
-
-    /// h/l on the shape step. Countries move in tens because the range is
-    /// 50-400 and nobody wants to press a key 350 times; the two landmass
-    /// counts move one at a time because their ranges are small and every
-    /// step visibly changes the world.
-    pub fn adjust_shape(&mut self, delta: i32) {
-        use super::mapgen::{
-            GEN_MAX_CONTINENTS, GEN_MAX_ISLANDS, GEN_MAX_TERRITORIES, GEN_MIN_TERRITORIES,
-        };
-        match self.shape_field {
-            0 => {
-                self.shape.continents = (self.shape.continents as i32 + delta)
-                    .clamp(0, GEN_MAX_CONTINENTS as i32)
-                    as u8;
-            }
-            1 => {
-                self.shape.islands =
-                    (self.shape.islands as i32 + delta).clamp(0, GEN_MAX_ISLANDS as i32) as u8;
-            }
-            _ => {
-                self.shape.territories = (self.shape.territories as i32 + delta * 10)
-                    .clamp(GEN_MIN_TERRITORIES as i32, GEN_MAX_TERRITORIES as i32)
-                    as u16;
-            }
-        }
-    }
-
-    /// A world with no land is the one combination the generator cannot
-    /// build, so the step says so instead of letting Enter make it.
-    pub fn shape_is_buildable(&self) -> bool {
-        self.shape.continents > 0 || self.shape.islands > 0
-    }
-}
-
-/// What one frame of realm work produced. `changed` is the important half:
-/// realm state arrives from a service task rather than from the keystroke
-/// that asked for it, so nothing else in the frame knows a repaint is due.
-#[derive(Default)]
 pub struct RealmTick {
     pub banner: Option<Banner>,
     pub changed: bool,
@@ -374,7 +272,6 @@ impl RealmState {
             snapshot_rx,
             event_rx,
             board: None,
-            create_draft: None,
             join_draft: None,
         }
     }
@@ -389,31 +286,20 @@ impl RealmState {
         &self.svc
     }
 
-    /// Games I'm in (running, then recently finished), for the modal's realm
-    /// section. A realm is live from creation, so there is no waiting-room
-    /// list any more — `open_games` only ever holds pre-continuous-join rows.
-    pub fn my_games(&self) -> Vec<&super::svc::RealmGameItem> {
-        self.snapshot
-            .open_games
-            .iter()
-            .chain(self.snapshot.active_games.iter())
-            .chain(self.snapshot.finished_games.iter())
-            .filter(|g| g.is_member(self.user_id))
-            .collect()
+    /// The standing world, as the hub card and the board's join key read it.
+    pub fn live(&self) -> Option<&super::svc::RealmGameItem> {
+        self.snapshot.live()
     }
 
-    /// Everyone else's realms: joinable while the map still has room, and
-    /// watchable once it does not.
-    pub fn other_games(&self) -> Vec<&super::svc::RealmGameItem> {
-        self.snapshot
-            .open_games
-            .iter()
-            .chain(self.snapshot.active_games.iter())
-            .filter(|g| !g.is_member(self.user_id))
-            .collect()
+    /// Whether the viewer can march into the standing world right now:
+    /// there is one, they are not already on its roster, and its gates are
+    /// open. The service has the final say when they do.
+    pub fn can_join(&self) -> bool {
+        self.live()
+            .is_some_and(|game| !game.is_member(self.user_id) && game.joinable)
     }
 
-    // ----- join draft (Lobby modal overlay)
+    // ----- join draft (the colour picker over the board)
 
     /// Open the colour picker for a realm about to be joined. Lands on the
     /// first colour nobody there has taken.
@@ -459,232 +345,10 @@ impl RealmState {
         );
     }
 
-    /// Esc on the picker. Returns true when it was open, so the modal knows
-    /// the key was spent here rather than closing the Lobby.
+    /// Esc on the picker. Returns true when it was open, so the board knows
+    /// the key was spent here rather than closing the board.
     pub fn join_cancel(&mut self) -> bool {
         self.join_draft.take().is_some()
-    }
-
-    // ----- create draft (Lobby modal overlay)
-
-    pub fn begin_create_draft(&mut self) {
-        // Default the refill to the viewer's own 18:00, so the common case is
-        // one Enter away; everything else is a scroll.
-        let hour = self.default_reset_hour();
-        self.create_draft = Some(RealmCreateDraft {
-            step: CreateStep::Ruleset,
-            ruleset: 0,
-            map: 0,
-            shape: super::mapgen::GeneratedMapSpec::default(),
-            shape_field: 0,
-            color: 0,
-            pace: super::rulesets::PACES
-                .iter()
-                .position(|p| p.id == super::rulesets::DEFAULT_PACE)
-                .unwrap_or(0),
-            hour,
-            name: String::new(),
-            option: 0,
-            options: super::rulesets::default_options(),
-        });
-    }
-
-    /// The UTC hour that reads as 18:00 on the viewer's own clock (plain
-    /// 18:00 UTC when they have set no zone).
-    fn default_reset_hour(&self) -> i16 {
-        const EVENING: i64 = 18;
-        match self.viewer_tz {
-            Some(tz) => {
-                use chrono::{Offset, TimeZone};
-                let now = Utc::now();
-                let offset_hours = tz
-                    .from_utc_datetime(&now.naive_utc())
-                    .offset()
-                    .fix()
-                    .local_minus_utc() as i64
-                    / 3_600;
-                (EVENING - offset_hours).rem_euclid(24) as i16
-            }
-            None => EVENING as i16,
-        }
-    }
-
-    pub fn draft_move_selection(&mut self, delta: isize) {
-        let Some(draft) = self.create_draft.as_mut() else {
-            return;
-        };
-        match draft.step {
-            CreateStep::Ruleset => {
-                let count = super::rulesets::RULESETS.len() as isize;
-                draft.ruleset = (draft.ruleset as isize + delta).clamp(0, count - 1) as usize;
-            }
-            CreateStep::Map => {
-                let count = super::map::MAPS.len() as isize;
-                draft.map = (draft.map as isize + delta).clamp(0, count - 1) as usize;
-            }
-            CreateStep::MapShape => {
-                draft.shape_field = (draft.shape_field as isize + delta).clamp(0, 2) as usize;
-            }
-            CreateStep::Color => {
-                let count = PLAYER_PALETTES.len() as isize;
-                draft.color = (draft.color as isize + delta).clamp(0, count - 1) as usize;
-            }
-            CreateStep::Pace => {
-                let count = super::rulesets::PACES.len() as isize;
-                draft.pace = (draft.pace as isize + delta).clamp(0, count - 1) as usize;
-            }
-            CreateStep::ResetHour => {
-                // Whole hours only, wrapping around the clock.
-                draft.hour = ((draft.hour as isize + delta).rem_euclid(24)) as i16;
-            }
-            // The name step is typed, not scrolled.
-            CreateStep::Name => {}
-            CreateStep::Options => {
-                let count = super::rulesets::OPTIONS.len() as isize;
-                draft.option = (draft.option as isize + delta).clamp(0, count - 1) as usize;
-            }
-        }
-    }
-
-    /// h/l on the shape step, forwarded to the draft.
-    pub fn draft_adjust_shape(&mut self, delta: i32) {
-        if let Some(draft) = self.create_draft.as_mut()
-            && draft.step == CreateStep::MapShape
-        {
-            draft.adjust_shape(delta);
-        }
-    }
-
-    /// Type into the name. Capped at the same length the service enforces, so
-    /// the overlay can never show something that would be cut on save.
-    pub fn draft_push_name(&mut self, ch: char) {
-        if let Some(draft) = self.create_draft.as_mut()
-            && draft.step == CreateStep::Name
-            && !ch.is_control()
-            && draft.name.chars().count() < super::svc::REALM_NAME_MAX
-        {
-            draft.name.push(ch);
-        }
-    }
-
-    pub fn draft_pop_name(&mut self) {
-        if let Some(draft) = self.create_draft.as_mut()
-            && draft.step == CreateStep::Name
-        {
-            draft.name.pop();
-        }
-    }
-
-    /// Enter on the draft: first Enter picks the ruleset, the second creates
-    /// the game at the chosen hour.
-    pub fn draft_confirm(&mut self) {
-        let Some(draft) = self.create_draft.as_mut() else {
-            return;
-        };
-        match draft.step {
-            CreateStep::Ruleset => draft.step = CreateStep::Map,
-            CreateStep::Map => {
-                draft.step = if draft.generated() {
-                    CreateStep::MapShape
-                } else {
-                    CreateStep::Pace
-                }
-            }
-            CreateStep::MapShape => {
-                if !draft.shape_is_buildable() {
-                    return;
-                }
-                draft.step = CreateStep::Pace;
-            }
-            CreateStep::Pace => draft.step = CreateStep::ResetHour,
-            CreateStep::ResetHour => draft.step = CreateStep::Name,
-            CreateStep::Name => draft.step = CreateStep::Color,
-            CreateStep::Color => draft.step = CreateStep::Options,
-            CreateStep::Options => {
-                let draft = self.create_draft.take().expect("checked above");
-                let ruleset = super::rulesets::RULESETS
-                    [draft.ruleset.min(super::rulesets::RULESETS.len() - 1)]
-                .id;
-                let pace =
-                    super::rulesets::PACES[draft.pace.min(super::rulesets::PACES.len() - 1)].id;
-                let map = super::map::MAPS[draft.map.min(super::map::MAPS.len() - 1)].id;
-                self.svc.create_game_task(
-                    self.user_id,
-                    self.username.clone(),
-                    super::svc::NewRealm {
-                        name: draft.name.clone(),
-                        ruleset_id: ruleset.to_string(),
-                        pace_id: pace.to_string(),
-                        reset_hour_utc: draft.hour,
-                        options: draft.options.clone(),
-                        map_id: map.to_string(),
-                        map_spec: draft.generated().then(|| draft.shape.normalized()),
-                        color: Some(draft.color as u8),
-                    },
-                );
-            }
-        }
-    }
-
-    /// Esc on the draft: step back to the ruleset, or close the overlay.
-    /// Returns true when the overlay is still open.
-    /// Space on the options step: flip the highlighted rule.
-    pub fn draft_toggle_option(&mut self) {
-        let Some(draft) = self.create_draft.as_mut() else {
-            return;
-        };
-        if draft.step != CreateStep::Options {
-            return;
-        }
-        let Some(option) = super::rulesets::OPTIONS.get(draft.option) else {
-            return;
-        };
-        let entry = draft
-            .options
-            .entry(option.id.to_string())
-            .or_insert(option.default_on);
-        *entry = !*entry;
-    }
-
-    pub fn draft_back(&mut self) -> bool {
-        match self.create_draft.as_mut() {
-            Some(draft) if draft.step == CreateStep::Name => {
-                draft.step = CreateStep::ResetHour;
-                true
-            }
-            Some(draft) if draft.step == CreateStep::Options => {
-                draft.step = CreateStep::Color;
-                true
-            }
-            Some(draft) if draft.step == CreateStep::Color => {
-                draft.step = CreateStep::Name;
-                true
-            }
-            Some(draft) if draft.step == CreateStep::ResetHour => {
-                draft.step = CreateStep::Pace;
-                true
-            }
-            Some(draft) if draft.step == CreateStep::Pace => {
-                draft.step = if draft.generated() {
-                    CreateStep::MapShape
-                } else {
-                    CreateStep::Map
-                };
-                true
-            }
-            Some(draft) if draft.step == CreateStep::MapShape => {
-                draft.step = CreateStep::Map;
-                true
-            }
-            Some(draft) if draft.step == CreateStep::Map => {
-                draft.step = CreateStep::Ruleset;
-                true
-            }
-            _ => {
-                self.create_draft = None;
-                false
-            }
-        }
     }
 
     /// Drain snapshot + events; returns at most one banner for this tick.
@@ -849,13 +513,13 @@ impl RealmState {
                     None => Banner::info("Realm: the realm dissolved — nobody held it"),
                 })
             }
-            // A realm stands frozen for its first minutes, and this is the
-            // only window in which everyone can start level — so it
-            // interrupts whatever anyone is doing, wherever they are.
-            RealmEvent::GameCreated { name, opens_at, .. } => {
+            // A world stands frozen for its first day, and this is the only
+            // window in which everyone can start level, so it interrupts
+            // whatever anyone is doing, wherever they are.
+            RealmEvent::SeasonOpened { name, opens_at, .. } => {
                 let left = (opens_at - Utc::now()).max(chrono::Duration::zero());
                 Some(Banner::info(&format!(
-                    "A realm is forming: {name} — it opens in {} · join it from the lobby",
+                    "A new realm rises: {name} · the gates open in {} · press 3, then Realm",
                     countdown_label(left)
                 )))
             }
@@ -933,15 +597,7 @@ impl RealmState {
                 match parse_state(&row.state) {
                     Ok(state) => {
                         board.detail = Some(RealmDetail {
-                            name: super::svc::game_name(
-                                &row.name,
-                                state
-                                    .players
-                                    .iter()
-                                    .find(|p| p.user_id == row.creator_id)
-                                    .map(|p| p.username.as_str())
-                                    .unwrap_or("someone"),
-                            ),
+                            name: super::svc::game_name(&row.name, row.season),
                             row_status: row.status,
                             created: row.created,
                             last_resolved_day: row.last_resolved_day,
@@ -1713,84 +1369,6 @@ pub fn ownership_colors(state: &RealmGameState) -> BTreeMap<TerritoryId, (u8, u8
             (*t, shades[idx])
         })
         .collect()
-}
-
-#[cfg(test)]
-mod draft_test {
-    use super::*;
-    use crate::app::lobby::realm::mapgen::{GEN_MAX_CONTINENTS, GEN_MAX_TERRITORIES};
-
-    fn draft(map: usize) -> RealmCreateDraft {
-        RealmCreateDraft {
-            step: CreateStep::Map,
-            option: 0,
-            options: BTreeMap::new(),
-            ruleset: 0,
-            map,
-            shape: super::super::mapgen::GeneratedMapSpec::default(),
-            shape_field: 0,
-            color: 0,
-            pace: 0,
-            hour: 18,
-            name: String::new(),
-        }
-    }
-
-    fn map_index(id: &str) -> usize {
-        super::super::map::MAPS
-            .iter()
-            .position(|m| m.id == id)
-            .expect("map in the roster")
-    }
-
-    /// The shape step exists for one map. Picking Earth has to walk the same
-    /// path it always did, or every creator pays for a feature they did not
-    /// ask for.
-    #[test]
-    fn only_the_generated_world_asks_for_a_shape() {
-        assert!(!draft(map_index("earth")).generated());
-        assert!(draft(map_index("generated")).generated());
-    }
-
-    #[test]
-    fn the_shape_fields_move_in_their_own_ranges() {
-        let mut d = draft(map_index("generated"));
-        d.shape.continents = 0;
-        d.shape_field = 0;
-        d.adjust_shape(-1);
-        assert_eq!(d.shape.continents, 0, "nothing goes below zero");
-        for _ in 0..40 {
-            d.adjust_shape(1);
-        }
-        assert_eq!(d.shape.continents, GEN_MAX_CONTINENTS);
-
-        // Countries move in tens: the range is 50-400 and a key press has to
-        // be worth pressing.
-        d.shape_field = 2;
-        d.shape.territories = 160;
-        d.adjust_shape(1);
-        assert_eq!(d.shape.territories, 170);
-        for _ in 0..100 {
-            d.adjust_shape(1);
-        }
-        assert_eq!(d.shape.territories, GEN_MAX_TERRITORIES);
-        for _ in 0..100 {
-            d.adjust_shape(-1);
-        }
-        assert_eq!(d.shape.territories, 50);
-    }
-
-    /// A sea with nothing in it is the one shape the generator cannot build,
-    /// so the step refuses rather than quietly inventing a continent.
-    #[test]
-    fn a_world_of_pure_water_cannot_be_confirmed() {
-        let mut d = draft(map_index("generated"));
-        d.shape.continents = 0;
-        d.shape.islands = 0;
-        assert!(!d.shape_is_buildable());
-        d.shape.islands = 1;
-        assert!(d.shape_is_buildable());
-    }
 }
 
 #[cfg(test)]

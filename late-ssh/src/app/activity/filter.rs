@@ -121,9 +121,11 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // a nudge to everyone else that a war is running. Once a day per
         // realm, and only for realms with somebody to call.
         ActivityKind::RealmCalls { .. } => true,
-        // A realm standing open for a couple of minutes: the one line in the
-        // feed with a deadline, which is the whole reason it is posted.
-        ActivityKind::RealmForming { .. } => true,
+        // A world standing open for its first day: the one line in the feed
+        // with a deadline, which is the whole reason it is posted. And its
+        // end, which is the biggest story the realm has.
+        ActivityKind::RealmSeasonOpened { .. } => true,
+        ActivityKind::RealmSeasonEnded { .. } => true,
         // A bought username effect: being seen is the whole product, so the
         // purchase is a story by design.
         ActivityKind::UsernameEffectApplied { .. } => true,
@@ -290,6 +292,37 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         // A post is the ticker's: a headline for every post would be five
         // a day from one account, and the start will headline anyway.
         ActivityKind::EventPosted { .. } => None,
+        // A new world is a day-long invitation to the whole house, and the
+        // people it is for are exactly the ones not looking at the ticker
+        // when it rises. No `@`: nobody is being told anything personally.
+        ActivityKind::RealmSeasonOpened { season, .. } => Some(format!(
+            "\u{2694} A new realm rises: season {season}. The gates are open and the first \
+             point is spent in a day. Press 3, then Realm, to take your spot."
+        )),
+        // The fall of a world outlives the ticker like a pot draw does: the
+        // conqueror is named so they get the notification, and the house
+        // learns the next world is on its way.
+        ActivityKind::RealmSeasonEnded {
+            season,
+            winner,
+            pot,
+            players,
+            ..
+        } => Some(match (winner, *pot) {
+            (Some(winner), 0) => format!(
+                "\u{2694} @{winner} conquered the realm: season {season} is over after {players} \
+                 players, too soon to pay. The next world rises within the day."
+            ),
+            (Some(winner), pot) => format!(
+                "\u{2694} @{winner} conquered the realm: season {season} is over after {players} \
+                 players and {} chips paid. The next world rises within the day.",
+                thousands(pot)
+            ),
+            (None, _) => format!(
+                "\u{2694} Season {season} of the realm fell silent: nobody held it. The next \
+                 world rises within the day."
+            ),
+        }),
         // No headline: @bartender already says it out loud in the room where
         // it was bought, and everyone it reached is online by definition, so a
         // #lounge row would be the third telling of one drink.
@@ -317,7 +350,6 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         // The ticker line is the whole story, and a daily @mention of
         // everyone in a realm would be a chore rather than news.
         | ActivityKind::RealmCalls { .. }
-        | ActivityKind::RealmForming { .. }
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, error::SqlState};
 use uuid::Uuid;
 
 /// The notify channel a row-level trigger (migration 241) fires on every
@@ -9,19 +9,21 @@ use uuid::Uuid;
 /// the payload is empty and never trusted.
 pub const REALM_GAME_CHANGED_CHANNEL: &str = "realm_game_changed";
 
-// One realm game. `name` is the creator's label for it (empty means the
-// service fills in "<creator>'s realm"); `reset_hour_utc` (0-23) is when this game's action points
-// refill, picked at creation so a game can run on its players' clock rather
-// than a global midnight; `last_resolved_day` is the last realm day the
-// sweeper closed out (log archived, idle clocks checked); `payout` is what
-// the pot did once a finished game was settled (`paid`, `unearned`,
-// `dissolved`), NULL until it has been.
+// One realm game: a season of the house's standing world. `season` numbers
+// the worlds in order (0 on rows from before the house opened them);
+// `name` is the world's label; `reset_hour_utc` (0-23) is when its action
+// points refill; `last_resolved_day` is the last realm day the sweeper
+// closed out (log archived, idle clocks checked); `payout` is what the pot
+// did once a finished game was settled (`paid`, `unearned`, `dissolved`),
+// NULL until it has been. At most one row is open or active at a time
+// (`realm_games_one_live`).
 crate::model! {
     table = "realm_games";
     params = RealmGameParams;
     struct RealmGame {
         @data
         pub status: String,
+        pub season: i32,
         pub creator_id: Uuid,
         pub name: String,
         pub ruleset_id: String,
@@ -69,7 +71,12 @@ impl RealmGame {
     pub const PAYOUT_UNEARNED: &'static str = "unearned";
     pub const PAYOUT_DISSOLVED: &'static str = "dissolved";
 
-    pub async fn create_game(
+    /// Open the next world. `None` when a world is already standing: the
+    /// partial unique index `realm_games_one_live` refuses a second open or
+    /// active row, which is how two replicas opening the same season at
+    /// once settle on one. The season number is taken inside the same
+    /// statement, so it cannot be handed out twice either.
+    pub async fn open_season(
         client: &Client,
         creator_id: Uuid,
         name: &str,
@@ -77,13 +84,15 @@ impl RealmGame {
         reset_hour_utc: i16,
         last_resolved_day: i32,
         state: &Value,
-    ) -> Result<Self> {
-        let row = client
+    ) -> Result<Option<Self>> {
+        let inserted = client
             .query_one(
                 "INSERT INTO realm_games
-                     (status, creator_id, name, ruleset_id, reset_hour_utc,
+                     (status, season, creator_id, name, ruleset_id, reset_hour_utc,
                       last_resolved_day, state)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 VALUES ($1,
+                         (SELECT COALESCE(MAX(season), 0) + 1 FROM realm_games),
+                         $2, $3, $4, $5, $6, $7)
                  RETURNING *",
                 &[
                     &Self::STATUS_OPEN,
@@ -95,25 +104,39 @@ impl RealmGame {
                     state,
                 ],
             )
-            .await?;
-        Ok(Self::from(row))
+            .await;
+        match inserted {
+            Ok(row) => Ok(Some(Self::from(row))),
+            Err(error) if error.code() == Some(&SqlState::UNIQUE_VIOLATION) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
-    /// Open or active games the user is a member of (creator or joined) —
-    /// the entry-cap input. Membership lives in the state JSONB's players
-    /// array; `@>` with a partial object matches on user_id alone.
-    pub async fn count_active_memberships(client: &Client, user_id: Uuid) -> Result<i64> {
+    /// The number the next world will carry: one past the highest so far.
+    /// `open_season` computes the same inside its insert; this is for naming
+    /// what is about to be opened.
+    pub async fn next_season(client: &Client) -> Result<i32> {
         let row = client
             .query_one(
-                "SELECT COUNT(*)::bigint AS count
-                 FROM realm_games
-                 WHERE status IN ('open', 'active')
-                   AND state->'players' @> jsonb_build_array(jsonb_build_object('user_id', $1::uuid))",
-                &[&user_id],
+                "SELECT (COALESCE(MAX(season), 0) + 1)::int AS season FROM realm_games",
+                &[],
             )
             .await?;
-        let count: i64 = row.get("count");
-        Ok(count)
+        Ok(row.get("season"))
+    }
+
+    /// The standing world: the one open or active row, if there is one.
+    pub async fn live(client: &Client) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM realm_games
+                 WHERE status IN ('open', 'active')
+                 ORDER BY created DESC, id DESC
+                 LIMIT 1",
+                &[],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     pub async fn list_open(client: &Client) -> Result<Vec<Self>> {

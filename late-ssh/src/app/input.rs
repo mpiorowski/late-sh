@@ -1454,6 +1454,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     // will, but the match still has to be exhaustive.
                     HubGame::NightCity
                     | HubGame::Lateania
+                    | HubGame::Realm
                     | HubGame::Minecraft
                     | HubGame::VintageStory
                     | HubGame::Rebels
@@ -1593,6 +1594,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
         }
+        // The standing world, play or watch alike: the board is the same
+        // and joining happens from it (`j`), after seeing the map. Nothing
+        // to open between seasons, which lasts a sweeper tick at most.
+        HubGame::Realm => crate::app::door::realm::input::open_realm(app),
         // Played from the game client, not the terminal: the landing says
         // how to connect and there is nothing to launch.
         HubGame::Minecraft | HubGame::VintageStory => {}
@@ -2029,7 +2034,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if door_games_allows_global_help(event) {
             return false;
         }
-        return crate::app::lobby::realm::input::handle_event(app, event);
+        return crate::app::door::realm::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::Scratchpad {
@@ -2443,7 +2448,7 @@ fn dispatch_escape(app: &mut App) {
         crate::app::lobby::daily::board_input::close_board(app);
         return;
     }
-    // Esc from the realm screen drops back to the Lobby modal. There is
+    // Esc from the realm board drops back to the Games hub. There is
     // nothing to confirm on the way out: closing the board is not leaving
     // the game, because a running realm cannot be left at all.
     if ctx.screen == Screen::Realm {
@@ -2452,7 +2457,7 @@ fn dispatch_escape(app: &mut App) {
         if app.realm.close_results() {
             return;
         }
-        crate::app::lobby::realm::input::close_board(app);
+        crate::app::door::realm::input::close_board(app);
         return;
     }
     // Esc from a house table mirrors the daily board: peel chat selection
@@ -3836,7 +3841,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.lobby.mark_seen(&app.daily, &app.realm);
+    app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;
 }
 

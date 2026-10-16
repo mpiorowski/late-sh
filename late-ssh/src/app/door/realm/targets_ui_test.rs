@@ -3,8 +3,8 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use super::{Columns, target_line};
 use crate::app::common::theme;
-use crate::app::lobby::realm::rulesets::{Reach, RouteMode};
-use crate::app::lobby::realm::state::TargetRow;
+use crate::app::door::realm::rulesets::{Reach, RouteMode};
+use crate::app::door::realm::state::TargetRow;
 
 fn row(name: &str, mine: bool) -> TargetRow {
     TargetRow {

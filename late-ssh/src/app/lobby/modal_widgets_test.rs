@@ -1,21 +1,4 @@
-use super::{col, wrap_blurb};
-
-#[test]
-fn a_blurb_wraps_on_words_and_fits() {
-    let text = "reach anywhere on the map at collapsing odds · off keeps war to your \
-                own neighbourhood";
-    let lines = wrap_blurb(text, 30);
-    assert!(lines.len() > 1, "a long blurb has to break somewhere");
-    for line in &lines {
-        assert!(line.chars().count() <= 30, "{line:?} is too wide");
-        assert!(!line.starts_with(' '), "{line:?} starts mid-gap");
-    }
-    // Nothing is lost in the breaking.
-    assert_eq!(
-        lines.join(" ").split_whitespace().collect::<Vec<_>>(),
-        text.split_whitespace().collect::<Vec<_>>()
-    );
-}
+use super::col;
 
 #[test]
 fn col_pads_short_text_to_width() {

@@ -375,7 +375,7 @@ pub fn compact(n: u64) -> String {
 mod tests {
     use super::*;
     use crate::app::common::worldmap::view::{MIN_SCALE, ZOOM_STEP, max_scale};
-    use crate::app::lobby::realm::map::map_by_id;
+    use crate::app::door::realm::map::map_by_id;
 
     /// Perceptual distance, so "these two look alike" is a number rather
     /// than an opinion. CIELAB ΔE76: under about 10 two fills are easy to
@@ -416,8 +416,8 @@ mod tests {
     /// colour and nobody noticed until someone played them together.
     #[test]
     fn no_two_map_fills_look_alike() {
-        use crate::app::lobby::realm::resolver::PALETTE_SLOTS;
-        use crate::app::lobby::realm::state::PLAYER_PALETTES;
+        use crate::app::door::realm::resolver::PALETTE_SLOTS;
+        use crate::app::door::realm::state::PLAYER_PALETTES;
         // The service hands out colours by index against this count, so a
         // palette shorter than it would offer a colour that does not exist.
         assert_eq!(PLAYER_PALETTES.len(), PALETTE_SLOTS as usize);

@@ -1,18 +1,25 @@
 use chrono::{Duration, Utc};
 use late_core::{
-    models::realm_game::RealmGame,
+    models::{
+        realm_game::RealmGame,
+        user::{User, UserParams},
+    },
     test_utils::{TestDb, create_test_user},
 };
 use uuid::Uuid;
 
+use crate::app::activity::event::{ActivityEvent, ActivityKind};
+use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
 use crate::app::activity::publisher::ActivityPublisher;
-use crate::app::games::chips::svc::ChipService;
-use crate::app::lobby::realm::map::TerritoryId;
-use crate::app::lobby::realm::resolver::{RealmAction, RealmGameState, RealmPlayerStatus};
-use crate::app::lobby::realm::svc::{
-    REALM_MAX_ACTIVE_GAMES, RealmService, next_reset, parse_state, realm_day, reset_hour_label,
+use crate::app::door::realm::map::TerritoryId;
+use crate::app::door::realm::resolver::{
+    RealmAction, RealmGameState, RealmNewsKind, RealmPlayerStatus,
+};
+use crate::app::door::realm::svc::{
+    NewRealm, RealmService, next_reset, parse_state, realm_day, reset_hour_label,
     reset_hour_label_at,
 };
+use crate::app::games::chips::svc::ChipService;
 use crate::test_helpers::new_test_db;
 use tokio::sync::broadcast;
 
@@ -21,8 +28,8 @@ use tokio::sync::broadcast;
 const RESET_HOUR: i16 = 0;
 
 /// The usual game: standard rules at the slow tempo, default options.
-fn spec(name: &str, hour: i16) -> crate::app::lobby::realm::svc::NewRealm {
-    crate::app::lobby::realm::svc::NewRealm {
+fn spec(name: &str, hour: i16) -> NewRealm {
+    NewRealm {
         name: name.to_string(),
         ruleset_id: "standard".to_string(),
         pace_id: "slow".to_string(),
@@ -30,8 +37,70 @@ fn spec(name: &str, hour: i16) -> crate::app::lobby::realm::svc::NewRealm {
         options: Default::default(),
         map_id: "earth".to_string(),
         map_spec: None,
-        color: None,
     }
+}
+
+/// The house's own account, which the lounge feed ensures at startup and a
+/// test has to make itself: the world's row is the system user's.
+async fn house(test_db: &TestDb) -> User {
+    let client = test_db.db.get().await.expect("db");
+    match User::find_by_fingerprint(&client, SYSTEM_FINGERPRINT)
+        .await
+        .expect("find system user")
+    {
+        Some(user) => user,
+        None => User::create(
+            &client,
+            UserParams {
+                fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                username: SYSTEM_USERNAME.to_string(),
+                settings: serde_json::json!({ "bot": true, "system": true }),
+            },
+        )
+        .await
+        .expect("create system user"),
+    }
+}
+
+/// Open a world from `spec`, the way the house does: nobody on it yet.
+async fn open(svc: &RealmService, test_db: &TestDb, spec: &NewRealm) -> RealmGame {
+    house(test_db).await;
+    let client = test_db.db.get().await.expect("db");
+    svc.open_world(&client, spec)
+        .await
+        .expect("open world")
+        .expect("no world was standing")
+}
+
+/// Open a world and march `user` straight in, which is what "creating a
+/// game" amounts to now: the row is the house's, and the first player is a
+/// joiner like every player after them.
+async fn create_game(svc: &RealmService, test_db: &TestDb, user: &User, spec: &NewRealm) -> RealmGame {
+    let game = open(svc, test_db, spec).await;
+    svc.join_game(user.id, &user.username, game.id, None)
+        .await
+        .expect("join the new world");
+    svc.load_game(game.id)
+        .await
+        .expect("load")
+        .expect("the world is there")
+}
+
+/// The next activity event `matches`, or a panic after a few seconds.
+async fn activity_where(
+    activity: &mut broadcast::Receiver<ActivityEvent>,
+    matches: impl Fn(&ActivityEvent) -> bool,
+) -> ActivityEvent {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = activity.recv().await.expect("activity");
+            if matches(&event) {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("the event was published")
 }
 
 fn realm_service(test_db: &TestDb) -> RealmService {
@@ -59,22 +128,14 @@ fn realm_service_watching(
     )
 }
 
-/// Create + start a standard game with the given players; returns the game id.
+/// Open a standard world and march the given players in; returns the game id.
 async fn started_game(svc: &RealmService, test_db: &TestDb, names: &[&str]) -> (Uuid, Vec<Uuid>) {
     let mut ids = Vec::new();
     for name in names {
         ids.push(create_test_user(&test_db.db, name).await);
     }
-    let creator = &ids[0];
-    let game = svc
-        .create_game(
-            creator.id,
-            &creator.username,
-            &spec("The Long War", RESET_HOUR),
-        )
-        .await
-        .expect("create game");
-    for user in &ids[1..] {
+    let game = open(svc, test_db, &spec("The Long War", RESET_HOUR)).await;
+    for user in &ids {
         svc.join_game(user.id, &user.username, game.id, None)
             .await
             .expect("join game");
@@ -83,14 +144,14 @@ async fn started_game(svc: &RealmService, test_db: &TestDb, names: &[&str]) -> (
     (game.id, ids.iter().map(|u| u.id).collect())
 }
 
-/// Wind a realm's opening muster into the past, so a test that is not about
-/// the muster can act right away. The freeze is five wall-clock minutes long
-/// and nobody should wait them out to assert something else.
+/// Wind a world's opening muster into the past, so a test that is not about
+/// the muster can act right away. The freeze is a wall-clock day long and
+/// nobody should wait it out to assert something else.
 async fn open_the_doors(test_db: &TestDb, game_id: Uuid) {
     let client = test_db.db.get().await.expect("db");
     client
         .execute(
-            "UPDATE realm_games SET created = created - INTERVAL '1 hour' WHERE id = $1",
+            "UPDATE realm_games SET created = created - INTERVAL '2 days' WHERE id = $1",
             &[&game_id],
         )
         .await
@@ -126,8 +187,8 @@ async fn claim_until_taken(svc: &RealmService, game_id: Uuid, user_id: Uuid, tar
 /// The moves in a day's log, without the arrivals. Spawns are logged too —
 /// the map's history cannot be replayed otherwise — but a test about acting
 /// is not a test about who turned up.
-fn moves(entries: &[crate::app::lobby::realm::resolver::LogEntry]) -> usize {
-    use crate::app::lobby::realm::resolver::LogEntry;
+fn moves(entries: &[crate::app::door::realm::resolver::LogEntry]) -> usize {
+    use crate::app::door::realm::resolver::LogEntry;
     entries
         .iter()
         .filter(|entry| !matches!(entry, LogEntry::Spawned { .. } | LogEntry::Left { .. }))
@@ -143,8 +204,8 @@ async fn load_state(svc: &RealmService, game_id: Uuid) -> RealmGameState {
 /// spawn can land on an island with no land border at all, so this falls back
 /// to the closest free land by hops rather than assuming a neighbour.
 fn nearest_free(state: &RealmGameState, user_id: Uuid) -> TerritoryId {
-    let map = crate::app::lobby::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
-    let index = crate::app::lobby::realm::resolver::ReachIndex::build(
+    let map = crate::app::door::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
+    let index = crate::app::door::realm::resolver::ReachIndex::build(
         state,
         &map,
         user_id,
@@ -185,41 +246,20 @@ async fn wait_for_payout(test_db: &TestDb, user_id: Uuid) -> Option<i64> {
 }
 
 #[tokio::test]
-async fn a_realm_is_live_from_creation_and_takes_comers() {
+async fn a_world_is_live_from_its_opening_and_takes_comers() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "realm_alice").await;
     let bob = create_test_user(&test_db.db, "realm_bob").await;
+    let client = test_db.db.get().await.expect("client");
 
-    let game = svc
-        .create_game(
-            alice.id,
-            &alice.username,
-            &spec("  Spring   Offensive  ", 18),
-        )
-        .await
-        .expect("create");
-    // No waiting room and no starting gun: it is being played already.
-    assert_eq!(game.status, RealmGame::STATUS_ACTIVE);
-    assert_eq!(game.reset_hour_utc, 18, "the chosen hour is persisted");
-    assert_eq!(
-        game.name, "Spring Offensive",
-        "the name is tidied, not taken raw"
-    );
-    let state = parse_state(&game.state).expect("state");
-    assert_eq!(state.territory_count(alice.id), 1, "the creator spawns");
-    assert_eq!(
-        state.points_left(alice.id, realm_day(Utc::now(), 18)),
-        7,
-        "alone on a whole world, on the most generous tier"
-    );
-
-    // Unknown ruleset and an impossible hour are still refused.
+    // Unknown ruleset and an impossible hour are refused before anything
+    // is written.
+    house(&test_db).await;
     assert!(
-        svc.create_game(
-            alice.id,
-            &alice.username,
-            &crate::app::lobby::realm::svc::NewRealm {
+        svc.open_world(
+            &client,
+            &NewRealm {
                 ruleset_id: "nope".into(),
                 ..spec("x", RESET_HOUR)
             }
@@ -227,10 +267,36 @@ async fn a_realm_is_live_from_creation_and_takes_comers() {
         .await
         .is_err()
     );
-    assert!(
-        svc.create_game(alice.id, &alice.username, &spec("x", 24))
-            .await
-            .is_err()
+    assert!(svc.open_world(&client, &spec("x", 24)).await.is_err());
+
+    let game = open(&svc, &test_db, &spec("  Spring   Offensive  ", 18)).await;
+    // No waiting room and no starting gun: it is being played already, by
+    // nobody yet. The row is the house's and the season is numbered.
+    assert_eq!(game.status, RealmGame::STATUS_ACTIVE);
+    assert_eq!(game.season, 1, "the first world the house opened");
+    assert_eq!(game.reset_hour_utc, 18, "the chosen hour is persisted");
+    assert_eq!(
+        game.name, "Spring Offensive",
+        "the name is tidied, not taken raw"
+    );
+    let state = parse_state(&game.state).expect("state");
+    assert!(state.players.is_empty(), "nobody has marched in");
+    assert_eq!(
+        state.news.as_ref().map(|n| &n.kind),
+        Some(&RealmNewsKind::Opened),
+        "the opening is the first thing the strip can read"
+    );
+
+    // The first to arrive is a joiner like everyone after them.
+    svc.join_game(alice.id, &alice.username, game.id, None)
+        .await
+        .expect("alice joins");
+    let state = load_state(&svc, game.id).await;
+    assert_eq!(state.territory_count(alice.id), 1, "she spawns on arrival");
+    assert_eq!(
+        state.points_left(alice.id, realm_day(Utc::now(), 18)),
+        7,
+        "alone on a whole world, on the most generous tier"
     );
 
     // Somebody turns up later and simply joins the war in progress.
@@ -247,9 +313,117 @@ async fn a_realm_is_live_from_creation_and_takes_comers() {
     assert_eq!(state.territory_count(bob.id), 1, "and spawns on arrival");
     assert_eq!(
         state.phase(bob.id, realm_day(Utc::now(), 18)),
-        crate::app::lobby::realm::resolver::PlayerPhase::New,
+        crate::app::door::realm::resolver::PlayerPhase::New,
         "with his own first days to find his feet"
     );
+    // His arrival is the world's latest moment, colour and all, for the
+    // strip to read off the row.
+    assert_eq!(
+        state.news.as_ref().map(|n| n.kind.clone()),
+        Some(RealmNewsKind::Joined {
+            user_id: bob.id,
+            username: bob.username.clone(),
+            color: state.player(bob.id).expect("bob").color.expect("a colour"),
+        })
+    );
+}
+
+/// The house keeps one world standing. A sweeper tick that finds none opens
+/// the next season, numbered on from the last, on the standard rules at the
+/// house pace, Earth and a drawn world taking turns; a tick that finds one
+/// standing opens nothing; and the house hears about every opening.
+#[tokio::test]
+async fn the_house_raises_the_next_world_when_none_stands() {
+    use crate::app::door::realm::map::GENERATED_MAP_ID;
+    use crate::app::door::realm::svc::{HOUSE_RESET_HOUR_UTC, REALM_MUSTER};
+
+    let test_db = new_test_db().await;
+    let (svc, mut activity) = realm_service_watching(&test_db);
+    house(&test_db).await;
+    let client = test_db.db.get().await.expect("client");
+    assert!(RealmGame::live(&client).await.expect("live").is_none());
+
+    svc.sweep(Utc::now()).await.expect("sweep");
+    let first = RealmGame::live(&client)
+        .await
+        .expect("live")
+        .expect("the first world stands");
+    assert_eq!(first.season, 1);
+    assert_eq!(first.status, RealmGame::STATUS_ACTIVE);
+    assert_eq!(first.reset_hour_utc, HOUSE_RESET_HOUR_UTC);
+    let state = parse_state(&first.state).expect("state");
+    assert_eq!(state.ruleset.map_id, "earth", "odd seasons are played on Earth");
+    assert_eq!(state.ruleset.pace_name, "Fast");
+    assert!(state.players.is_empty());
+    assert!(
+        svc.act_at(
+            Uuid::nil(),
+            first.id,
+            RealmAction::Claim { target: 0 },
+            Utc::now()
+        )
+        .await
+        .is_err(),
+        "frozen while it musters"
+    );
+    assert!(
+        crate::app::door::realm::svc::muster_left(first.created, Utc::now() + REALM_MUSTER / 2)
+            .is_some(),
+        "the muster is a day long"
+    );
+
+    // Standing worlds are left alone.
+    svc.sweep(Utc::now()).await.expect("sweep");
+    let standing: i64 = client
+        .query_one(
+            "SELECT COUNT(*)::bigint AS n FROM realm_games WHERE status IN ('open', 'active')",
+            &[],
+        )
+        .await
+        .expect("count")
+        .get("n");
+    assert_eq!(standing, 1, "one world at a time");
+
+    // It falls; the next tick raises the next one, on the other kind of world.
+    RealmGame::cancel(&client, first.id).await.expect("cancel");
+    svc.sweep(Utc::now()).await.expect("sweep");
+    let second = RealmGame::live(&client)
+        .await
+        .expect("live")
+        .expect("the second world stands");
+    assert_eq!(second.season, 2);
+    let state = parse_state(&second.state).expect("state");
+    assert_eq!(state.ruleset.map_id, GENERATED_MAP_ID, "even seasons are drawn");
+    assert!(state.ruleset.map_spec.is_some());
+
+    for (game_id, season) in [(first.id, 1), (second.id, 2)] {
+        let opened = activity_where(&mut activity, |event| {
+            matches!(event.kind, ActivityKind::RealmSeasonOpened { game_id: g, .. } if g == game_id)
+        })
+        .await;
+        assert_eq!(opened.kind, ActivityKind::RealmSeasonOpened { game_id, season });
+    }
+}
+
+/// Two replicas' sweepers both find no world and both open one: the second
+/// insert is refused by the table, not by luck, and reads as "somebody got
+/// there first" rather than an error.
+#[tokio::test]
+async fn only_one_world_stands_at_a_time() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    house(&test_db).await;
+    let client = test_db.db.get().await.expect("client");
+    let first = svc
+        .open_world(&client, &spec("First", RESET_HOUR))
+        .await
+        .expect("open");
+    assert!(first.is_some());
+    let second = svc
+        .open_world(&client, &spec("Second", RESET_HOUR))
+        .await
+        .expect("the second open is not an error");
+    assert!(second.is_none(), "but it opens nothing");
 }
 
 #[tokio::test]
@@ -261,7 +435,7 @@ async fn the_doors_close_once_the_map_is_half_carved_up() {
     let client = test_db.db.get().await.expect("client");
 
     let mut state = load_state(&svc, game_id).await;
-    let map = crate::app::lobby::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
+    let map = crate::app::door::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
     assert!(state.joinable(&map), "a fresh realm takes comers");
 
     // Carve the world up past the threshold.
@@ -337,7 +511,7 @@ async fn a_spectator_can_look_but_never_act() {
     let client = test_db.db.get().await.expect("client");
     let mut locked = load_state(&svc, game_id).await;
     let expected = locked.revision as i64;
-    let map = crate::app::lobby::realm::map::map_by_id(&locked.ruleset.map_id).expect("map");
+    let map = crate::app::door::realm::map::map_by_id(&locked.ruleset.map_id).expect("map");
     let limit = (map.territories.len() as f64 * locked.ruleset.join_max_claimed).ceil() as u16;
     for t in 0..limit {
         locked.ownership.insert(t, ids[0]);
@@ -455,7 +629,7 @@ async fn the_final_table_is_what_the_pot_actually_paid() {
     // Hers except one: a realm ends when a player holds the *whole* map, so
     // the position under test is one territory short of that.
     let map =
-        crate::app::lobby::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
+        crate::app::door::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
     let last = map.territories.len() as u16 - 1;
     state.ownership.clear();
     for territory in 0..last {
@@ -472,7 +646,7 @@ async fn the_final_table_is_what_the_pot_actually_paid() {
     .expect("write state");
 
     let state = load_state(&svc, game_id).await;
-    let table = crate::app::lobby::realm::svc::final_table(&state, game_id, Some(alice));
+    let table = crate::app::door::realm::svc::final_table(&state, game_id, Some(alice));
     assert_eq!(table.len(), 3, "everyone is on the board, paid or not");
     assert_eq!(table[0].user_id, alice);
     assert_eq!(table[0].place, Some(1));
@@ -526,7 +700,7 @@ async fn a_finished_realm_lingers_a_day_and_then_leaves_the_lobby() {
         .expect("finish it");
     let listed = RealmGame::list_finished_recent(
         &client,
-        crate::app::lobby::realm::svc::REALM_RESULTS_HOURS,
+        crate::app::door::realm::svc::REALM_RESULTS_HOURS,
     )
     .await
     .expect("list");
@@ -543,14 +717,14 @@ async fn a_finished_realm_lingers_a_day_and_then_leaves_the_lobby() {
              WHERE id = $1",
             &[
                 &game_id,
-                &(crate::app::lobby::realm::svc::REALM_RESULTS_HOURS as i32 + 1),
+                &(crate::app::door::realm::svc::REALM_RESULTS_HOURS as i32 + 1),
             ],
         )
         .await
         .expect("age it");
     let listed = RealmGame::list_finished_recent(
         &client,
-        crate::app::lobby::realm::svc::REALM_RESULTS_HOURS,
+        crate::app::door::realm::svc::REALM_RESULTS_HOURS,
     )
     .await
     .expect("list");
@@ -558,23 +732,6 @@ async fn a_finished_realm_lingers_a_day_and_then_leaves_the_lobby() {
     // The row itself is still there: the history and its logs outlive the
     // listing.
     assert!(svc.load_game(game_id).await.expect("load").is_some());
-}
-
-#[tokio::test]
-async fn game_capacity_cap_enforced() {
-    let test_db = new_test_db().await;
-    let svc = realm_service(&test_db);
-    let user = create_test_user(&test_db.db, "realm_capped").await;
-    for _ in 0..REALM_MAX_ACTIVE_GAMES {
-        svc.create_game(user.id, &user.username, &spec("", RESET_HOUR))
-            .await
-            .expect("create under cap");
-    }
-    let err = svc
-        .create_game(user.id, &user.username, &spec("", RESET_HOUR))
-        .await
-        .expect_err("cap exceeded");
-    assert!(err.to_string().contains("limit reached"));
 }
 
 #[tokio::test]
@@ -680,7 +837,7 @@ async fn a_distant_strike_is_allowed_at_long_odds() {
     let (game_id, ids) = started_game(&svc, &test_db, &["realm_far_a", "realm_far_b"]).await;
     let alice = ids[0];
     let state = load_state(&svc, game_id).await;
-    let map = crate::app::lobby::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
+    let map = crate::app::door::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
 
     // Something far away and unowned: legal to go for, just very unlikely.
     // Far, not unreachable — a target on another landmass with no way to it
@@ -688,7 +845,7 @@ async fn a_distant_strike_is_allowed_at_long_odds() {
     // test (it is refused outright, see `ActionRejected::NoRoute`). Whether
     // the first match was one of those depended on where the spawn landed,
     // which made this flaky rather than wrong.
-    let index = crate::app::lobby::realm::resolver::ReachIndex::build(
+    let index = crate::app::door::realm::resolver::ReachIndex::build(
         &state,
         &map,
         alice,
@@ -704,7 +861,7 @@ async fn a_distant_strike_is_allowed_at_long_odds() {
         })
         .expect("earth has somewhere far away");
 
-    let reach = crate::app::lobby::realm::resolver::reach_for(
+    let reach = crate::app::door::realm::resolver::reach_for(
         &state,
         &map,
         alice,
@@ -712,7 +869,7 @@ async fn a_distant_strike_is_allowed_at_long_odds() {
         realm_day(Utc::now(), RESET_HOUR),
     );
     assert!(reach.cost >= 4.0);
-    let odds = crate::app::lobby::realm::resolver::projected_probability(
+    let odds = crate::app::door::realm::resolver::projected_probability(
         &state,
         &map,
         alice,
@@ -780,7 +937,7 @@ async fn a_game_nobody_plays_dissolves_without_paying() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let (game_id, ids) = started_game(&svc, &test_db, &["realm_idle_a", "realm_idle_b"]).await;
-    let abandon_days = i64::from(crate::app::lobby::realm::resolver::REALM_ABANDON_DAYS);
+    let abandon_days = i64::from(crate::app::door::realm::resolver::REALM_ABANDON_DAYS);
 
     // A quiet spell is not an exit: everyone is still in and still holding.
     svc.sweep(Utc::now() + Duration::days(abandon_days - 1))
@@ -805,6 +962,14 @@ async fn a_game_nobody_plays_dissolves_without_paying() {
     for id in ids {
         assert_eq!(wait_for_payout(&test_db, id).await, None);
     }
+    assert_eq!(
+        parse_state(&row.state).expect("state").news.map(|n| n.kind),
+        Some(RealmNewsKind::Ended {
+            winner_user_id: None,
+            winner_username: None,
+        }),
+        "the strip reads a world that fell silent"
+    );
 }
 
 #[tokio::test]
@@ -863,10 +1028,7 @@ async fn the_last_player_can_pack_the_realm_up() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "realm_solo").await;
-    let game = svc
-        .create_game(alice.id, &alice.username, &spec("", RESET_HOUR))
-        .await
-        .expect("create");
+    let game = create_game(&svc, &test_db, &alice, &spec("", RESET_HOUR)).await;
 
     // Nobody else ever turned up, so there is nobody to hand it to.
     svc.leave_game(alice.id, game.id)
@@ -879,7 +1041,7 @@ async fn the_last_player_can_pack_the_realm_up() {
 #[tokio::test]
 async fn a_conquest_after_a_week_of_play_pays_the_pot() {
     let test_db = new_test_db().await;
-    let svc = realm_service(&test_db);
+    let (svc, mut activity) = realm_service_watching(&test_db);
     let (game_id, ids) =
         started_game(&svc, &test_db, &["realm_p_a", "realm_p_b", "realm_p_c"]).await;
     let (alice, bob, carol) = (ids[0], ids[1], ids[2]);
@@ -904,7 +1066,7 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
     // Hers except one: a realm ends when a player holds the *whole* map, so
     // the position under test is one territory short of that.
     let map =
-        crate::app::lobby::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
+        crate::app::door::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
     let last = map.territories.len() as u16 - 1;
     state.ownership.clear();
     for territory in 0..last {
@@ -936,7 +1098,7 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
     assert_eq!(row.winner_user_id, Some(alice));
 
     // Three players at start: the whole pot, winner takes all.
-    let pot: i64 = crate::app::lobby::realm::svc::payout_plan(3, state.ruleset.pot_scale)
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
         .iter()
         .map(|(_, chips)| chips)
         .sum();
@@ -946,6 +1108,31 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
     // take nothing from it.
     assert_eq!(wait_for_payout(&test_db, bob).await, None);
     assert_eq!(wait_for_payout(&test_db, carol).await, None);
+
+    // The house hears the world fell: who took it and what it paid, and
+    // the row's last moment is the end, for the strip.
+    let fell = activity_where(&mut activity, |event| {
+        matches!(event.kind, ActivityKind::RealmSeasonEnded { game_id: g, .. } if g == game_id)
+    })
+    .await;
+    assert_eq!(
+        fell.kind,
+        ActivityKind::RealmSeasonEnded {
+            game_id,
+            season: row.season,
+            winner: Some("realm_p_a".to_string()),
+            pot,
+            players: 3,
+        }
+    );
+    let state = load_state(&svc, game_id).await;
+    assert_eq!(
+        state.news.map(|n| n.kind),
+        Some(RealmNewsKind::Ended {
+            winner_user_id: Some(alice),
+            winner_username: Some("realm_p_a".to_string()),
+        })
+    );
 }
 
 #[tokio::test]
@@ -1074,22 +1261,15 @@ async fn two_players_cannot_wear_the_same_colour() {
     let bob = create_test_user(&test_db.db, "bob").await;
     let carol = create_test_user(&test_db.db, "carol").await;
 
-    let game = svc
-        .create_game(
-            alice.id,
-            &alice.username,
-            &crate::app::lobby::realm::svc::NewRealm {
-                color: Some(4),
-                ..spec("Colours", RESET_HOUR)
-            },
-        )
+    let game = open(&svc, &test_db, &spec("Colours", RESET_HOUR)).await;
+    svc.join_game(alice.id, &alice.username, game.id, Some(4))
         .await
-        .expect("create");
+        .expect("alice joins in her colour");
     let state = load_state(&svc, game.id).await;
     assert_eq!(
         state.player(alice.id).expect("alice").color,
         Some(4),
-        "the creator plays in what they picked"
+        "she plays in what she picked"
     );
 
     assert!(
@@ -1116,20 +1296,20 @@ async fn two_players_cannot_wear_the_same_colour() {
     assert_eq!(state.player(bob.id).expect("bob").color, Some(7));
 }
 
-/// The map is the creator's choice, frozen into the game like every other
-/// rule — not something the ruleset carries, and not something a later
+/// The map is the opener's choice, frozen into the game like every other
+/// rule: not something the ruleset carries, and not something a later
 /// roster change can move under a game being played.
 #[tokio::test]
-async fn the_creator_picks_the_world_and_it_is_frozen_with_the_rules() {
+async fn the_world_is_picked_at_the_opening_and_frozen_with_the_rules() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
-    let alice = create_test_user(&test_db.db, "alice").await;
+    let client = test_db.db.get().await.expect("client");
 
+    house(&test_db).await;
     assert!(
-        svc.create_game(
-            alice.id,
-            &alice.username,
-            &crate::app::lobby::realm::svc::NewRealm {
+        svc.open_world(
+            &client,
+            &NewRealm {
                 map_id: "atlantis".to_string(),
                 ..spec("Nowhere", RESET_HOUR)
             }
@@ -1139,10 +1319,7 @@ async fn the_creator_picks_the_world_and_it_is_frozen_with_the_rules() {
         "a world that does not exist is not a game"
     );
 
-    let game = svc
-        .create_game(alice.id, &alice.username, &spec("Earth", RESET_HOUR))
-        .await
-        .expect("create");
+    let game = open(&svc, &test_db, &spec("Earth", RESET_HOUR)).await;
     let state = load_state(&svc, game.id).await;
     assert_eq!(state.ruleset.map_id, "earth");
 }
@@ -1153,18 +1330,14 @@ async fn the_creator_picks_the_world_and_it_is_frozen_with_the_rules() {
 /// board the game is played on is rebuilt from the snapshot every time.
 #[tokio::test]
 async fn a_generated_world_is_frozen_as_the_recipe_that_draws_it() {
-    use crate::app::lobby::realm::map::{GENERATED_MAP_ID, map_handle};
-    use crate::app::lobby::realm::mapgen::GeneratedMapSpec;
+    use crate::app::door::realm::map::{GENERATED_MAP_ID, map_handle};
+    use crate::app::door::realm::mapgen::GeneratedMapSpec;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
 
-    let game = svc
-        .create_game(
-            alice.id,
-            &alice.username,
-            &crate::app::lobby::realm::svc::NewRealm {
+    let game = create_game(&svc, &test_db, &alice, &crate::app::door::realm::svc::NewRealm {
                 map_id: GENERATED_MAP_ID.to_string(),
                 map_spec: Some(GeneratedMapSpec {
                     // A seed the creator would like: it must not be the one
@@ -1178,9 +1351,7 @@ async fn a_generated_world_is_frozen_as_the_recipe_that_draws_it() {
                 }),
                 ..spec("Uncharted", RESET_HOUR)
             },
-        )
-        .await
-        .expect("create");
+        ).await;
 
     let state = load_state(&svc, game.id).await;
     assert_eq!(state.ruleset.map_id, GENERATED_MAP_ID);
@@ -1213,19 +1384,15 @@ async fn a_generated_world_is_frozen_as_the_recipe_that_draws_it() {
 /// world that cannot be built.
 #[tokio::test]
 async fn a_generated_world_clamps_the_shape_it_was_asked_for() {
-    use crate::app::lobby::realm::map::GENERATED_MAP_ID;
-    use crate::app::lobby::realm::mapgen::{
+    use crate::app::door::realm::map::GENERATED_MAP_ID;
+    use crate::app::door::realm::mapgen::{
         GEN_MAX_CONTINENTS, GEN_MAX_TERRITORIES, GeneratedMapSpec,
     };
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
-    let game = svc
-        .create_game(
-            alice.id,
-            &alice.username,
-            &crate::app::lobby::realm::svc::NewRealm {
+    let game = create_game(&svc, &test_db, &alice, &crate::app::door::realm::svc::NewRealm {
                 map_id: GENERATED_MAP_ID.to_string(),
                 map_spec: Some(GeneratedMapSpec {
                     seed: 0,
@@ -1236,9 +1403,7 @@ async fn a_generated_world_clamps_the_shape_it_was_asked_for() {
                 }),
                 ..spec("Too much world", RESET_HOUR)
             },
-        )
-        .await
-        .expect("create");
+        ).await;
     let stored = load_state(&svc, game.id)
         .await
         .ruleset
@@ -1253,13 +1418,13 @@ async fn a_generated_world_clamps_the_shape_it_was_asked_for() {
 /// map rather than the same one again.
 #[tokio::test]
 async fn two_generated_realms_are_two_different_worlds() {
-    use crate::app::lobby::realm::map::GENERATED_MAP_ID;
-    use crate::app::lobby::realm::mapgen::GeneratedMapSpec;
+    use crate::app::door::realm::map::GENERATED_MAP_ID;
+    use crate::app::door::realm::mapgen::GeneratedMapSpec;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
-    let ask = |name: &'static str| crate::app::lobby::realm::svc::NewRealm {
+    let ask = |name: &'static str| crate::app::door::realm::svc::NewRealm {
         map_id: GENERATED_MAP_ID.to_string(),
         map_spec: Some(GeneratedMapSpec {
             seed: 0,
@@ -1270,14 +1435,11 @@ async fn two_generated_realms_are_two_different_worlds() {
         }),
         ..spec(name, RESET_HOUR)
     };
-    let one = svc
-        .create_game(alice.id, &alice.username, &ask("First"))
-        .await
-        .expect("create");
-    let two = svc
-        .create_game(alice.id, &alice.username, &ask("Second"))
-        .await
-        .expect("create");
+    let one = create_game(&svc, &test_db, &alice, &ask("First")).await;
+    // One world at a time: the first has to end before the next is drawn.
+    let client = test_db.db.get().await.expect("client");
+    RealmGame::cancel(&client, one.id).await.expect("cancel");
+    let two = create_game(&svc, &test_db, &alice, &ask("Second")).await;
     let a = load_state(&svc, one.id).await.ruleset.map_spec.unwrap();
     let b = load_state(&svc, two.id).await.ruleset.map_spec.unwrap();
     assert_ne!(a.seed, b.seed);
@@ -1308,7 +1470,7 @@ async fn joining_records_how_much_of_the_world_was_gone() {
 
     // Hand most of the map to alice, then let a third player in: they arrive
     // somewhere quite different, and the record says so.
-    let map = crate::app::lobby::realm::map::map_handle(&state.ruleset.map_id, None).expect("map");
+    let map = crate::app::door::realm::map::map_handle(&state.ruleset.map_id, None).expect("map");
     let mut carved = state.clone();
     for t in map.territories.iter().take(map.territories.len() / 3) {
         carved.ownership.insert(t.id, ids[0]);
@@ -1349,8 +1511,8 @@ async fn joining_records_how_much_of_the_world_was_gone() {
 /// cursor and trigger a render for another reason.
 #[tokio::test]
 async fn a_resolved_action_asks_for_the_frame_that_shows_it() {
-    use crate::app::lobby::realm::resolver::RealmAction;
-    use crate::app::lobby::realm::state::RealmState;
+    use crate::app::door::realm::resolver::RealmAction;
+    use crate::app::door::realm::state::RealmState;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
@@ -1367,7 +1529,7 @@ async fn a_resolved_action_asks_for_the_frame_that_shows_it() {
 
     // Claim something reachable, the way the board does.
     let state = load_state(&svc, game_id).await;
-    let map = crate::app::lobby::realm::map::map_handle(&state.ruleset.map_id, None).expect("map");
+    let map = crate::app::door::realm::map::map_handle(&state.ruleset.map_id, None).expect("map");
     let mine = *state
         .ownership
         .iter()
@@ -1427,8 +1589,8 @@ async fn a_resolved_action_asks_for_the_frame_that_shows_it() {
 
 /// Poll `tick` until `done`, the way the app's frame loop does.
 async fn wait_for_tick(
-    session: &mut crate::app::lobby::realm::state::RealmState,
-    done: impl Fn(&crate::app::lobby::realm::state::RealmState) -> bool,
+    session: &mut crate::app::door::realm::state::RealmState,
+    done: impl Fn(&crate::app::door::realm::state::RealmState) -> bool,
 ) -> bool {
     for _ in 0..200 {
         session.tick();
@@ -1456,7 +1618,7 @@ async fn a_rolled_day_calls_the_players_by_name() {
 
     let mut called = None;
     while let Ok(event) = events.try_recv() {
-        if let crate::app::lobby::realm::svc::RealmEvent::DayRolled {
+        if let crate::app::door::realm::svc::RealmEvent::DayRolled {
             game_id: id, name, ..
         } = event
             && id == game_id
@@ -1472,28 +1634,36 @@ async fn a_rolled_day_calls_the_players_by_name() {
 }
 
 /// The lounge hears about a war that has players in it, and hears nothing
-/// from a realm somebody made and sat in alone — that would be a daily line
-/// about nothing, every day, for as long as the row lives.
+/// from a world somebody sits in alone: that would be a daily line about
+/// nothing, every day, for as long as the row lives.
 #[tokio::test]
 async fn only_a_realm_with_players_calls_the_lounge() {
-    use crate::app::activity::event::ActivityKind;
-
     let test_db = new_test_db().await;
     let (svc, mut activity) = realm_service_watching(&test_db);
     let alice = create_test_user(&test_db.db, "realm_lounge_solo").await;
-    let solo = svc
-        .create_game(alice.id, &alice.username, &spec("Alone", RESET_HOUR))
-        .await
-        .expect("create");
-
-    let (shared_id, _ids) =
-        started_game(&svc, &test_db, &["realm_lounge_a", "realm_lounge_b"]).await;
-
+    let solo = create_game(&svc, &test_db, &alice, &spec("Alone", RESET_HOUR)).await;
     svc.sweep(Utc::now() + Duration::days(1))
         .await
         .expect("sweep");
-
     let mut called = Vec::new();
+    while let Ok(event) = activity.try_recv() {
+        if let ActivityKind::RealmCalls { game_id, .. } = event.kind {
+            called.push((game_id, event.username.clone(), event.action.clone()));
+        }
+    }
+    assert!(
+        !called.iter().any(|(id, _, _)| *id == solo.id),
+        "a world sat in alone says nothing: {called:?}"
+    );
+
+    // One world at a time: the lonely one ends before the shared one rises.
+    let client = test_db.db.get().await.expect("client");
+    RealmGame::cancel(&client, solo.id).await.expect("cancel");
+    let (shared_id, _ids) =
+        started_game(&svc, &test_db, &["realm_lounge_a", "realm_lounge_b"]).await;
+    svc.sweep(Utc::now() + Duration::days(1))
+        .await
+        .expect("sweep");
     while let Ok(event) = activity.try_recv() {
         if let ActivityKind::RealmCalls { game_id, .. } = event.kind {
             called.push((game_id, event.username.clone(), event.action.clone()));
@@ -1504,10 +1674,6 @@ async fn only_a_realm_with_players_calls_the_lounge() {
             && who == "realm"
             && what == "The Long War calls its players"),
         "a war with players in it calls the lounge: {called:?}"
-    );
-    assert!(
-        !called.iter().any(|(id, _, _)| *id == solo.id),
-        "a realm sat in alone says nothing"
     );
 }
 
@@ -1521,10 +1687,7 @@ async fn a_new_realm_is_frozen_until_its_muster_ends() {
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "realm_muster_a").await;
     let bob = create_test_user(&test_db.db, "realm_muster_b").await;
-    let game = svc
-        .create_game(alice.id, &alice.username, &spec("Muster", RESET_HOUR))
-        .await
-        .expect("create");
+    let game = create_game(&svc, &test_db, &alice, &spec("Muster", RESET_HOUR)).await;
 
     let state = load_state(&svc, game.id).await;
     let target = nearest_free(&state, alice.id);
@@ -1555,7 +1718,7 @@ async fn a_new_realm_is_frozen_until_its_muster_ends() {
         alice.id,
         game.id,
         RealmAction::Claim { target },
-        Utc::now() + crate::app::lobby::realm::svc::REALM_MUSTER,
+        Utc::now() + crate::app::door::realm::svc::REALM_MUSTER,
     )
     .await
     .expect("the realm is open");
@@ -1565,33 +1728,26 @@ async fn a_new_realm_is_frozen_until_its_muster_ends() {
 /// announces itself — named, attributed to whoever raised it, and with the
 /// deadline in the line.
 #[tokio::test]
-async fn raising_a_realm_announces_it() {
-    use crate::app::activity::event::ActivityKind;
-
+async fn opening_a_world_announces_it_to_the_house() {
     let test_db = new_test_db().await;
     let (svc, mut activity) = realm_service_watching(&test_db);
-    let alice = create_test_user(&test_db.db, "realm_announce").await;
-    let game = svc
-        .create_game(alice.id, &alice.username, &spec("The Long War", RESET_HOUR))
-        .await
-        .expect("create");
+    let game = open(&svc, &test_db, &spec("", RESET_HOUR)).await;
 
-    let announced = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            let event = activity.recv().await.expect("activity");
-            if let ActivityKind::RealmForming { game_id } = event.kind
-                && game_id == game.id
-            {
-                return event;
-            }
-        }
+    let announced = activity_where(&mut activity, |event| {
+        matches!(event.kind, ActivityKind::RealmSeasonOpened { game_id, .. } if game_id == game.id)
     })
-    .await
-    .expect("the realm announced itself");
-    assert_eq!(announced.username, "realm_announce");
+    .await;
+    assert_eq!(announced.username, "realm", "the invitation is the house's");
+    assert_eq!(
+        announced.kind,
+        ActivityKind::RealmSeasonOpened {
+            game_id: game.id,
+            season: game.season,
+        }
+    );
     assert!(
-        announced.action.contains("The Long War") && announced.action.contains("opens in"),
-        "the line names the realm and its deadline: {}",
+        announced.action.contains("season 1") && announced.action.contains("gates open in a day"),
+        "the line names the season and its deadline: {}",
         announced.action
     );
 }
@@ -1603,7 +1759,7 @@ async fn raising_a_realm_announces_it() {
 /// they looked.
 #[tokio::test]
 async fn every_day_keeps_the_board_it_closed_on() {
-    use crate::app::lobby::realm::resolver::LogEntry;
+    use crate::app::door::realm::resolver::LogEntry;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
@@ -1695,7 +1851,7 @@ async fn every_day_keeps_the_board_it_closed_on() {
 /// with no record of how.
 #[tokio::test]
 async fn withdrawing_says_what_it_let_go_of() {
-    use crate::app::lobby::realm::resolver::LogEntry;
+    use crate::app::door::realm::resolver::LogEntry;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
@@ -1773,7 +1929,7 @@ async fn a_busy_day_keeps_its_board_through_the_quiet_ones() {
 /// a time, and a two-month game is five pages.
 #[tokio::test]
 async fn the_history_view_pages_the_whole_archive_in() {
-    use crate::app::lobby::realm::state::{RealmState, RealmView};
+    use crate::app::door::realm::state::{RealmState, RealmView};
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
@@ -1838,57 +1994,13 @@ async fn the_history_view_pages_the_whole_archive_in() {
     assert_eq!(total, seen);
 }
 
-/// The sweeper's work list is bounded per tick, and the bound has to be
-/// applied *after* the "already rolled today" check. Applied before it, twenty
-/// up-to-date games at the front of the list hide every game behind them: the
-/// twenty-first never has its day rolled by anyone but its own players, never
-/// calls them, and never dissolves when they stop coming.
-#[tokio::test]
-async fn the_sweeper_reaches_every_game_behind_the_clock() {
-    let test_db = new_test_db().await;
-    let svc = realm_service(&test_db);
-    let mut games = Vec::new();
-    // One past the per-tick bound, spread over three creators so the per-user
-    // cap is not what this test runs into.
-    for owner in 0..3 {
-        let user = create_test_user(&test_db.db, &format!("realm_many_{owner}")).await;
-        for n in 0..7 {
-            let game = svc
-                .create_game(
-                    user.id,
-                    &user.username,
-                    &spec(&format!("War {owner}-{n}"), RESET_HOUR),
-                )
-                .await
-                .expect("create");
-            games.push(game.id);
-        }
-    }
-    assert_eq!(games.len(), 21);
-
-    // Two ticks: the bound still means one tick does at most twenty games,
-    // but the second tick must pick up where the first stopped.
-    let tomorrow = Utc::now() + Duration::days(1);
-    svc.sweep(tomorrow).await.expect("first sweep");
-    svc.sweep(tomorrow).await.expect("second sweep");
-
-    let day = realm_day(tomorrow, RESET_HOUR);
-    for game_id in &games {
-        let row = svc.load_game(*game_id).await.expect("load").expect("row");
-        assert_eq!(
-            row.last_resolved_day, day,
-            "game {game_id} was left behind by the sweep"
-        );
-    }
-}
-
 /// A worker fed by hand: what another replica's write looks like from here is
 /// a notify arriving on the channel and the worker re-reading. Returns once
 /// that re-read has published a snapshot.
 async fn notified(
     worker: &tokio::sync::mpsc::UnboundedSender<crate::pg_listener::Signal>,
     snapshot: &mut tokio::sync::watch::Receiver<
-        std::sync::Arc<crate::app::lobby::realm::svc::RealmSnapshot>,
+        std::sync::Arc<crate::app::door::realm::svc::RealmSnapshot>,
     >,
 ) {
     worker
@@ -1905,8 +2017,8 @@ async fn notified(
 
 /// Drain the events a session would see, up to a short deadline.
 async fn drained(
-    events: &mut broadcast::Receiver<crate::app::lobby::realm::svc::RealmEvent>,
-) -> Vec<crate::app::lobby::realm::svc::RealmEvent> {
+    events: &mut broadcast::Receiver<crate::app::door::realm::svc::RealmEvent>,
+) -> Vec<crate::app::door::realm::svc::RealmEvent> {
     let mut seen = Vec::new();
     while let Ok(Ok(event)) =
         tokio::time::timeout(std::time::Duration::from_millis(300), events.recv()).await
@@ -1922,7 +2034,7 @@ async fn drained(
 /// the reload, the daily call by name, and the finish.
 #[tokio::test]
 async fn a_write_from_another_replica_reaches_this_one_on_the_re_read() {
-    use crate::app::lobby::realm::svc::RealmEvent;
+    use crate::app::door::realm::svc::RealmEvent;
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
@@ -2026,7 +2138,7 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
         }
     }
     let map =
-        crate::app::lobby::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
+        crate::app::door::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
     let last = map.territories.len() as u16 - 1;
     state.ownership.clear();
     for territory in 0..last {
@@ -2087,7 +2199,7 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
     svc.sweep(Utc::now()).await.expect("sweep");
     let row = svc.load_game(game_id).await.expect("load").expect("row");
     assert_eq!(row.payout.as_deref(), Some(RealmGame::PAYOUT_PAID));
-    let pot: i64 = crate::app::lobby::realm::svc::payout_plan(3, state.ruleset.pot_scale)
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
         .iter()
         .map(|(_, chips)| chips)
         .sum();
@@ -2104,14 +2216,21 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
 async fn a_corrupt_row_leaves_the_listing_without_taking_it_down() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
-    let (sound, _) = started_game(&svc, &test_db, &["realm_rot_a", "realm_rot_b"]).await;
-    let carol = create_test_user(&test_db.db, "realm_rot_c").await;
-    let rotten = svc
-        .create_game(carol.id, &carol.username, &spec("Rotten", RESET_HOUR))
-        .await
-        .expect("create")
-        .id;
     let client = test_db.db.get().await.expect("client");
+    // The rotten row is a world that just ended, still in the listing; the
+    // sound one is the world standing after it.
+    let carol = create_test_user(&test_db.db, "realm_rot_c").await;
+    let rotten = create_game(&svc, &test_db, &carol, &spec("Rotten", RESET_HOUR))
+        .await
+        .id;
+    client
+        .execute(
+            "UPDATE realm_games SET status = 'finished', updated = current_timestamp WHERE id = $1",
+            &[&rotten],
+        )
+        .await
+        .expect("end the rotten world");
+    let (sound, _) = started_game(&svc, &test_db, &["realm_rot_a", "realm_rot_b"]).await;
     let (worker, signals) = tokio::sync::mpsc::unbounded_channel();
     let _worker = svc.start_notify_worker(signals);
     let mut snapshot = svc.subscribe_snapshot();
@@ -2130,6 +2249,7 @@ async fn a_corrupt_row_leaves_the_listing_without_taking_it_down() {
         .borrow()
         .active_games
         .iter()
+        .chain(snapshot.borrow().finished_games.iter())
         .map(|g| g.id)
         .collect();
     assert!(listed.contains(&sound), "the readable game is still listed");
@@ -2139,39 +2259,12 @@ async fn a_corrupt_row_leaves_the_listing_without_taking_it_down() {
     );
 }
 
-/// Every realm a creator raises puts them somewhere new. The spawn used to
-/// be seeded from the nil game id, so on Earth the same person started on
-/// the same country every time, and everyone could learn where.
-#[tokio::test]
-async fn a_creator_does_not_start_every_realm_in_the_same_place() {
-    let test_db = new_test_db().await;
-    let svc = realm_service(&test_db);
-    let alice = create_test_user(&test_db.db, "realm_spawn_creator").await;
-    let mut spawns = std::collections::BTreeSet::new();
-    for n in 0..5 {
-        let game = svc
-            .create_game(
-                alice.id,
-                &alice.username,
-                &spec(&format!("War {n}"), RESET_HOUR),
-            )
-            .await
-            .expect("create");
-        let state = parse_state(&game.state).expect("state");
-        spawns.extend(state.holdings(alice.id));
-    }
-    assert!(
-        spawns.len() > 1,
-        "five realms, one starting country: {spawns:?}"
-    );
-}
-
 /// The board's "left of" figure is the day's real allowance. It used to be
 /// the tier for the roster's high-water mark, so five arrivals on a fresh
 /// world read "7/5 points".
 #[tokio::test]
 async fn the_board_counts_points_against_the_days_real_allowance() {
-    use crate::app::lobby::realm::state::{RealmState, points_left};
+    use crate::app::door::realm::state::{RealmState, points_left};
 
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);

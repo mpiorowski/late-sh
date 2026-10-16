@@ -231,10 +231,20 @@ pub enum ActivityKind {
     AquariumSproutWithered,
     /// The first pet of the UTC day cleared the DB chip gate.
     PetPetted,
-    /// Somebody made a realm and it is standing frozen while people arrive.
-    /// The invitation, and the only one with a deadline on it.
-    RealmForming {
+    /// The house opened the next world and it stands frozen while people
+    /// arrive. The invitation, and the only one with a deadline on it.
+    RealmSeasonOpened {
         game_id: Uuid,
+        season: i32,
+    },
+    /// The world ended: conquered by `winner`, or dissolved when nobody held
+    /// it. `pot` is what the conquest paid in all, 0 when it paid nothing.
+    RealmSeasonEnded {
+        game_id: Uuid,
+        season: i32,
+        winner: Option<String>,
+        pot: i64,
+        players: u8,
     },
     /// A realm's day turned over and everyone in it has points again. The
     /// one activity line that belongs to a game rather than a person: it is
@@ -273,7 +283,8 @@ impl ActivityKind {
             | Self::BossSlain { .. }
             | Self::SatDown { .. }
             | Self::RealmCalls { .. }
-            | Self::RealmForming { .. }
+            | Self::RealmSeasonOpened { .. }
+            | Self::RealmSeasonEnded { .. }
             | Self::DailyResult { .. } => ActivityCategory::Game,
             Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
@@ -612,20 +623,41 @@ impl ActivityEvent {
         )
     }
 
-    /// A realm was made and is mustering. Attributed to the creator, whose
-    /// invitation it is — unlike the daily call, which belongs to the game.
-    pub fn realm_forming(
-        user_id: Uuid,
-        username: impl Into<String>,
-        game_id: Uuid,
-        name: &str,
-        opens_in: &str,
-    ) -> Self {
+    /// The house opened a world and it is mustering. Attributed to nobody,
+    /// like the daily call: the invitation is the house's.
+    pub fn realm_season_opened(game_id: Uuid, season: i32, world: &str, opens_in: &str) -> Self {
         Self::new(
-            Some(user_id),
-            username,
-            ActivityKind::RealmForming { game_id },
-            format!("is raising the realm {name} — it opens in {opens_in}"),
+            None,
+            "realm",
+            ActivityKind::RealmSeasonOpened { game_id, season },
+            format!("rises: season {season} on {world}, the gates open in {opens_in}"),
+        )
+    }
+
+    /// A world ended. Attributed to nobody: the conqueror has their own
+    /// `GameWon` line, and this one is about the world.
+    pub fn realm_season_ended(
+        game_id: Uuid,
+        season: i32,
+        winner: Option<String>,
+        pot: i64,
+        players: u8,
+    ) -> Self {
+        let action = match winner.as_deref() {
+            Some(winner) => format!("has fallen: season {season} is {winner}'s"),
+            None => format!("fell silent: season {season} ended with nobody holding it"),
+        };
+        Self::new(
+            None,
+            "realm",
+            ActivityKind::RealmSeasonEnded {
+                game_id,
+                season,
+                winner,
+                pot,
+                players,
+            },
+            action,
         )
     }
 

@@ -256,7 +256,7 @@ pub struct SessionConfig {
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
-    pub realm_service: crate::app::lobby::realm::svc::RealmService,
+    pub realm_service: crate::app::door::realm::svc::RealmService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects,
     /// consuming a color slot and showing up in `peer_count`, when the user actually
@@ -958,7 +958,7 @@ pub struct App {
     /// Daily correspondence games: sidebar panel and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
     /// Realm territory-conquest games: per-session snapshot + board state.
-    pub(crate) realm: crate::app::lobby::realm::state::RealmState,
+    pub(crate) realm: crate::app::door::realm::state::RealmState,
     /// The live strip at the top of the #lounge card.
     pub(crate) live: crate::app::live::state::LiveState,
     /// House tables: the fixed multiplayer tables behind the Lobby modal.
@@ -1924,7 +1924,7 @@ impl App {
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
-            realm: crate::app::lobby::realm::state::RealmState::new(
+            realm: crate::app::door::realm::state::RealmState::new(
                 config.realm_service.clone(),
                 config.user_id,
                 username.clone(),

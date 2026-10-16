@@ -124,17 +124,27 @@ impl ActivityPublisher {
         });
     }
 
-    /// Somebody raised a realm and it is mustering.
-    pub fn realm_forming_task(&self, user_id: Uuid, game_id: Uuid, name: &str) {
-        let publisher = self.clone();
-        let name = name.to_string();
-        let opens_in = crate::app::lobby::realm::svc::muster_label();
-        tokio::spawn(async move {
-            let username = publisher.username_for(user_id).await;
-            let _ = publisher.tx.send(ActivityEvent::realm_forming(
-                user_id, username, game_id, &name, &opens_in,
-            ));
-        });
+    /// The house opened the next world and it is mustering. No user to look
+    /// up, so a plain send.
+    pub fn realm_season_opened(&self, game_id: Uuid, season: i32, world: &str, opens_in: &str) {
+        let _ = self.tx.send(ActivityEvent::realm_season_opened(
+            game_id, season, world, opens_in,
+        ));
+    }
+
+    /// A world ended, conquered or dissolved. The winner's name is already
+    /// in the state, so no lookup here either.
+    pub fn realm_season_ended(
+        &self,
+        game_id: Uuid,
+        season: i32,
+        winner: Option<String>,
+        pot: i64,
+        players: u8,
+    ) {
+        let _ = self.tx.send(ActivityEvent::realm_season_ended(
+            game_id, season, winner, pot, players,
+        ));
     }
 
     /// A realm called its players. No user to look up, so this is a plain

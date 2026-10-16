@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use super::*;
-use crate::app::lobby::realm::map::{TerritoryId, WorldMap, map_by_id};
-use crate::app::lobby::realm::rulesets::{PACES, RealmRulesetSnapshot, STANDARD};
-use crate::app::lobby::realm::svc::{paying_players, payout_plan};
+use crate::app::door::realm::map::{TerritoryId, WorldMap, map_by_id};
+use crate::app::door::realm::rulesets::{PACES, RealmRulesetSnapshot, STANDARD};
+use crate::app::door::realm::svc::{paying_players, payout_plan};
 
 const START_DAY: i32 = 20_000;
 /// Long enough for a realm to resolve, short enough that the suite stays
@@ -85,7 +85,7 @@ fn new_state(
         revision: 1,
         ruleset: RealmRulesetSnapshot::at_pace(
             &STANDARD,
-            crate::app::lobby::realm::rulesets::pace_by_id(pace_id).expect("pace"),
+            crate::app::door::realm::rulesets::pace_by_id(pace_id).expect("pace"),
         ),
         players: players
             .iter()
@@ -111,6 +111,7 @@ fn new_state(
         last_day: None,
         start_player_count: players.len() as u8,
         start_day: START_DAY,
+        news: None,
     };
     // Spawn everyone on distinct random territories, the way `start_game`
     // and `join_game` do.
@@ -157,7 +158,7 @@ impl Sim {
     /// A turtle spends on walls first: the deepest hole it can still dig.
     fn wall_to_raise(&self, actor: Uuid) -> Option<RealmAction> {
         let state = &self.state;
-        if !state.option(crate::app::lobby::realm::rulesets::OPTION_FORTIFY) {
+        if !state.option(crate::app::door::realm::rulesets::OPTION_FORTIFY) {
             return None;
         }
         state
@@ -573,7 +574,7 @@ fn assert_sane_finish(outcome: &Outcome) {
             .map(|(_, chips)| chips)
             .sum();
         assert!(
-            (1_000..=crate::app::lobby::realm::svc::REALM_POT_MAX).contains(&pot),
+            (1_000..=crate::app::door::realm::svc::REALM_POT_MAX).contains(&pot),
             "pot of {pot} is outside anything reasonable"
         );
     }
@@ -768,7 +769,7 @@ fn latecomer_week(seed: u64) -> (u16, u16, bool, f64) {
     // The same rule the service spawns by: a land border, and free ground
     // next to it — so the latecomer is tested on arriving late rather than on
     // a placement nobody would have chosen for them.
-    let has_room = |t: &crate::app::lobby::realm::map::Territory| {
+    let has_room = |t: &crate::app::door::realm::map::Territory| {
         !t.land_links.is_empty()
             && t.land_links
                 .iter()

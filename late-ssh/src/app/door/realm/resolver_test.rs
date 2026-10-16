@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use super::*;
-use crate::app::lobby::realm::map::map_by_id;
-use crate::app::lobby::realm::rulesets::{RouteMode, STANDARD};
+use crate::app::door::realm::map::map_by_id;
+use crate::app::door::realm::rulesets::{RouteMode, STANDARD};
 
 const DAY: i32 = 20_000;
 
@@ -44,6 +44,7 @@ fn base_state(players: &[(u128, &str)]) -> RealmGameState {
         // Old enough that the opening grace has expired, except where a test
         // moves it back on purpose.
         start_day: DAY - 10,
+        news: None,
     }
 }
 
@@ -1267,7 +1268,7 @@ fn an_inland_player_has_no_fleet_when_the_option_is_off() {
     state.ownership.insert(bolivia.id, uid(1));
     state.ownership.insert(madagascar.id, uid(2));
     assert!(
-        !state.option(crate::app::lobby::realm::rulesets::OPTION_LANDLOCKED_SEA),
+        !state.option(crate::app::door::realm::rulesets::OPTION_LANDLOCKED_SEA),
         "off by default — this test is about that default"
     );
 

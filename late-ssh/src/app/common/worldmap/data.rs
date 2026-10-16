@@ -5,7 +5,7 @@
 //! rule — it is a map of the Earth with a country per cell — and a second
 //! caller wanted it (`/map`, where everyone online is right now), so
 //! it lives here and realm imports it like anybody else. What stayed behind
-//! in `lobby/realm/map.rs` is the part that *is* realm: which maps its
+//! in `door/realm/map.rs` is the part that *is* realm: which maps its
 //! create dialog offers, and how a generated world is looked up.
 //!
 //! "testmap" is a hand-built 12-territory continent used by the engine tests;

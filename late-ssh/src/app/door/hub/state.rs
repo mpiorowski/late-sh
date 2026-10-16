@@ -17,7 +17,9 @@
 //! are information only.
 //! Night City heads the sidebar for runners only ([`HubGame::roster`]): its
 //! card is the night city's front door, and Enter takes the same descent as
-//! `0` on the Lounge (`deadchannel/city/input.rs`).
+//! `0` on the Lounge (`deadchannel/city/input.rs`). Realm is the house's
+//! standing world (`door/realm`): one season at a time, its card the way in
+//! for players and watchers alike.
 
 use std::cell::Cell;
 
@@ -28,6 +30,7 @@ use crate::app::state::App;
 pub enum HubGame {
     NightCity,
     Lateania,
+    Realm,
     Minecraft,
     VintageStory,
     Rebels,
@@ -70,17 +73,18 @@ impl HubGroup {
 impl HubGame {
     /// Selector order, top to bottom: the house games first (Night City,
     /// the runners' own card, sliced off for everyone else by
-    /// [`HubGame::roster`], then Lateania, ours from the ground up), the
-    /// roguelikes by stature, the remakes (our own build of A Dark Room,
+    /// [`HubGame::roster`], then Lateania, ours from the ground up, then the
+    /// Realm, the house's one standing world), the roguelikes by stature, the remakes (our own build of A Dark Room,
     /// then the Zork Trilogy behind our own edition and save menus), the
     /// servers we host and you play from a game client (Minecraft, Vintage
     /// Story), then the
     /// doors: Green Dragon (our native LORD remake, filed with the BBS doors
     /// it descends from) and the foreign upstream terminal games hosted on a
     /// PTY.
-    pub const ALL: [HubGame; 15] = [
+    pub const ALL: [HubGame; 16] = [
         HubGame::NightCity,
         HubGame::Lateania,
+        HubGame::Realm,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
@@ -110,6 +114,7 @@ impl HubGame {
         match self {
             HubGame::NightCity => "Night City",
             HubGame::Lateania => "Lateania",
+            HubGame::Realm => "Realm",
             HubGame::Minecraft => "Minecraft",
             HubGame::VintageStory => "Vintage Story",
             HubGame::Rebels => "Rebels",
@@ -128,7 +133,7 @@ impl HubGame {
 
     pub fn group(self) -> HubGroup {
         match self {
-            HubGame::NightCity | HubGame::Lateania => HubGroup::House,
+            HubGame::NightCity | HubGame::Lateania | HubGame::Realm => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
             HubGame::Darkroom | HubGame::Zork => HubGroup::Remakes,
             HubGame::Minecraft | HubGame::VintageStory => HubGroup::Servers,
@@ -151,6 +156,7 @@ impl HubGame {
             HubGame::Dcss => Some(DoorRcGame::Dcss),
             HubGame::NightCity
             | HubGame::Lateania
+            | HubGame::Realm
             | HubGame::Minecraft
             | HubGame::VintageStory
             | HubGame::Rebels
@@ -177,6 +183,7 @@ impl HubGame {
             HubGame::Zork => Some(SpectateGame::Zork),
             HubGame::NightCity
             | HubGame::Lateania
+            | HubGame::Realm
             | HubGame::Minecraft
             | HubGame::VintageStory
             | HubGame::Rebels
@@ -206,10 +213,12 @@ impl HubGame {
     /// The PTY doors (Usurper, dopewars, BashQuest, Rebels, CodeKeep) end
     /// their session on leaving the screen, so they are never live. Minecraft
     /// and Vintage Story have no session here at all, and Night City is not a door: the street
-    /// keeps a runner standing on its own (`deadchannel/street`).
+    /// keeps a runner standing on its own (`deadchannel/street`). The Realm
+    /// board stays open across a hop, so an open board is the test.
     pub(crate) fn live_screen(self, app: &App) -> Option<Screen> {
         match self {
             HubGame::Lateania => app.lateania_recently_active().then_some(Screen::Lateania),
+            HubGame::Realm => app.realm.board.is_some().then_some(Screen::Realm),
             HubGame::Dcss => app
                 .dcss_state
                 .as_ref()

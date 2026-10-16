@@ -97,8 +97,9 @@ pub enum Screen {
     /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
     /// modal.
     HouseTable,
-    /// Full-screen realm game (map/overview/log views). Entered only from
-    /// the Lobby modal, absent from the Tab cycle; Esc returns to the modal.
+    /// Full-screen realm board (map/targets/overview/log/history views) of
+    /// the house's standing world. Entered from the Games hub card or the
+    /// live strip, absent from the Tab cycle; Esc returns to the hub.
     Realm,
     /// Paired live coding scratchpad. Entered only once both users have run
     /// `/pair @other`, absent from the Tab cycle; Esc leaves the pairing.
@@ -137,7 +138,7 @@ impl Screen {
             | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
-            Screen::Realm => Screen::Dashboard,
+            Screen::Realm => Screen::Games,
             Screen::Scratchpad => Screen::Dashboard,
             Screen::Nightcap => Screen::Clubhouse,
         }
@@ -169,7 +170,7 @@ impl Screen {
             | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
-            Screen::Realm => Screen::Dashboard,
+            Screen::Realm => Screen::Games,
             Screen::Scratchpad => Screen::Dashboard,
             Screen::Nightcap => Screen::Clubhouse,
         }

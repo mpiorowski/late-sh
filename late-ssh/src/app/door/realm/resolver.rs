@@ -53,6 +53,59 @@ pub struct RealmGameState {
     /// their grace long expired.
     #[serde(default)]
     pub start_day: i32,
+    /// The last thing worth telling the house about this world: who marched
+    /// in, who took what from whom, who fell, and the opening and the end.
+    /// Stamped by the write that made it, so every replica's live strip
+    /// shows the same moment at the same time. Absent on worlds frozen
+    /// before it existed, and until the first such moment.
+    #[serde(default)]
+    pub news: Option<RealmNews>,
+}
+
+/// A moment the live strip shows, with the wall-clock instant it happened.
+/// Usernames are carried here because the player it names may be gone from
+/// the roster by the time the strip reads it (a withdrawal removes the
+/// player), and the strip must still say who it was.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RealmNews {
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub kind: RealmNewsKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RealmNewsKind {
+    /// The world was opened and stands mustering.
+    Opened,
+    /// Somebody marched in, wearing `color` (a palette slot).
+    Joined {
+        user_id: Uuid,
+        username: String,
+        color: u8,
+    },
+    /// A territory changed hands.
+    Took {
+        user_id: Uuid,
+        username: String,
+        from_user_id: Uuid,
+        from_username: String,
+        target: TerritoryId,
+        /// The country's name, carried so the strip never has to build a
+        /// generated world to say it.
+        target_name: String,
+    },
+    /// Somebody lost the last of their land.
+    Fell {
+        user_id: Uuid,
+        username: String,
+        by_user_id: Uuid,
+        by_username: String,
+    },
+    /// The world ended: conquered by `winner`, or dissolved when `None`.
+    Ended {
+        winner_user_id: Option<Uuid>,
+        winner_username: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

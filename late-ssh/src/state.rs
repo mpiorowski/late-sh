@@ -141,7 +141,7 @@ pub struct State {
     pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     pub door_rc_service: crate::app::door::rc::DoorRcService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
-    pub realm_service: crate::app::lobby::realm::svc::RealmService,
+    pub realm_service: crate::app::door::realm::svc::RealmService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,

@@ -520,6 +520,7 @@ impl App {
             &self.chat.live_streams,
             &self.live_games.live_rows(),
             &self.calendar,
+            &self.realm,
             reading,
             picture_settings,
         );
@@ -543,7 +544,7 @@ impl App {
             changed = true;
         }
         // Modal cursor, pending claim, and glow follow the daily snapshot.
-        self.lobby.sync(&self.daily, &self.realm);
+        self.lobby.sync(&self.daily);
         // The match chat room id only becomes known once the board's row
         // loads, so the one-time idempotent join and the visible-room sync
         // (read marker + tail) both key off the loaded detail here rather

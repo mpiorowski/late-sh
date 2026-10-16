@@ -5,11 +5,13 @@
 
 pub mod history_ui;
 pub mod input;
+pub mod join_ui;
+pub mod landing_ui;
+pub mod live;
 pub mod log_ui;
 pub mod map;
 pub mod map_ui;
 pub mod mapgen;
-pub mod modal_ui;
 pub mod overview_ui;
 pub mod resolver;
 pub mod results_ui;

@@ -30,7 +30,7 @@ pub struct RealmMapInfo {
 /// in an afternoon.
 pub const MAPS: &[RealmMapInfo] = &[
     RealmMapInfo {
-        id: "earth",
+        id: EARTH_MAP_ID,
         display_name: "Earth",
         blurb: "242 countries on real borders — the whole world to take",
     },
@@ -44,6 +44,9 @@ pub const MAPS: &[RealmMapInfo] = &[
 pub fn map_info_by_id(id: &str) -> Option<&'static RealmMapInfo> {
     MAPS.iter().find(|m| m.id == id)
 }
+
+/// The real Earth, the house's odd-season world.
+pub const EARTH_MAP_ID: &str = "earth";
 
 /// The id every generated world carries. It is not a map on its own — the
 /// spec beside it in the snapshot is what says which world.

@@ -7,7 +7,7 @@
 
 ## 1. Shape
 
-The cycle is its own vertical slice because it spans four domains and belongs to none of them. It consumes each leg through that domain's own queries (`DailyState::my_turn_matches`, `HouseState::my_seated_tables`, `door::hub::state::live_doors`) and owns everything cycle-specific itself: the leg order, the `GameWorkspace` enum, the routing, and the Arcade stop machinery (`ArcadeStop` is cycle vocabulary, not an Arcade concept; the Arcade never uses it). Adding a game to the cycle is an edit to this domain, on purpose: what joins and in what order is one policy, auditable here.
+The cycle is its own vertical slice because it spans four domains and belongs to none of them. It consumes each leg through that domain's own queries (`DailyState::my_turn_matches`, `HouseState::my_seated_tables`, `door::hub::state::live_doors`, which counts the Realm board as a live door while it is open, so a realm hopped away from is a stop like a detached roguelike) and owns everything cycle-specific itself: the leg order, the `GameWorkspace` enum, the routing, and the Arcade stop machinery (`ArcadeStop` is cycle vocabulary, not an Arcade concept; the Arcade never uses it). Adding a game to the cycle is an edit to this domain, on purpose: what joins and in what order is one policy, auditable here.
 
 Stop order: the base → each daily board waiting on your move (nearest deadline first) → each house table you hold a seat at (roster order) → each unfinished Arcade daily (lobby order) → each live door game (hub sidebar order) → each open watch → back to the base. Rooms are gone; real-time Arcade games (Lateris, Snake, Traffic, NES) and personal boards never join.
 

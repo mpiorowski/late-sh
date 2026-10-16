@@ -21,9 +21,15 @@ use crate::app::{
         state::CalendarState,
     },
     chat::news::live::{self as news_live, ArticleStripView},
-    door::spectate::{
-        live::{self as door_live, DoorGameStripView},
-        state::LiveRow,
+    door::{
+        realm::{
+            live::{self as realm_live, RealmStripView},
+            state::RealmState,
+        },
+        spectate::{
+            live::{self as door_live, DoorGameStripView},
+            state::LiveRow,
+        },
     },
     files::inline_image::InlineImageRenderSettings,
     lobby::daily::{live::MatchStripView, state::DailyState},
@@ -44,6 +50,7 @@ pub enum LiveStripView<'a> {
     Stream(StreamStripView),
     DoorGame(DoorGameStripView),
     Event(EventStripView),
+    Realm(RealmStripView),
 }
 
 impl LiveStripView<'_> {
@@ -60,6 +67,7 @@ impl LiveStripView<'_> {
             Self::Stream(strip) => Some(LiveSource::Stream(strip.stream.user_id)),
             Self::DoorGame(strip) => Some(LiveSource::DoorGame(strip.key)),
             Self::Event(strip) => Some(LiveSource::BoardEvent(strip.event.id)),
+            Self::Realm(strip) => Some(LiveSource::Realm(strip.item.id)),
         }
     }
 }
@@ -119,11 +127,13 @@ impl LiveState {
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
         calendar: &CalendarState,
+        realm: &RealmState,
         reading: bool,
         picture_settings: InlineImageRenderSettings,
     ) -> bool {
         let now_utc = Utc::now();
         let mut candidates = daily.live_candidates();
+        candidates.extend(realm_live::candidates(&realm.snapshot));
         candidates.extend(audio.live_candidates());
         candidates.extend(news_live::candidates(articles));
         candidates.extend(stream_live::candidates(streams));
@@ -140,6 +150,7 @@ impl LiveState {
             | Some(LiveSource::Stream(_))
             | Some(LiveSource::DoorGame(_))
             | Some(LiveSource::BoardEvent(_))
+            | Some(LiveSource::Realm(_))
             | None => None,
         };
         let picture_changed = self.refresh_track_picture(thumbnail, picture_settings);
@@ -250,6 +261,7 @@ impl LiveState {
         door_games: &[LiveRow],
         live_games: &LiveGamesService,
         calendar: &CalendarState,
+        realm: &RealmState,
     ) -> Option<LiveStripView<'a>> {
         match self.showing()? {
             LiveSource::DailyMatch(match_id) => {
@@ -282,6 +294,9 @@ impl LiveState {
                 event_live::view(&calendar.live_at(now), id, calendar.tz, now)
                     .map(LiveStripView::Event)
             }
+            LiveSource::Realm(game_id) => {
+                realm_live::view(&realm.snapshot, game_id, Utc::now()).map(LiveStripView::Realm)
+            }
         }
     }
 
@@ -295,7 +310,8 @@ impl LiveState {
             | LiveSource::NewsArticle(_)
             | LiveSource::Stream(_)
             | LiveSource::DoorGame(_)
-            | LiveSource::BoardEvent(_)) => Some(source),
+            | LiveSource::BoardEvent(_)
+            | LiveSource::Realm(_)) => Some(source),
         }
     }
 }

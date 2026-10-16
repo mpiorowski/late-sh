@@ -400,7 +400,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         ),
-        realm_service: crate::app::lobby::realm::svc::RealmService::new(
+        realm_service: crate::app::door::realm::svc::RealmService::new(
             db.clone(),
             chip_service.clone(),
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -615,7 +615,7 @@ fn make_app_with_chat_service_and_permissions(
             chip_service.clone(),
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         ),
-        realm_service: crate::app::lobby::realm::svc::RealmService::new(
+        realm_service: crate::app::door::realm::svc::RealmService::new(
             db.clone(),
             chip_service.clone(),
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -887,7 +887,7 @@ pub fn make_app_with_paired_client(
             chip_service.clone(),
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         ),
-        realm_service: crate::app::lobby::realm::svc::RealmService::new(
+        realm_service: crate::app::door::realm::svc::RealmService::new(
             db.clone(),
             chip_service.clone(),
             ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),

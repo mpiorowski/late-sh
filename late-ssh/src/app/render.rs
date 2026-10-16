@@ -211,6 +211,7 @@ struct DrawContext<'a> {
     /// `HubGame::live_screen` (the one definition the backtick cycle also
     /// reads) before the door states are borrowed or taken below.
     lateania_live: bool,
+    realm_live: bool,
     nethack_live: bool,
     dcss_live: bool,
     brogue_live: bool,
@@ -372,7 +373,7 @@ struct DrawContext<'a> {
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
-    realm: &'a crate::app::lobby::realm::state::RealmState,
+    realm: &'a crate::app::door::realm::state::RealmState,
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -470,6 +471,7 @@ impl App {
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
+        let realm_live = HubGame::Realm.live_screen(self).is_some();
         let nethack_live = HubGame::Nethack.live_screen(self).is_some();
         let dcss_live = HubGame::Dcss.live_screen(self).is_some();
         let brogue_live = HubGame::Brogue.live_screen(self).is_some();
@@ -790,6 +792,7 @@ impl App {
                 &live_rows,
                 &self.live_games,
                 &self.calendar,
+                &self.realm,
             )
         } else {
             None
@@ -846,6 +849,7 @@ impl App {
                     &live_rows,
                     &self.live_games,
                     &self.calendar,
+                    &self.realm,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
         } else {
@@ -1636,6 +1640,7 @@ impl App {
                         lateania_slots: self.lateania_service.character_slots(self.user_id),
                         lateania_slot_cursor: self.lateania_slot_cursor,
                         lateania_live,
+                        realm_live,
                         nethack_live,
                         dcss_live,
                         brogue_live,
@@ -2208,6 +2213,8 @@ impl App {
                         lateania_slots: ctx.lateania_slots.clone(),
                         lateania_slot_cursor: ctx.lateania_slot_cursor,
                         lateania_live: ctx.lateania_live,
+                        realm_live: ctx.realm_live,
+                        realm: ctx.realm,
                         nethack_live: ctx.nethack_live,
                         dcss_live: ctx.dcss_live,
                         brogue_live: ctx.brogue_live,
@@ -2594,7 +2601,7 @@ impl App {
                 terminal_images,
                 ctx.daily_chat_view.take(),
             ),
-            Screen::Realm => crate::app::lobby::realm::ui::draw(frame, content_area, ctx.realm),
+            Screen::Realm => crate::app::door::realm::ui::draw(frame, content_area, ctx.realm),
             Screen::HouseTable => crate::app::lobby::house::ui::draw(
                 frame,
                 content_area,
@@ -2776,7 +2783,6 @@ impl App {
                 inner,
                 ctx.lobby,
                 ctx.daily,
-                ctx.realm,
                 ctx.house,
                 tour_header.as_ref(),
             );

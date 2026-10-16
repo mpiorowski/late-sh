@@ -5,8 +5,10 @@
 //! (resolved on the spot). Target view: `j`/`k` walk the table, Enter or `a`
 //! acts on the highlighted row. Tab cycles map -> targets -> overview -> log.
 //! `n`/`N` walks your own territories, framing each on the map, and `g` in
-//! either list does the same for the highlighted row. `q`/Esc returns to the
-//! lobby modal — there is no quitting a running realm.
+//! either list does the same for the highlighted row. `j` on the map, for a
+//! visitor while the gates are open, is the colour picker and the way in.
+//! `q`/Esc returns to the Games hub with nothing to confirm: closing the
+//! board is not leaving the game, and a running realm cannot be left.
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
@@ -16,6 +18,10 @@ use super::map_ui::cell_at;
 use super::state::RealmView;
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
+    // The colour picker owns the keys while it is up.
+    if app.realm.join_draft.is_some() {
+        return handle_join_input(app, event);
+    }
     match event {
         ParsedInput::Byte(byte) => handle_key(app, *byte),
         ParsedInput::Char(ch) if ch.is_ascii() => handle_key(app, *ch as u8),
@@ -60,6 +66,15 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
         }
         b'q' | b'Q' | 0x1B => {
             close_board(app);
+            true
+        }
+        // The way in for a visitor: pick a colour, march in. The map is the
+        // view this is offered on, so the other views keep `j` for their
+        // own cursors.
+        b'j' | b'J' if view == RealmView::Map && app.realm.can_join() => {
+            if let Some(game) = app.realm.live().cloned() {
+                app.realm.begin_join_draft(&game);
+            }
             true
         }
         // There is no abandoning a running realm: stopping is something you
@@ -450,7 +465,62 @@ fn scroll_log(app: &mut App, delta: i32) {
 }
 
 pub(crate) fn close_board(app: &mut App) {
-    let target = app.realm.close_board().unwrap_or(Screen::Dashboard);
+    let target = app.realm.close_board().unwrap_or(Screen::Games);
     app.set_screen(target);
-    app.show_lobby_modal = true;
+}
+
+/// Enter on the hub card: the standing world's board, to play or to watch,
+/// or the last world's while the next one is being raised. A board already
+/// open on it (hopped away from) is resumed as it was.
+pub(crate) fn open_realm(app: &mut App) {
+    let game_id = app
+        .realm
+        .live()
+        .map(|game| game.id)
+        .or_else(|| app.realm.snapshot.last_finished().map(|game| game.id));
+    let Some(game_id) = game_id else {
+        app.banner = Some(crate::app::common::primitives::Banner::info(
+            "Realm: the next world is being raised, try again in a moment",
+        ));
+        return;
+    };
+    if !app
+        .realm
+        .board
+        .as_ref()
+        .is_some_and(|b| b.game_id == game_id)
+    {
+        app.realm.open_board(game_id, Screen::Games);
+    }
+    app.set_screen(Screen::Realm);
+}
+
+/// The colour picker: `j`/`k` or the wheel walk the free colours, Enter
+/// marches in, Esc puts it away.
+fn handle_join_input(app: &mut App, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.realm.join_cancel();
+        }
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            app.realm.join_confirm();
+        }
+        ParsedInput::Arrow(b'B')
+        | ParsedInput::Byte(b'j' | b'J')
+        | ParsedInput::Char('j' | 'J') => {
+            app.realm.join_move_selection(1);
+        }
+        ParsedInput::Arrow(b'A')
+        | ParsedInput::Byte(b'k' | b'K')
+        | ParsedInput::Char('k' | 'K') => {
+            app.realm.join_move_selection(-1);
+        }
+        ParsedInput::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => app.realm.join_move_selection(-1),
+            MouseEventKind::ScrollDown => app.realm.join_move_selection(1),
+            _ => {}
+        },
+        _ => {}
+    }
+    true
 }

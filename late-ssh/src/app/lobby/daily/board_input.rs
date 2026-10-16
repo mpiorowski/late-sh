@@ -232,7 +232,7 @@ pub(crate) fn close_board(app: &mut App) {
     match entry {
         BoardEntry::Lobby => {
             app.show_lobby_modal = true;
-            app.lobby.mark_seen(&app.daily, &app.realm);
+            app.lobby.mark_seen(&app.daily);
         }
         BoardEntry::LoungeStrip | BoardEntry::Practice => {}
     }

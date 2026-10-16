@@ -1,9 +1,5 @@
-//! The Lobby modal: the daily matches, the realm games and the house tables
-//! in one scrollable list, plus the daily challenge overlay.
-//!
-//! What a realm *looks like* in here — its row and its two overlays — is
-//! `realm/modal_ui.rs`, because it is about realms rather than about this
-//! list; what the list keeps is where they go in it. The widgets both draw
+//! The Lobby modal: the daily matches and the house tables in one
+//! scrollable list, plus the daily challenge overlay. The widgets it draws
 //! with are `modal_widgets.rs`.
 
 use chrono::Utc;
@@ -30,10 +26,6 @@ use crate::app::{
     lobby::modal_widgets::{
         centered_rect, col, empty_line, gap, key, marker_span, section_line, text,
     },
-    lobby::realm::{
-        modal_ui::{draw_realm_draft_overlay, draw_realm_join_overlay, realm_line},
-        state::RealmState,
-    },
     lobby::state::{LobbyEntry, LobbyState},
 };
 
@@ -52,7 +44,6 @@ pub(crate) fn draw(
     area: Rect,
     lobby: &LobbyState,
     daily: &DailyState,
-    realm: &RealmState,
     house: &HouseState,
     tour: Option<&crate::app::clubhouse::ui::TourHeader>,
 ) {
@@ -93,7 +84,7 @@ pub(crate) fn draw(
     ])
     .split(inner);
 
-    draw_list(frame, layout[1], lobby, daily, realm, house);
+    draw_list(frame, layout[1], lobby, daily, house);
     match tour {
         Some(header) => header.draw(
             frame,
@@ -104,18 +95,12 @@ pub(crate) fn draw(
         ),
         None => {
             draw_status(frame, layout[2], lobby, daily);
-            draw_footer(frame, layout[3], lobby, daily, realm);
+            draw_footer(frame, layout[3], lobby, daily);
         }
     }
 
     if let Some(draft) = &daily.challenge_draft {
         draw_draft_overlay(frame, popup, draft);
-    }
-    if let Some(draft) = realm.join_draft.as_ref() {
-        draw_realm_join_overlay(frame, popup, draft);
-    }
-    if let Some(draft) = realm.create_draft.as_ref() {
-        draw_realm_draft_overlay(frame, popup, draft, realm);
     }
 }
 
@@ -124,15 +109,12 @@ fn draw_list(
     area: Rect,
     lobby_state: &LobbyState,
     daily: &DailyState,
-    realm: &RealmState,
     house: &HouseState,
 ) {
     let finished = daily.my_finished();
     let matches = daily.my_matches();
     let lobby = daily.lobby();
     let live = daily.live_games();
-    let my_realms = realm.my_games();
-    let other_realms = realm.other_games();
     let width = area.width as usize;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -175,34 +157,11 @@ fn draw_list(
             ));
         }
     }
-    // Realm games: always present (stable chrome), mine first, then
-    // joinable/watchable ones.
-    lines.push(Line::raw(""));
-    lines.push(section_line(width, "realm"));
-    if my_realms.is_empty() && other_realms.is_empty() {
-        lines.push(empty_line("no realm games · start one with n"));
-    }
-    let realm_base = lobby_base + lobby.len() + live.len();
-    for (idx, game) in my_realms.iter().enumerate() {
-        lines.push(realm_line(
-            realm,
-            game,
-            lobby_state.selected == realm_base + idx,
-        ));
-    }
-    for (idx, game) in other_realms.iter().enumerate() {
-        lines.push(realm_line(
-            realm,
-            game,
-            lobby_state.selected == realm_base + my_realms.len() + idx,
-        ));
-    }
-
     // The fixed house tables: always present (stable chrome), one row per
     // roster variant, live occupancy from the singleton services.
     lines.push(Line::raw(""));
     lines.push(section_line(width, "house tables"));
-    let house_base = realm_base + my_realms.len() + other_realms.len();
+    let house_base = lobby_base + lobby.len() + live.len();
     for (idx, table) in HouseTable::ALL.into_iter().enumerate() {
         lines.push(house_line(
             table,
@@ -214,13 +173,8 @@ fn draw_list(
     // Keep the selected row in view on small terminals: scroll whole lines.
     let budget = area.height as usize;
     if lines.len() > budget {
-        let selected_line = selected_line_index(
-            lobby_state.selected,
-            lobby_base,
-            lobby.len(),
-            live.len(),
-            my_realms.len() + other_realms.len(),
-        );
+        let selected_line =
+            selected_line_index(lobby_state.selected, lobby_base, lobby.len(), live.len());
         let skip = visible_window_start(selected_line, lines.len(), budget);
         lines.drain(..skip);
         lines.truncate(budget);
@@ -280,7 +234,6 @@ fn selected_line_index(
     mine_count: usize,
     lobby_count: usize,
     live_count: usize,
-    realm_count: usize,
 ) -> usize {
     if selected < mine_count {
         return 1 + selected;
@@ -300,20 +253,13 @@ fn selected_line_index(
     if after_lobby < live_count {
         return live_base + after_lobby;
     }
-    // live rows (when present) + blank + realm header
-    let realm_base = if live_count > 0 {
+    // live rows (when present) + blank + house-tables header
+    let house_base = if live_count > 0 {
         live_base + live_count + 2
     } else {
         lobby_base + lobby_rows + 2
     };
-    let after_live = after_lobby - live_count;
-    if after_live < realm_count {
-        return realm_base + after_live;
-    }
-    // realm rows (or empty row) + blank + house-tables header
-    let realm_rows = realm_count.max(1);
-    let house_base = realm_base + realm_rows + 2;
-    house_base + (after_live - realm_count)
+    house_base + (after_lobby - live_count)
 }
 
 // List rows are a fixed grid: marker, opponent, game, detail, status. `{:<N}`
@@ -562,15 +508,7 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyState) {
-    let line = if lobby.confirm_realm.is_some() {
-        Line::from(Span::styled(
-            "join this realm? you spawn at once, untouchable for your first day · enter confirm · esc back",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ))
-        .centered()
-    } else if lobby.confirm_claim.is_some() {
+    let line = if lobby.confirm_claim.is_some() {
         Line::from(Span::styled(
             "claim this challenge and start the match? enter confirm · esc back",
             Style::default()
@@ -656,13 +594,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_footer(
-    frame: &mut Frame,
-    area: Rect,
-    lobby: &LobbyState,
-    daily: &DailyState,
-    realm: &RealmState,
-) {
+fn draw_footer(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyState) {
     let mut spans = vec![
         key("j/k"),
         text(" move"),
@@ -673,11 +605,8 @@ fn draw_footer(
         key("c"),
         text(" challenge"),
         gap(),
-        key("n"),
-        text(" new realm"),
-        gap(),
     ];
-    match lobby.selected_entry(daily, realm) {
+    match lobby.selected_entry(daily) {
         Some(LobbyEntry::Challenge(challenge)) if challenge.challenger_id == daily.user_id() => {
             spans.push(key("x"));
             spans.push(text(" cancel"));
@@ -688,22 +617,6 @@ fn draw_footer(
             spans.push(text(" dismiss"));
             spans.push(gap());
         }
-        Some(LobbyEntry::Realm(game)) if !game.is_member(realm.user_id) && game.joinable => {
-            // The row says Enter joins, so say how to look first.
-            spans.push(key("w"));
-            spans.push(text(" watch"));
-            spans.push(gap());
-        }
-        Some(LobbyEntry::Realm(game)) if game.is_member(realm.user_id) && game.can_withdraw => {
-            // Only in your own first day, or as the last one in the realm.
-            spans.push(key("x"));
-            spans.push(text(if game.players.len() == 1 {
-                " disband"
-            } else {
-                " withdraw"
-            }));
-            spans.push(gap());
-        }
         _ => {}
     }
     spans.push(key("esc"));
@@ -711,12 +624,6 @@ fn draw_footer(
     frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
 }
 
-/// The realm create-game overlay: pick a ruleset, then the hour this game's
-/// action points come back each day. The hour is shown in the creator's own
-/// clock as well as UTC — a game meant for one side of the planet is exactly
-/// what this step is for.
-/// The overlay's contents, built to a known text width so a long tagline
-/// or a wordy note cannot run past the border. Split out from the draw so
 #[cfg(test)]
 #[path = "modal_ui_test.rs"]
 mod modal_ui_test;

@@ -5,12 +5,12 @@ use uuid::Uuid;
 use super::{HistoryFrame, render};
 use crate::app::common::worldmap::data::map_by_id;
 use crate::app::common::worldmap::view::Viewport;
-use crate::app::lobby::realm::resolver::{
+use crate::app::door::realm::resolver::{
     DayBoard, DayPlayer, DayResult, LogEntry, RealmGameState, STATE_VERSION,
 };
-use crate::app::lobby::realm::rulesets::STANDARD;
-use crate::app::lobby::realm::state::palette_shades;
-use crate::app::lobby::realm::svc::ArchivedDay;
+use crate::app::door::realm::rulesets::STANDARD;
+use crate::app::door::realm::state::palette_shades;
+use crate::app::door::realm::svc::ArchivedDay;
 
 /// The live game the rail names people from. Empty of players on purpose:
 /// everything the history draws about *who* comes from the day's own board,
@@ -26,6 +26,7 @@ fn live_state() -> RealmGameState {
         last_day: None,
         start_player_count: 0,
         start_day: 0,
+        news: None,
     }
 }
 
@@ -228,7 +229,7 @@ fn an_empty_archive_says_so_instead_of_drawing_nothing() {
 /// teleport to the other one.
 #[test]
 fn the_slider_stops_at_both_ends() {
-    use crate::app::lobby::realm::state::history_step_index;
+    use crate::app::door::realm::state::history_step_index;
 
     // Three days, standing on the middle one.
     assert_eq!(history_step_index(1, 3, -1), 0);
