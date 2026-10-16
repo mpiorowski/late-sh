@@ -1240,7 +1240,13 @@ impl RealmState {
                 // A phase rule is worth answering on the spot: it is a rule,
                 // not a race lost.
                 let map = detail.map()?;
-                let reach = super::resolver::reach_for(&detail.state, &map, user_id, target);
+                let reach = super::resolver::reach_for(
+                    &detail.state,
+                    &map,
+                    user_id,
+                    target,
+                    detail.today(),
+                );
                 let defender = *owner;
                 if let Err(locked) =
                     detail
@@ -1321,7 +1327,8 @@ impl RealmState {
         let detail = self.board.as_ref()?.detail.as_ref()?;
         let map = detail.map()?;
         let target = action.target();
-        let reach = super::resolver::reach_for(&detail.state, &map, self.user_id, target);
+        let reach =
+            super::resolver::reach_for(&detail.state, &map, self.user_id, target, detail.today());
         projected_probability(
             &detail.state,
             &map,
@@ -1343,6 +1350,7 @@ impl RealmState {
             &map,
             self.user_id,
             target,
+            detail.today(),
         ))
     }
 
@@ -1359,7 +1367,7 @@ impl RealmState {
         };
         let state = &detail.state;
         let today = detail.today();
-        let reach_index = ReachIndex::build(state, &map, self.user_id);
+        let reach_index = ReachIndex::build(state, &map, self.user_id, today);
         // Whether the short-reach cap is biting at all: it lifts entirely
         // for a player with nothing in range, so the table must not mark
         // rows unreachable when they are the only thing left.
@@ -1491,16 +1499,15 @@ impl RealmState {
     }
 }
 
-/// Action points left today, and the daily cap, for the viewer.
+/// Action points left today, and what today is worth, for the viewer. The
+/// cap is the day's real allowance (the tier for who is involved, plus the
+/// bank), the same figure the engine spends against.
 pub fn points_left(board: &RealmBoardState, user_id: Uuid) -> Option<(usize, usize)> {
     let detail = board.detail.as_ref()?;
-    let cap = detail
-        .state
-        .ruleset
-        .actions_per_day(detail.state.start_player_count) as usize;
+    let standing = detail.state.standing(user_id, detail.today());
     Some((
-        detail.state.points_left(user_id, detail.today()) as usize,
-        cap,
+        usize::from(standing.left()),
+        usize::from(standing.allowance),
     ))
 }
 

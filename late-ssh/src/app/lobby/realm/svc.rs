@@ -577,7 +577,9 @@ impl RealmService {
         // wait for, so the creator spawns and can play at once. Everyone who
         // arrives later does the same, protected by their own first days.
         state.roll_day(today, day_seed(Uuid::nil(), today));
-        if !spawn_player(&mut state, &map, Uuid::nil(), user_id) {
+        // The server's draw, like a generated world's seed: the creator
+        // starts somewhere new in every realm they raise.
+        if !spawn_player(&mut state, &map, Uuid::nil(), user_id, rand_seed()) {
             bail!("that map has no room to start a realm");
         }
         let game = RealmGame::create_game(
@@ -657,7 +659,9 @@ impl RealmService {
                 .players
                 .push(new_player(user_id, username, today, color, claimed));
             state.start_player_count = state.start_player_count.max(state.players.len() as u8);
-            if !spawn_player(&mut state, &map, game_id, user_id) {
+            let spawn_seed =
+                day_seed(game_id, state.revision as i32) ^ u64::from(user_id.as_u128() as u32);
+            if !spawn_player(&mut state, &map, game_id, user_id, spawn_seed) {
                 bail!("there is no free land left to spawn on");
             }
             state.revision += 1;
@@ -710,22 +714,13 @@ impl RealmService {
                 return Ok(());
             }
             let expected = state.revision as i64;
-            let freed: Vec<TerritoryId> = state
-                .ownership
-                .iter()
-                .filter(|(_, owner)| **owner == user_id)
-                .map(|(territory, _)| *territory)
-                .collect();
+            let freed = state.release_holdings(user_id);
             state.log(
                 today,
                 day_seed(game_id, today),
-                resolver::LogEntry::Left {
-                    user_id,
-                    freed: freed.clone(),
-                },
+                resolver::LogEntry::Left { user_id, freed },
             );
             state.players.retain(|p| p.user_id != user_id);
-            state.ownership.retain(|_, owner| *owner != user_id);
             state.revision += 1;
             let updated = RealmGame::update_state_cas(
                 &client,
@@ -848,7 +843,9 @@ impl RealmService {
             if let Some(finished) = rolled {
                 self.archive_with_board(&client, game_id, &finished, closing_board.as_ref())
                     .await;
-                self.announce_day_rolled(game_id, &name, finished.day + 1, &state);
+                // The day that opened, which is not `finished.day + 1` when
+                // the realm went days without a rollover.
+                self.announce_day_rolled(game_id, &name, day, &state);
             }
             if let Some(current) = state.last_day.as_ref() {
                 // A game that just ended has no tomorrow to snapshot, so the
@@ -1339,10 +1336,19 @@ impl RealmService {
     }
 }
 
-/// Put a player on the map: a random free territory, picked with a seeded
-/// RNG so the same arrival always lands the same way. Returns None when the
-/// world is full, which is the one thing that can refuse a join outright.
-fn spawn_player(state: &mut RealmGameState, map: &WorldMap, game_id: Uuid, user_id: Uuid) -> bool {
+/// Put a player on the map: a free territory drawn with `spawn_seed`.
+/// Returns false when the world is full, which is the one thing that can
+/// refuse a join outright. The caller owns the seed because the creator's
+/// cannot be derived: their game has no id yet, and anything else they hold
+/// in common across realms (their user id, an empty world) would put them on
+/// the same country every time.
+fn spawn_player(
+    state: &mut RealmGameState,
+    map: &WorldMap,
+    game_id: Uuid,
+    user_id: Uuid,
+    spawn_seed: u64,
+) -> bool {
     let free: Vec<u16> = (0..map.territories.len() as u16)
         .filter(|t| !state.ownership.contains_key(t))
         .collect();
@@ -1361,9 +1367,7 @@ fn spawn_player(state: &mut RealmGameState, map: &WorldMap, game_id: Uuid, user_
         .filter(|t| map.territory(*t).is_some_and(|t| !t.land_links.is_empty()))
         .collect();
     let free = if mainland.is_empty() { free } else { mainland };
-    let mut rng = SplitMix64::new(
-        day_seed(game_id, state.revision as i32) ^ u64::from(user_id.as_u128() as u32),
-    );
+    let mut rng = SplitMix64::new(spawn_seed);
     let territory = free[rng.next_index(free.len())];
     state.ownership.insert(territory, user_id);
     // Logged, because the history replays from the log and a game whose
@@ -1574,19 +1578,23 @@ fn payout_earned_by(state: &RealmGameState, user_id: Uuid, winner: Option<Uuid>)
     winner.is_some() && payout_eligible(state, user_id)
 }
 
-/// How many players the pot is sized on: those who have actually played,
-/// not everyone on the roster.
+/// How many players the pot is sized on: those who played as long as a win
+/// takes, not everyone on the roster.
 ///
 /// With arrivals open all game, counting the roster would let a colluder
-/// walk alts in to swell the prize without ever taking a turn. Counting
-/// players who cleared `min_payout_active_days` means an honest latecomer
-/// grows the pot and a body thrown in to pad it does not. Floored at two,
-/// because a realm is never worth less than a duel.
+/// walk alts in to swell the prize without ever taking a turn, and the
+/// podium bar (`min_payout_active_days`) is a few clicks on a few days, so
+/// counting players who cleared that let one person with nine alts bank a
+/// whole 60/25/15 split. The win bar makes each padded body cost as many
+/// days of play as the conquest itself. It is a mitigation: the pot still
+/// scales with headcount, which is the thing alts fake. The cost is that an
+/// honest player knocked out before the win bar does not grow the pot
+/// either. Floored at two, because a realm is never worth less than a duel.
 pub fn paying_players(state: &RealmGameState) -> u8 {
     let played = state
         .players
         .iter()
-        .filter(|p| p.active_days >= state.ruleset.min_payout_active_days)
+        .filter(|p| p.active_days >= state.ruleset.min_active_days_to_win)
         .count();
     played.clamp(2, u8::MAX as usize) as u8
 }
@@ -2050,7 +2058,7 @@ mod tests {
             "start_day": 20_000
         }))
         .expect("state");
-        let bar = state.ruleset.min_payout_active_days;
+        let bar = state.ruleset.min_active_days_to_win;
         let mut add = |n: u128, active_days: u16| {
             state.players.push(
                 serde_json::from_value(serde_json::json!({
@@ -2103,6 +2111,51 @@ mod tests {
         // And the floor holds: a duel is the least a realm can be worth.
         state.players.truncate(1);
         assert_eq!(paying_players(&state), 2);
+    }
+
+    /// Clicking through the podium bar on a few days is cheap, and an alt
+    /// that does it must not grow the prize or open a place for itself:
+    /// otherwise one person with nine alts banks the whole 60/25/15 split.
+    /// Only somebody who played as long as a win takes adds to the pot.
+    #[test]
+    fn alts_who_click_through_the_podium_bar_do_not_swell_the_pot() {
+        let mut state: RealmGameState = serde_json::from_value(serde_json::json!({
+            "version": STATE_VERSION,
+            "revision": 2,
+            "ruleset": serde_json::to_value(RealmRulesetSnapshot::from(
+                &super::super::rulesets::STANDARD,
+            ))
+            .unwrap(),
+            "players": [],
+            "ownership": {},
+            "last_day": null,
+            "start_player_count": 0,
+            "start_day": 20_000
+        }))
+        .expect("state");
+        let podium = state.ruleset.min_payout_active_days;
+        let win = state.ruleset.min_active_days_to_win;
+        assert!(podium < win, "the podium bar is the cheaper one");
+        for n in 1..=10u128 {
+            state.players.push(
+                serde_json::from_value(serde_json::json!({
+                    "user_id": Uuid::from_u128(n),
+                    "username": format!("p{n}"),
+                    "status": if n == 1 { "alive" } else { "eliminated" },
+                    "joined_day": 20_000,
+                    "exit_day": if n == 1 { None } else { Some(20_002) },
+                    "exit_territories": 1,
+                    "active_days": if n == 1 { win } else { podium }
+                }))
+                .expect("player"),
+            );
+        }
+        assert_eq!(paying_players(&state), 2, "nine alts are not nine players");
+        assert_eq!(
+            payout_plan(paying_players(&state), 1.0).len(),
+            1,
+            "and they open no places"
+        );
     }
 
     #[test]

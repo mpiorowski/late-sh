@@ -11,7 +11,7 @@
 //! What a day still means: the action budget. Every player gets N points per
 //! *realm day*, which rolls over at the game's own `reset_hour_utc` (picked at
 //! creation so a US game and an EU game can refill at civilised local times).
-//! Days also drive the inactivity kick.
+//! Days also drive dormancy decay and the abandoned-realm dissolve.
 
 use std::collections::BTreeMap;
 
@@ -44,8 +44,9 @@ pub struct RealmGameState {
     /// The running log of the current realm day; older days are archived to
     /// `realm_days` when the day rolls over.
     pub last_day: Option<DayResult>,
-    /// Player count when the game started; picks the action-point tier and
-    /// the payout tier.
+    /// The most players the roster has held; it grows as people join. The
+    /// action-point tier follows `involved_count` and the payout tier
+    /// follows `paying_players`, not this.
     pub start_player_count: u8,
     /// The realm day the game started on — the clock the early-game attack
     /// grace runs off. Zero on games frozen before it existed, which makes
@@ -808,18 +809,30 @@ impl RealmGameState {
     }
 
     /// `joinable` from the territory count alone (see `claimed_fraction_of`).
+    /// A realm short of a rival keeps its doors open however much of the map
+    /// is taken: it cannot be won until somebody else arrives, so closing
+    /// them would leave its last player in a war that can never end.
     pub fn joinable_of(&self, territory_total: usize) -> bool {
         self.players.len() < self.ruleset.max_players as usize
-            && self.claimed_fraction_of(territory_total) < self.ruleset.join_max_claimed
+            && (self.short_of_rivals()
+                || self.claimed_fraction_of(territory_total) < self.ruleset.join_max_claimed)
     }
 
-    /// What a missed day banks, as a fraction of the daily base, given how
-    /// many days in a row were missed. Missing one is nearly free; missing a
-    /// few costs half; past the cutoff a missed day banks nothing, so being
-    /// away cannot be hoarded into a blitz.
-    pub fn bank_rate(&self, missed: i32) -> f64 {
+    /// Too few people on the roster for this to be a war at all. A realm
+    /// created and sat in alone is not a conquest, so nobody can win it.
+    pub fn short_of_rivals(&self) -> bool {
+        self.players.len() < self.ruleset.min_players as usize
+    }
+
+    /// What the `nth` missed day in a row banks, as a fraction of the daily
+    /// base. Each missed day is its own rung: the first is nearly free, the
+    /// next few up to the cutoff bank half, and every day past the cutoff
+    /// banks nothing, so being away cannot be hoarded into a blitz. A rung
+    /// past the cutoff adds nothing; it never takes back what the earlier
+    /// rungs banked.
+    pub fn bank_rate(&self, nth: i32) -> f64 {
         let rs = &self.ruleset;
-        match missed {
+        match nth {
             ..=0 => 1.0,
             1 => rs.bank_rate_one_missed,
             m if m <= i32::from(rs.bank_missed_cutoff) => rs.bank_rate_few_missed,
@@ -848,11 +861,11 @@ impl RealmGameState {
     fn opening_allowance(&self, player: &RealmPlayer, day: i32) -> (u8, u8) {
         let base = self.daily_base(day);
         // Days between their last action and today are the missed ones; the
-        // ladder decides what each of them is still worth.
+        // ladder decides what each of them is still worth, one rung a day.
         let missed = (player.quiet_days(day) - 1).max(0);
-        let rate = self.bank_rate(missed);
+        let rungs: f64 = (1..=missed).map(|nth| self.bank_rate(nth)).sum();
         let cap = f64::from(base) * f64::from(self.ruleset.bank_cap_days);
-        let banked = (f64::from(base) * rate * missed as f64).min(cap).floor() as u8;
+        let banked = (f64::from(base) * rungs).min(cap).floor() as u8;
         (base, banked)
     }
 
@@ -955,9 +968,7 @@ impl RealmGameState {
 
     /// Has this player put in the days a conquest is supposed to take?
     pub fn can_win(&self, user_id: Uuid) -> bool {
-        // Enough rivals to have been a war at all: a realm created and sat
-        // in alone for a week is not a conquest.
-        self.players.len() >= self.ruleset.min_players as usize
+        !self.short_of_rivals()
             && self
                 .player(user_id)
                 .is_some_and(|p| p.active_days >= self.ruleset.min_active_days_to_win)
@@ -990,7 +1001,19 @@ impl RealmGameState {
         out
     }
 
-    /// Free a player's territories and record their exit.
+    /// Hand a player's ground back to nobody, walls and all, and say which
+    /// ground it was. Free land carries no walls: whoever claims it next
+    /// starts from bare ground, and the map never draws a fortress nobody
+    /// holds.
+    pub(super) fn release_holdings(&mut self, user_id: Uuid) -> Vec<TerritoryId> {
+        let freed = self.holdings(user_id);
+        self.ownership.retain(|_, owner| *owner != user_id);
+        for territory in &freed {
+            self.forts.remove(territory);
+        }
+        freed
+    }
+
     /// Free a player's territories and record their exit. Hands back the
     /// territories themselves rather than a count: the log is what the
     /// history replays from, and "three territories went somewhere" cannot be
@@ -1001,13 +1024,7 @@ impl RealmGameState {
         status: RealmPlayerStatus,
         day: i32,
     ) -> Vec<TerritoryId> {
-        let freed: Vec<TerritoryId> = self
-            .ownership
-            .iter()
-            .filter(|(_, owner)| **owner == user_id)
-            .map(|(territory, _)| *territory)
-            .collect();
-        self.ownership.retain(|_, owner| *owner != user_id);
+        let freed = self.release_holdings(user_id);
         if let Some(p) = self.player_mut(user_id) {
             p.status = status;
             p.exit_day = Some(day);
@@ -1063,13 +1080,11 @@ pub struct ReachIndex {
 }
 
 impl ReachIndex {
-    pub fn build(state: &RealmGameState, map: &WorldMap, actor: Uuid) -> Self {
-        Self::build_on(state, map, actor, state.start_day)
-    }
-
-    /// As `build`, for a given day — walls weaken as their holder goes
-    /// quiet, so the routes around them change with the calendar.
-    pub fn build_on(state: &RealmGameState, map: &WorldMap, actor: Uuid, day: i32) -> Self {
+    /// Routes as they stand on `day`. The day is required because walls
+    /// weaken as their holder goes quiet, so the routes around them change
+    /// with the calendar, and the engine and the board must price the same
+    /// day or the odds on screen are not the odds rolled.
+    pub fn build(state: &RealmGameState, map: &WorldMap, actor: Uuid, day: i32) -> Self {
         let rs = &state.ruleset;
         let holdings = state.holdings(actor);
 
@@ -1256,15 +1271,17 @@ pub fn anything_within(
         .any(|t| index.reach(map, &state.ruleset, t.id).cost <= cap)
 }
 
-/// Reach of a target for a player, building the index for one lookup.
-/// Callers pricing many targets should build a [`ReachIndex`] instead.
+/// Reach of a target for a player on `day`, building the index for one
+/// lookup. Callers pricing many targets should build a [`ReachIndex`]
+/// instead.
 pub fn reach_for(
     state: &RealmGameState,
     map: &WorldMap,
     actor: Uuid,
     target: TerritoryId,
+    day: i32,
 ) -> Reach {
-    ReachIndex::build(state, map, actor).reach(map, &state.ruleset, target)
+    ReachIndex::build(state, map, actor, day).reach(map, &state.ruleset, target)
 }
 
 /// The odds a player is shown, and the odds the roll uses — one function, so
@@ -1358,6 +1375,9 @@ pub fn apply_action(
             level: raised,
         };
         state.log(day, day_seed, entry.clone());
+        // A day spent digging is a day played, and it can be the day that
+        // brings a lone survivor up to the bar.
+        let end = check_end(state, map, day, day_seed);
         state.revision += 1;
         return Ok(ActionOutcome {
             entry,
@@ -1365,7 +1385,7 @@ pub fn apply_action(
             success: true,
             reach: Reach::ADJACENT,
             points_left,
-            end: ResolveEnd::Ongoing,
+            end,
         });
     }
 
@@ -1383,7 +1403,7 @@ pub fn apply_action(
         RealmAction::Fortify { .. } => unreachable!("handled above"),
     };
 
-    let index = ReachIndex::build(state, map, actor);
+    let index = ReachIndex::build(state, map, actor, day);
     let reach = index.reach(map, &state.ruleset, target);
     if reach.is_unreachable() {
         return Err(ActionRejected::NoRoute);

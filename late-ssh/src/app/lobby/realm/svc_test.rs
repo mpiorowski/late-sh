@@ -144,7 +144,12 @@ async fn load_state(svc: &RealmService, game_id: Uuid) -> RealmGameState {
 /// to the closest free land by hops rather than assuming a neighbour.
 fn nearest_free(state: &RealmGameState, user_id: Uuid) -> TerritoryId {
     let map = crate::app::lobby::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
-    let index = crate::app::lobby::realm::resolver::ReachIndex::build(state, &map, user_id);
+    let index = crate::app::lobby::realm::resolver::ReachIndex::build(
+        state,
+        &map,
+        user_id,
+        realm_day(Utc::now(), RESET_HOUR),
+    );
     map.territories
         .iter()
         .filter(|t| !state.ownership.contains_key(&t.id))
@@ -683,7 +688,12 @@ async fn a_distant_strike_is_allowed_at_long_odds() {
     // test (it is refused outright, see `ActionRejected::NoRoute`). Whether
     // the first match was one of those depended on where the spawn landed,
     // which made this flaky rather than wrong.
-    let index = crate::app::lobby::realm::resolver::ReachIndex::build(&state, &map, alice);
+    let index = crate::app::lobby::realm::resolver::ReachIndex::build(
+        &state,
+        &map,
+        alice,
+        realm_day(Utc::now(), RESET_HOUR),
+    );
     let far = map
         .territories
         .iter()
@@ -694,7 +704,13 @@ async fn a_distant_strike_is_allowed_at_long_odds() {
         })
         .expect("earth has somewhere far away");
 
-    let reach = crate::app::lobby::realm::resolver::reach_for(&state, &map, alice, far.id);
+    let reach = crate::app::lobby::realm::resolver::reach_for(
+        &state,
+        &map,
+        alice,
+        far.id,
+        realm_day(Utc::now(), RESET_HOUR),
+    );
     assert!(reach.cost >= 4.0);
     let odds = crate::app::lobby::realm::resolver::projected_probability(
         &state,
@@ -878,10 +894,11 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
         if player.user_id == alice {
             player.active_days = bar;
         } else {
-            // Conquered, having played enough to place.
+            // Conquered, having played the week, so the pot is sized on
+            // all three of them.
             player.status = RealmPlayerStatus::Eliminated;
             player.exit_day = Some(realm_day(Utc::now(), RESET_HOUR));
-            player.active_days = state.ruleset.min_payout_active_days;
+            player.active_days = bar;
         }
     }
     // Hers except one: a realm ends when a player holds the *whole* map, so
@@ -925,8 +942,8 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
         .sum();
     assert_eq!(wait_for_payout(&test_db, alice).await, Some(pot));
     assert!(pot >= 9_000, "a three-player pot should be worth winning");
-    // A conquered player who never really played is not on the podium; here
-    // the tier pays one place anyway.
+    // The three-player tier pays one place: the runners-up grew the pot and
+    // take nothing from it.
     assert_eq!(wait_for_payout(&test_db, bob).await, None);
     assert_eq!(wait_for_payout(&test_db, carol).await, None);
 }
@@ -2001,7 +2018,7 @@ async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
         } else {
             player.status = RealmPlayerStatus::Eliminated;
             player.exit_day = Some(realm_day(Utc::now(), RESET_HOUR));
-            player.active_days = state.ruleset.min_payout_active_days;
+            player.active_days = bar;
         }
     }
     let map =
@@ -2113,4 +2130,117 @@ async fn a_corrupt_row_leaves_the_listing_without_taking_it_down() {
         !listed.contains(&rotten),
         "the unreadable one is left out rather than guessed at"
     );
+}
+
+/// Every realm a creator raises puts them somewhere new. The spawn used to
+/// be seeded from the nil game id, so on Earth the same person started on
+/// the same country every time, and everyone could learn where.
+#[tokio::test]
+async fn a_creator_does_not_start_every_realm_in_the_same_place() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let alice = create_test_user(&test_db.db, "realm_spawn_creator").await;
+    let mut spawns = std::collections::BTreeSet::new();
+    for n in 0..5 {
+        let game = svc
+            .create_game(alice.id, &alice.username, &spec(&format!("War {n}"), RESET_HOUR))
+            .await
+            .expect("create");
+        let state = parse_state(&game.state).expect("state");
+        spawns.extend(state.holdings(alice.id));
+    }
+    assert!(
+        spawns.len() > 1,
+        "five realms, one starting country: {spawns:?}"
+    );
+}
+
+/// The board's "left of" figure is the day's real allowance. It used to be
+/// the tier for the roster's high-water mark, so five arrivals on a fresh
+/// world read "7/5 points".
+#[tokio::test]
+async fn the_board_counts_points_against_the_days_real_allowance() {
+    use crate::app::lobby::realm::state::{RealmState, points_left};
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_game(
+        &svc,
+        &test_db,
+        &["realm_cap_a", "realm_cap_b", "realm_cap_c", "realm_cap_d", "realm_cap_e"],
+    )
+    .await;
+    let state = load_state(&svc, game_id).await;
+    let allowance = state
+        .standing(ids[0], realm_day(Utc::now(), RESET_HOUR))
+        .allowance;
+
+    let mut session = RealmState::new(svc.clone(), ids[0], "realm_cap_a".to_string());
+    session.open_board(game_id, crate::app::common::primitives::Screen::Dashboard);
+    let loaded = wait_for_tick(&mut session, |s| {
+        s.board.as_ref().is_some_and(|b| b.detail.is_some())
+    })
+    .await;
+    assert!(loaded, "the board never loaded");
+
+    let board = session.board.as_ref().expect("board");
+    assert_eq!(
+        points_left(board, ids[0]),
+        Some((usize::from(allowance), usize::from(allowance))),
+        "nothing spent yet: every point of the day's allowance is left"
+    );
+}
+
+/// The lounge call names the day that just opened, however long the realm
+/// went without a rollover before this action brought it up to date.
+#[tokio::test]
+async fn the_lounge_call_names_the_day_that_opened() {
+    use crate::app::activity::event::ActivityKind;
+
+    let test_db = new_test_db().await;
+    let (svc, mut activity) = realm_service_watching(&test_db);
+    let (game_id, ids) =
+        started_game(&svc, &test_db, &["realm_call_day_a", "realm_call_day_b"]).await;
+
+    // Three days with no sweeper (a deploy that stayed down), then a move.
+    let later = Utc::now() + Duration::days(3);
+    let state = load_state(&svc, game_id).await;
+    let target = nearest_free(&state, ids[0]);
+    svc.act_at(ids[0], game_id, RealmAction::Claim { target }, later)
+        .await
+        .expect("act");
+
+    let mut called = Vec::new();
+    while let Ok(event) = activity.try_recv() {
+        if let ActivityKind::RealmCalls { game_id: id, day } = event.kind
+            && id == game_id
+        {
+            called.push(day);
+        }
+    }
+    assert_eq!(called, vec![realm_day(later, RESET_HOUR)]);
+}
+
+/// Withdrawing gives the ground back as it was found: free land carries no
+/// walls, or the map draws a fortress nobody holds and the next claimant
+/// inherits it in the history.
+#[tokio::test]
+async fn withdrawing_takes_your_walls_with_you() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_game(&svc, &test_db, &["realm_wall_a", "realm_wall_b"]).await;
+    let bob = ids[1];
+    let state = load_state(&svc, game_id).await;
+    let spawn = state.holdings(bob)[0];
+
+    svc.act(bob, game_id, RealmAction::Fortify { target: spawn })
+        .await
+        .expect("dig in");
+    assert_eq!(load_state(&svc, game_id).await.fort_level(spawn), 2);
+
+    svc.leave_game(bob, game_id).await.expect("bob withdraws");
+    let state = load_state(&svc, game_id).await;
+    assert_eq!(state.ownership.get(&spawn), None, "the ground went back");
+    assert_eq!(state.fort_level(spawn), 1, "and so did the walls on it");
+    assert!(state.forts.is_empty(), "nothing left standing: {:?}", state.forts);
 }

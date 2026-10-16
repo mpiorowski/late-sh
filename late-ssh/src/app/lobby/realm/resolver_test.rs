@@ -74,7 +74,7 @@ fn an_action_resolves_on_the_spot_and_spends_one_point() {
     state.ownership.insert(11, uid(2));
     let cap = state.ruleset.actions_per_day(2);
 
-    let reach = reach_for(&state, &map, uid(1), 1);
+    let reach = reach_for(&state, &map, uid(1), 1, DAY);
     let odds = projected_probability(&state, &map, uid(1), 1, reach, DAY).unwrap();
     let out = apply_action(
         &mut state,
@@ -107,7 +107,7 @@ fn a_failed_roll_still_costs_the_point() {
     state.ownership.insert(11, uid(2));
     let cap = state.ruleset.actions_per_day(2);
 
-    let reach = reach_for(&state, &map, uid(1), 1);
+    let reach = reach_for(&state, &map, uid(1), 1, DAY);
     let odds = projected_probability(&state, &map, uid(1), 1, reach, DAY).unwrap();
     let out = apply_action(
         &mut state,
@@ -198,7 +198,7 @@ fn first_action_wins_the_race_and_the_second_is_refused() {
     state.ownership.insert(0, uid(1));
     state.ownership.insert(2, uid(2));
 
-    let reach = reach_for(&state, &map, uid(1), 1);
+    let reach = reach_for(&state, &map, uid(1), 1, DAY);
     let odds = projected_probability(&state, &map, uid(1), 1, reach, DAY).unwrap();
     apply_action(
         &mut state,
@@ -225,7 +225,7 @@ fn a_route_costs_what_it_crosses() {
     state.ownership.insert(0, uid(1));
     state.ownership.insert(11, uid(2));
 
-    let index = ReachIndex::build(&state, &map, uid(1));
+    let index = ReachIndex::build(&state, &map, uid(1), DAY);
     let cost = |t: u16| index.reach(&map, &state.ruleset, t).cost;
     // A neighbour is the plain move, and costs the plain amount.
     assert!((cost(1) - 1.0).abs() < 1e-6);
@@ -237,7 +237,7 @@ fn a_route_costs_what_it_crosses() {
     let mut blocked = base_state(&[(1, "a"), (2, "b")]);
     blocked.ownership.insert(0, uid(1));
     blocked.ownership.insert(1, uid(2));
-    let blocked_index = ReachIndex::build(&blocked, &map, uid(1));
+    let blocked_index = ReachIndex::build(&blocked, &map, uid(1), DAY);
     let through_rival = blocked_index.reach(&map, &blocked.ruleset, 2).cost;
     assert!(
         through_rival > cost(2) + 1.0,
@@ -254,7 +254,7 @@ fn a_route_costs_what_it_crosses() {
     let mut owned = base_state(&[(1, "a"), (2, "b")]);
     owned.ownership.insert(0, uid(1));
     owned.ownership.insert(1, uid(1));
-    let owned_index = ReachIndex::build(&owned, &map, uid(1));
+    let owned_index = ReachIndex::build(&owned, &map, uid(1), DAY);
     assert!((owned_index.reach(&map, &owned.ruleset, 2).cost - 1.0).abs() < 1e-6);
 }
 
@@ -264,7 +264,7 @@ fn the_odds_follow_the_route_and_never_hit_zero() {
     let mut state = base_state(&[(1, "a"), (2, "b")]);
     state.ownership.insert(0, uid(1));
     state.ownership.insert(11, uid(2));
-    let index = ReachIndex::build(&state, &map, uid(1));
+    let index = ReachIndex::build(&state, &map, uid(1), DAY);
 
     let odds = |t: u16| {
         projected_probability(
@@ -298,7 +298,7 @@ fn the_sea_is_its_own_route_and_a_strait_is_nearly_free() {
     let mut state = base_state(&[(1, "a"), (2, "b")]);
     state.ownership.insert(island.id, uid(1));
 
-    let index = ReachIndex::build(&state, &map, uid(1));
+    let index = ReachIndex::build(&state, &map, uid(1), DAY);
     // The nearest coast to them is a short crossing and stays cheap.
     let nearest = map
         .territories
@@ -359,7 +359,7 @@ fn the_cheaper_of_land_and_sea_is_the_one_that_counts() {
         state.ownership.insert(*neighbour, uid(2));
     }
 
-    let index = ReachIndex::build(&state, &map, uid(1));
+    let index = ReachIndex::build(&state, &map, uid(1), DAY);
     // Somewhere across water that the land route would have to cross a
     // rival to reach: the sea should win.
     let sea_targets = map
@@ -386,7 +386,7 @@ fn reaching_a_far_target_is_legal_never_impossible() {
 
     // The far corner is a long march and owned — legal to strike, just bad
     // odds. It must not be refused the way the old queue fizzled it.
-    let reach = reach_for(&state, &map, uid(1), 11);
+    let reach = reach_for(&state, &map, uid(1), 11, DAY);
     let odds = projected_probability(&state, &map, uid(1), 11, reach, DAY).unwrap();
     assert!(odds >= state.ruleset.far_prob_floor && odds < 0.2);
     let out = apply_action(
@@ -425,7 +425,7 @@ fn an_island_start_sails_instead_of_being_stranded() {
 
     // No land route exists, so the route is the sea — no special case, no
     // bonus, just what the crossing costs.
-    let reach = reach_for(&state, &map, uid(1), mainland.id);
+    let reach = reach_for(&state, &map, uid(1), mainland.id, DAY);
     assert!(reach.by_sea(), "the only way off an island is the water");
     let odds = projected_probability(&state, &map, uid(1), mainland.id, reach, DAY)
         .expect("a price for the crossing");
@@ -434,7 +434,7 @@ fn an_island_start_sails_instead_of_being_stranded() {
         "a crossing is never impossible"
     );
     // And an island player is never without a move.
-    let index = ReachIndex::build(&state, &map, uid(1));
+    let index = ReachIndex::build(&state, &map, uid(1), DAY);
     assert!(
         map.territories
             .iter()
@@ -537,7 +537,9 @@ fn phases_count_from_each_players_own_arrival() {
 #[test]
 fn the_doors_close_once_the_map_is_half_taken() {
     let map = map_by_id("testmap").unwrap();
-    let mut state = base_state(&[(1, "a")]);
+    // A real war: two on the roster. A realm short of a rival stays open
+    // (see `a_realm_short_of_a_rival_keeps_its_doors_open`).
+    let mut state = base_state(&[(1, "a"), (2, "b")]);
     assert!(state.joinable(&map), "an empty world takes all comers");
 
     let limit = (map.territories.len() as f64 * state.ruleset.join_max_claimed).ceil() as u16;
@@ -583,7 +585,7 @@ fn digging_in_costs_a_point_and_makes_a_place_dearer() {
         &map,
         uid(1),
         1,
-        reach_for(&state, &map, uid(1), 1),
+        reach_for(&state, &map, uid(1), 1, DAY),
         DAY,
     )
     .unwrap();
@@ -605,7 +607,7 @@ fn digging_in_costs_a_point_and_makes_a_place_dearer() {
         &map,
         uid(1),
         1,
-        reach_for(&state, &map, uid(1), 1),
+        reach_for(&state, &map, uid(1), 1, DAY),
         DAY,
     )
     .unwrap();
@@ -664,7 +666,7 @@ fn walls_are_a_losing_trade_in_points_and_are_levelled_when_the_place_falls() {
             &map,
             uid(1),
             1,
-            reach_for(state, &map, uid(1), 1),
+            reach_for(state, &map, uid(1), 1, DAY),
             DAY,
         )
         .unwrap()
@@ -689,7 +691,7 @@ fn walls_are_a_losing_trade_in_points_and_are_levelled_when_the_place_falls() {
 
     // Taking the place levels what was built on it: offence is rewarded
     // with a weak position, so a frontier never sets.
-    let reach = reach_for(&state, &map, uid(1), 1);
+    let reach = reach_for(&state, &map, uid(1), 1, DAY);
     let odds = projected_probability(&state, &map, uid(1), 1, reach, DAY).unwrap();
     apply_action(
         &mut state,
@@ -714,7 +716,7 @@ fn walls_make_a_place_dearer_to_march_past_and_crumble_with_their_holder() {
     state.ownership.insert(1, uid(2));
     state.ownership.insert(4, uid(2));
     let cost_to = |state: &RealmGameState, day: i32| {
-        ReachIndex::build_on(state, &map, uid(1), day)
+        ReachIndex::build(state, &map, uid(1), day)
             .reach(&map, &state.ruleset, 2)
             .cost
     };
@@ -813,7 +815,7 @@ fn taking_a_last_territory_eliminates_and_ends_the_realm() {
     state.ownership.insert(0, uid(1));
     state.ownership.insert(1, uid(2));
 
-    let reach = reach_for(&state, &map, uid(1), 1);
+    let reach = reach_for(&state, &map, uid(1), 1, DAY);
     let odds = projected_probability(&state, &map, uid(1), 1, reach, DAY).unwrap();
     let out = apply_action(
         &mut state,
@@ -880,7 +882,7 @@ fn going_quiet_costs_you_your_grip_not_your_land() {
     assert!(decay < 1.0 && decay >= state.ruleset.decay_floor);
     assert!(state.effective_strength(uid(3), &map, later) < state.strength(uid(3), &map));
     // Which shows up as better odds for whoever comes for them.
-    let reach = reach_for(&state, &map, uid(2), 2);
+    let reach = reach_for(&state, &map, uid(2), 2, DAY);
     let now = projected_probability(&state, &map, uid(2), 2, reach, DAY).unwrap();
     let crumbling = projected_probability(&state, &map, uid(2), 2, reach, later).unwrap();
     assert!(crumbling > now, "an abandoned empire is easier to carve up");
@@ -972,11 +974,12 @@ fn missed_days_bank_on_a_ladder_and_then_stop() {
     // A few missed days are worth half each.
     let three = standing(3);
     assert!(three.banked > one.banked);
-    // Past the cutoff nothing more banks — a fortnight away is not a blitz.
+    // Past the cutoff nothing more banks, a fortnight away is not a blitz;
+    // and nothing already banked is taken back.
     let cutoff = i32::from(state.ruleset.bank_missed_cutoff);
     let long_gone = standing(cutoff + 5);
-    assert_eq!(long_gone.banked, 0);
-    assert_eq!(long_gone.allowance, base, "just the day's own points");
+    assert_eq!(long_gone.banked, standing(cutoff).banked);
+    assert_eq!(long_gone.allowance, base + long_gone.banked);
     // And the bank never exceeds its cap.
     let cap = base * state.ruleset.bank_cap_days;
     for missed in 0..10 {
@@ -1033,7 +1036,7 @@ fn winning_takes_a_week_of_play_not_an_afternoon() {
 
     // Conquering the only other player does not end it yet: the field is
     // clear, but the week is not in.
-    let reach = reach_for(&state, &map, uid(1), 1);
+    let reach = reach_for(&state, &map, uid(1), 1, DAY);
     let odds = projected_probability(&state, &map, uid(1), 1, reach, DAY).unwrap();
     let out = apply_action(
         &mut state,
@@ -1100,7 +1103,7 @@ fn total_conquest_wins_while_others_are_still_alive() {
     }
     // b is alive but landless-by-fiat; the sweep sees the whole map is taken.
     state.ownership.insert(11, uid(2));
-    let reach = reach_for(&state, &map, uid(1), 11);
+    let reach = reach_for(&state, &map, uid(1), 11, DAY);
     let odds = projected_probability(&state, &map, uid(1), 11, reach, DAY).unwrap();
     let out = apply_action(
         &mut state,
@@ -1212,7 +1215,7 @@ fn a_target_on_another_landmass_is_out_of_reach_not_next_door() {
     state.ownership.insert(bolivia.id, uid(1));
     state.ownership.insert(mongolia.id, uid(2));
 
-    let reach = reach_for(&state, &map, uid(1), mongolia.id);
+    let reach = reach_for(&state, &map, uid(1), mongolia.id, DAY);
     assert!(
         !reach.is_adjacent(),
         "another continent is not your border: {}",
@@ -1268,7 +1271,7 @@ fn an_inland_player_has_no_fleet_when_the_option_is_off() {
         "off by default — this test is about that default"
     );
 
-    let landlocked = reach_for(&state, &map, uid(1), madagascar.id);
+    let landlocked = reach_for(&state, &map, uid(1), madagascar.id, DAY);
     assert!(
         landlocked.is_unreachable(),
         "no coast, no fleet: {}",
@@ -1277,7 +1280,7 @@ fn an_inland_player_has_no_fleet_when_the_option_is_off() {
 
     // Reach the sea and the same target becomes a crossing.
     state.ownership.insert(peru.id, uid(1));
-    let with_a_coast = reach_for(&state, &map, uid(1), madagascar.id);
+    let with_a_coast = reach_for(&state, &map, uid(1), madagascar.id, DAY);
     assert!(
         with_a_coast.by_sea(),
         "a coastal holding is a port: {}",
@@ -1318,7 +1321,7 @@ fn an_overseas_part_is_not_a_bridge_between_continents() {
     let mut state = base_state(&[(1, "a"), (2, "b")]);
     state.ownership.insert(brazil.id, uid(1));
     state.ownership.insert(spain.id, uid(2));
-    let index = ReachIndex::build(&state, &map, uid(1));
+    let index = ReachIndex::build(&state, &map, uid(1), DAY);
 
     // The border itself is real — it is in South America, and so are you.
     let to_france = index.reach(&map, &state.ruleset, france.id);
@@ -1385,4 +1388,122 @@ fn the_newcomer_shield_grows_with_how_carved_up_the_world_is() {
     // A game frozen before any of this existed reads as it always did.
     state.ruleset.newcomer_shield_max_days = 0;
     assert_eq!(state.shield_days(uid(3)), base);
+}
+
+/// The engine prices a march past walls on the day it is taken, not the day
+/// the realm began. Walls fade as their holder goes quiet, and the route the
+/// engine charges for has to fade with them, or the board's "go around" is
+/// a toll nobody is collecting.
+#[test]
+fn the_engine_charges_for_walls_as_they_stand_today() {
+    let map = map_by_id("testmap").unwrap();
+    let mut state = base_state(&[(1, "a"), (2, "b")]);
+    // a is boxed into the corner behind b's walled pass, as in the routing
+    // test above.
+    state.ownership.insert(0, uid(1));
+    state.ownership.insert(1, uid(2));
+    state.ownership.insert(4, uid(2));
+    state.forts.insert(1, state.ruleset.fort_max_level);
+    let long_quiet = DAY + 60;
+    state.player_mut(uid(1)).unwrap().last_action_day = Some(long_quiet - 1);
+    let walled_then = ReachIndex::build(&state, &map, uid(1), DAY)
+        .reach(&map, &state.ruleset, 2)
+        .cost;
+    let crumbled_now = ReachIndex::build(&state, &map, uid(1), long_quiet)
+        .reach(&map, &state.ruleset, 2)
+        .cost;
+    assert!(crumbled_now < walled_then, "the toll fades with its holder");
+
+    let out = apply_action(&mut state, &map, uid(1), claim(2), long_quiet, 1).expect("claim");
+    assert_eq!(
+        out.reach.cost, crumbled_now,
+        "the roll is priced on today's walls"
+    );
+}
+
+/// Digging in is a day of play like any other, so the day that brings a
+/// lone survivor's count up to the bar ends the realm there and then, not
+/// whenever they next happen to take ground.
+#[test]
+fn a_win_earned_on_a_day_spent_digging_in_ends_the_realm() {
+    let map = map_by_id("testmap").unwrap();
+    let mut state = base_state(&[(1, "a"), (2, "b")]);
+    state.ownership.insert(0, uid(1));
+    let b = state.player_mut(uid(2)).unwrap();
+    b.status = RealmPlayerStatus::Eliminated;
+    b.exit_day = Some(DAY - 1);
+    let bar = state.ruleset.min_active_days_to_win;
+    let a = state.player_mut(uid(1)).unwrap();
+    a.active_days = bar - 1;
+    a.last_action_day = Some(DAY - 1);
+
+    let out = apply_action(
+        &mut state,
+        &map,
+        uid(1),
+        RealmAction::Fortify { target: 0 },
+        DAY,
+        1,
+    )
+    .expect("dig in");
+    assert_eq!(out.end, ResolveEnd::Won(uid(1)));
+    assert!(
+        state
+            .last_day
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| matches!(e, LogEntry::Won { .. })),
+        "and the win is in the log"
+    );
+}
+
+/// The bank is a ladder of days: each missed day adds what its rung is
+/// worth, and past the cutoff a day adds nothing. Coming back a day later
+/// must never be worth less than coming back a day sooner.
+#[test]
+fn staying_away_longer_never_shrinks_the_bank() {
+    let state = base_state(&[(1, "a"), (2, "b")]);
+    let base = f64::from(state.ruleset.actions_per_day(2));
+    let rs = &state.ruleset;
+    let cutoff = i32::from(rs.bank_missed_cutoff);
+    let standing = |missed: i32| state.standing(uid(1), DAY + missed + 1);
+
+    for missed in 0..cutoff + 5 {
+        assert!(
+            standing(missed + 1).banked >= standing(missed).banked,
+            "{} missed banks {}, {} missed banks {}",
+            missed,
+            standing(missed).banked,
+            missed + 1,
+            standing(missed + 1).banked
+        );
+    }
+    // Each rung is its own rate: the first day at the one-day rate, the rest
+    // up to the cutoff at the few-days rate.
+    let ladder = rs.bank_rate_one_missed + rs.bank_rate_few_missed * f64::from(cutoff - 1);
+    let expected = (base * ladder).min(base * f64::from(rs.bank_cap_days)).floor() as u8;
+    assert_eq!(standing(cutoff).banked, expected);
+    assert_eq!(
+        standing(cutoff + 5).banked,
+        expected,
+        "days past the cutoff add nothing, and take nothing away"
+    );
+}
+
+/// A realm with nobody left to fight cannot be won, so it must not close the
+/// door on the rival it is waiting for. Otherwise the last player standing
+/// after a withdrawal claims past half the map and is stuck in a war that
+/// can never end.
+#[test]
+fn a_realm_short_of_a_rival_keeps_its_doors_open() {
+    let map = map_by_id("testmap").unwrap();
+    let mut state = base_state(&[(1, "a")]);
+    for t in 0..map.territories.len() as u16 - 1 {
+        state.ownership.insert(t, uid(1));
+    }
+    assert!(state.claimed_fraction(&map) >= state.ruleset.join_max_claimed);
+    assert!(!state.can_win(uid(1)), "alone, there is nothing to win");
+    assert!(state.joinable(&map), "so the door stays open for a rival");
 }

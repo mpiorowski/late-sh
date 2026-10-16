@@ -176,10 +176,10 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
                 "you: {}/{} days played{}",
                 played,
                 state.ruleset.min_active_days_to_win,
-                if to_win > 0 {
-                    format!(" · {to_win} more before you can win")
-                } else {
-                    " · you have played enough to win".to_string()
+                match (to_win, state.short_of_rivals()) {
+                    (0, true) => " · nobody can win a realm alone, it needs a rival".to_string(),
+                    (0, false) => " · you have played enough to win".to_string(),
+                    (more, _) => format!(" · {more} more before you can win"),
                 }
             ),
             Style::default().fg(theme::AMBER()),

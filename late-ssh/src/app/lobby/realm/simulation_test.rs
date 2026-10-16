@@ -176,7 +176,7 @@ impl Sim {
             return Some(wall);
         }
         let state = &self.state;
-        let index = ReachIndex::build(state, &self.map, actor);
+        let index = ReachIndex::build(state, &self.map, actor, self.day);
         let mut best: Option<(f64, RealmAction)> = None;
         for territory in &self.map.territories {
             let owner = state.ownership.get(&territory.id).copied();
@@ -444,7 +444,7 @@ impl Sim {
             .iter()
             .filter(|p| p.status == RealmPlayerStatus::Alive)
         {
-            let index = ReachIndex::build(state, &self.map, player.user_id);
+            let index = ReachIndex::build(state, &self.map, player.user_id, day);
             for territory in self.map.territories.iter().take(30) {
                 let reach = index.reach(&self.map, &state.ruleset, territory.id);
                 if let Some(p) = projected_probability(
