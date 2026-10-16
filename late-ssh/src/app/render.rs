@@ -1263,8 +1263,8 @@ impl App {
             (Some(room_id), None) => crate::app::door::realm::ui::RealmChatPane::Hidden {
                 unread: self.chat.unread_counts.get(&room_id).copied().unwrap_or(0),
             },
-            (Some(_), Some(chat_room_id)) => {
-                crate::app::door::realm::ui::RealmChatPane::Shown(chat::ui::EmbeddedRoomChatView {
+            (Some(_), Some(chat_room_id)) => crate::app::door::realm::ui::RealmChatPane::Shown(
+                Box::new(chat::ui::EmbeddedRoomChatView {
                     messages_inset: 1,
                     title: "Realm Chat",
                     messages: self.chat.messages_for_room(chat_room_id),
@@ -1325,8 +1325,8 @@ impl App {
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
-                })
-            }
+                }),
+            ),
         };
         // The watch chat: docked beside the watched screen for a watcher,
         // read-only beside their own game for the player.

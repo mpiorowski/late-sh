@@ -80,10 +80,10 @@ pub(crate) enum RealmChatPane<'a> {
     /// before rooms were born with it and the sweeper has not caught up.
     Absent,
     /// The room is there and put away; what was said since is counted.
-    Hidden {
-        unread: i64,
-    },
-    Shown(EmbeddedRoomChatView<'a>),
+    Hidden { unread: i64 },
+    /// Boxed: the view dwarfs the other two variants, and the pane is built
+    /// once a frame.
+    Shown(Box<EmbeddedRoomChatView<'a>>),
 }
 
 /// The chat column's width: a third of the screen, never narrower than the
@@ -278,7 +278,7 @@ pub(crate) fn draw(
                 rule,
             );
         }
-        draw_embedded_room_chat(frame, chat_area, view, terminal_images);
+        draw_embedded_room_chat(frame, chat_area, *view, terminal_images);
     }
 
     // The result goes over the top of everything: it is the one thing on
